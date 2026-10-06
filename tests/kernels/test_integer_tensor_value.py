@@ -149,11 +149,13 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
         platform=FULL_DSP48E2,
         weights=weights,
     )
-    assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
+    # The weight channel's tensor is stated over the value's range; MatMul reads INT3.
+    assert base.w.tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
+    assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
     handles = {item.key: item.reference for item in inspection.decisions(base)}
     point = base.with_choices({handles["matmul.compute"]: "packed"})
     point = point.with_choices({handles["w.source.memstream.ram_style"]: "block"})
-    assert point.matmul.weight_tensor.element.value_range == (-1, 1)
+    assert point.w.tensor.element.value_range == (-1, 1)
     assert point.w.source.value_range == (-1, 1)
     assert loads == []
     folded = point.with_choices(

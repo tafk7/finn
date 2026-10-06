@@ -4,11 +4,12 @@
 """The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
 
 The graph decides which weights the node owns: weights that are an initializer
-are the node's own (``Facts.owned``), the weight channel's known value, which
-its ``source`` stores, keyed by their value summary's digest; weights on any
-other tensor arrive on a channel like any edge. One node root serves both: the
-weights are an optional formal, and the weight channel's value is MatMul's view
-of it, present only when they are. A's leading axes are rows; B is the (k, n)
+are the node's own (``Facts.owned``), the weight channel's known value
+(``Facts.values``), which its ``source`` stores, keyed by their value summary's
+digest, and the channel's tensor states their range; weights on any other
+tensor arrive on a channel like any edge. One node root serves both: the weight
+channel's contents are supplied only when the node owns them. MatMul consumes
+the weights from the channel. A's leading axes are rows; B is the (k, n)
 matrix ONNX stores. The output is A's leading axes and n.
 """
 
@@ -30,6 +31,7 @@ from finn.custom_op.kernels.base import (
 )
 from finn.custom_op.kernels.cache import Facts
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 
 
 class MatMul(KernelOp):
@@ -39,10 +41,10 @@ class MatMul(KernelOp):
     op_version = MatMulKernel.version
     kernel = MatMulKernel
     member = "matmul"
-    formals = ("m", "n", "k", "activation_dtype", "weights_dtype", "weights", "platform")
+    formals = ("m", "n", "k", "activation_dtype", "weights_dtype", "platform")
     ports = ("x", "w")
     references = {"x": "x_channel", "w": "w_channel", "y": "y_channel"}
-    parameters = {"w": ("weight_tensor", "weight_values")}
+    parameters = ("w",)
 
     def facts(self) -> Facts:
         model, label = self.model(), self.label
@@ -79,13 +81,13 @@ class MatMul(KernelOp):
             return Facts(root, MatMulKernel, (*key, None), lambda: common, self.edges)
         digest = admitted(model, b, weights_dtype, label)
 
-        def formals() -> dict[str, object]:
-            values = model.get_initializer(b)
-            if values is None:
+        def values() -> dict[str, IntegerTensorValue]:
+            stored = model.get_initializer(b)
+            if stored is None:
                 raise KernelOpError(f"{label}: {b} is not an initializer")
-            return {**common, "weights": integer_tensor(values)}
+            return {"w": integer_tensor(stored)}
 
-        return Facts(root, MatMulKernel, (*key, digest), formals, self.edges, ("w",))
+        return Facts(root, MatMulKernel, (*key, digest), lambda: common, self.edges, values, ("w",))
 
     def output_tensors(self) -> Shapes:
         result = self.view("result_tensor")

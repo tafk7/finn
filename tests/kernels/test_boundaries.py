@@ -108,15 +108,16 @@ for memory in ("none", "memstream"):
         weights_dtype=DataType["INT3"],
         platform=PLATFORM,
     )
+    # Stored weights are the weight channel's value, which its source stores.
+    stored = {}
     if memory == "memstream":
-        facts["weights"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+        stored["contents"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
 
     class Placed(Root):
         x = Channel(tensor=Tensor((2, 4), INT3), port="in0_V", platform=PLATFORM)
-        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
+        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM, **stored)
         y = Channel(tensor=Tensor((2, 4), INT8), port="out0_V", platform=PLATFORM)
         matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
-        w.contents = matmul.weight_values
 
     choices = {
         "x.transport": "direct",

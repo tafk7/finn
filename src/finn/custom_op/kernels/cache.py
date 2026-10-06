@@ -10,8 +10,9 @@ three kinds of point:
 
 - its **kernel** alone, from the kernel's formals: what inference reads (the
   fact-level views, ``result_tensor``), before any output of the node is known;
-- its **node root**, nothing chosen, from the same formals and the tensor of
-  each edge the graph states (``x_tensor``, ``y_tensor``);
+- its **node root**, nothing chosen, from the same formals, the tensor of each
+  channel the graph states (``x_tensor``, ``w_tensor``, ``y_tensor``) and the
+  value of each initializer the node owns (``w_contents``);
 - a node root with **choices** replayed, because replay evaluates a new
   configuration from its facts again.
 
@@ -36,6 +37,7 @@ from typing import Any, Generic, TypeVar, cast
 from finn.core.space import design_space
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
+from finn.kernels.values.semantics import IntegerTensorValue
 
 V = TypeVar("V")
 
@@ -43,16 +45,17 @@ V = TypeVar("V")
 @dataclass(frozen=True)
 class Facts:
     """What binding a node reads: its op's node root and kernel classes; the key that
-    identifies the kernel's formals by value; the formals (a thunk, called only on a miss);
-    the tensor of each edge, by port, as the graph states it (a thunk: an output's is known
-    only once inference wrote it); and the parameter ports whose value the node owns (an
-    initializer's)."""
+    identifies the kernel's formals and the node's values by value; the formals (a thunk,
+    called only on a miss); the tensor of each channel, by port, as the graph states it (a
+    thunk: an output's is known only once inference wrote it); the value of each
+    parameter port the node owns (an initializer's), by port (a thunk); and those ports."""
 
     root: type[Kernel]
     kernel: type[Kernel]
     key: tuple[Hashable, ...]
     formals: Callable[[], dict[str, object]]
     edges: Callable[[], dict[str, Tensor]]
+    values: Callable[[], dict[str, IntegerTensorValue]] = dict
     owned: tuple[str, ...] = ()
 
 
@@ -105,10 +108,16 @@ class BindCache(LeastRecentlyUsed[Kernel]):
     def point(self, facts: Facts) -> Kernel:
         """The node root bound from ``facts``, nothing chosen."""
         key, edges = self._root_key(facts)
-        tensors = {f"{port}_tensor": tensor for port, tensor in edges.items()}
-        return self.get(
-            key, lambda: design_space(cast(Any, facts.root)(**facts.formals(), **tensors))
-        )
+
+        def bind() -> Kernel:
+            tensors = {f"{port}_tensor": tensor for port, tensor in edges.items()}
+            values = {f"{port}_contents": value for port, value in facts.values().items()}
+            bound: Kernel = design_space(
+                cast(Any, facts.root)(**facts.formals(), **tensors, **values)
+            )
+            return bound
+
+        return self.get(key, bind)
 
     def configured(
         self, facts: Facts, choices: Mapping[str, object], build: Callable[[Kernel], Kernel]

@@ -5,9 +5,11 @@
 
 It computes ``thresholds(x @ W1) @ W2``. Each MatMul sits on the root's channels
 through its reference inputs; the root declares every channel, reading the
-tensor of a MatMul's weights and results from the MatMul's views
-(``weight_tensor``, ``result_tensor``). ``chain()`` is the Chain configured as
-the kernel tests, the KernelOp partition tests and the XSim harness use it.
+tensor of a MatMul's results from the MatMul's view (``result_tensor``). The
+weights are the root's: each weight channel carries them (``contents``), its
+tensor the MatMul's ``weight_tensor`` over their range. ``chain()`` is the
+Chain configured as the kernel tests, the KernelOp partition tests and the XSim
+harness use it.
 """
 
 from __future__ import annotations
@@ -41,7 +43,6 @@ def matmul(
     k: int,
     n: int,
     dtype: Any,
-    weights: Any,
     *,
     x_channel: Channel,
     w_channel: Channel,
@@ -54,33 +55,28 @@ def matmul(
         activation_dtype=dtype,
         weights_dtype=W,
         platform=FULL_DSP48E2,
-        weights=weights,
         x_channel=x_channel,
         w_channel=w_channel,
         y_channel=y_channel,
     )
 
 
-def weights(k: int, n: int) -> Channel:
-    """A MatMul's weight channel: from its memory to its core."""
-    return Channel(tensor=Tensor((k, n), ScalarEncoding(W)), platform=FULL_DSP48E2)
+def weights(values: Any) -> Channel:
+    """A MatMul's weight channel, carrying ``values``: from its memory to its core, its
+    tensor over their range."""
+    k, n = len(values), len(values[0])
+    least, greatest = min(map(min, values)), max(map(max, values))
+    tensor = Tensor((k, n), ScalarEncoding(W, (least, greatest)))
+    return Channel(tensor=tensor, contents=values, platform=FULL_DSP48E2)
 
 
 class Chain(Root):
     # The input is the root's to state, and the thresholding's output too: a leaf
     # binds its extents from its own ports, so its output tensor is not read from it.
-    # Each MatMul's weights and results are its views, which read only its facts.
-    @derived
-    def w1_tensor(self) -> Tensor:
-        return self.first.weight_tensor
-
+    # Each MatMul's results are its view, which reads only its facts and its weights.
     @derived
     def hidden_tensor(self) -> Tensor:
         return self.first.result_tensor
-
-    @derived
-    def w2_tensor(self) -> Tensor:
-        return self.second.weight_tensor
 
     @derived
     def y_tensor(self) -> Tensor:
@@ -89,12 +85,12 @@ class Chain(Root):
     x = Channel(
         platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="s_axis_0"
     )
-    w1 = Channel(tensor=w1_tensor, platform=FULL_DSP48E2)
+    w1 = weights(W1)
     hidden = Channel(tensor=hidden_tensor, platform=FULL_DSP48E2)
     levels = Channel(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)), platform=FULL_DSP48E2)
-    w2 = Channel(tensor=w2_tensor, platform=FULL_DSP48E2)
+    w2 = weights(W2)
     y = Channel(tensor=y_tensor, port="m_axis_0", platform=FULL_DSP48E2)
-    first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w1, y_channel=hidden)
+    first = matmul(INPUTS, HIDDEN, A, x_channel=x, w_channel=w1, y_channel=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
         threshold_dtype=THRESHOLD_DTYPE,
@@ -105,10 +101,7 @@ class Chain(Root):
         output_channel=levels,
         platform=FULL_DSP48E2,
     )
-    second = matmul(HIDDEN, OUTPUTS, T, W2, x_channel=levels, w_channel=w2, y_channel=y)
-    # Each weight channel carries its MatMul's weights, which the channel's source stores.
-    w1.contents = first.weight_values
-    w2.contents = second.weight_values
+    second = matmul(HIDDEN, OUTPUTS, T, x_channel=levels, w_channel=w2, y_channel=y)
 
 
 LAYERS = (("first", "w1"), ("second", "w2"))

@@ -77,11 +77,11 @@ def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
             port="in0_V",
             platform=FULL_DSP48E2,
         )
-        w = weights(INPUTS, HIDDEN)
+        w = weights(W1)
         y = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)), port="out0_V"
         )
-        first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w, y_channel=y)
+        first = matmul(INPUTS, HIDDEN, A, x_channel=x, w_channel=w, y_channel=y)
 
     refused = design_space(Misplaced()).first.query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
@@ -95,13 +95,13 @@ def test_a_matmul_on_a_stream_of_another_element_is_refused():
         x = Channel(
             platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V"
         )
-        w = weights(INPUTS, HIDDEN)
+        w = weights(W1)
         y = Channel(
             tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(DataType["INT32"])),
             port="out0_V",
             platform=FULL_DSP48E2,
         )
-        first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w, y_channel=y)
+        first = matmul(INPUTS, HIDDEN, A, x_channel=x, w_channel=w, y_channel=y)
 
     refused = design_space(Widened()).first.query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
@@ -111,7 +111,8 @@ def test_a_matmul_on_a_stream_of_another_element_is_refused():
 def carried(
     x: ScalarEncoding, w: ScalarEncoding, y: ScalarEncoding, *, known: bool = True
 ) -> object:
-    """MatMul's ``carried`` on channels stating these elements; weights known or not."""
+    """MatMul's ``carried`` on channels stating these elements; the weight channel carrying
+    W1 (known weights) or nothing."""
     facts = dict(
         m=ROWS,
         n=HIDDEN,
@@ -120,14 +121,15 @@ def carried(
         weights_dtype=W,
         platform=FULL_DSP48E2,
     )
+    value = {"contents": W1} if known else {}
 
     class Stated(Root):
         x_ = Channel(tensor=Tensor((ROWS, INPUTS), x), port="in0_V", platform=FULL_DSP48E2)
-        w_ = Channel(tensor=Tensor((INPUTS, HIDDEN), w), port="in1_V", platform=FULL_DSP48E2)
-        y_ = Channel(tensor=Tensor((ROWS, HIDDEN), y), port="out0_V", platform=FULL_DSP48E2)
-        first = MatMulKernel(
-            **facts, **({"weights": W1} if known else {}), x_channel=x_, w_channel=w_, y_channel=y_
+        w_ = Channel(
+            tensor=Tensor((INPUTS, HIDDEN), w), port="in1_V", platform=FULL_DSP48E2, **value
         )
+        y_ = Channel(tensor=Tensor((ROWS, HIDDEN), y), port="out0_V", platform=FULL_DSP48E2)
+        first = MatMulKernel(**facts, x_channel=x_, w_channel=w_, y_channel=y_)
 
     return design_space(Stated()).first.query(MatMulKernel.carried)
 
@@ -143,11 +145,10 @@ def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_pro
     narrow_y = ScalarEncoding(H, (0, 1))
     refused = carried(plain_a, plain_w, narrow_y)
     assert isinstance(refused, Rejected) and "y_channel" in str(refused)
-    # Known weights (W1 holds -3 to 3) are produced by MatMul's memory: they fit a plain
-    # channel (above), not a tighter one.
-    refused = carried(plain_a, ScalarEncoding(W, (-2, 2)), plain_h)
-    assert isinstance(refused, Rejected) and "w_channel" in str(refused)
-    # Unknown weights come from outside: a tighter channel fits MatMul's full range.
+    # Weights, known or not, are consumed: their channel's values fit MatMul's datatype.
+    # Whether a source's values fit the range its channel states is the channel's
+    # (channel-tensor), not MatMul's.
+    assert carried(plain_a, ScalarEncoding(W, (-3, 3)), plain_h) == accepted
     assert carried(plain_a, tight, plain_h, known=False) == accepted
     refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), plain_h, known=False)
     assert isinstance(refused, Rejected) and "w_channel" in str(refused)

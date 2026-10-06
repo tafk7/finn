@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A matrix-multiply unit on channels, with external or stored weights.
+"""A matrix-multiply unit on channels: activations and weights in, results out.
 
 The facts are the extents in canonical GEMM notation, ``m`` rows, ``n``
 outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
@@ -11,10 +11,10 @@ outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
 - ``DEPTHWISE``: Y[m, n] = sum over k of X[m, k, n] * W[k, n]. Each output
   channel reads its own activations, so nothing is replayed.
 
-Weights are stored ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
+Weights are read ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
 operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
-``realization`` Decision, on the dense datapath with block-diagonal weights,
-reading its (M, K, N) activations as (M, K * N).
+``realization`` Decision, on the dense datapath with block-diagonal weights
+(``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores that sit on the
 channels its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
@@ -22,22 +22,21 @@ weights) and ``y_channel`` (the results). Each channel, its adapter, its FIFO
 and its source are its parent's: the parent (a test harness, a KernelOp's node
 root, a partition root) declares each channel and either binds its tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
-``result_tensor``, ``set_tensor``), which reads only MatMul's facts and
-``realization``, never a port, or states it; ``carried`` refuses a stated
-tensor of another shape, or whose values do not fit (``matmul-tensor``):
-MatMul's values must fit a channel that carries them, and a channel's values
-must fit what MatMul consumes. A boundary channel there presents its ``port``
-name (``in0_V``).
+``result_tensor``), which reads only MatMul's facts and ``realization``, never
+a port, or states it; ``carried`` refuses a stated tensor of another shape, or
+whose values do not fit (``matmul-tensor``): MatMul's results must fit their
+channel, and an input channel's values must fit what MatMul reads. A boundary
+channel there presents its ``port`` name (``in0_V``).
 
-Known ``weights`` are values MatMul owns: its ``weight_tensor`` states their
-range (``INT4 over [-7, 7]``), and its ``weight_values`` view is the value the
-weight channel carries (the datapath's weights, block-diagonal when densely
-realized), which the parent binds to the channel's ``contents``. Whether the
-weights are known is their presence, the view's guard, so the channel's
-``source`` applies before the realization is chosen. With several weight
-sets, the parent's set channel (bound to ``set_tensor``) is the weight channel's
-``index``. A consumer derives from the range what it may (the packed core's
-``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
+MatMul consumes its weights; it never holds them. Known weights are the weight
+channel's value: its ``contents``, which its ``source`` stores, bound by
+whoever declares the channel (the value's owner), who states on the channel's
+tensor the range it promises (``INT4 over [-7, 7]``). With several weight sets
+the channel's ``sets`` and ``index`` select one per row. A consumer derives
+from what the channel carries what it may (the packed core's
+``NARROW_WEIGHTS``); a channel without a value carries the datatype's range. A
+dense realization of a depthwise operation reads block-diagonal weights, so it
+needs a value on its weight channel (``matmul-realization``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and channels. Each core owns its folding factors (``compute.<core>.pe``,
@@ -77,13 +76,12 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import Platform
-from finn.kernels.values.domains import admit_element, set_index_dtype
+from finn.kernels.values.domains import admit_element
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerTensorValue,
-    integer_range,
+    integer_shape,
     integers,
 )
 
@@ -108,6 +106,27 @@ def exact_result_dtype(
     return resolve_qonnx_datatype_name(f"INT{bits}")
 
 
+def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
+    """Depthwise weights ``(k, n)``, or one operand a set ``(sets, k, n)``, as the dense
+    datapath reads them: ``(k * n, n)`` a set.
+
+    W'[k * N + c, n] = W[k, n] when c = n, and 0 otherwise: the densely read
+    activation row (k, c) meets only its own channel's weights. The value owner
+    states it for a dense realization; it reads the integers.
+    """
+    shape = integer_shape(weights)
+    if shape is None or len(shape) not in (2, 3):
+        raise ValueError("depthwise weights are (k, n), or (sets, k, n)")
+    channels, flat = shape[-1], integers(weights)
+    dense = [
+        value if channel == output else 0
+        for row in range(0, len(flat), channels)
+        for channel in range(channels)
+        for output, value in enumerate(flat[row : row + channels])
+    ]
+    return IntegerTensorValue.flat((*shape[:-2], shape[-2] * channels, channels), dense)
+
+
 class MatMulKernel(Kernel):
     """Operation facts, and the kernels and Decisions over kernels on its channels."""
 
@@ -120,25 +139,11 @@ class MatMulKernel(Kernel):
     form: Form = Param(default=Form.DENSE)
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-    # Several weight sets, one selected per row by an index on ``in2_V``;
-    # ``weights`` then holds one operand per set.
-    weight_sets: int = Param(default=1)
     platform: Platform = Param()
-
-    @derived
-    def known(self) -> bool:
-        """Whether the weights are known: MatMul owns them, and its weight channel's
-        source stores them."""
-        return self.present(MatMulKernel.weights)
 
     @derived
     def depthwise(self) -> bool:
         return self.form is Form.DEPTHWISE
-
-    @derived
-    def multi_set(self) -> bool:
-        return self.weight_sets > 1
 
     @derived
     def reads_depthwise(self) -> bool:
@@ -183,30 +188,6 @@ class MatMulKernel(Kernel):
         """The datapath's K: the window times the channels when densely realized."""
         return self.k * self.n if self.dense_view else self.k
 
-    @derived(semantics=INTEGER_TENSOR)
-    def datapath_weights(self) -> IntegerTensor:
-        """The weights the datapath reads, ``(k, n)``: block-diagonal when densely realized.
-
-        W'[k * N + c, n] = W[k, n] when c = n, and 0 otherwise: the densely read
-        activation row (k, c) meets only its own channel's weights.
-        """
-        weights = self.weights
-        if not self.dense_view:
-            return weights
-        # Densifying reads the integers: the dense realization of a depthwise operation
-        # builds its weights when it is chosen.
-        channels, flat = self.n, integers(weights)
-        dense = [
-            value if channel == output else 0
-            for row in range(0, len(flat), channels)
-            for channel in range(channels)
-            for output, value in enumerate(flat[row : row + channels])
-        ]
-        shape = (self.k * channels, channels)
-        return IntegerTensorValue.flat(
-            (self.weight_sets, *shape) if self.multi_set else shape, dense
-        )
-
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_type(self) -> QONNXDataType | Rejected:
         try:
@@ -239,55 +220,37 @@ class MatMulKernel(Kernel):
 
     @view
     def weight_tensor(self) -> Tensor | Rejected:
-        """(K, N) as the datapath reads it, over the range of known weights."""
-        shape = (self.datapath_k, self.n)
-        if not self.present(MatMulKernel.weights):
-            return self._tensor(shape, self.weights_dtype)
-        least, greatest = integer_range(self.datapath_weights)
-        low, high = ordinary_integer_bounds(self.weights_dtype)
-        if not low <= least <= greatest <= high:
-            return reject(
-                "matmul-weights",
-                f"every value must be an integer admitted by {self.weights_dtype.name}",
-            )
-        element = admit_element(self.weights_dtype, (least, greatest))
-        if isinstance(element, Rejected):
-            return element
-        return Tensor(shape, element)
+        """(K, N) as the datapath reads it, in the weights' datatype: the weight channel's
+        values must fit it."""
+        return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
     @view
     def result_tensor(self) -> Tensor | Rejected:
         return self._tensor((self.m, self.n), self.result_type)
-
-    @view(when=known, semantics=INTEGER_TENSOR)
-    def weight_values(self) -> IntegerTensor:
-        """The value the weight channel carries: the datapath's weights, one operand a set."""
-        return self.datapath_weights
-
-    @view
-    def set_tensor(self) -> Tensor | Rejected:
-        """One set index per row, as wide as the weight source's selector."""
-        return self._tensor((self.m,), set_index_dtype(self.weight_sets))
 
     # The channels it sits on, supplied by its parent.
     x_channel: Channel = Param(required=False)
     w_channel: Channel = Param(required=False)
     y_channel: Channel = Param(required=False)
 
+    @derived
+    def stored(self) -> bool:
+        """Whether the weight channel carries a known value, which its source stores."""
+        return self.present(MatMulKernel.w_channel) and self.w_channel.valued
+
     @constraint
     def carried(self) -> bool | Rejected:
         """Each supplied channel carries a tensor of the shape MatMul derives for it.
 
-        On a channel that carries MatMul's own values (the results, and the
-        weights when known: MatMul owns them, the channel's source streams them)
-        MatMul's values fit the channel's element; on a channel it consumes, the
-        channel's values fit MatMul's.
+        On the results channel MatMul's values fit the channel's element; on a
+        channel it consumes, activations or weights, the channel's values fit
+        MatMul's.
         """
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            produced = reference == "y_channel" or (reference == "w_channel" and self.known)
+            produced = reference == "y_channel"
             inner, outer = (derived_, supplied) if produced else (supplied, derived_)
             if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
                 return reject(
@@ -314,10 +277,11 @@ class MatMulKernel(Kernel):
 
     @constraint
     def realization_supported(self) -> bool | Rejected:
-        if self.dense_view and not self.known:
+        if self.dense_view and not self.stored:
             return reject(
                 "matmul-realization",
-                "a dense realization builds block-diagonal weights, so it needs known weights",
+                "a dense realization reads block-diagonal weights, so it needs a value on "
+                "its weight channel",
             )
         return True
 
@@ -327,4 +291,4 @@ class MatMulKernel(Kernel):
         return "finn_matmul"
 
 
-__all__ = ["MatMulKernel", "exact_result_dtype"]
+__all__ = ["MatMulKernel", "block_diagonal", "exact_result_dtype"]

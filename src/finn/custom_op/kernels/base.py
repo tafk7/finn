@@ -5,12 +5,14 @@
 
 An op reads its facts from the attached model only: input shapes and datatype
 annotations, initializers admitted by their value summary, and the build target
-from the model's ``finn.platform`` metadata. It states its placement once, as
-data (``kernel``, ``formals``, ``references``, ``parameters``;
-``finn.custom_op.kernels.roots``): its node root is generated from it, and a
-partition root places the same kernel. It binds through the bind cache, its
-kernel alone for inference and its node root for its choices, replays the
-choices its node holds, and answers the compiler's queries from the result.
+from the model's ``finn.platform`` metadata. An initializer the node owns is a
+value its channel carries (``Facts.values``), and the channel's tensor states
+its range. It states its placement once, as data (``kernel``, ``formals``,
+``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
+root is generated from it, and a partition root places the same kernel. It
+binds through the bind cache, its kernel alone for inference and its node root
+for its choices, replays the choices its node holds, and answers the
+compiler's queries from the result.
 
 Two kinds of attribute:
 
@@ -58,6 +60,7 @@ from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
+    is_ordinary_integer,
     ordinary_integer_bounds,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -136,9 +139,17 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
 
 
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
-    """The tensor an edge's channel carries, as the graph states it: its shape as
-    rows and its annotation."""
-    return Tensor(rows(shape(model, tensor, label)), ScalarEncoding(datatype(model, tensor, label)))
+    """The tensor a channel carries, as the graph states it: its shape as rows and its
+    annotation; an initializer of integers (``admitted``) over its values' range, the
+    range its owner promises."""
+    dtype = datatype(model, tensor, label)
+    stored = model.get_initializer(tensor)
+    element = (
+        ScalarEncoding(dtype, (int(stored.min()), int(stored.max())))
+        if stored is not None and is_ordinary_integer(dtype)
+        else ScalarEncoding(dtype)
+    )
+    return Tensor(rows(shape(model, tensor, label)), element)
 
 
 def read_target(model: ModelWrapper) -> Target:
@@ -295,8 +306,8 @@ class KernelOp(CustomOp):
     - ``ports``, each ONNX input's channel (``None``: an input that is a fact, never
       a channel), and ``outputs``, each ONNX output's;
     - ``references``, the kernel's reference input each port's channel binds;
-    - ``parameters``, for a port that may carry a value the node owns, the kernel's
-      views of the tensor and of the value its channel carries.
+    - ``parameters``, the ports whose channel may carry a value the node owns (an
+      initializer): the channel's ``contents``, which its source stores.
     """
 
     wants_model = True
@@ -308,7 +319,7 @@ class KernelOp(CustomOp):
     ports: ClassVar[tuple[str | None, ...]]
     outputs: ClassVar[tuple[str, ...]] = ("y",)
     references: ClassVar[Mapping[str, str]]
-    parameters: ClassVar[Mapping[str, tuple[str, str]]] = {}
+    parameters: ClassVar[tuple[str, ...]] = ()
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
     _roots: ClassVar[dict[type[KernelOp], type[Kernel]]] = {}
     _schemas: ClassVar[dict[type[KernelOp], dict[str, tuple[str, tuple[str, ...]]]]] = {}
@@ -395,13 +406,13 @@ class KernelOp(CustomOp):
         raise NotImplementedError
 
     def edges(self) -> dict[str, Tensor]:
-        """The tensor of each edge of the node root, by port, as the graph states it: each
-        input channel but a parameter port's, and each output."""
+        """The tensor of each channel of the node root, by port, as the graph states it:
+        each input's (an initializer's over its values' range) and each output's."""
         model, node = self.model(), self.onnx_node
         found = {
             port: edge_tensor(model, tensor, self.label)
             for port, tensor in zip(self.ports, node.input)
-            if port is not None and port not in self.parameters
+            if port is not None
         }
         return found | {
             port: edge_tensor(model, tensor, self.label)
@@ -492,8 +503,8 @@ class KernelOp(CustomOp):
 
     def owned(self, facts: Facts) -> dict[str, str]:
         """The tensor of each parameter port whose value this node owns (``facts``, the
-        node's), by port: its channel is this node's to declare, and carries the kernel's
-        views."""
+        node's), by port: its channel is this node's to declare, from the graph, with the
+        value (``Facts.values``) as its contents."""
         return {port: self.onnx_node.input[self.ports.index(port)] for port in facts.owned}
 
     def place(self, facts: Facts, channels: Mapping[str, Channel]) -> Kernel:
@@ -501,7 +512,7 @@ class KernelOp(CustomOp):
         tensor), its formals literals: the placement its node root is generated from."""
         tensors = self.inputs() | dict(zip(self.outputs, self.onnx_node.output))
         on = {port: channels[tensor] for port, tensor in tensors.items()}
-        return placed(type(self), facts.formals(), on, facts.owned)
+        return placed(type(self), facts.formals(), on)
 
     # -- inference ------------------------------------------------------------------------
 

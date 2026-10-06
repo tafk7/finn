@@ -178,9 +178,10 @@ for memory in ("none", "memstream"):
         "matmul.compute": "packed",
     }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
+    stored = {}
     if memory == "memstream":
-        # Stored (k, n): the columns of the by-output rows.
-        facts["weights"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+        # Stored (k, n): the columns of the by-output rows; the weight channel's value.
+        stored["contents"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
         choices |= {
             "w.source.memstream.ram_style": "auto",
             "w.source.memstream.pumped_memory": False,
@@ -190,10 +191,9 @@ for memory in ("none", "memstream"):
     # The MatMul in a root that declares its streams.
     class Placed(Root):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
-        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
+        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM, **stored)
         y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=PLATFORM)
         matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
-        w.contents = matmul.weight_values
 
     root = commit(design_space(Placed()), choices)
     root = commit(root, {
