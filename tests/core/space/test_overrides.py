@@ -16,8 +16,8 @@ from __future__ import annotations
 import re
 
 import pytest
-from core.space._results_support import codes
 
+from core.space._results_support import codes
 from finn.core.space import (
     Available,
     ConfigurationError,

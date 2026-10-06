@@ -15,7 +15,6 @@ from typing import TypeVar, cast
 
 from core.space._collapse_support import answers, counts, open_space
 from core.space._toys_support import Budget, Company, Department, House
-
 from finn.core.space import (
     Decision,
     Inapplicable,

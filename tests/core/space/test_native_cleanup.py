@@ -9,8 +9,8 @@ from types import FrameType
 from typing import TYPE_CHECKING
 
 import pytest
-from core.space._native_support import source_line
 
+from core.space._native_support import source_line
 from finn.core.space import (
     Decision,
     EvaluationError,

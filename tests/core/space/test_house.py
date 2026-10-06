@@ -12,9 +12,9 @@ The house is declared in ``_toys_support``, which the collapse tests share.
 from __future__ import annotations
 
 import pytest
+
 from core.space._results_support import codes
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
-
 from finn.core.space import (
     Available,
     ConfigurationError,
