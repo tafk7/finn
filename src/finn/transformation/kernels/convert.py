@@ -40,8 +40,8 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 # Device capabilities by part pattern (fnmatch on the lower-case part), first match
-# wins: (pattern, dsp, uram, uram_init, aie). UltraScale+ ignores an UltraRAM's INIT
-# (packaging probe 4); Versal is unverified and refused until a synthesis run says
+# wins: (pattern, dsp, uram, uram_init, aie). UltraScale+ ignores an UltraRAM's INIT;
+# Versal is unverified and refused until a synthesis run says
 # otherwise (refusing is the side to reverse). A part matching no row is refused.
 DEVICES: tuple[tuple[str, DspBlock, bool, bool, bool], ...] = (
     ("xc7*", DspBlock.DSP48E1, False, False, False),  # 7 series: no UltraRAM
@@ -64,7 +64,7 @@ DEVICES: tuple[tuple[str, DspBlock, bool, bool, bool], ...] = (
 
 # Interface capabilities by shell (the builder's ``ShellFlowType`` values):
 # (clk2x, control_ports, memory_ports). No shell drives ap_clk2x yet; Vitis and SLASH
-# take no AXI-Lite on a compute partition (packaging P7, P8); the shells' memory
+# take no AXI-Lite on a compute partition; the shells' memory
 # ports are their IODMAs', none a compute partition's. The Zynq shell's AXI
 # interconnect has at most 64 masters, two of them the IODMAs'. Without a shell (a
 # stitched IP, a harness: ``None``) nothing is stated away: a doubled clock, one

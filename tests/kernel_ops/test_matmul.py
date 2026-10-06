@@ -103,18 +103,18 @@ def test_the_schema_is_the_node_roots_decision_keys() -> None:
     # no KernelOp consumes it (a graph output).
     assert "w.transport" in schema and any(name.startswith("x.adapter") for name in schema)
     assert {"x.transport", "y.transport"} <= set(schema)
-    # The weights' source is the weight stream's: its keys sit under the port name.
+    # The weights' source is the weight channel's: its keys sit under the port name.
     assert schema["w.source"] == ("s", ("memstream",))
     assert schema["w.source.memstream.ram_style"] == ("s", ())
     assert not any(name.startswith("memory") for name in schema)
-    # The activations never carry a value: their stream compiles no source, so no keys.
+    # The activations never carry a value: their channel compiles no source, so no keys.
     assert not any(name.startswith("x.source") for name in schema)
     types = op(matmul_model()).get_nodeattr_types()
     assert types["compute"] == ("s", False, "", {"packed", "int8_dsp58"})
 
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:
-    """Changing a kernel's or a stream's keys changes the schema. Unreleased, the digest
+    """Changing a kernel's or a channel's keys changes the schema. Unreleased, the digest
     is re-pinned without an op-version bump (clean breaks)."""
     assert (MatMul.op_version, schema_digest(MatMul)) == (1, "f7fe5ce3d719625e")
 
@@ -144,7 +144,7 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
 
 
 def test_the_weight_sources_choices_persist_on_the_node_and_a_forced_source_is_not() -> None:
-    """The node owns its weight stream (D8): the source's keys are its attributes, under
+    """The node owns its weight channel: the source's keys are its attributes, under
     the port name. The source, its one case forced, is written only when saved on
     purpose."""
     model = matmul_model()
@@ -190,7 +190,7 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
 def test_an_unknown_attribute_is_refused() -> None:
     model = matmul_model()
     node = model.graph.node[0]
-    # MatMul's retired memory choice is no choice of it either: nothing is pinned.
+    # Nor is ``memory``: the weight channel's source owns the memory. Nothing is pinned.
     for name, value in (("PE", 2), ("memory", "memstream")):
         node.attribute.append(helper.make_attribute(name, value))
         with pytest.raises(KernelOpError, match=f"{name} is not a choice of MatMul"):
@@ -239,7 +239,7 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert isinstance(getCustomOp(model.graph.node[0], onnx_opset_version=1), MatMul)
-    # Each op class states its identity in its own body (Q2): qonnx's rule reads it
+    # Each op class states its identity in its own body: qonnx's rule reads it
     # there, and the domain's opset version is the one the module states.
     for op in (MatMul, Thresholding):
         assert "op_type" in vars(op) and "op_version" in vars(op)

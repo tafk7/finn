@@ -3,7 +3,7 @@
 
 """The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
 
-H-006's reading rule decides the node root from the graph: weights that are an
+The graph decides the node root: weights that are an
 initializer are the node's own, the weight channel's known value, which its
 ``source`` stores (``StoredMatMulNode``), keyed by their value summary's
 digest; weights on any other tensor arrive on a channel like any edge

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Traversals, stream contracts, checked composition, and a reusable memory.
+"""Traversals, channel-end contracts, checked composition, and a reusable memory.
 
 The stress cases come from baseline FINN: the tiled MVU's two internal
 ``input_gen`` adapters and the Shuffle op's inner/outer decomposition. Their

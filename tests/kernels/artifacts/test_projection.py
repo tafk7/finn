@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A1: the projection, before anything is keyed by it.
+"""The projection, before anything is keyed by it.
 
 The claim the whole package rests on is that a preimage of ordered pairs of
 tagged scalars needs no canonical-encoding dependency.  Two properties carry
@@ -87,7 +87,7 @@ def test_an_enum_is_keyed_by_member_name_not_by_value() -> None:
     assert projected == (("", "enum", f"{__name__}._Resource.DSP"),)
 
 
-# -- the two properties §6.1 names ---------------------------------------------
+# -- the two properties ------------------------------------------------------
 
 
 def test_the_preimage_of_a_nested_value_contains_no_mapping_and_no_bare_number() -> None:

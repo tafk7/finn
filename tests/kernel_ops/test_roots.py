@@ -3,7 +3,7 @@
 
 """Node roots and the bind cache.
 
-A KernelOp's Space is its kernel on the node's boundary streams: a bare kernel
+A KernelOp's Space is its kernel on the node's boundary channels: a bare kernel
 cannot commit folding (its cores bind extents from their ports). The node
 root's views answer from facts alone, the graph's pins are declarations, and
 points are cached by the facts they were bound from.

@@ -52,7 +52,7 @@ class Platform:
     - ``dsp``: the DSP block (``None``: none stated, which a DSP core refuses);
     - ``uram``: the device has UltraRAM;
     - ``uram_init``: an UltraRAM takes initial contents (UltraScale+ ignores its
-      INIT and builds block RAM: issue ``uram-initialization``);
+      INIT and builds block RAM);
     - ``clk2x``: the shell supplies an aligned 2x clock (``ap_clk2x``);
     - ``control_ports``: the AXI-Lite target ports a compute partition may present;
     - ``memory_ports``: the AXI memory ports a compute partition may use;

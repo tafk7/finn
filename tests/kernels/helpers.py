@@ -6,17 +6,17 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
 
-A kernel with children sits on streams its parent supplies, so a test places
+A kernel with children sits on channels its parent supplies, so a test places
 it in a ``Root``, the top of what is emitted, which declares them (as
 ``placed_dotp`` does for a dot-product core). ``placed_matmul`` places a
 MatMul (``matmul``) on the root's ``x`` (``in0_V``), ``w`` (``in1_V``,
 buffered), ``y`` (``out0_V``) and, with several weight sets, ``set``
-(``in2_V``). The root declares the streams and binds each one's tensor to
+(``in2_V``). The root declares the channels and binds each one's tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
 ``result_tensor``, ``set_tensor``), which reads only MatMul's facts and its
 ``realization``: one root serves every realization, a depthwise MatMul's left
-open until committed. Known weights are the weight stream's ``contents``
-(MatMul's ``weight_values``), with ``set`` its ``index``, so the stream's
+open until committed. Known weights are the weight channel's ``contents``
+(MatMul's ``weight_values``), with ``set`` its ``index``, so the channel's
 ``source`` stores them. The edge choices are the root's (``x.adapter``,
 ``w.transport``, ``w.source.memstream.ram_style``), the MatMul's below it
 (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
@@ -120,19 +120,19 @@ def placed_dotp(
     reduction: int | None = None,
     **facts: object,
 ) -> S:
-    """A dot-product core between three boundary streams, its folding factors committed.
+    """A dot-product core between three boundary channels, its folding factors committed.
 
-    The core takes its extents from the streams: ``outputs`` (N) defaults to PE
+    The core takes its extents from the channels: ``outputs`` (N) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
     stays open, as does ``reducer``, which only a core that declares it commits.
-    ``weights_range`` is the range of values the weight stream carries; the
+    ``weights_range`` is the range of values the weight channel carries; the
     datatype's own by default.
     """
     form = facts.get("form", Form.DENSE)
     n = outputs if outputs is not None else (pe if isinstance(pe, int) and pe > 0 else 1)
     k = reduction if reduction is not None else (simd if isinstance(simd, int) and simd > 0 else 1)
     x_shape = (rows, k, n) if form is Form.DEPTHWISE else (rows, k)
-    # The streams are on the core's platform; a test that omits it gets FULL_DSP48E2's.
+    # The channels are on the core's platform; a test that omits it gets FULL_DSP48E2's.
     platform = cast(Platform, facts.get("platform", FULL_DSP48E2))
 
     class Placed(Space):
@@ -171,7 +171,7 @@ def placed_dotp(
 
 
 class Root(Kernel):
-    """The top of what a test emits: the streams it declares and the kernels on them."""
+    """The top of what a test emits: the channels it declares and the kernels on them."""
 
     id = "test.root"
     version = 1
@@ -186,8 +186,8 @@ def rooted(name: str, members: Mapping[str, object]) -> Root:
 
 @cache
 def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
-    """A root placing a MatMul of ``space_type`` (``matmul``) on the streams it declares, its
-    facts its own formals and the streams' tensors MatMul's views; see the module
+    """A root placing a MatMul of ``space_type`` (``matmul``) on the channels it declares, its
+    facts its own formals and the channels' tensors MatMul's views; see the module
     docstring."""
 
     class MatMul(Root):
@@ -205,7 +205,7 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
         def several(self) -> bool:
             return self.weight_sets > 1
 
-        # Each stream's tensor is MatMul's view of it: its facts, never its ports.
+        # Each channel's tensor is MatMul's view of it: its facts, never its ports.
         @derived
         def x_tensor(self) -> Tensor:
             return self.matmul.activation_tensor
@@ -246,7 +246,7 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
 
 
 def placed_matmul(**facts: object) -> Root:
-    """A MatMul (``matmul``) in a root declaring its streams; see the module docstring."""
+    """A MatMul (``matmul``) in a root declaring its channels; see the module docstring."""
     space_type: Any = matmul_root(MatMulKernel)
     root: Root = space_type(**facts)
     return root
@@ -357,7 +357,7 @@ ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 
 def with_adapter_memories(point: S, ram_style: str = "auto") -> S:
     """Each open adapter input_gen's memory takes ``ram_style``: the flow's choice. Each
-    stream's adapter, its one viable chain, is forced."""
+    channel's adapter, its one viable chain, is forced."""
     styles = undecided(point, ADAPTER_RAM_STYLES)
     return commit(point, dict.fromkeys(styles, ram_style)) if styles else point
 
@@ -415,7 +415,7 @@ def vivado_simulator() -> bool:
 
 
 class WeightDelivery(Enum):
-    """Where the weights come from: the weight stream's ``source`` case, or the
+    """Where the weights come from: the weight channel's ``source`` case, or the
     boundary (external)."""
 
     EXTERNAL = "none"
@@ -483,10 +483,10 @@ def matmul_assembly(
 
     ``m`` rows, ``n`` outputs and the reduction ``k``; for a depthwise ``form``,
     ``k`` is the window and ``n`` the channels. ``weights`` is stored (K, N),
-    and is required by, and only accepted with, a memory: the weight stream's
+    and is required by, and only accepted with, a memory: the weight channel's
     source, forced when its one candidate is viable. The ``auto``
     ``ram_style`` default leaves memory inference to synthesis.
-    ``weight_fifo_depth`` places a FIFO on the weight stream; ``None`` connects
+    ``weight_fifo_depth`` places a FIFO on the weight channel; ``None`` connects
     it directly. The ``platform``'s clock period is the clock the module must
     meet; it sets dotp's DSP58 chain segmentation. ``core`` names the
     compute core (``packed`` or ``int8_dsp58``); left out, the one core
@@ -523,7 +523,7 @@ def matmul_assembly(
         choices["w.transport.fifo.buffer.ram_style"] = "auto"
     point = commit(matmul_point(realization=realization, **facts), choices)
     if form is Form.DEPTHWISE and realization is None:
-        # The realization sets the datapath's reduction, and so the weight stream's
+        # The realization sets the datapath's reduction, and so the weight channel's
         # tensor: each is tried on the one point.
         viable = [
             case for case in ("native", "dense") if isinstance(_realizes(point, case), Available)
@@ -558,8 +558,8 @@ def matmul_assembly(
             **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },
     )
-    # Each stream's adapter is forced; an input_gen's memory is inferred; the other
-    # streams connect directly.
+    # Each channel's adapter is forced; an input_gen's memory is inferred; the other
+    # channels connect directly.
     point = with_direct_transports(with_adapter_memories(point))
     built = point.query(Kernel.module)
     if not isinstance(built, Available):

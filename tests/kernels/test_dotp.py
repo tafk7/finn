@@ -5,7 +5,7 @@
 
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
-A core sits between three streams (``helpers.placed_dotp``): its elements and
+A core sits between three channels (``helpers.placed_dotp``): its elements and
 extents come from their tensors, and PE, SIMD and pumping are its Decisions.
 """
 

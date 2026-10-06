@@ -81,7 +81,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
 @pytest.mark.parametrize(
     ("layer", "name"),
     [
-        # What the kernels' old denylist could not see (review A3).
+        # Kernels importing above their layer: the flow, util, qonnx, KernelOps, parked code.
         ("kernels", "finn.transformation.fpgadataflow.insert_iodma.InsertIODMA"),
         ("kernels", "finn.util.basic.make_build_dir"),
         ("kernels", "finn.builder.build_dataflow"),
@@ -92,7 +92,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("dataflow", "qonnx.util.basic"),
         ("space", "finn.dataflow.tensor"),
         ("space", "numpy"),
-        # util below the flow (review A1).
+        # util below the flow.
         ("util", "finn.transformation.fpgadataflow.make_zynq_proj.ZynqBuild"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
         ("util", "finn.util.torch_hw_modules"),

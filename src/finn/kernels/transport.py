@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Stream transport: native ready/valid pins, AXIS, and the contract of one stream end.
+"""Transport: native ready/valid pins, AXIS, and the contract of one channel end.
 
 **Ready/valid.** A transfer occurs on the associated rising clock edge with
 valid and ready, outside reset. Valid data and sidebands are held while
@@ -19,10 +19,10 @@ and checked here together:
 
 ``compatibility`` compares a producing and a consuming end: the producer's
 values must fit the consumer's element (``ScalarEncoding.fits``). A logical
-mismatch can only be repaired by an adapter, which
-``finn.dataflow.traversal.classify`` names (reorder or replay, width
-conversion, lane regroup). A pure lane
-permutation, padding and reset polarity leave the sequence unchanged; they are
+mismatch is the channel's to repair: its plan (``finn.dataflow.plan``) names the
+steps (reorder or replay, width conversion, markers) and its adapter carries
+them out (``finn.kernels.adapters``). A pure lane permutation, padding and
+reset polarity leave the sequence unchanged; they are
 properties of the connection, realized as wires (``lane_permutation``,
 ``marker_pairs``): a producer's padding bits are left unconnected, and a
 consumer's padding is driven with zeros.
@@ -217,7 +217,7 @@ class AxisBeat:
         )
 
 
-# -- the contract of one stream end --------------------------------------------------------
+# -- the contract of one channel end -------------------------------------------------------
 
 
 class Level(Enum):
@@ -235,7 +235,7 @@ class Mismatch:
 
 @dataclass(frozen=True)
 class StreamContract:
-    """One stream end: its transport plus the logical sequence it carries.
+    """One channel end: its transport plus the logical sequence it carries.
 
     ``markers`` maps a transport marker to the rule it follows: a one-bit
     marker by its signal (``olast``), or one bit of a wider loop-completion
@@ -305,7 +305,7 @@ def compatibility(
 ) -> tuple[Mismatch, ...]:
     """Every reason ``source`` may not drive ``sink``; empty when they connect.
 
-    Elements are not compared: a stream's ``well_formed`` holds each end against
+    Elements are not compared: a channel's ``well_formed`` holds each end against
     its tensor's element, and every stage between carries that element.
 
     ``*_is_top`` marks an end on the composed module's own boundary, whose

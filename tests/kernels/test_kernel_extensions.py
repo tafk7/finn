@@ -151,10 +151,9 @@ def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_va
 
 
 def test_composite_extends_kernel_with_typed_optional_views_and_independent_nodes() -> None:
-    # ScopeBuilder is removed: the declarations are built in plain Python and
-    # ``composite`` names them as a Space class on the kernel base. Its exposed ``dtype``
-    # binding becomes a formal each placing node binds by name; each node call is
-    # an independent scope.
+    # The declarations are built in plain Python and ``composite`` names them as a
+    # Space class on the kernel base. ``dtype`` is a formal each placing node binds
+    # by name; each node call is an independent scope.
     class InterfaceKernel(Kernel):
         id = "test.interface"
 

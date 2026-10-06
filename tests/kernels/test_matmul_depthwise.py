@@ -67,7 +67,7 @@ def parameters(module, label):
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
-    # Nothing is replayed: the stream only closes each window's frame.
+    # Nothing is replayed: the channel only closes each window's frame.
     assert configured.x.plan.steps == (Step.MARKERS,)
     boundary = configured.x.endpoints.source
     # Rows, then channel folds, then window folds; lane s * PE + p is window
@@ -136,14 +136,14 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
 
 
 def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
-    # The root binds its weight stream's tensor to MatMul's weight_tensor, which
+    # The root binds its weight channel's tensor to MatMul's weight_tensor, which
     # follows the realization: open, the tensor waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
     point = matmul_point(**FACTS, weights=weights)
     pending = point.query(matmul_root(MatMulKernel).w.tensor)
     assert isinstance(pending, Unresolved)
     assert {finding.owner for finding in pending.findings} == {"matmul.realization"}
-    # Whether the weight stream has a value is the weights' presence, a fact: its
+    # Whether the weight channel has a value is the weights' presence, a fact: its
     # source is forced while the value itself waits on the realization.
     assert point.w.valued
     assert ("w.source", "memstream") in {

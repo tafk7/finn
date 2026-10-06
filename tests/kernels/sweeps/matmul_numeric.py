@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Explicit XSI matrix conformance for physical-only MatMulKernel production builds.
+"""Explicit XSI matrix conformance for MatMulKernel production builds.
 
 Run with Vivado selected (FinnLib is the ``finnlib`` resource). The
 observation wrapper only exposes child pins; all arithmetic and transport RTL
@@ -146,7 +146,7 @@ def _instance(label):
 
 
 def _replay_node(module):
-    """The activation stream's adapter feeding dotp, and the frame-marker bit dotp reads."""
+    """The activation channel's adapter feeding dotp, and the frame-marker bit dotp reads."""
     ((source, bit),) = [
         (link.source.instance, f"{marker[0]}[{marker[1] or 0}]")
         for link in module.fragment.links

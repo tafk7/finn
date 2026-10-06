@@ -5,8 +5,7 @@
 and the toolchain it hands to each transformation that runs Vivado or Vitis HLS.
 
 The Chain (``kernels.chain``), its choices saved, as the KernelOps' model; no Vivado and no
-Vitis HLS (the build itself: the TFC_W2A2 build script in the scratchpad's
-records/zynq-kernel-build-2026-10-04).
+Vitis HLS runs (the bitstream build itself is not a test).
 """
 
 from __future__ import annotations

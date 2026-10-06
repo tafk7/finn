@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Behavioral vertical slices for the replacement runtime."""
+"""Behavioral vertical slices through the runtime: binding, commitment, reads and refusals."""
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass

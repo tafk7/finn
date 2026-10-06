@@ -3,8 +3,8 @@
 
 """The datatype boundary: what may enter the stack, and as what.
 
-Adopting QONNX datatypes removes a lossy conversion, and these pin the three
-things that removal depends on -- that identity is by canonical name, that
+QONNX's datatype is the one datatype identity, with no lossy local form, and these
+pin the three things that depends on -- that identity is by canonical name, that
 recognition never promises more than the snapshot can deliver, and that a
 datatype and its own name never get confused for one another.
 
@@ -34,8 +34,8 @@ from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 #: The datatype domain at ``object``, so a test can offer it values of any type.
 QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)
 
-#: Every datatype family the stack could be handed, including the ones the
-#: previous representation could not express at all.
+#: Every datatype family the stack could be handed, including the ones a
+#: (type, bit width) pair cannot express at all.
 REPRESENTATIVE = (
     "BINARY",
     "BIPOLAR",
@@ -54,9 +54,9 @@ REPRESENTATIVE = (
     "FLOAT<5,10,7>",
 )
 
-#: Pairs that reduced to one value under ``NumericElementType`` and must not.
-#: ``TERNARY``/``INT2`` is the one that was live: a ternary MatMul was admitted
-#: and its artifact declared ``INT2``.
+#: Pairs of one width and different meanings, which a (type, bit width) pair
+#: would merge and must not. ``TERNARY``/``INT2`` is the one that matters most:
+#: merged, a ternary MatMul would be admitted and its artifact declare ``INT2``.
 FORMERLY_COLLIDING = (
     ("TERNARY", "INT2"),
     ("FLOAT16", "FLOAT<5,10,7>"),
@@ -76,13 +76,12 @@ def test_equal_width_types_with_different_meanings_stay_different(left: str, rig
 
 
 def test_uint1_and_binary_are_deliberately_the_same_value() -> None:
-    """The one merge adoption brings with it, pinned as accepted.
+    """The one merge QONNX's canonicalization makes, pinned as accepted.
 
     QONNX canonicalizes ``UINT1`` to ``BINARY``, so they are one value, not two
-    that happen to compare equal.  Adopting QONNX means adopting its
-    canonicalization; a FINN-local exception here would re-establish the second
-    authority this whole change removes.  Recorded so the merge reads as a
-    decision rather than being rediscovered later as a bug.
+    that happen to compare equal.  FINN takes QONNX's canonicalization as it is;
+    a FINN-local exception here would be a second authority for a datatype's
+    identity.  Pinned so the merge reads as a decision, not a bug.
     """
 
     assert DataType["UINT1"] == DataType["BINARY"]
@@ -294,8 +293,8 @@ def test_freezing_keeps_the_one_immutable_value() -> None:
 
 
 def test_a_datatype_keeps_its_key_in_a_mapping() -> None:
-    """The hazard the old defences guarded (a mutated key orphaned in a dict) is
-    gone: the mutation is refused, so the entry stays reachable under its key."""
+    """A key mutated in place would be orphaned in a dict; the mutation is refused,
+    so the entry stays reachable under its key."""
 
     held = DataType["INT8"]
     holder = {held: "eight"}

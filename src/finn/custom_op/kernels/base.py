@@ -1,14 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""KernelOp: a qonnx ``CustomOp`` that binds one kernel point (boundary note D1).
+"""KernelOp: a qonnx ``CustomOp`` that binds one kernel point.
 
-An op reads its facts from the attached model only (H-002, H-006's reading
-rule): input shapes and datatype annotations, initializers admitted by their
-value summary, and the build target from the model's ``finn.platform``
-metadata. It binds its
-node root (``finn.custom_op.kernels.roots``) through the bind cache, replays the
-choices its node holds, and answers the compiler's queries from the result.
+An op reads its facts from the attached model only: input shapes and datatype
+annotations, initializers admitted by their value summary, and the build target
+from the model's ``finn.platform`` metadata. It binds its node root
+(``finn.custom_op.kernels.roots``) through the bind cache, replays the choices
+its node holds, and answers the compiler's queries from the result.
 
 Two kinds of attribute:
 
@@ -422,7 +421,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     def owned_channels(self) -> dict[str, Channel]:
         """The channels this node declares beside its outputs, by tensor: a stored
-        parameter's, its tensor the kernel's view (D5, D6)."""
+        parameter's, its tensor the kernel's view."""
         return {}
 
     def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:

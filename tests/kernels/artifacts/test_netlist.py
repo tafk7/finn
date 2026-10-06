@@ -259,7 +259,7 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
         associated_clock="clk",
         associated_reset="rst",
     )
-    # A FIFO on no stream: its stream inputs are held.
+    # A FIFO on no channel: its data inputs are held.
     leaf = replace(fifo(8), held=Held((("idat", 0), ("ivld", 0), ("ordy", 0))))
     controlled = replace(leaf, abi=replace(leaf.abi, pins=(*leaf.abi.pins, config)))
     top = Bus(

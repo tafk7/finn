@@ -8,9 +8,9 @@
 - **channels**, one per ONNX tensor, in node order: a node's graph inputs, the
   parameter channels it owns (named after the initializer, the kernel's view),
   its outputs. A channel's tensor is the graph's value_info and annotation
-  (D6), its platform the model's target's. Only the subgraph's ONNX inputs and
+  its platform the model's target's. Only the subgraph's ONNX inputs and
   outputs are boundaries, named by the shell's convention ``s_axis_<i>`` and
-  ``m_axis_<i>`` (D4): a channel refuses a boundary no port names
+  ``m_axis_<i>``: a channel refuses a boundary no port names
   (``channel-boundary``);
 - **kernels**, one per node, from its facts, the graph's pins as keywords;
 - **replay**: each node's kernel choices, then the edge choices (an edge's
@@ -18,7 +18,7 @@
   graph refuses is stale, dropped and reported, and the forced case applies
   again;
 - **owners**: each member's node and attribute prefix, how a choice made in the
-  root goes back to the node that persists it (D8): a kernel's on its node, an
+  root goes back to the node that persists it: a kernel's on its node, an
   edge's on its consumer, a parameter channel's on its value owner. An output
   boundary consumed by no KernelOp (a graph output) is its producer's, under
   its output port; one a KernelOp outside the partition consumes is that
@@ -109,7 +109,7 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
 
 def _handed_on(model: ModelWrapper, nodes: list[NodeProto]) -> set[str]:
     """The outputs of ``nodes`` a KernelOp outside them consumes: their transport is that
-    consumer's, chosen in its own partition (D8)."""
+    consumer's, chosen in its own partition."""
     inside = {id(node) for node in nodes}
     consumed = {
         tensor
@@ -254,7 +254,7 @@ def partition_root(
 def save_partition_choices(
     model: ModelWrapper, root: PartitionRoot, choices: Mapping[str, object]
 ) -> dict[str, dict[str, object]]:
-    """Persist choices made on purpose in a partition root, each on its owning node (D8)."""
+    """Persist choices made on purpose in a partition root, each on its owning node."""
     per_node: dict[str, dict[str, object]] = {}
     for key, value in choices.items():
         head, _, rest = key.partition(".")

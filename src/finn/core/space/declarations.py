@@ -6,7 +6,7 @@ A Space class's body declares members (formals, decisions, computations,
 views) and nodes. Calling a Space class, ``Room(area=12)``, declares a node: a
 template with bindings, compiled only by ``design_space``. Attribute access on a
 node declaration, ``kitchen.finish``, is a symbolic reference to that node's
-member. It is typed as the member's value (option A); at runtime it refuses
+member. It is typed as the member's value; at runtime it refuses
 every value-like use with ``ReferenceUseError``.
 """
 
@@ -218,7 +218,8 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
     """A class member descriptor.
 
     On a configuration it reads the value; on a node declaration it returns a
-    symbolic ``MemberRef`` (statically typed as the value, see DESIGN.md).
+    symbolic ``MemberRef``, statically typed as the value, which refuses value-like
+    use at runtime (``ReferenceUseError``).
     """
 
     @overload
@@ -384,7 +385,7 @@ class Param(ValueDecl[T], Generic[T]):
     ``Param()`` is required: preparing a Space class in which nothing supplies it is
     a definition error. ``default=`` makes it optional, and ``required=False``
     leaves it unsupplied when nobody binds it. A formal annotated with a Space class
-    (``output: Stream = Param()``) is a reference input: the caller supplies a
+    (``output: Channel = Param()``) is a reference input: the caller supplies a
     node, placed there if it is fresh and referenced if it is placed elsewhere.
     """
 
@@ -488,7 +489,7 @@ class Param(ValueDecl[T], Generic[T]):
     if not TYPE_CHECKING:
 
         def __getattr__(self, name: str) -> Any:
-            # ``output.spec`` in the class body that declares ``output: Stream``:
+            # ``output.spec`` in the class body that declares ``output: Channel``:
             # a member of the node the reference input will name. A value formal
             # projects an attribute of its value (``platform.uram``), as a derived
             # value does.

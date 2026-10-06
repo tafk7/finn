@@ -356,7 +356,7 @@ def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
     assert [(m.node, m.value) for m in point.widths] == [("head", 3), ("body", 5)]
 
 
-# -- 7. reducibility: the old structural choice is simply a Decision over nodes ----------
+# -- 7. reducibility: the structural choice is simply a Decision over nodes --------------
 
 
 class Fixed(Space):

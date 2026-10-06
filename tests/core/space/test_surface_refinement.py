@@ -196,8 +196,8 @@ def test_call_keywords_do_not_steal_formal_names_and_request_errors_precede_snap
     point = design_space(Example(parameters=3))
     assert point.parameters == 3
     snapshots.clear()
-    # A call on a Space class binds formals by keyword only; the positional mapping of the
-    # old constructor is refused before any value is snapshotted.
+    # A call on a Space class binds formals by keyword only; a positional mapping is
+    # refused before any value is snapshotted.
     with pytest.raises(DefinitionError, match="by keyword"):
         Example({Example.parameters: 3}, parameters=4)  # type: ignore[arg-type, call-arg]
     assert snapshots == []

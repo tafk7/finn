@@ -173,7 +173,7 @@ OPTIONAL_DTYPE = or_none(QONNX_DATATYPE_VALUE_SEMANTICS)
 
 
 class AxiStreamPort(Port):
-    """One stream interface: what it presents of its channel's tensor, its element, its pins.
+    """One AXI-Stream interface: what it presents of its channel's tensor, its element, its pins.
 
     It presents either its kernel's ``schedule``, projected through the indices
     it reads (``index``), its lane order (``lanes``, outer first), the indices

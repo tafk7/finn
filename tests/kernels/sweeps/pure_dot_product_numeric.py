@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Bounded arithmetic conformance of the physical dotp component.
+"""Bounded arithmetic conformance of the dotp kernel.
 
 Run explicitly on a machine with XSI; this is not part of ordinary unit tests.
-Packing and transport reuse the existing independent RTL test helpers. The
-caller proves a result width from its own reduction bound, then supplies
-that dtype to the physical component. No logical kernel or contract is needed.
+Packing and transport are the sweeps' shared helpers (``dotp_support``,
+``rtl_transport``). The caller proves a result width from its own reduction
+bound, then supplies that dtype to the kernel.
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
         result_bits += 1
     result_type = DataType[f"INT{result_bits}"]
     space_type = Int8Dsp58DotpKernel if c.int8 else PackedDotpKernel
-    # The core between three streams: its extents are the case's, its folding factors PE and SIMD.
+    # The core between three channels: its extents are the case's, its folding factors PE and SIMD.
     point = placed_dotp(
         space_type,
         activation_dtype=a_type,

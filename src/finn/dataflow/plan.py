@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What must happen between two beat sequences of one tensor: a stream's plan.
+"""What must happen between two beat sequences of one tensor: a channel's plan.
 
 ``plan(source, sink)`` compares what a producer presents with what a consumer
 requires and returns the canonical chain of steps that turns one into the
 other, each step between two beat sequences:
 
 - ``REORDER``: a buffered loop-nest reorder, replay included (``classify``'s
-  ``Reorder`` carries the ``input_gen`` parameters);
+  ``Reorder``: the frame, loop extents and strides of the nest);
 - ``WIDTH``: the same element order, another number of lanes a beat;
 - ``MARKERS``: the consumer's marker rules synthesized on an unchanged
   sequence.
@@ -22,7 +22,7 @@ same sequence (a lane permutation, carrier padding) is a property of the
 connection, realized as wires, and not a step. An empty plan connects the ends
 directly.
 
-The plan says what must happen, not which hardware does it: a stream's
+The plan says what must happen, not which hardware does it: a channel's
 ``adapter`` Decision chooses a realization, and each candidate refuses a plan
 it cannot carry out. ``Unrealizable`` names what no chain can repair: another
 element order or positions, or a single pass feeding a cyclic consumer.

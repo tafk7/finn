@@ -83,8 +83,7 @@ def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> 
     bench.write_text("`timescale 1ns/1ps\n" + testbench)
     vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(str(shutil.which("xelab"))).parents[1])))
     commands = (
-        # Relaxed, as FINN's own flow elaborates (finn_xsi: ``xelab -relax``): FinnLib's
-        # inner_shuffle.sv reads a signal before declaring it, which strict mode refuses.
+        # Relaxed, as FINN's own flow elaborates (finn_xsi: ``xelab -relax``).
         [
             "xvlog",
             "--sv",

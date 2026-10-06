@@ -644,7 +644,7 @@ class _Allocation:
             self.table.shared[node] = (choice.index, member)
 
     def reference_input(self, scope: ScopeDraft, name: str, formal: Param[object]) -> None:
-        """``output: Stream = Param()``: place a fresh node here, or reference a placed one.
+        """``output: Channel = Param()``: place a fresh node here, or reference a placed one.
 
         Either way the input gets a presence node: a constant guarded by the
         reached node's own guard, so reading the input of an absent node is
@@ -719,7 +719,7 @@ class _Allocation:
         chain of forwarding composites is walked when reading it. The
         forwarding node is a user of that node too, represented by the nodes
         it forwards through (``users_candidates``): ``Users`` sees a kernel's
-        port that references a stream through its kernel's input.
+        port that references a channel through its kernel's input.
         """
         for task in self.pending:
             draft = self.table.drafts[task.scope]

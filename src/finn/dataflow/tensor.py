@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The fact a stream carries: a tensor of one element.
+"""The fact a channel carries: a tensor of one element.
 
 A ``Tensor`` is a row-major shape of positive extents and the element
-``ScalarEncoding`` every position holds. Both ends of a stream read it; each
+``ScalarEncoding`` every position holds. Both ends of a channel read it; each
 end presents its own traversal of it (``finn.dataflow.traversal``). Its
-identity is the stream that carries it, so it holds no name.
+identity is the channel that carries it, so it holds no name.
 
 An element is a datatype and the range of its values, by default the
 datatype's. A producer that knows its values (a value owner) states a tighter
 range; one element ``fits`` another when its values are values of the other,
-which is what a stream checks between a producer and its consumer.
+which is what a channel checks between a producer and its consumer.
 """
 
 from __future__ import annotations

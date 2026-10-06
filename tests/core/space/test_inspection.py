@@ -136,7 +136,7 @@ def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
     assert_type(decision, DecisionHandle[int])
     assert_type(value, ValueHandle[int])
     assert_type(point.field(Example.lanes), BoundDecision[int])
-    # DecisionRef is gone: a discovered handle is itself an edit key of the mapping form.
+    # A discovered handle is itself an edit key of the mapping form.
     trial = point.with_choices({decision: 2})
     assert trial.query(value) == Available(2)
     assert trial.query(decision) == Available(2)
@@ -195,9 +195,8 @@ def test_handles_follow_model_identity_across_starts_without_retaining_point_sta
 
 
 def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> None:
-    # Replaces "a singleton choice exposes no editable selector": a Decision over
-    # nodes is an ordinary Decision, so even one candidate is an owned, editable
-    # selector. A None candidate places nothing and has no scope or Space class.
+    # A Decision over nodes is an ordinary Decision, so even one candidate is an
+    # owned, editable selector. A None candidate places nothing and has no scope or Space class.
     class Child(Space):
         value = Const(1)
 

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One schedule derives every port's traversal: the S0 roster, checked independently.
+"""One schedule derives every port's traversal: the kernel roster, checked independently.
 
 Each derived traversal is compared with an independent reference: a form
 FINN's conventions define (``vector_major``, ``tile``), a traversal pinned by

@@ -68,7 +68,7 @@ def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
 
 
 def eltwise(pe=2, **changes):
-    """Flat: no stream binds its extent, so its folding factor is any the RTL takes, committed
+    """Flat: no channel binds its extent, so its folding factor is any the RTL takes, committed
     as a choice."""
     facts = dict(
         operation="ADD",

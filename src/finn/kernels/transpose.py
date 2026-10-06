@@ -7,8 +7,7 @@ A row-major ``(I, J)`` matrix, SIMD elements of a row a beat, becomes its
 columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
 candidate of a channel's ``adapter`` Decision (``finn.kernels.adapters``): a
 kernel with children places it explicitly, and a channel realizes lane regroups
-through the common lane count instead. The defect that kept it out (see
-``TransposeKernel``) is fixed in FinnLib, which reopens that option.
+through the common lane count instead.
 """
 
 from __future__ import annotations
@@ -43,18 +42,12 @@ class TransposeKernel(Kernel):
     output presents each matrix column by column, SIMD elements of a column a
     beat. SIMD, a Decision, divides I and J; I and J are bound from the ports.
 
-    Needs FinnLib ``99d75e8`` ("inner_shuffle: read a page only once all of it
-    is written"), which is pinned; ``d03f2fc`` predates it. The RTL writes matrices
-    alternately into two pages. Before the fix its read guard held the reader
-    back from the first page only, so whenever the output drained faster than
-    the input arrived (stalled or bursty input, as behind a ``vpc``) it read the
-    second page before that page's last rows were written: undefined lanes, the
-    lanes of the last rows. And a page counted as written once the write address
-    reached its last beat, before that beat was written, so an input pausing
-    there released the page early and then replayed it. Every SIMD (1 included)
-    and shape tried failed under a slow enough input; a free-running input
-    never failed. ``tests/kernels/test_conformance.py``'s transpose case fails
-    against ``d03f2fc``.
+    The RTL writes matrices alternately into two pages, and reads a page only
+    once all of it is written, its last beat included (FinnLib ``99d75e8`` and
+    later; the pin includes it). Without that guard an output draining faster
+    than the input arrives (stalled or bursty input, as behind a ``vpc``) reads
+    lanes not yet written. ``tests/kernels/test_conformance.py``'s transpose
+    case runs stalled and behind a ``vpc``, so it checks the guard.
     """
 
     id = "finnlib.inner_shuffle"
