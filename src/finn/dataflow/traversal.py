@@ -366,6 +366,12 @@ class LevelEnd:
     def asserted(self, beat: int) -> bool:
         return (beat + 1) % self.beats == 0
 
+    @property
+    def constant(self) -> bool:
+        """A level of one beat closes on every beat: a constant, which every sequence
+        carries."""
+        return self.beats == 1
+
     def aligned(self, form: Traversal) -> bool:
         """Whether the level closes whole innermost loops of ``form``."""
         if form.beats % self.beats:

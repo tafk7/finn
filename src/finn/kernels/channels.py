@@ -99,7 +99,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd
+from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd, Marker
 from finn.kernels.base import BOUNDARY, CLOCK, NETLIST, PORT, RESET
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -147,10 +147,11 @@ def wired(
 ) -> Link:
     """One hop that connects directly, as wires: each sink lane from its source lane
     (``lane_permutation``), and each marker the sink requires from the source bit that
-    guarantees it (``marker_pairs``)."""
-    markers = []
+    guarantees it, or tied high when it closes every beat (``marker_pairs``)."""
+    markers: list[Marker] = []
     for offered, required in marker_pairs(produced, consumed):
-        (signal, bit), (pin, position) = marker_bit(offered), marker_bit(required)
+        signal, bit = (None, None) if offered is None else marker_bit(offered)
+        pin, position = marker_bit(required)
         markers.append((signal, bit, pin, position))
     return Link(
         _end(source, produced),

@@ -161,10 +161,12 @@ def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
 
 
 class PreferUltra:
-    """The placeholder's ranking, with ``ultra`` first wherever it is viable."""
+    """The placeholder's ranking at two lanes, with ``ultra`` first wherever it is viable.
+    Two lanes leave each MatMul's reduction two beats, which its activation channel's
+    adapter frames (a frame of one beat needs none: its marker is tied high)."""
 
     def rank(self, choice: inspection.Viable) -> Sequence[object]:
-        return sorted(PlaceholderPolicy().rank(choice), key=lambda case: case != "ultra")
+        return sorted(PlaceholderPolicy(lanes=2).rank(choice), key=lambda case: case != "ultra")
 
 
 def adapter_memories(model: ModelWrapper) -> dict[str, object]:

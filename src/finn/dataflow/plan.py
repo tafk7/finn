@@ -19,8 +19,9 @@ mismatch of lanes and beat order is ``WIDTH`` then ``REORDER``, or ``REORDER``
 then ``WIDTH``. Every sequence step invalidates the markers before it, so a
 marker the consumer requires is synthesized after the last one. What stays the
 same sequence (a lane permutation, carrier padding) is a property of the
-connection, realized as wires, and not a step. An empty plan connects the ends
-directly.
+connection, realized as wires, and not a step; so is a marker closing every beat
+(``LevelEnd.constant``), which every sequence carries. An empty plan connects
+the ends directly.
 
 The plan says what must happen, not which hardware does it: a channel's
 ``adapter`` Decision chooses a realization, and each candidate refuses a plan
@@ -160,7 +161,9 @@ def plan(source: BeatSequence, sink: BeatSequence) -> Plan:
         after = BeatSequence(form)
         hops.append(Hop(step, current, after, reorder))
         current = after
-    missing = tuple(rule for rule in sink.markers if rule not in current.markers)
+    missing = tuple(
+        rule for rule in sink.markers if rule not in current.markers and not rule.constant
+    )
     if missing:
         marked = BeatSequence(current.form, markers=(*current.markers, *missing))
         hops.append(Hop(Step.MARKERS, current, marked))

@@ -105,9 +105,7 @@ def _pack(values, bits):
     return sum((int(value) & mask) << (index * bits) for index, value in enumerate(values))
 
 
-def _observation_wrapper(
-    pins, entry_point, directory, activation_bits, weight_bits, compute, replay, last
-):
+def _observation_wrapper(pins, entry_point, directory, activation_bits, weight_bits, compute):
     ports, connections = [], []
     for name, info in abi_pins(pins).items():
         width = f" [{info.width - 1}:0]" if info.width > 1 else ""
@@ -115,7 +113,20 @@ def _observation_wrapper(
         connections.append(f".{name}({name})")
     observations, assignments = {}, []
     for label, child, names, bits in (
-        ("replay", replay, ("odat", "ovld", "ordy", last), activation_bits),
+        # What the core consumes: the replayed, framed activations, from its channel's
+        # adapter or, with nothing to replay and one-beat frames, the boundary with the
+        # frame marker tied high.
+        (
+            "activations",
+            compute,
+            (
+                "s_axis_input_tdata",
+                "s_axis_input_tvalid",
+                "s_axis_input_tready",
+                "s_axis_input_tlast",
+            ),
+            activation_bits,
+        ),
         (
             "weights",
             compute,
@@ -143,18 +154,6 @@ def _observation_wrapper(
 def _instance(label):
     """The instance an emitted netlist names for a label."""
     return "u_" + label.replace(".", "_")
-
-
-def _replay_node(module):
-    """The activation channel's adapter feeding dotp, and the frame-marker bit dotp reads."""
-    ((source, bit),) = [
-        (link.source.instance, f"{marker[0]}[{marker[1] or 0}]")
-        for link in module.fragment.links
-        if (link.sink.instance or "").startswith("matmul.compute")
-        for marker in link.markers
-        if marker[2] == "s_axis_input_tlast"
-    ]
-    return _instance(source), bit
 
 
 def run(
@@ -300,7 +299,6 @@ def run(
             for label, _ in built.module.fragment.instances
             if label.startswith("matmul.compute")
         ),
-        *_replay_node(built.module),
     )
     sources.append(str(wrapper))
     # Dense rows are replayed once per output fold; depthwise beats pass once.
@@ -336,8 +334,8 @@ def run(
         )
         actual = [word & result_mask for word in measured["outputs"]["out0_V"]]
         trace = measured["observations"]
-        assert trace["replay"]["words"] == replay_expected
-        assert trace["replay"]["last"] == last_expected
+        assert trace["activations"]["words"] == replay_expected
+        assert trace["activations"]["last"] == last_expected
         consumed_weights = trace["weights"]["words"]
         assert len(actual) == len(expected_words)
         if sets > 1:

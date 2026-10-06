@@ -28,6 +28,7 @@ frame, ``DIMS`` and ``COEFS`` are ``classify``'s; the marker step that follows
 it merges into the same module, whose ``olst[d]`` bits close the levels
 ``DIMS[d:]``, split or grouped until every required level is one of them.
 Marker synthesis alone is an ``input_gen`` that passes its frames in order. A
+marker closing every beat is no step: the connection ties it high. A
 width conversion is a ``vpc`` over vectors of the two lane counts' least common
 multiple, which the channel must hold whole. Each candidate places its modules
 as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
@@ -36,8 +37,10 @@ ports, which the channel checks like any other end.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
-directly; it is not a candidate, and a kernel with children places it explicitly
-(``finn.kernels.transpose``).
+directly, but it is not a candidate: a channel realizes every lane regroup
+through the common lane count (``vpc_input_gen_vpc``), and ``TransposeKernel``
+(``finn.kernels.transpose``) is ``inner_shuffle`` for a parent to place
+explicitly.
 """
 
 from __future__ import annotations

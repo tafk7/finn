@@ -89,6 +89,8 @@ def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
         wiring = [beats[0].index(position) for position in wanted[0]]
         assert [tuple(beat[lane] for lane in wiring) for beat in beats] == wanted
         for rule in sink.markers:
+            if rule.constant:
+                continue  # tied high by the connection: asserted on every beat
             depth = levels.index(rule)
             asserted = [mark[depth] for mark in marks]
             assert asserted == [rule.asserted(beat) for beat in range(len(beats))]
@@ -139,8 +141,9 @@ def test_known_plans_realize_as_their_candidates():
         "input_gen",
         "vpc",
     )
-    # A frame of one beat (SIMD = K), with and without a replay.
-    assert check(BeatSequence(rows), BeatSequence(rows, markers=(LevelEnd(1),))) == ("input_gen",)
+    # A frame of one beat (SIMD = K) closes on every beat: its marker is tied high, no
+    # step; with a replay, the reorder alone.
+    assert check(BeatSequence(rows), BeatSequence(rows, markers=(LevelEnd(1),))) == ()
     one = vector_major((3, 2), 2)
     assert check(
         BeatSequence(one), BeatSequence(one.replayed(3, inner_beats=1), markers=(LevelEnd(1),))

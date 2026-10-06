@@ -21,7 +21,11 @@ from qonnx.transformation.base import Transformation
 
 from finn.transformation.fpgadataflow import make_zynq_proj
 from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
-from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    PARTITION_INPUTS,
+    PARTITION_OUTPUTS,
+    partition_facts,
+)
 from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
 from finn.util import hls
@@ -43,6 +47,10 @@ def test_a_model_of_kernel_ops_becomes_iodma_and_kernel_partitions(tmp_path: Pat
     ]
     # The KernelOps' partition states its facts; the IODMAs' widths came from them.
     inputs, outputs = partition_facts(bodies[1])
+    # They describe that partition only: neither the model it was cut from, nor the
+    # parent graph, nor an IODMA's body carries them.
+    for other in (model, parent, bodies[0], bodies[2]):
+        assert (other.get(PARTITION_INPUTS), other.get(PARTITION_OUTPUTS)) == (None, None)
     assert (inputs[0]["tdata"], outputs[0]["tdata"]) == (8, 16)
     assert getCustomOp(bodies[0].graph.node[0]).get_nodeattr("streamWidth") == 8
     assert getCustomOp(bodies[2].graph.node[0]).get_nodeattr("streamWidth") == 16

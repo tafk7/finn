@@ -243,15 +243,16 @@ class LinkEnd:
         )
 
 
-Marker = tuple[str, Union[int, None], str, Union[int, None]]
-"""(source pin, bit, sink pin, bit); a bit of None is a one-bit marker pin."""
+Marker = tuple[Union[str, None], Union[int, None], str, Union[int, None]]
+"""(source pin, bit, sink pin, bit); a bit of None is a one-bit marker pin, and a source
+pin of None a constant marker, tied high."""
 
 
 @dataclass(frozen=True)
 class Link:
     """One channel hop: sink lane ``i`` takes source lane ``lanes[i]``, lane zero least
     significant, each ``lane_bits`` wide; valid forward, ready back, and each marker pair
-    from source to sink."""
+    from source to sink (a constant marker, closing every beat, tied high)."""
 
     source: LinkEnd
     sink: LinkEnd
@@ -378,8 +379,9 @@ class Composed:
                 if pins[end.data].width != end.data_bits:
                     raise BuildError(f"{where}.{end.data} is not {end.data_bits} bits")
             for source, _, sink, _ in link.markers:
-                for instance, pin in ((link.source.instance, source), (link.sink.instance, sink)):
-                    if pin not in pins_of(instance, "a marker"):
+                ends = ((link.source.instance, source), (link.sink.instance, sink))
+                for instance, pin in ends:
+                    if pin is not None and pin not in pins_of(instance, "a marker"):
                         raise BuildError(f"{instance or 'the root'} has no marker pin {pin!r}")
         for item in self.fragment.exports:
             pins = pins_of(item.instance, "a presented bus")
