@@ -123,7 +123,7 @@ constraint-dependencies = [
 [tool.uv.sources]
 # Unreleased commits FINN is developed against. Development and CI only: published
 # metadata carries the plain requirements above.
-qonnx = { git = "https://github.com/tafk7/qonnx.git", rev = "06f00c27b23219af459ec927cdaf9dc52c1f39e0" }
+qonnx = { git = "https://github.com/tafk7/qonnx.git", rev = "8a1d1d49ad30d376c96c1a01c0f31f99719df07e" }
 brevitas = { git = "https://github.com/Xilinx/brevitas.git", rev = "aad4d5a293db6f2ec622a92a5d3278e47072453e" }
 dataset-loading = { git = "https://github.com/fbcotter/dataset_loading.git", rev = "5b9faa226e5f7c857579d31cdd9acde8cdfb816f" }
 torch = { index = "pytorch-cpu" }
