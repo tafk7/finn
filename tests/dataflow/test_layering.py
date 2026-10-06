@@ -22,4 +22,9 @@ def test_the_values_import_no_other_layer() -> None:
     ``finn.core.space`` (or any other FINN layer) is a violation."""
 
     assert BY_NAME["dataflow"].imports == ()
-    assert BY_NAME["tests.dataflow"].imports == ("dataflow", "tests.layering")
+    assert BY_NAME["tests.dataflow"].imports == (
+        "dataflow",
+        "tests.layering",
+        "tests.value_classes",
+    )
+

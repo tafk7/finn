@@ -133,7 +133,7 @@ def boundary_contract(
     form = sequence.form
     beat = AxisBeat(name, element.dtype, form.lanes, endpoint=endpoint, last=bool(sequence.markers))
     transport = beat.native(clock=CLOCK, reset=RESET)
-    markers = {transport.markers[0].signal: sequence.markers[0]} if sequence.markers else {}
+    markers = ((transport.markers[0].signal, sequence.markers[0]),) if sequence.markers else ()
     return StreamContract(transport, element, form, sequence.repetition, markers)
 
 

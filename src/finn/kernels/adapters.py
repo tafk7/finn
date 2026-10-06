@@ -311,13 +311,13 @@ class StreamAdapter(Space):
         for index, stage in enumerate(realization):
             name = _stage_name(kinds, index)
             kernel = getattr(self, name)
-            offered: dict[str, LevelEnd] = {}
+            offered: tuple[tuple[str, LevelEnd], ...] = ()
             if isinstance(stage.module, Generate):
-                offered = {
-                    f"olst[{depth}]": level
+                offered = tuple(
+                    (f"olst[{depth}]", level)
                     for depth, level in enumerate(stage.module.levels)
                     if level in stage.sink.markers
-                }
+                )
             found.append(
                 Stage(
                     kernel.module,

@@ -31,7 +31,6 @@ consumer's padding is driven with zeros.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -237,9 +236,9 @@ class Mismatch:
 class StreamContract:
     """One channel end: its transport plus the logical sequence it carries.
 
-    ``markers`` maps a transport marker to the rule it follows: a one-bit
-    marker by its signal (``olast``), or one bit of a wider loop-completion
-    marker as ``signal[bit]`` (``olst[1]``). For a producer these are
+    ``markers`` pairs a transport marker with the rule it follows, in key
+    order: a one-bit marker by its signal (``olast``), or one bit of a wider
+    loop-completion marker as ``signal[bit]`` (``olst[1]``). For a producer these are
     guarantees; for a consumer, requirements. Transport markers without a rule
     can be neither required nor matched.
     """
@@ -248,7 +247,7 @@ class StreamContract:
     element: ScalarEncoding
     form: Traversal
     repetition: Repetition = Repetition.ONCE
-    markers: Mapping[str, LevelEnd] | tuple[tuple[str, LevelEnd], ...] = ()
+    markers: tuple[tuple[str, LevelEnd], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, ReadyValidStream):
@@ -263,6 +262,8 @@ class StreamContract:
                 f"exceed the {self.transport.data_width}-bit data word"
             )
         markers = dict(self.markers)
+        if len(markers) != len(self.markers):
+            raise ValueError("a transport marker follows one rule")
         widths = {marker.signal: marker.width for marker in self.transport.markers}
         for key, rule in markers.items():
             signal, bit = marker_bit(key)

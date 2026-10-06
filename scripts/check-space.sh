@@ -11,6 +11,7 @@ gate_pytest tests/core/space
 # Documentation examples are checked separately in scratchpad/space/.
 # The layer table (tests/layering.py), which every layer's tests use, and the
 # pre-commit check every gate's gate_ruff runs, are checked with the lowest layer.
-gate_ruff src/finn/core/space tests/core/space tests/layering.py scripts/_gate_precommit.py
+gate_ruff src/finn/core/space tests/core/space tests/layering.py tests/value_classes.py \
+    scripts/_gate_precommit.py
 gate_mypy -p finn.core.space
-gate_mypy tests/core/space tests/layering.py
+gate_mypy tests/core/space tests/layering.py tests/value_classes.py
