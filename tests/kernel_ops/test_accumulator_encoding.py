@@ -237,7 +237,7 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
 def _computes(case: Case, directory: Path, **options: Any) -> None:
     model = kernel_ops(case, **options)
     root = partition_root(model, model.graph.node)
-    assert undecided(root.point, "*") == [] and root.dropped == ()
+    assert undecided(root.point, "*") == [] and not root.dropped
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)
     x = np.random.default_rng(5).integers(low, high + 1, size=(ROWS, k)).astype(np.float32)
