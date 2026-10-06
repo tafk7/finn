@@ -47,7 +47,8 @@ def test_rtl_source_lists_resolve_installed_files(module, classname, tmp_path, m
     paths = op.get_rtl_file_list(abspath=True)
     package_paths = [p for p in paths if not p.startswith(str(tmp_path))]
     assert package_paths
-    assert all(Path(path).is_file() for path in package_paths), package_paths
+    missing = [path for path in package_paths if not Path(path).is_file()]
+    assert not missing, missing
 
 
 def test_generated_hls_tcl_resolves_resources_and_external_input(tmp_path, monkeypatch):
