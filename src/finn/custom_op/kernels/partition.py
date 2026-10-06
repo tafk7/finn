@@ -27,7 +27,15 @@
   node's, applied in its own partition as an input boundary, so here its
   ``transport`` is pinned ``direct``: one FIFO per edge, on the consumer's side.
   A choice a node holds under an output port whose channel a KernelOp now
-  consumes is stale, dropped and reported.
+  consumes is stale, dropped and reported;
+- **reuse**: the partition's class, and so its compiled model, is kept by what it
+  is built from, by value (``PartitionKey``): the name; the target's platform;
+  each channel as declared (the tensor it carries, rows and annotation, its port,
+  pinned ``direct`` or not); each node's name, op class, node-root class, facts
+  key (its formals by value, as the bind cache keys them), owned parameter ports
+  and tensors. A call on the same facts reuses the class, never a point: the
+  choices are replayed on a fresh design space every call. ``PARTITIONS`` keeps the
+  16 most recently used.
 
 Members are named as the graph: channels by tensor and kernels by node
 (``\\W`` as ``_``); two members of one name (a node and a tensor, or two nodes) are
@@ -37,7 +45,7 @@ refused, not renamed.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -54,8 +62,11 @@ from finn.custom_op.kernels.base import (
     refusal,
     typed_choices,
 )
+from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
+from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
+from finn.kernels.target import Platform
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -81,6 +92,56 @@ class PartitionRoot:
     owners: Mapping[str, tuple[str, str]]
     dropped: tuple[str, ...]
     boundary: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class Declared:
+    """A channel as the partition declares it: the tensor it carries, rows and
+    annotation (``None``: a parameter channel, which carries its kernel's views), its
+    boundary port, and whether it is pinned ``direct`` (an output handed on)."""
+
+    tensor: Tensor | None = None
+    port: str | None = None
+    direct: bool = False
+
+    def channel(self, platform: Platform) -> Channel:
+        """The channel on the target's ``platform``."""
+        settings: dict[str, Any] = {} if self.tensor is None else {"tensor": self.tensor}
+        if self.port is not None:
+            settings["port"] = self.port
+        if self.direct:
+            settings["transport"] = "direct"
+        return Channel(platform=platform, **settings)
+
+
+@dataclass(frozen=True)
+class Placement:
+    """What placing a node's kernel reads: the node's name (its member), its op class,
+    node-root class and facts key (its formals by value), the parameter ports it owns,
+    and its tensors."""
+
+    node: str
+    op: type[KernelOp]
+    root: type[Kernel]
+    facts: tuple[Hashable, ...]
+    owned: tuple[str, ...]
+    inputs: tuple[str, ...]
+    outputs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PartitionKey:
+    """What a partition's class is built from, by value: its name, the target's platform,
+    its channels as declared, in order, and its nodes' placements, in order."""
+
+    name: str
+    platform: Platform
+    channels: tuple[tuple[str, Declared], ...]
+    kernels: tuple[Placement, ...]
+
+
+PARTITIONS: LeastRecentlyUsed[type[Partition]] = LeastRecentlyUsed(16)
+"""The process's partition classes by ``PartitionKey``: the 16 most recently used."""
 
 
 def member(name: str) -> str:
@@ -127,81 +188,91 @@ def _channels(
     owned: list[dict[str, str]],
     ports: Mapping[str, str],
     handed_on: set[str],
-) -> dict[str, Channel]:
+) -> dict[str, Declared]:
     """The partition's channels by tensor, in node order: a node's inputs on an edge or
     the boundary, the parameter channels it owns (their tensor and value bound where it
     is placed), its outputs. An output handed on to a KernelOp outside is pinned
     ``direct``: its FIFO, if any, is the consumer's."""
-    platform = read_target(model).platform
     parameters = {tensor for tensors in owned for tensor in tensors.values()}
-    channels: dict[str, Channel] = {}
+    channels: dict[str, Declared] = {}
 
     def declare(tensor: str, label: str) -> None:
-        if tensor in channels:
-            return
-        port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
-        if tensor in handed_on:
-            port["transport"] = "direct"
-        carried = edge_tensor(model, tensor, label)
-        channels[tensor] = Channel(tensor=carried, platform=platform, **port)
+        if tensor not in channels:
+            carried = edge_tensor(model, tensor, label)
+            channels[tensor] = Declared(carried, ports.get(tensor), tensor in handed_on)
 
     for node, op, tensors in zip(nodes, ops, owned):
         for tensor in node.input:
             if tensor not in parameters and model.get_initializer(tensor) is None:
                 declare(tensor, op.label)
-        channels |= {tensor: Channel(platform=platform) for tensor in tensors.values()}
+        channels |= {tensor: Declared() for tensor in tensors.values()}
         for tensor in node.output:
             declare(tensor, op.label)
     return channels
 
 
 @dataclass
-class _Placed:
-    """The kernels placed on the channels, by member; each member's owner (node,
-    attribute prefix); the nodes' choices split by what declares them, and those stale
-    before replay (an output's, now an edge another KernelOp owns)."""
+class _Owners:
+    """Each member's owner (node, attribute prefix); the nodes' choices split by what
+    declares them, and those stale before replay (an output's, now an edge another
+    KernelOp owns)."""
 
-    kernels: dict[str, Kernel]
     owners: dict[str, tuple[str, str]]
     kernel_choices: dict[str, object]
     edge_choices: dict[str, object]
     stale: list[str]
 
 
-def _place(
-    nodes: list[NodeProto],
-    ops: list[KernelOp],
-    channels: Mapping[str, Channel],
-    produced: set[str],
-) -> _Placed:
-    """Each node's kernel on ``channels``, and its choices as root keys: a kernel's under
-    the kernel's member, an input or owned channel's under the channel's, and an output's
-    under the channel's where its node is the producer that owns it (``produced``: graph
-    outputs no KernelOp consumes)."""
-    placed = _Placed({}, {}, {}, {}, [])
+def _owners(
+    nodes: list[NodeProto], ops: list[KernelOp], channels: Iterable[str], produced: set[str]
+) -> _Owners:
+    """Each node's kernel member and channels' owners, and its choices as root keys: a
+    kernel's under the kernel's member, an input or owned channel's under the channel's,
+    and an output's under the channel's where its node is the producer that owns it
+    (``produced``: graph outputs no KernelOp consumes)."""
+    found = _Owners({}, {}, {}, [])
     channel_members = {member(tensor) for tensor in channels}
+    kernels: set[str] = set()
     for node, op in zip(nodes, ops):
         kernel = member(node.name)
-        if kernel in channel_members or kernel in placed.kernels:
+        if kernel in channel_members or kernel in kernels:
             other = "a tensor" if kernel in channel_members else "another node"
             raise KernelOpError(f"{node.name}: a node and {other} are both named {kernel}")
-        placed.kernels[kernel], by_port = op.place(channels)
-        by_port |= {
+        kernels.add(kernel)
+        by_port = op.inputs() | {
             port: tensor for port, tensor in zip(op.outputs, node.output) if tensor in produced
         }
-        placed.owners[kernel] = (node.name, "")
+        found.owners[kernel] = (node.name, "")
         for port, tensor in by_port.items():
-            placed.owners[member(tensor)] = (node.name, f"{port}.")
+            found.owners[member(tensor)] = (node.name, f"{port}.")
         for attribute, value in op.choices().items():
             head, _, rest = attribute.partition(".")
             if head in by_port:
-                placed.edge_choices[f"{member(by_port[head])}.{rest}"] = value
+                found.edge_choices[f"{member(by_port[head])}.{rest}"] = value
             elif head in op.outputs:
                 tensor = node.output[op.outputs.index(head)]
-                placed.stale.append(f"{member(tensor)}.{rest}")
+                found.stale.append(f"{member(tensor)}.{rest}")
             else:
-                placed.kernel_choices[f"{kernel}.{attribute}"] = value
-    return placed
+                found.kernel_choices[f"{kernel}.{attribute}"] = value
+    return found
+
+
+def _composite(
+    name: str,
+    platform: Platform,
+    nodes: list[NodeProto],
+    ops: list[KernelOp],
+    facts: list[Facts],
+    declared: Mapping[str, Declared],
+) -> type[Partition]:
+    """The partition's class: its channels as ``declared``, each node's kernel placed on
+    them from its ``facts``."""
+    channels = {tensor: each.channel(platform) for tensor, each in declared.items()}
+    kernels = {
+        member(node.name): op.place(each, channels) for node, op, each in zip(nodes, ops, facts)
+    }
+    members = {member(tensor): channel for tensor, channel in channels.items()} | kernels
+    return composite(name, members, base=Partition)
 
 
 def _replay_edges(point: S, choices: Mapping[str, object]) -> tuple[S, tuple[str, ...]]:
@@ -227,25 +298,43 @@ def partition_root(
     """The root of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
     nodes = list(nodes)
     ops = [kernel_op(model, node) for node in nodes]
-    owned = [op.owned() for op in ops]
+    facts = [op.facts() for op in ops]
+    owned = [op.owned(each) for op, each in zip(ops, facts)]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
     handed_on = _handed_on(model, nodes)
-    channels = _channels(model, nodes, ops, owned, ports, handed_on)
+    declared = _channels(model, nodes, ops, owned, ports, handed_on)
     outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}
-    placed = _place(nodes, ops, channels, outputs - handed_on)
+    found = _owners(nodes, ops, declared, outputs - handed_on)
 
-    members = {member(tensor): channel for tensor, channel in channels.items()} | placed.kernels
-    root: Any = composite(name, members, base=Partition)
+    platform = read_target(model).platform
+    key = PartitionKey(
+        name,
+        platform,
+        tuple(declared.items()),
+        tuple(
+            Placement(
+                node.name,
+                type(op),
+                each.root,
+                each.key,
+                each.owned,
+                tuple(node.input),
+                tuple(node.output),
+            )
+            for node, op, each in zip(nodes, ops, facts)
+        ),
+    )
+    root: Any = PARTITIONS.get(key, lambda: _composite(name, platform, nodes, ops, facts, declared))
     point = design_space(root())
-    if placed.kernel_choices:
-        replayed = committed(point, typed_choices([point], placed.kernel_choices))
+    if found.kernel_choices:
+        replayed = committed(point, typed_choices([point], found.kernel_choices))
         if isinstance(replayed, dict):
             raise refusal(name, replayed)
         point = replayed
     dropped: tuple[str, ...] = ()
-    if placed.edge_choices:
-        point, dropped = _replay_edges(point, placed.edge_choices)
-    return PartitionRoot(point, placed.owners, (*placed.stale, *dropped), tuple(ports.items()))
+    if found.edge_choices:
+        point, dropped = _replay_edges(point, found.edge_choices)
+    return PartitionRoot(point, found.owners, (*found.stale, *dropped), tuple(ports.items()))
 
 
 def save_partition_choices(
@@ -265,4 +354,14 @@ def save_partition_choices(
     return per_node
 
 
-__all__ = ["Partition", "PartitionRoot", "member", "partition_root", "save_partition_choices"]
+__all__ = [
+    "PARTITIONS",
+    "Declared",
+    "Partition",
+    "PartitionKey",
+    "PartitionRoot",
+    "Placement",
+    "member",
+    "partition_root",
+    "save_partition_choices",
+]
