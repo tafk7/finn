@@ -409,7 +409,8 @@ separate build processes. See [the compatibility ledger](legacy-build-env-ledger
 an explicitly accepted configured environment, a site command directory, and a
 launcher argv prefix. `Selection.prepare()` snapshots the mapping. With local
 settings and no base mapping, it uses system PATH plus HOME/user/locale/temp/display
-and licence inputs. To accept additional base variables, pass a mapping explicitly;
+and licence inputs and `LD_PRELOAD` (the image preloads `libudev.so.1`, without
+which Vivado's licence library crashes in `udev_enumerate_scan_devices`). To accept additional base variables, pass a mapping explicitly;
 FINN does not attempt to unsource a previously activated installation. Bash startup
 hooks and exported functions are removed in children. A prepared environment that
 names no licence gets the machine file's (`XILINXD_LICENSE_FILE=PORT@HOST`), except
@@ -429,6 +430,28 @@ selection; `ZynqBuild`, `PrepareForLinking` and
 `FINN_TOOL_DIR_OVERRIDE` continues to select site wrappers; launcher prefixes
 preserve those names and do not substitute local absolute vendor executables.
 The site owns remote activation, path visibility and remote cancellation.
+
+A build configuration names its toolchain, the HLS frontend included. With
+Vivado/Vitis 2025.x that is `vitis-run`: a selection never guesses its frontend,
+and the default, `vitis_hls`, is refused on 2025.x. A kernel-path build of TFC
+for Ultra96 (`dataflow_build_config.json`; the environment as configured, so
+`settings` stays empty):
+
+```json
+{
+  "output_dir": "output",
+  "synth_clk_period_ns": 5.0,
+  "board": "Ultra96",
+  "shell_flow_type": "vivado_zynq",
+  "steps": ["phase_kernel_path", "phase_generate_outputs"],
+  "kernel_strategies": ["placeholder"],
+  "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
+  "toolchain": {"hls_frontend": "vitis-run"}
+}
+```
+
+`kernel_strategies` names the strategies that commit the KernelOps' open choices,
+run in order; the choices they commit are written to `kernel_choices.json`.
 
 Choose `FINN_HLS_FRONTEND=vivado_hls`, `vitis_hls`, or `vitis-run` for legacy entry
 points; explicit selections, and a dataflow build's configuration, name the
