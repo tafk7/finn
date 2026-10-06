@@ -130,7 +130,7 @@ def write_boundary_facts(model: ModelWrapper, label: str = "partition") -> None:
     model.set(PARTITION_OUTPUTS, outputs)
 
 
-class PackagePartition(Transformation):  # type: ignore[misc]
+class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP; see the module docstring.
 
     ``ip_name`` is the partition node's name; the part and the clock period are the

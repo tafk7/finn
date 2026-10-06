@@ -21,7 +21,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 
 
-class _LyingWidth(BaseDataType):  # type: ignore[misc]
+class _LyingWidth(BaseDataType):
     """Names itself ``INT8`` truthfully and reports its width falsely."""
 
     def get_canonical_name(self) -> str:
@@ -36,7 +36,7 @@ class _LyingWidth(BaseDataType):  # type: ignore[misc]
     def max(self) -> int:
         return 255
 
-    def allowed(self, value: float) -> bool:
+    def allowed(self, value: Any) -> bool:
         return True
 
     def is_integer(self) -> bool:

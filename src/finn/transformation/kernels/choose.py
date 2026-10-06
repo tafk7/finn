@@ -90,7 +90,7 @@ class PlaceholderPolicy:
         return [*first, *(case for case in choice.cases if case not in first)]
 
 
-class CommitKernelChoices(Transformation):  # type: ignore[misc]
+class CommitKernelChoices(Transformation):
     """Every open choice of the model's KernelOps committed by ``policy``, and saved."""
 
     def __init__(self, policy: KernelChoicePolicy) -> None:

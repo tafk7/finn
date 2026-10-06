@@ -4,7 +4,7 @@
 """MatMulKernel construction, packing, precision, and portable builds."""
 
 import pytest
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+from qonnx.core.datatype import DataType
 
 from finn.core.space import (
     Available,

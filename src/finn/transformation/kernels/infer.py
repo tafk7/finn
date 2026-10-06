@@ -32,7 +32,7 @@ import onnx.shape_inference as shape_inference
 from onnx import NodeProto, defs, helper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.base import Transformation
-from qonnx.transformation.infer_datatypes import _infer_node_datatype
+from qonnx.transformation.infer_datatypes import infer_node_datatype
 
 from finn.custom_op.kernels.base import KernelOp, KernelOpError, datatype
 from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
@@ -69,9 +69,10 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
                 name, stored[name].data_type, list(stored[name].dims)
             )
         else:
-            info = model.get_tensor_valueinfo(name)
-            if info is None:
+            known = model.get_tensor_valueinfo(name)
+            if known is None:
                 raise KernelOpError(f"{node.name or node.op_type}: {name} has no shape yet")
+            info = known
         types[name] = info.type
     for name, proto in shape_inference.infer_node_outputs(schema, node, types, values).items():
         tensor = proto.tensor_type
@@ -80,14 +81,14 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
             model.set_tensor_shape(name, dims)
 
 
-class InferKernelTensors(Transformation):  # type: ignore[misc]
+class InferKernelTensors(Transformation):
     """One pass in graph order; see the module docstring."""
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         for node in model.graph.node:
             if not is_custom_op(node.domain):
                 _standard(model, node)
-                _infer_node_datatype(model, node, False)
+                infer_node_datatype(model, node, False)
                 continue
             op = model.get_customop_wrapper(node)
             if not isinstance(op, KernelOp):

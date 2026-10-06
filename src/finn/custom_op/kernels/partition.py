@@ -49,6 +49,7 @@ from finn.custom_op.kernels.base import (
     KernelOpError,
     committed,
     edge_tensor,
+    kernel_op,
     read_target,
     refusal,
     typed_choices,
@@ -225,10 +226,7 @@ def partition_root(
 ) -> PartitionRoot:
     """The root of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
     nodes = list(nodes)
-    ops = [model.get_customop_wrapper(node) for node in nodes]
-    for node, op in zip(nodes, ops):
-        if not isinstance(op, KernelOp):
-            raise KernelOpError(f"{node.name}: a partition root places KernelOps only")
+    ops = [kernel_op(model, node) for node in nodes]
     owned = [op.owned() for op in ops]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
     handed_on = _handed_on(model, nodes)
@@ -263,7 +261,7 @@ def save_partition_choices(
         per_node.setdefault(node, {})[prefix + rest] = value
     by_name = {node.name: node for node in model.graph.node}
     for node, values in per_node.items():
-        model.get_customop_wrapper(by_name[node]).save(values)
+        kernel_op(model, by_name[node]).save(values)
     return per_node
 
 

@@ -83,6 +83,13 @@ class Thresholding(KernelOp):
         model.set_initializer(thresholds, table)
         model.set_tensor_datatype(thresholds, dtype)
 
+    def bias(self) -> int:
+        """The ``bias`` attribute, added to every count."""
+        bias = self.get_nodeattr("bias")
+        if not isinstance(bias, int):
+            raise KernelOpError(f"{self.label}: bias = {bias!r} is not an integer")
+        return bias
+
     def facts(self) -> Facts:
         model, label = self.model(), self.label
         x, thresholds = self.onnx_node.input
@@ -98,11 +105,13 @@ class Thresholding(KernelOp):
         input_dtype = datatype(model, x, label)
         threshold_dtype = datatype(model, thresholds, label)
         digest = admitted(model, thresholds, threshold_dtype, label)
-        bias = int(self.get_nodeattr("bias"))
+        bias = self.bias()
         platform = self.target().platform
 
         def formals() -> dict[str, object]:
             values = model.get_initializer(thresholds)
+            if values is None:
+                raise KernelOpError(f"{label}: {thresholds} is not an initializer")
             return dict(
                 input_dtype=input_dtype,
                 threshold_dtype=threshold_dtype,
@@ -130,7 +139,7 @@ class Thresholding(KernelOp):
         x, thresholds = self.onnx_node.input
         values, table = context[x], context[thresholds]
         counts = (values[..., :, None] >= table).sum(axis=-1)
-        bias = int(self.get_nodeattr("bias"))
+        bias = self.bias()
         context[self.onnx_node.output[0]] = (counts + bias).astype(np.float32)
 
 

@@ -134,7 +134,7 @@ def test_whatever_is_recognized_can_also_be_frozen(name: str) -> None:
     assert QONNX_DATATYPE_SEMANTICS.freeze(datatype) == datatype
 
 
-class _Unregistered(BaseDataType):  # type: ignore[misc]
+class _Unregistered(BaseDataType):
     """A well-formed subclass QONNX has never heard of."""
 
     def get_canonical_name(self) -> str:
@@ -149,8 +149,8 @@ class _Unregistered(BaseDataType):  # type: ignore[misc]
     def max(self) -> int:
         return 7
 
-    def allowed(self, value: float) -> bool:
-        return 0 <= value <= 7
+    def allowed(self, value: Any) -> bool:
+        return bool(0 <= value <= 7)
 
     def is_integer(self) -> bool:
         return True
@@ -198,7 +198,7 @@ def test_a_malformed_canonical_name_is_refused(name: str) -> None:
         resolve_qonnx_datatype_name(name)
 
 
-class _ExplodingName(BaseDataType):  # type: ignore[misc]
+class _ExplodingName(BaseDataType):
     """A well-formed subclass that raises from ``get_canonical_name()``.
 
     Not a contrived case so much as a general one: the boundary calls a
@@ -217,7 +217,7 @@ class _ExplodingName(BaseDataType):  # type: ignore[misc]
     def max(self) -> int:
         return 255
 
-    def allowed(self, value: float) -> bool:
+    def allowed(self, value: Any) -> bool:
         return True
 
     def is_integer(self) -> bool:
@@ -309,7 +309,7 @@ def test_a_datatype_keeps_its_key_in_a_mapping() -> None:
 def test_every_datatype_field_shares_one_token() -> None:
     """``is_compatible_with`` is token identity, not subtyping.
 
-    A second token -- the ``QONNXDataType`` protocol, say -- would partition the
+    A second token -- a ``BaseDataType`` subclass, say -- would partition the
     domain and make two datatype fields report that they cannot be compared.
     """
 

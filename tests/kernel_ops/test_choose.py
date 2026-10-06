@@ -19,7 +19,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import KernelOpError, write_target
+from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.configure import undecided
 from finn.kernels.target import Target
@@ -42,7 +42,7 @@ def kernel_model(target: Target = TARGET) -> ModelWrapper:
 
 def choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
     return {
-        node.name: model.get_customop_wrapper(node).choices()
+        node.name: kernel_op(model, node).choices()
         for node in model.graph.node
         if node.domain == "finn.custom_op.kernels"
     }

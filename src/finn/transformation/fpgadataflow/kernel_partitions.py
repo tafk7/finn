@@ -88,7 +88,10 @@ def kernel_partition_ports(node: Any) -> dict[str, dict[str, Any]] | None:
     once; its ports are in its graph's order, which is the partition node's."""
     if node.op_type != "StreamingDataflowPartition":
         return None
-    body = ModelWrapper(getCustomOp(node).get_nodeattr("model"))
+    path = getCustomOp(node).get_nodeattr("model")
+    if not isinstance(path, str):
+        raise TypeError(f"{node.name}: its model attribute is {path!r}, not a path")
+    body = ModelWrapper(path)
     if not is_kernel_partition(body):
         return None
     inputs, outputs = partition_facts(body)

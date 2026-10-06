@@ -38,13 +38,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import fields
 from math import prod
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, TypeVar
 
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
 )
-from qonnx.core.metadata import MetadataError, Namespace
+from qonnx.core.metadata import Key, MetadataError, Namespace
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
 
@@ -64,6 +64,7 @@ from finn.kernels.configure import describe
 from finn.kernels.target import DspBlock, Platform, Target
 
 if TYPE_CHECKING:
+    from onnx import NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
 S = TypeVar("S", bound=Space)
@@ -73,7 +74,7 @@ PLATFORM = Namespace("finn.platform", version=1, inherit=True)
 and the platform (``finn.kernels.target.Platform``: the clock period and the
 capabilities), every key stated. It inherits: a subgraph body reads its parent's."""
 
-PLATFORM_KEYS = dict(
+PLATFORM_KEYS: dict[str, Key[Any]] = dict(
     part=PLATFORM.key("part", str),
     period_ns=PLATFORM.key("period_ns", float, check=lambda v: v > 0, expect="a period > 0"),
     dsp=PLATFORM.key("dsp", DspBlock),
@@ -194,7 +195,10 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         low, high = ordinary_integer_bounds(dtype)
     except DatatypeError:
         return str(summary.content_digest)  # not an ordinary integer: the kernel refuses it
-    observed = (int(summary.minimum), int(summary.maximum))
+    # Known defect, fixed on another lane (delete this ignore with it): minimum and
+    # maximum are None for an empty initializer, which is_integral admits, so this
+    # raises TypeError rather than KernelOpError.
+    observed = (int(summary.minimum), int(summary.maximum))  # type: ignore[arg-type]
     if not low <= observed[0] <= observed[1] <= high:
         raise KernelOpError(
             f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"
@@ -255,7 +259,14 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
 # -- the op ------------------------------------------------------------------------------
 
 
-class KernelOp(CustomOp):  # type: ignore[misc]
+def _is_choice_value(value: object, kind: str, cases: tuple[str, ...]) -> TypeGuard[int | str]:
+    """Whether ``value`` is a value of a choice attribute of ONNX type ``kind`` (a
+    string for ``"s"``, an integer otherwise), among its ``cases`` if it has any."""
+    fits = isinstance(value, str) if kind == "s" else isinstance(value, int)
+    return fits and (not cases or value in cases)
+
+
+class KernelOp(CustomOp):
     """One ONNX node's binding of one kernel point; see the module docstring.
 
     An op class states ``op_version`` (its kernel's ``version``) in its own body; its
@@ -352,7 +363,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
     # -- facts and binding ----------------------------------------------------------------
 
     def model(self) -> ModelWrapper:
-        model = getattr(self, "_model", None)
+        model = self._model
         if model is None:
             raise KernelOpError(f"{self.label}: no model attached (use get_customop_wrapper)")
         return model
@@ -437,20 +448,18 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         unknown = sorted(set(choices) - set(schema))
         if unknown:
             raise KernelOpError(f"{self.label}: {unknown} are not choices of {self.op_type}")
-        merged = {
-            name: value
-            for name, value in {**self.choices(), **choices}.items()
-            if value is not None
-        }
-        for name, value in merged.items():
+        merged: dict[str, int | str] = {}
+        for name, value in {**self.choices(), **choices}.items():
+            if value is None:
+                continue
             kind, cases = schema[name]
-            fits = isinstance(value, str) if kind == "s" else isinstance(value, int)
-            if not fits or (cases and value not in cases):
+            if not _is_choice_value(value, kind, cases):
                 raise KernelOpError(
                     f"{self.label}: {name} = {value!r} is not an {kind!r} value"
                     + (f" among {list(cases)}" if cases else ""),
                     (name,),
                 )
+            merged[name] = value
         self.point(merged)  # refuses before any write
         for name in schema:
             present = get_by_name(self.onnx_node.attribute, name)
@@ -520,6 +529,15 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         return answer.value
 
 
+def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
+    """The KernelOp of ``node``, attached to ``model``; a node of any other op is
+    refused."""
+    op = model.get_customop_wrapper(node)
+    if not isinstance(op, KernelOp):
+        raise KernelOpError(f"{node.name or node.op_type}: {node.op_type} is not a KernelOp")
+    return op
+
+
 __all__ = [
     "PLATFORM",
     "PLATFORM_FIELDS",
@@ -530,6 +548,7 @@ __all__ = [
     "committed",
     "datatype",
     "edge_tensor",
+    "kernel_op",
     "read_target",
     "refusal",
     "rows",

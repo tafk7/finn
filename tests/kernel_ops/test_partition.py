@@ -13,6 +13,7 @@ netlist and pins, and in XSim what ``execute_onnx`` computes on the source.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -23,7 +24,7 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import KernelOpError
+from finn.custom_op.kernels.base import KernelOpError, kernel_op
 from finn.custom_op.kernels.partition import partition_root, save_partition_choices
 from finn.kernels.configure import commit
 from finn.transformation.kernels import InferKernelTensors
@@ -48,10 +49,16 @@ def test_the_root_of_the_chains_nodes_is_the_chain() -> None:
     assert root.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
 
 
+def test_a_partition_root_refuses_a_node_that_is_not_a_kernel_op() -> None:
+    model = chain_source()
+    with pytest.raises(KernelOpError, match="activate: MultiThreshold is not a KernelOp"):
+        partition_root(model, model.graph.node[1:2])
+
+
 def test_edge_choices_persist_on_their_consumers() -> None:
     model = kernel_model()
     configure_partition(model)
-    ops = {node.name: model.get_customop_wrapper(node) for node in model.graph.node}
+    ops = {node.name: kernel_op(model, node) for node in model.graph.node}
     assert "x.adapter.input_gen.input_gen.ram_style" in ops["first"].choices()
     assert "x.adapter.input_gen.input_gen.ram_style" in ops["second"].choices()  # levels
 
@@ -59,7 +66,7 @@ def test_edge_choices_persist_on_their_consumers() -> None:
 def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
     model = kernel_model()
     configure_partition(model)
-    second = model.get_customop_wrapper(model.graph.node[2])
+    second = kernel_op(model, model.graph.node[2])
     second.save({"compute.packed.simd": 4})
     root = partition_root(model, model.graph.node, name="chain")
     # The levels edge now converts widths: its input_gen memory no longer applies.
@@ -73,14 +80,15 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     value, so no source, and the source's choices, now the weight edge's, are the
     partition's to replay: it drops them as stale."""
     model = matmul_model()
-    stored = model.get_customop_wrapper(model.graph.node[0])
+    stored = kernel_op(model, model.graph.node[0])
     stored.save({"compute.packed.pe": 2, "w.source.memstream.ram_style": "block"})
     lift(model, "w")
     model.set_tensor_datatype("w", INT3)
-    streamed = model.get_customop_wrapper(model.graph.node[0])
+    streamed = kernel_op(model, model.graph.node[0])
     assert streamed.facts().owned == ()
     # The node replays its own choices only: the weight edge's are the partition's.
-    assert streamed.point().matmul.compute.pe == 2 and streamed.verify_node() == []
+    point: Any = streamed.point()
+    assert point.matmul.compute.pe == 2 and streamed.verify_node() == []
     model = model.transform(InferKernelTensors())
     assert partition_root(model, model.graph.node).dropped == ("w.source.memstream.ram_style",)
 
@@ -116,7 +124,7 @@ def test_an_edge_between_partitions_has_one_transport_its_consumers() -> None:
     written = save_partition_choices(model, back, {"levels.transport": "fifo"})
     assert written == {"second": {"x.transport": "fifo"}}
 
-    model.get_customop_wrapper(model.graph.node[1]).save({"y.transport": "fifo"})
+    kernel_op(model, model.graph.node[1]).save({"y.transport": "fifo"})
     assert partition_root(model, model.graph.node[:2], name="front").dropped == (
         "levels.transport",
     )
@@ -152,7 +160,7 @@ def test_a_choice_in_the_root_persists_on_the_weight_streams_owner() -> None:
     root = partition_root(model, model.graph.node, name="chain")
     written = save_partition_choices(model, root, {"w2.source.memstream.ram_style": "block"})
     assert written == {"second": {"w.source.memstream.ram_style": "block"}}
-    second = model.get_customop_wrapper(model.graph.node[2])
+    second = kernel_op(model, model.graph.node[2])
     assert second.choices()["w.source.memstream.ram_style"] == "block"
     rebuilt = partition_root(model, model.graph.node, name="chain")
     assert rebuilt.point.w2.source.ram_style == "block" and rebuilt.dropped == ()
