@@ -44,6 +44,13 @@ export PYTHONPATH="$ROOT/src:$ROOT/tests"
 # relies on. Unset, it cannot make a test pass in one caller's shell and fail in
 # another's.
 unset FINN_ROOT
+# pytest's options are the gate's (gate_pytest, and .pytest.ini). A caller's
+# PYTEST_ADDOPTS could deselect, skip or re-mark tests and still print a pass,
+# so it is cleared, and the gate says so.
+if [ -n "${PYTEST_ADDOPTS:-}" ]; then
+    printf '%s: ignoring PYTEST_ADDOPTS=%s\n' "$(basename "$0")" "$PYTEST_ADDOPTS" >&2
+fi
+unset PYTEST_ADDOPTS
 cd "$ROOT"
 
 printf '== %s\n' "$(basename "$0")"
@@ -56,7 +63,11 @@ printf 'mode     %s\n' "$GATE_MODE"
 
 # gate_pytest [--conftest-root <root>] <dir> [marker...]: the tests under <dir>,
 # the conftest in <root> (default <dir>) the outermost, less those carrying any
-# of the markers, and in fast mode less the slow ones.
+# of the markers, and in fast mode less the slow ones. A marker .pytest.ini does
+# not declare is an error (--strict-markers): a misspelt marker would otherwise
+# escape its deselection. The tests run in parallel, one worker per CPU
+# (pytest-xdist); each test owns its temporary paths, so the result is the
+# serial run's.
 gate_pytest() {
     local root= dir marker expression= selection=()
     if [ "$1" = --conftest-root ]; then
@@ -71,7 +82,8 @@ gate_pytest() {
         expression+="${expression:+ and }not $marker"
     done
     [ -z "$expression" ] || selection=(-m "$expression")
-    "$PYTHON_BIN" -m pytest -q --confcutdir="${root:-$dir}" "$dir" "${selection[@]}"
+    "$PYTHON_BIN" -m pytest -q --strict-markers -n auto --confcutdir="${root:-$dir}" "$dir" \
+        "${selection[@]}"
 }
 
 # gate_ruff <path...>: formatting, and the lint selection every gate uses
