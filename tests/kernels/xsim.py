@@ -133,7 +133,7 @@ def stream_through(
 ) -> None:
     buses = [
         port
-        for port in module.pins.ports
+        for port in module.abi.pins
         if isinstance(port, Bus) and port.protocol is StandardProtocol.AXIS
     ]
     for side, names, endpoint in (
@@ -153,7 +153,7 @@ def stream_through(
     valid, ready = ("cycle % 3 != 0", "cycle % 4 != 1") if stalled else ("1", "1")
     streams = {**inputs, **outputs}
     lines: list[str] = []
-    for name, info in abi_pins(module.pins.ports).items():
+    for name, info in abi_pins(module.abi.pins).items():
         if isinstance(info.role, (Clock, Reset)) or info.bus in streams:
             continue
         width = "" if info.width == 1 else f"[{info.width - 1}:0] "

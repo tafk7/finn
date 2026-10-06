@@ -14,8 +14,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from core.space._collapse_support import answers, open_space
 
+from core.space._collapse_support import answers, open_space
 from finn.core.space import (
     Available,
     ConfigurationError,

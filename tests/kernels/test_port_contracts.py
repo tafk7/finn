@@ -43,6 +43,7 @@ from finn.kernels.port import AxiStreamPort
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    codes,
     matmul_point,
     with_adapter_memories,
     with_direct_transports,
@@ -117,11 +118,6 @@ def placed(
     )
 
 
-def codes(answer: object) -> set[str]:
-    assert isinstance(answer, (Available, Rejected)), answer
-    return {finding.code for finding in answer.findings} if isinstance(answer, Rejected) else set()
-
-
 def test_every_port_presents_what_the_schedule_derives():
     point = placed()
     x, w, y = (port.presented for port in (point.compute.x, point.compute.w, point.compute.y))
@@ -139,8 +135,8 @@ def test_every_port_presents_what_the_schedule_derives():
     (end,) = point.r.users
     assert (end.node, end.member) == ("compute.y", "channel")
     # The cyclic weights and the results connect as derived.
-    assert codes(point.w_s.query(Channel.netlist)) == set()
-    assert codes(point.r.query(Channel.netlist)) == set()
+    assert isinstance(point.w_s.query(Channel.netlist), Available)
+    assert isinstance(point.r.query(Channel.netlist), Available)
 
 
 def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
@@ -149,7 +145,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
     # Lane s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
-    assert codes(point.w_s.query(Channel.netlist)) == set()
+    assert isinstance(point.w_s.query(Channel.netlist), Available)
 
 
 def test_a_folding_factor_that_does_not_divide_its_extent_is_refused_where_it_is_committed():
@@ -166,7 +162,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     )
     point = placed(weights_form=columns_first)
     assert point.w_s.plan.steps == (Step.REORDER,)
-    assert codes(with_adapter_memories(point).w_s.query(Channel.netlist)) == set()
+    assert isinstance(with_adapter_memories(point).w_s.query(Channel.netlist), Available)
     # Probe: the tile's own sequence, one weight a beat where dotp reads PE x SIMD.
     narrow = placed(weights_form=regrouped(weights_tile(), 1))
     assert narrow.w_s.plan.steps == (Step.WIDTH,)
@@ -188,7 +184,7 @@ def test_a_producer_s_lane_order_is_wires():
         ((1, OUTPUTS // PE, PE), (0, REDUCTION // SIMD, SIMD)),
         ((0, SIMD, 1), (1, PE, 1)),
     )
-    assert codes(placed(weights_form=transposed).w_s.query(Channel.netlist)) == set()
+    assert isinstance(placed(weights_form=transposed).w_s.query(Channel.netlist), Available)
     # E-048: hlslib's per-channel order (window positions fastest) is likewise a
     # lane permutation of FinnLib's.
     finnlib = placed(Form.DEPTHWISE).compute.x.presented.form

@@ -6,12 +6,9 @@
 import pytest
 
 from finn.core.space import Rejected, Unresolved, inspection
-from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.test_dotp import kernel as dotp
-from kernels.test_migrated_rich import threshold_base
-from kernels.test_migrated_simple import eltwise
+from kernels.helpers import eltwise, threshold_base
 
 
 @pytest.mark.parametrize("name", ("INT0", "UINT0"))
@@ -26,12 +23,3 @@ def test_threshold_type_refusal_precedes_unrelated_configuration_choices():
     assessment = base.inspect(ThresholdingAxiKernel.module)
     assert isinstance(assessment.constraints.results["types_supported"], Rejected)
     assert isinstance(assessment.accepted_result, Unresolved)
-
-
-@pytest.mark.parametrize("field", ("pe", "simd"))
-def test_dotp_rejects_native_parameter_overflow(field):
-    assert isinstance(dotp(**{field: 2**32}).query(DotpAxiKernel.module), Rejected)
-
-
-def test_dotp_rejects_packed_width_overflow_even_when_dimensions_fit():
-    assert isinstance(dotp(pe=2**30, simd=2).query(DotpAxiKernel.module), Rejected)

@@ -1,4 +1,4 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Process-isolated kernel RTL simulation support."""
+"""The tests of finn.core.space."""

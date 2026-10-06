@@ -65,7 +65,7 @@ def contract(form, endpoint, *, element=INT3, repetition=Repetition.ONCE, width=
     return StreamContract(native("s", bits, endpoint), element, form, repetition, **kw)
 
 
-def codes(mismatches):
+def mismatch_codes(mismatches):
     return {item.code for item in mismatches}
 
 
@@ -206,7 +206,7 @@ def test_mismatches_name_the_adapter_that_would_repair_them():
         sink_is_top=False,
     )
     # Equal lanes and widths, different positions per beat.
-    assert codes(found) == {"channel-form"}
+    assert mismatch_codes(found) == {"channel-form"}
     assert "lane_regroup" in next(iter(found)).message
 
 
@@ -214,11 +214,11 @@ def test_repetition_direction_and_marker_rules_are_checked():
     form = vector_major((4,), 2)
     ok = contract(form, Endpoint.INITIATOR)
     cyclic_sink = contract(form, Endpoint.TARGET, repetition=Repetition.CYCLIC)
-    assert "channel-repetition" in codes(
+    assert "channel-repetition" in mismatch_codes(
         compatibility(ok, cyclic_sink, source_is_top=False, sink_is_top=False)
     )
     backwards = contract(form, Endpoint.INITIATOR)
-    assert "channel-direction" in codes(
+    assert "channel-direction" in mismatch_codes(
         compatibility(ok, backwards, source_is_top=False, sink_is_top=False)
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
@@ -228,7 +228,7 @@ def test_repetition_direction_and_marker_rules_are_checked():
     required = StreamContract(
         native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
     )
-    assert "channel-marker" in codes(
+    assert "channel-marker" in mismatch_codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)
     )
 

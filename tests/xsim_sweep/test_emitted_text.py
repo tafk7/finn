@@ -43,7 +43,7 @@ tool = _load()
 MEMSTREAM = tool.conformance_job(
     "tests/kernels/test_conformance.py::test_the_kernel_conforms_in_xsim[memstream]"
 )
-ADAPTERS = tool.Job("sweep-adapters", "sweep", ("kernels.rtlsim.adapter_numeric",))
+ADAPTERS = tool.Job("sweep-adapters", "sweep", ("kernels.sweeps.adapter_numeric",))
 COPIED = ("src", "tests", "scripts", "docker", ".pytest.ini", "uv.lock", "pyproject.toml")
 
 
@@ -174,7 +174,7 @@ EDITS = [
     ("finnlib-thresholding", "finnlib/rtl/nonlin/thresholding.sv", "\n// e\n", {ADAPTERS.name}),
     # The harness: conformance's code, the adapters' stimulus module, the XSI runtime.
     ("conformance-code", "tests/kernels/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
-    ("adapter-stimulus", "tests/kernels/test_adapters.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
+    ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     ("sweep-script", "scripts/xsim-sweep.sh", "\n# edited\n", BOTH),
     # Not consumed: another kernel's RTL, an unrelated test, a comment in the harness,

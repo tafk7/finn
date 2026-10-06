@@ -13,6 +13,7 @@ from finn.core.space import (
     Decision,
     EvaluationError,
     Inapplicable,
+    NativeEvaluationError,
     Param,
     Space,
     Unresolved,
@@ -26,7 +27,6 @@ from finn.core.space import (
     selections,
     view,
 )
-from finn.core.space._execution import NativeEvaluationError
 from finn.core.space.occurrence import state
 
 

@@ -11,7 +11,7 @@ by the job's own code with the simulator replaced by a capture:
   directory: the staged module sources (FinnLib's included, copied by
   content), each memory's INIT_FILE, and the testbench ``check.sv``, which
   carries the stimulus and the expected words;
-- a numeric sweep (``python -m kernels.rtlsim.<module> ARGS``) runs its
+- a numeric sweep (``python -m kernels.sweeps.<module> ARGS``) runs its
   ``main`` with ``rtl_transport._run_worker`` capturing the request it would
   hand the simulation process: its sources by content (with every file of a
   header's directory), stimulus, expected counts and observations. A run of
@@ -78,32 +78,32 @@ CONFORMANCE = "tests/kernels/test_conformance.py"
 # The numeric sweeps: (job name, module, arguments). Each runs as
 # ``python -m <module> <arguments> --output <OUT>/sim-<name without sweep->``.
 SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("sweep-dense", "kernels.rtlsim.matmul_numeric", ()),
+    ("sweep-dense", "kernels.sweeps.matmul_numeric", ()),
     (
         "sweep-fifo-packed",
-        "kernels.rtlsim.matmul_numeric",
+        "kernels.sweeps.matmul_numeric",
         ("--case", "packed", "--weight-fifo-depth", "2"),
     ),
     (
         "sweep-fifo-int8-pumped",
-        "kernels.rtlsim.matmul_numeric",
+        "kernels.sweeps.matmul_numeric",
         ("--case", "int8_pumped", "--weight-fifo-depth", "2"),
     ),
-    ("sweep-depthwise", "kernels.rtlsim.matmul_numeric", ("--depthwise",)),
-    ("sweep-memstream", "kernels.rtlsim.matmul_numeric", ("--delivery", "memstream")),
+    ("sweep-depthwise", "kernels.sweeps.matmul_numeric", ("--depthwise",)),
+    ("sweep-memstream", "kernels.sweeps.matmul_numeric", ("--delivery", "memstream")),
     (
         "sweep-memstream-depthwise",
-        "kernels.rtlsim.matmul_numeric",
+        "kernels.sweeps.matmul_numeric",
         ("--depthwise", "--delivery", "memstream"),
     ),
-    ("sweep-pumped-memory", "kernels.rtlsim.matmul_numeric", ("--pumped-memory",)),
-    ("sweep-sets", "kernels.rtlsim.matmul_numeric", ("--sets", "3")),
-    ("sweep-dotp", "kernels.rtlsim.pure_dot_product_numeric", ()),
-    ("sweep-dotp-stress", "kernels.rtlsim.pure_dot_product_numeric", ("--stress",)),
-    ("sweep-adapters", "kernels.rtlsim.adapter_numeric", ()),
+    ("sweep-pumped-memory", "kernels.sweeps.matmul_numeric", ("--pumped-memory",)),
+    ("sweep-sets", "kernels.sweeps.matmul_numeric", ("--sets", "3")),
+    ("sweep-dotp", "kernels.sweeps.pure_dot_product_numeric", ()),
+    ("sweep-dotp-stress", "kernels.sweeps.pure_dot_product_numeric", ("--stress",)),
+    ("sweep-adapters", "kernels.sweeps.adapter_numeric", ()),
 )
 SMOKE_SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("sweep-packed", "kernels.rtlsim.matmul_numeric", ("--case", "packed")),
+    ("sweep-packed", "kernels.sweeps.matmul_numeric", ("--case", "packed")),
 )
 # The pytest groups: (job name, pytest arguments), run with Vivado selected.
 PYTEST_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -371,10 +371,11 @@ def _write_ipxact(module: Any, target: Path) -> None:
             interface_names,
             interface_tcl,
         )
-    except ImportError as error:
+
+        pins = module.abi.pins
+    except (ImportError, AttributeError) as error:  # the checkout lacks the API
         (target / "unavailable.txt").write_text(f"{type(error).__name__}: {error}\n")
         return
-    pins = getattr(module.pins, "declared", None) or module.pins.ports
     (target / "interface.tcl").write_text("\n".join(interface_tcl(pins, 5.0)) + "\n")
     (target / "ifnames.json").write_text(json.dumps(interface_names(pins), indent=1) + "\n")
 
@@ -455,7 +456,6 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
 def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str]) -> int:
     """Run a numeric sweep module with each run's first simulation request captured."""
     # The checkout's harness, importable only in its environment (Target.run).
-    import kernels.rtlsim.rtl_transport as transport  # noqa: PLC0415
 
     from finn import resources  # noqa: PLC0415
 
@@ -497,6 +497,8 @@ def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str])
         captured.append(top_module)
         raise _Captured
 
+    # The sweeps' transport sits beside them (kernels.sweeps.rtl_transport).
+    transport = importlib.import_module(module_name.rpartition(".")[0] + ".rtl_transport")
     transport._run_worker = run_worker
     module = importlib.import_module(module_name)
     depth = [0]
@@ -555,7 +557,7 @@ def emit_package(out: Path, work: Path) -> int:
     run_synth): package.tcl and the stitch metadata, the work prefix removed.
     """
     # The checkout's code, importable only in its environment (Target.run).
-    from kernel_ops.test_partition import configured, kernel_model  # noqa: PLC0415
+    from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
     from kernel_ops.tfc import partitioned  # noqa: PLC0415
 
     from finn.transformation.kernels import PackagePartition  # noqa: PLC0415
@@ -581,9 +583,9 @@ def emit_package(out: Path, work: Path) -> int:
 
     out.mkdir(parents=True, exist_ok=True)
     work = work.resolve()
-    configured(chain := kernel_model())
+    configure_partition(chain := kernel_model())
     emit("chain", chain, "sdp_1")
-    configured(chain := kernel_model())
+    configure_partition(chain := kernel_model())
     emit("chain_synth", chain, "sdp_1", run_synth=True)
     (work / "tfc_build").mkdir(parents=True, exist_ok=True)
     _, parent, body = partitioned(work / "tfc_build")
@@ -865,15 +867,12 @@ def _publish(source: Path, target: Path, blank: bool) -> None:
         destination.write_bytes(data)
 
 
-# A checkout from before the code a section emits: the section says so, and emit goes on.
-_UNAVAILABLE = ("ModuleNotFoundError", "ImportError")
-
-
 def emit(target: Target, out: Path, work: Path, blank: bool, strict: bool = True) -> dict[str, Any]:
     """The emitted text into ``out`` (designs, ipxact, package); the keys of its jobs.
 
-    A section whose code the checkout lacks says so in its ``unavailable.txt``;
-    unless ``strict``, so does one that fails (an older checkout's API: compare).
+    Unless ``strict``, an evidence section (IP-XACT, package) the checkout cannot
+    emit says why in its ``unavailable.txt`` (an older checkout's API: compare);
+    the designs, which the keys digest, are always required.
     """
     if out.exists():
         shutil.rmtree(out)
@@ -886,12 +885,14 @@ def emit(target: Target, out: Path, work: Path, blank: bool, strict: bool = True
         raise RuntimeError(f"capture failed: {failed}")
     for job in (job for job in listed if job.kind != "pytest"):
         _publish(work / "keys" / job.name / "designs", out / "designs" / job.name, blank)
+    missing = sorted(work.glob("ipxact/**/unavailable.txt"))
+    if strict and missing:
+        raise RuntimeError(f"IP-XACT text unavailable: {missing[0].read_text().strip()}")
     _publish(work / "ipxact", out / "ipxact", blank)
     log = work / "package.log"
     if target.run("_emit-package", work / "package", work / "package-work", log=log) != 0:
-        errors = [line for line in _lines(log) if re.match(r"^\w+(Error|Exception): ", line)]
-        unavailable = errors if not strict else [e for e in errors if e.startswith(_UNAVAILABLE)]
-        if not unavailable:
+        unavailable = [line for line in _lines(log) if re.match(r"^\w+(Error|Exception): ", line)]
+        if strict or not unavailable:
             raise RuntimeError(f"PackagePartition's text failed: {log}")
         (work / "package").mkdir(parents=True, exist_ok=True)
         (work / "package" / "unavailable.txt").write_text(unavailable[-1] + "\n")

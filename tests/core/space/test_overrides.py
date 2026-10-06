@@ -17,6 +17,7 @@ import re
 
 import pytest
 
+from core.space._results_support import codes
 from finn.core.space import (
     Available,
     ConfigurationError,
@@ -42,11 +43,6 @@ from finn.core.space import (
 )
 
 COST = ViewKey("cost", int)
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, (Rejected, Unresolved))
-    return {finding.code for finding in result.findings}
 
 
 def messages(result: object) -> str:
