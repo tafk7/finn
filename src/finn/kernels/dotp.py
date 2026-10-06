@@ -50,7 +50,12 @@ from finn.core.space import (
     reject,
     requires,
 )
-from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
+from finn.dataflow.datatypes import (
+    DatatypeError,
+    QONNXDataType,
+    ordinary_integer_bounds,
+    qonnx_datatype_width,
+)
 from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
@@ -103,12 +108,21 @@ class DotpAxiKernel(Kernel):
 
     pe: int = Decision(domain=divisors_of(outputs))
     simd: int = Decision(domain=divisors_of(reduction))
+
+    @derived
+    def pumpable(self) -> bool:
+        """Whether pumping has SIMD lanes to split over the doubled clock: SIMD >= 2."""
+        return self.simd >= 2
+
+    # Pumping needs the platform's doubled clock and lanes to split (SIMD before it in
+    # rank, so a configuration with SIMD 1 does not offer it).
     compute_pumping: bool = Decision(
         values=(False, True),
         requires=(
             requires(
                 platform.clk2x, "clk2x-absent: the platform has no doubled clock", cases=(True,)
             ),
+            requires(pumpable, "dotp-pumping: pumping requires SIMD >= 2", cases=(True,)),
         ),
     )
 
@@ -199,12 +213,6 @@ class DotpAxiKernel(Kernel):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         return True
 
-    @constraint
-    def pumping_supported(self) -> bool | Rejected:
-        if self.compute_pumping and self.simd < 2:
-            return reject("dotp-pumping", "pumping requires SIMD >= 2")
-        return True
-
     @derived
     def segment_length(self) -> int | Rejected:
         """The longest DSP58 chain segment that meets the target period, at most the chain."""
@@ -222,7 +230,6 @@ class DotpAxiKernel(Kernel):
         core_supported,
         accumulator_width_supported,
         stream_widths_supported,
-        pumping_supported,
     )
 
     @derived
@@ -390,17 +397,24 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     version = 1
     core = "dotp_8sx9_dsp58"
 
-    def _core_refusal(self) -> Rejected | None:
-        if self.dsp is not DspBlock.DSP58:
+    @staticmethod
+    def operand_refusal(
+        dsp: DspBlock | None, activation: QONNXDataType, weights: QONNXDataType
+    ) -> Rejected | None:
+        """Why the core cannot take these operands on ``dsp``, or ``None``: its bounds read
+        the datatypes alone, so a parent asks them before it places the core."""
+        if dsp is not DspBlock.DSP58:
             return reject("dotp-target", "the INT8 core is a DSP58 mode")
-        activation, weights = self.x.element, self.w.element
-        if activation.bits + (not activation.signed) > 9:
+        if qonnx_datatype_width(activation) + (not activation.signed()) > 9:
             return reject(
                 "dotp-activation-width", "activation values must fit the 9-bit signed INT8 lanes"
             )
-        if weights.bits > 8:
+        if qonnx_datatype_width(weights) > 8:
             return reject("dotp-weight-width", "weights must fit the 8-bit INT8 lanes")
         return None
+
+    def _core_refusal(self) -> Rejected | None:
+        return self.operand_refusal(self.dsp, self.x.element.dtype, self.w.element.dtype)
 
     def sources(self) -> tuple[CopiedSource, ...]:
         return (

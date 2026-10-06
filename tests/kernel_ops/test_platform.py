@@ -72,12 +72,12 @@ def test_a_doubled_clock_is_the_shells_and_forced_off_without_it() -> None:
     assert alone.point().w.source.pumped_memory is True
 
 
-def test_runtime_writable_thresholds_need_a_control_port() -> None:
+def test_runtime_writable_thresholds_need_a_control_port_and_bus() -> None:
     with pytest.raises(KernelOpError, match="use_axilite.*control-absent"):
         op(targeted(thresholding_model(), ALVEO)).save({"use_axilite": True})
-    ultra96 = op(thresholding_model())
-    ultra96.save({"use_axilite": True})
-    assert ultra96.point().activate.use_axilite is True
+    # Ultra96 has the port, but a KernelOp places no control bus to present it through.
+    with pytest.raises(KernelOpError, match="use_axilite.*threshold-control"):
+        op(thresholding_model()).save({"use_axilite": True})
 
 
 def test_a_partitions_weight_stream_reads_the_platform() -> None:

@@ -156,8 +156,9 @@ def test_the_choices_do_not_move_with_pe() -> None:
 
 def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
     """An UltraRAM stage needs UltraRAM that takes initial contents, runtime-writable
-    thresholds a control port: on a platform without them, each case is refused by
-    name and its Decision forced to what remains."""
+    thresholds a control port (and a control bus, which a bare kernel has not): on a
+    platform without them, each case is refused by name and its Decision forced to
+    what remains."""
 
     def point(platform: Platform) -> ThresholdingAxiKernel:
         return design_space(
@@ -171,7 +172,11 @@ def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
         )
 
     forced = {item.key: item for item in inspection.forced(point(FULL_DSP48E2))}
-    assert "use_axilite" not in forced and "ultra_stages" not in forced
+    assert "ultra_stages" not in forced
+    assert forced["use_axilite"].refused == {
+        "True": "use_axilite: threshold-control: True: runtime-writable thresholds need a "
+        "control bus"
+    }
     bare = {
         item.key: item
         for item in inspection.forced(point(replace(FULL_DSP48E2, uram=False, control_ports=0)))

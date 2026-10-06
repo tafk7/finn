@@ -119,6 +119,32 @@ def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
         matmul_assembly(**{**facts, "platform": FULL_DSP48E2})
 
 
+@pytest.mark.parametrize(
+    "platform,activation,offered",
+    [
+        (FULL_DSP58, "INT4", ("native", "dense")),
+        (FULL_DSP48E2, "INT4", ("dense",)),  # no core reads it natively on DSP48E2
+        (FULL_DSP58, "INT12", ("dense",)),  # wider than the INT8 core's lanes
+    ],
+)
+def test_native_is_offered_only_where_a_core_reads_the_depthwise_operands(
+    platform, activation, offered
+):
+    # The realization states its need where its case is declared, so a native case
+    # whose core would refuse it is never offered (it would leave compute no case).
+    facts = {**FACTS, "platform": platform, "activation_dtype": DataType[activation]}
+    weights = tuple(tuple((r + c) % 5 - 2 for c in range(4)) for r in range(9))
+    space = matmul_point(**facts, weights=weights)
+    verdicts = {item.key: item for item in (*inspection.viable(space), *inspection.forced(space))}
+    realization = verdicts["matmul.realization"]
+    found = getattr(realization, "cases", None) or (realization.value,)
+    assert found == offered
+    if offered == ("dense",):
+        assert "matmul-native" in realization.refused["'native'"]
+        with pytest.raises(ValueError, match="matmul-native"):
+            commit(space, {"matmul.realization": "native"})
+
+
 def test_depthwise_cyclic_weights_are_the_channel_tile():
     weights = [[(c + k) % 16 - 8 for c in range(4)] for k in range(9)]
     built = matmul_assembly(

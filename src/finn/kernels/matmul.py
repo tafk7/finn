@@ -63,6 +63,7 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    requires,
     view,
 )
 from finn.dataflow.datatypes import (
@@ -139,9 +140,31 @@ class MatMulKernel(Kernel):
     def multi_set(self) -> bool:
         return self.weight_sets > 1
 
-    # A depthwise operation runs natively (one channel per PE lane, INT8 DSP58
-    # only) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(values=("native", "dense"), when=depthwise)
+    @derived
+    def reads_depthwise(self) -> bool:
+        """Whether a core reads depthwise operands natively: only the INT8 DSP58 core
+        does, within its own bounds on the platform's DSP and the datatypes."""
+        return (
+            Int8Dsp58DotpKernel.operand_refusal(
+                self.platform.dsp, self.activation_dtype, self.weights_dtype
+            )
+            is None
+        )
+
+    # A depthwise operation runs natively (one channel per PE lane, a core that reads
+    # it) or on the dense datapath with block-diagonal weights, on any core.
+    realization: str = Decision(
+        values=("native", "dense"),
+        when=depthwise,
+        requires=(
+            requires(
+                reads_depthwise,
+                "matmul-native: no core reads these depthwise operands natively "
+                "(the INT8 DSP58 core alone does, within its bounds)",
+                cases=("native",),
+            ),
+        ),
+    )
 
     @derived
     def datapath(self) -> Form:

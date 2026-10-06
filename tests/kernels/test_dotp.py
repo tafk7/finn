@@ -182,7 +182,6 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
             {"platform": full_platform(DspBlock.DSP58, period_ns=1.4), "compute_pumping": True},
             "dotp-clock-period",
         ),
-        ({"simd": 1, "compute_pumping": True}, "dotp-pumping"),
     ],
 )
 def test_physical_view_reports_each_refusal_once(updates, code):
@@ -220,12 +219,28 @@ def test_a_folding_factor_must_divide_its_extent(factor):
 
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
-    point = kernel(simd=1, compute_pumping=True)
+    point = kernel(result_dtype=DataType["INT59"], compute_pumping=True)
     physical = point.inspect(DotpAxiKernel.module)
     assert isinstance(physical.output_result, Available)
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
     assert dict(physical.output_result.value.parameters)["PUMPED_COMPUTE"] == 1
-    assert codes(physical.accepted_result) == {"dotp-pumping"}
+    assert codes(physical.accepted_result) == {"dotp-accumulator-width"}
+
+
+def test_pumping_needs_lanes_to_split_and_is_not_offered_with_one():
+    """Pumping splits SIMD lanes over the doubled clock: with SIMD 1 its case is refused
+    where it is declared, so the Decision is forced, never a dead end."""
+    one = kernel(simd=1, compute_pumping=None, outputs=2, reduction=4)
+    (forced,) = [item for item in inspection.forced(one) if item.key == "compute.compute_pumping"]
+    assert forced.value is False and "dotp-pumping" in forced.refused["True"]
+    with pytest.raises(ValueError, match="dotp-pumping"):
+        kernel(simd=1, compute_pumping=True, reduction=4)
+    two = kernel(simd=2, compute_pumping=None, outputs=2, reduction=4)
+    (viable,) = [item for item in inspection.viable(two) if item.key == "compute.compute_pumping"]
+    assert viable.cases == (False, True)
+    # Its cases read SIMD, so pumping is committed with or after it.
+    with pytest.raises(ValueError, match="compute.simd: decision-unassigned"):
+        kernel(simd=None, compute_pumping=False, reduction=4)
 
 
 def test_narrow_weights_derive_from_the_weight_stream_s_range():
@@ -281,8 +296,9 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     # The module waits on the folding factors; the refusal is already known.
     module = point.inspect(DotpAxiKernel.module).accepted_result
     assert not isinstance(module, Available)
-    # Folding factors left open leave an admissible core unresolved, not refused.
-    open_factors = kernel(pe=None, simd=None, compute_pumping=None)
+    # Folding factors left open leave an admissible core unresolved, not refused (with
+    # extents of 1 every factor would be forced).
+    open_factors = kernel(pe=None, simd=None, compute_pumping=None, outputs=2, reduction=4)
     assert isinstance(open_factors.inspect(DotpAxiKernel.core_supported).result, Available)
     assert isinstance(open_factors.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
     assert open_factors.x.element.bits == 3
