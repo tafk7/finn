@@ -30,7 +30,7 @@ refused.
 This module has **no FINN imports at all**, so ``finn.dataflow`` builds on it
 without dragging the engine into its datatypes (the layer table,
 ``tests/layering.py``, holds the package directions). The engine-side ``ValueSemantics`` declaration
-lives in ``finn.kernels.datatypes.semantics``, built from the helpers here.
+lives in ``finn.kernels.values.semantics``, built from the helpers here.
 
 Two rules it keeps, which qonnx leaves to its callers:
 
@@ -57,6 +57,7 @@ __all__ = [
     "QONNXDataType",
     "QONNX_DATATYPE_TOKEN",
     "canonical_qonnx_datatype",
+    "is_ordinary_integer",
     "is_qonnx_datatype",
     "ordinary_integer_bounds",
     "qonnx_datatype_width",
@@ -108,13 +109,19 @@ class DatatypeError(ValueError):
     """A value was offered as a datatype and is not one this stack can hold."""
 
 
+def is_ordinary_integer(value: QONNXDataType) -> bool:
+    """Whether ``value`` is an ordinary INT/UINT encoding: ``INT<n>``, ``UINT<n>``, or
+    ``BINARY`` (QONNX's canonical name for ``UINT1``)."""
+    return value.name == "BINARY" or re.fullmatch(r"U?INT\d+", value.name) is not None
+
+
 def ordinary_integer_bounds(value: QONNXDataType) -> tuple[int, int]:
     """Exact INT/UINT bounds; special integer-valued encodings are distinct.
 
     Compute from the ordinary encoding instead of third-party range methods,
     which may use floating point for very wide types. No datatype is converted.
     """
-    if value.name != "BINARY" and re.fullmatch(r"U?INT\d+", value.name) is None:
+    if not is_ordinary_integer(value):
         raise DatatypeError(f"{value.name} is not an ordinary INT/UINT encoding")
     bits = qonnx_datatype_width(value)
     if bits < 1:
@@ -180,6 +187,6 @@ is_qonnx_datatype: Callable[[object], TypeGuard[QONNXDataType]] = is_datatype
 #: compared.
 #: The single object every datatype value-semantics declaration must use as its
 #: ``type_token``.  Exported so that the declaration -- which lives in
-#: ``finn.kernels.datatypes.semantics`` to keep this module engine-independent --
+#: ``finn.kernels.values.semantics`` to keep this module engine-independent --
 #: names the same object this module recognizes against.
 QONNX_DATATYPE_TOKEN = BaseDataType

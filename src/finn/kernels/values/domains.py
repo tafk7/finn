@@ -9,12 +9,12 @@ a kernel checks one in a constraint of its ``admission``.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from finn.core.space import Rejected, reject
 from finn.dataflow.datatypes import (
     QONNXDataType,
+    is_ordinary_integer,
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
@@ -44,8 +44,7 @@ class Integer:
 
     def check(self, dtype: QONNXDataType) -> bool | Rejected:
         """True when ``dtype`` is in the policy; otherwise the refusal says why."""
-        ordinary = dtype.name == "BINARY" or re.fullmatch(r"U?INT-?\d+", dtype.name) is not None
-        if not ordinary or (
+        if not is_ordinary_integer(dtype) or (
             self.signed is not None and dtype.name.startswith("INT") != self.signed
         ):
             expected = {None: "INT/UINT", True: "signed INT", False: "unsigned UINT"}[self.signed]

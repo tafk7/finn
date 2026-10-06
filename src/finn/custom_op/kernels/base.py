@@ -127,7 +127,7 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
     return prod(dims[:-1]), dims[-1]
 
 
-def target(model: ModelWrapper) -> Target:
+def read_target(model: ModelWrapper) -> Target:
     """The build target, from the model's ``finn.platform`` metadata (a subgraph body
     opened through its parent reads the parent's).
 
@@ -150,7 +150,7 @@ def target(model: ModelWrapper) -> Target:
 
 def write_target(model: ModelWrapper, target: Target) -> None:
     """State the build target in the model's ``finn.platform`` metadata, every key,
-    where ``target`` reads it."""
+    where ``read_target`` reads it."""
     platform = target.platform
     if platform.dsp is None:
         raise KernelOpError(
@@ -332,7 +332,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     def target(self) -> Target:
         try:
-            return target(self.model())
+            return read_target(self.model())
         except KernelOpError as error:
             raise KernelOpError(f"{self.label}: {error}") from error
 
@@ -482,10 +482,10 @@ __all__ = [
     "admitted",
     "committed",
     "datatype",
+    "read_target",
     "refusal",
     "rows",
     "shape",
-    "target",
     "typed_choices",
     "write_target",
 ]

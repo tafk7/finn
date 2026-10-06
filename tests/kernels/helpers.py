@@ -53,13 +53,13 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.target import DspBlock, Platform
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
 )
-from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import DspBlock, Platform
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)

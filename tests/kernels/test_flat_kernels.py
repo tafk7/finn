@@ -17,16 +17,14 @@ from finn.core.space import (
     Rejected,
     design_space,
 )
-from finn.kernels import (
-    EltwiseKernel,
-    FifoKernel,
-    InputGeneratorKernel,
-    ThresholdingAxiKernel,
-)
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
+from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.fifo import FifoKernel
+from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, finnlib_root, point_for
 from kernels.xsim import requires_xsim, simulate
 

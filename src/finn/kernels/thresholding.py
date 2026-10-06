@@ -75,17 +75,17 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import Kernel
+from finn.kernels.base import CLOCK, RESET, Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
-from finn.kernels.datatypes.domains import Integer, set_index_dtype
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.port import AxiStreamPort
+from finn.kernels.target import Platform
+from finn.kernels.values.domains import Integer, set_index_dtype
+from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
     ThresholdTable,
 )
-from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
 
 c = Index("c")
 
@@ -332,8 +332,8 @@ class ThresholdingAxiKernel(Kernel):
                     ("RRESP", 2),
                 )
             ),
-            associated_clock="ap_clk",
-            associated_reset="ap_rst_n",
+            associated_clock=CLOCK,
+            associated_reset=RESET,
         )
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)

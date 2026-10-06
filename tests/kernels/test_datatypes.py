@@ -29,7 +29,7 @@ from finn.dataflow.datatypes import (
     is_qonnx_datatype,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 #: The datatype domain at ``object``, so a test can offer it values of any type.
 QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)

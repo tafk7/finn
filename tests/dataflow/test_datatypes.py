@@ -14,6 +14,8 @@ from qonnx.core.datatype import BaseDataType, DataType
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
+    is_ordinary_integer,
+    ordinary_integer_bounds,
     qonnx_datatype_width,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -68,6 +70,31 @@ def test_a_subclass_naming_itself_int8_is_not_int8() -> None:
             qonnx_datatype_width(rogue)
         with pytest.raises(DatatypeError):
             ScalarEncoding(cast(QONNXDataType, rogue))
+
+
+@pytest.mark.parametrize(
+    ("name", "ordinary"),
+    [
+        ("INT1", True),
+        ("INT33", True),
+        ("UINT4", True),
+        ("UINT1", True),  # resolves to BINARY
+        ("BIPOLAR", False),
+        ("TERNARY", False),
+        ("SCALEDINT<8>", False),
+        ("FIXED<8,4>", False),
+        ("FLOAT32", False),
+    ],
+)
+def test_an_ordinary_integer_is_an_int_or_uint_encoding(name: str, ordinary: bool) -> None:
+    """``INT<n>``, ``UINT<n>`` and ``BINARY``; the other integer-valued encodings are
+    distinct, and have no ordinary bounds."""
+
+    dtype = DataType[name]
+    assert is_ordinary_integer(dtype) is ordinary
+    if not ordinary:
+        with pytest.raises(DatatypeError, match="not an ordinary INT/UINT encoding"):
+            ordinary_integer_bounds(dtype)
 
 
 def test_a_degenerate_width_is_still_refused() -> None:

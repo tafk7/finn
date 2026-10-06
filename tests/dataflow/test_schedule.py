@@ -268,3 +268,12 @@ def test_a_reduction_presented_before_it_closes_is_refused() -> None:
         reordered.closing((k,))
     with pytest.raises(Refused, match="not an index"):
         schedule.present((2, 2), (m, Index("q")))
+
+
+def test_an_index_outside_the_schedule_has_no_extent_or_factor() -> None:
+    schedule = gemm(2, 2, 4, 1, 2)
+    q = Index("q")
+    with pytest.raises(Refused, match=r"^q is not an index of the schedule$"):
+        schedule.extent(q)
+    with pytest.raises(Refused, match=r"^q is not an index of the schedule$"):
+        schedule.factor(q)

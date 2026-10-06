@@ -73,17 +73,18 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.datatypes.domains import set_index_dtype
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.target import Platform
+from finn.kernels.values.domains import set_index_dtype
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     integer_range,
 )
-from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.target import Platform
 
 _CARRIED = (
     ("x_channel", "activation_tensor"),
@@ -93,16 +94,11 @@ _CARRIED = (
 """Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
-def _positive(value: int, name: str) -> None:
-    if type(value) is not int or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-
-
 def exact_result_dtype(
     vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
 ) -> QONNXDataType:
     """Smallest signed INT covering every full-range integer dot product."""
-    _positive(vector_length, "vector_length")
+    require_positive(vector_length, "vector_length")
     activation = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
     weights = ordinary_integer_bounds(canonical_qonnx_datatype(weights_dtype))
     products = tuple(a * w for a in activation for w in weights)
@@ -225,7 +221,7 @@ class MatMulKernel(Kernel):
         low, high = ordinary_integer_bounds(self.weights_dtype)
         if not low <= least <= greatest <= high:
             return reject(
-                "memstream-values",
+                "matmul-weights",
                 f"every value must be an integer admitted by {self.weights_dtype.name}",
             )
         element = ScalarEncoding.admit(self.weights_dtype, (least, greatest))

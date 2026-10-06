@@ -18,7 +18,7 @@ and stores them; weights on a graph tensor arrive on the channel like any edge,
 and it has no source. Nothing is pinned.
 
 The platform is a fact too: the target's capabilities and its clock period
-(``target(model)``), bound
+(``read_target(model)``), bound
 to the kernels and to every channel, so the requirements of their value cases
 (``requires``) read the device the model is built for. The DSP block is
 the platform's (``platform.dsp``), which the compute cores read.
@@ -33,16 +33,16 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.target import Platform
+from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     THRESHOLD_TABLE,
     IntegerTensor,
     ThresholdTable,
 )
-from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import Platform
-from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
 class MatMulNode(Kernel):

@@ -62,10 +62,10 @@ from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.datatypes.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.target import Platform
 from finn.kernels.transport import StreamContract
+from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.vpc import VpcKernel
 
 

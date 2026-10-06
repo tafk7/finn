@@ -177,7 +177,7 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
     point = commit(design_space(Placed()), {"kernel.pe": 8})
     ((code, message),) = codes(point.kernel.x.query(AxiStreamPort.presented))
     assert code == "port-presentation"
-    assert message.startswith("s_axis_input: a schedule or a sequence, not both")
+    assert message.startswith("s_axis_input: exactly one of a schedule or a sequence")
 
 
 def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:

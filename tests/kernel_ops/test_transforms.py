@@ -21,7 +21,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, target
+from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, read_target
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
 from kernel_ops.models import DOMAIN, TARGET, chain_source
@@ -53,7 +53,7 @@ def test_conversion_rewrites_the_nodes_and_states_the_target() -> None:
     ]
     assert model.get_customop_wrapper(model.graph.node[1]).get_nodeattr("bias") == 0
     assert model.get_opset_imports()[DOMAIN] == 1
-    assert target(model) == TARGET
+    assert read_target(model) == TARGET
     assert {key.entry for key in PLATFORM_KEYS.values()} <= {
         item.key for item in model.graph.metadata_props
     }

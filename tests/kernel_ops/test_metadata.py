@@ -21,7 +21,7 @@ from finn.custom_op.kernels.base import (
     PLATFORM_FIELDS,
     PLATFORM_KEYS,
     KernelOpError,
-    target,
+    read_target,
     write_target,
 )
 from finn.kernels.target import DspBlock, Platform, Target
@@ -54,7 +54,7 @@ def body_of(model: ModelWrapper) -> ModelWrapper:
 def test_the_target_is_stated_typed_every_key_and_read_back() -> None:
     model = holder()
     write_target(model, TARGET)
-    assert target(model) == TARGET
+    assert read_target(model) == TARGET
     assert set(PLATFORM_KEYS) == {"part", *PLATFORM_FIELDS}
     stated = entries(model)
     assert stated["finn.platform/@version"] == "1"
@@ -65,9 +65,9 @@ def test_the_target_is_stated_typed_every_key_and_read_back() -> None:
     assert stated["finn.platform/control_ports"] == "1"
     # A body opened through its parent reads the parent's; extracted, it carries a copy.
     body = body_of(model)
-    assert target(body) == TARGET
+    assert read_target(body) == TARGET
     body.inherit_metadata(PLATFORM)
-    assert target(ModelWrapper(body.model)) == TARGET
+    assert read_target(ModelWrapper(body.model)) == TARGET
 
 
 @pytest.mark.parametrize("missing", ["dsp", "period_ns", "clk2x"])
@@ -78,9 +78,9 @@ def test_a_missing_key_is_refused_by_name(missing: str) -> None:
     with pytest.raises(
         KernelOpError, match=f"states no target \\(finn.platform: {missing} missing"
     ):
-        target(model)
+        read_target(model)
     with pytest.raises(KernelOpError, match="states no target"):
-        target(holder())
+        read_target(holder())
 
 
 def test_a_malformed_key_is_refused() -> None:
@@ -90,7 +90,7 @@ def test_a_malformed_key_is_refused() -> None:
     with pytest.raises(
         KernelOpError, match="finn.platform/period_ns: stored 'fast' is not a float"
     ):
-        target(model)
+        read_target(model)
 
 
 def test_a_target_that_is_not_one_writes_nothing() -> None:
@@ -104,7 +104,7 @@ def test_a_target_that_is_not_one_writes_nothing() -> None:
 
 def test_conversion_states_the_target_it_is_given() -> None:
     zcu104 = resolve_target("xczu7ev-ffvc1156-2-e", 4.0, "vivado_zynq")
-    assert target(chain_source().transform(ToKernelOps(zcu104))) == zcu104
+    assert read_target(chain_source().transform(ToKernelOps(zcu104))) == zcu104
 
 
 def test_the_capability_tables() -> None:

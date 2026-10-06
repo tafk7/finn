@@ -56,10 +56,19 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import ACCESS, CLOCKED, HELD, PINS, PORT
-from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.kernels.base import (
+    ACCESS,
+    CLOCK,
+    CLOCKED,
+    HELD,
+    NATIVE_CLOCKING,
+    PINS,
+    PORT,
+    RESET,
+)
 from finn.kernels.transport import AxisBeat, ReadyValidStream, StreamContract, StreamMarker
+from finn.kernels.values.domains import Integer
+from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 if TYPE_CHECKING:
     import finn.kernels.channels
@@ -81,8 +90,8 @@ class Port(Space):
 
     name: str = Param()
     endpoint: Endpoint = Param()
-    clock: str = Param(default="ap_clk")
-    reset: str = Param(default="ap_rst_n")
+    clock: str = Param(default=CLOCK)
+    reset: str = Param(default=RESET)
     transport = required(ReadyValidStream)
 
     @derived
@@ -120,8 +129,8 @@ class WordPort(Port):
 
     bits: int = Param()
     markers: tuple[StreamMarker, ...] = Param(default=())
-    clock: str = Param(default="clk")
-    reset: str = Param(default="rst")
+    clock: str = Param(default=NATIVE_CLOCKING.clock)
+    reset: str = Param(default=NATIVE_CLOCKING.reset)
 
     @derived
     def transport(self) -> ReadyValidStream | Rejected:
@@ -218,7 +227,9 @@ class AxiStreamPort(Port):
         """What the port presents of its channel's tensor: its schedule's projection, or given."""
         schedule, given = self.schedule, self.sequence
         if (schedule is None) == (given is None):
-            return reject("port-presentation", f"{self.name}: a schedule or a sequence, not both")
+            return reject(
+                "port-presentation", f"{self.name}: exactly one of a schedule or a sequence"
+            )
         if given is not None:
             return given
         assert schedule is not None
@@ -239,7 +250,7 @@ class AxiStreamPort(Port):
             )
             markers = (schedule.closing(self.closes),) if self.closes else ()
             return BeatSequence(form, markers=markers)
-        except (Refused, KeyError) as error:
+        except Refused as error:
             return reject("port-schedule", f"{self.name}: {error}")
 
     @derived

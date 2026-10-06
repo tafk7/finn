@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from dataclasses import replace
 from math import ceil
 
 from finn.core.space import (
@@ -60,10 +61,12 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
-from finn.kernels.datatypes.domains import Integer, set_index_dtype
-from finn.kernels.datatypes.semantics import (
+from finn.kernels.port import AxiStreamPort
+from finn.kernels.target import Platform
+from finn.kernels.values.domains import Integer, set_index_dtype
+from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     INTEGER_VECTOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -71,8 +74,6 @@ from finn.kernels.datatypes.semantics import (
     IntegerVector,
     integer_range,
 )
-from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
 
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""
@@ -240,8 +241,8 @@ class MemStreamKernel(Kernel):
                     ("rdata", 32),
                 )
             ),
-            associated_clock="clk",
-            associated_reset="rst",
+            associated_clock=NATIVE_CLOCKING.clock,
+            associated_reset=NATIVE_CLOCKING.reset,
         )
 
     @derived
@@ -268,8 +269,8 @@ class MemStreamKernel(Kernel):
         sequence=set_sequence,
         dtype=set_dtype,
         signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     output = AxiStreamPort(
         name="m_axis_0",
@@ -281,15 +282,15 @@ class MemStreamKernel(Kernel):
         value_range=value_range,
         lanes=(LANE,),
         factors=word_factors,
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
 
     @derived
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return Clocking("clk", "rst", doubled="clk2x", doubling=pumped, active_low=False)
+        return replace(NATIVE_CLOCKING, doubled="clk2x", doubling=pumped)
 
     def parameters(self) -> Mapping[str, int | str]:
         return {

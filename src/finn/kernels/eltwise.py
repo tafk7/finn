@@ -34,10 +34,10 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
 from finn.kernels.channels import Channel
-from finn.kernels.datatypes.domains import Integer
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock, Platform
+from finn.kernels.values.domains import Integer
+from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 c = Index("c")
 
@@ -159,8 +159,8 @@ class EltwiseKernel(Kernel):
         lanes=(c,),
         dtype=lhs_dtype,
         signals=("adat", "avld", "ardy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     rhs = AxiStreamPort(
         name="rhs",
@@ -172,8 +172,8 @@ class EltwiseKernel(Kernel):
         lanes=(c,),
         dtype=rhs_dtype,
         signals=("bdat", "bvld", "brdy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     result = AxiStreamPort(
         name="result",
@@ -185,8 +185,8 @@ class EltwiseKernel(Kernel):
         lanes=(c,),
         dtype=result_dtype,
         signals=("odat", "ovld", "ordy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
 
     @derived

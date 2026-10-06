@@ -47,10 +47,10 @@ from finn.custom_op.kernels.base import (
     KernelOpError,
     committed,
     datatype,
+    read_target,
     refusal,
     rows,
     shape,
-    target,
     typed_choices,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -131,7 +131,7 @@ def _channels(
     """The partition's channels by tensor, in node order: a node's inputs on an edge or
     the boundary, the parameter channels it owns, its outputs. An output handed on to a
     KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
-    platform = target(model).platform
+    platform = read_target(model).platform
     parameters = {tensor for channels in owned for tensor in channels}
     channels: dict[str, Channel] = {}
 

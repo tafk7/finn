@@ -29,8 +29,8 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
-from finn.kernels.datatypes.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.kernels.port import AxiStreamPort
+from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 i, j = Index("i"), Index("j")
 
@@ -106,8 +106,8 @@ class TransposeKernel(Kernel):
         lanes=(j,),
         dtype=dtype,
         signals=("idat", "ivld", "irdy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
     output = AxiStreamPort(
         name="output",
@@ -118,8 +118,8 @@ class TransposeKernel(Kernel):
         lanes=(i,),
         dtype=dtype,
         signals=("odat", "ovld", "ordy"),
-        clock="clk",
-        reset="rst",
+        clock=NATIVE_CLOCKING.clock,
+        reset=NATIVE_CLOCKING.reset,
     )
 
     @derived
