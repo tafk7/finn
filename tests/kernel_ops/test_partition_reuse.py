@@ -18,7 +18,8 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels import MatMul, Thresholding
-from finn.custom_op.kernels.base import write_target
+from finn.custom_op.kernels import matmul as matmul_op
+from finn.custom_op.kernels.base import integer_tensor, write_target
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
 from finn.custom_op.kernels.partition import (
     PARTITIONS,
@@ -144,6 +145,32 @@ def test_the_weights_values_change_the_facts_key_alone() -> None:
     assert replace(after, kernels=(replace(placement, facts=before.kernels[0].facts),)) == before
 
 
+def test_an_owned_weight_channel_is_declared_from_the_graph_its_value_read_to_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The node's weight channel carries the initializer's tensor over its values' range
+    and, as contents, the node's value (``Facts.values``), read only to build the class:
+    the facts key already identifies it, so a hit reads none."""
+    model, again = matmul_model(), matmul_model()
+    first, _ = root(model)
+    declared = dict(last_key().channels)["w"]
+    assert declared.tensor.element.value_range == (int(WEIGHTS.min()), int(WEIGHTS.max()))
+    assert declared.port is None  # owned: never a boundary
+    assert first.point.w.contents == integer_tensor(WEIGHTS)
+    assert first.point.w.valued
+    reads: list[int] = []
+
+    def counted(values: Any) -> Any:
+        reads.append(1)
+        return integer_tensor(values)
+
+    monkeypatch.setattr(matmul_op, "integer_tensor", counted)
+    _, reused = root(again)
+    assert reused and reads == []
+    _, reused = root(again, "another")  # a miss builds the class: it reads the value
+    assert not reused and reads == [1]
+
+
 def test_the_partitions_name_misses() -> None:
     first, _ = root(matmul_model(), "one")
     again, _ = root(matmul_model(), "another")
@@ -190,7 +217,7 @@ def test_every_component_of_the_key_is_compared() -> None:
     root(kernel_model(), "chain")
     key: PartitionKey = last_key()
     placement, (tensor, declared) = key.kernels[0], key.channels[0]
-    assert placement.op is MatMul and declared.tensor is not None
+    assert placement.op is MatMul
     platform = replace(key.platform, period_ns=key.platform.period_ns + 1)
     other: dict[str, Any] = {
         "name": "other",

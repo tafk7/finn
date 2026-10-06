@@ -126,10 +126,23 @@ def _loading(found: tuple[object, ...]) -> Callable[[], tuple[int, ...]]:
     return lambda: cast(tuple[int, ...], found)
 
 
+def test_a_value_keeps_its_column_sums() -> None:
+    """Each column's positive and negative sums, over the next-to-last axis, per set."""
+    value = IntegerTensorValue.of(((1, -2), (3, 4), (-5, 0)))
+    assert value.columns == ((4, -5), (4, -2))
+    assert value.columns is value.columns  # computed once
+    sets = IntegerTensorValue.of((((1, -1),), ((-2, 2),)))  # two sets of (1, 2)
+    assert sets.columns == ((1, 0), (0, -1), (0, -2), (2, 0))
+    assert IntegerTensorValue.of((2, -3, 4)).columns == ((6, -3),)  # a vector: one column
+    # Sums past 64 bits are exact too.
+    assert IntegerTensorValue.of(((2**62, -1), (2**62, 3))).columns == ((2**63, 0), (3, -1))
+
+
 def test_a_new_configuration_reads_only_the_stated_facts() -> None:
-    """Configuring a point reads the weights' shape and range, and only the memory image
-    their integers: at 512 x 512, recognizing the same weights again cost about 700 ms a
-    configuration."""
+    """Configuring a point reads the weights' shape and range, and their integers once:
+    for the column sums MatMul's result range derives from (K7), which the value keeps,
+    and the memory image reads the same load. At 512 x 512, recognizing the same weights
+    again cost about 700 ms a configuration."""
     int3 = DataType["INT3"]
     nested = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
     loads: list[int] = []
@@ -149,13 +162,17 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
         platform=FULL_DSP48E2,
         weights=weights,
     )
-    assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
+    # The weight channel's tensor is stated over the value's range; MatMul reads INT3.
+    assert base.w.tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
+    assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
     handles = {item.key: item.reference for item in inspection.decisions(base)}
     point = base.with_choices({handles["matmul.compute"]: "packed"})
     point = point.with_choices({handles["w.source.memstream.ram_style"]: "block"})
-    assert point.matmul.weight_tensor.element.value_range == (-1, 1)
+    assert point.w.tensor.element.value_range == (-1, 1)
     assert point.w.source.value_range == (-1, 1)
-    assert loads == []
+    # The result's range read the columns (over INT3 activations: [-11, 11]), once.
+    assert point.matmul.result_tensor.element == ScalarEncoding(DataType["INT5"], (-11, 11))
+    assert loads == [1]
     folded = point.with_choices(
         {handles["matmul.compute.packed.pe"]: 2, handles["matmul.compute.packed.simd"]: 2}
     )

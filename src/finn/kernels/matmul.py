@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A matrix-multiply unit on channels, with external or stored weights.
+"""A matrix-multiply unit on channels: activations and weights in, results out.
 
 The facts are the extents in canonical GEMM notation, ``m`` rows, ``n``
 outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
@@ -11,10 +11,10 @@ outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
 - ``DEPTHWISE``: Y[m, n] = sum over k of X[m, k, n] * W[k, n]. Each output
   channel reads its own activations, so nothing is replayed.
 
-Weights are stored ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
+Weights are read ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
 operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
-``realization`` Decision, on the dense datapath with block-diagonal weights,
-reading its (M, K, N) activations as (M, K * N).
+``realization`` Decision, on the dense datapath with block-diagonal weights
+(``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores that sit on the
 channels its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
@@ -22,22 +22,30 @@ weights) and ``y_channel`` (the results). Each channel, its adapter, its FIFO
 and its source are its parent's: the parent (a test harness, a KernelOp's node
 root, a partition root) declares each channel and either binds its tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
-``result_tensor``, ``set_tensor``), which reads only MatMul's facts and
-``realization``, never a port, or states it; ``carried`` refuses a stated
-tensor of another shape, or whose values do not fit (``matmul-tensor``):
-MatMul's values must fit a channel that carries them, and a channel's values
-must fit what MatMul consumes. A boundary channel there presents its ``port``
-name (``in0_V``).
+``result_tensor``), which reads only MatMul's facts and ``realization``, never
+a port, or states it; ``carried`` refuses a stated tensor of another shape, or
+whose values do not fit (``matmul-tensor``): MatMul's results must fit their
+channel, and an input channel's values must fit what MatMul reads. A boundary
+channel there presents its ``port`` name (``in0_V``).
 
-Known ``weights`` are values MatMul owns: its ``weight_tensor`` states their
-range (``INT4 over [-7, 7]``), and its ``weight_values`` view is the value the
-weight channel carries (the datapath's weights, block-diagonal when densely
-realized), which the parent binds to the channel's ``contents``. Whether the
-weights are known is their presence, the view's guard, so the channel's
-``source`` applies before the realization is chosen. With several weight
-sets, the parent's set channel (bound to ``set_tensor``) is the weight channel's
-``index``. A consumer derives from the range what it may (the packed core's
-``NARROW_WEIGHTS``). Unknown weights carry the datatype's range.
+MatMul consumes its weights; it never holds them. Known weights are the weight
+channel's value: its ``contents``, which its ``source`` stores, bound by
+whoever declares the channel (the value's owner), who states on the channel's
+tensor the range it promises (``INT4 over [-7, 7]``). With several weight sets
+the channel's ``sets`` and ``index`` select one per row. A consumer derives
+from what the channel carries what it may (the packed core's
+``NARROW_WEIGHTS``); a channel without a value carries the datatype's range. A
+dense realization of a depthwise operation reads block-diagonal weights, so it
+needs a value on its weight channel (``matmul-realization``).
+
+The result's range is derived from what the weight channel carries: with a
+value, the exact range of each output column's dot products over the
+activation datatype (``column_range``), unioned over the columns; without one,
+every dot product of the two datatypes' values. The accumulator is the
+smallest signed INT holding it, and never narrower than one product of the
+operands' encodings, which the packed core needs (``accumulator_dtype``,
+``result_type``); the result element states the range (``result_tensor``, the
+core's ``result_range``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and channels. Each core owns its folding factors (``compute.<core>.pe``,
@@ -68,6 +76,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
+    qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.gemm import Form
@@ -77,13 +86,13 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import Platform
-from finn.kernels.values.domains import admit_element, set_index_dtype
+from finn.kernels.values.domains import admit_element
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerTensorValue,
-    integer_range,
+    integer_columns,
+    integer_shape,
     integers,
 )
 
@@ -95,17 +104,89 @@ _CARRIED = (
 """Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
-def exact_result_dtype(
+def signed_integer_dtype(least: int, greatest: int) -> QONNXDataType:
+    """The smallest signed INT holding every integer of ``[least, greatest]``."""
+    bits = max(1, greatest.bit_length() + 1, (~least).bit_length() + 1 if least < 0 else 1)
+    return resolve_qonnx_datatype_name(f"INT{bits}")
+
+
+def datatype_range(
     vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
-) -> QONNXDataType:
-    """Smallest signed INT covering every full-range integer dot product."""
+) -> tuple[int, int]:
+    """The least and greatest dot product of ``vector_length`` values of each datatype."""
     require_positive(vector_length, "vector_length")
     activation = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
     weights = ordinary_integer_bounds(canonical_qonnx_datatype(weights_dtype))
     products = tuple(a * w for a in activation for w in weights)
-    lower, upper = vector_length * min(products), vector_length * max(products)
-    bits = max(1, upper.bit_length() + 1, (~lower).bit_length() + 1 if lower < 0 else 1)
-    return resolve_qonnx_datatype_name(f"INT{bits}")
+    return vector_length * min(products), vector_length * max(products)
+
+
+def exact_result_dtype(
+    vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
+) -> QONNXDataType:
+    """Smallest signed INT covering every full-range integer dot product."""
+    return signed_integer_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
+
+
+def accumulator_dtype(
+    activation_dtype: QONNXDataType, weights_dtype: QONNXDataType, value_range: tuple[int, int]
+) -> QONNXDataType:
+    """The accumulator of dot products over ``value_range``: the smallest signed INT
+    holding it, widened to one product of the operands' encodings when narrower.
+
+    FinnLib's packed dotp elaborates only ACCU_WIDTH >= WEIGHT_WIDTH +
+    ACTIVATION_WIDTH - SIGNED_ACTIVATIONS (its lanes hold a whole product), so
+    small or zero weights, whose columns' range is narrow, still take that width.
+    The datatypes' range (``datatype_range``) is never narrower.
+    """
+    activation = canonical_qonnx_datatype(activation_dtype)
+    product = (
+        qonnx_datatype_width(weights_dtype)
+        + qonnx_datatype_width(activation)
+        - int(activation.signed())
+    )
+    exact = signed_integer_dtype(*value_range)
+    if qonnx_datatype_width(exact) >= product:
+        return exact
+    return resolve_qonnx_datatype_name(f"INT{product}")
+
+
+def column_range(activation_dtype: QONNXDataType, weights: IntegerTensor) -> tuple[int, int]:
+    """The least and greatest dot product of any column of ``weights`` (``(..., k, n)``,
+    reduced over ``k``) with activations of ``activation_dtype``.
+
+    A column whose positive weights sum to P and negative ones to N meets activations
+    in [lo, hi] (an ordinary integer type: lo <= 0 <= hi) over [lo * P + hi * N,
+    hi * P + lo * N], each term taking its extremes independently. Every partial sum
+    lies within it too, since each term's range holds 0.
+    """
+    low, high = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
+    columns = integer_columns(weights)
+    return (
+        min(low * positive + high * negative for positive, negative in columns),
+        max(high * positive + low * negative for positive, negative in columns),
+    )
+
+
+def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
+    """Depthwise weights ``(k, n)``, or one operand a set ``(sets, k, n)``, as the dense
+    datapath reads them: ``(k * n, n)`` a set.
+
+    W'[k * N + c, n] = W[k, n] when c = n, and 0 otherwise: the densely read
+    activation row (k, c) meets only its own channel's weights. The value owner
+    states it for a dense realization; it reads the integers.
+    """
+    shape = integer_shape(weights)
+    if shape is None or len(shape) not in (2, 3):
+        raise ValueError("depthwise weights are (k, n), or (sets, k, n)")
+    channels, flat = shape[-1], integers(weights)
+    dense = [
+        value if channel == output else 0
+        for row in range(0, len(flat), channels)
+        for channel in range(channels)
+        for output, value in enumerate(flat[row : row + channels])
+    ]
+    return IntegerTensorValue.flat((*shape[:-2], shape[-2] * channels, channels), dense)
 
 
 class MatMulKernel(Kernel):
@@ -120,25 +201,11 @@ class MatMulKernel(Kernel):
     form: Form = Param(default=Form.DENSE)
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-    # Several weight sets, one selected per row by an index on ``in2_V``;
-    # ``weights`` then holds one operand per set.
-    weight_sets: int = Param(default=1)
     platform: Platform = Param()
-
-    @derived
-    def known(self) -> bool:
-        """Whether the weights are known: MatMul owns them, and its weight channel's
-        source stores them."""
-        return self.present(MatMulKernel.weights)
 
     @derived
     def depthwise(self) -> bool:
         return self.form is Form.DEPTHWISE
-
-    @derived
-    def multi_set(self) -> bool:
-        return self.weight_sets > 1
 
     @derived
     def reads_depthwise(self) -> bool:
@@ -183,36 +250,24 @@ class MatMulKernel(Kernel):
         """The datapath's K: the window times the channels when densely realized."""
         return self.k * self.n if self.dense_view else self.k
 
-    @derived(semantics=INTEGER_TENSOR)
-    def datapath_weights(self) -> IntegerTensor:
-        """The weights the datapath reads, ``(k, n)``: block-diagonal when densely realized.
-
-        W'[k * N + c, n] = W[k, n] when c = n, and 0 otherwise: the densely read
-        activation row (k, c) meets only its own channel's weights.
-        """
-        weights = self.weights
-        if not self.dense_view:
-            return weights
-        # Densifying reads the integers: the dense realization of a depthwise operation
-        # builds its weights when it is chosen.
-        channels, flat = self.n, integers(weights)
-        dense = [
-            value if channel == output else 0
-            for row in range(0, len(flat), channels)
-            for channel in range(channels)
-            for output, value in enumerate(flat[row : row + channels])
-        ]
-        shape = (self.k * channels, channels)
-        return IntegerTensorValue.flat(
-            (self.weight_sets, *shape) if self.multi_set else shape, dense
-        )
-
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    def result_type(self) -> QONNXDataType | Rejected:
+    @derived
+    def result_range(self) -> tuple[int, int] | Rejected:
+        """The results' least and greatest value: with a value on the weight channel, its
+        columns' over the activation datatype (``column_range``, per output column); without
+        one, every dot product of the two datatypes' values (``datatype_range``)."""
         try:
-            return exact_result_dtype(self.k, self.activation_dtype, self.weights_dtype)
+            if self.stored:
+                return column_range(self.activation_dtype, self.w_channel.contents)
+            return datatype_range(self.k, self.activation_dtype, self.weights_dtype)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def result_type(self) -> QONNXDataType:
+        """The accumulator: the smallest signed INT holding the result range, at least one
+        product wide (``accumulator_dtype``)."""
+        least, greatest = self.result_range
+        return accumulator_dtype(self.activation_dtype, self.weights_dtype, (least, greatest))
 
     @constraint
     def extents_supported(self) -> bool | Rejected:
@@ -222,8 +277,13 @@ class MatMulKernel(Kernel):
 
     # The tensors the channels carry.
 
-    def _tensor(self, shape: tuple[int, ...], dtype: QONNXDataType) -> Tensor | Rejected:
-        element = admit_element(dtype)
+    def _tensor(
+        self,
+        shape: tuple[int, ...],
+        dtype: QONNXDataType,
+        value_range: tuple[int, int] | None = None,
+    ) -> Tensor | Rejected:
+        element = admit_element(dtype, value_range)
         if isinstance(element, Rejected):
             return element
         try:
@@ -239,55 +299,38 @@ class MatMulKernel(Kernel):
 
     @view
     def weight_tensor(self) -> Tensor | Rejected:
-        """(K, N) as the datapath reads it, over the range of known weights."""
-        shape = (self.datapath_k, self.n)
-        if not self.present(MatMulKernel.weights):
-            return self._tensor(shape, self.weights_dtype)
-        least, greatest = integer_range(self.datapath_weights)
-        low, high = ordinary_integer_bounds(self.weights_dtype)
-        if not low <= least <= greatest <= high:
-            return reject(
-                "matmul-weights",
-                f"every value must be an integer admitted by {self.weights_dtype.name}",
-            )
-        element = admit_element(self.weights_dtype, (least, greatest))
-        if isinstance(element, Rejected):
-            return element
-        return Tensor(shape, element)
+        """(K, N) as the datapath reads it, in the weights' datatype: the weight channel's
+        values must fit it."""
+        return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
     @view
     def result_tensor(self) -> Tensor | Rejected:
-        return self._tensor((self.m, self.n), self.result_type)
-
-    @view(when=known, semantics=INTEGER_TENSOR)
-    def weight_values(self) -> IntegerTensor:
-        """The value the weight channel carries: the datapath's weights, one operand a set."""
-        return self.datapath_weights
-
-    @view
-    def set_tensor(self) -> Tensor | Rejected:
-        """One set index per row, as wide as the weight source's selector."""
-        return self._tensor((self.m,), set_index_dtype(self.weight_sets))
+        """(M, N), the accumulator over the result range."""
+        return self._tensor((self.m, self.n), self.result_type, self.result_range)
 
     # The channels it sits on, supplied by its parent.
     x_channel: Channel = Param(required=False)
     w_channel: Channel = Param(required=False)
     y_channel: Channel = Param(required=False)
 
+    @derived
+    def stored(self) -> bool:
+        """Whether the weight channel carries a known value, which its source stores."""
+        return self.present(MatMulKernel.w_channel) and self.w_channel.valued
+
     @constraint
     def carried(self) -> bool | Rejected:
         """Each supplied channel carries a tensor of the shape MatMul derives for it.
 
-        On a channel that carries MatMul's own values (the results, and the
-        weights when known: MatMul owns them, the channel's source streams them)
-        MatMul's values fit the channel's element; on a channel it consumes, the
-        channel's values fit MatMul's.
+        On the results channel MatMul's values fit the channel's element; on a
+        channel it consumes, activations or weights, the channel's values fit
+        MatMul's.
         """
         for reference, tensor in _CARRIED:
             if not self.present(getattr(MatMulKernel, reference)):
                 continue
             supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            produced = reference == "y_channel" or (reference == "w_channel" and self.known)
+            produced = reference == "y_channel"
             inner, outer = (derived_, supplied) if produced else (supplied, derived_)
             if supplied.shape != derived_.shape or not inner.element.fits(outer.element):
                 return reject(
@@ -306,6 +349,7 @@ class MatMulKernel(Kernel):
         form=datapath,
         reshape_activations=dense_view,
         result_dtype=result_type,
+        result_range=result_range,
         platform=platform,
         x_channel=x_channel,
         w_channel=w_channel,
@@ -314,10 +358,11 @@ class MatMulKernel(Kernel):
 
     @constraint
     def realization_supported(self) -> bool | Rejected:
-        if self.dense_view and not self.known:
+        if self.dense_view and not self.stored:
             return reject(
                 "matmul-realization",
-                "a dense realization builds block-diagonal weights, so it needs known weights",
+                "a dense realization reads block-diagonal weights, so it needs a value on "
+                "its weight channel",
             )
         return True
 
@@ -327,4 +372,12 @@ class MatMulKernel(Kernel):
         return "finn_matmul"
 
 
-__all__ = ["MatMulKernel", "exact_result_dtype"]
+__all__ = [
+    "MatMulKernel",
+    "accumulator_dtype",
+    "block_diagonal",
+    "column_range",
+    "datatype_range",
+    "exact_result_dtype",
+    "signed_integer_dtype",
+]

@@ -178,9 +178,12 @@ for memory in ("none", "memstream"):
         "matmul.compute": "packed",
     }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
+    # Unknown weights: the datatypes' result, INT8. Stored ones: their columns', INT7.
+    stored, bits = {}, 8
     if memory == "memstream":
-        # Stored (k, n): the columns of the by-output rows.
-        facts["weights"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+        # Stored (k, n): the columns of the by-output rows; the weight channel's value.
+        stored["contents"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+        bits = 7
         choices |= {
             "w.source.memstream.ram_style": "auto",
             "w.source.memstream.pumped_memory": False,
@@ -190,10 +193,13 @@ for memory in ("none", "memstream"):
     # The MatMul in a root that declares its streams.
     class Placed(Root):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
-        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM)
-        y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=PLATFORM)
+        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM, **stored)
+        y = Channel(
+            tensor=Tensor((3, 4), ScalarEncoding(DataType[f"INT{bits}"])),
+            port="out0_V",
+            platform=PLATFORM,
+        )
         matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
-        w.contents = matmul.weight_values
 
     root = commit(design_space(Placed()), choices)
     root = commit(root, {
@@ -215,7 +221,7 @@ for memory in ("none", "memstream"):
     # A memory image ships as generated data, named by its contents.
     expected |= {item.path for _, leaf in composed.fragment.instances for item in leaf.data}
     wrapper = materialize(composed, expected).read_text()
-    assert ".ACCU_WIDTH(8)" in wrapper
+    assert f".ACCU_WIDTH({bits})" in wrapper
     assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
     if memory == "memstream":
         assert '.INIT_FILE("memstream_' in wrapper

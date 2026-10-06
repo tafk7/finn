@@ -5,12 +5,14 @@
 
 ``partition_root(model, nodes)`` builds, and changes no graph:
 
-- **channels**, one per ONNX tensor, in node order: a node's graph inputs, the
-  parameter channels it owns (named after the initializer), its outputs. An
-  edge's tensor is the graph's value_info and annotation, a parameter
-  channel's the kernel's views, bound where the node is placed; every channel's
-  platform is the model's target's. Only the subgraph's ONNX inputs and
-  outputs are boundaries, named by the shell's convention ``s_axis_<i>`` and
+- **channels**, one per ONNX tensor, in node order, each declared from the
+  graph before any kernel is placed: a node's graph inputs, the parameter
+  channels it owns (named after the initializer), its outputs. A channel's
+  tensor is the graph's value_info and annotation; a parameter channel's is
+  the initializer's over its values' range, and its contents the node's value
+  of it (``Facts.values``), which its source stores; every channel's platform
+  is the model's target's. Only the subgraph's ONNX inputs and outputs are
+  boundaries, named by the shell's convention ``s_axis_<i>`` and
   ``m_axis_<i>``: a channel refuses a boundary no port names
   (``channel-boundary``);
 - **kernels**, one per node: its op's placement (``KernelOp.place``, the one its
@@ -32,8 +34,9 @@
   is built from, by value (``PartitionKey``): the name; the target's platform;
   each channel as declared (the tensor it carries, rows and annotation, its port,
   pinned ``direct`` or not); each node's name, op class, node-root class, facts
-  key (its formals by value, as the bind cache keys them), owned parameter ports
-  and tensors. A call on the same facts reuses the class, never a point: the
+  key (its formals and owned values by value, as the bind cache keys them), owned
+  parameter ports and tensors. A call on the same facts reuses the class, never a
+  point, and reads an owned value only to build the class: the
   choices are replayed on a fresh design space every call. ``PARTITIONS`` keeps the
   16 most recently used.
 
@@ -67,6 +70,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.target import Platform
+from finn.kernels.values.semantics import IntegerTensorValue
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -97,16 +101,19 @@ class PartitionRoot:
 @dataclass(frozen=True)
 class Declared:
     """A channel as the partition declares it: the tensor it carries, rows and
-    annotation (``None``: a parameter channel, which carries its kernel's views), its
-    boundary port, and whether it is pinned ``direct`` (an output handed on)."""
+    annotation (a parameter channel's over its values' range), its boundary port, and
+    whether it is pinned ``direct`` (an output handed on)."""
 
-    tensor: Tensor | None = None
+    tensor: Tensor
     port: str | None = None
     direct: bool = False
 
-    def channel(self, platform: Platform) -> Channel:
-        """The channel on the target's ``platform``."""
-        settings: dict[str, Any] = {} if self.tensor is None else {"tensor": self.tensor}
+    def channel(self, platform: Platform, contents: IntegerTensorValue | None = None) -> Channel:
+        """The channel on the target's ``platform``, carrying ``contents`` (an owned
+        parameter's value) when given."""
+        settings: dict[str, Any] = {"tensor": self.tensor}
+        if contents is not None:
+            settings["contents"] = contents
         if self.port is not None:
             settings["port"] = self.port
         if self.direct:
@@ -117,8 +124,8 @@ class Declared:
 @dataclass(frozen=True)
 class Placement:
     """What placing a node's kernel reads: the node's name (its member), its op class,
-    node-root class and facts key (its formals by value), the parameter ports it owns,
-    and its tensors."""
+    node-root class and facts key (its formals and owned values by value), the parameter
+    ports it owns, and its tensors."""
 
     node: str
     op: type[KernelOp]
@@ -190,9 +197,9 @@ def _channels(
     handed_on: set[str],
 ) -> dict[str, Declared]:
     """The partition's channels by tensor, in node order: a node's inputs on an edge or
-    the boundary, the parameter channels it owns (their tensor and value bound where it
-    is placed), its outputs. An output handed on to a KernelOp outside is pinned
-    ``direct``: its FIFO, if any, is the consumer's."""
+    the boundary, the parameter channels it owns (the initializer's tensor; its value,
+    the contents, is bound when the class is built), its outputs. An output handed on to
+    a KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
     parameters = {tensor for tensors in owned for tensor in tensors.values()}
     channels: dict[str, Declared] = {}
 
@@ -205,7 +212,8 @@ def _channels(
         for tensor in node.input:
             if tensor not in parameters and model.get_initializer(tensor) is None:
                 declare(tensor, op.label)
-        channels |= {tensor: Declared() for tensor in tensors.values()}
+        for tensor in tensors.values():
+            channels[tensor] = Declared(edge_tensor(model, tensor, op.label))
         for tensor in node.output:
             declare(tensor, op.label)
     return channels
@@ -264,10 +272,18 @@ def _composite(
     ops: list[KernelOp],
     facts: list[Facts],
     declared: Mapping[str, Declared],
+    owned: list[dict[str, str]],
 ) -> type[Partition]:
-    """The partition's class: its channels as ``declared``, each node's kernel placed on
-    them from its ``facts``."""
-    channels = {tensor: each.channel(platform) for tensor, each in declared.items()}
+    """The partition's class: its channels as ``declared``, an owned parameter's with its
+    node's value as contents, and each node's kernel placed on them from its ``facts``."""
+    contents: dict[str, IntegerTensorValue] = {}
+    for each, tensors in zip(facts, owned):
+        if tensors:
+            values = each.values()
+            contents |= {tensor: values[port] for port, tensor in tensors.items()}
+    channels = {
+        tensor: each.channel(platform, contents.get(tensor)) for tensor, each in declared.items()
+    }
     kernels = {
         member(node.name): op.place(each, channels) for node, op, each in zip(nodes, ops, facts)
     }
@@ -324,7 +340,9 @@ def partition_root(
             for node, op, each in zip(nodes, ops, facts)
         ),
     )
-    root: Any = PARTITIONS.get(key, lambda: _composite(name, platform, nodes, ops, facts, declared))
+    root: Any = PARTITIONS.get(
+        key, lambda: _composite(name, platform, nodes, ops, facts, declared, owned)
+    )
     point = design_space(root())
     if found.kernel_choices:
         replayed = committed(point, typed_choices([point], found.kernel_choices))

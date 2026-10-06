@@ -6,8 +6,8 @@
 A KernelOp's Space is its kernel on the node's boundary channels: a bare kernel
 cannot commit folding (its cores bind extents from their ports). One node root
 per op, generated from the placement the op states: its formals are the
-kernel's, its edges carry the graph's tensors, and a parameter channel carries
-the kernel's views, its value only when the kernel holds one. The kernel's views
+kernel's, its channels carry the graph's tensors, and a parameter channel
+carries a value only when the node owns one (its contents). The kernel's views
 answer from facts alone, and points are cached by the facts they were bound from.
 """
 
@@ -26,6 +26,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit, describe
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from kernel_ops.models import TARGET
 
 INT3 = dtype("INT3")
@@ -40,19 +41,26 @@ FACTS: dict[str, Any] = dict(
 """A node root's facts: the platform (its DSP block the compute cores') and the clock."""
 WEIGHTS = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
 X = Tensor((3, 4), ScalarEncoding(INT3))
-Y = Tensor((3, 4), ScalarEncoding(dtype("INT8")))
+W = Tensor((4, 4), ScalarEncoding(INT3, (-1, 1)))  # the initializer's, over its values' range
+Y = Tensor((3, 4), ScalarEncoding(dtype("INT8")))  # INT3 x INT3 over 4 terms: [-48, 64]
+# The stored weights' columns over INT3 activations: [-10, 11], [-7, 7], [-11, 10], [-10, 11].
+Y_STORED = Tensor((3, 4), ScalarEncoding(dtype("INT5")))
 
 
 def stored(x: Tensor = X) -> Any:
-    return design_space(MatMul.root()(**FACTS, weights=WEIGHTS, x_tensor=x, y_tensor=Y))
+    return design_space(
+        MatMul.root()(**FACTS, x_tensor=x, w_tensor=W, w_contents=WEIGHTS, y_tensor=Y_STORED)
+    )
 
 
 def test_one_root_serves_stored_and_streamed_weights() -> None:
-    """The weights are an optional formal: the weight channel has a value, and so a
-    source, only when they are supplied; the decision keys are the same."""
+    """The weight channel's contents are an optional Param: the channel has a value, and
+    so a source, only when they are supplied; the decision keys are the same."""
     root = MatMul.root()
     assert root is MatMul.root()  # generated once
-    streamed = design_space(root(**FACTS, x_tensor=X, y_tensor=Y))
+    streamed = design_space(
+        root(**FACTS, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)), y_tensor=Y)
+    )
     assert stored().w.valued and not streamed.w.valued
     keys = {item.key for item in inspection.decisions(root)}
     assert {"w.source", "w.source.memstream.ram_style", "w.transport"} <= keys
@@ -60,9 +68,7 @@ def test_one_root_serves_stored_and_streamed_weights() -> None:
 
 
 def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
-    bare = design_space(MatMulKernel(**FACTS, weights=WEIGHTS)).with_choices(
-        {MatMulKernel.compute: "packed"}
-    )
+    bare = design_space(MatMulKernel(**FACTS)).with_choices({MatMulKernel.compute: "packed"})
     report = bare.try_with_choices({MatMulKernel.packed.pe: 2})
     assert not report.accepted
     assert "kernel-extents" in describe(outcome.result for outcome in report.outcomes)
@@ -74,10 +80,24 @@ def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
 
 
 def test_the_views_answer_from_facts() -> None:
-    # Inference reads the kernel alone: its result from the facts.
-    assert design_space(MatMulKernel(**FACTS, weights=WEIGHTS)).result_tensor == Y
-    # The weight channel carries the kernel's view: their range, read from the values.
-    assert stored().w.tensor.element.value_range == (-1, 1)
+    # Inference reads the node root bound on its inputs, its output absent: the result
+    # from the facts and the weight channel. Without a value, the datatypes' range; with
+    # one, its columns' (K7), each stated on the result element.
+    root = MatMul.root()
+    streamed = design_space(
+        root(**FACTS, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)))
+    )
+    assert streamed.matmul.result_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), (-48, 64)))
+    owned = design_space(root(**FACTS, x_tensor=X, w_tensor=W, w_contents=WEIGHTS))
+    assert owned.matmul.result_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT5"), (-11, 11)))
+    assert design_space(MatMulKernel(**FACTS)).result_tensor == streamed.matmul.result_tensor
+    # The weight channel carries the graph's statement: the values' range, and the value,
+    # which its source restates.
+    point = stored()
+    assert point.w.tensor.element.value_range == (-1, 1)
+    assert point.w.source.value_range == (-1, 1)
+    # MatMul reads its weights' datatype; the channel's values fit it.
+    assert point.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(INT3))
     table = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(4)),)
     facts: dict[str, Any] = dict(
         input_dtype=dtype("INT8"),
@@ -106,13 +126,17 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
 def facts(digest: str, *, size: int = 4) -> Facts:
     weights = tuple(tuple((r + c) % 3 - 1 for c in range(size)) for r in range(size))
     formals = dict(FACTS, k=size, n=size)
-    edges = {"x": Tensor((3, size), ScalarEncoding(INT3)), "y": Y}
+    inputs = {
+        "x": Tensor((3, size), ScalarEncoding(INT3)),
+        "w": Tensor((size, size), ScalarEncoding(INT3, (-1, 1))),
+    }
     return Facts(
         MatMul.root(),
-        MatMulKernel,
         ("MatMul", 1, size, digest),
-        lambda: {**formals, "weights": weights},
-        lambda: edges,
+        lambda: formals,
+        lambda: inputs,
+        lambda: {"y": Y_STORED},
+        lambda: {"w": IntegerTensorValue.of(weights)},
         ("w",),
     )
 

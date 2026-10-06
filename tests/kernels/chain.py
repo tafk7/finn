@@ -5,9 +5,11 @@
 
 It computes ``thresholds(x @ W1) @ W2``. Each MatMul sits on the root's channels
 through its reference inputs; the root declares every channel, reading the
-tensor of a MatMul's weights and results from the MatMul's views
-(``weight_tensor``, ``result_tensor``). ``chain()`` is the Chain configured as
-the kernel tests, the KernelOp partition tests and the XSim harness use it.
+tensor of a MatMul's results from the MatMul's view (``result_tensor``). The
+weights are the root's: each weight channel carries them (``contents``), its
+tensor the MatMul's ``weight_tensor`` over their range. ``chain()`` is the
+Chain configured as the kernel tests, the KernelOp partition tests and the XSim
+harness use it.
 """
 
 from __future__ import annotations
@@ -20,28 +22,29 @@ from finn.core.space import derived, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from finn.kernels.matmul import MatMulKernel, accumulator_dtype, column_range
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
 
 ROWS, INPUTS, HIDDEN, OUTPUTS, PE, SIMD = 3, 4, 4, 4, 2, 2
 A = W = DataType["INT3"]
-H = exact_result_dtype(INPUTS, A, W)
 T = DataType["UINT2"]
-Y = exact_result_dtype(HIDDEN, T, W)
 THRESHOLDS = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(HIDDEN)),)
 # The smallest type of H's signedness holding THRESHOLDS: what the ordered pass annotates.
 THRESHOLD_DTYPE = DataType["INT5"]
 W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(INPUTS))
 W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
+# Each MatMul's result: its weights' columns over its activations' datatype (K7):
+# INT6 over [-28, 28] and INT5 over [-15, 12] (the second at its product floor, 3 + 2 bits).
+H = accumulator_dtype(A, W, column_range(A, W1))
+Y = accumulator_dtype(T, W, column_range(T, W2))
 
 
 def matmul(
     k: int,
     n: int,
     dtype: Any,
-    weights: Any,
     *,
     x_channel: Channel,
     w_channel: Channel,
@@ -54,33 +57,28 @@ def matmul(
         activation_dtype=dtype,
         weights_dtype=W,
         platform=FULL_DSP48E2,
-        weights=weights,
         x_channel=x_channel,
         w_channel=w_channel,
         y_channel=y_channel,
     )
 
 
-def weights(k: int, n: int) -> Channel:
-    """A MatMul's weight channel: from its memory to its core."""
-    return Channel(tensor=Tensor((k, n), ScalarEncoding(W)), platform=FULL_DSP48E2)
+def weights(values: Any) -> Channel:
+    """A MatMul's weight channel, carrying ``values``: from its memory to its core, its
+    tensor over their range."""
+    k, n = len(values), len(values[0])
+    least, greatest = min(map(min, values)), max(map(max, values))
+    tensor = Tensor((k, n), ScalarEncoding(W, (least, greatest)))
+    return Channel(tensor=tensor, contents=values, platform=FULL_DSP48E2)
 
 
 class Chain(Root):
     # The input is the root's to state, and the thresholding's output too: a leaf
     # binds its extents from its own ports, so its output tensor is not read from it.
-    # Each MatMul's weights and results are its views, which read only its facts.
-    @derived
-    def w1_tensor(self) -> Tensor:
-        return self.first.weight_tensor
-
+    # Each MatMul's results are its view, which reads only its facts and its weights.
     @derived
     def hidden_tensor(self) -> Tensor:
         return self.first.result_tensor
-
-    @derived
-    def w2_tensor(self) -> Tensor:
-        return self.second.weight_tensor
 
     @derived
     def y_tensor(self) -> Tensor:
@@ -89,12 +87,12 @@ class Chain(Root):
     x = Channel(
         platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="s_axis_0"
     )
-    w1 = Channel(tensor=w1_tensor, platform=FULL_DSP48E2)
+    w1 = weights(W1)
     hidden = Channel(tensor=hidden_tensor, platform=FULL_DSP48E2)
     levels = Channel(tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(T)), platform=FULL_DSP48E2)
-    w2 = Channel(tensor=w2_tensor, platform=FULL_DSP48E2)
+    w2 = weights(W2)
     y = Channel(tensor=y_tensor, port="m_axis_0", platform=FULL_DSP48E2)
-    first = matmul(INPUTS, HIDDEN, A, W1, x_channel=x, w_channel=w1, y_channel=hidden)
+    first = matmul(INPUTS, HIDDEN, A, x_channel=x, w_channel=w1, y_channel=hidden)
     activate = ThresholdingAxiKernel(
         input_dtype=H,
         threshold_dtype=THRESHOLD_DTYPE,
@@ -105,10 +103,7 @@ class Chain(Root):
         output_channel=levels,
         platform=FULL_DSP48E2,
     )
-    second = matmul(HIDDEN, OUTPUTS, T, W2, x_channel=levels, w_channel=w2, y_channel=y)
-    # Each weight channel carries its MatMul's weights, which the channel's source stores.
-    w1.contents = first.weight_values
-    w2.contents = second.weight_values
+    second = matmul(HIDDEN, OUTPUTS, T, x_channel=levels, w_channel=w2, y_channel=y)
 
 
 LAYERS = (("first", "w1"), ("second", "w2"))

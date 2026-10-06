@@ -6,23 +6,27 @@
 A KernelOp states how its kernel sits in a graph once, as data
 (``finn.custom_op.kernels.base.KernelOp``): the ``kernel`` class, the
 ``formals`` it reads from the graph (the kernel's own: facts stay facts), the
-reference input each port's channel binds (``references``), and for a
-parameter port the kernel's views of the tensor and of the value its channel
-carries (``parameters``: MatMul's ``weight_tensor`` and ``weight_values``).
-``placed`` is that placement: the kernel on channels by port, from formals
-that are Params or literals. Two things are built with it:
+reference input each port's channel binds (``references``), and the ports
+whose channel may carry a value the node owns (``parameters``: MatMul's
+``w``). ``placed`` is that placement: the kernel on channels by port, from
+formals that are Params or literals. The channels are declared from the graph
+before any kernel is placed, and the kernel binds nothing into them. Two
+things are built with it:
 
 - the **node root** (``node_root``), one class per op, compiled once: the
-  formals are its Params, declared as the kernel declares them; each edge's
-  channel, an input's or an output's, carries the tensor the graph states,
-  a Param of its own (``x_tensor``, ``y_tensor``); a parameter port's channel
-  carries the kernel's views, its ``contents`` supplied only when the kernel
-  holds the value (the view's guard: an initializer the node owns, which the
-  channel's ``source`` then stores; weights on a graph tensor arrive like any
-  edge, with no source). Every channel is a boundary, ``in<i>_V`` and
-  ``out<j>_V`` by ONNX position: a kernel's cores bind their extents from the
-  ports on its channels (``kernel-extents``), so a node alone can commit its
-  own choices only on channels;
+  formals are its Params, declared as the kernel declares them; each port's
+  channel, an input's or an output's, carries the tensor the graph states, a
+  Param of its own (``x_tensor``, ``w_tensor``, ``y_tensor``); a parameter
+  port's channel also carries its ``contents``, a Param supplied only when the
+  node owns the value (an initializer, which the channel's ``source`` then
+  stores; weights on a graph tensor arrive like any edge, with no source).
+  An output's channel is present once its tensor is supplied: bound on its
+  inputs alone, the root answers inference (a result derived from an input
+  channel's value), and inference states the outputs it is then bound with.
+  Every channel is a boundary, ``in<i>_V`` and ``out<j>_V`` by ONNX position:
+  a kernel's cores bind their extents from the ports on its channels
+  (``kernel-extents``), so a node alone can commit its own choices only on
+  channels;
 - the **partition root** (``finn.custom_op.kernels.partition``): the same
   placement with literal formals, on channels the partition declares once per
   ONNX tensor and shares between nodes.
@@ -35,36 +39,28 @@ cases (``requires``) read the device the model is built for.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast, get_type_hints
 
-from finn.core.space import Param, composite
+from finn.core.space import Param, composite, default_semantics, supplied
 from finn.core.space.declarations import UNSUPPLIED
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
+from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 
 if TYPE_CHECKING:
     from finn.custom_op.kernels.base import KernelOp
 
 
 def placed(
-    op: type[KernelOp],
-    formals: Mapping[str, object],
-    channels: Mapping[str, Channel],
-    valued: Iterable[str],
+    op: type[KernelOp], formals: Mapping[str, object], channels: Mapping[str, Channel]
 ) -> Kernel:
-    """``op``'s kernel from ``formals`` (Params or literals) on ``channels`` (by port);
-    each parameter port in ``valued`` carries the kernel's views of its tensor and value."""
+    """``op``'s kernel from ``formals`` (Params or literals) on ``channels`` (by port)."""
     references = {
         reference: channels[port] for port, reference in op.references.items() if port in channels
     }
-    kernel: Any = cast(Any, op.kernel)(**formals, **references)
-    for port in valued:
-        tensor, value = op.parameters[port]
-        channels[port].tensor = getattr(kernel, tensor)
-        channels[port].contents = getattr(kernel, value)
-    placement: Kernel = kernel
+    placement: Kernel = cast(Any, op.kernel)(**formals, **references)
     return placement
 
 
@@ -93,15 +89,26 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
         for index, port in enumerate(ports):
             if port is None:
                 continue
-            if port in op.parameters:
-                channels[port] = Channel(port=f"{side}{index}_V", platform=platform)
-                continue
-            tensor: Tensor = Param()
+            output = side == "out"
+            # An output's tensor is optional; its semantics stated, since its guard reads it
+            # before the class is collected.
+            tensor: Tensor = (
+                Param(required=False, semantics=default_semantics(Tensor)) if output else Param()
+            )
             members[f"{port}_tensor"] = tensor
             annotations[f"{port}_tensor"] = Tensor
-            channels[port] = Channel(tensor=tensor, port=f"{side}{index}_V", platform=platform)
+            stated: dict[str, Any] = {}
+            if output:
+                members[f"{port}_stated"] = stated["when"] = supplied(tensor)
+            if port in op.parameters:
+                contents: IntegerTensor = Param(required=False, semantics=INTEGER_TENSOR)
+                members[f"{port}_contents"] = stated["contents"] = contents
+                annotations[f"{port}_contents"] = IntegerTensor
+            channels[port] = Channel(
+                tensor=tensor, port=f"{side}{index}_V", platform=platform, **stated
+            )
     formals = {name: members[name] for name in op.formals}
-    kernel = placed(op, formals, channels, op.parameters)
+    kernel = placed(op, formals, channels)
     identity = {"id": f"finn.custom_op.kernels.node.{op.op_type.lower()}", "version": op.op_version}
     return composite(
         f"{op.__name__}Node",

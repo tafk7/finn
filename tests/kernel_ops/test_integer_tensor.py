@@ -46,5 +46,5 @@ def test_equal_integers_stored_differently_are_one_value_under_two_binding_keys(
     integers = matmul_model(infer=False)
     integers.set_initializer("w", np.asarray(WEIGHTS, dtype=np.int8))
     facts = [kernel_op(model, model.graph.node[0]).facts() for model in (floats, integers)]
-    assert facts[0].formals()["weights"] == facts[1].formals()["weights"]
+    assert facts[0].values()["w"] == facts[1].values()["w"]
     assert facts[0].key != facts[1].key

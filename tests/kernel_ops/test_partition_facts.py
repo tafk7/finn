@@ -107,7 +107,7 @@ def test_iodmas_take_their_widths_from_the_partitions_facts(tmp_path: Path) -> N
     names = ("direction", "numInputVectors", "NumChannels", "streamWidth", "intfWidth")
     # x: 6 beats of 8 bits (two INT3 lanes padded): 48 bits, a 16-bit interface.
     assert attributes(parent.graph.node[0], *names) == ("in", [1, 6], 1, 8, 16)
-    # y: 6 beats of 16 bits (two INT7 lanes padded): 96 bits, a 32-bit interface.
+    # y: 6 beats of 16 bits (two INT5 lanes padded): 96 bits, a 32-bit interface.
     assert attributes(parent.graph.node[2], *names) == ("out", [1, 6], 2, 16, 32)
     sdp = parent.graph.node[1]
     assert (sdp.input[0], sdp.output[0]) == (
@@ -164,8 +164,9 @@ def test_the_driver_shapes_come_from_the_facts(tmp_path: Path) -> None:
     parent = parent.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path / "io")))
     assert [node.op_type for node in parent.graph.node] == ["StreamingDataflowPartition"] * 3
     shapes = get_driver_shapes(parent)
-    assert (shapes["idt"], shapes["odt"]) == (["DataType['INT3']"], ["DataType['INT7']"])
+    # The output is the second MatMul's, from its weights' columns (K7): INT5.
+    assert (shapes["idt"], shapes["odt"]) == (["DataType['INT3']"], ["DataType['INT5']"])
     assert (shapes["ishape_normal"], shapes["oshape_normal"]) == ([(3, 4)], [(3, 4)])
     assert (shapes["ishape_folded"], shapes["oshape_folded"]) == ([(1, 6, 2)], [(1, 6, 2)])
-    # Packed: two INT3 lanes in one byte a beat; two INT7 lanes in two.
+    # Packed: two INT3 lanes in one byte a beat; two INT5 lanes in two.
     assert (shapes["ishape_packed"], shapes["oshape_packed"]) == ([(1, 6, 1)], [(1, 6, 2)])
