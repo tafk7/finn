@@ -13,9 +13,12 @@ graph order instead:
   its outputs from its kernel's fact-level views, in its node root bound on its
   inputs (the facts, the input channels' tensors and an owned initializer's
   value: MatMul's result range is its weights' columns'; the whole root reads the
-  outputs this pass states), and the pass writes them; a stated annotation
-  narrower than the exact type is refused, a wider one replaced (FLOAT32 is no
-  statement);
+  outputs this pass states), and the pass writes them. An output's annotation is
+  its producer's statement: every run states it again from the node's facts and
+  replaces what was there, narrower or wider, so a change of the facts (weights
+  replaced or lifted to a graph input) reaches the nodes that follow on the next
+  run. An input that conflicts with the node (unannotated, or an initializer whose
+  values its annotation does not hold) is refused by the node's facts;
 - another custom op runs its shape stand-in through ONNX's per-node inference,
   then its own datatype hook;
 - a standard op goes through ONNX's per-node inference, its initializers given
@@ -36,21 +39,10 @@ from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import infer_node_datatype
 
-from finn.custom_op.kernels.base import KernelOp, KernelOpError, datatype
-from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
+from finn.custom_op.kernels.base import KernelOp, KernelOpError
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-
-def _admits(stated: QONNXDataType, exact: QONNXDataType) -> bool:
-    """Whether a stated annotation holds every value of the exact type."""
-    try:
-        low, high = ordinary_integer_bounds(stated)
-    except DatatypeError:
-        return False
-    need_low, need_high = ordinary_integer_bounds(exact)
-    return low <= need_low and need_high <= high
 
 
 def _standard(model: ModelWrapper, node: NodeProto) -> None:
@@ -100,13 +92,6 @@ class InferKernelTensors(Transformation):
                 continue
             op.normalize_inputs()
             for name, (dims, dtype) in op.infer_output_tensors(model).items():
-                if model.has_tensor_datatype(name):
-                    stated = datatype(model, name, op.label)
-                    if stated.name != "FLOAT32" and not _admits(stated, dtype):
-                        raise KernelOpError(
-                            f"{op.label}: {name} is annotated {stated.name}, narrower than "
-                            f"{dtype.name}"
-                        )
                 model.set_tensor_shape(name, list(dims))
                 model.set_tensor_datatype(name, dtype)
         return model, False
