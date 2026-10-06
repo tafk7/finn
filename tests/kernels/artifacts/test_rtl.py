@@ -43,7 +43,7 @@ from finn.kernels.artifacts.rtl import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.util.resources import resource_path
-from kernels.helpers import finnlib_root
+from kernels.toolchain import finnlib_root
 
 REPLAY_PARAMETERS = (("LEN", "2"), ("REP", "3"), ("W", "16"))
 DOTP_PARAMETERS = (

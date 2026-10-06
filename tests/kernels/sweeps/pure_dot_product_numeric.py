@@ -22,7 +22,7 @@ from qonnx.core.datatype import DataType
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import DspBlock
-from kernels.helpers import finnlib_root, full_platform, placed_dotp, print_identity
+from kernels.helpers import full_platform, placed_dotp
 from kernels.sweeps.dotp_support import (
     Case,
     _activation_beats,
@@ -31,6 +31,7 @@ from kernels.sweeps.dotp_support import (
     _wrapper,
 )
 from kernels.sweeps.rtl_transport import drive_observed
+from kernels.toolchain import finnlib_root, print_identity
 
 
 @dataclass(frozen=True)

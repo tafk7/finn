@@ -24,8 +24,8 @@ import numpy as np
 
 from finn.dataflow.traversal import Traversal, vector_major
 from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
-from kernels.helpers import print_identity
 from kernels.sweeps.rtl_transport import drive
+from kernels.toolchain import print_identity
 from kernels.xsim import materialize
 
 BITS = ELEMENT.bits

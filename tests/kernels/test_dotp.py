@@ -32,6 +32,7 @@ from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from kernels import helpers
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
+from kernels.toolchain import finnlib_root
 
 
 def parameters(**updates):
@@ -341,7 +342,7 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
 
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).module
-    finnlib = helpers.finnlib_root()
+    finnlib = finnlib_root()
     emitted = emit_module(requirements, tmp_path, roots={"finnlib": finnlib})
     upstream = {
         "rtl/arith/add_multi_pkg.sv",

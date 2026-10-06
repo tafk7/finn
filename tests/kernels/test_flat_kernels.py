@@ -25,7 +25,8 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, finnlib_root, point_for
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, point_for
+from kernels.toolchain import finnlib_root
 from kernels.xsim import requires_xsim, simulate
 
 ROOT = Path(__file__).resolve().parents[2]

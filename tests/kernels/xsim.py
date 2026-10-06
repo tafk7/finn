@@ -39,7 +39,7 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.module import Module
 from finn.kernels.artifacts.sources import include_directories, is_header
-from kernels.helpers import finnlib_root, vivado_simulator
+from kernels.toolchain import finnlib_root, vivado_simulator
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
 

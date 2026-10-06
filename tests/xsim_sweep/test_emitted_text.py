@@ -5,10 +5,12 @@
 
 The keys are computed for real, without Vivado, on a copy of this checkout and of
 FinnLib: a change to an input of a job's simulation (a FinnLib file its design
-includes, its harness's code, the sweep script) changes the job's key; a file
-the job does not consume (another kernel's RTL, an unrelated test, a comment or
-an import's module path) does not. The selection runs exactly the jobs whose key
-differs from a passed baseline's, or that the baseline did not pass.
+includes, its harness's code, the sweep script, a result of construction code
+the sweep reads besides the design) changes the job's key; a file the job does
+not consume (another kernel's RTL, an unrelated test, a comment or an import's
+module path, construction code whose effect is unchanged) does not. The selection
+runs exactly the jobs whose key differs from a passed baseline's, or that the
+baseline did not pass.
 """
 
 from __future__ import annotations
@@ -44,6 +46,8 @@ MEMSTREAM = tool.conformance_job(
     "tests/kernels/test_conformance.py::test_the_kernel_conforms_in_xsim[memstream]"
 )
 ADAPTERS = tool.Job("sweep-adapters", "sweep", ("kernels.sweeps.adapter_numeric",))
+# A MatMul sweep: it reads its assembly's beat counts after the simulation.
+PACKED = tool.Job("sweep-packed", "sweep", ("kernels.sweeps.matmul_numeric", "--case", "packed"))
 COPIED = ("src", "tests", "scripts", "docker", ".pytest.ini", "uv.lock", "pyproject.toml")
 
 
@@ -133,8 +137,10 @@ def sandbox(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 Edit = Callable[[Path, Path], None]
 
 
-def _keys(root: Path, finnlib: Path, work: Path) -> dict[str, Any]:
-    found = tool.compute_keys(tool.Target(root, finnlib), [MEMSTREAM, ADAPTERS], work)
+def _keys(
+    root: Path, finnlib: Path, work: Path, jobs: tuple[Any, ...] = (MEMSTREAM, ADAPTERS)
+) -> dict[str, Any]:
+    found = tool.compute_keys(tool.Target(root, finnlib), list(jobs), work)
     for entry in found["jobs"].values():
         assert entry.get("key"), entry
         assert entry["simulations"] > 0
@@ -157,13 +163,18 @@ def unedited(
     return _keys(*sandbox, tmp_path_factory.mktemp("unedited"))
 
 
-def _edited(sandbox: tuple[Path, Path], tmp_path: Path, edit: Edit) -> dict[str, Any]:
+def _edited(
+    sandbox: tuple[Path, Path],
+    tmp_path: Path,
+    edit: Edit,
+    jobs: tuple[Any, ...] = (MEMSTREAM, ADAPTERS),
+) -> dict[str, Any]:
     """The keys after ``edit``, on a fresh copy of the sandbox."""
     root, finnlib = tmp_path / "finn", tmp_path / "finnlib"
     shutil.copytree(sandbox[0], root, symlinks=True)
     shutil.copytree(sandbox[1], finnlib, symlinks=True)
     edit(root, finnlib)
-    return _keys(root, finnlib, tmp_path / "keys")
+    return _keys(root, finnlib, tmp_path / "keys", jobs)
 
 
 BOTH = {MEMSTREAM.name, ADAPTERS.name}
@@ -176,12 +187,15 @@ EDITS = [
     ("conformance-code", "tests/kernels/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
     ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
+    ("toolchain", "tests/kernels/toolchain.py", "\nLIMIT = 1\n", BOTH),
     ("sweep-script", "scripts/xsim-sweep.sh", "\n# edited\n", BOTH),
     # Not consumed: another kernel's RTL, an unrelated test, a comment in the harness,
     # FINN code no design reaches.
     ("finnlib-dotp", "finnlib/rtl/linalg/dotp.sv", "\n// edited\n", set()),
     ("unrelated-test", "tests/kernels/test_dotp.py", "\nLIMIT = 1\n", set()),
     ("harness-comment", "tests/kernels/conformance.py", "\n# a comment\n", set()),
+    # Construction code whose effect is unchanged: its designs are the same.
+    ("construction-code", "tests/kernels/helpers.py", "\nLIMIT = 1\n", set()),
     ("builder", "src/finn/builder/build_dataflow.py", "\nLIMIT = 1\n", set()),
 ]
 
@@ -201,6 +215,44 @@ def test_a_job_key_changes_with_exactly_what_the_job_consumes(
 ) -> None:
     before, after = unedited, _edited(sandbox, tmp_path, _append(path, text))
     assert {name for name in before if before[name]["key"] != after[name]["key"]} == changed
+
+
+def _rename(path: str, old: str, new: str) -> Edit:
+    def edit(root: Path, finnlib: Path) -> None:
+        target = root / path
+        assert old in target.read_text()
+        target.write_text(target.read_text().replace(old, new))
+
+    return edit
+
+
+# The verdict's weight beats differ; the design does not.
+FEWER_BEATS = """
+import dataclasses as _dataclasses
+_assembled = matmul_assembly
+
+def matmul_assembly(**arguments):
+    built = _assembled(**arguments)
+    return _dataclasses.replace(built, weight_beats=built.weight_beats - 1)
+"""
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("edit", "changed"),
+    [
+        pytest.param(_rename("tests/kernels/helpers.py", "_frozen", "_tupled"), False, id="rename"),
+        pytest.param(_append("tests/kernels/helpers.py", FEWER_BEATS), True, id="verdict-value"),
+    ],
+)
+def test_a_sweep_is_keyed_by_what_construction_hands_it_not_by_its_code(
+    sandbox: tuple[Path, Path], tmp_path: Path, edit: Edit, changed: bool
+) -> None:
+    before = _keys(*sandbox, tmp_path / "unedited", (PACKED,))[PACKED.name]
+    after = _edited(sandbox, tmp_path / "edited", edit, (PACKED,))[PACKED.name]
+    assert after["inputs"]["designs"] == before["inputs"]["designs"]
+    assert (after["key"] != before["key"]) is changed
+    assert not any(name.endswith("helpers.py") for name in after["inputs"])
 
 
 @pytest.mark.slow
