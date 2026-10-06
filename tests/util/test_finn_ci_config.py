@@ -5,9 +5,22 @@
 
 import pytest
 
+import configparser
 from finn_ci import config
+from pathlib import Path
 
 pytestmark = pytest.mark.util
+
+
+def test_every_boards_markers_are_declared():
+    """A board's markers are declared in .pytest.ini, which the gates read with
+    --strict-markers: the board harness (ci/test_bnn_hw_pytest.py) carries ``marker``,
+    the end2end BNN tests ``bnnMarker``."""
+    ini = configparser.ConfigParser()
+    ini.read(Path(__file__).parents[2] / ".pytest.ini")
+    declared = {line.split(":")[0].strip() for line in ini["pytest"]["markers"].splitlines()}
+    for board in config.BOARDS.values():
+        assert {board["marker"], board["bnnMarker"]} <= declared
 
 
 def test_enabled_params_sanity_runs_only_sanity_rows():
