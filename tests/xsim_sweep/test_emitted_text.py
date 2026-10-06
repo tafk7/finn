@@ -174,7 +174,9 @@ EDITS = [
     ("finnlib-thresholding", "finnlib/rtl/nonlin/thresholding.sv", "\n// e\n", {ADAPTERS.name}),
     # The harness: conformance's code, the adapters' stimulus module, the XSI runtime.
     ("conformance-code", "tests/kernels/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
-    ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
+    # test_conformance.py imports kernels.adapted (the channel-stage cases), so every
+    # conformance job consumes it, as well as the adapters sweep.
+    ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", BOTH),
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     ("sweep-script", "scripts/xsim-sweep.sh", "\n# edited\n", BOTH),
     # Not consumed: another kernel's RTL, an unrelated test, a comment in the harness,
