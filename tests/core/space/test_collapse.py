@@ -14,8 +14,7 @@ from __future__ import annotations
 from typing import TypeVar, cast
 
 from core.space._collapse_support import answers, counts, open_space
-from core.space.test_house import House
-from core.space.test_references import Budget, Company, Department
+from core.space._toys_support import Budget, Company, Department, House
 
 from finn.core.space import (
     Decision,

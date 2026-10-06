@@ -13,54 +13,20 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     Unresolved,
-    design_space,
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.artifacts.abi import Bus, Signal
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerVector, ThresholdTable
-from kernels.helpers import FULL_DSP48E2, controlled
+from kernels.helpers import FULL_DSP48E2, THRESHOLD_TABLE, controlled, generator, threshold_base
 
-TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
-
-
-def generator(
-    *,
-    bits: int = 13,
-    frame: int = 6,
-    dims: IntegerVector = (3, 6),
-    strides: IntegerVector = (0, 1),
-) -> InputGeneratorKernel:
-    return design_space(
-        InputGeneratorKernel(
-            word_bits=bits, frame_words=frame, dims=dims, strides=strides, platform=FULL_DSP48E2
-        )
-    ).with_choices(ram_style="auto")
-
-
-def threshold_base(
-    *,
-    table: ThresholdTable = TABLE,
-    bias: int = -1,
-    input_dtype: str = "INT8",
-    threshold_dtype: str = "INT5",
-) -> ThresholdingAxiKernel:
-    return design_space(
-        ThresholdingAxiKernel(
-            input_dtype=resolve_qonnx_datatype_name(input_dtype),
-            threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
-            thresholds=table,
-            bias=bias,
-            platform=FULL_DSP48E2,
-        )
-    )
 
 
 def threshold(
     *,
-    table: ThresholdTable = TABLE,
+    table: ThresholdTable = THRESHOLD_TABLE,
     pe: int | None = 1,
     bias: int = -1,
     input_dtype: str = "INT8",

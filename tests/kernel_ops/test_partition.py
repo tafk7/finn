@@ -1,98 +1,47 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The partition root: test_design's Chain built from KernelOp nodes.
+"""The partition root: the Chain (``kernels.chain``) built from KernelOp nodes.
 
 Each node's choices are saved on it; the root's adapter memories, open (several
 viable), are the flow's to choose and are saved on their consumers (D8); each
 edge's adapter is forced. The
-rebuilt root is test_design's Chain, configured the same way: the same flat
+rebuilt root is the Chain (``kernels.chain``), configured the same way: the same flat
 netlist and pins, and in XSim what ``execute_onnx`` computes on the source.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
-from kernels import test_design as chain
-from kernels.helpers import ADAPTER_RAM_STYLES, labels
+from kernels import chain
+from kernels.helpers import labels
 from kernels.xsim import pack, requires_xsim, stream_through
-from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError
-from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
+from finn.custom_op.kernels.partition import partition_root, save_partition_choices
 from finn.custom_op.kernels.roots import StreamedMatMulNode
-from finn.kernels.configure import commit, undecided
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-from kernel_ops.models import INT3, TARGET, chain_source, lift, matmul_model
-
-MATMUL = {
-    "compute": "packed",
-    "compute.packed.pe": chain.PE,
-    "compute.packed.simd": chain.SIMD,
-    "compute.packed.compute_pumping": False,
-    "compute.packed.reducer": "tree",
-    "w.source.memstream.ram_style": "auto",
-    "w.source.memstream.pumped_memory": False,
-    "w.transport": "direct",
-    "x.transport": "direct",
-}
-THRESHOLDING = {
-    "pe": chain.PE,
-    "use_axilite": False,
-    "deep_pipeline": False,
-    "ram_style": "auto",
-    "ultra_stages": 0,
-    "x.transport": "direct",
-}
+from finn.kernels.configure import commit
+from finn.transformation.kernels import InferKernelTensors
+from kernel_ops.models import (
+    INT3,
+    chain_source,
+    configure_partition,
+    kernel_model,
+    lift,
+    matmul_model,
+    open_memories,
+)
 
 
-def kernel_model(**options: bool) -> ModelWrapper:
-    """The Chain as KernelOps, each node's choices saved as test_design configures them."""
-    model = (
-        chain_source(**options)
-        .transform(InferShapes())
-        .transform(ToKernelOps(TARGET))
-        .transform(InferKernelTensors())
-    )
-    for node in model.graph.node:
-        choices = MATMUL if node.op_type == "MatMul" else THRESHOLDING
-        if node.op_type == "MatMul" and model.get_initializer(node.input[1]) is None:
-            # Streamed weights: no value, so no source; the weight edge's transport is
-            # the root's.
-            choices = {k: v for k, v in choices.items() if not k.startswith("w.source.")}
-        if node.output[0] in {output.name for output in model.graph.output}:
-            # A graph output: no KernelOp consumes it, so its producer owns its transport.
-            choices = {**choices, "y.transport": "direct"}
-        model.get_customop_wrapper(node).save(choices)
-    return model
-
-
-def open_memories(root: PartitionRoot) -> tuple[Any, list[str]]:
-    """The root's point and its open adapter memories."""
-    return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
-
-
-def configured(model: ModelWrapper) -> tuple[PartitionRoot, Any]:
-    """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
-    root = partition_root(model, model.graph.node, name="chain")
-    _, styles = open_memories(root)
-    save_partition_choices(model, root, dict.fromkeys(styles, "auto"))
-    root = partition_root(model, model.graph.node, name="chain")
-    point, open_styles = open_memories(root)
-    assert open_styles == [] and root.dropped == ()
-    return root, point
-
-
-def test_the_root_of_the_chains_nodes_is_test_designs_chain() -> None:
+def test_the_root_of_the_chains_nodes_is_the_chain() -> None:
     model = kernel_model()
-    root, point = configured(model)
+    root, point = configure_partition(model)
     reference = chain.chain()
     assert labels(point.module) == labels(reference.module)
     assert point.module.fragment == reference.module.fragment
@@ -102,7 +51,7 @@ def test_the_root_of_the_chains_nodes_is_test_designs_chain() -> None:
 
 def test_edge_choices_persist_on_their_consumers() -> None:
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     ops = {node.name: model.get_customop_wrapper(node) for node in model.graph.node}
     assert "x.adapter.input_gen.input_gen.ram_style" in ops["first"].choices()
     assert "x.adapter.input_gen.input_gen.ram_style" in ops["second"].choices()  # levels
@@ -110,7 +59,7 @@ def test_edge_choices_persist_on_their_consumers() -> None:
 
 def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     second = model.get_customop_wrapper(model.graph.node[2])
     second.save({"compute.packed.simd": 4})
     root = partition_root(model, model.graph.node, name="chain")
@@ -238,7 +187,7 @@ def test_a_kernel_choice_the_root_refuses_is_named_by_member() -> None:
 @requires_xsim
 def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
     model = kernel_model()
-    _, point = configured(model)
+    _, point = configure_partition(model)
     x = np.array(chain.X, dtype=np.float32)
     y = execute_onnx(chain_source().transform(InferShapes()), {"x": x})["y"].astype(int)
     a_bits, y_bits = chain.A.bitwidth(), chain.Y.bitwidth()

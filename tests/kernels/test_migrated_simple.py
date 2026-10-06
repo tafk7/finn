@@ -25,7 +25,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.target import DspBlock, Platform
-from kernels.helpers import FULL_DSP48E2, full_platform
+from kernels.helpers import FULL_DSP48E2, eltwise
 
 T = TypeVar("T")
 
@@ -87,27 +87,6 @@ def test_fifo_geometry_refusal_remains_visible_before_and_after_ram_choice(
     with pytest.raises(ValueUnavailableError) as error:
         _ = chosen.module
     assert isinstance(error.value.result, Rejected)
-
-
-def eltwise(
-    *,
-    operation: str = "ADD",
-    pe: int = 2,
-    lhs: str = "INT3",
-    rhs: str = "INT3",
-    scale: float = 1.0,
-    target: DspBlock = DspBlock.DSP58,
-) -> EltwiseKernel:
-    return design_space(
-        EltwiseKernel(
-            operation=operation,
-            pe=pe,
-            lhs_dtype=resolve_qonnx_datatype_name(lhs),
-            rhs_dtype=resolve_qonnx_datatype_name(rhs),
-            b_scale=scale,
-            platform=full_platform(target),
-        )
-    )
 
 
 @pytest.mark.parametrize(

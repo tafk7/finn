@@ -419,3 +419,12 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     assert lanes == [6, 6, 3]
     refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.module)
     assert codes(refused) == {"dotp-form"}
+
+
+@pytest.mark.parametrize("field", ("pe", "simd"))
+def test_dotp_rejects_native_parameter_overflow(field):
+    assert isinstance(kernel(**{field: 2**32}).query(DotpAxiKernel.module), Rejected)
+
+
+def test_dotp_rejects_packed_width_overflow_even_when_dimensions_fit():
+    assert isinstance(kernel(pe=2**30, simd=2).query(DotpAxiKernel.module), Rejected)

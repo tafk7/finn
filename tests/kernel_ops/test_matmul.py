@@ -10,7 +10,6 @@ never written; a nested choice applies under its forced selector.
 
 from __future__ import annotations
 
-import hashlib
 import warnings
 from pathlib import Path
 
@@ -22,7 +21,7 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOp, KernelOpError
+from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
 from finn.custom_op.kernels.thresholding import Thresholding
@@ -30,7 +29,7 @@ from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.general import ApplyConfig
-from kernel_ops.models import WEIGHTS, X, matmul_model
+from kernel_ops.models import WEIGHTS, X, matmul_model, schema_digest
 
 FOLDING = {
     "compute": "packed",
@@ -112,11 +111,6 @@ def test_the_schema_is_the_node_roots_decision_keys() -> None:
     assert not any(name.startswith("x.source") for name in schema)
     types = op(matmul_model()).get_nodeattr_types()
     assert types["compute"] == ("s", False, "", {"packed", "int8_dsp58"})
-
-
-def schema_digest(cls: type[KernelOp]) -> str:
-    rows = sorted((name, kind, cases) for name, (kind, cases) in cls.schema().items())
-    return hashlib.sha256(repr(rows).encode()).hexdigest()[:16]
 
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:

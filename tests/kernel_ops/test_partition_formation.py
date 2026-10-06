@@ -4,7 +4,7 @@
 """CreateDataflowPartition over KernelOps: one StreamingDataflowPartition, its body a model
 of KernelOps, the graph's other ops left on the host.
 
-test_design's Chain as KernelOps, its choices saved, between two host ops (an
+The Chain (``kernels.chain``) as KernelOps, its choices saved, between two host ops (an
 Identity in front, as TFC's flatten, and one behind, as its label select).
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from kernels import test_design as chain
+from kernels import chain
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -21,7 +21,7 @@ from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.partition import partition_root
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import PackagePartition
-from kernel_ops.test_partition import configured, kernel_model
+from kernel_ops.models import configure_partition, kernel_model
 
 
 def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:
@@ -50,7 +50,7 @@ def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:
 
 def partitioned(tmp_path: object) -> tuple[ModelWrapper, ModelWrapper]:
     source = kernel_model()
-    configured(source)
+    configure_partition(source)
     source = on_the_host(source)
     parent = source.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
     return source, parent
@@ -93,7 +93,7 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
 
 def test_a_host_op_between_kernel_ops_refuses(tmp_path: object) -> None:
     source = kernel_model()
-    configured(source)
+    configure_partition(source)
     source = on_the_host(source, between=True)
     with pytest.raises(AssertionError, match="partition depends on itself"):
         source.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))

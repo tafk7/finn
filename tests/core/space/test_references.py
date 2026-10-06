@@ -8,6 +8,7 @@ budget, and inside their methods ``self.budget`` is the budget's configuration.
 Supplied with a fresh node, it places that node there. ``Users(SPEND)`` in the
 budget is the mirror of ``Members``: every present node whose input references
 the budget, located by its name and input. Nothing here is about hardware.
+The company is declared in ``_toys_support``, which the collapse tests share.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import pytest
+from core.space._toys_support import SPEND, Budget, Company, Department
 
 from finn.core.space import (
     Available,
@@ -28,69 +30,21 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    Users,
     ValueSemantics,
     ValueUnavailableError,
-    ViewKey,
     composite,
-    constraint,
     default_semantics,
     derived,
     design_space,
     inspection,
-    reject,
     view,
 )
 from finn.core.space.errors import RequestError
-
-SPEND = ViewKey("spend", int)
 
 
 def codes(result: object) -> set[str]:
     assert isinstance(result, (Rejected, Unresolved))
     return {finding.code for finding in result.findings}
-
-
-class Budget(Space):
-    """Knows nothing about departments: it sees whoever references it."""
-
-    limit: int = Param()
-    rate: int = Param()
-    claims = Users(SPEND)
-
-    @constraint
-    def covered(self) -> bool | Rejected:
-        total = sum(claim.value for claim in self.claims)
-        if total > self.limit:
-            named = ", ".join(f"{c.node}.{c.member}={c.value}" for c in self.claims)
-            return reject("over-budget", f"{named} exceed {self.limit}")
-        return True
-
-    @view(requires=(claims, covered))
-    def remaining(self) -> int:
-        return self.limit - sum(claim.value for claim in self.claims)
-
-
-class Department(Space):
-    budget: Budget = Param()
-    staff: int = Decision(values=(1, 2, 3))
-
-    @view
-    def spend(self) -> int:
-        # The referenced node's configuration: a real value, read in a method.
-        return self.staff * self.budget.rate
-
-    exports = {SPEND: spend}
-
-
-class Company(Space):
-    limit: int = Param()
-    open_lab: bool = Decision(values=(False, True))
-    shared = Budget(limit=limit, rate=10)
-    sales = Department(budget=shared)
-    research = Department()
-    research.budget = shared  # a reference input may be assigned like any formal
-    lab = Department(budget=shared, when=open_lab)
 
 
 def staffed(point: Company, **staff: int) -> Company:
