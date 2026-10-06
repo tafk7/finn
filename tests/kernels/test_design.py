@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Chain (``kernels.chain``): one flat netlist, its edges' adapters, its streams' tensors.
+"""The Chain (``kernels.chain``): one flat netlist, its edges' adapters, its channels' tensors.
 
-Each MatMul passes the root's streams to the kernels that use them: each stream
+Each MatMul passes the root's channels to the kernels that use them: each channel
 is one real edge, so each adapter sits on the edge that needs it (a replay
 before each MatMul's core, none inside a MatMul). The root's module is one
 netlist of every leaf; it computes ``thresholds(x @ W1) @ W2`` in XSim. A tensor
@@ -50,7 +50,7 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
     # A replay before each MatMul's core, on the root's edge into it; none inside a MatMul.
     assert point.x.plan.steps == point.levels.plan.steps == (Step.REORDER, Step.MARKERS)
     assert point.hidden.plan.steps == ()
-    # Each weight memory is its stream's source: a leaf below the stream, in member order.
+    # Each weight memory is its channel's source: a leaf below the channel, in member order.
     assert labels(point.module) == [
         "x.adapter.input_gen.input_gen",
         "w1.source.memstream",
@@ -60,7 +60,7 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
         "activate",
         "second.compute.packed",
     ]
-    # The root's own ports are its boundary streams.
+    # The root's own ports are its boundary channels.
     assert {port.name for port in point.module.abi.pins} == {
         "ap_clk",
         "ap_rst_n",
@@ -89,7 +89,7 @@ def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
 
 
 def test_a_matmul_on_a_stream_of_another_element_is_refused():
-    """The result type MatMul states (its core's ``result_dtype``) meets the stream's."""
+    """The result type MatMul states (its core's ``result_dtype``) meets the channel's."""
 
     class Widened(Root):
         x = Channel(
@@ -111,7 +111,7 @@ def test_a_matmul_on_a_stream_of_another_element_is_refused():
 def carried(
     x: ScalarEncoding, w: ScalarEncoding, y: ScalarEncoding, *, known: bool = True
 ) -> object:
-    """MatMul's ``carried`` on streams stating these elements; weights known or not."""
+    """MatMul's ``carried`` on channels stating these elements; weights known or not."""
     facts = dict(
         m=ROWS,
         n=HIDDEN,
@@ -138,16 +138,16 @@ def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_pro
     accepted = Available(True)
     # Consumed: an upstream with a tighter range feeds MatMul's activations.
     assert carried(tight, plain_w, plain_h) == accepted
-    # Produced: MatMul's full result range fits a plainly stated stream, not a tighter one.
+    # Produced: MatMul's full result range fits a plainly stated channel, not a tighter one.
     assert carried(plain_a, plain_w, plain_h) == accepted
     narrow_y = ScalarEncoding(H, (0, 1))
     refused = carried(plain_a, plain_w, narrow_y)
     assert isinstance(refused, Rejected) and "y_channel" in str(refused)
     # Known weights (W1 holds -3 to 3) are produced by MatMul's memory: they fit a plain
-    # stream (above), not a tighter one.
+    # channel (above), not a tighter one.
     refused = carried(plain_a, ScalarEncoding(W, (-2, 2)), plain_h)
     assert isinstance(refused, Rejected) and "w_channel" in str(refused)
-    # Unknown weights come from outside: a tighter stream fits MatMul's full range.
+    # Unknown weights come from outside: a tighter channel fits MatMul's full range.
     assert carried(plain_a, tight, plain_h, known=False) == accepted
     refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), plain_h, known=False)
     assert isinstance(refused, Rejected) and "w_channel" in str(refused)

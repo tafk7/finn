@@ -1,10 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Chain: a root of two MatMuls and a thresholding on its streams.
+"""The Chain: a root of two MatMuls and a thresholding on its channels.
 
-It computes ``thresholds(x @ W1) @ W2``. Each MatMul sits on the root's streams
-through its reference inputs; the root declares every stream, reading the
+It computes ``thresholds(x @ W1) @ W2``. Each MatMul sits on the root's channels
+through its reference inputs; the root declares every channel, reading the
 tensor of a MatMul's weights and results from the MatMul's views
 (``weight_tensor``, ``result_tensor``). ``chain()`` is the Chain configured as
 the kernel tests, the KernelOp partition tests and the XSim harness use it.
@@ -62,7 +62,7 @@ def matmul(
 
 
 def weights(k: int, n: int) -> Channel:
-    """A MatMul's weight stream: from its memory to its core."""
+    """A MatMul's weight channel: from its memory to its core."""
     return Channel(tensor=Tensor((k, n), ScalarEncoding(W)), platform=FULL_DSP48E2)
 
 
@@ -106,20 +106,20 @@ class Chain(Root):
         platform=FULL_DSP48E2,
     )
     second = matmul(HIDDEN, OUTPUTS, T, W2, x_channel=levels, w_channel=w2, y_channel=y)
-    # Each weight stream carries its MatMul's weights, which the stream's source stores.
+    # Each weight channel carries its MatMul's weights, which the channel's source stores.
     w1.contents = first.weight_values
     w2.contents = second.weight_values
 
 
 LAYERS = (("first", "w1"), ("second", "w2"))
-"""Each MatMul of the Chain and its weight stream."""
+"""Each MatMul of the Chain and its weight channel."""
 
 
 def configure_chain(root: Root, **choices: object) -> Any:
     """``root`` (a Chain) with ``choices`` and each MatMul's packed core configured."""
     choices = choices | {f"{stream}.transport": "direct" for _, stream in LAYERS}
     point = with_adapter_memories(commit(with_direct_transports(design_space(root)), choices))
-    # The Decisions inside the subspaces just selected, each keyed by its owner.
+    # The Decisions inside the candidates just selected, each keyed by its owner.
     nested: dict[str, object] = {}
     for layer, stream in LAYERS:
         nested |= {

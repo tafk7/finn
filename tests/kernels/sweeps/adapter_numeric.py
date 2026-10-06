@@ -1,15 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Explicit XSI conformance for the stream adapters, each in a root's module.
+"""Explicit XSI conformance for the channel adapters, each in a root's module.
 
-Every adapter kind a stream's plan takes (``vpc``, ``input_gen``, and chains of
+Every adapter kind a channel's plan takes (``vpc``, ``input_gen``, and chains of
 both) runs between a cyclic producer presenting a tensor in some order and
 thresholding reading it PE channels a beat. The thresholds map each INT4 value
 v to the level v + 8, so every output word identifies the elements that
 reached it; the expected words are the tensor's values in row-major order,
-packed here independently of the kernels' forms. ``inner_shuffle`` (not a
-stream candidate) runs placed between two boundary streams. Run with
+packed here independently of the kernels' forms. ``inner_shuffle`` (not an
+adapter candidate) runs placed between two boundary channels. Run with
 Vivado selected (FinnLib is the ``finnlib`` resource); each simulation
 runs in a fresh process.
 """
@@ -61,8 +61,8 @@ ADAPTED = (
     ("input_gen_vpc", columns_first(ROWS, CHANNELS, 1), 4, ("input_gen", "vpc")),
     ("vpc_input_gen_vpc", ROWS_AS_LANES, 2, ("vpc", "input_gen", "vpc")),
 )
-# SIMD 4 at 4x4, 8x4 and 4x8 stalled needs FinnLib's inner_shuffle page-guard
-# fix (finn.kernels.transpose); the pinned d03f2fc fails them.
+# SIMD 4 at 4x4, 8x4 and 4x8, stalled, exercise inner_shuffle's page guard
+# (finn.kernels.transpose).
 TRANSPOSES = ((4, 6, 2), (6, 6, 3), (4, 4, 2), (6, 9, 3), (4, 4, 4), (8, 4, 4), (4, 8, 4))
 
 

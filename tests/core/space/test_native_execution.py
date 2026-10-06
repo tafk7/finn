@@ -123,7 +123,7 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
         "assign": lambda point: setattr(point, "fact", 99),
         "delete": lambda point: delattr(point, "fact"),
         "foreign": lambda point: foreign.fact,
-        # design_space() is the compile step that replaced constructing a configuration.
+        # design_space() is the compile step: a configuration is never constructed.
         "configure": lambda point: design_space(Example(fact=1)),
     }
     point = design_space(Example(fact=7))

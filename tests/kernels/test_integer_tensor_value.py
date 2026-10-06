@@ -55,8 +55,8 @@ def test_what_is_no_integer_tensor_is_refused(wrong: object) -> None:
 
 
 def test_a_new_configuration_does_not_walk_the_weights(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The replay cost of phase 1's record: 700 ms per configuration of a 512 x 512
-    point, all of it recognizing the same weights again."""
+    """A new configuration does not recognize the same weights again: at 512 x 512
+    that walk costs about 700 ms a configuration."""
     int3 = DataType["INT3"]
     weights = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
     base = matmul_point(

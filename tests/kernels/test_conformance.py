@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Every kernel on streams, checked against its RTL by the conformance harness.
+"""Every kernel on channels, checked against its RTL by the conformance harness.
 
-Each case places one kernel between boundary streams over sampled folding factors
+Each case places one kernel between boundary channels over sampled folding factors
 (``kernels.conformance``): dotp on both cores (packed; INT8, dense and
 depthwise), thresholding, eltwise with a broadcast operand, transpose, and
 memstream with an identity reference. Every folding factor is a Decision (dotp's PE and
@@ -21,9 +21,8 @@ whose ``parameters()`` omit a module parameter, including for modules with a
 parameter whose value the RTL checker does not establish (thresholding's
 array, eltwise's real, which is itself the omission checked).
 
-transpose needs FinnLib with the ``inner_shuffle`` page-guard fix (pinned at
-``99d75e8``; ``finn.kernels.transpose``): at ``d03f2fc`` its samples at SIMD 3
-and 6 failed stalled, and its adapter sample failed in both modes.
+transpose's stalled samples and its adapter sample (behind a ``vpc``) exercise
+``inner_shuffle``'s page guard (``finn.kernels.transpose``).
 """
 
 from __future__ import annotations
@@ -451,8 +450,8 @@ class Unbound(MemStreamKernel):
 class Unpipelined(ThresholdingAxiKernel):
     """thresholding_axi without DEEP_PIPELINE, which the module declares with a default.
 
-    Checked at all only because THRESHOLDS, an array, no longer declines the
-    module. Omitting THRESHOLDS itself cannot show it: slang refuses the
+    Checked at all because THRESHOLDS, an array, does not decline the module: the
+    checker names it without a value. Omitting THRESHOLDS itself cannot show it: slang refuses the
     module's default for it (``'{default: ...}`` "invalid target type"), so
     that binding declines.
     """

@@ -24,8 +24,8 @@ from finn.core.space.errors import DefinitionError
 
 @pytest.mark.parametrize("name", ["", "a.b", "$selector", "has space", "ümlaut"])
 def test_authored_names_are_unambiguous_segments(name: str) -> None:
-    # ValueKey is removed; ViewKey is the only export key. A candidate key of a
-    # Decision over nodes replaces a SubspaceChoice case id.
+    # Export keys (ViewKey) and the candidate keys of a Decision over nodes are
+    # authored names, so each must be one segment.
     with pytest.raises(DefinitionError, match="name segment"):
         ViewKey(name, int)
     with pytest.raises(DefinitionError, match="name segment"):
@@ -38,9 +38,9 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
 
 
 def test_malformed_candidates_fail_as_definitions() -> None:
-    # Subspace(F) is gone: a node is declared by calling its Space class, so the
-    # malformed forms are a candidate or a reference input that is not a
-    # node, and a composite over a non-Space base.
+    # A node is declared by calling its Space class, so the malformed forms are a
+    # candidate or a reference input that is not a node, and a composite over a
+    # non-Space base.
     class Holder(Space):
         held: Space = Param()
 
@@ -48,7 +48,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         composite("NotSpace", {}, base=cast(type[Space], int))
     with pytest.raises(DefinitionError, match="must be a Space class or a call on one"):
         Decision({"case": cast(Space, 4)})
-    # The mapping spelling is retired: candidates are entries.
+    # Candidates are entries, not a mapping of values.
     with pytest.raises(DefinitionError, match="lists its candidates as entries"):
         Decision(values={"case": Holder()})
     with pytest.raises(DefinitionError, match="takes a node declaration"):
@@ -57,7 +57,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         Decision({})
     with pytest.raises(DefinitionError, match="at least one candidate"):
         Decision({}, optional=True)  # the None candidate alone places nothing
-    # Choice exports are removed; a duplicate export name is refused on the Space class.
+    # A duplicate export name is refused on the Space class.
     first = ViewKey("result", int)
     second = ViewKey("result", int)
 

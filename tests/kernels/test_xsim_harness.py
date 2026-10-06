@@ -16,7 +16,7 @@ from kernels.xsim import stream_through
 @pytest.mark.parametrize(
     "inputs, outputs, complaint",
     [
-        # A stale name (a partition root's before its ports took the shells' names).
+        # A name the module does not present (its ports take the shells' names).
         (
             {"in0_V": ([1], 6)},
             {"m_axis_0": ([1], 16)},

@@ -117,7 +117,7 @@ def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
     assert [label for label, _ in placed.instances] == ["memory.memstream"]
     assert placed.exports[0].instance == "memory.memstream"
     assert placed.exports[0].port == "memory_memstream_s_axilite"
-    # A stream's fragment: its stage below it; its users beside it (^), its boundary None.
+    # A channel's fragment: its stage below it; its users beside it (^), its boundary None.
     stream = Fragment(
         (("adapter.vpc.vpc", stage()),),
         (link(None, "adapter.vpc.vpc"), link("adapter.vpc.vpc", "^compute.packed")),
@@ -128,7 +128,7 @@ def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
         (None, "x.adapter.vpc.vpc"),
         ("x.adapter.vpc.vpc", "compute.packed"),
     ]
-    # Placed in turn under its kernel's node, a user beside the stream stays beside it.
+    # Placed in turn under its kernel's node, a user beside the channel stays beside it.
     deeper = inside.under("mm")
     assert [(item.source.instance, item.sink.instance) for item in deeper.links] == [
         (None, "mm.x.adapter.vpc.vpc"),

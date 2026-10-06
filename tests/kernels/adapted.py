@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Roots whose streams are adapted: a cyclic producer feeding a thresholding, and
-``inner_shuffle`` between two boundary streams. ``test_adapters`` checks their plans
+"""Roots whose channels are adapted: a cyclic producer feeding a thresholding, and
+``inner_shuffle`` between two boundary channels. ``test_adapters`` checks their plans
 and adapters; the adapter XSI sweep simulates them."""
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def columns_first(rows: int, channels: int, lanes: int) -> Traversal:
 
 
 def transposed(rows: int, cols: int, simd: int, batches: int = 2) -> Any:
-    """``inner_shuffle`` placed between two boundary streams: rows in, columns out."""
+    """``inner_shuffle`` placed between two boundary channels: rows in, columns out."""
     shape = (batches, rows, cols)
 
     class Transposed(Root):

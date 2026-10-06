@@ -32,7 +32,7 @@ from finn.transformation.kernels.package import write_boundary_facts
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
 LOGITS = "MatMul_3_out0"
-# The partition's boundary facts as the network survey's probe read them (io.txt):
+# The partition's boundary facts:
 # 784 UINT8 pixels in 49 beats of 16 lanes; ten INT10 logits in one beat of 104 bits.
 FACTS = (
     [
@@ -128,7 +128,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
 # Builds and partitions the whole network, about 20 s.
 @pytest.mark.slow
 def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
-    """Every KernelOp and stream of the partition reads Ultra96's capabilities from the
+    """Every KernelOp and channel of the partition reads Ultra96's capabilities from the
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
     shell drives no 2x clock)."""
     _, _, body = partitioned(tmp_path)

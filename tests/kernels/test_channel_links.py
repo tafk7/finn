@@ -89,7 +89,7 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
 
 def test_a_boundary_no_port_names_is_refused() -> None:
     """A weight channel with one user and no port is a boundary nothing may cross: only an
-    ONNX input or output of a partition is one (D4)."""
+    ONNX input or output of a partition is one."""
 
     class Unnamed(Space):
         x = Channel(

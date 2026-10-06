@@ -3,8 +3,7 @@
 
 """A reusable interface leaves nested formals unsupplied; enclosing nodes supply them.
 
-The nested ``bindings={...}`` map is gone. Its roles are played by assignment:
-a nested formal left unsupplied is assigned through a path by an enclosing
+A nested formal left unsupplied is assigned through a path by an enclosing
 Space class (``kernel.port.dtype = dtype``), which binds it for that placement only;
 a formal that should be exposed is declared on the enclosing Space class and bound
 by name; and a fresh inline ``Decision`` at a node call (also on a node the
@@ -190,7 +189,7 @@ def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
 
 
 def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_space_class() -> None:
-    # An exposed inline Param is gone: declare the formal here, bind it by name.
+    # The formal is declared here and bound to the child by name.
     class Parent(Space):
         lanes: int = Param(required=False)
         kernel = Reusable(count=1)
@@ -341,7 +340,7 @@ def test_configure_freezes_its_root() -> None:
 
 
 def test_a_graph_built_as_data_binds_nested_formals_and_keeps_their_types() -> None:
-    # ScopeBuilder is gone: nodes are plain values, joined by assignment, named by composite.
+    # Nodes are plain values, joined by assignment, named by composite.
     child = Reusable(count=1)
     child.port.dtype = "INT8"
     child.port.lanes = 2

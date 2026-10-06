@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A stream plans what its ends need and its adapter carries the plan out.
+"""A channel plans what its ends need and its adapter carries the plan out.
 
 A cyclic producer presents a tensor in any order; thresholding consumes it
-PE channels a beat, channels innermost. The stream between them derives its
+PE channels a beat, channels innermost. The channel between them derives its
 plan from the two presentations, and exactly one adapter candidate carries it
 out: nothing for the same order, a ``vpc`` for other lanes, an ``input_gen``
-for another beat order, and chains of both. A stream that admits no adapter
+for another beat order, and chains of both. A channel that admits no adapter
 refuses a non-empty plan. FinnLib's ``inner_shuffle`` is not a candidate; a
 kernel with children places it explicitly (``TransposeKernel``).
 """
@@ -54,7 +54,7 @@ def test_other_lanes_are_a_vpc(before, after, vector):
     assert point.x.plan.steps == (Step.WIDTH,)
     ((name, vpc),) = stage_parameters(point)
     assert name == "vpc" and (vpc["PI"], vpc["PO"], vpc["N"]) == (before, after, vector)
-    # The stage sits below the stream, at its place in the root's netlist.
+    # The stage sits below the channel, at its place in the root's netlist.
     assert labels(point.module) == ["x.adapter.vpc.vpc", "producer", "activate"]
 
 

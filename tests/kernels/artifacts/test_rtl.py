@@ -1,11 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A7: the checker, against the real sources and the real defect.
+"""The checker, against the real sources.
 
 Three claims, and the last one is a measurement rather than an assertion.
 
-The A3 case mismatch is caught **against the actual file**, not a fixture.
+A pin's case mismatch (``CLK`` against the source's ``clk``) is caught **against
+the actual file**, not a fixture.
 ``replay_buffer.sv``, ``dotp_axi.sv`` and the FinnLib closure parse without
 declining.  And the decline rate is measured and recorded, because declining
 is permitted and the honest scope of the guarantee is whatever is left.
@@ -221,11 +222,11 @@ def test_a_derived_localparam_is_evaluated_and_not_left_as_an_expression(
     assert locals_["INPUT_STREAM_WIDTH"] == 16
 
 
-# -- the defect, against the real file ------------------------------------------
+# -- a case mismatch, against the real file -------------------------------------
 
 
 def test_the_case_mismatch_is_caught_against_the_actual_source(replay: Path) -> None:
-    """A3 reproduced it against a fixture copy.  Here it is against the file."""
+    """``CLK`` declared, ``clk`` in FinnLib's ``replay_buffer.sv``: refused, by case."""
 
     wrong = (
         Signal("CLK", Direction.IN, 1, Clock(Free())),
@@ -310,7 +311,7 @@ def test_a_declared_stream_is_checked_through_its_flipped_signature(
 def test_an_array_parameter_is_named_and_its_value_is_not_invented(
     thresholding: tuple[Path, ...],
 ) -> None:
-    """``THRESHOLDS`` used to decline the whole module; now only its value is unknown."""
+    """``THRESHOLDS``, an unpacked array, is named; only its value is not established."""
 
     module = _module(extract(thresholding, "thresholding_axi", THRESHOLDING_PARAMETERS))
     parameters = dict(module.parameters)
@@ -516,7 +517,7 @@ def test_packed_dotp_above_simd_one_binds_through_its_generate_block_function(
 
 
 def test_inner_shuffle_elaborates_without_an_error() -> None:
-    """FinnLib 99d75e8 declares its nets before reading them; nothing is forgiven."""
+    """FinnLib's ``inner_shuffle`` declares its nets before reading them; nothing is forgiven."""
 
     files = _finnlib_files(INNER_SHUFFLE_CLOSURE)
     assert _diagnosed(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS) == set()

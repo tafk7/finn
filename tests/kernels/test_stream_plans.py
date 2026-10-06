@@ -12,7 +12,7 @@ regroups the element sequence), runs the realized chain on the source's
 positions, and compares the result with the sink's positions and required
 markers, up to the one fixed lane permutation the connection wires. Random
 pairs cover mismatched lane counts, lane axes, beat orders, replays and
-markers (the plan's mutation probes: NF other than SF, swapped lane orders).
+markers, among them NF other than SF and swapped lane orders.
 """
 
 from __future__ import annotations

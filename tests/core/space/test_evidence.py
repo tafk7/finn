@@ -52,7 +52,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
         exports = {PHYSICAL: physical}
 
     # The structural choice is a Decision over nodes; its output reads the
-    # selected candidate's member by name (formerly SubspaceChoice.accepted).
+    # selected candidate's member by name.
     class Root(Space):
         size: int = Param()
         implementation: Good | Bad = Decision({"good": Good(size=size), "bad": Bad()})
@@ -122,9 +122,9 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
     class Child(Space):
         value: int = Param()
 
-    # Formerly an inline exposed Param(int) child binding: now the enclosing
-    # Space class declares the formal and binds it by name (``Forwarded``); a plain
-    # literal binding (``Literal``) is covered alongside it.
+    # The enclosing Space class declares the formal and binds it to the child by
+    # name (``Forwarded``); a plain literal binding (``Literal``) is covered
+    # alongside it.
     class Forwarded(Space):
         value: int = Param()
         enabled = Const(False)

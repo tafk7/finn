@@ -213,7 +213,7 @@ def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:
 def test_a_views_own_name_in_its_class_body_is_its_declaration() -> None:
     # In its own body a view is the declaration (View[T]): it may be required,
     # exported or wrapped, and at runtime it supplies a formal like any
-    # reference. Statically it is not the T a formal takes (resistance R30).
+    # reference. Statically it is not the T a formal takes.
     class Wing(Space):
         kitchen = Room(area=12)
 

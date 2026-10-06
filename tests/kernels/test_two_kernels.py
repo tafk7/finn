@@ -1,16 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Two dot-product layers joined by one stream that plans and adapts between them.
+"""Two dot-product layers joined by one channel that plans and adapts between them.
 
 The first layer produces its results PE = 4 lanes a beat, each row once; the
 second reads them as activations, SIMD = 2 lanes a beat, each row once per
 output fold, framed by reduction. Neither kernel knows the other: each
 presents its own traversal of the hidden tensor, derived from its own schedule
 over its own folding factors.
-The stream between them plans a width conversion, a replay and the frame, and
+The channel between them plans a width conversion, a replay and the frame, and
 its adapter places a ``vpc`` and an ``input_gen``. The root's module computes
-``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a stream that admits no
+``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a channel that admits no
 adapter refuses it.
 """
 
@@ -114,7 +114,7 @@ def layered(*, adaptable: bool = True):
             "second.reducer": "tree",
         },
     )
-    # A stream admitting no adapter keeps its Decision closed; the others' are forced.
+    # A channel admitting no adapter keeps its Decision closed; the others' are forced.
     return with_adapter_memories(point)
 
 

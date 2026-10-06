@@ -1,4 +1,4 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Independent physical kernel subsystem tests."""
+"""The tests of finn.kernels, its conformance harness and its XSI sweeps."""

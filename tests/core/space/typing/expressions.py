@@ -1,7 +1,7 @@
 """Expressions as mypy sees them.
 
 Formals are annotated with their value type and a reference to a node's
-member is typed as its value (option A), so arithmetic on either is statically
+member is typed as its value, so arithmetic on either is statically
 an ``int``: a member defined that way is an ``int`` at class level and at
 instance level (at runtime it is an ``Expr``).
 """

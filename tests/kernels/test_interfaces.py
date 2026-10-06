@@ -3,7 +3,7 @@
 
 """Non-stream interfaces: exported control buses, tie-offs and child padding.
 
-dotp feeds thresholding in one root; the activation stream's adapter replays
+dotp feeds thresholding in one root; the activation channel's adapter replays
 each row for dotp. dotp's padded AXIS result feeds a child: the padding bits
 stay unconnected and the consumer's padding is zero. Thresholding's AXI-Lite
 bus is presented through a ``ControlBus`` when its thresholds are
@@ -87,7 +87,7 @@ def activated(*, writable: bool):
 
 
 def test_a_padded_child_result_feeds_a_child_and_its_padding_stays_unconnected():
-    # Probe P3: one INT9 lane rides a 16-bit AXIS word into thresholding.
+    # One INT9 lane rides a 16-bit AXIS word into thresholding.
     module = activated(writable=False).module
     (fed,) = [link for link in module.fragment.links if link.sink.instance == "activate"]
     assert (fed.source.instance, fed.source.data_bits, fed.payload_bits) == ("compute", 16, 9)
@@ -100,7 +100,7 @@ def test_a_padded_child_result_feeds_a_child_and_its_padding_stays_unconnected()
 
 
 def test_read_only_thresholds_tie_their_control_and_set_interfaces():
-    # Probe P4: every thresholding input is driven, and nothing is presented.
+    # Every thresholding input is driven, and nothing is presented.
     module = activated(writable=False).module
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",
@@ -170,7 +170,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
     def word(values):
         return sum((v & 7) << (3 * i) for i, v in enumerate(values))
 
-    # Each row once: the stream's input_gen presents it HEIGHT times, framed.
+    # Each row once: the channel's input_gen presents it HEIGHT times, framed.
     activation_words = [
         word(x[r][f * SIMD : (f + 1) * SIMD]) for r in range(REPETITIONS) for f in range(FOLDS)
     ]
@@ -189,7 +189,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
 
 
 def test_several_threshold_sets_take_a_set_selector_stream():
-    # A sideband is an ordinary stream: one set index per input beat.
+    # A sideband is an ordinary channel: one set index per input beat.
     selectors = Tensor((REPETITIONS * HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
@@ -216,7 +216,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     )
     assert isinstance(point.sets.query(Channel.netlist), Available)
     assert point.sets.endpoints.sink.transport.name == "s_axis_set"
-    # One set index for every input beat: a shorter selector stream is refused.
+    # One set index for every input beat: a shorter selector channel is refused.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
 
     class Short(Selected):

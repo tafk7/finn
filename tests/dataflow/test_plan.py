@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A stream's plan: the canonical steps between two beat sequences of one tensor."""
+"""A channel's plan: the canonical steps between two beat sequences of one tensor."""
 
 from __future__ import annotations
 

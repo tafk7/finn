@@ -116,8 +116,8 @@ def test_selector_change_requires_explicit_case_clearing_before_capture() -> Non
 
 
 def test_singleton_choices_persist_their_selector_like_any_decision() -> None:
-    # Replaces "singleton choices do not create persisted selectors": a singleton
-    # Decision over nodes is an ordinary Decision, committed and captured like any other.
+    # A singleton Decision over nodes is an ordinary Decision, committed and
+    # captured like any other.
     # Uncommitted, its one case is forced: read, never captured.
     class Child(Space):
         lanes: int = Decision(values=(1,))
@@ -253,8 +253,8 @@ def test_restore_preconditions_precede_value_adapters_and_admission() -> None:
 
 
 def test_singleton_structural_selection_is_committed_and_replays_on_an_empty_root() -> None:
-    # Replaces "selecting the only case is a no-op": a singleton Decision over nodes
-    # needs a commitment now; the committed selector replays like any other choice.
+    # A singleton Decision over nodes is committed like any other; the committed
+    # selector replays like any other choice.
     class Child(Space):
         value: int = Decision(values=(1,))
 

@@ -3,10 +3,10 @@
 
 """The platform a KernelOp binds: its model's target (``read_target(model).platform``).
 
-The node roots bind it to their kernels and to a stream with a source, so a value
+The node roots bind it to their kernels and to a channel with a source, so a value
 case that requires a capability (``requires``) is refused, by name, on a device
 without it and viable on one with it; the DSP block is the platform's. A bare
-kernel, with no model, keeps the default platform, which refuses nothing.
+kernel, with no model, has no platform: its caller must state one.
 """
 
 from __future__ import annotations

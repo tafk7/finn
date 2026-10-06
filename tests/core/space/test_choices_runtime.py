@@ -122,8 +122,8 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
         exports = {PHYSICAL: physical}
 
     class Root(Space):
-        # A Decision over nodes replaces SubspaceChoice; ``implementation.physical``
-        # reads the selected candidate's member by name (was accepted(PHYSICAL)).
+        # A Decision over nodes; ``implementation.physical`` reads the selected
+        # candidate's member by name.
         implementation: Refused | Explodes = Decision(
             {"refused": Refused(), "explodes": Explodes()}
         )
@@ -255,7 +255,7 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
 
     class Root(Space):
         supplier: int = Decision(values=(2, 4))
-        # An inline exposed Param is gone: the formal is declared here and bound by name.
+        # The formal is declared here and bound to the child by name.
         exposed_width: int = Param()
         aliased = Child(width=supplier)
         local = Child(width=Decision(values=(3, 6)))

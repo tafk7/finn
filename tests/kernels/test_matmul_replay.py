@@ -1,10 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Replay is the activation stream's plan, and its adapter carries it out.
+"""Replay is the activation channel's plan, and its adapter carries it out.
 
 The module receives each activation row once at ``in0_V``; dotp reads it once
-per output fold, framed by reduction. The stream between them plans a reorder
+per output fold, framed by reduction. The channel between them plans a reorder
 (the replay) and the frame marker, and its ``input_gen`` adapter realizes both:
 per frame of one row's folds, the row once per output fold, with ``olst``
 closing each fold group. A per-channel row passes once, so its plan is the
@@ -60,7 +60,7 @@ CHOICES = choices()
 
 def test_the_activation_stream_plans_the_replay_and_its_frame():
     point = commit(matmul_point(**FACTS), CHOICES)
-    # The stream into the core is the root's: its plan and adapter are the edge's.
+    # The channel into the core is the root's: its plan and adapter are the edge's.
     stream = point.x
     assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
     (reorder, _) = stream.plan.hops

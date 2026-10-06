@@ -5,11 +5,9 @@
 
 """Driving one RTL top under XSI, and the process discipline that requires.
 
-Extracted from fixture 5, unchanged.  Fixture 8 compares the same composed RTL
-against arithmetic rather than against the fused core, and the Phase 6 plan is
-explicit that it should reuse fixture 5's *transport* and not its comparison --
-the marshalling, the backpressure collector and the watchdog handling are
-correct and hard-won, and a second copy of them would be a second place for the
+Every sweep drives its design through this one transport -- the marshalling,
+the backpressure collector and the watchdog handling -- and compares the
+results itself.  A second copy of the transport would be a second place for the
 one-simulation-per-process rule to be got wrong.
 
 **Each simulation runs in its own process.**  XSI keeps state that outlives
@@ -20,9 +18,9 @@ because one configuration is already several simulations.  So :func:`drive`
 marshals a request to a fresh interpreter running *this* module, whose whole
 job is one simulation.
 
-The worker is this module and not the caller's, deliberately.  A fixture that
-spawned another fixture's file would re-enter that fixture's argument parser,
-and the two would have to keep agreeing about flags they do not share.
+The worker is this module and not the caller's, deliberately.  A sweep that
+spawned another sweep's file would re-enter that sweep's argument parser, and
+the two would have to keep agreeing about flags they do not share.
 """
 
 from __future__ import annotations
@@ -60,11 +58,10 @@ def random_word(generator: np.random.RandomState, bits: int) -> int:
 
     ``.astype(np.uint8).tobytes()`` and not ``bytes(...)``.  ``randint``
     returns ``int64``, and ``bytes()`` on a numpy array reads its *buffer* --
-    eight bytes per value, seven of them zero.  A 32-bit word therefore came
-    out as one random low byte and 24 zero bits, so a four-lane weight beat had
-    three lanes stuck at zero and fixture 5 compared two DUTs on a quarter of
-    the stimulus it appeared to be using.  Nothing failed, because both DUTs
-    got the same impoverished stream.
+    eight bytes per value, seven of them zero.  A 32-bit word would then be one
+    random low byte and 24 zero bits, a four-lane weight beat would have three
+    lanes stuck at zero, and a comparison would run on a quarter of the stimulus
+    it appeared to use, without failing.
     """
 
     raw = generator.randint(0, 256, size=(bits + 7) // 8).astype(np.uint8).tobytes()

@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Extents bound from the tensors the ports read: the rules, coverage, and the S0 roster.
+"""Extents bound from the tensors the ports read: the rules, coverage, and the kernel roster.
 
 Each roster member states only which index addresses which axis of each
 port's tensor (and, where no axis addresses an index alone, the extents its
-author gives). The binding must give today's extents, and a schedule over the
+author gives). The binding must give the extents each member states, and a schedule over the
 bound extents must present every position of each tensor whose axes it binds.
 """
 
@@ -141,7 +141,7 @@ def test_bound_extents_make_every_bound_port_cover_its_tensor() -> None:
 
 
 def test_a_tensor_too_wide_for_the_other_ports_is_refused() -> None:
-    # The finding D3 closes: x (M, K + 2) against w (K, N) and y (M, N).
+    # x (M, K + 2) against w (K, N) and y (M, N): the ports disagree on k.
     M, K, N = 2, 4, 2
     x, w, y = Access("x", (M, K + 2), Form.DENSE.x), *dense(M, K, N)[1:]
     with pytest.raises(Refused, match=r"^k is 6 \(x axis 1\) and 4 \(w axis 0\)$"):
@@ -152,7 +152,7 @@ def test_a_tensor_too_wide_for_the_other_ports_is_refused() -> None:
     assert not covers(schedule.present(x.shape, x.index, lanes=(k,)))
 
 
-# -- the S0 roster ------------------------------------------------------------------------
+# -- the kernel roster --------------------------------------------------------------------
 
 
 def plain(access: Access) -> bool:
@@ -176,7 +176,7 @@ class Member:
     """A roster member: its ports, the extents its author gives, and its schedule.
 
     ``unscheduled`` are accesses that bind but that no schedule presents (a
-    table the kernel reads beside its streams). ``uncovered`` names the ports
+    table the kernel reads beside its channels). ``uncovered`` names the ports
     that present only part of their tensor: a window's image.
     """
 
@@ -282,7 +282,7 @@ ROSTER = {
         {},
         {c: 4},
         (r, c),
-        # Its (sets, channels, thresholds) table has its streams' channels: checked.
+        # Its (sets, channels, thresholds) table has its ports' channels: checked.
         unscheduled=(Access("thresholds", (2, 8, 15), (g, c, j)),),
     ),
     "eltwise, broadcast operands": Member(
@@ -318,7 +318,7 @@ def test_the_s0_roster_binds_and_its_bound_ports_cover_their_tensors(name: str) 
     for port in member.ports:
         label = port.access.name
         assert covers(member.present(port)) is (label not in member.uncovered), label
-        # D3's claim: a port whose every axis is bound (or read through a view) covers.
+        # A port whose every axis is bound (or read through a view) covers.
         if label in member.uncovered:
             assert not plain(port.access)
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Executable typing contract; mypy checks this without a plugin or Any escapes.
 
-Declarations are typed as the values they stand for (option A): a node call
+Declarations are typed as the values they stand for: a node call
 ``Room(area=12)`` is a ``Room``, and ``kitchen.finish`` in a class body is an
 ``int``. Formals and Decisions are annotated with their value type
 (``area: int = Param()``), so a class-level member is typed as its value too,
@@ -277,7 +277,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(GuardedAssembly.physical, View[int])
 
 
-# -- iteration 3: annotated formals, reads through reference inputs, overrides ----------
+# -- annotated formals, reads through reference inputs, overrides -----------------------
 
 
 @dataclass(frozen=True)
@@ -333,7 +333,7 @@ def keys(board: Board, house: House) -> None:
     assert_type(house.with_choices({House.kitchen.finish: 2}), House)
 
 
-# -- iteration 4: views read as values -------------------------------------------------
+# -- views read as values --------------------------------------------------------------
 
 
 class Wing(Space):

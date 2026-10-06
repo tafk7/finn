@@ -4,7 +4,7 @@
 """The partition root: the Chain (``kernels.chain``) built from KernelOp nodes.
 
 Each node's choices are saved on it; the root's adapter memories, open (several
-viable), are the flow's to choose and are saved on their consumers (D8); each
+viable), are the flow's to choose and are saved on their consumers; each
 edge's adapter is forced. The
 rebuilt root is the Chain (``kernels.chain``), configured the same way: the same flat
 netlist and pins, and in XSim what ``execute_onnx`` computes on the source.
@@ -70,7 +70,7 @@ def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None
 
 
 def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> None:
-    """Weights lifted to a graph input leave the node streamed: its weight stream has no
+    """Weights lifted to a graph input leave the node streamed: its weight channel has no
     value, so no source, and the source's choices, now the weight edge's, are the
     partition's to replay: it drops them as stale."""
     model = matmul_model()
@@ -101,7 +101,7 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
 
 
 def test_an_edge_between_partitions_has_one_transport_its_consumers() -> None:
-    """``levels`` leaves the front partition for a KernelOp of the back one (D8, case 3):
+    """``levels`` leaves the front partition for a KernelOp of the back one:
     the back partition's input boundary, its transport its consumer's; the front pins it
     ``direct``, owns nothing of it, and drops a producer's transport set while the edge
     left the graph."""

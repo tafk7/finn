@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical-only MatMulKernel construction, packing, precision, and portable builds."""
+"""MatMulKernel construction, packing, precision, and portable builds."""
 
 import pytest
 from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
@@ -63,8 +63,8 @@ def test_external_construction_owns_replay_and_exact_precision():
     assert built.result_dtype == DataType["INT8"]
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
     assert built.initializer == ()
-    # The activation stream's adapter replays each row once per output fold: the
-    # root's stream, the real edge into the core.
+    # The activation channel's adapter replays each row once per output fold: the
+    # root's channel, the real edge into the core.
     assert labels(built.module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     replay, dotp = (dict(leaf.parameters) for _, leaf in built.module.fragment.instances)
     assert (replay["FM_SIZE"], replay["DIMS"], replay["COEFS"]) == (2, "'{2, 2}", "'{0, 1}")
@@ -185,8 +185,8 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
         base,
         {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2},
     )
-    # The activation stream's adapter applies once its plan is known, which the
-    # folding decides; the stream is the root's.
+    # The activation channel's adapter applies once its plan is known, which the
+    # folding decides; the channel is the root's.
     point = commit(
         point,
         {"x.adapter": "input_gen", "x.adapter.input_gen.input_gen.ram_style": "auto"},
@@ -204,7 +204,7 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
     assert matmul.compute.y.element.dtype == matmul.result_type
     _ = matmul.compute.module
     assert matmul.compute.y.presented.form.beats == 4
-    # The MatMul contributes its children's netlist; the root's module adds the streams.
+    # The MatMul contributes its children's netlist; the root's module adds the channels.
     # Without them, MatMul alone is no complete module: its core's inputs are the root's.
     assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]
     alone = matmul.query(MatMulKernel.module)
@@ -267,7 +267,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
 
     class RestrictedMatMul(MatMulKernel):
         # A compute Decision whose one candidate is the restricted core, on the
-        # streams MatMulKernel is supplied, which RestrictedMatMul inherits.
+        # channels MatMulKernel is supplied, which RestrictedMatMul inherits.
         compute = Decision(
             {"packed": RestrictedDotp},
             form=MatMulKernel.datapath,

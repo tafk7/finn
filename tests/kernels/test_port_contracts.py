@@ -1,18 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""dotp's ports derive from its schedule, and each refusal stays on its own stream.
+"""dotp's ports derive from its schedule, and each refusal stays on its own channel.
 
 dotp takes its extents from the streams it sits on, and its folding factors are its own
 Decisions; every port presents what its schedule derives, so a wrong lane
 count or a transposed tile can no longer be written into dotp. A producer
-presenting another order is the stream's to judge: its plan names the steps
-and its adapter carries them out, a lane order is wires, and a stream
-admitting no adapter refuses the plan. The B1 probes map as follows: a wrong
-lane count and a transposed tile become plans; a folding factor that does not
-divide its extent is refused where it is committed; a frame crossing rows,
-results that swap frames and depthwise operands under a dense core have no
-analogue, since dotp derives its own schedule and the form is its own.
+presenting another order is the channel's to judge: its plan names the steps
+and its adapter carries them out, a lane order is wires, and a channel
+admitting no adapter refuses the plan. A wrong lane count and a transposed
+tile become plans; a folding factor that does not divide its extent is refused
+where it is committed; a frame crossing rows, results that swap frames and
+depthwise operands under a dense core cannot be written, since dotp derives
+its own schedule and the form is its own.
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def test_every_port_presents_what_the_schedule_derives():
     )
     assert y.form == vector_major((ROWS, OUTPUTS), PE)
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
-    # Each end is presented by a port node, named after it on the stream.
+    # Each end is presented by a port node, named after it on the channel.
     (end,) = point.r.users
     assert (end.node, end.member) == ("compute.y", "channel")
     # The cyclic weights and the results connect as derived.
@@ -171,7 +171,7 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     assert rows.w_s.plan.steps == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
     assert isinstance(narrow.compute.w.query(AxiStreamPort.contract), Available)
-    # A stream that admits no adapter refuses the plan, naming it.
+    # A channel that admits no adapter refuses the plan, naming it.
     fixed = placed(weights_form=columns_first, adaptable=False)
     refused = fixed.w_s.query(Channel.netlist)
     assert "channel-plan" in codes(refused) and "reorder" in str(refused)
@@ -185,7 +185,7 @@ def test_a_producer_s_lane_order_is_wires():
         ((0, SIMD, 1), (1, PE, 1)),
     )
     assert isinstance(placed(weights_form=transposed).w_s.query(Channel.netlist), Available)
-    # E-048: hlslib's per-channel order (window positions fastest) is likewise a
+    # hlslib's per-channel order (window positions fastest) is likewise a
     # lane permutation of FinnLib's.
     finnlib = placed(Form.DEPTHWISE).compute.x.presented.form
     window_fastest = Traversal(
@@ -195,7 +195,7 @@ def test_a_producer_s_lane_order_is_wires():
 
 
 def test_one_kernel_refusal_reaches_only_its_own_stream():
-    # Probe P2: unsigned weights are refused by dotp's weight port. The
+    # Unsigned weights are refused by dotp's weight port. The
     # activations and the results are untouched.
     point = commit(
         matmul_point(
@@ -222,7 +222,7 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
 
 
 def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
-    """An ADD between boundary streams: lhs (3, 4), rhs of ``rhs_shape``, PE 2."""
+    """An ADD between boundary channels: lhs (3, 4), rhs of ``rhs_shape``, PE 2."""
     int4 = DataType["INT4"]
 
     class Added(Space):
@@ -273,7 +273,7 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     assert {(finding.code, finding.message) for finding in refused.findings} == {
         ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
     }
-    # An operand stream of another element: the stream refuses the port's end.
+    # An operand channel of another element: the channel refuses the port's end.
     other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Channel.netlist)
     assert isinstance(other, Rejected)
     assert "channel-tensor" in {finding.code for finding in other.findings}
