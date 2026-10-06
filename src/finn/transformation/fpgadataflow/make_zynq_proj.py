@@ -320,11 +320,19 @@ class ZynqBuild(Transformation):
     def prepare_kernel_partitions(self, model):
         """A model of KernelOps as the parent graph of its partitions: an IODMA
         partition per input and output around the KernelOps' partition, whose
-        model states its boundary facts (finn.partition). No IP is built."""
-        write_boundary_facts(model, "the KernelOps' partition")
+        model states its boundary facts (finn.partition). No IP is built.
+
+        The facts are written on the partition's body after the cut: they describe
+        that partition only, while the model being cut stays the parent graph and
+        partitioning copies its metadata to every body cut from it."""
         model = model.transform(
             CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
         )
+        for node in model.graph.node:
+            body_file = getCustomOp(node).get_nodeattr("model")
+            body = ModelWrapper(body_file)
+            write_boundary_facts(body, "the KernelOps' partition")
+            body.save(body_file)
         # InsertIODMA inserts IODMA_hls nodes, already specialized.
         model = model.transform(InsertIODMA(self.axi_port_width))
         # Each IODMA is a partition of its own (Floorplan's default, stated here).

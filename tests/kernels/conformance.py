@@ -9,11 +9,12 @@ each sample it
 1. places the kernel in a generated ``Root`` between boundary channels, one
    per reference input, commits the sample's factors and the pinned ``choices``,
    and the memories of the adapter chains (each chain forced);
-2. checks the kernel's module against its materialized sources under the
-   declared parameter binding (``artifacts.rtl.extract``, then the comparison
-   ``check_abi`` makes, on the one extraction): a refusal fails; a decline is a
-   warning (``RtlDeclined``). A parameter whose value the checker does not
-   establish (an array, a real) does not decline: its name is still
+2. checks each of the kernel's leaves in the root's module (the kernel, or
+   the children of a kernel with children) against its materialized sources
+   under the declared parameter binding (``artifacts.rtl.extract``, then the
+   comparison ``check_abi`` makes, on the one extraction): a refusal fails; a
+   decline is a warning (``RtlDeclined``). A parameter whose value the checker
+   does not establish (an array, a real) does not decline: its name is still
    established;
 3. checks the model: every port's traversal covers its tensor, a scheduled
    port presents the schedule's beats less the ones it drops, each boundary
@@ -32,17 +33,23 @@ presenting ``vector_major`` at another lane count, so that input's channel
 places a width conversion and the adapter is part of the simulated path. A
 kernel without inputs has none.
 
+A port is found where it is placed: the user of each channel below the
+kernel, a member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
+
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's scalar Decisions that ``choices`` leaves open,
 each folding factor's candidates read from ``point.field(<factor>).candidates()`` with the
 factors before it committed, and deduplicates them; ``ALL`` takes every
 combination. Explicit configurations name the kernel's own members: a Decision
-is committed, a Param is given (a folding factor that is still a Param). The adapter
-sample reuses the middle configuration.
+is committed, a Param is given (a folding factor that is still a Param). A
+Decision below a child is named by its key below the kernel
+(``compute.packed.pe``). The adapter sample reuses the middle configuration.
 
 An output given as a shape takes its element from the kernel: its port's
-element with that output unplaced. An output given as a ``Tensor`` (a test
-that means to fix it) is checked against that element all the same.
+element with that output unplaced, which only a leaf kernel's own port states
+before placement (a kernel with children gives its outputs as ``Tensor``s). An
+output given as a ``Tensor`` (a test that means to fix it) is checked against
+that element all the same.
 
 ``reference`` maps named input arrays to named output arrays.
 
@@ -79,9 +86,16 @@ from finn.core.space import (
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import Repetition, Traversal, pack, unreplayed, vector_major
+from finn.dataflow.traversal import (
+    BeatSequence,
+    Repetition,
+    Traversal,
+    pack,
+    unreplayed,
+    vector_major,
+)
 from finn.kernels.artifacts.abi import check_against_rtl
-from finn.kernels.artifacts.module import Leaf
+from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
@@ -146,11 +160,11 @@ def conformance(
         point = place(
             space_type, sample, inputs, outputs, choices=choices, facts=facts, values=values
         )
-        kernel = getattr(point, KERNEL)
-        leaf = _value(kernel.query(type(kernel).module), space_type, sample)
+        module = _value(point.query(type(point).module), space_type, sample)
         with tempfile.TemporaryDirectory() as scratch:
-            names = _check_rtl(space_type, sample, leaf, Path(scratch))
-        _check_model(point, space_type, sample, inputs, outputs, leaf, names)
+            for label, leaf in _kernel_leaves(module):
+                _check_rtl(space_type, sample, label, leaf, Path(scratch) / label)
+        _check_model(point, space_type, sample, inputs, outputs)
         _check_unplaced_outputs(point, space_type, sample, inputs, outputs, choices, facts)
         if xsim is not None:
             directory = xsim / f"{index}-{re.sub(r'[^A-Za-z0-9_.=-]+', '_', sample.label)}"
@@ -215,6 +229,8 @@ def samples(
 
 def _label(config: Mapping[str, object]) -> str:
     def short(value: object) -> str:
+        if isinstance(value, BeatSequence):
+            value = value.form
         return f"{value.beats}x{value.lanes}" if isinstance(value, Traversal) else str(value)
 
     return ", ".join(f"{key}={short(value)}" for key, value in config.items()) or "defaults"
@@ -281,7 +297,9 @@ def _enumerated(
 
 
 def _ports(space_type: type[Kernel]) -> dict[str, str]:
-    """Each reference input's port: the member whose ``channel`` it binds."""
+    """Each reference input's port among the kernel's own members: the member whose
+    ``channel`` it binds. A kernel with children has none; its children's ports are found
+    placed (``_user``)."""
     found: dict[str, str] = {}
     for owner in reversed(space_type.__mro__):
         for name, member in vars(owner).items():
@@ -321,6 +339,33 @@ def _design(
             platform=FULL_DSP48E2,
         )
     return design_space(type(f"{space_type.__name__}Conformance", (Root,), namespace)())
+
+
+def _user(point: Any, name: str) -> str:
+    """The path below the kernel of the port on channel ``name``: a member of a leaf
+    kernel (``input``), or a child's below a kernel with children (``compute.packed.x``)."""
+    ends = getattr(point, name).endpoints
+    for owner in (ends.source_owner, ends.sink_owner):
+        if owner is not None and owner.startswith(f"{KERNEL}."):
+            return str(owner[len(KERNEL) + 1 :])
+    raise AssertionError(f"no port of the kernel is on {name}: {ends}")
+
+
+def _node(kernel: Any, path: str) -> Any:
+    """The node at ``path`` below ``kernel``; a Decision over nodes is followed into the case
+    the path names next (``compute.packed``)."""
+    node, parts = kernel, path.split(".")
+    while parts:
+        part, *parts = parts
+        if parts:
+            try:
+                node = inspection.candidate(node, getattr(type(node), part), parts[0])
+                parts = parts[1:]
+                continue
+            except RequestError:
+                pass
+        node = getattr(node, part)
+    return node
 
 
 def _stated(
@@ -367,8 +412,12 @@ def _committed(
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
     """Placed, with the configuration's Params given and its Decisions and ``choices`` committed."""
+    # A configuration's key is a member (``pe``), or a Decision below a child
+    # (``compute.packed.pe``), which is never a Param.
     given = {
-        key: value for key, value in config.items() if isinstance(getattr(space_type, key), Param)
+        key: value
+        for key, value in config.items()
+        if isinstance(getattr(space_type, key, None), Param)
     }
     known = {**facts, **given}
     point = _design(space_type, _tensors(space_type, inputs, outputs, known), known, fed)
@@ -404,7 +453,7 @@ def place(
     if not sample.adapter:
         return plain
     name = next(iter(inputs))
-    tensor, port = inputs[name], _ports(space_type)[name]
+    tensor = inputs[name]
     lanes = _value(
         getattr(plain, name).query(Channel.endpoints), space_type, sample
     ).sink.form.lanes
@@ -424,7 +473,7 @@ def place(
             return point
     raise AssertionError(
         f"{space_type.__name__} [{sample.label}]: no lane count of {tensor.shape} other than "
-        f"{port}'s {lanes} makes {name} convert widths"
+        f"its port's {lanes} makes {name} convert widths"
     )
 
 
@@ -440,33 +489,49 @@ def _value(found: QueryResult[Any], space_type: type[Kernel], sample: Sample) ->
     return found.value
 
 
+def _kernel_leaves(module: Composed) -> tuple[tuple[str, Leaf], ...]:
+    """The kernel's leaves in the root's module: the kernel itself (``kernel``), or the
+    children of a kernel with children (``kernel.compute.packed``)."""
+    return tuple(
+        (label, leaf)
+        for label, leaf in module.fragment.instances
+        if label == KERNEL or label.startswith(f"{KERNEL}.")
+    )
+
+
 def _check_rtl(
-    space_type: type[Kernel], sample: Sample, leaf: Leaf, directory: Path
-) -> set[str] | None:
-    """Refuse a module its sources contradict; the source's parameter names, unless declined."""
+    space_type: type[Kernel], sample: Sample, label: str, leaf: Leaf, directory: Path
+) -> None:
+    """Refuse a leaf its sources contradict, and a ``parameters()`` that does not name
+    exactly its module's parameters, unless the RTL checker declines."""
+    where = f"{_where(space_type, sample)} {label}"
     top, sources, _ = materialize(leaf, directory)
     abi = leaf.abi
     extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
-        message = f"{_where(space_type, sample)}: the RTL checker declined {top}: {extracted}"
+        message = f"{where}: the RTL checker declined {top}: {extracted}"
         warnings.warn(message, RtlDeclined, stacklevel=3)
-        return None
+        return
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
     issues = check_against_rtl(abi.pins, extracted.ports)
-    assert not issues, f"{_where(space_type, sample)}: {top} refuses its ABI: " + "; ".join(issues)
+    assert not issues, f"{where}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
-    return {name for name, _ in extracted.parameters}
+    names = {name for name, _ in extracted.parameters}
+    declared = set(dict(leaf.parameters))
+    assert declared == names, (
+        f"{where}: parameters() names {sorted(declared - names)} the module does not "
+        f"declare, and omits {sorted(names - declared)}"
+    )
 
 
 def _ends(
     point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
     """The contract the kernel presents on each channel."""
-    ports = _ports(space_type)
     found: dict[str, StreamContract] = {}
     for name in names:
         ends = _value(getattr(point, name).query(Channel.endpoints), space_type, sample)
-        owner = f"{KERNEL}.{ports[name]}"
+        owner = f"{KERNEL}.{_user(point, name)}"
         if ends.sink_owner == owner:
             found[name] = ends.sink
         else:
@@ -485,21 +550,19 @@ def _check_model(
     sample: Sample,
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
-    leaf: Leaf,
-    names: set[str] | None,
 ) -> None:
     where = _where(space_type, sample)
-    _value(point.query(type(point).module), space_type, sample)
-    kernel, ports = getattr(point, KERNEL), _ports(space_type)
+    kernel = getattr(point, KERNEL)
     fed = next(iter(inputs)) if sample.adapter else None
     for name, end in _ends(point, space_type, sample, [*inputs, *outputs]).items():
-        form, port = end.form, getattr(kernel, ports[name])
-        assert _covers(form), f"{where}: {ports[name]} does not cover its {form.shape} tensor"
+        path = _user(point, name)
+        form, port = end.form, _node(kernel, path)
+        assert _covers(form), f"{where}: {path} does not cover its {form.shape} tensor"
         if port.schedule is not None:
             schedule = port.schedule
             dropped = prod(schedule.steps(index) for index in (*port.reduces, *port.holds))
             assert form.beats == schedule.beat_count // dropped, (
-                f"{where}: {ports[name]} presents {form.beats} beats; its schedule walks "
+                f"{where}: {path} presents {form.beats} beats; its schedule walks "
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
@@ -509,12 +572,6 @@ def _check_model(
             assert boundary.form == presented, (
                 f"{where}: {name}'s boundary presents {boundary.form}"
             )
-    if names is not None:
-        declared = set(dict(leaf.parameters))
-        assert declared == names, (
-            f"{where}: parameters() names {sorted(declared - names)} the module does not "
-            f"declare, and omits {sorted(names - declared)}"
-        )
 
 
 def _check_unplaced_outputs(
@@ -531,17 +588,18 @@ def _check_unplaced_outputs(
     A producer's element reads its kernel's facts, choices and input elements,
     never its own output channel: a compiler infers output types node by node.
     """
-    where, ports = _where(space_type, sample), _ports(space_type)
+    where = _where(space_type, sample)
     probe = getattr(_committed(space_type, sample.factors, inputs, EMPTY, choices, facts), KERNEL)
     placed = _ends(point, space_type, sample, list(outputs))
     for name in outputs:
-        port = getattr(probe, ports[name])
+        path = _user(point, name)
+        port = _node(probe, path)
         stated = port.query(type(port).element)
         assert isinstance(stated, Available), (
-            f"{where}: {ports[name]} states no element with {name} unplaced: {describe((stated,))}"
+            f"{where}: {path} states no element with {name} unplaced: {describe((stated,))}"
         )
         assert stated.value == placed[name].element, (
-            f"{where}: {ports[name]} states {stated.value} unplaced, {placed[name].element} placed"
+            f"{where}: {path} states {stated.value} unplaced, {placed[name].element} placed"
         )
 
 

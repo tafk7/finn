@@ -25,7 +25,8 @@ them out (``finn.kernels.adapters``). A pure lane permutation, padding and
 reset polarity leave the sequence unchanged; they are
 properties of the connection, realized as wires (``lane_permutation``,
 ``marker_pairs``): a producer's padding bits are left unconnected, and a
-consumer's padding is driven with zeros.
+consumer's padding is driven with zeros. A marker closing every beat
+(``LevelEnd.constant``) is one too: tied high where the producer offers none.
 """
 
 from __future__ import annotations
@@ -342,7 +343,7 @@ def compatibility(
 
     offered = source.rules
     for signal, rule in sink.rules.items():
-        if rule not in offered.values():
+        if rule not in offered.values() and not rule.constant:
             refuse(
                 Level.LOGICAL,
                 "channel-marker",
@@ -350,7 +351,11 @@ def compatibility(
             )
 
     if source_is_top:
-        consumed = {marker_bit(pair[0])[0] for pair in marker_pairs(source, sink)}
+        consumed = {
+            marker_bit(offered)[0]
+            for offered, _ in marker_pairs(source, sink)
+            if offered is not None
+        }
         unused = [m.signal for m in source.transport.markers if m.signal not in consumed]
         if unused:
             refuse(
@@ -387,10 +392,13 @@ def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int,
     return tuple(range(sink.lanes))
 
 
-def marker_pairs(source: StreamContract, sink: StreamContract) -> tuple[tuple[str, str], ...]:
-    """(source signal, sink signal) for each required sink marker."""
+def marker_pairs(
+    source: StreamContract, sink: StreamContract
+) -> tuple[tuple[str | None, str], ...]:
+    """(source signal, sink signal) for each required sink marker; a source of None ties
+    a constant marker (one closing every beat) the source does not offer high."""
     offered = source.rules
-    pairs: list[tuple[str, str]] = []
+    pairs: list[tuple[str | None, str]] = []
     used: set[str] = set()
     for signal, rule in sink.rules.items():
         for candidate, candidate_rule in offered.items():
@@ -398,6 +406,9 @@ def marker_pairs(source: StreamContract, sink: StreamContract) -> tuple[tuple[st
                 pairs.append((candidate, signal))
                 used.add(candidate)
                 break
+        else:
+            if rule.constant:
+                pairs.append((None, signal))
     return tuple(pairs)
 
 

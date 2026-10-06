@@ -41,6 +41,7 @@ from finn.kernels.transport import (
     StreamContract,
     StreamMarker,
     compatibility,
+    marker_pairs,
 )
 from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
@@ -223,14 +224,23 @@ def test_repetition_direction_and_marker_rules_are_checked():
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
-        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, form, markers={"s_m": LevelEnd(2)}
+        native("s", 6, Endpoint.INITIATOR, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
     )
     required = StreamContract(
-        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
+        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(2)}
     )
     assert "channel-marker" in mismatch_codes(
         compatibility(produced, required, source_is_top=False, sink_is_top=False)
     )
+    # A marker closing every beat is a constant: met by any producer, from the producer's
+    # own marker where it offers one, otherwise tied high.
+    every = StreamContract(
+        native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers={"s_m": LevelEnd(1)}
+    )
+    unmarked = contract(form, Endpoint.INITIATOR)
+    assert compatibility(unmarked, every, source_is_top=False, sink_is_top=False) == ()
+    assert marker_pairs(unmarked, every) == ((None, "s_m"),)
+    assert marker_pairs(produced, every) == (("s_m", "s_m"),)
 
 
 def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():

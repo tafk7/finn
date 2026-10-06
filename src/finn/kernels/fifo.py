@@ -5,11 +5,12 @@
 
 Words have no numerical datatype. DEPTH is the requested capacity; the native
 implementation may round its storage up and forces a shift FIFO for shallow
-depths. ``auto`` selects by depth and word width: a shift register up to 64
-words narrower than 12 bits, LUTRAM up to 257 words, then block and UltraRAM.
-Reset is synchronous, active-high, and discards pending words. ``ultra``
-requires the ``platform``'s UltraRAM; the FIFO starts empty, so no initial
-contents are asked of it.
+depths. The RTL's ``auto`` selects by depth and word width: a shift register up
+to 64 words narrower than 12 bits, LUTRAM up to 257 words, block RAM up to 2028,
+then UltraRAM. Reset is synchronous, active-high, and discards pending words.
+``ultra`` requires the ``platform``'s UltraRAM; the FIFO starts empty, so no
+initial contents are asked of it. ``auto`` never takes UltraRAM the platform
+lacks: where the RTL's own selection would, the kernel gives it ``block``.
 """
 
 from __future__ import annotations
@@ -44,6 +45,19 @@ class FifoStorage:
     capacity: int
 
 
+def _selected(depth: int, bits: int, style: str) -> str:
+    """The storage the native RTL implements for DEPTH, DATA_WIDTH and RAM_STYLE."""
+    if depth <= 33:
+        return "shift"
+    if style != "auto":
+        return style
+    if depth <= 64 and bits < 12:
+        return "shift"
+    if depth <= 257:
+        return "distributed"
+    return "block" if depth <= 2028 else "ultra"
+
+
 class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = 2
@@ -68,22 +82,20 @@ class FifoKernel(Kernel):
         ),
     )
 
+    @derived
+    def rtl_ram_style(self) -> str:
+        """The RAM_STYLE the RTL is given: ``ram_style``, except an ``auto`` the RTL would
+        resolve to UltraRAM the platform lacks, which is block RAM."""
+        style = self.ram_style
+        if style == "auto" and not self.platform.uram:
+            if _selected(self.depth, self.word_bits, style) == "ultra":
+                return "block"
+        return style
+
     @view(requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:
-        depth, style, bits = self.depth, self.ram_style, self.word_bits
-        effective = (
-            "shift"
-            if depth <= 33
-            else style
-            if style != "auto"
-            else "shift"
-            if depth <= 64 and bits < 12
-            else "distributed"
-            if depth <= 257
-            else "block"
-            if depth <= 2028
-            else "ultra"
-        )
+        depth = self.depth
+        effective = _selected(depth, self.word_bits, self.rtl_ram_style)
         if effective == "shift":
             capacity = max(5, depth)
         elif effective == "distributed":
@@ -123,7 +135,7 @@ class FifoKernel(Kernel):
         return {
             "DATA_WIDTH": self.word_bits,
             "DEPTH": self.depth,
-            "RAM_STYLE": f'"{self.ram_style}"',
+            "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }
 
     def sources(self) -> tuple[CopiedSource, ...]:

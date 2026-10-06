@@ -15,10 +15,11 @@ The one step that touches the filesystem, in two parts:
   value: its ports from its pins; one net per instance input and per output
   something reads; per link, the data lanes (lane zero least significant), the
   sink's padding driven zero (a root output carries the source's own padding),
-  valid forward, ready back and each marker bit; each leaf's held inputs tied
-  and its other outputs left open; each instance clock and reset pin driven by
-  its role (a free clock from the root's, a clock at twice it from the root's
-  doubled clock, a reset from the root's, inverted when the polarities differ);
+  valid forward, ready back and each marker bit (a constant one tied high);
+  each leaf's held inputs tied and its other outputs left open; each instance
+  clock and reset pin driven by its role (a free clock from the root's, a clock
+  at twice it from the root's doubled clock, a reset from the root's, inverted
+  when the polarities differ);
   each presented bus wired member by member to ``<port>_<MEMBER>``.
 
 Nothing here decides or checks what a configuration may be: a module arrives
@@ -208,7 +209,9 @@ class _Netlist:
         for produced, produced_bit, consumed, consumed_bit in link.markers:
             self.assign(
                 self._marker(sink, consumed, consumed_bit),
-                self._marker(source, produced, produced_bit),
+                _constant(1, 1)
+                if produced is None
+                else self._marker(source, produced, produced_bit),
             )
 
     def _marker(self, end: LinkEnd, pin: str, bit: int | None) -> str:

@@ -8,8 +8,9 @@ per output fold, framed by reduction. The channel between them plans a reorder
 (the replay) and the frame marker, and its ``input_gen`` adapter realizes both:
 per frame of one row's folds, the row once per output fold, with ``olst``
 closing each fold group. A per-channel row passes once, so its plan is the
-marker alone. ``input_gen`` is the only replay hardware; FinnLib's
-``replay_buffer`` is not wrapped.
+marker alone. A frame of one beat (SIMD = K) closes on every beat: that marker
+is a constant, tied high, and no step. ``input_gen`` is the only replay
+hardware; FinnLib's ``replay_buffer`` is not wrapped.
 """
 
 import pytest
@@ -21,12 +22,14 @@ from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.build import emit_module
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    finnlib_root,
     matmul_assembly,
     matmul_point,
     placed,
@@ -105,11 +108,39 @@ def test_the_input_gen_replays_each_row_and_closes_each_fold_group():
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (6, 12, 6)
 
 
-def test_one_output_fold_and_one_beat_frames_close_every_beat():
-    # PE = N: no replay; SIMD = K: a frame is one beat, closed by a level of one.
+def test_one_output_fold_and_one_beat_frames_tie_the_frame_marker_high(tmp_path):
+    # PE = N: no replay; SIMD = K: a frame is one beat, closed on every beat. The marker
+    # is a constant: no adapter, the TLAST tied high.
     built = matmul_assembly(**FACTS, pe=4, simd=4)
-    parameters = dict(placed(built.module, "x.adapter.input_gen.input_gen").parameters)
-    assert (parameters["FM_SIZE"], parameters["DIMS"], parameters["COEFS"]) == (1, "'{1}", "'{1}")
+    assert [label for label, _ in built.module.fragment.instances] == ["matmul.compute.packed"]
+    (into,) = [
+        link
+        for link in built.module.fragment.links
+        if link.sink.instance == "matmul.compute.packed"
+        and link.sink.data.startswith("s_axis_input")
+    ]
+    assert (into.source.instance, into.markers) == (
+        None,
+        ((None, None, "s_axis_input_tlast", None),),
+    )
+    emitted = emit_module(built.module, tmp_path, roots={"finnlib": finnlib_root()})
+    netlist = (emitted.directory / f"{emitted.entry_point}.sv").read_text()
+    assert "assign n__u_matmul_compute_packed__s_axis_input_tlast = 1'h1;" in netlist
+
+
+def test_a_replay_with_one_beat_frames_ties_the_frame_marker_high():
+    # SIMD = K with two output folds: the adapter replays each row, and the frame marker,
+    # closing every beat, is tied high rather than an input_gen loop of one.
+    built = matmul_assembly(**FACTS, pe=2, simd=4)
+    replay = dict(placed(built.module, "x.adapter.input_gen.input_gen").parameters)
+    assert (replay["FM_SIZE"], replay["DIMS"], replay["COEFS"]) == (1, "'{2}", "'{0}")
+    (into,) = [
+        link
+        for link in built.module.fragment.links
+        if link.sink.instance == "matmul.compute.packed"
+        and link.sink.data.startswith("s_axis_input")
+    ]
+    assert into.markers == ((None, None, "s_axis_input_tlast", None),)
 
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():

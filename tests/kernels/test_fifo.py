@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TypeVar
 
 import pytest
@@ -12,7 +13,7 @@ import pytest
 from finn.core.space import Available, QueryResult, Rejected, Unresolved, design_space
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
-from finn.kernels.fifo import FifoKernel
+from finn.kernels.fifo import FifoKernel, FifoStorage
 from kernels.helpers import FULL_DSP48E2
 
 T = TypeVar("T")
@@ -75,3 +76,23 @@ def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(
     with pytest.raises(ValueUnavailableError) as error:
         _ = chosen.module
     assert isinstance(error.value.result, Rejected)
+
+
+@pytest.mark.parametrize(
+    ("uram", "depth", "storage", "rtl_style"),
+    (
+        (True, 4096, FifoStorage("ultra", 4113), '"auto"'),
+        (False, 4096, FifoStorage("block", 4098), '"block"'),
+        # Within block RAM's range the RTL's own auto selection is block already.
+        (False, 2028, FifoStorage("block", 2050), '"auto"'),
+    ),
+)
+def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
+    uram: bool, depth: int, storage: FifoStorage, rtl_style: str
+) -> None:
+    platform = replace(FULL_DSP48E2, uram=uram)
+    point = design_space(FifoKernel(word_bits=8, depth=depth, platform=platform)).with_choices(
+        ram_style="auto"
+    )
+    assert point.storage == storage
+    assert dict(point.module.parameters)["RAM_STYLE"] == rtl_style
