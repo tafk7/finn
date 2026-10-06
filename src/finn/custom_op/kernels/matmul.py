@@ -3,17 +3,17 @@
 
 """The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
 
-H-006's reading rule decides the node root from the graph: weights that are an
-initializer are the node's own, the weight channel's known value, which its
-``source`` stores (``StoredMatMulNode``), keyed by their value summary's
-digest; weights on any other tensor arrive on a channel like any edge
-(``StreamedMatMulNode``). A's leading axes are rows; B is the (k, n) matrix
-ONNX stores. The output is A's leading axes and n.
+H-006's reading rule decides from the graph: weights that are an initializer
+are the node's own (``Facts.owned``), the weight channel's known value, which
+its ``source`` stores, keyed by their value summary's digest; weights on any
+other tensor arrive on a channel like any edge. One node root serves both: the
+weights are an optional formal, and the weight channel's value is MatMul's view
+of it, present only when they are. A's leading axes are rows; B is the (k, n)
+matrix ONNX stores. The output is A's leading axes and n.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -28,10 +28,6 @@ from finn.custom_op.kernels.base import (
     shape,
 )
 from finn.custom_op.kernels.cache import Facts
-from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel
 
 
@@ -40,9 +36,12 @@ class MatMul(KernelOp):
 
     op_type = "MatMul"
     op_version = MatMulKernel.version
-    roots = (StoredMatMulNode, StreamedMatMulNode)
+    kernel = MatMulKernel
     member = "matmul"
+    formals = ("m", "n", "k", "activation_dtype", "weights_dtype", "weights", "platform")
     ports = ("x", "w")
+    references = {"x": "x_channel", "w": "w_channel", "y": "y_channel"}
+    parameters = {"w": ("weight_tensor", "weight_values")}
 
     def facts(self) -> Facts:
         model, label = self.model(), self.label
@@ -63,7 +62,6 @@ class MatMul(KernelOp):
             activation_dtype=activation,
             weights_dtype=weights_dtype,
             platform=platform,
-            x_tensor=Tensor((m, k), ScalarEncoding(activation)),
         )
         key = (
             self.op_type,
@@ -75,8 +73,9 @@ class MatMul(KernelOp):
             weights_dtype.name,
             platform,
         )
+        root = self.root()
         if model.get_initializer(b) is None:
-            return Facts(StreamedMatMulNode, (*key, None), lambda: common)
+            return Facts(root, MatMulKernel, (*key, None), lambda: common, self.edges)
         digest = admitted(model, b, weights_dtype, label)
 
         def formals() -> dict[str, object]:
@@ -84,37 +83,12 @@ class MatMul(KernelOp):
             weights = tuple(tuple(int(value) for value in row) for row in values)
             return {**common, "weights": weights}
 
-        return Facts(StoredMatMulNode, (*key, digest), formals, ("w",))
+        return Facts(root, MatMulKernel, (*key, digest), formals, self.edges, ("w",))
 
     def output_tensors(self) -> Shapes:
-        result = self.view("y_tensor")
+        result = self.view("result_tensor")
         leading = shape(self.model(), self.onnx_node.input[0], self.label)[:-1]
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
-
-    def owned_channels(self) -> dict[str, Channel]:
-        if self.facts().root is not StoredMatMulNode:
-            return {}
-        base: Any = self.base()
-        return {
-            self.onnx_node.input[1]: Channel(
-                tensor=self.view("w_tensor"),
-                contents=base.matmul.weight_values,
-                platform=self.target().platform,
-            )
-        }
-
-    def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
-        facts = self.facts()
-        formals: dict[str, Any] = facts.formals()
-        del formals["x_tensor"]
-        a, b = self.onnx_node.input
-        kernel = MatMulKernel(
-            **formals,
-            x_channel=channels[a],
-            w_channel=channels[b],
-            y_channel=channels[self.onnx_node.output[0]],
-        )
-        return kernel, {"x": a, "w": b}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         a, b = self.onnx_node.input

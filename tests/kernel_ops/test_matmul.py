@@ -24,12 +24,12 @@ from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_i
 import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOp, KernelOpError
 from finn.custom_op.kernels.matmul import MatMul
-from finn.custom_op.kernels.roots import StoredMatMulNode, StreamedMatMulNode
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.general import ApplyConfig
+from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import WEIGHTS, X, matmul_model
 
 FOLDING = {
@@ -57,16 +57,18 @@ def attributes(model: ModelWrapper) -> list[str]:
 def test_facts_come_from_the_model() -> None:
     model = matmul_model()
     facts = op(model).facts()
-    assert facts.root is StoredMatMulNode and facts.owned == ("w",)
+    # One node root, stored or streamed: the node owns the weights when they are an
+    # initializer.
+    assert facts.root is MatMul.root() and facts.owned == ("w",)
     formals = facts.formals()
     assert (formals["m"], formals["k"], formals["n"]) == (3, 4, 4)
     assert formals["weights"] == tuple(tuple(int(v) for v in row) for row in WEIGHTS)
     # The output keeps the input's leading axes.
     assert op(model).output_tensors() == {
-        "y": ((1, 3, 4), op(model).view("y_tensor").element.dtype)
+        "y": ((1, 3, 4), op(model).view("result_tensor").element.dtype)
     }
     streamed = matmul_model(stored=False)
-    assert op(streamed).facts().root is StreamedMatMulNode
+    assert op(streamed).facts().root is MatMul.root()
     assert op(streamed).facts().owned == ()
 
 
@@ -77,16 +79,16 @@ def refusal(model: ModelWrapper) -> str:
 
 
 def test_each_missing_or_refused_fact_is_named() -> None:
-    assert "x has no datatype annotation" in refusal(matmul_model(annotate=("w",)))
+    assert "x has no datatype annotation" in refusal(matmul_model(annotate=("w",), infer=False))
     unknown = matmul_model()
     unknown.graph.input[0].type.tensor_type.ClearField("shape")
     assert "x has no shape yet (run InferKernelTensors)" in refusal(unknown)
-    assert "states no target" in refusal(matmul_model(target=False))
-    assert "not integers" in refusal(matmul_model(weights=WEIGHTS + 0.5))
+    assert "states no target" in refusal(matmul_model(target=False, infer=False))
+    assert "not integers" in refusal(matmul_model(weights=WEIGHTS + 0.5, infer=False))
     assert "annotated INT3 and holds values over [-3, 9]" in refusal(
-        matmul_model(weights=np.where(WEIGHTS == 3, 9, WEIGHTS))
+        matmul_model(weights=np.where(WEIGHTS == 3, 9, WEIGHTS), infer=False)
     )
-    assert "x has 5 columns and w 4 rows" in refusal(matmul_model(x_shape=[1, 3, 5]))
+    assert "x has 5 columns and w 4 rows" in refusal(matmul_model(x_shape=[1, 3, 5], infer=False))
 
 
 # -- the schema -------------------------------------------------------------------------
@@ -186,6 +188,11 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     assert op(model).verify_node() == []
     # The weights' columns change from 4 to 6: pe = 4 no longer divides them.
     model.set_initializer("w", np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32))
+    # Until inference states y again, the node root carries the graph's stale y (D6),
+    # which the kernel's extents refuse.
+    stale = op(model).verify_node()
+    assert len(stale) == 1 and "kernel-extents: n is 6 (w axis 1) and 4 (y axis 1)" in stale[0]
+    model = model.transform(InferKernelTensors())
     problems = op(model).verify_node()
     assert len(problems) == 1 and "compute.packed.pe: " in problems[0]
     with pytest.raises(KernelOpError) as error:

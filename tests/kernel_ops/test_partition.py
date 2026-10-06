@@ -27,7 +27,6 @@ from qonnx.transformation.infer_shapes import InferShapes
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
-from finn.custom_op.kernels.roots import StreamedMatMulNode
 from finn.kernels.configure import commit, undecided
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from kernel_ops.models import INT3, TARGET, chain_source, lift, matmul_model
@@ -130,7 +129,7 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     lift(model, "w")
     model.set_tensor_datatype("w", INT3)
     streamed = model.get_customop_wrapper(model.graph.node[0])
-    assert streamed.facts().root is StreamedMatMulNode
+    assert streamed.facts().owned == ()
     # The node replays its own choices only: the weight edge's are the partition's.
     assert streamed.point().matmul.compute.pe == 2 and streamed.verify_node() == []
     model = model.transform(InferKernelTensors())

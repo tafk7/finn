@@ -1,12 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Node roots and the bind cache.
+"""Node roots, generated from an op's placement, and the bind cache.
 
-A KernelOp's Space is its kernel on the node's boundary streams: a bare kernel
-cannot commit folding (its cores bind extents from their ports). The node
-root's views answer from facts alone, the graph's pins are declarations, and
-points are cached by the facts they were bound from.
+A KernelOp's Space is its kernel on the node's boundary channels: a bare kernel
+cannot commit folding (its cores bind extents from their ports). One node root
+per op, generated from the placement the op states: its formals are the
+kernel's, its edges carry the graph's tensors, and a parameter channel carries
+the kernel's views, its value only when the kernel holds one. The kernel's views
+answer from facts alone, and points are cached by the facts they were bound from.
 """
 
 from __future__ import annotations
@@ -17,11 +19,13 @@ import pytest
 
 from finn.core.space import Rejected, design_space, inspection
 from finn.custom_op.kernels.cache import BindCache, Facts
-from finn.custom_op.kernels.roots import StoredMatMulNode, ThresholdingNode
+from finn.custom_op.kernels.matmul import MatMul
+from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit, describe
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernel_ops.models import TARGET
 
 INT3 = dtype("INT3")
@@ -36,10 +40,23 @@ FACTS: dict[str, Any] = dict(
 """A node root's facts: the platform (its DSP block the compute cores') and the clock."""
 WEIGHTS = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
 X = Tensor((3, 4), ScalarEncoding(INT3))
+Y = Tensor((3, 4), ScalarEncoding(dtype("INT8")))
 
 
-def stored(x: Tensor = X) -> StoredMatMulNode:
-    return design_space(StoredMatMulNode(**FACTS, weights=WEIGHTS, x_tensor=x))
+def stored(x: Tensor = X) -> Any:
+    return design_space(MatMul.root()(**FACTS, weights=WEIGHTS, x_tensor=x, y_tensor=Y))
+
+
+def test_one_root_serves_stored_and_streamed_weights() -> None:
+    """The weights are an optional formal: the weight channel has a value, and so a
+    source, only when they are supplied; the decision keys are the same."""
+    root = MatMul.root()
+    assert root is MatMul.root()  # generated once
+    streamed = design_space(root(**FACTS, x_tensor=X, y_tensor=Y))
+    assert stored().w.valued and not streamed.w.valued
+    keys = {item.key for item in inspection.decisions(root)}
+    assert {"w.source", "w.source.memstream.ram_style", "w.transport"} <= keys
+    assert commit(streamed, {"matmul.compute": "packed"}).matmul.compute is not None
 
 
 def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
@@ -57,23 +74,23 @@ def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
 
 
 def test_the_views_answer_from_facts() -> None:
-    point = stored()
-    assert point.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8")))
-    # The weights' view states their range, read from the values the node owns.
-    assert point.w_tensor.element.value_range == (-1, 1)
+    # Inference reads the kernel alone: its result from the facts.
+    assert design_space(MatMulKernel(**FACTS, weights=WEIGHTS)).result_tensor == Y
+    # The weight channel carries the kernel's view: their range, read from the values.
+    assert stored().w.tensor.element.value_range == (-1, 1)
     table = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(4)),)
-    activate = design_space(
-        ThresholdingNode(
-            input_dtype=dtype("INT8"),
-            threshold_dtype=dtype("INT8"),
-            thresholds=table,
-            bias=0,
-            platform=TARGET.platform,
-            x_tensor=Tensor((3, 4), ScalarEncoding(dtype("INT8"))),
-        )
+    facts: dict[str, Any] = dict(
+        input_dtype=dtype("INT8"),
+        threshold_dtype=dtype("INT8"),
+        thresholds=table,
+        bias=0,
+        platform=TARGET.platform,
     )
-    assert activate.y_tensor.element.dtype.name == "UINT2"
-    assert activate.y_tensor.element.value_range == (0, 3)
+    assert design_space(ThresholdingAxiKernel(**facts)).result_dtype.name == "UINT2"
+    edge = Tensor((3, 4), ScalarEncoding(dtype("INT8")))
+    result = Tensor((3, 4), ScalarEncoding(dtype("UINT2")))
+    activate = design_space(Thresholding.root()(**facts, x_tensor=edge, y_tensor=result))
+    assert activate.y.tensor.element.value_range == (0, 3)
     keys = {item.key for item in inspection.decisions(activate)}
     # The threshold memories are left to choose (block_stages only once distributed).
     assert {"activate.ram_style", "activate.ultra_stages"} <= keys
@@ -88,11 +105,14 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
 
 def facts(digest: str, *, size: int = 4) -> Facts:
     weights = tuple(tuple((r + c) % 3 - 1 for c in range(size)) for r in range(size))
-    formals = dict(FACTS, k=size, n=size, x_tensor=Tensor((3, size), ScalarEncoding(INT3)))
+    formals = dict(FACTS, k=size, n=size)
+    edges = {"x": Tensor((3, size), ScalarEncoding(INT3)), "y": Y}
     return Facts(
-        StoredMatMulNode,
+        MatMul.root(),
+        MatMulKernel,
         ("MatMul", 1, size, digest),
         lambda: {**formals, "weights": weights},
+        lambda: edges,
         ("w",),
     )
 
@@ -106,7 +126,7 @@ def test_the_cache_keys_points_by_facts_and_choices() -> None:
     assert cache.point(facts("b")) is not first
     assert cache.misses == 2
 
-    def build(base: StoredMatMulNode) -> StoredMatMulNode:
+    def build(base: Any) -> Any:
         return commit(base, {"matmul.compute": "packed"})
 
     chosen = {"matmul.compute": "packed"}
@@ -128,7 +148,7 @@ def test_the_cache_keys_points_by_facts_and_choices() -> None:
 def test_a_refused_replay_caches_nothing() -> None:
     cache = BindCache()
 
-    def refuse(base: StoredMatMulNode) -> StoredMatMulNode:
+    def refuse(base: Any) -> Any:
         return commit(base, {"matmul.compute": "packed", "matmul.compute.packed.pe": 3})
 
     with pytest.raises(ValueError):
