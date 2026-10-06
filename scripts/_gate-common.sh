@@ -32,35 +32,46 @@ fi
 GATE_ARGS=()
 [ "$GATE_MODE" = default ] || GATE_ARGS=(--fast)
 
-FINN_ROOT=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
+ROOT=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
 PYTHON_BIN=${PYTHON_BIN:-python3}
 RUFF_BIN=${RUFF_BIN:-ruff}
 MYPY_BIN=${MYPY_BIN:-mypy}
-export FINN_ROOT PYTHON_BIN RUFF_BIN MYPY_BIN
+export PYTHON_BIN RUFF_BIN MYPY_BIN
 export PYTHONDONTWRITEBYTECODE=1
-export PYTHONPATH="$FINN_ROOT/src:$FINN_ROOT/tests"
-cd "$FINN_ROOT"
+export PYTHONPATH="$ROOT/src:$ROOT/tests"
+# A test finds the checkout from its own path, and FINN's sources read FINN_ROOT
+# only at the legacy boundary (finn.util._legacy_build_env), which no gated test
+# relies on. Unset, it cannot make a test pass in one caller's shell and fail in
+# another's.
+unset FINN_ROOT
+cd "$ROOT"
 
 printf '== %s\n' "$(basename "$0")"
-printf 'finn     %s  %s\n' "$(git rev-parse HEAD)" "$FINN_ROOT"
+printf 'finn     %s  %s\n' "$(git rev-parse HEAD)" "$ROOT"
 printf 'mode     %s\n' "$GATE_MODE"
 "$PYTHON_BIN" --version
 "$PYTHON_BIN" -m pytest --version
 "$RUFF_BIN" --version
 "$MYPY_BIN" --version
 
-# gate_pytest <dir> [marker...]: the tests under <dir>, its conftest the
-# outermost, less those carrying any of the markers, and in fast mode less the
-# slow ones.
+# gate_pytest [--conftest-root <root>] <dir> [marker...]: the tests under <dir>,
+# the conftest in <root> (default <dir>) the outermost, less those carrying any
+# of the markers, and in fast mode less the slow ones.
 gate_pytest() {
-    local dir=$1 marker expression= selection=(); shift
+    local root= dir marker expression= selection=()
+    if [ "$1" = --conftest-root ]; then
+        root=$2
+        shift 2
+    fi
+    dir=$1
+    shift
     local deselected=("$@")
     [ "$GATE_MODE" = default ] || deselected+=(slow)
     for marker in "${deselected[@]}"; do
         expression+="${expression:+ and }not $marker"
     done
     [ -z "$expression" ] || selection=(-m "$expression")
-    "$PYTHON_BIN" -m pytest -q --confcutdir="$dir" "$dir" "${selection[@]}"
+    "$PYTHON_BIN" -m pytest -q --confcutdir="${root:-$dir}" "$dir" "${selection[@]}"
 }
 
 # gate_ruff <path...>: formatting, and the lint selection every gate uses

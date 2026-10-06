@@ -541,6 +541,7 @@ def test_stitched_vivado_operation_uses_selected_route(tmp_path, monkeypatch):
     assert "sim_ctrl.v" in tcl
 
 
+@pytest.mark.slow
 def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
     import onnx  # noqa: PLC0415
     import onnx.helper as oh  # noqa: PLC0415

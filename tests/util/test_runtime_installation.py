@@ -2,6 +2,8 @@
 
 No proprietary tools, network downloads, root variables or import hooks are used.
 """
+import pytest
+
 import json
 import os
 import shutil
@@ -87,6 +89,7 @@ def install(python, cwd, *args):
     )
 
 
+@pytest.mark.slow
 def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tmp_path):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
@@ -183,6 +186,7 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
     assert listing.splitlines()[1].startswith("hlslib ")
 
 
+@pytest.mark.slow
 def test_two_editable_environments_observe_only_selected_code_and_resources(tmp_path):
     environments = []
     for number in (1, 2):
@@ -247,8 +251,6 @@ def test_legacy_interpretation_allowlist():
 
 
 def test_editable_finn_plus_real_qonnx(tmp_path):
-    import pytest  # noqa: PLC0415
-
     selected = os.environ.get("FINN_TEST_QONNX_CHECKOUT")
     if not selected:
         pytest.skip("set FINN_TEST_QONNX_CHECKOUT to a prepared versioned QONNX checkout")

@@ -41,6 +41,7 @@ import warnings
 from brevitas.export import export_qonnx
 from dataset_loading import cifar, mnist
 from finn_ci.config import BOARDS, TEST_BOARDS
+from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -104,7 +105,6 @@ from finn.transformation.streamline.reorder import (
 )
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
 from finn.util.basic import (
-    get_finn_root,
     make_build_dir,
     pynq_part_map,
     vitis_default_platform,
@@ -292,14 +292,18 @@ def get_golden_io_pair(topology, wbits, abits, preproc=ToTensor(), return_topk=N
     return (input_tensor_npy, output_tensor_npy)
 
 
+# Downloaded datasets are kept in the checkout's dataset/ (gitignored).
+DATASET_DIR = Path(__file__).resolve().parents[2] / "dataset"
+
+
 def measure_top1_accuracy(model_chkpt, dataset, parent_chkpt=None):
     if dataset == "cifar10":
         trainx, trainy, testx, testy, valx, valy = cifar.load_cifar_data(
-            get_finn_root() + "/dataset", download=True, one_hot=False
+            str(DATASET_DIR), download=True, one_hot=False
         )
     elif dataset == "mnist":
         trainx, trainy, testx, testy, valx, valy = mnist.load_mnist_data(
-            get_finn_root() + "/dataset", download=True, one_hot=False
+            str(DATASET_DIR), download=True, one_hot=False
         )
     else:
         raise Exception("Unrecognized dataset")
