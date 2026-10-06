@@ -90,7 +90,9 @@ class IntegerTensorValue:
     """An integer tensor as a value: its ``shape``, the least and greatest of its
     integers (``range``) and a ``digest`` of them, stated when it is made; the integers
     themselves, row-major, loaded when first read (``integers``). Two are equal when
-    their digests are.
+    their digests are: a stored operand's identity is its shape and integers, however
+    they are stored (a float32 and an int8 initializer of the same integers are one
+    value).
 
     Its producer states it. Nested int tuples make one by a single walk (``of``); a
     producer that holds the integers in another form states the facts and how to load
