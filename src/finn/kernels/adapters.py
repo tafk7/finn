@@ -5,23 +5,21 @@
 
 A channel compares what its source presents with what its sink requires and
 derives a plan (``finn.dataflow.plan``): reorders, width conversions and marker
-synthesis. Its ``adapter`` Decision chooses the hardware that carries the plan
-out. Each candidate is a fixed chain of FinnLib modules and refuses every plan
-that chain does not realize, so at most one candidate survives a plan:
+synthesis, split at the channel's transport. Each side of the transport has its
+adapter Decision, which chooses the hardware that carries out that side of the
+plan. Each candidate is a fixed chain of FinnLib modules and refuses every plan
+that chain does not realize, so at most one candidate survives a side:
 
-- ``input_gen``: a reorder, replay included, and marker synthesis
-  (``InputGenAdapter``);
-- ``vpc``: a width conversion (``WidthAdapter``);
-- ``vpc_input_gen`` and ``input_gen_vpc``: a width conversion before or after a
-  reorder or marker synthesis;
-- ``input_gen_vpc_input_gen``: a reorder, new lanes, then markers (a ``vpc``
-  carries none);
-- ``vpc_input_gen_vpc`` and ``vpc_input_gen_vpc_input_gen``: a lane regroup
-  through the common lane count, then markers.
+- the output side, before the transport (``OUTPUT_ADAPTERS``): ``vpc``, a width
+  conversion;
+- the input side, after it (``ADAPTERS``): ``input_gen``, a reorder, replay
+  included, and marker synthesis; ``input_gen_vpc``, a reorder, then new lanes;
+  ``input_gen_vpc_input_gen``, a reorder, new lanes, then markers (a ``vpc``
+  carries none).
 
-These are every shape a plan can take (``CHAINS``), so every realizable plan
-has exactly one candidate; each is keyed by its modules, joined
-(``vpc_input_gen``).
+These are every shape a side of a plan can take (``OUTPUT_CHAINS``,
+``INPUT_CHAINS``), so every realizable plan has exactly one candidate a side;
+each is keyed by its modules, joined (``input_gen_vpc``).
 
 ``realize`` maps a plan onto modules. A reorder becomes an ``input_gen`` whose
 frame, ``DIMS`` and ``COEFS`` are ``classify``'s; the marker step that follows
@@ -33,14 +31,16 @@ width conversion is a ``vpc`` over vectors of the two lane counts' least common
 multiple, which the channel must hold whole. Each candidate places its modules
 as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
 and each becomes a ``Stage``: the child's module and the contracts of its two
-ports, which the channel checks like any other end.
+ports, which the channel checks like any other end. Its cost reads the
+realization alone, never a child's choices: ``beats``, the most beats any of its
+ports carries, and ``held_bits``, the frames its ``input_gen`` stages hold.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
 directly, but it is not a candidate: a channel realizes every lane regroup
-through the common lane count (``vpc_input_gen_vpc``), and ``TransposeKernel``
-(``finn.kernels.transpose``) is ``inner_shuffle`` for a parent to place
-explicitly.
+through the common lane count (``vpc`` before the transport, ``input_gen_vpc``
+after it), and ``TransposeKernel`` (``finn.kernels.transpose``) is
+``inner_shuffle`` for a parent to place explicitly.
 """
 
 from __future__ import annotations
@@ -287,6 +287,26 @@ class StreamAdapter(Space):
         assert isinstance(module, Convert)
         return VpcFacts(self.tensor.element.bits, module.lanes_in, module.lanes_out)
 
+    # Cost, from the realization alone: a stage's memory style changes neither.
+    @view
+    def beats(self) -> int:
+        """The most beats any of its stages' ports carries a frame."""
+        return max(
+            beats
+            for stage in self.realization
+            for beats in (stage.source.form.beats, stage.sink.form.beats)
+        )
+
+    @view
+    def held_bits(self) -> int:
+        """The bits its ``input_gen`` stages hold: each its frame of input words."""
+        bits = self.tensor.element.bits
+        return sum(
+            stage.module.frame * stage.source.form.lanes * bits
+            for stage in self.realization
+            if isinstance(stage.module, Generate)
+        )
+
     # The facts of every stage a chain can name; each chain reads its own.
     @derived
     def input_gen_facts(self) -> InputGenFacts | Rejected:
@@ -351,16 +371,15 @@ def _vpc(facts: VpcFacts) -> VpcKernel:
     )
 
 
-CHAINS: tuple[tuple[str, ...], ...] = (
+OUTPUT_CHAINS: tuple[tuple[str, ...], ...] = (("vpc",),)
+"""Every chain the output side of a plan can take: its width conversion."""
+
+INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
     ("input_gen",),
-    ("vpc",),
-    ("vpc", "input_gen"),
     ("input_gen", "vpc"),
     ("input_gen", "vpc", "input_gen"),
-    ("vpc", "input_gen", "vpc"),
-    ("vpc", "input_gen", "vpc", "input_gen"),
 )
-"""Every chain a plan can take, each a candidate of a channel's ``adapter`` Decision."""
+"""Every chain the input side of a plan can take: a reorder or markers first."""
 
 
 def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
@@ -373,13 +392,22 @@ def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
     return composite("_".join(modules), members, base=StreamAdapter)
 
 
-ADAPTERS: dict[str, type[StreamAdapter]] = {"_".join(chain): _chain(chain) for chain in CHAINS}
-"""The candidates by key: each chain's modules, joined."""
+OUTPUT_ADAPTERS: dict[str, type[StreamAdapter]] = {
+    "_".join(chain): _chain(chain) for chain in OUTPUT_CHAINS
+}
+"""The candidates of a channel's ``output_adapter`` Decision, by key."""
+
+ADAPTERS: dict[str, type[StreamAdapter]] = {
+    "_".join(chain): _chain(chain) for chain in INPUT_CHAINS
+}
+"""The candidates of a channel's ``adapter`` Decision (the input side), by key."""
 
 
 __all__ = [
     "ADAPTERS",
-    "CHAINS",
+    "INPUT_CHAINS",
+    "OUTPUT_ADAPTERS",
+    "OUTPUT_CHAINS",
     "Convert",
     "Generate",
     "InputGenFacts",

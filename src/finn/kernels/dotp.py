@@ -132,6 +132,11 @@ class DotpAxiKernel(Kernel):
         return self.bound_schedule(order=(m, n, k), factors={n: self.pe, k: self.simd})
 
     @derived
+    def frame_cycles(self) -> int:
+        """Its schedule's beats, one a cycle at best."""
+        return self.schedule.beat_count
+
+    @derived
     def x_index(self) -> tuple[Index, ...]:
         return self.form.x
 

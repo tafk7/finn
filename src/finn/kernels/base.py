@@ -39,6 +39,15 @@ outputs) and each presented bus.
 Every kernel exports its netlist (``NETLIST``) and its ``module`` (``MODULE``):
 the ``Leaf``, or the ``Composed`` module, accepted under ``admission``,
 ``pins_accounted`` and ``clocked``.
+
+Every kernel also exports what a design space exploration ranks by: cost, not
+validity, so neither export waits on an admission, and each reads only the choices
+it depends on. ``cycles`` (``CYCLES``) is the clock cycles a frame takes: a leaf
+with a schedule overrides ``frame_cycles`` with the schedule's beat count (one
+beat a cycle at best); a kernel with children takes its slowest member's, kernels
+and channels alike, so a root's cycles are its bottleneck. ``buffering``
+(``BUFFERING``) is the bits its channels' stages hold, summed over its members (a
+leaf holds none).
 """
 
 from __future__ import annotations
@@ -136,6 +145,14 @@ the extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
 HELD_SEMANTICS = default_semantics(Held)
 HELD = ViewKey("held", HELD_SEMANTICS)
 """What an idle port holds, collected by its kernel's leaf."""
+
+CYCLES = ViewKey("cycles", default_semantics(int))
+"""The clock cycles a frame takes through a kernel or a channel: a schedule's beat count;
+a kernel with children's is its slowest member's."""
+
+BUFFERING = ViewKey("buffering", default_semantics(int))
+"""The bits a channel's stages hold between its ends (an adapter's frame, a FIFO's depth);
+a kernel with children's is the sum over its members."""
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
@@ -445,8 +462,34 @@ class Kernel(Space):
         fragment, requires=(admission, pins_accounted, clocked, netlists, presented, boundary_buses)
     )
 
+    # -- what a design space exploration ranks by ------------------------------------------
+
+    member_cycles = Members(CYCLES)
+    member_buffering = Members(BUFFERING)
+
+    @derived
+    def frame_cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes: a leaf with a schedule overrides it with the
+        schedule's beat count; a kernel with children's is its slowest member's."""
+        space_type = type(self)
+        if space_type.rtl_module:
+            return reject("kernel-cycles", f"{space_type.__qualname__} states no schedule")
+        found = [item.value for item in self.member_cycles]
+        if not found:
+            return reject("kernel-cycles", f"no member of {space_type.__qualname__} states cycles")
+        return max(found)
+
+    @derived
+    def held_bits(self) -> int:
+        """The bits its channels' stages hold; a leaf holds none of them."""
+        return sum(item.value for item in self.member_buffering)
+
+    # Cost, not validity: a configuration's admission is the engine's, read apart.
+    cycles = View(frame_cycles)
+    buffering = View(held_bits)
+
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
-    exports = {NETLIST: netlist, MODULE: module}
+    exports = {NETLIST: netlist, MODULE: module, CYCLES: cycles, BUFFERING: buffering}
 
 
 def extent_of(index: Index) -> int:
@@ -490,6 +533,7 @@ def factor_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
         accepts=accepts,
         candidates=enumerate_,
         semantics=default_semantics(int),
+        ordered=True,
         extents=Kernel.extents,
     )
 
@@ -497,9 +541,11 @@ def factor_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
 __all__ = [
     "ACCESS",
     "BOUNDARY",
+    "BUFFERING",
     "CLOCK",
     "CLOCK2X",
     "CLOCKED",
+    "CYCLES",
     "Clocking",
     "HELD",
     "HELD_SEMANTICS",

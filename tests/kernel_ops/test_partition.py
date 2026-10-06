@@ -63,16 +63,31 @@ def test_edge_choices_persist_on_their_consumers() -> None:
     assert "x.adapter.input_gen.input_gen.ram_style" in ops["second"].choices()  # levels
 
 
-def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
+def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     model = kernel_model()
     configure_partition(model)
     second = kernel_op(model, model.graph.node[2])
     second.save({"compute.packed.simd": 4})
     root = partition_root(model, model.graph.node, name="chain")
-    # The levels edge now converts widths: its input_gen memory no longer applies.
-    assert root.dropped == ("levels.adapter.input_gen.input_gen.ram_style",)
+    # The levels edge now converts widths before its transport; its replay after it is
+    # the same input_gen, whose memory choice still applies.
+    assert root.dropped == ()
+    assert [stage.label for stage in root.point.levels.stages] == [
+        "output_adapter.vpc.vpc",
+        "adapter.input_gen.input_gen",
+    ]
+
+
+def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
+    model = kernel_model()
+    configure_partition(model)
+    second = kernel_op(model, model.graph.node[2])
+    # A memory of a chain the levels edge does not take.
+    second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
+    root = partition_root(model, model.graph.node, name="chain")
+    assert root.dropped == ("levels.adapter.input_gen_vpc.input_gen.ram_style",)
     point, _ = open_memories(root)
-    assert point.levels.query(type(point.levels).adapter).value.startswith("vpc")
+    assert point.levels.query(type(point.levels).adapter).value == "input_gen"
 
 
 def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> None:

@@ -149,6 +149,11 @@ class EltwiseKernel(Kernel):
         """Row-major over lhs's axes, ``c`` split by PE innermost."""
         return self.bound_schedule(self.indices, self.factors)
 
+    @derived
+    def frame_cycles(self) -> int:
+        """Its schedule's beats, one a cycle at best."""
+        return self.schedule.beat_count
+
     lhs = AxiStreamPort(
         name="lhs",
         endpoint=Endpoint.TARGET,

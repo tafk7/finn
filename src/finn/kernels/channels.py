@@ -23,11 +23,16 @@ kernel produces into the channel (initiator) or consumes from it (target).
 Its ``ends`` are the contracts' logical part (``finn.dataflow.ends``): each
 must traverse the tensor (``well_formed``, ``channel-tensor``), and the
 ``plan`` between their beat sequences (``finn.dataflow.plan``) must be one a
-chain of steps carries out (``channel-plan``). A non-empty plan opens the
-channel's ``adapter`` Decision over nodes, whose candidates are fixed chains
-of FinnLib modules (``finn.kernels.adapters``); each refuses a plan it does
-not carry out, so at most one survives. A channel whose ``adaptable`` input is
-False admits no adapter and refuses any plan.
+chain of steps carries out (``channel-plan``). A channel runs, in order:
+
+    source -> output adapter -> transport -> input adapter -> consumer
+
+The plan splits at the transport. Its output side (width conversions) opens
+the ``output_adapter`` Decision over nodes, its input side (a reorder, replay
+included, and markers) the ``adapter`` Decision; the candidates of each are
+fixed chains of FinnLib modules (``finn.kernels.adapters``), each refusing a
+plan it does not carry out, so at most one survives a side. A channel whose
+``adaptable`` input is False admits no adapter and refuses any plan.
 
 A channel with a user on one side only is a boundary of the root that
 declares it. Its ``port`` input names the top-level AXIS port (``in0_V``): an
@@ -40,13 +45,17 @@ boundary without the replay its receiver realizes (``unreplayed``), an output
 boundary as produced, neither with markers and both as a single pass.
 
 Every channel, boundaries included, owns a ``transport`` Decision over two
-nodes after its adapter: ``direct`` or ``fifo``. The FIFO candidate owns its
-``depth``, left open for the DSE seam, and the FIFO's ``ram_style``; it is an
-identity stage presenting what arrives at it, inside the root that declares
-the channel (on a boundary, between the root's pins and its user). The
-adapter's and transport's stages are checked on both sides, on the channel's
-``platform``. Their keys are the channel's (``x.adapter``, ``x.transport``),
-so they belong to whoever owns the edge.
+nodes between its adapters: ``direct`` or ``fifo``. The FIFO candidate owns its
+``depth``, a Decision known by its domain's membership only, which a design
+space exploration proposes, and the FIFO's ``ram_style``; it is an identity
+stage presenting what arrives at it, inside the root that declares the channel
+(on a boundary, between the root's pins and its user). A FIFO carries data
+words only: where what arrives carries markers (a producer whose own output
+carries them; a width conversion drops them), the FIFO refuses itself
+(``fifo-markers``). The adapters' and transport's stages are checked on both
+sides, on the channel's ``platform``. Their keys are the channel's
+(``x.output_adapter``, ``x.transport``, ``x.adapter``), so they belong to
+whoever owns the edge.
 
 A channel whose tensor has a known value (``contents``, one operand per set;
 with several ``sets``, its ``index`` channel selects one) carries a
@@ -60,11 +69,19 @@ a value has its source as its only producer** (``channel-users``).
 
 Beside ``compatible``, each checked hop is resolved into wires (``wired``),
 and the channel exports its netlist under ``NETLIST``: its stages' leaves at
-their labels below it (``adapter.input_gen.input_gen``,
-``transport.fifo.buffer``) and its hops. A user's end belongs to the kernel
-whose ``Port`` it is, beside the channel (``^compute.packed``); a boundary end
-is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its
-boundary side presents, if any.
+their labels below it (``output_adapter.vpc.vpc``, ``transport.fifo.buffer``,
+``adapter.input_gen.input_gen``) and its hops. A user's end belongs to the
+kernel whose ``Port`` it is, beside the channel (``^compute.packed``); a
+boundary end is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus
+its boundary side presents, if any.
+
+A channel refuses itself as a kernel does, through its ``admission``
+(``well_formed``, ``realizable``, ``compatible``). It exports its cost, which
+waits on no admission and reads no memory style: under ``CYCLES`` the clock
+cycles a frame takes through its own stages (the most beats its source's or an
+adapter's port carries a frame; a FIFO presents what arrives, so it adds none,
+and a channel of wires takes none of its own), under ``BUFFERING`` the bits its
+stages hold (an adapter's frames, a FIFO's depth).
 
 The Space class refers to itself (``index``) and, through its source's port, is
 referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
@@ -78,6 +95,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from finn.core.space import (
+    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -97,10 +115,10 @@ from finn.dataflow.ends import End, Ends, misfit
 from finn.dataflow.plan import Plan, Unrealizable, plan
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
-from finn.kernels.adapters import ADAPTERS, Stage, StreamAdapter
+from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd, Marker
-from finn.kernels.base import BOUNDARY, CLOCK, NETLIST, PORT, RESET
+from finn.kernels.base import BOUNDARY, BUFFERING, CLOCK, CYCLES, NETLIST, PORT, RESET
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
@@ -163,11 +181,15 @@ def wired(
 
 
 class _Direct(Space):
-    """No stage: the hop after the adapter connects directly."""
+    """No stage: the hop across the transport connects directly."""
 
     @view
     def stages(self) -> tuple[Stage, ...]:
         return ()
+
+    @view
+    def held_bits(self) -> int:
+        return 0
 
 
 class ChannelFifo(Space):
@@ -183,9 +205,30 @@ class ChannelFifo(Space):
 
     buffer = FifoKernel(
         word_bits=word_bits,
-        depth=Decision(domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32)),
+        depth=Decision(
+            domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True)
+        ),
         platform=platform,
     )
+
+    @constraint
+    def carries_data(self) -> bool | Rejected:
+        """What arrives carries no marker a FIFO would have to carry (one closing every
+        beat is tied high after it)."""
+        if any(not rule.constant for rule in self.arriving.markers):
+            return reject(
+                "fifo-markers",
+                "what arrives carries markers, and a FIFO carries data words only",
+            )
+        return True
+
+    # The candidate's refusal, which the transport Decision's viability reads.
+    admission = ConstraintGroup(carries_data)
+
+    @view
+    def held_bits(self) -> int:
+        """Its depth of words."""
+        return self.buffer.depth * self.word_bits
 
     @view
     def stages(self) -> tuple[Stage, ...]:
@@ -357,8 +400,22 @@ class Channel(Space):
             return reject("channel-plan", f"no adapter can join the ends: {error}")
 
     @derived
+    def output_plan(self) -> Plan:
+        """The plan's side before the transport (``Plan.output``)."""
+        return self.plan.output
+
+    @derived
+    def input_plan(self) -> Plan:
+        """The plan's side after the transport (``Plan.input``)."""
+        return self.plan.input
+
+    @derived
+    def output_adapting(self) -> bool:
+        return self.adaptable and bool(self.output_plan)
+
+    @derived
     def adapting(self) -> bool:
-        return self.adaptable and bool(self.plan)
+        return self.adaptable and bool(self.input_plan)
 
     @constraint
     def realizable(self) -> bool | Rejected:
@@ -370,15 +427,39 @@ class Channel(Space):
             )
         return True
 
+    output_adapter: StreamAdapter = Decision(
+        OUTPUT_ADAPTERS,
+        when=output_adapting,
+        tensor=tensor,
+        plan=output_plan,
+        platform=platform,
+    )
+    output_adapter_stages = View(output_adapter.stages)
+    output_adapter_beats = View(output_adapter.beats)
+    output_adapter_held = View(output_adapter.held_bits)
+
     adapter: StreamAdapter = Decision(
-        ADAPTERS, when=adapting, tensor=tensor, plan=plan, platform=platform
+        ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
     )
     adapter_stages = View(adapter.stages)
+    adapter_beats = View(adapter.beats)
+    adapter_held = View(adapter.held_bits)
+
+    @derived
+    def output_adapted(self) -> tuple[Stage, ...]:
+        """The output adapter's stages, in order, labelled below the channel; none when
+        the plan converts no width before the transport."""
+        if not self.output_adapting:
+            return ()
+        return tuple(
+            replace(stage, label=f"output_adapter.{stage.label}")
+            for stage in self.output_adapter_stages
+        )
 
     @derived
     def adapted(self) -> tuple[Stage, ...]:
-        """The adapter's stages, in order, labelled below the channel; none when the ends
-        connect directly."""
+        """The input adapter's stages, in order, labelled below the channel; none when
+        nothing is left to do after the transport."""
         if not self.adapting:
             return ()
         return tuple(
@@ -387,8 +468,8 @@ class Channel(Space):
 
     @derived
     def arriving(self) -> BeatSequence:
-        """What arrives after the adapter: the beat sequence a transport stage receives."""
-        adapted = self.adapted
+        """What arrives at the transport: the beat sequence after the output adapter."""
+        adapted = self.output_adapted
         output = adapted[-1].output if adapted else None
         return self.endpoints.source.sequence if output is None else output.sequence
 
@@ -400,13 +481,16 @@ class Channel(Space):
     )
     transport_stages = View(transport.stages)
 
+    transport_held = View(transport.held_bits)
+
     @view
     def stages(self) -> tuple[Stage, ...]:
-        """The adapter's stages, then the transport's FIFO, if any."""
+        """The output adapter's stages, the transport's FIFO, if any, then the input
+        adapter's stages."""
         transported = tuple(
             replace(stage, label=f"transport.{stage.label}") for stage in self.transport_stages
         )
-        return (*self.adapted, *transported)
+        return (*self.output_adapted, *transported, *self.adapted)
 
     @constraint
     def compatible(self) -> bool | Rejected:
@@ -480,6 +564,38 @@ class Channel(Space):
             stages = ((self.source_label, module), *stages)
         return Fragment(stages, self.hops)
 
+    admission = ConstraintGroup(well_formed, realizable, compatible)
+
+    # -- what a design space exploration ranks by ------------------------------------------
+
+    @derived
+    def frame_cycles(self) -> int:
+        """The clock cycles a frame takes through its own stages: the most beats its
+        source's port or an adapter's carries a frame (one beat a cycle at best)."""
+        found = [0]
+        if self.valued:
+            found.append(self.source_contract.form.beats)
+        if self.output_adapting:
+            found.append(self.output_adapter_beats)
+        if self.adapting:
+            found.append(self.adapter_beats)
+        return max(found)
+
+    @derived
+    def held_bits(self) -> int:
+        """The bits its stages hold between its ends: the adapters' frames, a FIFO's
+        depth."""
+        held: int = self.transport_held
+        if self.output_adapting:
+            held += self.output_adapter_held
+        if self.adapting:
+            held += self.adapter_held
+        return held
+
+    # Cost, not validity: read apart from the channel's admission.
+    cycles = View(frame_cycles)
+    buffering = View(held_bits)
+
     @view(requires=(well_formed, realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
         """The AXIS bus the root presents for it, when one side has no user."""
@@ -487,7 +603,7 @@ class Channel(Space):
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
-    exports = {NETLIST: netlist, BOUNDARY: boundary_bus}
+    exports = {NETLIST: netlist, BOUNDARY: boundary_bus, CYCLES: cycles, BUFFERING: buffering}
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:

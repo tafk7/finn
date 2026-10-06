@@ -34,7 +34,7 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.adapters import CHAINS, Convert, Generate, realize
+from finn.kernels.adapters import INPUT_CHAINS, OUTPUT_CHAINS, Convert, Generate, realize
 
 Beats = list[tuple[Position, ...]]
 
@@ -71,7 +71,8 @@ def convert(beats: Beats, module: Convert) -> Beats:
 
 
 def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
-    """Run the realized chain on the source's positions; return its module kinds."""
+    """Run the realized chain on the source's positions; return its module kinds, both
+    sides of the transport."""
     found = plan(source, sink)
     stages = realize(found)
     beats: Beats = list(found.hops[0].source.form.positions()) if found else []
@@ -94,9 +95,12 @@ def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
             depth = levels.index(rule)
             asserted = [mark[depth] for mark in marks]
             assert asserted == [rule.asserted(beat) for beat in range(len(beats))]
-    kinds = tuple(stage.kind for stage in stages)
-    assert not found or kinds in CHAINS, kinds
-    return kinds
+    # Each side of the transport is one candidate's chain, and together they are the plan's.
+    sides = realize(found.output), realize(found.input)
+    assert (*sides[0], *sides[1]) == stages
+    for side, chains in zip(sides, (OUTPUT_CHAINS, INPUT_CHAINS)):
+        assert not side or tuple(stage.kind for stage in side) in chains, side
+    return tuple(stage.kind for stage in stages)
 
 
 def random_form(rng: random.Random, shape: tuple[int, ...], replay: bool) -> Traversal:

@@ -122,9 +122,10 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
     point = layered()
     assert point.h.plan.steps == (Step.WIDTH, Step.REORDER, Step.MARKERS)
     stages = point.h.stages
+    # The width conversion before the transport, the replay and frame after it.
     assert [stage.label for stage in stages] == [
-        "adapter.vpc_input_gen.vpc",
-        "adapter.vpc_input_gen.input_gen",
+        "output_adapter.vpc.vpc",
+        "adapter.input_gen.input_gen",
     ]
     # The first layer's activations need only their frame closed.
     assert point.x.plan.steps == (Step.MARKERS,)
@@ -132,16 +133,16 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
         "first",
         "second",
         "x.adapter.input_gen.input_gen",
-        "h.adapter.vpc_input_gen.vpc",
-        "h.adapter.vpc_input_gen.input_gen",
+        "h.output_adapter.vpc.vpc",
+        "h.adapter.input_gen.input_gen",
     } <= set(labels(point.module))
     # The ends belong to the layers' ports; the instances are the layers'.
     ends = point.h.endpoints
     assert (ends.source_owner, ends.sink_owner) == ("first.y", "second.x")
     assert [(link.source.instance, link.sink.instance) for link in point.h.netlist.links] == [
-        ("^first", "adapter.vpc_input_gen.vpc"),
-        ("adapter.vpc_input_gen.vpc", "adapter.vpc_input_gen.input_gen"),
-        ("adapter.vpc_input_gen.input_gen", "^second"),
+        ("^first", "output_adapter.vpc.vpc"),
+        ("output_adapter.vpc.vpc", "adapter.input_gen.input_gen"),
+        ("adapter.input_gen.input_gen", "^second"),
     ]
     vpc = dict(stages[0].module.parameters)
     assert (vpc["PI"], vpc["PO"]) == (PE1, SIMD2)
@@ -152,6 +153,21 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
         "'{2, 2}",
         "'{0, 1}",
     )
+
+
+KERNELS, CHANNELS = ("rom1", "rom2", "first", "second"), ("x", "h", "y")
+
+
+def test_the_root_s_cycles_are_its_slowest_member_s_and_its_buffering_their_sum():
+    point = layered()
+    cycles = {name: getattr(point, name).query(Kernel.cycles).value for name in KERNELS}
+    cycles |= {name: getattr(point, name).query(Channel.cycles).value for name in CHANNELS}
+    # The hidden stream's input_gen replays each row once per output fold: twelve beats.
+    assert point.h.query(Channel.cycles).value == 12 == cycles["second"]
+    assert point.query(Kernel.cycles).value == max(cycles.values()) == 12
+    # Only channels hold bits between their ends.
+    held = sum(getattr(point, name).query(Channel.buffering).value for name in CHANNELS)
+    assert point.query(Kernel.buffering).value == held > 0
 
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
