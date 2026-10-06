@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Public API checks for traversal, threshold tables and HLS source views."""
+"""The thresholding kernel: its result type, its table, its configuration and its refusals."""
 
 from __future__ import annotations
 
@@ -9,17 +9,12 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import (
-    DefinitionError,
-    Rejected,
-    Unresolved,
-)
+from finn.core.space import DefinitionError, Rejected, Unresolved
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.kernels.artifacts.abi import Bus, Signal
-from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.artifacts.abi import Bus
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.values.semantics import IntegerVector, ThresholdTable
-from kernels.helpers import FULL_DSP48E2, THRESHOLD_TABLE, controlled, generator, threshold_base
+from finn.kernels.values.semantics import ThresholdTable
+from kernels.helpers import FULL_DSP48E2, THRESHOLD_TABLE, controlled, threshold_base
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
 
@@ -63,49 +58,7 @@ def threshold(
     return report.instance
 
 
-def test_generator_preserves_zero_stride_replay_and_multibit_native_markers() -> None:
-    point = generator()
-    requirements = point.module
-    assert requirements.parameters == (
-        ("COEFS", "'{0, 1}"),
-        ("D", 2),
-        ("DATA_WIDTH", 13),
-        ("DIMS", "'{3, 6}"),
-        ("FM_SIZE", 6),
-        ("RAM_STYLE", '"auto"'),
-    )
-    widths = {port.name: port.width for port in requirements.pins.ports if isinstance(port, Signal)}
-    assert widths["idat"] == widths["odat"] == 13
-    assert widths["olst"] == 2
-    assert all(isinstance(port, Signal) for port in requirements.pins.ports)
-    ranked = generator(frame=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2))
-    ports = ranked.module.pins.ports
-    assert (
-        next(port.width for port in ports if isinstance(port, Signal) and port.name == "olst") == 4
-    )
-
-
-@pytest.mark.parametrize(
-    ("dims", "strides"),
-    (((), ()), ((3, 6), (1,)), ((2, 6), (1, 1)), ((3, 6), (-1, 1)), ((0, 6), (0, 1))),
-)
-def test_generator_refuses_invalid_loop_geometry(
-    dims: IntegerVector, strides: IntegerVector
-) -> None:
-    assert isinstance(
-        generator(dims=dims, strides=strides).inspect(InputGeneratorKernel.module).accepted_result,
-        Rejected,
-    )
-
-
-@pytest.mark.parametrize("bad", ([3, 6], (3, True), (3, [6])))
-def test_generator_requires_exact_immutable_integer_vectors(bad: object) -> None:
-    # A bad literal is refused at the node call.
-    with pytest.raises(DefinitionError, match="integer vector"):
-        generator(dims=cast(IntegerVector, bad))
-
-
-def test_threshold_output_initialization_and_configuration_profiles_are_preserved() -> None:
+def test_threshold_states_its_result_type_initial_table_and_configuration() -> None:
     point = threshold()
     requirements = point.module
     assert point.result_dtype.name == "INT3"
@@ -134,7 +87,7 @@ def test_threshold_output_initialization_and_configuration_profiles_are_preserve
     } == {5}
 
 
-def test_threshold_multiple_sets_keep_selector_bus_and_refuse_axilite_addressing() -> None:
+def test_threshold_sets_present_a_selector_bus_and_refuse_axilite_addressing() -> None:
     table: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
     point = threshold(table=table)
     requirements = point.module
@@ -159,7 +112,7 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
     assert isinstance(base.inspect(ThresholdingAxiKernel.module).accepted_result, Unresolved)
 
 
-def test_threshold_rejects_existing_unsupported_profiles_and_malformed_tables() -> None:
+def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     profiles = (
         threshold(table=(), pe=None),
         threshold(table=(((2, 1),),)),
