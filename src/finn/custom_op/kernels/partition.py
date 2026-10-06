@@ -6,13 +6,15 @@
 ``partition_root(model, nodes)`` builds, and changes no graph:
 
 - **channels**, one per ONNX tensor, in node order: a node's graph inputs, the
-  parameter channels it owns (named after the initializer, the kernel's view),
-  its outputs. A channel's tensor is the graph's value_info and annotation
-  its platform the model's target's. Only the subgraph's ONNX inputs and
+  parameter channels it owns (named after the initializer), its outputs. An
+  edge's tensor is the graph's value_info and annotation, a parameter
+  channel's the kernel's views, bound where the node is placed; every channel's
+  platform is the model's target's. Only the subgraph's ONNX inputs and
   outputs are boundaries, named by the shell's convention ``s_axis_<i>`` and
   ``m_axis_<i>``: a channel refuses a boundary no port names
   (``channel-boundary``);
-- **kernels**, one per node, from its facts, the graph's pins as keywords;
+- **kernels**, one per node: its op's placement (``KernelOp.place``, the one its
+  node root is generated from) with literal formals, on these channels;
 - **replay**: each node's kernel choices, then the edge choices (an edge's
   adapter selector is forced, never persisted); an edge choice the current
   graph refuses is stale, dropped and reported, and the forced case applies
@@ -46,14 +48,11 @@ from finn.custom_op.kernels.base import (
     KernelOp,
     KernelOpError,
     committed,
-    datatype,
+    edge_tensor,
     read_target,
     refusal,
-    rows,
-    shape,
     typed_choices,
 )
-from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 
@@ -124,32 +123,32 @@ def _channels(
     model: ModelWrapper,
     nodes: list[NodeProto],
     ops: list[KernelOp],
-    owned: list[dict[str, Channel]],
+    owned: list[dict[str, str]],
     ports: Mapping[str, str],
     handed_on: set[str],
 ) -> dict[str, Channel]:
     """The partition's channels by tensor, in node order: a node's inputs on an edge or
-    the boundary, the parameter channels it owns, its outputs. An output handed on to a
-    KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
+    the boundary, the parameter channels it owns (their tensor and value bound where it
+    is placed), its outputs. An output handed on to a KernelOp outside is pinned
+    ``direct``: its FIFO, if any, is the consumer's."""
     platform = read_target(model).platform
-    parameters = {tensor for channels in owned for tensor in channels}
+    parameters = {tensor for tensors in owned for tensor in tensors.values()}
     channels: dict[str, Channel] = {}
 
     def declare(tensor: str, label: str) -> None:
         if tensor in channels:
             return
-        dims = rows(shape(model, tensor, label))
-        carried = Tensor(dims, ScalarEncoding(datatype(model, tensor, label)))
         port: dict[str, Any] = {"port": ports[tensor]} if tensor in ports else {}
         if tensor in handed_on:
             port["transport"] = "direct"
+        carried = edge_tensor(model, tensor, label)
         channels[tensor] = Channel(tensor=carried, platform=platform, **port)
 
-    for node, op, parameter_channels in zip(nodes, ops, owned):
+    for node, op, tensors in zip(nodes, ops, owned):
         for tensor in node.input:
             if tensor not in parameters and model.get_initializer(tensor) is None:
                 declare(tensor, op.label)
-        channels |= parameter_channels
+        channels |= {tensor: Channel(platform=platform) for tensor in tensors.values()}
         for tensor in node.output:
             declare(tensor, op.label)
     return channels
@@ -230,8 +229,8 @@ def partition_root(
     for node, op in zip(nodes, ops):
         if not isinstance(op, KernelOp):
             raise KernelOpError(f"{node.name}: a partition root places KernelOps only")
-    owned = [op.owned_channels() for op in ops]
-    ports = _boundary(model, nodes, {tensor for channels in owned for tensor in channels})
+    owned = [op.owned() for op in ops]
+    ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
     handed_on = _handed_on(model, nodes)
     channels = _channels(model, nodes, ops, owned, ports, handed_on)
     outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}

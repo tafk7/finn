@@ -5,15 +5,18 @@
 
 An op reads its facts from the attached model only: input shapes and datatype
 annotations, initializers admitted by their value summary, and the build target
-from the model's ``finn.platform`` metadata. It binds its node root
-(``finn.custom_op.kernels.roots``) through the bind cache, replays the choices
-its node holds, and answers the compiler's queries from the result.
+from the model's ``finn.platform`` metadata. It states its placement once, as
+data (``kernel``, ``formals``, ``references``, ``parameters``;
+``finn.custom_op.kernels.roots``): its node root is generated from it, and a
+partition root places the same kernel. It binds through the bind cache, its
+kernel alone for inference and its node root for its choices, replays the
+choices its node holds, and answers the compiler's queries from the result.
 
 Two kinds of attribute:
 
 - **semantic**: part of the operation, stated by the graph (Thresholding's
   ``bias``); required, never a choice;
-- **choice**: one per decision key of the op's node roots, sparse, absent
+- **choice**: one per decision key of the op's node root, sparse, absent
   meaning open. The kernel's keys are unprefixed (``compute.packed.pe``), a
   channel's sit under the op's port name (``x.adapter…``, ``w.transport``,
   ``y.transport``). A channel's choices are its consumer's; an output
@@ -47,13 +50,14 @@ from qonnx.util.basic import get_by_name
 
 from finn.core.space import Available, Inapplicable, Rejected, Space, inspection
 from finn.custom_op.kernels.cache import BIND_CACHE, Facts
+from finn.custom_op.kernels.roots import node_root, placed
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
 )
-from finn.dataflow.tensor import Tensor
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
@@ -124,6 +128,12 @@ def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
 def rows(dims: tuple[int, ...]) -> tuple[int, int]:
     """Leading axes are rows: (1, M, K) is M rows of K."""
     return prod(dims[:-1]), dims[-1]
+
+
+def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
+    """The tensor an edge's channel carries, as the graph states it: its shape as
+    rows and its annotation."""
+    return Tensor(rows(shape(model, tensor, label)), ScalarEncoding(datatype(model, tensor, label)))
 
 
 def read_target(model: ModelWrapper) -> Target:
@@ -248,25 +258,35 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     An op class states ``op_version`` (its kernel's ``version``) in its own body; its
     ``op_type`` is qonnx's (stated in its own body, or the name its domain exports
-    it under). It names its node-root classes (``roots``), its
-    kernel's member in them (``member``), each ONNX input's channel (``ports``;
-    ``None``: an input that is a fact, never a channel) and each ONNX output's
-    (``outputs``).
+    it under). It states its placement, from which its node root is generated
+    (``root()``) and by which a partition places it (``place``):
+
+    - ``kernel``, the kernel class it binds, and ``member``, its name in the root;
+    - ``formals``, the kernel's formals the op reads from the graph (``facts``);
+    - ``ports``, each ONNX input's channel (``None``: an input that is a fact, never
+      a channel), and ``outputs``, each ONNX output's;
+    - ``references``, the kernel's reference input each port's channel binds;
+    - ``parameters``, for a port that may carry a value the node owns, the kernel's
+      views of the tensor and of the value its channel carries.
     """
 
     wants_model = True
     op_type: ClassVar[str]
     op_version: ClassVar[int]
-    roots: ClassVar[tuple[type[Kernel], ...]]
+    kernel: ClassVar[type[Kernel]]
     member: ClassVar[str]
+    formals: ClassVar[tuple[str, ...]]
     ports: ClassVar[tuple[str | None, ...]]
     outputs: ClassVar[tuple[str, ...]] = ("y",)
+    references: ClassVar[Mapping[str, str]]
+    parameters: ClassVar[Mapping[str, tuple[str, str]]] = {}
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
+    _roots: ClassVar[dict[type[KernelOp], type[Kernel]]] = {}
     _schemas: ClassVar[dict[type[KernelOp], dict[str, tuple[str, tuple[str, ...]]]]] = {}
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        if "roots" not in cls.__dict__:
+        if "kernel" not in cls.__dict__:
             return  # an abstract base
         version = cls.__dict__.get("op_version")
         if type(version) is not int or version < 1:
@@ -300,17 +320,23 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         )
 
     @classmethod
+    def root(cls) -> type[Kernel]:
+        """The op's node root class, generated from its placement once per process."""
+        if cls not in KernelOp._roots:
+            KernelOp._roots[cls] = node_root(cls)
+        return KernelOp._roots[cls]
+
+    @classmethod
     def schema(cls) -> dict[str, tuple[str, tuple[str, ...]]]:
-        """The choice attributes: name -> (ONNX type, a selector's cases), the union
-        of the node-root classes' decision keys."""
+        """The choice attributes: name -> (ONNX type, a selector's cases), from the node
+        root's decision keys."""
         if cls not in KernelOp._schemas:
             found: dict[str, tuple[str, tuple[str, ...]]] = {}
-            for root in cls.roots:
-                for item in inspection.decisions(root):
-                    name = cls.attribute(item.key)
-                    if name is not None:
-                        kind = ONNX_TYPES[value_type(item)]
-                        found[name] = (kind, item.cases if item.selector else ())
+            for item in inspection.decisions(cls.root()):
+                name = cls.attribute(item.key)
+                if name is not None:
+                    kind = ONNX_TYPES[value_type(item)]
+                    found[name] = (kind, item.cases if item.selector else ())
             KernelOp._schemas[cls] = dict(sorted(found.items()))
         return KernelOp._schemas[cls]
 
@@ -338,6 +364,20 @@ class KernelOp(CustomOp):  # type: ignore[misc]
     def facts(self) -> Facts:
         """What binding this node reads, from the attached model."""
         raise NotImplementedError
+
+    def edges(self) -> dict[str, Tensor]:
+        """The tensor of each edge of the node root, by port, as the graph states it: each
+        input channel but a parameter port's, and each output."""
+        model, node = self.model(), self.onnx_node
+        found = {
+            port: edge_tensor(model, tensor, self.label)
+            for port, tensor in zip(self.ports, node.input)
+            if port is not None and port not in self.parameters
+        }
+        return found | {
+            port: edge_tensor(model, tensor, self.label)
+            for port, tensor in zip(self.outputs, node.output)
+        }
 
     def base(self) -> Kernel:
         """The node root bound from this node's facts, nothing chosen."""
@@ -375,7 +415,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
             return BIND_CACHE.point(facts)
         names = {self.node_key(name): name for name in wanted}
         typed = typed_choices(
-            self.roots, {self.node_key(name): value for name, value in wanted.items()}
+            [self.root()], {self.node_key(name): value for name, value in wanted.items()}
         )
 
         def build(base: Kernel) -> Kernel:
@@ -419,15 +459,20 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     # -- in a partition root ---------------------------------------------------------------
 
-    def owned_channels(self) -> dict[str, Channel]:
-        """The channels this node declares beside its outputs, by tensor: a stored
-        parameter's, its tensor the kernel's view."""
-        return {}
+    def owned(self) -> dict[str, str]:
+        """The tensor of each parameter port whose value this node owns, by port: its
+        channel is this node's to declare, and carries the kernel's views."""
+        return {port: self.onnx_node.input[self.ports.index(port)] for port in self.facts().owned}
 
     def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
-        """This node's kernel on a partition's ``channels`` (by tensor), the graph's pins as
-        keywords; and the tensor of each of its input and owned channels, by port."""
-        raise NotImplementedError
+        """This node's kernel on a partition's ``channels`` (by tensor), its formals
+        literals: the placement its node root is generated from. And the tensor of each
+        of its input channels, by port."""
+        facts = self.facts()
+        inputs = {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
+        tensors = inputs | dict(zip(self.outputs, self.onnx_node.output))
+        on = {port: channels[tensor] for port, tensor in tensors.items()}
+        return placed(type(self), facts.formals(), on, facts.owned), inputs
 
     # -- inference ------------------------------------------------------------------------
 
@@ -437,7 +482,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         default."""
 
     def output_tensors(self) -> Shapes:
-        """Each output's ONNX shape and datatype, from the node root's views."""
+        """Each output's ONNX shape and datatype, from the kernel's fact-level views."""
         raise NotImplementedError
 
     def infer_output_tensors(self, model: ModelWrapper) -> Shapes:
@@ -462,14 +507,15 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         result = kernel.inspect(type(kernel).admission).result
         return [f"{self.label}: {describe([result])}"] if isinstance(result, Rejected) else []
 
-    def view(self, name: str) -> Tensor:
-        """A fact-level view of the node root (``y_tensor``, ``w_tensor``)."""
-        base = self.base()
-        answer = base.query(getattr(type(base), name))
+    def view(self, name: str) -> Any:
+        """A fact-level view of the op's kernel, bound alone from the node's formals
+        (``result_tensor``, ``result_dtype``): what inference reads, before any output of
+        the node is known."""
+        kernel = BIND_CACHE.kernel(self.facts())
+        answer = kernel.query(getattr(type(kernel), name))
         if not isinstance(answer, Available):
             raise KernelOpError(f"{self.label}: {describe([answer])}")
-        tensor: Tensor = answer.value
-        return tensor
+        return answer.value
 
 
 __all__ = [
@@ -481,6 +527,7 @@ __all__ = [
     "admitted",
     "committed",
     "datatype",
+    "edge_tensor",
     "read_target",
     "refusal",
     "rows",

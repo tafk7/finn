@@ -13,7 +13,6 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import KernelOpError
-from finn.custom_op.kernels.roots import ThresholdingNode
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernel_ops.models import THRESHOLDS, schema_digest, thresholding_model
@@ -30,7 +29,7 @@ def op(model: ModelWrapper) -> Thresholding:
 def test_facts_and_the_output() -> None:
     model = thresholding_model(bias=-1)
     facts = op(model).facts()
-    assert facts.root is ThresholdingNode
+    assert facts.root is Thresholding.root() and facts.owned == ()
     formals = facts.formals()
     assert formals["thresholds"] == (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
     assert formals["bias"] == -1
@@ -41,9 +40,9 @@ def test_facts_and_the_output() -> None:
 
 def test_the_thresholds_must_be_an_initializer_with_a_row_per_channel() -> None:
     with pytest.raises(KernelOpError, match="must be an initializer"):
-        op(thresholding_model(stored=False)).facts()
+        op(thresholding_model(stored=False, infer=False)).facts()
     with pytest.raises(KernelOpError, match=r"\(1, 3\), not one row for each of the 4 channels"):
-        op(thresholding_model(thresholds=THRESHOLDS[:1])).facts()
+        op(thresholding_model(thresholds=THRESHOLDS[:1], infer=False)).facts()
 
 
 def test_the_schema_holds_the_memory_choices_and_bias_is_semantic() -> None:

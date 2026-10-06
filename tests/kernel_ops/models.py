@@ -40,10 +40,13 @@ def matmul_model(
     annotate: tuple[str, ...] = ("x", "w"),
     x_shape: list[int] | None = None,
     target: bool = True,
+    infer: bool = True,
 ) -> ModelWrapper:
     """x (1, 3, 4) -> MatMul ``first`` (domain ``finn.custom_op.kernels``) with w -> y.
 
-    ``stored``: w an initializer (the node's own), else a graph input.
+    ``stored``: w an initializer (the node's own), else a graph input. ``infer``: y
+    stated by ``InferKernelTensors``, as the node root reads it; without it, only
+    the node's facts are read.
     """
     weights = np.asarray(weights, dtype=np.float32)
     x = helper.make_tensor_value_info("x", TensorProto.FLOAT, x_shape or [1, ROWS, K])
@@ -65,7 +68,7 @@ def matmul_model(
         model.set_tensor_datatype(name, INT3)
     if target:
         write_target(model, TARGET)
-    return model
+    return model.transform(InferKernelTensors()) if infer else model
 
 
 THRESHOLDS = np.array([[-9 + c, 1 - c, 8 + 2 * c] for c in range(N)])
@@ -78,8 +81,10 @@ def thresholding_model(
     stored: bool = True,
     bias: int = 0,
     annotate: tuple[str, ...] = ("x", "t"),
+    infer: bool = True,
 ) -> ModelWrapper:
-    """x (3, 4) INT8 -> Thresholding ``activate`` with t (C, N) -> y."""
+    """x (3, 4) INT8 -> Thresholding ``activate`` with t (C, N) -> y; ``infer`` as for
+    ``matmul_model``."""
     thresholds = np.asarray(thresholds, dtype=np.float32)
     x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [ROWS, N])
     t = helper.make_tensor_value_info("t", TensorProto.FLOAT, list(thresholds.shape))
@@ -100,7 +105,7 @@ def thresholding_model(
     for name in annotate:
         model.set_tensor_datatype(name, H)
     write_target(model, TARGET)
-    return model
+    return model.transform(InferKernelTensors()) if infer else model
 
 
 def chain_source(*, annotate_input: bool = True, second_weights: bool = True) -> ModelWrapper:

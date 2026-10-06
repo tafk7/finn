@@ -3,7 +3,7 @@
 
 """The platform a KernelOp binds: its model's target (``read_target(model).platform``).
 
-The node roots bind it to their kernels and to a channel with a source, so a value
+The node roots bind it to their kernels and to every channel, so a value
 case that requires a capability (``requires``) is refused, by name, on a device
 without it and viable on one with it; the DSP block is the platform's. A bare
 kernel, with no model, has no platform: its caller must state one.
@@ -21,7 +21,6 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.custom_op.kernels.partition import partition_root
-from finn.custom_op.kernels.roots import StoredMatMulNode
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -105,8 +104,10 @@ def test_a_bare_kernel_states_its_platform() -> None:
 
 def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
     platform = replace(URAM.platform, dsp=None)
-    formals = {**op(matmul_model()).facts().formals(), "platform": platform}
-    answer = design_space(StoredMatMulNode(**formals)).matmul.query(MatMulKernel.compute)
+    node = op(matmul_model())
+    formals = {**node.facts().formals(), "platform": platform}
+    tensors = {f"{port}_tensor": tensor for port, tensor in node.edges().items()}
+    answer = design_space(node.root()(**formals, **tensors)).matmul.query(MatMulKernel.compute)
     assert isinstance(answer, Rejected)
     (finding,) = answer.findings  # no core is viable, each for the same reason
     for core in ("packed", "int8_dsp58"):

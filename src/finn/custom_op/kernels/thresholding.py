@@ -22,7 +22,6 @@ the input's range counts the same at its bound.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -37,15 +36,11 @@ from finn.custom_op.kernels.base import (
     shape,
 )
 from finn.custom_op.kernels.cache import Facts
-from finn.custom_op.kernels.roots import ThresholdingNode
 from finn.dataflow.datatypes import (
     DatatypeError,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
@@ -54,9 +49,11 @@ class Thresholding(KernelOp):
 
     op_type = "Thresholding"
     op_version = ThresholdingAxiKernel.version
-    roots = (ThresholdingNode,)
+    kernel = ThresholdingAxiKernel
     member = "activate"
+    formals = ("input_dtype", "threshold_dtype", "thresholds", "bias", "platform")
     ports = ("x", None)
+    references = {"x": "input_channel", "y": "output_channel"}
     semantic = {"bias": ("i", True, 0)}
 
     def normalize_inputs(self) -> None:
@@ -89,7 +86,7 @@ class Thresholding(KernelOp):
     def facts(self) -> Facts:
         model, label = self.model(), self.label
         x, thresholds = self.onnx_node.input
-        m, channels = rows(shape(model, x, label))
+        _, channels = rows(shape(model, x, label))
         table = model.get_initializer(thresholds)
         if table is None:
             raise KernelOpError(f"{label}: the thresholds {thresholds} must be an initializer")
@@ -112,35 +109,22 @@ class Thresholding(KernelOp):
                 thresholds=(tuple(tuple(int(value) for value in row) for row in values),),
                 bias=bias,
                 platform=platform,
-                x_tensor=Tensor((m, channels), ScalarEncoding(input_dtype)),
             )
 
         key = (
             self.op_type,
             self.op_version,
-            m,
-            channels,
             input_dtype.name,
             threshold_dtype.name,
             bias,
             platform,
             digest,
         )
-        return Facts(ThresholdingNode, key, formals)
+        return Facts(self.root(), ThresholdingAxiKernel, key, formals, self.edges)
 
     def output_tensors(self) -> Shapes:
-        result = self.view("y_tensor")
         dims = shape(self.model(), self.onnx_node.input[0], self.label)
-        return {self.onnx_node.output[0]: (dims, result.element.dtype)}
-
-    def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
-        formals: dict[str, Any] = self.facts().formals()
-        del formals["x_tensor"]
-        x = self.onnx_node.input[0]
-        kernel = ThresholdingAxiKernel(
-            **formals, input_channel=channels[x], output_channel=channels[self.onnx_node.output[0]]
-        )
-        return kernel, {"x": x}
+        return {self.onnx_node.output[0]: (dims, self.view("result_dtype"))}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         x, thresholds = self.onnx_node.input
