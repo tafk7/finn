@@ -561,7 +561,7 @@ def _values(
 
 
 def _words(form: Traversal, values: np.ndarray, element: ScalarEncoding) -> tuple[list[int], int]:
-    return list(pack(form, values.tolist(), element.bits)), form.lanes * element.bits
+    return list(pack(form, values.ravel().tolist(), element.bits)), form.lanes * element.bits
 
 
 def _brief(message: str) -> str:
