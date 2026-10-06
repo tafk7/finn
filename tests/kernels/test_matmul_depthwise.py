@@ -244,8 +244,9 @@ def test_a_dense_realization_reads_window_by_channel_rows_against_block_diagonal
         for start in range(0, 12, 4)
     )
     assert built.initializer == expected
-    # The result precision is the operation's: a window of 4, not 12.
-    assert built.result_dtype == DataType["INT10"]
+    # The result precision is the operation's: each channel's window of 4 weights over
+    # INT4 activations, not 12 (zeros add nothing): [-74, 76].
+    assert built.result_dtype == DataType["INT8"]
 
 
 def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_dsp58():

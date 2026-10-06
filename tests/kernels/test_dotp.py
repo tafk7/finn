@@ -74,6 +74,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.form",
         "compute.reshape_activations",
         "compute.result_dtype",
+        "compute.result_range",
         "compute.platform",
         "compute.x_channel",
         "compute.w_channel",
@@ -173,6 +174,8 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
         ({"result_dtype": DataType["UINT9"]}, "dtype-family"),
         ({"result_dtype": DataType["FLOAT32"]}, "dtype-family"),
         ({"result_dtype": DataType["INT59"]}, "dotp-accumulator-width"),
+        # Narrower than one INT3 x INT3 product (3 + 3 - 1 bits): FinnLib's dotp refuses it.
+        ({"result_dtype": DataType["INT4"]}, "dotp-accumulator-width"),
         (
             {"result_dtype": DataType["INT49"], "platform": FULL_DSP48E2},
             "dotp-accumulator-width",
@@ -313,7 +316,7 @@ def test_the_platform_is_a_required_fact():
         helpers.placed_dotp(PackedDotpKernel, **facts)
 
 
-@pytest.mark.parametrize("bits", (4, 9, 12, 58))
+@pytest.mark.parametrize("bits", (5, 9, 12, 58))
 def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
     assert point.y.element.dtype == DataType[f"INT{bits}"]
@@ -331,11 +334,13 @@ def test_the_results_stream_selects_accumulator_capacity(bits):
     ],
 )
 def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight):
+    # The DSP's whole accumulator: it holds a product (UINT23 x INT26 needs 49 bits).
+    accumulator = "INT58" if target is DspBlock.DSP58 else "INT48"
     requirements = kernel(
         platform=full_platform(target),
         activation_dtype=DataType[activation],
         weights_dtype=DataType[weight],
-        result_dtype=DataType["INT48"],
+        result_dtype=DataType[accumulator],
     ).module
     assert dict(requirements.parameters)["SIGNED_ACTIVATIONS"] == int(DataType[activation].signed())
 

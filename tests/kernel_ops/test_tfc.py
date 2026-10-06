@@ -33,7 +33,8 @@ from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
 LOGITS = "MatMul_3_out0"
 # The partition's boundary facts:
-# 784 UINT8 pixels in 49 beats of 16 lanes; ten INT10 logits in one beat of 104 bits.
+# 784 UINT8 pixels in 49 beats of 16 lanes; ten INT8 logits (the last MatMul's columns, K7)
+# in one beat of 80 bits.
 FACTS = (
     [
         {
@@ -52,11 +53,11 @@ FACTS = (
             "port": "m_axis_0",
             "tensor": LOGITS,
             "shape": [1, 10],
-            "datatype": "INT10",
+            "datatype": "INT8",
             "lanes": 10,
             "beats": 1,
-            "element_bits": 10,
-            "tdata": 104,
+            "element_bits": 8,
+            "tdata": 80,
         }
     ],
 )
@@ -109,7 +110,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     body = body.transform(PackagePartition(sdp.name, directory=project))
     assert body.get_metadata_prop("vivado_stitch_vlnv") == f"xilinx_finn:finn:{sdp.name}:1.0"
     names = json.loads(body.get_metadata_prop("vivado_stitch_ifnames"))
-    assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 104]])
+    assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 80]])
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
     widths = {
@@ -119,7 +120,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
         }.get("TDATA_NUM_BYTES")
         for bus in root.iter(f"{spirit}busInterface")
     }
-    assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "13")
+    assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "10")
     assert getCustomOp(sdp).get_nodeattr("slr") == -1
     assert partition_facts(body) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()

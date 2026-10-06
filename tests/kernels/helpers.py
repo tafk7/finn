@@ -13,11 +13,12 @@ MatMul (``matmul``) on the root's ``x`` (``in0_V``), ``w`` (``in1_V``,
 buffered), ``y`` (``out0_V``) and, with several weight sets, ``set``
 (``in2_V``). The root declares the channels and binds each one's tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
-``result_tensor``, ``set_tensor``), which reads only MatMul's facts and its
-``realization``: one root serves every realization, a depthwise MatMul's left
-open until committed. Known weights are the weight channel's ``contents``
-(MatMul's ``weight_values``), with ``set`` its ``index``, so the channel's
-``source`` stores them. The edge choices are the root's (``x.adapter``,
+``result_tensor``), which reads only MatMul's facts and its ``realization``:
+one root serves every realization, a depthwise MatMul's left open until
+committed. Known weights are the root's: the weight channel's ``contents``
+(block-diagonal for a dense realization), its tensor over their range, with
+``set`` its ``index`` (one index per row), so the channel's ``source`` stores
+them. The edge choices are the root's (``x.adapter``,
 ``w.transport``, ``w.source.memstream.ram_style``), the MatMul's below it
 (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
 concrete facts and choices.
@@ -41,9 +42,14 @@ from finn.core.space import (
     design_space,
     inspection,
     reject,
+    supplied,
 )
 from finn.core.space.results import Available, QueryResult
-from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
+from finn.dataflow.datatypes import (
+    QONNXDataType,
+    ordinary_integer_bounds,
+    resolve_qonnx_datatype_name,
+)
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.module import Composed, Leaf
@@ -53,15 +59,17 @@ from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import MatMulKernel, block_diagonal
 from finn.kernels.target import DspBlock, Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.domains import admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerVector,
     ThresholdTable,
+    integer_range,
 )
 
 T = TypeVar("T")
@@ -189,11 +197,23 @@ def rooted(name: str, members: Mapping[str, object]) -> Root:
     return root
 
 
+def stated(tensor: Tensor, value: IntegerTensor) -> Tensor | Rejected:
+    """``tensor`` as the owner of ``value`` states it for the channel carrying it: over the
+    value's range, which its datatype must admit."""
+    dtype = tensor.element.dtype
+    low, high = ordinary_integer_bounds(dtype)
+    least, greatest = integer_range(value)
+    if not low <= least <= greatest <= high:
+        return reject("dtype-storage", f"every value must be an integer admitted by {dtype.name}")
+    element = admit_element(dtype, (least, greatest))
+    return element if isinstance(element, Rejected) else Tensor(tensor.shape, element)
+
+
 @cache
 def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
     """A root placing a MatMul of ``space_type`` (``matmul``) on the channels it declares, its
-    facts its own formals and the channels' tensors MatMul's views; see the module
-    docstring."""
+    facts its own formals, the channels' tensors MatMul's views and the weights its own;
+    see the module docstring."""
 
     class MatMul(Root):
         m: int = Param()
@@ -203,8 +223,10 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
         activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         platform: Platform = Param()
+        # The weights are the root's (the value owner's), one operand a set.
         weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
         weight_sets: int = Param(default=1)
+        known = supplied(weights)
 
         @derived
         def several(self) -> bool:
@@ -215,9 +237,17 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
         def x_tensor(self) -> Tensor:
             return self.matmul.activation_tensor
 
+        @derived(when=known, semantics=INTEGER_TENSOR)
+        def w_contents(self) -> IntegerTensor:
+            """The weights as the datapath reads them: block-diagonal when a depthwise
+            operation is realized densely."""
+            return block_diagonal(self.weights) if self.matmul.dense_view else self.weights
+
         @derived
-        def w_tensor(self) -> Tensor:
-            return self.matmul.weight_tensor
+        def w_tensor(self) -> Tensor | Rejected:
+            """MatMul's view of its weights, over the range of the value the root states."""
+            tensor = self.matmul.weight_tensor
+            return stated(tensor, self.w_contents) if self.present(MatMul.weights) else tensor
 
         @derived
         def y_tensor(self) -> Tensor:
@@ -225,11 +255,19 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
 
         @derived
         def set_tensor(self) -> Tensor:
-            return self.matmul.set_tensor
+            """One set index per row, as wide as the weight source's selector."""
+            return Tensor((self.m,), ScalarEncoding(set_index_dtype(self.weight_sets)))
 
         x = Channel(tensor=x_tensor, port="in0_V", platform=platform)
         set = Channel(tensor=set_tensor, port="in2_V", when=several, platform=platform)
-        w = Channel(tensor=w_tensor, sets=weight_sets, index=set, port="in1_V", platform=platform)
+        w = Channel(
+            tensor=w_tensor,
+            contents=w_contents,
+            sets=weight_sets,
+            index=set,
+            port="in1_V",
+            platform=platform,
+        )
         y = Channel(tensor=y_tensor, port="out0_V", platform=platform)
         matmul = space_type(
             m=m,
@@ -239,13 +277,10 @@ def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
             activation_dtype=activation_dtype,
             weights_dtype=weights_dtype,
             platform=platform,
-            weights=weights,
-            weight_sets=weight_sets,
             x_channel=x,
             w_channel=w,
             y_channel=y,
         )
-        w.contents = matmul.weight_values
 
     return MatMul
 

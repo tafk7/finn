@@ -27,10 +27,11 @@ and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
 
-The result's element is ``result_dtype``, the accumulator encoding its parent
-chooses (its channel refuses another), not a proof that an arbitrary frame fits
-it: the parent must bound each frame's accumulation to it (including
-intermediate sums).
+The result's element is ``result_dtype`` over ``result_range`` (the datatype's
+own by default), the accumulator encoding and the range its parent states (its
+channel refuses another), not a proof that an arbitrary frame fits it: the
+parent must bound each frame's accumulation to it (including intermediate
+sums).
 """
 
 from __future__ import annotations
@@ -92,9 +93,11 @@ class DotpAxiKernel(Kernel):
 
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
-    # The accumulator encoding it produces: its parent's choice (MatMul binds its
-    # result type), so that it is known before the results channel exists.
+    # The accumulator encoding it produces and the range of its results: its parent's
+    # statement (MatMul binds its result type and range), so that they are known before
+    # the results channel exists. ``()`` is the datatype's own range.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_range: tuple[int, ...] = Param(default=())
     platform: Platform = Param()
     # The channels dotp sits on: reference inputs, each a Channel placed beside it.
     x_channel: Channel = Param(required=False)
@@ -170,6 +173,7 @@ class DotpAxiKernel(Kernel):
         lanes=(n,),
         reduces=(k,),
         dtype=result_dtype,
+        value_range=result_range,
     )
 
     @derived
@@ -332,7 +336,9 @@ class PackedDotpKernel(DotpAxiKernel):
     the weight channel's element: when its range excludes the type's most
     negative value (a value owner stated it), a weight needs no sign guard bit,
     which packs more lanes per DSP and admits weights as wide as the DSP's A
-    input. FinnLib stops simulation on a weight that breaks it.
+    input. FinnLib stops simulation on a weight that breaks it. Its accumulator holds
+    at least one product (FinnLib's elaboration refuses a narrower ``ACCU_WIDTH``),
+    whatever range its results span.
     """
 
     id = "finnlib.dotp_axi.dotp"
@@ -364,6 +370,12 @@ class PackedDotpKernel(DotpAxiKernel):
             return reject(
                 "dotp-weight-width",
                 "weights must fit the DSP A input, with a sign guard bit unless narrow",
+            )
+        if self.y.element.bits < weights.bits + activation.bits - activation.signed:
+            return reject(
+                "dotp-accumulator-width",
+                "the accumulator must hold one product: ACCU_WIDTH >= WEIGHT_WIDTH + "
+                "ACTIVATION_WIDTH - SIGNED_ACTIVATIONS",
             )
         return None
 

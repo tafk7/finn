@@ -62,9 +62,12 @@ def test_facts_come_from_the_model() -> None:
     assert facts.root is MatMul.root() and facts.owned == ("w",)
     formals = facts.formals()
     assert (formals["m"], formals["k"], formals["n"]) == (3, 4, 4)
-    assert formals["weights"] == IntegerTensorValue.of(
-        tuple(tuple(int(v) for v in row) for row in WEIGHTS)
-    )
+    # The weights are the weight channel's value, not a formal of MatMul's; the channel's
+    # tensor is the initializer's, over its values' range.
+    assert "weights" not in formals
+    value = IntegerTensorValue.of(tuple(tuple(int(v) for v in row) for row in WEIGHTS))
+    assert facts.values() == {"w": value}
+    assert facts.inputs()["w"].element.value_range == value.range
     # The output keeps the input's leading axes.
     assert op(model).output_tensors() == {
         "y": ((1, 3, 4), op(model).view("result_tensor").element.dtype)

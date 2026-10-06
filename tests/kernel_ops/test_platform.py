@@ -99,15 +99,19 @@ def test_a_bare_kernel_states_its_platform() -> None:
     formals = op(matmul_model()).facts().formals()
     facts = {name: formals[name] for name in ("m", "n", "k", "activation_dtype", "weights_dtype")}
     with pytest.raises(DefinitionError, match="platform is not supplied"):
-        design_space(MatMulKernel(**facts, weights=formals["weights"]))
+        design_space(MatMulKernel(**facts))
 
 
 def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
     platform = replace(URAM.platform, dsp=None)
     node = op(matmul_model())
-    formals = {**node.facts().formals(), "platform": platform}
+    facts = node.facts()
+    formals = {**facts.formals(), "platform": platform}
     tensors = {f"{port}_tensor": tensor for port, tensor in node.edges().items()}
-    answer = design_space(node.root()(**formals, **tensors)).matmul.query(MatMulKernel.compute)
+    values = {f"{port}_contents": value for port, value in facts.values().items()}
+    answer = design_space(node.root()(**formals, **tensors, **values)).matmul.query(
+        MatMulKernel.compute
+    )
     assert isinstance(answer, Rejected)
     (finding,) = answer.findings  # no core is viable, each for the same reason
     for core in ("packed", "int8_dsp58"):

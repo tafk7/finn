@@ -10,6 +10,8 @@ visits the nodes in order, and qonnx's passes agree after it.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from kernels import chain
@@ -21,10 +23,11 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, read_target
+from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, kernel_op, read_target
+from finn.kernels.matmul import exact_result_dtype
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
-from kernel_ops.models import DOMAIN, TARGET, chain_source
+from kernel_ops.models import DOMAIN, TARGET, chain_source, lift
 
 
 def converted(**options: bool) -> ModelWrapper:
@@ -83,22 +86,42 @@ def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
         "levels": ([chain.ROWS, chain.HIDDEN], chain.T.name),
         "y": ([chain.ROWS, chain.OUTPUTS], chain.Y.name),
     }
-    assert (chain.H.name, chain.T.name, chain.Y.name) == ("INT8", "UINT2", "INT7")
+    # Each MatMul's from its weights' columns (K7).
+    assert (chain.H.name, chain.T.name, chain.Y.name) == ("INT6", "UINT2", "INT5")
     after = model.transform(InferShapes()).transform(InferDataTypes())
     assert tensors(after) == tensors(model)
 
 
-def test_an_unannotated_input_and_a_narrower_annotation_are_refused() -> None:
+def test_an_input_that_conflicts_is_refused_an_output_is_stated_again() -> None:
     with pytest.raises(KernelOpError, match="first: x has no datatype annotation"):
         converted(annotate_input=False).transform(InferKernelTensors())
-    narrow = converted()
-    narrow.set_tensor_datatype("hidden", chain.T)
-    with pytest.raises(KernelOpError, match="hidden is annotated UINT2, narrower than INT8"):
-        narrow.transform(InferKernelTensors())
-    # A wider statement is replaced by the exact type.
-    wide = converted()
-    wide.set_tensor_datatype("hidden", DataType["INT16"])
-    assert tensors(wide.transform(InferKernelTensors()))["hidden"][1] == "INT8"
+    conflicting = converted()
+    conflicting.set_tensor_datatype("w1", DataType["INT2"])
+    with pytest.raises(KernelOpError, match="w1 is annotated INT2 and holds values over"):
+        conflicting.transform(InferKernelTensors())
+    # An output's annotation is its producer's statement: replaced, narrower or wider.
+    for stated in (chain.T, DataType["INT16"]):
+        model = converted()
+        model.set_tensor_datatype("hidden", stated)
+        assert tensors(model.transform(InferKernelTensors()))["hidden"][1] == "INT6"
+
+
+def test_a_fact_change_that_widens_a_result_reaches_what_follows() -> None:
+    """Lifting first's weights to a graph input leaves their datatype only: its result
+    widens from the columns' range to the datatypes', and inference, run again, states
+    the wider type, which the Thresholding that follows reads."""
+    model = inferred()
+    lift(model, "w1")
+    model.set_tensor_datatype("w1", chain.W)
+    model = model.transform(InferKernelTensors())
+    wide = exact_result_dtype(chain.INPUTS, chain.A, chain.W)
+    assert (chain.H.name, wide.name) == ("INT6", "INT8")
+    assert tensors(model)["hidden"] == ([chain.ROWS, chain.HIDDEN], wide.name)
+    activate = kernel_op(model, model.graph.node[1])
+    assert activate.input_edges()["x"].element.dtype == wide
+    point: Any = activate.point()
+    assert point.activate.input_dtype == wide
+    assert [kernel_op(model, node).verify_node() for node in model.graph.node] == [[], [], []]
 
 
 @pytest.mark.parametrize("second_weights", (True, False))
