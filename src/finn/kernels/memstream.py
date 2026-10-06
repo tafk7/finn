@@ -74,7 +74,7 @@ from finn.kernels.values.semantics import (
     IntegerVector,
     integer_range,
     integer_shape,
-    integers,
+    row_major,
 )
 
 LANE = Index("lane")
@@ -190,7 +190,7 @@ class MemStreamKernel(Kernel):
                 + (f"one operand per set ({sets}), each " if sets > 1 else "")
                 + f"of the form's shape {form.shape}",
             )
-        flat, size = integers(self.contents), prod(form.shape)
+        flat, size = row_major(self.contents), prod(form.shape)
         return tuple(
             word
             for start in range(0, sets * size, size)

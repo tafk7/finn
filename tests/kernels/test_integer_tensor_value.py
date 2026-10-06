@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import copy
 import pickle
+from collections.abc import Callable
+from typing import cast
 
+import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
@@ -28,6 +31,7 @@ from finn.kernels.values.semantics import (
     integer_digest,
     integer_range,
     integers,
+    row_major,
 )
 from kernels.helpers import FULL_DSP48E2, matmul_point
 
@@ -81,6 +85,45 @@ def test_a_stated_value_loads_its_integers_once_and_checks_them() -> None:
     wrong = IntegerTensorValue((2, 3), (-6, 6), digest, load)
     with pytest.raises(ValueError, match="loaded other integers"):
         wrong.integers
+
+
+def test_a_memory_image_reads_a_read_only_int64_array_up_to_64_bits() -> None:
+    """``row_major`` is what ``pack`` reads: an int64 array, loaded once and checked as
+    ``integers`` is, the integers read from it; beyond 64 bits, ``integers``."""
+    loads: list[int] = []
+
+    def load() -> tuple[int, ...]:
+        loads.append(1)
+        return (1, -2, 3, 4, 5, -6)
+
+    digest = integer_digest((2, 3), integer_bytes((1, -2, 3, 4, 5, -6)))
+    stated = IntegerTensorValue((2, 3), (-6, 5), digest, load)
+    array = row_major(stated)
+    assert isinstance(array, np.ndarray) and array.dtype == np.int64 and array.shape == (6,)
+    assert not array.flags.writeable and array.tolist() == [1, -2, 3, 4, 5, -6]
+    assert stated.integers == (1, -2, 3, 4, 5, -6) and stated.row_major is array
+    assert loads == [1] and all(type(item) is int for item in stated.integers)
+    nested = row_major(WEIGHTS)
+    assert isinstance(nested, np.ndarray) and nested.tolist() == [1, -2, 3, 4, 5, -6]
+    edges = IntegerTensorValue.of(((2**63 - 1, -(2**63)),)).row_major
+    assert isinstance(edges, np.ndarray) and edges.tolist() == [2**63 - 1, -(2**63)]
+    wide = IntegerTensorValue.of(((2**63, -1),))
+    assert wide.row_major is wide.integers
+    misstated: tuple[tuple[object, ...], ...] = (
+        (1, -2, 3, 4, 5),
+        (1, -2, 3, 4, 5, -7),
+        (1, -2, 3, 4, 2**63, -6),
+        ((1, -2, 3), (4, 5, -6)),
+    )
+    for loaded in misstated:
+        wrong = IntegerTensorValue((2, 3), (-6, 5), digest, _loading(loaded))
+        with pytest.raises(ValueError, match="loaded other integers"):
+            wrong.row_major
+
+
+def _loading(found: tuple[object, ...]) -> Callable[[], tuple[int, ...]]:
+    """A load that returns ``found``, whatever it holds."""
+    return lambda: cast(tuple[int, ...], found)
 
 
 def test_a_new_configuration_reads_only_the_stated_facts() -> None:

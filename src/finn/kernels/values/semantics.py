@@ -13,6 +13,9 @@ from itertools import chain
 from math import prod
 from typing import cast
 
+import numpy as np
+import numpy.typing as npt
+
 from finn.core.space import ValueSemantics
 from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
@@ -97,17 +100,20 @@ class IntegerTensorValue:
     Its producer states it. Nested int tuples make one by a single walk (``of``); a
     producer that holds the integers in another form states the facts and how to load
     them (a KernelOp's initializer, an array: loaded only when a memory image is
-    packed). Loading checks the stated shape and range. Immutable; a copy is the value
+    packed). Loading checks the stated shape and range. A memory image reads them as
+    ``row_major``: a read-only int64 array when the stated range fits in 64 bits, so
+    the integers of an array are never made Python ints. Immutable; a copy is the value
     itself.
     """
 
-    __slots__ = ("shape", "range", "digest", "_load", "_integers")
+    __slots__ = ("shape", "range", "digest", "_load", "_integers", "_array")
 
     shape: tuple[int, ...]
     range: tuple[int, int]
     digest: str
     _load: Callable[[], Sequence[int]]
     _integers: tuple[int, ...] | None
+    _array: npt.NDArray[np.int64] | None
 
     def __init__(
         self,
@@ -127,6 +133,7 @@ class IntegerTensorValue:
         object.__setattr__(self, "digest", digest)
         object.__setattr__(self, "_load", load)
         object.__setattr__(self, "_integers", None)
+        object.__setattr__(self, "_array", None)
 
     @classmethod
     def of(cls, values: object) -> IntegerTensorValue:
@@ -162,14 +169,48 @@ class IntegerTensorValue:
         shape and range."""
         found = self._integers
         if found is None:
-            found = tuple(self._load())
-            if len(found) != prod(self.shape) or (min(found), max(found)) != self.range:
-                raise ValueError(
-                    f"an integer tensor stated as {self.shape} over {list(self.range)} "
-                    "loaded other integers"
-                )
+            if self._fits:
+                found = tuple(self._int64().tolist())
+            else:
+                found = tuple(self._load())
+                if len(found) != prod(self.shape) or (min(found), max(found)) != self.range:
+                    raise self._misstated()
             object.__setattr__(self, "_integers", found)
         return found
+
+    @property
+    def row_major(self) -> Sequence[int] | npt.NDArray[np.int64]:
+        """Every integer, row-major, as a memory image packs them: a read-only int64
+        array when the stated range fits in 64 bits, else ``integers``. Loaded on first
+        read and checked as ``integers`` is."""
+        return self._int64() if self._fits else self.integers
+
+    @property
+    def _fits(self) -> bool:
+        least, greatest = self.range
+        return -(2**63) <= least and greatest < 2**63
+
+    def _int64(self) -> npt.NDArray[np.int64]:
+        found = self._array
+        if found is None:
+            loaded = self._integers if self._integers is not None else self._load()
+            try:
+                found = np.array(loaded, dtype=np.int64)
+            except OverflowError:
+                raise self._misstated() from None
+            if found.shape != (prod(self.shape),):
+                raise self._misstated()
+            if (int(found.min()), int(found.max())) != self.range:
+                raise self._misstated()
+            found.flags.writeable = False
+            object.__setattr__(self, "_array", found)
+        return found
+
+    def _misstated(self) -> ValueError:
+        return ValueError(
+            f"an integer tensor stated as {self.shape} over {list(self.range)} "
+            "loaded other integers"
+        )
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError(f"an integer tensor value is immutable; cannot set {name}")
@@ -205,6 +246,12 @@ IntegerTensor = IntegerTensorValue | tuple[object, ...]
 def integers(values: object) -> tuple[int, ...]:
     """Every integer of an integer tensor, row-major."""
     return _value(values).integers
+
+
+def row_major(values: object) -> Sequence[int] | npt.NDArray[np.int64]:
+    """Every integer of an integer tensor, row-major, as a memory image packs them
+    (``IntegerTensorValue.row_major``)."""
+    return _value(values).row_major
 
 
 def integer_shape(values: object) -> tuple[int, ...] | None:
@@ -275,4 +322,5 @@ __all__ = [
     "integer_range",
     "integer_shape",
     "integers",
+    "row_major",
 ]

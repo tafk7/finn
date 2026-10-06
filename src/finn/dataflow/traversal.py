@@ -31,6 +31,9 @@ from dataclasses import dataclass
 from enum import Enum
 from math import prod
 
+import numpy as np
+import numpy.typing as npt
+
 Position = tuple[int, ...]
 
 
@@ -431,12 +434,17 @@ def period(form: Traversal) -> Traversal:
     return Traversal(form.shape, loops[moving:], form.lane_loops)
 
 
-def pack(form: Traversal, integers: Sequence[int], bits: int) -> tuple[int, ...]:
+def pack(
+    form: Traversal, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
+) -> tuple[int, ...]:
     """Pack an integer operand of ``form.shape``, given as its row-major ``integers``, into
-    one raw word per beat, lane zero lowest.
+    one raw word per beat, lane zero lowest: each lane the low ``bits`` bits of its
+    integer's two's complement.
 
     Each beat's lanes are read at their flat offsets (``position`` before it is
-    unravelled), so no position is formed and no nested operand walked.
+    unravelled), so no position is formed and no nested operand walked. Integers that
+    fit in 64 bits are packed with numpy, at any lane and word width; an operand with
+    one that does not is packed one Python integer at a time. Both give the same words.
     """
     require_positive(bits, "bits")
     size = prod(form.shape)
@@ -444,6 +452,42 @@ def pack(form: Traversal, integers: Sequence[int], bits: int) -> tuple[int, ...]
         raise ValueError(
             f"an operand of shape {form.shape} has {size} integers, not {len(integers)}"
         )
+    try:
+        flat = np.asarray(integers, dtype=np.int64)
+    except OverflowError:
+        return _pack_exact(form, integers, bits)
+    lanes = flat[_offset_array(form.beat_loops)[:, None] + _offset_array(form.lane_loops)]
+    # Bit k of every lane, lane zero's bits first and each lane's least significant
+    # first; an arithmetic shift by at most 63 reads the sign above an int64.
+    planes = np.empty((*lanes.shape, bits), dtype=np.uint8)
+    for k in range(bits):
+        planes[..., k] = (lanes >> min(k, 63)) & 1
+    raw = np.packbits(planes.reshape(len(lanes), -1), axis=1, bitorder="little")
+    width = raw.shape[1]
+    if width <= 8:
+        padded = np.zeros((len(raw), 8), dtype=np.uint8)
+        padded[:, :width] = raw
+        return tuple(padded.view("<u8").ravel().tolist())
+    data = raw.tobytes()
+    return tuple(
+        int.from_bytes(data[start : start + width], "little")
+        for start in range(0, len(data), width)
+    )
+
+
+def _offset_array(loops: Sequence[Loop]) -> npt.NDArray[np.int64]:
+    """``_offsets`` as an array."""
+    found = np.zeros(1, dtype=np.int64)
+    for loop in loops:
+        steps = np.arange(loop.extent, dtype=np.int64) * loop.stride
+        found = (found[:, None] + steps).ravel()
+    return found
+
+
+def _pack_exact(
+    form: Traversal, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
+) -> tuple[int, ...]:
+    """``pack`` one Python integer at a time, for integers beyond 64 bits."""
     mask = (1 << bits) - 1
     lanes = tuple(zip(_offsets(form.lane_loops), range(0, form.lanes * bits, bits)))
     words = []
