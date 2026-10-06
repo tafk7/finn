@@ -33,6 +33,7 @@ class RejectParked(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, RejectParked())
 from finn.core.space import Space, design_space
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
@@ -73,7 +74,7 @@ class Placed(Space):
         platform=PLATFORM,
     )
     compute = PackedDotpKernel(
-        result_dtype=DataType["INT8"],
+        result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_channel=x,
         w_channel=w,
         y_channel=y,
@@ -109,12 +110,11 @@ for memory in ("none", "memstream"):
         platform=PLATFORM,
     )
     # Stored weights are the weight channel's value, which its source stores; the
-    # result is their columns' (the identity's, [-4, 3], at least one product wide:
-    # INT5), or the datatypes' (INT8).
+    # result is their columns' (the identity's, [-4, 3]: INT3), or the datatypes' (INT8).
     stored, result = {}, INT8
     if memory == "memstream":
         stored["contents"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
-        result = ScalarEncoding(DataType["INT5"])
+        result = INT3
 
     class Placed(Root):
         x = Channel(tensor=Tensor((2, 4), INT3), port="in0_V", platform=PLATFORM)

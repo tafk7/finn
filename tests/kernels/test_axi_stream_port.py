@@ -29,6 +29,7 @@ from finn.core.space import (
     design_space,
     divisors_of,
 )
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -202,7 +203,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
             form=Form.DENSE,
             reshape_activations=True,
             platform=FULL_DSP58,
-            result_dtype=DataType["INT9"],
+            result_range=ordinary_integer_bounds(DataType["INT9"]),
             x_channel=x,
             w_channel=w,
             y_channel=y,
@@ -216,7 +217,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
         x = stream((2, 14), "INT3", "in0_V")
         compute = PackedDotpKernel(
             platform=FULL_DSP58,
-            result_dtype=DataType["INT9"],
+            result_range=ordinary_integer_bounds(DataType["INT9"]),
             x_channel=x,
             w_channel=Placed.w,
             y_channel=Placed.y,

@@ -210,21 +210,21 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
 
 
 @pytest.mark.parametrize(
-    "weights,value_range",
+    "weights,value_range,result",
     [
-        (((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), (-4, 3)),  # the identity
-        (((0,) * 4,) * 4, (0, 0)),  # zeros
+        (((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)), (-4, 3), "INT3"),  # identity
+        (((0,) * 4,) * 4, (0, 0), "BINARY"),  # zeros
     ],
 )
-def test_a_narrow_result_range_keeps_an_accumulator_one_product_wide(weights, value_range):
-    """The columns' range stays exact on the result element; the accumulator holding it
-    is at least one INT3 x INT3 product wide (3 + 3 - 1 bits), which FinnLib's packed
-    dotp needs to elaborate."""
+def test_a_narrow_result_range_is_the_result_and_the_accumulator(weights, value_range, result):
+    """The result is the columns' range in its smallest encoding, narrower than one INT3 x
+    INT3 product (3 + 3 - 1 bits), and the packed core accumulates in it: FinnLib's
+    packed dotp computes the sum modulo 2**ACCU_WIDTH, exact where the range bounds it."""
     point = configured(base(weights=weights), style="block")
     assert point.matmul.result_range == value_range
-    assert point.matmul.result_type == DataType["INT5"]
-    assert point.matmul.compute.y.element == ScalarEncoding(DataType["INT5"], value_range)
-    assert point.matmul.compute.parameters()["ACCU_WIDTH"] == 5
+    assert point.matmul.result_type == DataType[result]
+    assert point.matmul.compute.y.element == ScalarEncoding(DataType[result], value_range)
+    assert point.matmul.compute.parameters()["ACCU_WIDTH"] == DataType[result].bitwidth()
     assert isinstance(point.query(Kernel.module), Available)
 
 

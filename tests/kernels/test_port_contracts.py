@@ -23,6 +23,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, Rejected, Space, design_space
+from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -98,7 +99,7 @@ def placed(
         )
         compute = core(
             form=form,
-            result_dtype=R,
+            result_range=ordinary_integer_bounds(R),
             x_channel=a,
             w_channel=w_s,
             y_channel=r,

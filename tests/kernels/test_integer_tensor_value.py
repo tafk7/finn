@@ -162,8 +162,9 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
         platform=FULL_DSP48E2,
         weights=weights,
     )
-    # The weight channel's tensor is stated over the value's range; MatMul reads INT3.
-    assert base.w.tensor == Tensor((4, 4), ScalarEncoding(int3, (-1, 1)))
+    # The weight channel's tensor is stated over the value's range, in the encoding it
+    # needs (INT2); MatMul reads INT3.
+    assert base.w.tensor == Tensor((4, 4), ScalarEncoding(DataType["INT2"], (-1, 1)))
     assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
     handles = {item.key: item.reference for item in inspection.decisions(base)}
     point = base.with_choices({handles["matmul.compute"]: "packed"})

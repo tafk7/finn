@@ -232,9 +232,9 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
     roots = {"finnlib": finnlib_root()}
     emitted = emit_module(built.module, tmp_path / "a", roots=roots)
     wrapper = (emitted.directory / (emitted.entry_point + ".sv")).read_text()
-    # Unknown weights: the datatypes' range, INT8; known zero weights: [0, 0], at least
-    # one INT3 x INT3 product wide (FinnLib's dotp elaborates no narrower): INT5.
-    assert f".ACCU_WIDTH({5 if 'weights' in options else 8})" in wrapper
+    # Unknown weights: the datatypes' range, INT8; known zero weights: [0, 0], whose
+    # smallest encoding, BINARY, the packed core accumulates in (FinnLib's ACCU_WIDTH >= 1).
+    assert f".ACCU_WIDTH({1 if 'weights' in options else 8})" in wrapper
     assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
     if delivery is WeightDelivery.MEMSTREAM:
         assert '.INIT_FILE("memstream_' in wrapper
@@ -263,7 +263,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             form=MatMulKernel.datapath,
             platform=MatMulKernel.platform,
             reshape_activations=MatMulKernel.dense_view,
-            result_dtype=MatMulKernel.result_type,
+            result_range=MatMulKernel.result_range,
             x_channel=MatMulKernel.x_channel,
             w_channel=MatMulKernel.w_channel,
             y_channel=MatMulKernel.y_channel,

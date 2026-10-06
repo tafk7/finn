@@ -583,7 +583,7 @@ def kernel_fixtures(api):
                 x_channel=dotp_streams["x"],
                 w_channel=dotp_streams["w"],
                 y_channel=dotp_streams["y"],
-                result_dtype=int8,
+                result_range=(-128, 127),  # int8's: the core's accumulator is INT8
                 platform=platform,
             ),
         },

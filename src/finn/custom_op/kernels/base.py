@@ -68,6 +68,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
 from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.values.domains import stored_element
 from finn.kernels.values.semantics import IntegerTensorValue, integer_bytes, integer_digest
 
 if TYPE_CHECKING:
@@ -140,12 +141,13 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
 
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
     """The tensor a channel carries, as the graph states it: its shape as rows and its
-    annotation; an initializer of integers (``admitted``) over its values' range, the
-    range its owner promises."""
+    annotation; an initializer of integers (``admitted``) as its owner states it, over
+    its values' range in the encoding they need (``stored_element``: INT8-typed ternary
+    weights are ``INT2 over [-1, 1]``)."""
     dtype = datatype(model, tensor, label)
     stored = model.get_initializer(tensor)
     element = (
-        ScalarEncoding(dtype, (int(stored.min()), int(stored.max())))
+        stored_element(dtype, (int(stored.min()), int(stored.max())))
         if stored is not None and is_ordinary_integer(dtype)
         else ScalarEncoding(dtype)
     )
