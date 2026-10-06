@@ -201,7 +201,7 @@ def slot_declaration(value: object) -> Declaration | None:
 
 
 def is_reference_input(declaration: object) -> bool:
-    """``output: Stream = Param()``: a formal whose value is a node."""
+    """``output: Channel = Param()``: a formal whose value is a node."""
     return (
         isinstance(declaration, Param)
         and not isinstance(declaration, LocatedParam)

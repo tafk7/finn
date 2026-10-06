@@ -51,7 +51,7 @@ so they belong to whoever owns the edge.
 A channel whose tensor has a known value (``contents``, one operand per set;
 with several ``sets``, its ``index`` channel selects one) carries a
 ``source`` Decision over the kernels that can drive it with that value
-(``SOURCES``: a memory now). It applies only when the value is known
+(``SOURCES``: a memory). It applies only when the value is known
 (``valued``), and it has no ``none`` case: one viable candidate is forced. The
 source is the channel's producer end, placed by the channel (``staged``), its
 leaf below the channel at ``source.<case>``; it stores one period of the value
@@ -121,8 +121,7 @@ from finn.kernels.values.semantics import (
 )
 
 SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
-"""The kernels that can drive a channel with its known value: a memory; later a fetcher
-from memory-mapped memory, a loop's memory, a source reloadable over AXI-Lite."""
+"""The kernels that can drive a channel with its known value, by case: a memory."""
 
 
 def boundary_contract(

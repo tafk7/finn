@@ -8,7 +8,7 @@ KernelOps (``partition_root``: their kernels and the channels between them) and
 commits every Decision the configuration leaves open, the kernels' (folding,
 memories, compute cores), the channels' (a ``source`` when several are viable,
 its memories, adapter memories), by asking the policy. It persists them on the
-nodes that own them (``save_partition_choices``, D8), so the model replays
+nodes that own them (``save_partition_choices``), so the model replays
 them.
 
 The policy only ranks. The engine decides what is viable
@@ -21,8 +21,8 @@ cannot enumerate, is refused, named.
 
 A preference between a Decision's cases is the policy's: the order of a
 kernel's domain states none. ``PlaceholderPolicy`` is the only policy, and a
-placeholder: it stands where a design space exploration will rank by cost
-(gate A, G4), and nothing should come to rely on its choices.
+placeholder: it stands where a design space exploration will rank by cost,
+and nothing should come to rely on its choices.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class KernelChoicePolicy(Protocol):
 
 
 class PlaceholderPolicy:
-    """The DSE seam's placeholder (gate A, G4): deterministic, and not a design.
+    """The DSE seam's placeholder: deterministic, and not a design.
 
     It folds every PE and SIMD to ``lanes`` where that is viable, otherwise to the
     largest viable factor, ranks the cases it has a preference for first

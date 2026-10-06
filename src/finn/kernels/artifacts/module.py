@@ -7,7 +7,7 @@ A ``Leaf`` is a FinnLib module bound to a configuration: its name, parameters
 and ABI (``Abi``: its pins, parameters as RTL spells them and aligned clocks),
 the files that provide it, the data it reads, and what it holds while part of
 it is idle (``Held``). A ``Composed`` module is a ``Fragment`` with an ABI:
-leaf instances, the ``Link`` of each stream hop between their pins and the
+leaf instances, the ``Link`` of each channel hop between their pins and the
 control buses it presents (``BusExport``). Every instance is a leaf: the
 netlist is flat, and grouping it into modules is a later decision of the flow.
 
@@ -249,7 +249,7 @@ Marker = tuple[str, Union[int, None], str, Union[int, None]]
 
 @dataclass(frozen=True)
 class Link:
-    """One stream hop: sink lane ``i`` takes source lane ``lanes[i]``, lane zero least
+    """One channel hop: sink lane ``i`` takes source lane ``lanes[i]``, lane zero least
     significant, each ``lane_bits`` wide; valid forward, ready back, and each marker pair
     from source to sink."""
 

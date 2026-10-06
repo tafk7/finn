@@ -38,8 +38,8 @@ AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
 runtime-writable (``controlled``), and otherwise held idle by its module, as
 is the set selector of a single set. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
-selection remains supported. Floating-point threshold comparison is outside
-this first profile.
+selection is supported. Floating-point threshold comparison is outside this
+profile.
 Biases below -N-1 are refused: the native unsigned width expression creates a
 33-bit output, but the result addition zero-extends the negative 32-bit bias.
 """

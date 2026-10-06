@@ -16,7 +16,7 @@ What crosses it:
   QONNX datatype *value*; a kernel's result type goes back as an annotation.
 - **Value information** is not a datatype. An initializer's values are
   admitted against its annotation from QONNX's value summary at the graph
-  boundary; the range of values a stream carries lives on its element
+  boundary; the range of values a channel carries lives on its element
   (``finn.dataflow.tensor.ScalarEncoding``), stated by the value owner and
   derived again on every build. Kernels read neither annotations nor
   summaries: they never read ONNX.
