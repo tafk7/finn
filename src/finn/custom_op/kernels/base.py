@@ -486,20 +486,22 @@ class KernelOp(CustomOp):
 
     # -- in a partition root ---------------------------------------------------------------
 
-    def owned(self) -> dict[str, str]:
-        """The tensor of each parameter port whose value this node owns, by port: its
-        channel is this node's to declare, and carries the kernel's views."""
-        return {port: self.onnx_node.input[self.ports.index(port)] for port in self.facts().owned}
+    def inputs(self) -> dict[str, str]:
+        """The tensor of each of this node's input channels, by port."""
+        return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
 
-    def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:
-        """This node's kernel on a partition's ``channels`` (by tensor), its formals
-        literals: the placement its node root is generated from. And the tensor of each
-        of its input channels, by port."""
-        facts = self.facts()
-        inputs = {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
-        tensors = inputs | dict(zip(self.outputs, self.onnx_node.output))
+    def owned(self, facts: Facts) -> dict[str, str]:
+        """The tensor of each parameter port whose value this node owns (``facts``, the
+        node's), by port: its channel is this node's to declare, and carries the kernel's
+        views."""
+        return {port: self.onnx_node.input[self.ports.index(port)] for port in facts.owned}
+
+    def place(self, facts: Facts, channels: Mapping[str, Channel]) -> Kernel:
+        """This node's kernel, from its ``facts``, on a partition's ``channels`` (by
+        tensor), its formals literals: the placement its node root is generated from."""
+        tensors = self.inputs() | dict(zip(self.outputs, self.onnx_node.output))
         on = {port: channels[tensor] for port, tensor in tensors.items()}
-        return placed(type(self), facts.formals(), on, facts.owned), inputs
+        return placed(type(self), facts.formals(), on, facts.owned)
 
     # -- inference ------------------------------------------------------------------------
 

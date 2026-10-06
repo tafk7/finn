@@ -21,7 +21,9 @@ A key is the facts by value, an initializer by its value summary's
 Points are immutable (replay returns successors), so sharing one across op
 instances and models is sound, and keys are values, so nothing is ever
 invalidated: changed facts are another key. The bound is memory: a
-least-recently-used cache of entries, base and replayed points alike.
+least-recently-used cache of entries, base and replayed points alike
+(``LeastRecentlyUsed``, which also keeps the partition roots' composite classes,
+``finn.custom_op.kernels.partition``).
 """
 
 from __future__ import annotations
@@ -29,11 +31,13 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Generic, TypeVar, cast
 
 from finn.core.space import design_space
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
+
+V = TypeVar("V")
 
 
 @dataclass(frozen=True)
@@ -52,31 +56,44 @@ class Facts:
     owned: tuple[str, ...] = ()
 
 
-class BindCache:
-    """Kernels and base points by facts, replayed points by facts and choices; a bounded
-    LRU."""
+class LeastRecentlyUsed(Generic[V]):
+    """Values by key, at most ``size``: a hit makes its entry the most recent, a miss
+    builds the value and evicts the least recently used past the bound. A build that
+    raises caches nothing."""
 
-    def __init__(self, size: int = 128) -> None:
+    def __init__(self, size: int) -> None:
         self.size = size
-        self.entries: OrderedDict[tuple[Hashable, ...], Kernel] = OrderedDict()
+        self.entries: OrderedDict[Hashable, V] = OrderedDict()
         self.hits = self.misses = 0
 
-    def _get(self, key: tuple[Hashable, ...], build: Callable[[], Kernel]) -> Kernel:
+    def get(self, key: Hashable, build: Callable[[], V]) -> V:
         found = self.entries.get(key)
         if found is not None:
             self.entries.move_to_end(key)
             self.hits += 1
             return found
         self.misses += 1
-        point = build()
-        self.entries[key] = point
+        value = build()
+        self.entries[key] = value
         while len(self.entries) > self.size:
             self.entries.popitem(last=False)
-        return point
+        return value
+
+    def clear(self) -> None:
+        self.entries.clear()
+        self.hits = self.misses = 0
+
+
+class BindCache(LeastRecentlyUsed[Kernel]):
+    """Kernels and base points by facts, replayed points by facts and choices; a bounded
+    LRU."""
+
+    def __init__(self, size: int = 128) -> None:
+        super().__init__(size)
 
     def kernel(self, facts: Facts) -> Kernel:
         """The op's kernel alone, bound from the formals in ``facts``."""
-        return self._get(
+        return self.get(
             (facts.kernel, *facts.key),
             lambda: design_space(cast(Any, facts.kernel)(**facts.formals())),
         )
@@ -89,7 +106,7 @@ class BindCache:
         """The node root bound from ``facts``, nothing chosen."""
         key, edges = self._root_key(facts)
         tensors = {f"{port}_tensor": tensor for port, tensor in edges.items()}
-        return self._get(
+        return self.get(
             key, lambda: design_space(cast(Any, facts.root)(**facts.formals(), **tensors))
         )
 
@@ -100,15 +117,11 @@ class BindCache:
         raises out of ``build`` and caches nothing."""
         chosen = tuple(sorted((key, type(value).__name__, value) for key, value in choices.items()))
         key, _ = self._root_key(facts)
-        return self._get((*key, chosen), lambda: build(self.point(facts)))
-
-    def clear(self) -> None:
-        self.entries.clear()
-        self.hits = self.misses = 0
+        return self.get((*key, chosen), lambda: build(self.point(facts)))
 
 
 BIND_CACHE = BindCache()
 """The process's cache, which every KernelOp binds through."""
 
 
-__all__ = ["BIND_CACHE", "BindCache", "Facts"]
+__all__ = ["BIND_CACHE", "BindCache", "Facts", "LeastRecentlyUsed"]
