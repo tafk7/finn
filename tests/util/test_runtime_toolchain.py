@@ -212,6 +212,19 @@ def test_settings_are_scoped_and_disable_bash_startup(tmp_path, monkeypatch):
     assert not (tmp_path / "bad").exists()
 
 
+def test_the_clean_base_keeps_the_hosts_preload(tmp_path, monkeypatch):
+    # The image's libudev.so.1 preload keeps Vivado's licence library alive; a
+    # settings-scripts selection must not drop it with the other toolchain's state.
+    settings = tmp_path / "settings64.sh"
+    settings.write_text("export SELECTED=1\n")
+    monkeypatch.setenv("LD_PRELOAD", "/lib/x86_64-linux-gnu/libudev.so.1")
+    monkeypatch.setenv("XILINX_VIVADO", "/another/Vivado")
+    environment = Selection(settings=(settings,)).prepare().environment
+    assert environment["LD_PRELOAD"] == "/lib/x86_64-linux-gnu/libudev.so.1"
+    assert environment["SELECTED"] == "1"
+    assert "XILINX_VIVADO" not in environment
+
+
 def test_environment_and_selection_are_defensive_snapshots(tmp_path):
     source = {"PATH": os.defpath, "CHOICE": "before"}
     launch = ["site"]
