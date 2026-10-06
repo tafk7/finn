@@ -88,7 +88,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     assert compute["CORE"] == '"dotp_8sx9_dsp58"'
     widths = {
         port.name: next(item.width for item in port.signals if item.logical == "tdata")
-        for port in module.pins.ports
+        for port in module.abi.pins
         if port.name.endswith("_V")
     }
     # PE channels of SIMD window positions per activation beat; the result is exact.
@@ -129,7 +129,7 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
         weight_delivery=WeightDelivery.MEMSTREAM,
         weights=weights,
     )
-    assert "in1_V" not in {port.name for port in built.module.pins.ports}
+    assert "in1_V" not in {port.name for port in built.module.abi.pins}
     # Channel folds, then window folds; PE channels of SIMD taps a beat, SIMD fastest.
     assert len(built.initializer) == 2 * 3
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (12, 12, 4)

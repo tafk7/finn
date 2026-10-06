@@ -176,24 +176,24 @@ for id in "${ids[@]}"; do
 done
 
 if [ "$SMOKE" = 1 ]; then
-    sweep_run packed kernels.rtlsim.matmul_numeric --case packed &
+    sweep_run packed kernels.sweeps.matmul_numeric --case packed &
 else
     pytest_run kernels-rest --confcutdir=tests/kernels tests/kernels \
         --ignore=tests/kernels/test_conformance.py &
     pytest_run kernel-ops-xsim --confcutdir=tests/kernel_ops tests/kernel_ops -m xsim &
     pytest_run kernel-ops-vivado --confcutdir=tests/kernel_ops tests/kernel_ops -m vivado &
 
-    sweep_run dense kernels.rtlsim.matmul_numeric &
-    sweep_run fifo-packed kernels.rtlsim.matmul_numeric --case packed --weight-fifo-depth 2 &
-    sweep_run fifo-int8-pumped kernels.rtlsim.matmul_numeric --case int8_pumped --weight-fifo-depth 2 &
-    sweep_run depthwise kernels.rtlsim.matmul_numeric --depthwise &
-    sweep_run memstream kernels.rtlsim.matmul_numeric --delivery memstream &
-    sweep_run memstream-depthwise kernels.rtlsim.matmul_numeric --depthwise --delivery memstream &
-    sweep_run pumped-memory kernels.rtlsim.matmul_numeric --pumped-memory &
-    sweep_run sets kernels.rtlsim.matmul_numeric --sets 3 &
-    sweep_run dotp kernels.rtlsim.pure_dot_product_numeric &
-    sweep_run dotp-stress kernels.rtlsim.pure_dot_product_numeric --stress &
-    sweep_run adapters kernels.rtlsim.adapter_numeric &
+    sweep_run dense kernels.sweeps.matmul_numeric &
+    sweep_run fifo-packed kernels.sweeps.matmul_numeric --case packed --weight-fifo-depth 2 &
+    sweep_run fifo-int8-pumped kernels.sweeps.matmul_numeric --case int8_pumped --weight-fifo-depth 2 &
+    sweep_run depthwise kernels.sweeps.matmul_numeric --depthwise &
+    sweep_run memstream kernels.sweeps.matmul_numeric --delivery memstream &
+    sweep_run memstream-depthwise kernels.sweeps.matmul_numeric --depthwise --delivery memstream &
+    sweep_run pumped-memory kernels.sweeps.matmul_numeric --pumped-memory &
+    sweep_run sets kernels.sweeps.matmul_numeric --sets 3 &
+    sweep_run dotp kernels.sweeps.pure_dot_product_numeric &
+    sweep_run dotp-stress kernels.sweeps.pure_dot_product_numeric --stress &
+    sweep_run adapters kernels.sweeps.adapter_numeric &
 fi
 wait
 finish 0

@@ -4,7 +4,7 @@
 """CommitKernelChoices: every open choice of a model's KernelOps, committed by a policy
 that only ranks what the engine says is viable, persisted on the owning nodes.
 
-On test_design's Chain as a model (MatMul, Thresholding, MatMul) for Ultra96 without
+On the Chain (``kernels.chain``) as a model (MatMul, Thresholding, MatMul) for Ultra96 without
 a shell: no UltraRAM, a doubled clock (nothing states it away).
 """
 

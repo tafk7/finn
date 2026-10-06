@@ -42,6 +42,7 @@ from kernels.helpers import (
     FULL_DSP48E2,
     Root,
     WeightDelivery,
+    codes,
     labels,
     matmul_assembly,
     matmul_point,
@@ -105,10 +106,6 @@ def forced(point):
     return {item.key: item.value for item in inspection.forced(point)}
 
 
-def keys(result):
-    return {finding.code for finding in result.findings}
-
-
 def owners(result):
     return {finding.owner for finding in result.findings}
 
@@ -123,7 +120,7 @@ def test_known_weights_give_the_weight_channel_its_source():
     ):
         module = point.module
         assert isinstance(module, Composed)
-        assert {p.name for p in module.pins.ports if isinstance(p, Bus)} == ports
+        assert {p.name for p in module.abi.pins if isinstance(p, Bus)} == ports
         assert labels(module) == instances
     # Known weights: the channel has a value, and its one source is forced, never committed.
     assert stored.w.valued and forced(stored)["w.source"] == "memstream"
@@ -187,7 +184,7 @@ def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     # Weights outside their type are refused where MatMul states their range.
     refused = base(weights=((4,) * 4,) * 4).matmul.query(MatMulKernel.weight_tensor)
     assert isinstance(refused, Rejected)
-    assert keys(refused) == {"matmul-weights"}
+    assert codes(refused) == {"matmul-weights"}
     assert owners(refused) == {"matmul.weight_tensor"}
     # A shape error is refused by the memory that packs them.
     wrong = configured(base(weights=((0,),)), style="auto").query(Kernel.module)
@@ -262,7 +259,7 @@ def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused(
     point = configured(base(weight_sets=2))
     answer = point.query(Kernel.module)
     assert isinstance(answer, Rejected)
-    assert "channel-unused" in keys(answer)
+    assert "channel-unused" in codes(answer)
 
 
 def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
@@ -283,13 +280,13 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
 
     point = design_space(Unindexed())
     answer = point.w.query(Channel.source)
-    assert isinstance(answer, Rejected) and keys(answer) == {"decision-no-viable-case"}
+    assert isinstance(answer, Rejected) and codes(answer) == {"decision-no-viable-case"}
     assert "memstream-set-channel" in answer.findings[0].message
     # Committed on purpose, the case is accepted (committing never checks a kernel
     # case's admission), and the candidate then refuses the configuration.
     chosen = commit(point, {"w.source": "memstream"})
     refusal = inspection.admission(chosen.w.source)
-    assert isinstance(refusal, Rejected) and "memstream-set-channel" in keys(refusal)
+    assert isinstance(refusal, Rejected) and "memstream-set-channel" in codes(refusal)
 
 
 def placed_with(platform: Platform):
@@ -319,7 +316,7 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
     assert report.accepted == (not refused)
     if refused:
         (outcome,) = report.outcomes
-        assert keys(outcome.result) == refused
+        assert codes(outcome.result) == refused
     # A platform without a doubled clock forces an unpumped memory, and says why.
     unpumped = placed_with(replace(platform, clk2x=False))
     reasons = {item.key: item.refused for item in inspection.forced(unpumped)}
@@ -335,7 +332,7 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
         matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
 
     answer = configured(design_space(Produced())).y.query(Channel.endpoints)
-    assert isinstance(answer, Rejected) and keys(answer) == {"channel-users"}
+    assert isinstance(answer, Rejected) and codes(answer) == {"channel-users"}
     assert "only producer" in answer.findings[0].message
 
 

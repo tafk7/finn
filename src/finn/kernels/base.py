@@ -81,6 +81,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import (
+    Abi,
     BuildError,
     BusExport,
     Composed,
@@ -88,7 +89,6 @@ from finn.kernels.artifacts.module import (
     Held,
     Leaf,
     Module,
-    Pins,
     ProducerIdentity,
     merge,
 )
@@ -323,7 +323,7 @@ class Kernel(Space):
             str(space_type.version),
             space_type.rtl_module,
             parameters,
-            Pins(
+            Abi(
                 (*clocking.signals(), *self.other_pins(), *pins),
                 tuple((name, str(value)) for name, value in parameters),
                 clocking.alignments(),
@@ -397,18 +397,18 @@ class Kernel(Space):
             return reject("kernel-netlist", str(error))
 
     @derived
-    def composed_pins(self) -> Pins:
+    def composed_abi(self) -> Abi:
         """Its clocks and reset, each boundary channel's AXIS bus (inputs, then outputs), then
         each presented bus."""
         fragment = self.fragment
         doubled = any(
             isinstance(info.role, Clock) and isinstance(info.role.rate, Derived)
             for _, leaf in fragment.instances
-            for info in abi_pins(leaf.pins.ports).values()
+            for info in abi_pins(leaf.abi.pins).values()
         )
         clocking = Clocking(doubled=CLOCK2X if doubled else None, doubling=doubled)
         buses = [bus for item in self.boundary_buses for bus in item.value]
-        return Pins(
+        return Abi(
             (
                 *clocking.signals(),
                 *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
@@ -432,7 +432,7 @@ class Kernel(Space):
                 producer.producer_id,
                 producer.contract_version,
                 self.stem(),
-                self.composed_pins,
+                self.composed_abi,
                 self.fragment,
             )
         except BuildError as error:

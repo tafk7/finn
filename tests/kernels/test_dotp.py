@@ -31,7 +31,7 @@ from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, Pack
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from kernels import helpers
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, full_platform
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
 
 
 def parameters(**updates):
@@ -50,11 +50,6 @@ def parameters(**updates):
 
 def kernel(space_type=PackedDotpKernel, **updates):
     return helpers.placed_dotp(space_type, **parameters(**updates))
-
-
-def codes(result):
-    assert isinstance(result, Rejected), result
-    return {finding.code for finding in result.findings}
 
 
 def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():
@@ -104,9 +99,9 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert rtl["PE"] == 2 and rtl["SIMD"] == 4
     assert rtl["NARROW_WEIGHTS"] == 0
     assert rtl["SIGNED_ACTIVATIONS"] == 1
-    ports = {port.name: port for port in requirements.pins.ports}
+    ports = {port.name: port for port in requirements.abi.pins}
     assert ports["ap_clk2x"].role == (Clock(DerivedClock("ap_clk", 2)) if pumping else Data())
-    assert bool(requirements.pins.clock_alignments) is pumping
+    assert bool(requirements.abi.clock_alignments) is pumping
     assert ports["ap_rst_n"].role.synchronous_to == (
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
@@ -151,7 +146,7 @@ def test_segment_length_follows_the_target_period(period, pumping, segment):
     platform = full_platform(DspBlock.DSP58, period_ns=period)
     point = kernel(simd=7, platform=platform, compute_pumping=pumping)
     assert point.segment_length == segment
-    assert dict(point.module.pins.parameters)["SEGMENTLEN"] == str(segment)
+    assert dict(point.module.abi.parameters)["SEGMENTLEN"] == str(segment)
 
 
 def test_dsp48_carries_the_segment_length_the_rtl_ignores():
@@ -331,8 +326,6 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).module
     finnlib = helpers.finnlib_root()
-    if not (finnlib / "rtl/linalg/dotp_axi.sv").is_file():
-        pytest.skip("FinnLib sources are unavailable")
     emitted = emit_module(requirements, tmp_path, roots={"finnlib": finnlib})
     upstream = {
         "rtl/arith/add_multi_pkg.sv",
@@ -419,3 +412,12 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     assert lanes == [6, 6, 3]
     refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.module)
     assert codes(refused) == {"dotp-form"}
+
+
+@pytest.mark.parametrize("field", ("pe", "simd"))
+def test_dotp_rejects_native_parameter_overflow(field):
+    assert isinstance(kernel(**{field: 2**32}).query(DotpAxiKernel.module), Rejected)
+
+
+def test_dotp_rejects_packed_width_overflow_even_when_dimensions_fit():
+    assert isinstance(kernel(pe=2**30, simd=2).query(DotpAxiKernel.module), Rejected)

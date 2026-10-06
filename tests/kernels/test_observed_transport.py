@@ -5,7 +5,7 @@
 
 import pytest
 
-from kernels.rtlsim import rtl_transport
+from kernels.sweeps import rtl_transport
 
 
 class Port:

@@ -78,7 +78,7 @@ def constants(first=VECTOR, second=VECTOR):
 
 def test_matching_channels_compose_into_one_module():
     built = constants().module
-    names = {port.name for port in built.pins.ports}
+    names = {port.name for port in built.abi.pins}
     assert {"ap_clk", "ap_rst_n", "out0_V", "out1_V"} <= names
 
 

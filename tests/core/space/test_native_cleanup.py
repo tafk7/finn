@@ -9,23 +9,24 @@ from types import FrameType
 from typing import TYPE_CHECKING
 
 import pytest
-from core.space._native_support import source_line
 
+from core.space._native_support import source_line
 from finn.core.space import (
     Decision,
     EvaluationError,
     Inapplicable,
+    NativeEvaluationError,
     Param,
     Rejected,
     Space,
     Unresolved,
     _execution,
+    cancellation_details,
     constraint,
     derived,
     design_space,
     view,
 )
-from finn.core.space._execution import NativeEvaluationError, cancellation_details
 from finn.core.space.occurrence import state
 
 if TYPE_CHECKING:

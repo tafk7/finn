@@ -16,8 +16,7 @@ from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.roots import ThresholdingNode
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernel_ops.models import THRESHOLDS, thresholding_model
-from kernel_ops.test_matmul import schema_digest
+from kernel_ops.models import THRESHOLDS, schema_digest, thresholding_model
 
 MEMORY = {"ram_style": "distributed", "block_stages": 1, "ultra_stages": 0}
 

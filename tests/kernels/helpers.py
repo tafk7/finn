@@ -45,7 +45,7 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space.results import Available, QueryResult
-from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.module import Composed, Leaf
@@ -53,12 +53,17 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
+from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.target import DspBlock, Platform
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
+    IntegerVector,
+    ThresholdTable,
 )
 
 T = TypeVar("T")
@@ -266,6 +271,72 @@ def controlled(space_type: Callable[..., S], facts: Mapping[str, object], **choi
     return kernel
 
 
+THRESHOLD_TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
+"""One threshold table: two channels of three thresholds."""
+
+
+def threshold_base(
+    *,
+    table: ThresholdTable = THRESHOLD_TABLE,
+    bias: int = -1,
+    input_dtype: str = "INT8",
+    threshold_dtype: str = "INT5",
+) -> ThresholdingAxiKernel:
+    """A thresholding's design space, its choices open."""
+    return design_space(
+        ThresholdingAxiKernel(
+            input_dtype=resolve_qonnx_datatype_name(input_dtype),
+            threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
+            thresholds=table,
+            bias=bias,
+            platform=FULL_DSP48E2,
+        )
+    )
+
+
+def generator(
+    *,
+    bits: int = 13,
+    frame: int = 6,
+    dims: IntegerVector = (3, 6),
+    strides: IntegerVector = (0, 1),
+) -> InputGeneratorKernel:
+    """An input generator's design space, its memory Vivado's."""
+    return design_space(
+        InputGeneratorKernel(
+            word_bits=bits, frame_words=frame, dims=dims, strides=strides, platform=FULL_DSP48E2
+        )
+    ).with_choices(ram_style="auto")
+
+
+def eltwise(
+    *,
+    operation: str = "ADD",
+    pe: int = 2,
+    lhs: str = "INT3",
+    rhs: str = "INT3",
+    scale: float = 1.0,
+    target: DspBlock = DspBlock.DSP58,
+) -> EltwiseKernel:
+    """An elementwise kernel's design space, on a platform of ``target``."""
+    return design_space(
+        EltwiseKernel(
+            operation=operation,
+            pe=pe,
+            lhs_dtype=resolve_qonnx_datatype_name(lhs),
+            rhs_dtype=resolve_qonnx_datatype_name(rhs),
+            b_scale=scale,
+            platform=full_platform(target),
+        )
+    )
+
+
+def codes(result: object) -> set[str]:
+    """The codes of the findings of ``result``, which must be refused."""
+    assert isinstance(result, Rejected), result
+    return {finding.code for finding in result.findings}
+
+
 def labels(module: Composed) -> list[str]:
     """A composed module's instance labels, in netlist order."""
     return [label for label, _ in module.fragment.instances]
@@ -277,7 +348,7 @@ def placed(module: Composed, label: str) -> Leaf:
 
 
 def pin_names(module: Composed | Leaf) -> set[str]:
-    return {port.name for port in module.pins.ports}
+    return {port.name for port in module.abi.pins}
 
 
 ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"

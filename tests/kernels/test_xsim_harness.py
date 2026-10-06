@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from kernels import test_design
+from kernels.chain import chain
 from kernels.xsim import stream_through
 
 
@@ -34,5 +34,5 @@ def test_a_stream_the_module_lacks_is_refused_naming_its_ports(
     tmp_path: Path, inputs: dict, outputs: dict, complaint: str
 ) -> None:
     with pytest.raises(ValueError, match=complaint):
-        stream_through(test_design.chain().module, tmp_path, inputs=inputs, outputs=outputs)
+        stream_through(chain().module, tmp_path, inputs=inputs, outputs=outputs)
     assert not any(tmp_path.iterdir())  # refused before anything was built

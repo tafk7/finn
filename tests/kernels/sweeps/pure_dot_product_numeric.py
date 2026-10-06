@@ -23,14 +23,14 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import DspBlock
 from kernels.helpers import finnlib_root, full_platform, placed_dotp, print_identity
-from kernels.rtlsim.dotp_support import (
+from kernels.sweeps.dotp_support import (
     Case,
     _activation_beats,
     _unpack,
     _weight_beats,
     _wrapper,
 )
-from kernels.rtlsim.rtl_transport import drive_observed
+from kernels.sweeps.rtl_transport import drive_observed
 
 
 @dataclass(frozen=True)

@@ -171,7 +171,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         emitted = emit_module(
             module, project / "src", roots={"finnlib": Path(resources.path("finnlib"))}
         )
-        pins = module.pins.ports
+        pins = module.abi.pins
         script = project / "package.tcl"
         script.write_text(
             package_tcl(
