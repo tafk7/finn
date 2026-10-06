@@ -6,7 +6,6 @@ import pytest
 import importlib.util
 import json
 import os
-import warnings
 import xml.etree.ElementTree as ET
 from finn_ci import __main__ as cli
 from finn_ci import config, hw
@@ -444,11 +443,8 @@ def _load_hw_harness():
     path = os.path.join(REPO_ROOT, "ci", "test_bnn_hw_pytest.py")
     spec = importlib.util.spec_from_file_location("bnn_hw_harness", path)
     module = importlib.util.module_from_spec(spec)
-    with warnings.catch_warnings():
-        # the board markers belong to the board's pytest run, so this suite has
-        # no reason to register them just to import the file
-        warnings.simplefilter("ignore", pytest.PytestUnknownMarkWarning)
-        spec.loader.exec_module(module)
+    # Its board markers are declared in .pytest.ini: the gates run --strict-markers.
+    spec.loader.exec_module(module)
     return module
 
 

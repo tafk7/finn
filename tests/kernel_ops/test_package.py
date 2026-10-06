@@ -6,7 +6,9 @@
 The Tcl and ``vivado_stitch_ifnames`` come from the module's ABI
 (``finn.kernels.artifacts.ipxact``, checked as text in
 ``tests/kernels/artifacts/test_ipxact.py``). Here: the partition's module from
-its nodes' choices, and one test that packages the Chain (``kernels.chain``) and reads
+its nodes' choices; that the emitted top is elaborated before Vivado runs (a
+toolchain double stands for Vivado, so these run in the fast gate); and one test
+that packages the Chain (``kernels.chain``) and reads
 the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 ``kernel-ops-vivado`` job runs it).
 """
@@ -17,13 +19,17 @@ import json
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from finn.custom_op.kernels.base import KernelOpError
+from finn.kernels.artifacts import build
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition
+from finn.util.toolchain import Toolchain
 from kernel_ops.models import configure_partition, kernel_model
+from kernel_ops.packaging import NoVivado, reaches_vivado
 
 
 def test_the_partition_packages_its_nodes_choices() -> None:
@@ -54,6 +60,36 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
         package.module(model)
+
+
+def test_the_chains_emitted_top_elaborates_before_vivado(tmp_path: Path) -> None:
+    configure_partition(model := kernel_model())
+    reaches_vivado(model, "sdp_1", tmp_path / "project")
+
+
+def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configure_partition(model := kernel_model())
+    netlist = build.netlist
+
+    def broken(module, name: str) -> str:
+        # A read of a net nothing declares (an assignment to one would declare it
+        # implicitly), just before the module ends.
+        text = netlist(module, name)
+        cut = text.rindex("endmodule")
+        return text[:cut] + "    wire probe = no_such_net;\n" + text[cut:]
+
+    monkeypatch.setattr(build, "netlist", broken)
+    toolchain = NoVivado()
+    with pytest.raises(KernelOpError, match="refused before packaging") as refused:
+        model.transform(
+            PackagePartition(
+                "sdp_1", directory=tmp_path / "project", toolchain=cast(Toolchain, toolchain)
+            )
+        )
+    assert "use of undeclared identifier 'no_such_net'" in str(refused.value)
+    assert toolchain.ran == []
 
 
 @pytest.mark.vivado

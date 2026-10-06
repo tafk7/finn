@@ -37,6 +37,12 @@ choice refuses, named. The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
+Before Vivado runs, the emitted top is elaborated with slang
+(``finn.kernels.artifacts.rtl.check_abi``, under the module's parameter
+binding): a top that does not elaborate, or whose ports contradict its pins, is
+refused with slang's errors, in a fraction of a second rather than after a
+Vivado start.
+
 ``run_synth`` synthesizes the module out of context and packages the checkpoint
 instead of the sources, as CreateStitchedIP does for Vitis and SLASH.
 
@@ -59,8 +65,10 @@ from qonnx.transformation.base import Transformation
 from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, shape
 from finn.custom_op.kernels.partition import member, partition_root
-from finn.kernels.artifacts.build import emit_module
+from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
+from finn.kernels.artifacts.module import Abi
+from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import undecided
 from finn.transformation.fpgadataflow.kernel_partitions import (
@@ -137,6 +145,23 @@ def write_boundary_facts(model: ModelWrapper, label: str = "partition") -> None:
     model.set(PARTITION_OUTPUTS, outputs)
 
 
+def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
+    """Refuse an emitted top that slang cannot elaborate under the ABI's parameter
+    binding, or whose ports contradict the ABI's pins, with slang's errors."""
+    files = [emitted.directory / path for path in emitted.sources]
+    found = check_abi(abi.pins, files, emitted.entry_point, abi.parameters)
+    if isinstance(found, Declined):
+        raise KernelOpError(
+            f"{label}: the emitted top {emitted.entry_point} is refused before packaging:"
+            f" {found.reason}\n" + "\n".join(found.details)
+        )
+    if found:
+        raise KernelOpError(
+            f"{label}: the emitted top {emitted.entry_point} contradicts its pins:\n"
+            + "\n".join(found)
+        )
+
+
 class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP; see the module docstring.
 
@@ -178,6 +203,7 @@ class PackagePartition(Transformation):
         emitted = emit_module(
             module, project / "src", roots={"finnlib": Path(resources.path("finnlib"))}
         )
+        check_elaborates(emitted, module.abi, self.ip_name)
         pins = module.abi.pins
         script = project / "package.tcl"
         script.write_text(
@@ -273,6 +299,7 @@ __all__ = [
     "ElaboratePartition",
     "PackagePartition",
     "boundary_facts",
+    "check_elaborates",
     "configured_root",
     "write_boundary_facts",
 ]
