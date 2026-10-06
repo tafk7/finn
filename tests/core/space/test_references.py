@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import pytest
+from core.space._results_support import codes
 from core.space._toys_support import SPEND, Budget, Company, Department
 
 from finn.core.space import (
@@ -40,11 +41,6 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.errors import RequestError
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, (Rejected, Unresolved))
-    return {finding.code for finding in result.findings}
 
 
 def staffed(point: Company, **staff: int) -> Company:

@@ -31,7 +31,7 @@ from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, Pack
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from kernels import helpers
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, full_platform
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
 
 
 def parameters(**updates):
@@ -50,11 +50,6 @@ def parameters(**updates):
 
 def kernel(space_type=PackedDotpKernel, **updates):
     return helpers.placed_dotp(space_type, **parameters(**updates))
-
-
-def codes(result):
-    assert isinstance(result, Rejected), result
-    return {finding.code for finding in result.findings}
 
 
 def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():

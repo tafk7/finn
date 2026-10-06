@@ -12,6 +12,7 @@ The house is declared in ``_toys_support``, which the collapse tests share.
 from __future__ import annotations
 
 import pytest
+from core.space._results_support import codes
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 
 from finn.core.space import (
@@ -20,18 +21,12 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Located,
-    Rejected,
     Space,
     Unresolved,
     design_space,
     inspection,
     selections,
 )
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, (Rejected, Unresolved))
-    return {finding.code for finding in result.findings}
 
 
 def test_the_house_is_declared_then_configured() -> None:

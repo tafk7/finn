@@ -331,6 +331,12 @@ def eltwise(
     )
 
 
+def codes(result: object) -> set[str]:
+    """The codes of the findings of ``result``, which must be refused."""
+    assert isinstance(result, Rejected), result
+    return {finding.code for finding in result.findings}
+
+
 def labels(module: Composed) -> list[str]:
     """A composed module's instance labels, in netlist order."""
     return [label for label, _ in module.fragment.instances]

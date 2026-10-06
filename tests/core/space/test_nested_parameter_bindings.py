@@ -24,7 +24,6 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
-    Rejected,
     Space,
     Unresolved,
     View,
@@ -61,11 +60,6 @@ class Kernel(Space):
 
     count: int = Param()
     port: Port = Param()
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, (Rejected, Unresolved))
-    return {finding.code for finding in result.findings}
 
 
 def test_outer_params_and_decisions_supply_interface_slots_without_new_choices() -> None:

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from core.space._results_support import codes
 
 from finn.core.space import (
     Available,
@@ -48,11 +49,6 @@ from finn.core.space import (
 COST = ViewKey("cost", int)
 AGREED = ViewKey("agreed", int)
 WIDTH = ViewKey("width", int)
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, (Rejected, Unresolved))
-    return {finding.code for finding in result.findings}
 
 
 def owners(result: object) -> set[str]:

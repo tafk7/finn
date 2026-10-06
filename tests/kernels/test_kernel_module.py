@@ -16,7 +16,7 @@ from collections.abc import Mapping
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, Param, Rejected, Space, derived, design_space
+from finn.core.space import Available, Param, Space, derived, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
@@ -26,15 +26,10 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, codes
 
 INT4 = DataType["INT4"]
 TENSOR = Tensor((4,), ScalarEncoding(INT4))
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, Rejected), result
-    return {finding.code for finding in result.findings}
 
 
 class Probe(Kernel):
