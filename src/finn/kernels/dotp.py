@@ -351,7 +351,7 @@ class PackedDotpKernel(DotpAxiKernel):
     core = "dotp"
 
     #: How add_multi reduces the SIMD products: a choice within this core. The order of
-    #: its cases states no preference; a policy ranks them (``CommitKernelChoices``).
+    #: its cases states no preference; a strategy ranks them (``finn.kernels.explore``).
     reducer: str = Decision(values=REDUCERS)
 
     @derived

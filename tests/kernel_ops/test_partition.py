@@ -25,8 +25,8 @@ from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op
-from finn.custom_op.kernels.partition import partition_root, save_partition_choices
-from finn.kernels.configure import commit
+from finn.custom_op.kernels.partition import partition_root, persist
+from finn.kernels.configure import chosen, commit
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import (
     INT3,
@@ -71,7 +71,7 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     root = partition_root(model, model.graph.node, name="chain")
     # The levels edge now converts widths before its transport; its replay after it is
     # the same input_gen, whose memory choice still applies.
-    assert root.dropped == ()
+    assert not root.dropped
     assert [stage.label for stage in root.point.levels.stages] == [
         "output_adapter.vpc.vpc",
         "adapter.input_gen.input_gen",
@@ -85,7 +85,8 @@ def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None
     # A memory of a chain the levels edge does not take.
     second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
     root = partition_root(model, model.graph.node, name="chain")
-    assert root.dropped == ("levels.adapter.input_gen_vpc.input_gen.ram_style",)
+    assert list(root.dropped) == ["levels.adapter.input_gen_vpc.input_gen.ram_style"]
+    assert root.dropped["levels.adapter.input_gen_vpc.input_gen.ram_style"] == "inapplicable"
     point, _ = open_memories(root)
     assert point.levels.query(type(point.levels).adapter).value == "input_gen"
 
@@ -111,7 +112,7 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     # The node replays its own choices only: the weight edge's are the partition's.
     point: Any = streamed.point()
     assert point.matmul.compute.pe == 2 and streamed.verify_node() == []
-    assert partition_root(model, model.graph.node).dropped == ("w.source.memstream.ram_style",)
+    assert list(partition_root(model, model.graph.node).dropped) == ["w.source.memstream.ram_style"]
 
 
 def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
@@ -140,15 +141,13 @@ def test_an_edge_between_partitions_has_one_transport_its_consumers() -> None:
     point = front.point
     assert point.levels.query(type(point.levels).transport).value == "direct"
     assert "levels" not in front.owners and back.owners["levels"] == ("second", "x.")
-    with pytest.raises(KernelOpError, match="no node of the partition owns levels"):
-        save_partition_choices(model, front, {"levels.transport": "fifo"})
-    written = save_partition_choices(model, back, {"levels.transport": "fifo"})
-    assert written == {"second": {"x.transport": "fifo"}}
+    written = persist(model, back, commit(back.point, {"levels.transport": "fifo"}))
+    assert written["second"]["x.transport"] == "fifo"
 
     kernel_op(model, model.graph.node[1]).save({"y.transport": "fifo"})
-    assert partition_root(model, model.graph.node[:2], name="front").dropped == (
-        "levels.transport",
-    )
+    assert list(partition_root(model, model.graph.node[:2], name="front").dropped) == [
+        "levels.transport"
+    ]
 
 
 def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
@@ -179,12 +178,12 @@ def test_the_owner_map() -> None:
 def test_a_choice_in_the_root_persists_on_the_weight_streams_owner() -> None:
     model = kernel_model()
     root = partition_root(model, model.graph.node, name="chain")
-    written = save_partition_choices(model, root, {"w2.source.memstream.ram_style": "block"})
-    assert written == {"second": {"w.source.memstream.ram_style": "block"}}
+    written = persist(model, root, commit(root.point, {"w2.source.memstream.ram_style": "block"}))
+    assert written["second"]["w.source.memstream.ram_style"] == "block"
     second = kernel_op(model, model.graph.node[2])
     assert second.choices()["w.source.memstream.ram_style"] == "block"
     rebuilt = partition_root(model, model.graph.node, name="chain")
-    assert rebuilt.point.w2.source.ram_style == "block" and rebuilt.dropped == ()
+    assert rebuilt.point.w2.source.ram_style == "block" and not rebuilt.dropped
 
 
 def test_a_node_named_like_a_tensor_is_refused() -> None:
@@ -201,15 +200,37 @@ def test_two_nodes_of_one_member_name_are_refused() -> None:
         partition_root(model, model.graph.node)
 
 
-def test_a_kernel_choice_the_root_refuses_is_named_by_member() -> None:
-    """A choice written past ``save`` reaches the root's replay, which names it."""
+def test_a_kernel_choice_the_root_refuses_is_dropped_named_and_cleared_by_persist() -> None:
+    """A choice written past ``save`` reaches the root's replay, which drops it as stale
+    with why; the rest replays, and persisting the point clears the stale attribute."""
     model = kernel_model()
-    model.get_customop_wrapper(model.graph.node[0]).set_nodeattr("compute.packed.pe", 3)
-    with pytest.raises(
-        KernelOpError, match="^chain: refused choices: first.compute.packed.pe: "
-    ) as error:
-        partition_root(model, model.graph.node, name="chain")
-    assert error.value.keys == ("first.compute.packed.pe",)
+    first = kernel_op(model, model.graph.node[0])
+    first.set_nodeattr("compute.packed.simd", 2)
+    first.set_nodeattr("compute.packed.pe", 3)
+    root = partition_root(model, model.graph.node, name="chain")
+    assert list(root.dropped) == ["first.compute.packed.pe"]
+    assert "domain-membership" in root.dropped["first.compute.packed.pe"]
+    assert root.point.first.compute.simd == 2
+    # Its pe is open again; once chosen, the node holds the new value, nothing stale.
+    persist(model, root, commit(root.point, {"first.compute.packed.pe": 2}))
+    assert first.choices()["compute.packed.pe"] == 2
+    assert not partition_root(model, model.graph.node, name="chain").dropped
+
+
+def test_persist_clears_what_the_point_does_not_commit() -> None:
+    model = kernel_model()
+    root = partition_root(model, model.graph.node, name="chain")
+    second = kernel_op(model, model.graph.node[2])
+    second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
+    stale = partition_root(model, model.graph.node, name="chain")
+    assert list(stale.dropped) == ["levels.adapter.input_gen_vpc.input_gen.ram_style"]
+    persist(model, stale, stale.point)
+    assert "x.adapter.input_gen_vpc.input_gen.ram_style" not in second.choices()
+    assert second.choices() == {
+        key.replace("levels.", "x.", 1).replace("w2.", "w.", 1).replace("second.", "", 1): value
+        for key, value in chosen(root.point).items()
+        if key.split(".")[0] in {"second", "levels", "w2", "y"}
+    }
 
 
 @requires_xsim

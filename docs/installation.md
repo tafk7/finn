@@ -444,14 +444,24 @@ for Ultra96 (`dataflow_build_config.json`; the environment as configured, so
   "board": "Ultra96",
   "shell_flow_type": "vivado_zynq",
   "steps": ["phase_kernel_path", "phase_generate_outputs"],
-  "kernel_strategies": ["placeholder"],
+  "kernel_exploration": [
+    {"strategy": "target_throughput", "fps": 1000000},
+    {"strategy": "placeholder"}
+  ],
   "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
   "toolchain": {"hls_frontend": "vitis-run"}
 }
 ```
 
-`kernel_strategies` names the strategies that commit the KernelOps' open choices,
-run in order; the choices they commit are written to `kernel_choices.json`.
+`kernel_exploration` lists the strategies that choose the KernelOps' open choices
+through the DSE seam, run as written, each with its own parameters:
+`target_throughput` folds the least parallelism that meets `fps` at the target's
+clock, `pinned` commits a `kernel_choices.json` (`"path"`), and `placeholder`
+takes every choice left by a fixed rank (the default list is just it). A choice
+left open after the list is refused by name. The chosen choices are written to
+`kernel_choices.json`, and what the exploration found (per-member cycles and
+buffering, the bottleneck, attempts and time per strategy) to
+`report/kernel_choices.json`.
 
 Choose `FINN_HLS_FRONTEND=vivado_hls`, `vitis_hls`, or `vitis-run` for legacy entry
 points; explicit selections, and a dataflow build's configuration, name the

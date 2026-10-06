@@ -135,13 +135,14 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
 
 @pytest.mark.slow
-def test_the_verification_refuses_a_partition_with_open_choices(
+def test_an_empty_exploration_refuses_the_choices_it_leaves_open(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
-    cfg = config(tmp_path, kernel_strategies=[])
-    model = source
-    for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
-        model = step(model, cfg)
+    cfg = config(tmp_path, kernel_exploration=[])
+    model = step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg)
+    with pytest.raises(KernelOpError, match="open choices no strategy chose: .*compute.packed.pe"):
+        step_kernel_choices(model, cfg)
+    # The verification refuses a partition with open choices too.
     body = step_kernel_partition(model, cfg)
     with pytest.raises(KernelOpError, match="open Decisions, to choose before packaging"):
         step_verify_kernel_partition(body, cfg)
@@ -161,7 +162,53 @@ def test_the_verification_refuses_a_partition_for_another_target(
         step_verify_kernel_partition(body, cfg)
 
 
-def test_a_choice_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(tmp_path, kernel_strategies=["placeholder", "target_throughput"])
-    with pytest.raises(ValueError, match=r"names no strategy: \['target_throughput'\]"):
+def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
+    cfg = config(tmp_path, kernel_exploration=[{"strategy": "fifo_depths"}])
+    with pytest.raises(ValueError, match="names no kernel strategy"):
         step_kernel_choices(matmul_model(), cfg)
+    cfg = config(tmp_path, kernel_exploration=[{"strategy": "target_throughput", "fsp": 1}])
+    with pytest.raises(ValueError, match="unexpected keyword argument 'fsp'"):
+        step_kernel_choices(matmul_model(), cfg)
+
+
+#: FINN's SetFolding on TFC_W2A2 at 1,000,000 frames a second and 5 ns (200 cycles a
+#: frame): each layer's folding, which the target throughput strategy reaches by cost.
+SET_FOLDING = {
+    "MultiThreshold_0": {"pe": 4},
+    "MatMul_0": {"compute.packed.pe": 16, "compute.packed.simd": 16},
+    "MultiThreshold_1": {"pe": 1},
+    "MatMul_1": {"compute.packed.pe": 1, "compute.packed.simd": 32},
+    "MultiThreshold_2": {"pe": 1},
+    "MatMul_2": {"compute.packed.pe": 1, "compute.packed.simd": 32},
+    "MultiThreshold_3": {"pe": 1},
+    "MatMul_3": {"compute.packed.pe": 1, "compute.packed.simd": 4},
+}
+
+
+@pytest.mark.slow
+def test_a_target_throughput_folds_tfc_as_set_folding_does(
+    source: ModelWrapper, tmp_path: Path
+) -> None:
+    specs = [{"strategy": "target_throughput", "fps": 1_000_000}, {"strategy": "placeholder"}]
+    cfg = config(tmp_path, kernel_exploration=specs)
+    model = step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg)
+    model = step_kernel_choices(model, cfg)
+    folding = {
+        node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
+        for node, held in kernel_choices_config(model).items()
+    }
+    assert folding == SET_FOLDING
+    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_choices.json").read_text())
+    target, placeholder = report["strategies"]
+    assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
+        "target_throughput",
+        200,
+        None,
+    )
+    assert placeholder["strategy"] == "placeholder"
+    # Four members tie at the bottleneck: the first layer's activations, its weights,
+    # its thresholds and its MatMul.
+    assert report["bottleneck"] == {
+        "members": ["MultiThreshold_0_out0", "MatMul_0_param0", "MultiThreshold_0", "MatMul_0"],
+        "cycles": 196,
+    }

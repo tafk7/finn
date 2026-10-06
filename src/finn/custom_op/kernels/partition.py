@@ -17,10 +17,13 @@
   (``channel-boundary``);
 - **kernels**, one per node: its op's placement (``KernelOp.place``, the one its
   node root is generated from) with literal formals, on these channels;
-- **replay**: each node's kernel choices, then the edge choices (an edge's
-  adapter selector is forced, never persisted); an edge choice the current
-  graph refuses is stale, dropped and reported, and the forced case applies
-  again;
+- **replay**: every node's choices, kernel and edge alike, together; a choice
+  the current facts refuse or make inapplicable (a key nested under a selector
+  a fact change un-forced: ``compute.packed.pe`` once ``compute`` is open) is
+  stale: dropped and reported with why (``dropped``), and what it chose is open
+  again, or forced (an edge's adapter selectors are forced, never persisted).
+  Nothing is written: ``persist`` writes a configured point's choices back,
+  each node's whole, which clears the dropped ones;
 - **owners**: each member's node and attribute prefix, how a choice made in the
   root goes back to the node that persists it: a kernel's on its node, an
   edge's on its consumer, a parameter channel's on its value owner. An output
@@ -62,13 +65,13 @@ from finn.custom_op.kernels.base import (
     edge_tensor,
     kernel_op,
     read_target,
-    refusal,
     typed_choices,
 )
 from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
+from finn.kernels.configure import chosen
 from finn.kernels.target import Platform
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -89,13 +92,15 @@ class Partition(Kernel):
 
 @dataclass(frozen=True)
 class PartitionRoot:
-    """The configured root; each member's owning node and attribute prefix; the edge
-    choices replay dropped as stale; each boundary tensor's port."""
+    """The configured root; each member's owning node and attribute prefix; the choices
+    replay dropped as stale, each with why; each boundary tensor's port; its members
+    (channels, then kernels), whose cost a design space exploration reads."""
 
     point: Any
     owners: Mapping[str, tuple[str, str]]
-    dropped: tuple[str, ...]
+    dropped: Mapping[str, str]
     boundary: tuple[tuple[str, str], ...]
+    members: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -291,21 +296,30 @@ def _composite(
     return composite(name, members, base=Partition)
 
 
-def _replay_edges(point: S, choices: Mapping[str, object]) -> tuple[S, tuple[str, ...]]:
-    """``choices`` replayed on ``point``: together when the graph accepts them all,
-    otherwise one by one, each refused one dropped as stale (its forced case applies)."""
-    edges = typed_choices([point], choices)
-    together = committed(point, edges)
-    if not isinstance(together, dict):
-        return together, ()
-    dropped: list[str] = []
-    for key, value in edges.items():
-        alone = committed(point, {key: value})
-        if isinstance(alone, dict):
-            dropped.append(key)
-        else:
-            point = alone
-    return point, tuple(dropped)
+def _replay(point: S, choices: Mapping[str, object]) -> tuple[S, dict[str, str]]:
+    """``choices`` replayed on ``point``: together when the facts accept them all;
+    otherwise every refused or inapplicable one is dropped as stale, with why, and the
+    rest replayed again, until they are accepted (what a dropped one chose is open
+    again, or forced). A refusal of the batch that names none of its keys is resolved
+    one choice at a time."""
+    remaining = typed_choices([point], choices)
+    dropped: dict[str, str] = {}
+    while remaining:
+        together = committed(point, remaining)
+        if not isinstance(together, dict):
+            return together, dropped
+        named = {key: why for key, why in together.items() if key in remaining}
+        if not named:
+            for key, value in remaining.items():
+                alone = committed(point, {key: value})
+                if isinstance(alone, dict):
+                    dropped[key] = "; ".join(alone.values())
+                else:
+                    point = alone
+            return point, dropped
+        dropped |= named
+        remaining = {key: value for key, value in remaining.items() if key not in named}
+    return point, dropped
 
 
 def partition_root(
@@ -343,32 +357,31 @@ def partition_root(
     root: Any = PARTITIONS.get(
         key, lambda: _composite(name, platform, nodes, ops, facts, declared, owned)
     )
-    point = design_space(root())
-    if found.kernel_choices:
-        replayed = committed(point, typed_choices([point], found.kernel_choices))
-        if isinstance(replayed, dict):
-            raise refusal(name, replayed)
-        point = replayed
-    dropped: tuple[str, ...] = ()
-    if found.edge_choices:
-        point, dropped = _replay_edges(point, found.edge_choices)
-    return PartitionRoot(point, found.owners, (*found.stale, *dropped), tuple(ports.items()))
+    point, dropped = _replay(design_space(root()), found.kernel_choices | found.edge_choices)
+    stale = dict.fromkeys(found.stale, "held under an output port a KernelOp now consumes")
+    # The members as ``_composite`` declares them: channels, then kernels.
+    members = (*(member(tensor) for tensor in declared), *(member(node.name) for node in nodes))
+    return PartitionRoot(point, found.owners, stale | dropped, tuple(ports.items()), members)
 
 
-def save_partition_choices(
-    model: ModelWrapper, root: PartitionRoot, choices: Mapping[str, object]
-) -> dict[str, dict[str, object]]:
-    """Persist choices made on purpose in a partition root, each on its owning node."""
-    per_node: dict[str, dict[str, object]] = {}
-    for key, value in choices.items():
+def persist(model: ModelWrapper, root: PartitionRoot, point: Any) -> dict[str, dict[str, object]]:
+    """Write ``point``'s choices, a configured point of ``root``'s class, back on the nodes
+    that own them, each node's whole: every Decision ``point`` commits (a forced one is
+    never committed) on its owner, and a choice a node holds that ``point`` does not
+    commit (one replay dropped as stale) cleared. Returns what each node now holds."""
+    per_node: dict[str, dict[str, object]] = {node: {} for node, _ in root.owners.values()}
+    for key, value in chosen(point).items():
         head, _, rest = key.partition(".")
         if head not in root.owners:
             raise KernelOpError(f"{key}: no node of the partition owns {head}")
         node, prefix = root.owners[head]
-        per_node.setdefault(node, {})[prefix + rest] = value
+        per_node[node][prefix + rest] = value
     by_name = {node.name: node for node in model.graph.node}
     for node, values in per_node.items():
-        kernel_op(model, by_name[node]).save(values)
+        op = kernel_op(model, by_name[node])
+        held = op.choices()
+        if values or held:
+            op.save(dict.fromkeys(held) | values)
     return per_node
 
 
@@ -381,5 +394,5 @@ __all__ = [
     "Placement",
     "member",
     "partition_root",
-    "save_partition_choices",
+    "persist",
 ]
