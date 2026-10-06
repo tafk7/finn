@@ -138,7 +138,7 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 def test_the_verification_refuses_a_partition_with_open_choices(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
-    cfg = config(tmp_path, kernel_choices=[])
+    cfg = config(tmp_path, kernel_strategies=[])
     model = source
     for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
         model = step(model, cfg)
@@ -162,6 +162,6 @@ def test_the_verification_refuses_a_partition_for_another_target(
 
 
 def test_a_choice_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(tmp_path, kernel_choices=["placeholder", "target_throughput"])
+    cfg = config(tmp_path, kernel_strategies=["placeholder", "target_throughput"])
     with pytest.raises(ValueError, match=r"names no strategy: \['target_throughput'\]"):
         step_kernel_choices(matmul_model(), cfg)
