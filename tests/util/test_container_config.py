@@ -378,10 +378,15 @@ def _clean_env(env):
     XILINX_VIVADO is set and a real settings64.sh would put Vivado's bin on
     PATH. Without this the dedup assertions compare against the host's
     toolchain instead of the fixture.
+
+    BASH_ENV and ENV go too: bash reads them even with --noprofile --norc, and
+    a sandbox's BASH_ENV exports its XILINX_* again inside the child.
     """
     child = dict(os.environ)
     child.pop("FINN_ENV_APPLIED", None)
     for key in (
+        "BASH_ENV",
+        "ENV",
         "XILINX_VIVADO",
         "XILINX_VITIS",
         "XILINX_HLS",

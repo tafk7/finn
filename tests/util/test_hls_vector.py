@@ -28,13 +28,11 @@
 import pytest
 
 import numpy as np
-import os
-import shlex
 import subprocess
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import gen_finn_dt_tensor
 
-from finn.util.basic import make_build_dir, robust_rmtree
+from finn.util.basic import CppBuilder, make_build_dir, robust_rmtree
 from finn.util.resources import resource_path
 
 
@@ -51,7 +49,7 @@ from finn.util.resources import resource_path
 )
 @pytest.mark.parametrize("test_shape", [(1, 2, 4), (1, 1, 64), (2, 64)])
 @pytest.mark.vivado
-def test_npy2vectorstream(test_shape, dtype):
+def test_npy2vectorstream(test_shape, dtype, hls_toolchain):
     ndarray = gen_finn_dt_tensor(dtype, test_shape)
     test_dir = make_build_dir(prefix="test_npy2vectorstream_")
     shape = ndarray.shape
@@ -94,18 +92,19 @@ def test_npy2vectorstream(test_shape, dtype):
     test_app_string += ["}"]
     with open(test_dir + "/test.cpp", "w") as f:
         f.write("\n".join(test_app_string))
-    cmd_compile = """
-g++ -o test_npy2vectorstream test.cpp {} \
--I{}/include -I{}/include -I{} \
---std=c++17 -lz """.format(
-        shlex.quote(resource_path("custom_hls", "cnpy.cpp")),
-        os.environ["HLS_PATH"],
-        os.environ["VITIS_PATH"],
-        shlex.quote(resource_path("custom_hls")),
+    builder = CppBuilder(toolchain=hls_toolchain)
+    builder.append_includes(
+        [
+            "-I" + str(hls_toolchain.hls_installation() / "include"),
+            "-I" + resource_path("custom_hls"),
+            "--std=c++17",
+            "-lz",
+        ]
     )
-    with open(test_dir + "/compile.sh", "w") as f:
-        f.write(cmd_compile)
-    subprocess.check_call(["sh", "compile.sh"], cwd=test_dir)
+    builder.append_sources(test_dir + "/test.cpp")
+    builder.append_sources(resource_path("custom_hls", "cnpy.cpp"))
+    builder.set_executable_path(test_dir + "/test_npy2vectorstream")
+    builder.build(test_dir)
     # make copy before saving the array
     ndarray = ndarray.copy()
     np.save(npy_in, ndarray)

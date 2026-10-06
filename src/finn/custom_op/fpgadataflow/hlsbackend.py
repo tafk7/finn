@@ -253,24 +253,13 @@ class HLSBackend(ABC):
         cmd = ["create_bd_cell -type ip -vlnv %s %s" % (vlnv, self.onnx_node.name)]
         return cmd
 
-    def compile_singlenode_code(self, toolchain=None, hls_path=None):
+    def compile_singlenode_code(self, toolchain=None):
         """Builds the bash script for compilation using the CppBuilder from
-        finn.util.basic and executes the script to produce the executable."""
+        finn.util.basic and executes the script to produce the executable,
+        against the HLS installation the toolchain names."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
         toolchain = toolchain or legacy_toolchain()
-        environment = toolchain.environment
-        hls_path = hls_path or next(
-            (
-                environment[k]
-                for k in ("XILINX_HLS", "HLS_PATH", "XILINX_VITIS", "VITIS_PATH")
-                if environment.get(k)
-            ),
-            None,
-        )
-        if not hls_path:
-            raise RuntimeError(
-                "Select the HLS installation providing C++ simulation headers/libraries"
-            )
+        hls_path = str(toolchain.hls_installation())
         builder = CppBuilder(toolchain=toolchain)
         builder.append_includes(
             [
