@@ -326,8 +326,6 @@ def test_supported_signed_and_unsigned_dsp_boundaries(target, activation, weight
 def test_sources_materialize_from_the_assessed_requirements(tmp_path):
     requirements = kernel(compute_pumping=True).module
     finnlib = helpers.finnlib_root()
-    if not (finnlib / "rtl/linalg/dotp_axi.sv").is_file():
-        pytest.skip("FinnLib sources are unavailable")
     emitted = emit_module(requirements, tmp_path, roots={"finnlib": finnlib})
     upstream = {
         "rtl/arith/add_multi_pkg.sv",

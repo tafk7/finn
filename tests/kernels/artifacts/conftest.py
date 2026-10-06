@@ -19,11 +19,6 @@ import pytest
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
 
-@pytest.fixture(scope="session")
-def finn_root() -> Path:
-    return FINN_ROOT
-
-
 @pytest.fixture(scope="session", params=("dataflow", "kernels"))
 def production_source_root(request: pytest.FixtureRequest) -> Path:
     """Both planning packages remain independent of tool execution."""

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from finn import resources
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -41,6 +40,7 @@ from finn.kernels.artifacts.module import (
     module_name,
 )
 from finn.kernels.artifacts.rtl import ExtractedModule, extract
+from kernels.helpers import finnlib_root
 
 ACTIVE_HIGH = Reset(False, True, ("clk",))
 
@@ -312,10 +312,7 @@ def test_codegen_writes_each_source_and_data_file_once(fixture_root: Path) -> No
 
 
 def test_an_emitted_top_elaborates_with_its_declared_ports(tmp_path: Path) -> None:
-    try:
-        finnlib = Path(resources.path("finnlib"))
-    except resources.ResourceError as error:
-        pytest.skip(f"FinnLib is not available: {error}")
+    finnlib = finnlib_root()
     module = chain(width=16, lanes=(1, 0))
     emitted = emit_module(module, tmp_path, roots={"finnlib": finnlib})
     files = [tmp_path / path for path in emitted.sources]
