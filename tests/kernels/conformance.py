@@ -435,7 +435,7 @@ def _check_rtl(
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
-    issues = check_against_rtl(pins.ports, extracted.ports)
+    issues = check_against_rtl(pins.pins, extracted.ports)
     assert not issues, f"{_where(space_type, sample)}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}

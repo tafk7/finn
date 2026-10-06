@@ -83,7 +83,7 @@ def test_a_pumped_memory_stores_half_words_low_first():
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]
-    ports = {port.name: port for port in point.module.pins.ports}
+    ports = {port.name: port for port in point.module.pins.pins}
     assert "clk2x" in ports and point.module.pins.clock_alignments
 
 

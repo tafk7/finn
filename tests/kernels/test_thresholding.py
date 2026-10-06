@@ -79,7 +79,7 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
     assert dict(threshold(pe=2).module.parameters)["PE"] == 2
     config = next(
         port
-        for port in requirements.pins.ports
+        for port in requirements.pins.pins
         if isinstance(port, Bus) and port.name == "s_axilite"
     )
     assert {
@@ -94,7 +94,7 @@ def test_threshold_sets_present_a_selector_bus_and_refuse_axilite_addressing() -
     assert dict(requirements.parameters)["SETS"] == 2
     selector = next(
         port
-        for port in requirements.pins.ports
+        for port in requirements.pins.pins
         if isinstance(port, Bus) and port.name == "s_axis_set"
     )
     assert next(signal.width for signal in selector.signals if signal.logical == "tdata") == 8

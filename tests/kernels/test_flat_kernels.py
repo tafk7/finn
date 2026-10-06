@@ -165,7 +165,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     requirements = point.module
     observed = native_ports(requirements, tmp_path)
     declared = {}
-    for port in requirements.pins.ports:
+    for port in requirements.pins.pins:
         if isinstance(port, Bus):
             directions = dict(port.member_directions())
             declared.update(
@@ -285,7 +285,7 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         with pytest.raises(DefinitionError, match="is not supplied"):
             point_for(kernel, {})
 
-    assert all(not isinstance(port, Bus) for port in fifo().module.pins.ports)
+    assert all(not isinstance(port, Bus) for port in fifo().module.pins.pins)
 
 
 def run(requirements, body, tmp_path):

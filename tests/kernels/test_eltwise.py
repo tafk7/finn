@@ -34,7 +34,7 @@ def test_eltwise_result_grows_for_integers_and_converts_to_float(
     point = eltwise(operation=operation, lhs=lhs, rhs=rhs)
     requirements = point.module
     assert point.result_dtype.name == result
-    widths = {port.name: port.width for port in requirements.pins.ports if isinstance(port, Signal)}
+    widths = {port.name: port.width for port in requirements.pins.pins if isinstance(port, Signal)}
     assert widths["adat"] == 2 * resolve_qonnx_datatype_name(lhs).bitwidth()
     assert widths["bdat"] == 2 * resolve_qonnx_datatype_name(rhs).bitwidth()
     assert widths["odat"] == 2 * resolve_qonnx_datatype_name(result).bitwidth()

@@ -27,12 +27,12 @@ def test_generator_states_zero_stride_replay_and_multibit_markers() -> None:
         ("FM_SIZE", 6),
         ("RAM_STYLE", '"auto"'),
     )
-    widths = {port.name: port.width for port in requirements.pins.ports if isinstance(port, Signal)}
+    widths = {port.name: port.width for port in requirements.pins.pins if isinstance(port, Signal)}
     assert widths["idat"] == widths["odat"] == 13
     assert widths["olst"] == 2
-    assert all(isinstance(port, Signal) for port in requirements.pins.ports)
+    assert all(isinstance(port, Signal) for port in requirements.pins.pins)
     ranked = generator(frame=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2))
-    ports = ranked.module.pins.ports
+    ports = ranked.module.pins.pins
     assert (
         next(port.width for port in ports if isinstance(port, Signal) and port.name == "olst") == 4
     )

@@ -102,7 +102,7 @@ def test_a_padded_child_result_feeds_a_child_and_its_padding_stays_unconnected()
 def test_read_only_thresholds_tie_their_control_and_set_interfaces():
     # Probe P4: every thresholding input is driven, and nothing is presented.
     module = activated(writable=False).module
-    assert [port.name for port in module.pins.ports] == [
+    assert [port.name for port in module.pins.pins] == [
         "ap_clk",
         "ap_rst_n",
         "in0_V",
@@ -118,7 +118,7 @@ def test_read_only_thresholds_tie_their_control_and_set_interfaces():
 def test_writable_thresholds_export_their_bus_through_the_control_node():
     module = activated(writable=True).module
     (bus,) = [
-        port for port in module.pins.ports if isinstance(port, Bus) and port.name == "s_axilite"
+        port for port in module.pins.pins if isinstance(port, Bus) and port.name == "s_axilite"
     ]
     assert bus.protocol is StandardProtocol.AXILITE and bus.endpoint is Endpoint.TARGET
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")

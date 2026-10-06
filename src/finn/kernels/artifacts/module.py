@@ -128,13 +128,9 @@ class ProducerIdentity:
 @dataclass(frozen=True, slots=True)
 class Pins:
     """A module's pins in declared order, its parameters as RTL spells them, and its
-    aligned clocks.
+    aligned clocks."""
 
-    ``ports`` keeps its name although it holds ``Pin`` values: a composed module's name
-    carries the digest of its typed fields (``fingerprint``), field names included, so
-    renaming the field would rename every composed module."""
-
-    ports: tuple[Pin, ...]
+    pins: tuple[Pin, ...]
     parameters: tuple[tuple[str, str], ...] = ()
     clock_alignments: tuple[ClockAlignment, ...] = ()
 
@@ -142,9 +138,9 @@ class Pins:
         parameters = tuple(sorted(self.parameters, key=lambda item: item[0]))
         if len(parameters) != len({name for name, _ in parameters}):
             raise BuildError("a module's pins name one parameter twice")
-        pins, alignments = tuple(self.ports), tuple(sorted(self.clock_alignments))
+        pins, alignments = tuple(self.pins), tuple(sorted(self.clock_alignments))
         validate_pins(pins, alignments)
-        object.__setattr__(self, "ports", pins)
+        object.__setattr__(self, "pins", pins)
         object.__setattr__(self, "parameters", parameters)
         object.__setattr__(self, "clock_alignments", alignments)
 
@@ -193,7 +189,7 @@ class Leaf:
             raise BuildError("a module's sources are copied sources")
         if any(not isinstance(item, GeneratedData) for item in data):
             raise BuildError("a module's data files are generated data")
-        pins = abi_pins(self.pins.ports)
+        pins = abi_pins(self.pins.pins)
         for pin, value in self.held.inputs:
             info = pins.get(pin)
             if info is None or info.direction is not Direction.IN:
@@ -357,7 +353,7 @@ class Composed:
         if not self.implementation_id or not self.implementation_version:
             raise BuildError("a module needs an implementation id and version")
         sanitize_stem(self.stem)
-        root = abi_pins(self.pins.ports)
+        root = abi_pins(self.pins.pins)
         leaves = dict(self.fragment.instances)
         for label in leaves:
             if not _LABEL.fullmatch(label):
@@ -369,7 +365,7 @@ class Composed:
             leaf = leaves.get(instance)
             if leaf is None:
                 raise BuildError(f"{what} names {instance!r}, which the netlist does not place")
-            return abi_pins(leaf.pins.ports)
+            return abi_pins(leaf.pins.pins)
 
         for link in self.fragment.links:
             for end in (link.source, link.sink):
@@ -392,9 +388,7 @@ class Composed:
             outer = [f"{item.port}_{member.logical.upper()}" for member in item.bus.signals]
             if any(pin not in root for pin in outer):
                 raise BuildError(f"the root has no pins {outer} to present {item.bus.name} at")
-        self._driven_once(
-            root, {label: abi_pins(leaf.pins.ports) for label, leaf in leaves.items()}
-        )
+        self._driven_once(root, {label: abi_pins(leaf.pins.pins) for label, leaf in leaves.items()})
 
     def _driven_once(
         self, root: Mapping[str, PinInfo], children: Mapping[str, Mapping[str, PinInfo]]

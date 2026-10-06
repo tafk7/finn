@@ -92,7 +92,7 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
     point, styles = open_memories(front)
     point = commit(point, dict.fromkeys(styles, "auto"))
-    assert sorted(port.name for port in point.module.pins.ports) == [
+    assert sorted(port.name for port in point.module.pins.pins) == [
         "ap_clk",
         "ap_rst_n",
         "m_axis_0",

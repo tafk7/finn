@@ -261,7 +261,7 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
     )
     # A FIFO on no stream: its stream inputs are held.
     leaf = replace(fifo(8), held=Held((("idat", 0), ("ivld", 0), ("ordy", 0))))
-    controlled = replace(leaf, pins=replace(leaf.pins, ports=(*leaf.pins.ports, config)))
+    controlled = replace(leaf, pins=replace(leaf.pins, pins=(*leaf.pins.pins, config)))
     top = Bus(
         "mm_s_axilite",
         StandardProtocol.AXILITE,
@@ -319,6 +319,6 @@ def test_an_emitted_top_elaborates_with_its_declared_ports(tmp_path: Path) -> No
     extracted = extract(files, emitted.entry_point)
     assert isinstance(extracted, ExtractedModule), extracted
     declared = [
-        (name, info.direction, info.width) for name, info in abi_pins(module.pins.ports).items()
+        (name, info.direction, info.width) for name, info in abi_pins(module.pins.pins).items()
     ]
     assert [(port.name, port.direction, port.width) for port in extracted.ports] == declared

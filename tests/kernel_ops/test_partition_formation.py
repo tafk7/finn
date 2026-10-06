@@ -83,7 +83,7 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
     kernel_ops = [node for node in source.graph.node if node.domain == "finn.custom_op.kernels"]
     reference = partition_root(source, kernel_ops).point.module
     assert (module.fragment, module.pins) == (reference.fragment, reference.pins)
-    assert [port.name for port in module.pins.ports] == [
+    assert [port.name for port in module.pins.pins] == [
         "ap_clk",
         "ap_rst_n",
         "s_axis_0",

@@ -290,7 +290,7 @@ def run(
     # Memory images (INIT_FILE) go where the simulation resolves them.
     entry_point, sources, data_files = materialize(built.module, directory)
     top, wrapper, observations = _observation_wrapper(
-        built.module.pins.ports,
+        built.module.pins.pins,
         entry_point,
         directory,
         activation_bits,

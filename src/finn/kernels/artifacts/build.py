@@ -154,8 +154,8 @@ class _Netlist:
 
     def __init__(self, module: Composed) -> None:
         self.module = module
-        self.root = abi_pins(module.pins.ports)
-        self.pins = {label: abi_pins(leaf.pins.ports) for label, leaf in module.fragment.instances}
+        self.root = abi_pins(module.pins.pins)
+        self.pins = {label: abi_pins(leaf.pins.pins) for label, leaf in module.fragment.instances}
         self.read: set[tuple[str, str]] = set()
         self.assigns: list[str] = []
 
@@ -219,7 +219,7 @@ class _Netlist:
         """The root's clock, doubled clock and reset pins by role, and whether its reset
         is active low."""
         found: dict[str, tuple[str, bool]] = {}
-        for pin in self.module.pins.ports:
+        for pin in self.module.pins.pins:
             if not isinstance(pin, Signal) or pin.direction is not Direction.IN:
                 continue
             role = pin.role

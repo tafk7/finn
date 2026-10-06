@@ -31,7 +31,7 @@ def test_the_partition_packages_its_nodes_choices() -> None:
     module = PackagePartition("sdp_1").module(model)
     assert (module.fragment, module.pins) == (point.module.fragment, point.module.pins)
     assert module.stem == "finn_partition"
-    assert [port.name for port in module.pins.ports] == [
+    assert [port.name for port in module.pins.pins] == [
         "ap_clk",
         "ap_rst_n",
         "s_axis_0",
@@ -50,7 +50,7 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
     model = kernel_model(second_weights=False)
     configure_partition(model)
     package = PackagePartition("sdp_1")
-    assert {port.name for port in package.module(model).pins.ports} >= {"s_axis_0", "s_axis_1"}
+    assert {port.name for port in package.module(model).pins.pins} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
         package.module(model)

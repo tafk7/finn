@@ -45,7 +45,7 @@ def assigns(module) -> set[str]:
 
 def test_an_unpumped_matmul_has_one_clock_and_holds_the_2x_input():
     built = matmul_assembly(**MATMUL_FACTS)
-    top = {port.name: port for port in built.module.pins.ports}
+    top = {port.name: port for port in built.module.pins.pins}
     assert "ap_clk2x" not in top
     assert top["ap_clk"] == Signal("ap_clk", Direction.IN, 1, Clock(Free()))
     assert top["ap_rst_n"].role == Reset(True, True, ("ap_clk",))
@@ -65,8 +65,8 @@ def test_an_unpumped_matmul_has_one_clock_and_holds_the_2x_input():
 def test_a_pumped_matmul_adds_the_2x_clock_and_its_alignment():
     built = matmul_assembly(**{**MATMUL_FACTS, "compute_pumping": True})
     pins = built.module.pins
-    ports = {port.name: port for port in pins.ports}
-    assert [port.name for port in pins.ports][:3] == ["ap_clk", "ap_clk2x", "ap_rst_n"]
+    ports = {port.name: port for port in pins.pins}
+    assert [port.name for port in pins.pins][:3] == ["ap_clk", "ap_clk2x", "ap_rst_n"]
     assert ports["ap_clk2x"].role == Clock(Derived("ap_clk", 2))
     assert ports["ap_rst_n"].role == Reset(True, True, ("ap_clk", "ap_clk2x"))
     assert pins.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)

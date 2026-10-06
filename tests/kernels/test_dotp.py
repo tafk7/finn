@@ -99,7 +99,7 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert rtl["PE"] == 2 and rtl["SIMD"] == 4
     assert rtl["NARROW_WEIGHTS"] == 0
     assert rtl["SIGNED_ACTIVATIONS"] == 1
-    ports = {port.name: port for port in requirements.pins.ports}
+    ports = {port.name: port for port in requirements.pins.pins}
     assert ports["ap_clk2x"].role == (Clock(DerivedClock("ap_clk", 2)) if pumping else Data())
     assert bool(requirements.pins.clock_alignments) is pumping
     assert ports["ap_rst_n"].role.synchronous_to == (

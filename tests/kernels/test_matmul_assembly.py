@@ -70,7 +70,7 @@ def test_external_construction_owns_replay_and_exact_precision():
     assert (replay["FM_SIZE"], replay["DIMS"], replay["COEFS"]) == (2, "'{2, 2}", "'{0, 1}")
     assert dotp["ACCU_WIDTH"] == 8
     assert dotp["NARROW_WEIGHTS"] == 0
-    assert {port.name for port in built.module.pins.ports if isinstance(port, Bus)} == {
+    assert {port.name for port in built.module.pins.pins if isinstance(port, Bus)} == {
         "in0_V",
         "in1_V",
         "out0_V",
@@ -90,7 +90,7 @@ def test_stored_image_has_output_then_reduction_then_pe_simd_order():
     built = assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=weights)
     # Hand-packed INT3 lanes: p0/s0, p0/s1, p1/s0, p1/s1, low first.
     assert built.initializer == (0x22C, 0x6BE, 0xDD3, 0x941)
-    assert "in1_V" not in {port.name for port in built.module.pins.ports}
+    assert "in1_V" not in {port.name for port in built.module.pins.pins}
     memory = dict(placed(built.module, "w.source.memstream").parameters)
     assert {name: memory[name] for name in ("DEPTH", "WIDTH", "SETS", "RAM_STYLE")} == {
         "DEPTH": 4,

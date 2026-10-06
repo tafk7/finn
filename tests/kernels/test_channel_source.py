@@ -120,7 +120,7 @@ def test_known_weights_give_the_weight_channel_its_source():
     ):
         module = point.module
         assert isinstance(module, Composed)
-        assert {p.name for p in module.pins.ports if isinstance(p, Bus)} == ports
+        assert {p.name for p in module.pins.pins if isinstance(p, Bus)} == ports
         assert labels(module) == instances
     # Known weights: the channel has a value, and its one source is forced, never committed.
     assert stored.w.valued and forced(stored)["w.source"] == "memstream"

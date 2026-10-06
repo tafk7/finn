@@ -404,7 +404,7 @@ class Kernel(Space):
         doubled = any(
             isinstance(info.role, Clock) and isinstance(info.role.rate, Derived)
             for _, leaf in fragment.instances
-            for info in abi_pins(leaf.pins.ports).values()
+            for info in abi_pins(leaf.pins.pins).values()
         )
         clocking = Clocking(doubled=CLOCK2X if doubled else None, doubling=doubled)
         buses = [bus for item in self.boundary_buses for bus in item.value]
