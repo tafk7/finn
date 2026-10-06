@@ -12,21 +12,36 @@
 # with its own .venv (uv sync), or in a sandbox with the image's environment.
 # FinnLib is the `finnlib` resource, as in every run.
 #
-#   bash scripts/xsim-sweep.sh [--smoke] [OUT [TMP]]   exit 0 only if every job passed
+#   bash scripts/xsim-sweep.sh [--smoke | --changed-since BASELINE] [OUT [TMP]]
+#                                                       exit 0 only if every job passed
 #
 # --smoke runs one conformance XSim test and one MatMul case: a few minutes, and
 # enough to tell a broken harness or toolchain from a design result before the
 # full sweep (~25 minutes) is spent on it.
 #
+# Every job has a key: a digest of everything its simulation consumes (the designs
+# it simulates, as materialized without Vivado; its harness and stimulus code; the
+# XSI runtime; this script; the selected Vivado), computed by scripts/emitted_text.py.
+# A full sweep records each job's key in summary.json. --changed-since BASELINE,
+# the summary.json of a passed full sweep, runs only the jobs whose key differs
+# from the baseline's or that the baseline did not pass, and records the rest as
+# skipped (unchanged since the baseline's commit) with their keys. Its exit is 0
+# only if every job it ran passed and the baseline itself passed (overall exit=0,
+# not smoke); such a sweep can be a baseline in turn.
+#
 # OUT keeps the evidence:
 #   events.log    one line as each job starts and ends; read it for progress
 #   collect.log   the collection of the conformance jobs
-#   summary.log   the conformance count, per-job exit and pass counts, written when
-#                 every job has ended (or at once, when collection failed)
-#   summary.json  the same, for tools
+#   jobs.tsv      the jobs: name, kind, arguments
+#   keys.json     each job's key and the inputs it digests (keys.log: how they were computed)
+#   selection.tsv with --changed-since: run or skip per job, and why
+#   summary.log   the conformance count, per-job exit and pass counts (or skipped,
+#                 and why), written when every job has ended (or at once, when
+#                 collection failed)
+#   summary.json  the same, with each job's key and inputs, for tools
 #   logs/, sim-*  each job's log and simulation store
-# pytest's temporary trees go to TMP (default OUT-tmp), which is scratch: they hold
-# symlinks that point outside it.
+# pytest's temporary trees, and the designs the keys digest, go to TMP (default
+# OUT-tmp), which is scratch: they hold symlinks that point outside it.
 #
 # Vivado: this machine's ~/.config/finn/xilinx.env, or FINN_XILINX_PATH and
 # FINN_XILINX_VERSION (applied through scripts/activate.sh; a variable wins over
@@ -34,9 +49,23 @@
 
 set -u
 SMOKE=0
-if [ "${1:-}" = --smoke ]; then
-    SMOKE=1
-    shift
+BASELINE=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --smoke) SMOKE=1; shift ;;
+        --changed-since)
+            BASELINE=$(readlink -f "${2:-}")
+            if [ ! -f "$BASELINE" ]; then
+                echo "--changed-since needs the summary.json of a passed full sweep" >&2
+                exit 2
+            fi
+            shift 2 ;;
+        *) break ;;
+    esac
+done
+if [ "$SMOKE" = 1 ] && [ -n "$BASELINE" ]; then
+    echo "--smoke and --changed-since exclude each other" >&2
+    exit 2
 fi
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 cd "$ROOT" || exit 2
@@ -93,6 +122,9 @@ else
 fi
 IDENTITY="finn $SHA${DIRTY:+ dirty}  finnlib $FINNLIB_SHA $FINNLIB"
 
+TOOL="$ROOT/scripts/emitted_text.py"
+collect_code=
+
 # Lines short enough that concurrent appends never interleave.
 event() { echo "$(date +%T) $*" >> "$EVENTS"; }
 
@@ -109,91 +141,59 @@ pytest_run() {  # <log name> <pytest args...>
     local name=$1; shift
     job "$name" "$PY" -m pytest -v -p no:cacheprovider --basetemp="$TMP/$name" "$@"
 }
-sweep_run() {  # <log name> <module> [args...]
-    local name=$1 module=$2; shift 2
-    job "sweep-$name" "$PY" -m "$module" "$@" --output "$OUT/sim-$name"
-}
 
-# Writes summary.log and summary.json from the job logs, ends events.log and
-# exits. <status>: 0, or non-zero when the sweep itself failed; a failed job
-# fails it too.
+# Writes summary.log and summary.json (scripts/emitted_text.py summarize), ends
+# events.log and exits. <status>: 0, or non-zero when the sweep itself failed; a
+# failed job fails it too, as does a baseline that did not pass.
 finish() {
-    local status=$1 rows=() log name code passes fails skips summary
-    {
-        echo "commit $(git rev-parse HEAD) checkout $ROOT"
-        echo "$IDENTITY"
-        echo "conformance collected=$collected collection exit=$collect_code"
-        for log in "$OUT"/logs/*.log; do
-            [ -e "$log" ] || continue
-            name=$(basename "$log" .log)
-            code=$(sed -n 's/^exit=//p' "$log" | tail -1)
-            [ "$code" = 0 ] || status=1
-            passes=$(grep -cE '^PASS|PASSED' "$log")
-            fails=$(grep -cE '^FAIL|FAILED|^Traceback' "$log")
-            skips=$(grep -c 'SKIPPED' "$log")
-            case $name in
-                sweep-*) summary="passes=$passes fails=$fails" ;;
-                *) summary=$(grep -E ' passed| failed| skipped' "$log" | tail -1) ;;
-            esac
-            echo "$name exit=$code $summary"
-            rows+=("{\"job\": \"$name\", \"exit\": ${code:-null}, \"passes\": $passes, \"fails\": $fails, \"skips\": $skips}")
-        done
-        echo "overall exit=$status"
-    } > "$OUT/summary.log"
-    {
-        printf '{"commit": "%s", "dirty": %s, "smoke": %s, "exit": %s, "conformance_collected": %s, "jobs": [\n  ' \
-            "$(git rev-parse HEAD)" "$([ -n "$DIRTY" ] && echo true || echo false)" \
-            "$([ "$SMOKE" = 1 ] && echo true || echo false)" "$status" "$collected"
-        (IFS=$'\n'; echo "${rows[*]}") | paste -sd ',' | sed 's/},{/},\n  {/g'
-        printf ']}\n'
-    } > "$OUT/summary.json"
+    local status
+    "$PY" "$TOOL" summarize "$OUT" --status "$1" --identity "$IDENTITY" \
+        --collect-code "$collect_code" ${BASELINE:+--baseline "$BASELINE"} \
+        $([ "$SMOKE" = 1 ] && echo --smoke) $([ -n "$DIRTY" ] && echo --dirty)
+    status=$?
     event "END overall exit=$status"
-    cat "$OUT/summary.log"
     exit "$status"
 }
 
-event "SWEEP $IDENTITY smoke=$SMOKE"
-# The conformance jobs, one per test id. Collected in an explicit mode: with the
-# project's addopts cleared and one -q, pytest prints one path::id line per test,
-# whatever .pytest.ini sets. A collection that fails or finds nothing ends the
-# sweep: an empty list would run no conformance job and could still pass.
-"$PY" -m pytest -o addopts= -q --collect-only -p no:cacheprovider --confcutdir=tests/kernels \
-    tests/kernels/test_conformance.py -m xsim > "$OUT/collect.log" 2>&1
+event "SWEEP $IDENTITY smoke=$SMOKE${BASELINE:+ changed-since=$BASELINE}"
+# The jobs: one per conformance XSim test id (collected; a collection that fails
+# or finds nothing ends the sweep, as an empty list could still pass), the pytest
+# groups and the numeric sweeps.
+"$PY" "$TOOL" jobs $([ "$SMOKE" = 1 ] && echo --smoke) --collect-log "$OUT/collect.log" \
+    > "$OUT/jobs.tsv" 2> "$OUT/jobs.log"
 collect_code=$?
-mapfile -t ids < <(grep '^tests/kernels/test_conformance\.py::' "$OUT/collect.log")
-collected=${#ids[@]}
-if [ "$collect_code" != 0 ] || [ "$collected" = 0 ]; then
-    {
-        echo "conformance collection failed (exit=$collect_code, $collected jobs); the end of $OUT/collect.log:"
-        tail -n 15 "$OUT/collect.log"
-    } >&2
+if [ "$collect_code" != 0 ]; then
+    cat "$OUT/jobs.log" >&2
     finish 1
 fi
-[ "$SMOKE" = 0 ] || ids=("${ids[@]:0:1}")
-for id in "${ids[@]}"; do
-    pytest_run "conformance-$(echo "${id#*::}" | tr -c 'A-Za-z0-9_\n-' '_')" \
-        --confcutdir=tests/kernels "$id" &
-done
 
-if [ "$SMOKE" = 1 ]; then
-    sweep_run packed kernels.rtlsim.matmul_numeric --case packed &
+keys() {
+    "$PY" "$TOOL" keys --jobs "$OUT/jobs.tsv" --work "$TMP/keys" > "$OUT/keys.json.part" \
+        2> "$OUT/keys.log" && mv "$OUT/keys.json.part" "$OUT/keys.json"
+}
+if [ -n "$BASELINE" ]; then
+    # Keys first: they decide what runs. Without keys, every job runs.
+    if keys && "$PY" "$TOOL" select "$BASELINE" "$OUT/keys.json" > "$OUT/selection.tsv"; then
+        event "SELECTED $(grep -c $'\trun\t' "$OUT/selection.tsv") of $(wc -l < "$OUT/jobs.tsv") jobs"
+    else
+        event "NO KEYS (keys.log): every job runs"
+        : > "$OUT/selection.tsv"
+    fi
 else
-    pytest_run kernels-rest --confcutdir=tests/kernels tests/kernels \
-        --ignore=tests/kernels/test_conformance.py &
-    pytest_run kernel-ops-xsim --confcutdir=tests/kernel_ops tests/kernel_ops -m xsim &
-    pytest_run kernel-ops-vivado --confcutdir=tests/kernel_ops tests/kernel_ops -m vivado &
-
-    sweep_run dense kernels.rtlsim.matmul_numeric &
-    sweep_run fifo-packed kernels.rtlsim.matmul_numeric --case packed --weight-fifo-depth 2 &
-    sweep_run fifo-int8-pumped kernels.rtlsim.matmul_numeric --case int8_pumped --weight-fifo-depth 2 &
-    sweep_run depthwise kernels.rtlsim.matmul_numeric --depthwise &
-    sweep_run memstream kernels.rtlsim.matmul_numeric --delivery memstream &
-    sweep_run memstream-depthwise kernels.rtlsim.matmul_numeric --depthwise --delivery memstream &
-    sweep_run pumped-memory kernels.rtlsim.matmul_numeric --pumped-memory &
-    sweep_run sets kernels.rtlsim.matmul_numeric --sets 3 &
-    sweep_run dotp kernels.rtlsim.pure_dot_product_numeric &
-    sweep_run dotp-stress kernels.rtlsim.pure_dot_product_numeric --stress &
-    sweep_run adapters kernels.rtlsim.adapter_numeric &
+    keys &  # beside the jobs: only the summary reads them
 fi
+
+# The list on descriptor 3: a job reading its standard input must not consume it.
+while IFS=$'\t' read -r -u 3 -a fields; do
+    name=${fields[0]} kind=${fields[1]} args=("${fields[@]:2}")
+    if grep -q "^$name"$'\tskip\t' "$OUT/selection.tsv" 2> /dev/null; then
+        event "SKIP $name"
+        continue
+    fi
+    case $kind in
+        sweep) job "$name" "$PY" -m "${args[@]}" --output "$OUT/sim-${name#sweep-}" & ;;
+        *) pytest_run "$name" "${args[@]}" & ;;
+    esac
+done 3< "$OUT/jobs.tsv"
 wait
 finish 0

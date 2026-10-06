@@ -19,11 +19,13 @@ bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 gate_pytest tests/kernels xsim vivado
 # The KernelOps and their transformations, the layer above finn.kernels.
 gate_pytest tests/kernel_ops xsim vivado
+# The XSim sweep's tooling: the emitted text and each job's key (no Vivado).
+gate_pytest tests/xsim_sweep
 gate_ruff src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
-    scripts/benchmark-space.py
+    scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep
 # finn.util.toolchain: the toolchain packaging takes (PackagePartition's toolchain=).
 gate_mypy -p finn.kernels -p finn.custom_op.kernels -p finn.transformation.kernels \
     -m finn.util.toolchain
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
-gate_mypy tests/kernels tests/kernel_ops
+gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep
