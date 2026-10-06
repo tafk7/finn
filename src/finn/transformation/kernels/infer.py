@@ -32,7 +32,7 @@ import onnx.shape_inference as shape_inference
 from onnx import NodeProto, defs, helper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.base import Transformation
-from qonnx.transformation.infer_datatypes import _infer_node_datatype
+from qonnx.transformation.infer_datatypes import infer_node_datatype
 
 from finn.custom_op.kernels.base import KernelOp, KernelOpError, datatype
 from finn.dataflow.datatypes import DatatypeError, QONNXDataType, ordinary_integer_bounds
@@ -87,7 +87,7 @@ class InferKernelTensors(Transformation):  # type: ignore[misc]
         for node in model.graph.node:
             if not is_custom_op(node.domain):
                 _standard(model, node)
-                _infer_node_datatype(model, node, False)
+                infer_node_datatype(model, node, False)
                 continue
             op = model.get_customop_wrapper(node)
             if not isinstance(op, KernelOp):
