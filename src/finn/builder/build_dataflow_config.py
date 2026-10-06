@@ -29,8 +29,9 @@
 
 import numpy as np
 import os
-from dataclasses import dataclass, field
-from dataclasses_json import dataclass_json
+from dataclasses import dataclass, field, fields
+from dataclasses_json import Undefined, config, dataclass_json
+from dataclasses_json.undefined import UndefinedParameterError
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
@@ -161,11 +162,26 @@ hw_codegen_dataflow_steps = estimate_only_dataflow_steps + ["step_hw_codegen"]
 kernel_path_dataflow_steps = ["phase_kernel_path", "phase_generate_outputs"]
 
 
-@dataclass_json
+def _toolchain_selection(stated: Any) -> Selection:
+    """The ``toolchain`` a configuration states, refusing keys Selection does not declare
+    (dataclasses_json would drop them, as it does a nested dataclass's)."""
+    if isinstance(stated, Selection):
+        return stated
+    unknown = sorted(set(stated) - {item.name for item in fields(Selection)})
+    if unknown:
+        raise UndefinedParameterError(f"toolchain: keys Selection does not declare: {unknown}")
+    return Selection(**stated)
+
+
+# undefined=RAISE: a key the configuration does not declare is refused, named, when a
+# configuration is read (from_json, from_dict), never dropped: after a rename, an old
+# configuration would otherwise build with the new field's default.
+@dataclass_json(undefined=Undefined.RAISE)
 @dataclass
 class DataflowBuildConfig:
     """Build configuration to be passed to the build_dataflow function. Can be
-    serialized into or de-serialized from JSON files for persistence.
+    serialized into or de-serialized from JSON files for persistence; reading one
+    refuses a key it does not declare (``UndefinedParameterError``, naming the keys).
     See list of attributes below for more information on the build configuration.
     """
 
@@ -449,7 +465,9 @@ class DataflowBuildConfig:
     #: 2024.2) or ``vitis-run`` (2025.1 on). The legacy environment variables
     #: (``XILINX_*``, ``FINN_HLS_FRONTEND``, ``FINN_TOOL_DIR_OVERRIDE``) select nothing.
     #: In JSON: {"settings": [...], "command_dir": "", "launcher": [], "hls_frontend": "..."}.
-    toolchain: Selection = field(default_factory=Selection)
+    toolchain: Selection = field(
+        default_factory=Selection, metadata=config(decoder=_toolchain_selection)
+    )
 
     #: The strategy chain of the kernel path's choice step (step_kernel_choices): the
     #: strategies that commit the KernelOps' open choices, by name

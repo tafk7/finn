@@ -42,6 +42,7 @@ To use it, first create a folder with the necessary configuration and model file
    The filename is important and must exactly be ``model.onnx``.
 3. Create a JSON file with the build configuration. It must be named ``dataflow_build_dir/dataflow_build_config.json``.
    Read more about the build configuration options on :py:mod:`finn.builder.build_dataflow_config.DataflowBuildConfig`.
+   A key the configuration does not declare (a misspelling, or a field's old name) is refused, named, when the file is read.
    You can find an example .json file under ``src/finn/qnn-data/build_dataflow/dataflow_build_config.json``
    With Vivado/Vitis 2025.x, name the HLS frontend: ``"toolchain": {"hls_frontend": "vitis-run"}``.
    The toolchain selection never guesses its frontend, and its default, ``vitis_hls``, is refused on 2025.x.
