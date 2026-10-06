@@ -5,5 +5,6 @@
 
 ``semantics``: the Space value semantics of datatypes (over :mod:`finn.dataflow.datatypes`
 values), integer vectors and tensors, and threshold tables. ``domains``: the ``Integer``
-policy a port's datatype must satisfy, and the set selector's datatype.
+policy a port's datatype must satisfy, ``admit_element`` (an element, or the refusal of
+one its datatype cannot hold), and the set selector's datatype.
 """

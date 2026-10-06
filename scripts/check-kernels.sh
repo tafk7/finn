@@ -7,7 +7,7 @@
 # shellcheck source=scripts/_gate-common.sh
 source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"
 
-# The layers below, in order: finn.core.space, then finn.dataflow. Parked
+# The layers below, independent of each other: finn.core.space and finn.dataflow. Parked
 # dataflow/graph tests remain outside this command; their compatibility is not
 # claimed.
 bash scripts/check-space.sh "${GATE_ARGS[@]}"

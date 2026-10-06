@@ -4,7 +4,9 @@
 """Integer datatype policy: what a port's hardware or a kernel's arithmetic takes.
 
 A policy is plain data. A port states the one its hardware takes (``admits``);
-a kernel checks one in a constraint of its ``admission``.
+a kernel checks one in a constraint of its ``admission``. ``admit_element`` is
+the same refusal for an element: the ``ScalarEncoding`` of a datatype and a
+range, or why there is none.
 """
 
 from __future__ import annotations
@@ -18,11 +20,22 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
+from finn.dataflow.tensor import ScalarEncoding
 
 
 def set_index_dtype(sets: int) -> QONNXDataType:
     """FinnLib's set selector: ``SET_BITS = SETS > 2 ? $clog2(SETS) : 1`` unsigned bits."""
     return resolve_qonnx_datatype_name(f"UINT{(sets - 1).bit_length() if sets > 2 else 1}")
+
+
+def admit_element(
+    dtype: QONNXDataType, value_range: tuple[int, int] | None = None
+) -> ScalarEncoding | Rejected:
+    """The element, or a ``dtype-storage`` refusal (a zero width, a range it cannot hold)."""
+    try:
+        return ScalarEncoding(dtype, value_range)
+    except ValueError as error:
+        return reject("dtype-storage", str(error))
 
 
 @dataclass(frozen=True)
@@ -65,4 +78,4 @@ class Integer:
         return True
 
 
-__all__ = ["Integer", "set_index_dtype"]
+__all__ = ["Integer", "admit_element", "set_index_dtype"]

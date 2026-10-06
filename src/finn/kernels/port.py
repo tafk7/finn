@@ -67,7 +67,7 @@ from finn.kernels.base import (
     RESET,
 )
 from finn.kernels.transport import AxisBeat, ReadyValidStream, StreamContract, StreamMarker
-from finn.kernels.values.domains import Integer
+from finn.kernels.values.domains import Integer, admit_element
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 if TYPE_CHECKING:
@@ -273,7 +273,7 @@ class AxiStreamPort(Port):
         if dtype is not None:
             if bounds and len(bounds) != 2:
                 return reject("port-element", f"{self.name}: a range is (minimum, maximum)")
-            return ScalarEncoding.admit(dtype, (bounds[0], bounds[1]) if bounds else None)
+            return admit_element(dtype, (bounds[0], bounds[1]) if bounds else None)
         if self.endpoint is Endpoint.INITIATOR:
             # From facts, choices and input elements only: an op asks before its output exists.
             return reject("port-element", f"{self.name}: a producer states its dtype")

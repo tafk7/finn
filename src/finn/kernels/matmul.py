@@ -72,13 +72,13 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.gemm import Form
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import Platform
-from finn.kernels.values.domains import set_index_dtype
+from finn.kernels.values.domains import admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -197,7 +197,7 @@ class MatMulKernel(Kernel):
     # The tensors the channels carry.
 
     def _tensor(self, shape: tuple[int, ...], dtype: QONNXDataType) -> Tensor | Rejected:
-        element = ScalarEncoding.admit(dtype)
+        element = admit_element(dtype)
         if isinstance(element, Rejected):
             return element
         try:
@@ -224,7 +224,7 @@ class MatMulKernel(Kernel):
                 "matmul-weights",
                 f"every value must be an integer admitted by {self.weights_dtype.name}",
             )
-        element = ScalarEncoding.admit(self.weights_dtype, (least, greatest))
+        element = admit_element(self.weights_dtype, (least, greatest))
         if isinstance(element, Rejected):
             return element
         return Tensor(shape, element)

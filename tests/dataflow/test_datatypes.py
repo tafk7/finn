@@ -155,9 +155,6 @@ def test_an_element_is_a_datatype_and_the_range_of_its_values() -> None:
 def test_a_range_must_be_one_the_datatype_holds(name: str, bounds: tuple[int, int]) -> None:
     with pytest.raises(ValueError):
         ScalarEncoding(DataType[name], bounds)
-    refused = ScalarEncoding.admit(DataType[name], bounds)
-    assert not isinstance(refused, ScalarEncoding)
-    assert {finding.code for finding in refused.findings} == {"dtype-storage"}
 
 
 def test_an_element_fits_another_with_its_datatype_and_a_range_around_its_own() -> None:
