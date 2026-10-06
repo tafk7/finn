@@ -12,7 +12,7 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from finn.custom_op.kernels.base import integer_tensor
+from finn.custom_op.kernels.base import integer_tensor, kernel_op
 from finn.kernels.values.semantics import IntegerTensorValue
 from kernel_ops.models import WEIGHTS, matmul_model
 
@@ -41,8 +41,6 @@ def test_equal_integers_stored_differently_are_one_value_under_two_binding_keys(
     floats = matmul_model(infer=False)
     integers = matmul_model(infer=False)
     integers.set_initializer("w", np.asarray(WEIGHTS, dtype=np.int8))
-    facts = [
-        model.get_customop_wrapper(model.graph.node[0]).facts() for model in (floats, integers)
-    ]
+    facts = [kernel_op(model, model.graph.node[0]).facts() for model in (floats, integers)]
     assert facts[0].formals()["weights"] == facts[1].formals()["weights"]
     assert facts[0].key != facts[1].key
