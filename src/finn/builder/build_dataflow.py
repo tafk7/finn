@@ -296,8 +296,11 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     json_filename = path_to_cfg_dir + "/dataflow_build_config.json"
     assert os.path.isfile(onnx_filename), "ONNX not found: " + onnx_filename
     assert os.path.isfile(json_filename), "Build config not found: " + json_filename
+    with open(json_filename) as f:
+        cfg = DataflowBuildConfig.from_json(f.read())
     # Isolate cwd and the pre-start native loader environment for this worker
-    # tree. Relative config paths retain their historical directory semantics.
+    # tree, from the toolchain the configuration selects. Relative config paths
+    # retain their historical directory semantics.
     child = subprocess.run(
         [
             sys.executable,
@@ -308,7 +311,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
             "DataflowBuildConfig.from_json(open('dataflow_build_config.json').read())))",
         ],
         cwd=path_to_cfg_dir,
-        env=build_environment(),
+        env=build_environment(cfg.toolchain),
     )
     return child.returncode
 

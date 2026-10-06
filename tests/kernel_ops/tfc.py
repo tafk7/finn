@@ -106,10 +106,10 @@ def streamlined(directory: Path) -> ModelWrapper:
     return model.transform(RemoveUnusedTensors())
 
 
-def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapper]:
-    """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
+def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
+    """The streamlined ``source`` by hand through the kernel path, as the builder's
+    kernel-path phase runs it: the parent graph (Reshape, the partition, TopK) and the
     partition's body, every choice committed by the placeholder policy."""
-    source = streamlined(directory)
     model = (
         source.transform(ToKernelOps(ULTRA96))
         .transform(InferKernelTensors())
@@ -118,4 +118,11 @@ def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapp
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
     sdp = getCustomOp(parent.graph.node[1])
     body: Any = ModelWrapper(sdp.get_nodeattr("model"))
-    return source, parent, body
+    return parent, body
+
+
+def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapper]:
+    """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
+    partition's body, every choice committed by the placeholder policy."""
+    source = streamlined(directory)
+    return (source, *partition(source, directory))

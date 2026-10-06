@@ -7,7 +7,9 @@
 ``Target`` (the part and the platform, its clock period and capabilities) from
 two tables: a part's device capabilities (``DEVICES``) and a shell's interface
 capabilities (``SHELLS``). Part and shell names stop here: kernels see
-capabilities only (``finn.kernels.target``).
+capabilities only (``finn.kernels.target``). ``shell_target`` is how a shell
+build reads the target back from the model, refusing a build for another part,
+period or shell.
 
 ``ToKernelOps`` states the build target once, in the one place
 ``read_target(model)`` reads it, the model's ``finn.platform`` metadata, imports the
@@ -25,6 +27,7 @@ Other nodes are left alone. The nodes keep their names, inputs and outputs.
 
 from __future__ import annotations
 
+from dataclasses import fields
 from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
@@ -32,7 +35,7 @@ from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import write_target
+from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
 from finn.kernels.target import DspBlock, Platform, Target
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
@@ -102,6 +105,41 @@ def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Tar
         aie=aie,
     )
     return Target(part, platform)
+
+
+def shell_target(
+    model: ModelWrapper, part: str, shell: str | None, period_ns: float | None = None
+) -> Target:
+    """The target a build in ``shell`` for ``part`` reads from a model of KernelOps.
+
+    The model is the single source of the target (``read_target``): its part, its
+    clock period and its capabilities are what the build uses. The build's own part,
+    shell and, when it states one, clock period must agree with it
+    (``resolve_target``); a disagreement is refused, each differing field named.
+    """
+    stated = read_target(model)
+    expected = resolve_target(
+        part, stated.platform.period_ns if period_ns is None else period_ns, shell
+    )
+    if stated != expected:
+        stated_platform, expected_platform = stated.platform, expected.platform
+        pairs = [("part", stated.part, expected.part)] + [
+            (
+                field.name,
+                getattr(stated_platform, field.name),
+                getattr(expected_platform, field.name),
+            )
+            for field in fields(Platform)
+        ]
+        raise KernelOpError(
+            f"the model's target is not the {shell or 'stitched-IP'} build's: "
+            + "; ".join(
+                f"{name}: the model states {model_value!r}, the build {build_value!r}"
+                for name, model_value, build_value in pairs
+                if model_value != build_value
+            )
+        )
+    return stated
 
 
 def _attributes(node: NodeProto) -> dict[str, Any]:

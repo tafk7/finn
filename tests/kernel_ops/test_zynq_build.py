@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """ZynqBuild over a model of KernelOps, up to its IP builds: the partitions it prepares,
-and the toolchain it hands to each transformation that runs Vivado or Vitis HLS.
+the target it reads from the model, and the toolchain it hands to each transformation
+that runs Vivado or Vitis HLS.
 
-The Chain (``kernels.chain``), its choices saved, as the KernelOps' model; no Vivado and no
-Vitis HLS runs (the bitstream build itself is not a test).
+The Chain (``kernels.chain``), its choices saved, stated for Ultra96 in the Zynq shell, as
+the KernelOps' model; no Vivado and no Vitis HLS runs (the bitstream build itself is not a
+test).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
+from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.transformation.fpgadataflow import make_zynq_proj
 from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
 from finn.transformation.fpgadataflow.kernel_partitions import (
@@ -28,14 +31,25 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
 )
 from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
+from finn.transformation.kernels import resolve_target
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
-from kernel_ops.models import configure_partition, kernel_model
+from kernel_ops.models import TARGET, configure_partition, kernel_model
+
+#: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
+ZYNQ = resolve_target(TARGET.part, 5.0, "vivado_zynq")
+
+
+def zynq_model() -> ModelWrapper:
+    """The Chain as KernelOps, stated for Ultra96 in the Zynq shell, its choices saved."""
+    model = kernel_model()
+    write_target(model, ZYNQ)
+    configure_partition(model)
+    return model
 
 
 def test_a_model_of_kernel_ops_becomes_iodma_and_kernel_partitions(tmp_path: Path) -> None:
-    model = kernel_model()
-    configure_partition(model)
+    model = zynq_model()
     build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
     parent = build.prepare_kernel_partitions(model)
     bodies = [ModelWrapper(getCustomOp(node).get_nodeattr("model")) for node in parent.graph.node]
@@ -98,10 +112,57 @@ def recorded_build(
 
     for name in replaced:
         monkeypatch.setattr(make_zynq_proj, name, recorder(name))
+    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path), toolchain=toolchain)
+    return zynq_model().transform(build), seen
+
+
+@pytest.mark.parametrize(
+    "board, period_ns, refused",
+    [
+        ("Ultra96", 10.0, "period_ns: the model states 5.0, the build 10.0"),
+        ("ZCU104", 5.0, "part: the model states 'xczu3eg-sbva484-1-e', the build 'xczu7ev-"),
+    ],
+)
+def test_a_build_for_another_target_than_the_models_is_refused(
+    tmp_path: Path, board: str, period_ns: float, refused: str
+) -> None:
+    build = ZynqBuild(board, period_ns, partition_model_dir=str(tmp_path))
+    with pytest.raises(KernelOpError, match=refused):
+        zynq_model().transform(build)
+
+
+def test_a_model_stated_for_another_shell_is_refused(tmp_path: Path) -> None:
+    # The Chain as kernel_model states it: no shell, so a doubled clock and one AXI-Lite
+    # port its kernels may use, neither of which the Zynq shell gives a partition.
     model = kernel_model()
     configure_partition(model)
-    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path), toolchain=toolchain)
-    return model.transform(build), seen
+    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
+    with pytest.raises(KernelOpError, match="clk2x: the model states True, the build False"):
+        model.transform(build)
+
+
+def test_a_build_of_kernel_ops_runs_at_the_models_clock_period(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    periods: list[tuple[str, object]] = []
+
+    def recorder(name: str) -> type[Transformation]:
+        class Recorded(Transformation):
+            def __init__(self, *args: object, **kwargs: object):
+                super().__init__()
+                if name in ("PrepareIP", "MakeZYNQProject"):
+                    periods.append((name, args[1]))
+
+            def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+                return model, False
+
+        return Recorded
+
+    for name in (*TOOL_STEPS, "PrepareIP"):
+        monkeypatch.setattr(make_zynq_proj, name, recorder(name))
+    build = ZynqBuild("Ultra96", None, partition_model_dir=str(tmp_path), toolchain=object())
+    zynq_model().transform(build)
+    assert periods == [("PrepareIP", 5.0), ("PrepareIP", 5.0), ("MakeZYNQProject", 5.0)]
 
 
 def test_a_build_runs_its_tools_through_the_toolchain_it_is_given(
