@@ -19,7 +19,7 @@ from kernels.helpers import FULL_DSP58
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
-from finn.custom_op.kernels.base import KernelOpError, write_target
+from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
@@ -39,7 +39,7 @@ def targeted(model: ModelWrapper, target: Target) -> ModelWrapper:
 
 
 def op(model: ModelWrapper) -> Any:
-    return model.get_customop_wrapper(model.graph.node[0])
+    return kernel_op(model, model.graph.node[0])
 
 
 def test_the_node_root_binds_the_models_platform_and_its_dsp_block() -> None:

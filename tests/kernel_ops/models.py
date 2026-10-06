@@ -20,7 +20,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import KernelOp, write_target
+from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
 from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
 from finn.kernels.configure import undecided
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, resolve_target
@@ -208,7 +208,7 @@ def kernel_model(**options: bool) -> ModelWrapper:
         if node.output[0] in {output.name for output in model.graph.output}:
             # A graph output: no KernelOp consumes it, so its producer owns its transport.
             choices = {**choices, "y.transport": "direct"}
-        model.get_customop_wrapper(node).save(choices)
+        kernel_op(model, node).save(choices)
     return model
 
 

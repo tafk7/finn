@@ -64,6 +64,7 @@ from finn.kernels.configure import describe
 from finn.kernels.target import DspBlock, Platform, Target
 
 if TYPE_CHECKING:
+    from onnx import NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
 S = TypeVar("S", bound=Space)
@@ -518,6 +519,15 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         return answer.value
 
 
+def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
+    """The KernelOp of ``node``, attached to ``model``; a node of any other op is
+    refused."""
+    op = model.get_customop_wrapper(node)
+    if not isinstance(op, KernelOp):
+        raise KernelOpError(f"{node.name or node.op_type}: {node.op_type} is not a KernelOp")
+    return op
+
+
 __all__ = [
     "PLATFORM",
     "PLATFORM_FIELDS",
@@ -528,6 +538,7 @@ __all__ = [
     "committed",
     "datatype",
     "edge_tensor",
+    "kernel_op",
     "read_target",
     "refusal",
     "rows",
