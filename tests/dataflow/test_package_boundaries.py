@@ -5,7 +5,7 @@
 
 ``finn.dataflow`` holds canonical logical values. Its import statements are
 checked against the layer table (``tests/layering.py``): QONNX's datatype
-module and the standard library, no engine.
+module, numpy and the standard library, no engine.
 """
 
 from __future__ import annotations

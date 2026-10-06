@@ -90,6 +90,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("kernels", "finn.parked.custom_op"),
         ("dataflow", "finn.kernels.base.Kernel"),
         ("dataflow", "qonnx.util.basic"),
+        ("dataflow", "onnx"),
         ("space", "finn.dataflow.tensor"),
         ("space", "numpy"),
         # util below the flow.
@@ -112,6 +113,8 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("space", "greenlet"),
         ("space", "collections.abc.Mapping"),
         ("dataflow", "qonnx.core.datatype.DataType"),
+        ("dataflow", "numpy"),
+        ("kernels", "numpy.typing"),
         ("kernels", "finn.kernels.artifacts.module.Leaf"),
         ("transformation.kernels", "finn.transformation.fpgadataflow.kernel_partitions"),
         ("transformation.kernels", "finn.util.basic.make_build_dir"),

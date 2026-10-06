@@ -70,8 +70,8 @@ _KERNEL_STACK = ("space", "dataflow", "kernels.artifacts", "kernels")
 LAYERS: tuple[Layer, ...] = (
     # The generic Space engine: the standard library and its native dependency.
     Layer("space", ("finn.core.space",), (), ("greenlet",), "tests/core/space"),
-    # Canonical logical values: QONNX's datatypes, no engine.
-    Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype",), "tests/dataflow"),
+    # Canonical logical values: QONNX's datatypes and numpy, no engine.
+    Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype", "numpy"), "tests/dataflow"),
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
     Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
@@ -80,7 +80,7 @@ LAYERS: tuple[Layer, ...] = (
         "kernels",
         ("finn.kernels",),
         ("space", "dataflow", "kernels.artifacts"),
-        ("qonnx.core.datatype", "pyslang"),
+        ("qonnx.core.datatype", "numpy", "pyslang"),
         "tests/kernels",
     ),
     # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
