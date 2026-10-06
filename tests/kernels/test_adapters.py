@@ -14,6 +14,8 @@ kernel with children places it explicitly (``TransposeKernel``).
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from finn.core.space import Rejected, inspection
@@ -30,6 +32,7 @@ from kernels.adapted import (
     transposed,
 )
 from kernels.helpers import (
+    FULL_DSP48E2,
     labels,
 )
 
@@ -131,3 +134,19 @@ def test_a_transposes_simd_divides_both_sides():
     assert transposed(4, 6, 1).shuffle.field(TransposeKernel.simd).candidates().value == (1, 2)
     with pytest.raises(ValueError, match="domain-membership"):
         transposed(4, 6, 3)  # divides J, not I
+
+
+def test_a_transposes_ultra_pages_need_the_platforms_ultraram():
+    with pytest.raises(ValueError, match="shuffle.ram_style: uram-absent"):
+        transposed(4, 6, 2, ram_style="ultra", platform=replace(FULL_DSP48E2, uram=False))
+    # The pages start empty: UltraRAM that takes no initial contents is enough.
+    point = transposed(4, 6, 2, ram_style="ultra", platform=replace(FULL_DSP48E2, uram_init=False))
+    assert dict(point.shuffle.module.parameters)["RAM_STYLE"] == '"ultra"'
+
+
+def test_a_transpose_admits_two_pages_its_rtl_counts():
+    point = transposed(1 << 15, 1 << 16, 1, batches=1)
+    refusal = inspection.admission(point.shuffle)
+    assert isinstance(refusal, Rejected)
+    assert [finding.code for finding in refusal.findings] == ["transpose-depth"]
+    assert not isinstance(inspection.admission(transposed(4, 6, 2).shuffle), Rejected)

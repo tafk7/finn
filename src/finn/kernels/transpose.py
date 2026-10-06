@@ -16,11 +16,15 @@ from collections.abc import Mapping
 from math import gcd
 
 from finn.core.space import (
+    ConstraintGroup,
     Decision,
     Param,
     Rejected,
+    constraint,
     derived,
     divisors_of,
+    reject,
+    requires,
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Index, Schedule
@@ -29,6 +33,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.port import AxiStreamPort
+from finn.kernels.target import Platform
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 i, j = Index("i"), Index("j")
@@ -48,6 +53,11 @@ class TransposeKernel(Kernel):
     than the input arrives (stalled or bursty input, as behind a ``vpc``) reads
     lanes not yet written. ``tests/kernels/test_conformance.py``'s transpose
     case runs stalled and behind a ``vpc``, so it checks the guard.
+
+    The pages' ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
+    UltraRAM (the pages start empty, so no initial contents are asked of it).
+    Admission is the RTL's own limit: it counts its banks' two pages, ``2 I J``
+    elements, in 32 bits. A port reading fewer than two axes refuses itself.
     """
 
     id = "finnlib.inner_shuffle"
@@ -56,7 +66,13 @@ class TransposeKernel(Kernel):
 
     input_channel: Channel = Param(required=False)
     output_channel: Channel = Param(required=False)
-    ram_style: str = Decision(values=("auto", "distributed", "block", "ultra"))
+    platform: Platform = Param()
+    ram_style: str = Decision(
+        values=("auto", "distributed", "block", "ultra"),
+        requires=(
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
+        ),
+    )
 
     rows = extent_of(i)  # I
     cols = extent_of(j)  # J
@@ -67,6 +83,15 @@ class TransposeKernel(Kernel):
         return gcd(self.rows, self.cols)
 
     simd: int = Decision(domain=divisors_of(sides))
+
+    @constraint
+    def pages_supported(self) -> bool | Rejected:
+        """The RTL counts its banks' two pages, ``2 I J`` elements, in 32 bits."""
+        if 2 * self.rows * self.cols > 0xFFFFFFFF:
+            return reject("transpose-depth", "two pages of I x J elements overflow 32 bits")
+        return True
+
+    admission = ConstraintGroup(pages_supported)
 
     @derived
     def indices(self) -> tuple[Index, ...]:

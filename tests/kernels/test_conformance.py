@@ -284,6 +284,7 @@ def transpose() -> dict[str, Any]:
         reference=lambda input_channel: {"output_channel": input_channel},
         factors=tuple({"simd": simd} for simd in (1, 3, 6)),
         choices={"ram_style": "auto"},
+        facts={"platform": FULL_DSP48E2},
     )
 
 

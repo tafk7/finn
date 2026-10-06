@@ -17,6 +17,7 @@ from finn.dataflow.traversal import Traversal
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
@@ -87,14 +88,22 @@ def columns_first(rows: int, channels: int, lanes: int) -> Traversal:
     )
 
 
-def transposed(rows: int, cols: int, simd: int, batches: int = 2) -> Any:
+def transposed(
+    rows: int,
+    cols: int,
+    simd: int,
+    batches: int = 2,
+    *,
+    ram_style: str = "auto",
+    platform: Platform = FULL_DSP48E2,
+) -> Any:
     """``inner_shuffle`` placed between two boundary channels: rows in, columns out."""
     shape = (batches, rows, cols)
 
     class Transposed(Root):
-        a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
-        b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
-        shuffle = TransposeKernel(input_channel=a, output_channel=b)
+        a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=platform)
+        b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=platform)
+        shuffle = TransposeKernel(input_channel=a, output_channel=b, platform=platform)
 
     point = with_direct_transports(design_space(Transposed()))
-    return commit(point, {"shuffle.ram_style": "auto", "shuffle.simd": simd})
+    return commit(point, {"shuffle.ram_style": ram_style, "shuffle.simd": simd})
