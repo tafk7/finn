@@ -36,9 +36,10 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
     abi_pins,
 )
-from finn.kernels.artifacts.build import emit_module
-from finn.kernels.artifacts.module import Module
+from finn.kernels.artifacts.build import emit_module, instance_net
+from finn.kernels.artifacts.module import Composed, Link, Module
 from finn.kernels.artifacts.sources import include_directories, is_header
+from kernels.cycles import Measured
 from kernels.toolchain import finnlib_root, vivado_simulator
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
@@ -77,8 +78,10 @@ def materialize(module: Module, directory: Path) -> tuple[str, list[str], dict[s
     return emitted.entry_point, sources, data
 
 
-def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> None:
-    """Elaborate the testbench module ``check`` over ``sources``; it must display PASS."""
+def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> str:
+    """Elaborate the testbench module ``check`` over ``sources``; it must display PASS.
+
+    The simulator's output, which the testbench may have displayed more in."""
     bench = directory / "check.sv"
     bench.write_text("`timescale 1ns/1ps\n" + testbench)
     vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(str(shutil.which("xelab"))).parents[1])))
@@ -114,6 +117,7 @@ def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> 
         result = subprocess.run(command, cwd=directory, capture_output=True, text=True, timeout=300)
         assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS" in result.stdout, result.stdout + result.stderr
+    return result.stdout
 
 
 def _table(name: str, bits: int, words: Sequence[int]) -> str:
@@ -129,6 +133,76 @@ def stream_through(
     outputs: Mapping[str, Words],
     stalled: bool = True,
     repeating: bool = False,
+) -> None:
+    _check_streams(module, inputs, outputs)
+    _stream(module, directory, inputs, outputs, stalled=stalled, repeating=repeating)
+
+
+def measure(
+    module: Module,
+    directory: Path,
+    *,
+    inputs: Mapping[str, Words],
+    outputs: Mapping[str, Words],
+    frames: int = 4,
+) -> Measured:
+    """The cycles of ``frames`` frames streamed back to back, never stalled; printed too.
+
+    Each input presents its words ``frames`` times over and each output must
+    present its words as many times, checked as ``stream_through`` checks them.
+    Every handshake is recorded by the cycle it completes in: on the root's
+    streams and on each link between the module's instances, observed at the
+    sink's nets (``instance_net``), so a kernel's own ports are measured where the
+    module composes several.
+    """
+    if frames < 1:
+        raise ValueError(f"at least one frame, not {frames}")
+    _check_streams(module, inputs, outputs)
+    observed = {name: (f"{name}_tvalid", f"{name}_tready") for name in (*inputs, *outputs)}
+    for link in module.fragment.links if isinstance(module, Composed) else ():
+        name = link_stream(link)
+        if name is not None:
+            sink = link.sink.instance
+            assert sink is not None
+            observed[name] = (
+                f"dut.{instance_net(sink, link.sink.valid)}",
+                f"dut.{instance_net(sink, link.sink.ready)}",
+            )
+    log = _stream(
+        module,
+        directory,
+        {port: (list(words) * frames, bits) for port, (words, bits) in inputs.items()},
+        {port: (list(words) * frames, bits) for port, (words, bits) in outputs.items()},
+        stalled=False,
+        repeating=False,
+        observed=observed,
+    )
+    beats: dict[str, list[int]] = {name: [] for name in observed}
+    for line in log.splitlines():
+        if line.startswith("BEAT "):
+            _, name, cycle = line.split()
+            beats[name].append(int(cycle))
+    measured = Measured(
+        frames=frames,
+        inputs=tuple(inputs),
+        outputs=tuple(outputs),
+        beats={name: tuple(cycles) for name, cycles in beats.items()},
+    )
+    print(measured.table(), flush=True)
+    return measured
+
+
+def link_stream(link: Link) -> str | None:
+    """The name ``measure`` records a link's handshakes under: its sink's data pin,
+    ``instance.pin``; None for a link into the root, recorded under the root's output
+    port. A link from the root is recorded under both: its sink's pin and the root's input
+    port, one handshake."""
+    sink = link.sink
+    return None if sink.instance is None else f"{sink.instance}.{sink.data}"
+
+
+def _check_streams(
+    module: Module, inputs: Mapping[str, Words], outputs: Mapping[str, Words]
 ) -> None:
     buses = [
         port
@@ -146,6 +220,23 @@ def stream_through(
                 f"the module has no {side} stream {', '.join(unknown)}; its {side}s: "
                 + (", ".join(has) or "none")
             )
+
+
+def _stream(
+    module: Module,
+    directory: Path,
+    inputs: Mapping[str, Words],
+    outputs: Mapping[str, Words],
+    *,
+    stalled: bool,
+    repeating: bool,
+    observed: Mapping[str, tuple[str, str]] | None = None,
+) -> str:
+    """Stream ``inputs`` through ``module`` checking ``outputs``; the simulator's output.
+
+    Each ``observed`` stream, by name, its valid and ready signals: a line ``BEAT
+    <name> <cycle>`` is displayed for each handshake on it.
+    """
     top, sources, data = materialize(module, directory)
     for name, text in data.items():  # $readmemh reads an INIT_FILE from the simulator's directory
         (directory / name).write_text(text)
@@ -191,8 +282,10 @@ def stream_through(
         taken = f"{port}_received < {len(words)} && " if repeating else ""
         drive.append(f"{port}_tready = {taken}({ready});")
         done.append(f"{port}_received == {len(words)}")
+    for name, (valid, ready) in (observed or {}).items():
+        count.append(f'if ({valid} && {ready}) $display("BEAT {name} %0d", cycle);')
     newline = "\n    "
-    simulate(
+    return simulate(
         sources,
         f"""module check;
     logic ap_clk = 0, ap_rst_n = 0;
