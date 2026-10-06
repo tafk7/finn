@@ -29,13 +29,13 @@ from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract,
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
-    finnlib_root,
     matmul_assembly,
     matmul_point,
     placed,
     with_adapter_memories,
     with_direct_transports,
 )
+from kernels.toolchain import finnlib_root
 
 FACTS = dict(
     m=3,
