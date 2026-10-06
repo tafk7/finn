@@ -38,13 +38,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import fields
 from math import prod
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, TypeVar
 
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
 )
-from qonnx.core.metadata import MetadataError, Namespace
+from qonnx.core.metadata import Key, MetadataError, Namespace
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
 
@@ -74,7 +74,7 @@ PLATFORM = Namespace("finn.platform", version=1, inherit=True)
 and the platform (``finn.kernels.target.Platform``: the clock period and the
 capabilities), every key stated. It inherits: a subgraph body reads its parent's."""
 
-PLATFORM_KEYS = dict(
+PLATFORM_KEYS: dict[str, Key[Any]] = dict(
     part=PLATFORM.key("part", str),
     period_ns=PLATFORM.key("period_ns", float, check=lambda v: v > 0, expect="a period > 0"),
     dsp=PLATFORM.key("dsp", DspBlock),
@@ -254,7 +254,14 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
 # -- the op ------------------------------------------------------------------------------
 
 
-class KernelOp(CustomOp):  # type: ignore[misc]
+def _is_choice_value(value: object, kind: str, cases: tuple[str, ...]) -> TypeGuard[int | str]:
+    """Whether ``value`` is a value of a choice attribute of ONNX type ``kind`` (a
+    string for ``"s"``, an integer otherwise), among its ``cases`` if it has any."""
+    fits = isinstance(value, str) if kind == "s" else isinstance(value, int)
+    return fits and (not cases or value in cases)
+
+
+class KernelOp(CustomOp):
     """One ONNX node's binding of one kernel point; see the module docstring.
 
     An op class states ``op_version`` (its kernel's ``version``) in its own body; its
@@ -351,7 +358,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
     # -- facts and binding ----------------------------------------------------------------
 
     def model(self) -> ModelWrapper:
-        model = getattr(self, "_model", None)
+        model = self._model
         if model is None:
             raise KernelOpError(f"{self.label}: no model attached (use get_customop_wrapper)")
         return model
@@ -436,20 +443,18 @@ class KernelOp(CustomOp):  # type: ignore[misc]
         unknown = sorted(set(choices) - set(schema))
         if unknown:
             raise KernelOpError(f"{self.label}: {unknown} are not choices of {self.op_type}")
-        merged = {
-            name: value
-            for name, value in {**self.choices(), **choices}.items()
-            if value is not None
-        }
-        for name, value in merged.items():
+        merged: dict[str, int | str] = {}
+        for name, value in {**self.choices(), **choices}.items():
+            if value is None:
+                continue
             kind, cases = schema[name]
-            fits = isinstance(value, str) if kind == "s" else isinstance(value, int)
-            if not fits or (cases and value not in cases):
+            if not _is_choice_value(value, kind, cases):
                 raise KernelOpError(
                     f"{self.label}: {name} = {value!r} is not an {kind!r} value"
                     + (f" among {list(cases)}" if cases else ""),
                     (name,),
                 )
+            merged[name] = value
         self.point(merged)  # refuses before any write
         for name in schema:
             present = get_by_name(self.onnx_node.attribute, name)

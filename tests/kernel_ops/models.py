@@ -156,6 +156,7 @@ def chain_source(*, annotate_input: bool = True, second_weights: bool = True) ->
 def lift(model: ModelWrapper, tensor: str) -> None:
     """Make an initializer a graph input (a stored node's weights become an edge)."""
     values = model.get_initializer(tensor)
+    assert values is not None, f"{tensor} is not an initializer"
     model.graph.initializer.remove(next(i for i in model.graph.initializer if i.name == tensor))
     info = model.get_tensor_valueinfo(tensor)
     if info is not None:

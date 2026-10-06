@@ -69,9 +69,10 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
                 name, stored[name].data_type, list(stored[name].dims)
             )
         else:
-            info = model.get_tensor_valueinfo(name)
-            if info is None:
+            known = model.get_tensor_valueinfo(name)
+            if known is None:
                 raise KernelOpError(f"{node.name or node.op_type}: {name} has no shape yet")
+            info = known
         types[name] = info.type
     for name, proto in shape_inference.infer_node_outputs(schema, node, types, values).items():
         tensor = proto.tensor_type

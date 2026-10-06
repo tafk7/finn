@@ -80,6 +80,8 @@ class MatMul(KernelOp):
 
         def formals() -> dict[str, object]:
             values = model.get_initializer(b)
+            if values is None:
+                raise KernelOpError(f"{label}: {b} is not an initializer")
             weights = tuple(tuple(int(value) for value in row) for row in values)
             return {**common, "weights": weights}
 
