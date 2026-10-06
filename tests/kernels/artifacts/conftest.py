@@ -1,12 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Fixtures for the artifact substrate, and nothing from anywhere else.
+"""Fixtures for the tests of ``finn.kernels.artifacts`` and its isolation.
 
-This tree has its own ``conftest`` so that it shares no file with the
-``Kernel`` migration running in parallel.  It deliberately does not
-reuse ``tests/conftest.py``: that one seeds numpy and torch for tests that
-generate stimulus, and nothing here does.
+Nothing here generates stimulus, so nothing here needs the numpy and torch
+seeding that ``tests/conftest.py`` does for the tests that do.
 """
 
 from __future__ import annotations
@@ -19,13 +17,8 @@ import pytest
 FINN_ROOT = Path(__file__).resolve().parents[3]
 
 
-@pytest.fixture(scope="session")
-def finn_root() -> Path:
-    return FINN_ROOT
-
-
 @pytest.fixture(scope="session", params=("dataflow", "kernels"))
 def production_source_root(request: pytest.FixtureRequest) -> Path:
-    """Both planning packages remain independent of tool execution."""
+    """Each planning package's source root, for the checks that it runs no tool."""
 
     return FINN_ROOT / "src" / "finn" / str(request.param)

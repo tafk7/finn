@@ -1,11 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A7: the checker, against the real sources and the real defect.
+"""The checker, against the real sources.
 
 Three claims, and the last one is a measurement rather than an assertion.
 
-The A3 case mismatch is caught **against the actual file**, not a fixture.
+A pin's case mismatch (``CLK`` against the source's ``clk``) is caught **against
+the actual file**, not a fixture.
 ``replay_buffer.sv``, ``dotp_axi.sv`` and the FinnLib closure parse without
 declining.  And the decline rate is measured and recorded, because declining
 is permitted and the honest scope of the guarantee is whatever is left.
@@ -19,7 +20,6 @@ import pyslang
 import pytest
 from pyslang import ast, syntax
 
-from finn import resources
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -43,6 +43,7 @@ from finn.kernels.artifacts.rtl import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.util.resources import resource_path
+from kernels.helpers import finnlib_root
 
 REPLAY_PARAMETERS = (("LEN", "2"), ("REP", "3"), ("W", "16"))
 DOTP_PARAMETERS = (
@@ -146,47 +147,34 @@ INNER_SHUFFLE_CLOSURE = (
 INNER_SHUFFLE_PARAMETERS = (("BITS", "4"), ("I", "6"), ("J", "6"), ("SIMD", "3"))
 
 
-def _finnlib_root() -> Path:
-    try:
-        return Path(resources.path("finnlib"))
-    except resources.ResourceError as error:
-        pytest.skip(f"FinnLib is not available: {error}")
+def _finnlib_files(names: tuple[str, ...]) -> tuple[Path, ...]:
+    """FinnLib's files of ``names``; a missing one fails the test that reads it."""
+    root = finnlib_root()
+    files = tuple(root / name for name in names)
+    missing = [str(path) for path in files if not path.is_file()]
+    assert not missing, f"FinnLib lacks {missing}"
+    return files
 
 
 @pytest.fixture(name="replay")
-def _replay(finn_root: Path) -> Path:
-    finnlib_root = _finnlib_root()
-    path = finnlib_root / "rtl/infra/replay_buffer.sv"
-    if not path.is_file():
-        pytest.skip("FinnLib lacks a file this test reads")
+def _replay() -> Path:
+    (path,) = _finnlib_files(("rtl/infra/replay_buffer.sv",))
     return path
 
 
 @pytest.fixture(name="finnlib")
-def _finnlib(finn_root: Path) -> tuple[Path, ...]:
-    finnlib_root = _finnlib_root()
-    files = tuple(finnlib_root / name for name in FINNLIB_CLOSURE)
-    if any(not path.is_file() for path in files):
-        pytest.skip("FinnLib lacks a file this test reads")
-    return files
-
-
-def _finnlib_files(finn_root: Path, names: tuple[str, ...]) -> tuple[Path, ...]:
-    finnlib_root = _finnlib_root()
-    files = tuple(finnlib_root / name for name in names)
-    if any(not path.is_file() for path in files):
-        pytest.skip("FinnLib lacks a file this test reads")
-    return files
+def _finnlib() -> tuple[Path, ...]:
+    return _finnlib_files(FINNLIB_CLOSURE)
 
 
 @pytest.fixture(name="thresholding")
-def _thresholding(finn_root: Path) -> tuple[Path, ...]:
-    return _finnlib_files(finn_root, THRESHOLDING_CLOSURE)
+def _thresholding() -> tuple[Path, ...]:
+    return _finnlib_files(THRESHOLDING_CLOSURE)
 
 
 @pytest.fixture(name="eltwise")
-def _eltwise(finn_root: Path) -> tuple[Path, ...]:
-    return _finnlib_files(finn_root, ELTWISE_CLOSURE)
+def _eltwise() -> tuple[Path, ...]:
+    return _finnlib_files(ELTWISE_CLOSURE)
 
 
 def _module(extraction: object) -> ExtractedModule:
@@ -234,11 +222,11 @@ def test_a_derived_localparam_is_evaluated_and_not_left_as_an_expression(
     assert locals_["INPUT_STREAM_WIDTH"] == 16
 
 
-# -- the defect, against the real file ------------------------------------------
+# -- a case mismatch, against the real file -------------------------------------
 
 
 def test_the_case_mismatch_is_caught_against_the_actual_source(replay: Path) -> None:
-    """A3 reproduced it against a fixture copy.  Here it is against the file."""
+    """``CLK`` declared, ``clk`` in FinnLib's ``replay_buffer.sv``: refused, by case."""
 
     wrong = (
         Signal("CLK", Direction.IN, 1, Clock(Free())),
@@ -323,7 +311,7 @@ def test_a_declared_stream_is_checked_through_its_flipped_signature(
 def test_an_array_parameter_is_named_and_its_value_is_not_invented(
     thresholding: tuple[Path, ...],
 ) -> None:
-    """``THRESHOLDS`` used to decline the whole module; now only its value is unknown."""
+    """``THRESHOLDS``, an unpacked array, is named; only its value is not established."""
 
     module = _module(extract(thresholding, "thresholding_axi", THRESHOLDING_PARAMETERS))
     parameters = dict(module.parameters)
@@ -511,12 +499,12 @@ def test_every_confining_construct_is_a_syntax_kind() -> None:
     ],
 )
 def test_packed_dotp_above_simd_one_binds_through_its_generate_block_function(
-    finn_root: Path, reducer: str, diagnosed_in: set[str]
+    reducer: str, diagnosed_in: set[str]
 ) -> None:
     """``add_multi`` calls functions of its generate blocks in constants, the compressor's
     in the schedule headers it includes there: slang's only errors, all tolerated."""
 
-    files = _finnlib_files(finn_root, PACKED_DOTP_CLOSURE)
+    files = _finnlib_files(PACKED_DOTP_CLOSURE)
     parameters = (*PACKED_DOTP_PARAMETERS, ("REDUCER", f'"{reducer}"'))
     diagnosed = _diagnosed(files, "dotp_axi", parameters)
     assert {code for code, _, _ in diagnosed} == {"DiagCode(ConstEvalFunctionInsideGenerate)"}
@@ -528,10 +516,10 @@ def test_packed_dotp_above_simd_one_binds_through_its_generate_block_function(
     assert widths["s_axis_input_tdata"] == 16
 
 
-def test_inner_shuffle_elaborates_without_an_error(finn_root: Path) -> None:
-    """FinnLib 99d75e8 declares its nets before reading them; nothing is forgiven."""
+def test_inner_shuffle_elaborates_without_an_error() -> None:
+    """FinnLib's ``inner_shuffle`` declares its nets before reading them; nothing is forgiven."""
 
-    files = _finnlib_files(finn_root, INNER_SHUFFLE_CLOSURE)
+    files = _finnlib_files(INNER_SHUFFLE_CLOSURE)
     assert _diagnosed(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS) == set()
     module = _module(extract(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS))
     assert {port.name: port.width for port in module.ports}["idat"] == 12
@@ -708,7 +696,7 @@ def test_declining_is_distinguishable_from_agreeing(replay: Path) -> None:
 
 
 def test_the_parse_rate_over_everything_we_compile_is_recorded(
-    finn_root: Path, capsys: pytest.CaptureFixture[str]
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The honest scope of the guarantee, measured rather than described.
 
@@ -722,7 +710,7 @@ def test_the_parse_rate_over_everything_we_compile_is_recorded(
     silently would overstate what was examined.
     """
 
-    roots = [_finnlib_root() / "rtl", Path(resource_path("rtllib"))]
+    roots = [finnlib_root() / "rtl", Path(resource_path("rtllib"))]
 
     files = sorted(
         path for root in roots for path in root.rglob("*.sv") if not path.name.endswith("_tb.sv")

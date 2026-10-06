@@ -5,7 +5,7 @@
 
 PackagePartition writes the facts from the partition root's boundary;
 InsertIODMA and ``get_driver_shapes`` read them for a partition of KernelOps
-instead of asking a first or last HW node. test_design's Chain, its choices
+instead of asking a first or last HW node. The Chain (``kernels.chain``), its choices
 saved, as the partition; no Vivado.
 """
 
@@ -35,7 +35,7 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
 from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import write_boundary_facts
-from kernel_ops.test_partition import configured, kernel_model
+from kernel_ops.models import configure_partition, kernel_model
 
 
 def facts(port: str, tensor: str, dims: list[int], dtype: str, *counts: int) -> dict[str, Any]:
@@ -54,7 +54,7 @@ def facts(port: str, tensor: str, dims: list[int], dtype: str, *counts: int) -> 
 
 def test_the_facts_are_the_boundary_streams_at_the_partitions_end() -> None:
     model = kernel_model(second_weights=False)  # x and the streamed w2 cross the boundary
-    configured(model)
+    configure_partition(model)
     assert model.get(PARTITION_INPUTS) is None
     write_boundary_facts(model)
     inputs, outputs = partition_facts(model)
@@ -73,7 +73,7 @@ def test_a_model_without_facts_is_refused() -> None:
 
 def test_packaging_reads_the_part_and_period_from_the_target() -> None:
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     for key in PLATFORM_KEYS.values():
         model.delete(key)
     with pytest.raises(KernelOpError, match="states no target"):
@@ -83,7 +83,7 @@ def test_packaging_reads_the_part_and_period_from_the_target() -> None:
 def packaged_parent(tmp_path: Path) -> ModelWrapper:
     """The Chain cut into one partition, its body's facts stated (as packaging does)."""
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
     body_file = getCustomOp(parent.graph.node[0]).get_nodeattr("model")
     body = ModelWrapper(body_file)
@@ -118,7 +118,7 @@ def test_iodmas_take_their_widths_from_the_partitions_facts(tmp_path: Path) -> N
 
 def test_a_partition_without_facts_refuses_iodma_insertion(tmp_path: Path) -> None:
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
     with pytest.raises(ValueError, match="no boundary facts"):
         parent.transform(InsertIODMA(32))

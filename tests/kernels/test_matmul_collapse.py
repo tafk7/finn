@@ -10,12 +10,23 @@ aliases are evaluated.
 """
 
 from core.space._collapse_support import answers, counts, open_space
+from qonnx.core.datatype import DataType
 
 from finn.core.space import inspection
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from kernels.helpers import Root, placed_matmul
-from kernels.test_channel_source import FACTS, WEIGHTS
+from kernels.helpers import FULL_DSP48E2, Root, placed_matmul
+
+FACTS = dict(
+    m=3,
+    k=4,
+    n=4,
+    activation_dtype=DataType["INT3"],
+    weights_dtype=DataType["INT3"],
+    platform=FULL_DSP48E2,
+)
+# Stored (k, n), any values: collapse is checked on a memory, not on what it holds.
+WEIGHTS = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
 
 CHOICES = {
     "none": {

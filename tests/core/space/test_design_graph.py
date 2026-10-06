@@ -18,6 +18,7 @@ from typing import cast
 
 import pytest
 
+from core.space._results_support import codes
 from finn.core.space import (
     Available,
     Decision,
@@ -48,11 +49,6 @@ from finn.core.space import (
 COST = ViewKey("cost", int)
 AGREED = ViewKey("agreed", int)
 WIDTH = ViewKey("width", int)
-
-
-def codes(result: object) -> set[str]:
-    assert isinstance(result, (Rejected, Unresolved))
-    return {finding.code for finding in result.findings}
 
 
 def owners(result: object) -> set[str]:
@@ -360,7 +356,7 @@ def test_a_composite_node_has_the_surface_of_a_leaf_node() -> None:
     assert [(m.node, m.value) for m in point.widths] == [("head", 3), ("body", 5)]
 
 
-# -- 7. reducibility: the old structural choice is simply a Decision over nodes ----------
+# -- 7. reducibility: the structural choice is simply a Decision over nodes --------------
 
 
 class Fixed(Space):

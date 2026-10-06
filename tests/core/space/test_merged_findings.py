@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""One reason reached by two routes is reported once (R6).
+"""One reason reached by two routes is reported once.
 
 A view that reads a value and also requires it, a refusal reached through a
 view's output and an obligation, and a computation reading two aliases of one

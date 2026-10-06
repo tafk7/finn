@@ -103,7 +103,7 @@ def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)
     return design_space(Placed())
 
 
-def codes(result: object) -> set[tuple[str, str]]:
+def coded_messages(result: object) -> set[tuple[str, str]]:
     assert isinstance(result, Rejected), result
     return {(finding.code, finding.message) for finding in result.findings}
 
@@ -121,8 +121,8 @@ def test_a_kernel_binds_its_extents_from_its_ports_and_its_folding_factors_divid
 def test_ports_that_disagree_on_an_extent_are_refused() -> None:
     point = pool(x_shape=(1, 4, 6))
     expected = {("kernel-extents", "c is 6 (x axis 2) and 8 (y axis 1)")}
-    assert codes(point.kernel.query(Pool.extents)) == expected
-    assert codes(point.kernel.query(Pool.module)) == expected
+    assert coded_messages(point.kernel.query(Pool.extents)) == expected
+    assert coded_messages(point.kernel.query(Pool.module)) == expected
 
 
 def test_an_idle_port_carries_the_lanes_of_its_folding_factors() -> None:
@@ -139,7 +139,7 @@ def test_an_unplaced_kernel_binds_no_extent_and_says_which() -> None:
     point = design_space(Pool())
     assert point.extents == {}
     refused = point.field(Pool.pe).candidates()
-    assert codes(refused) == {("kernel-extents", "c is bound by no placed port")}
+    assert coded_messages(refused) == {("kernel-extents", "c is bound by no placed port")}
 
 
 def test_extent_of_is_a_named_member() -> None:
@@ -175,7 +175,7 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
         kernel = Both(x_channel=x, y_channel=y)
 
     point = commit(design_space(Placed()), {"kernel.pe": 8})
-    ((code, message),) = codes(point.kernel.x.query(AxiStreamPort.presented))
+    ((code, message),) = coded_messages(point.kernel.x.query(AxiStreamPort.presented))
     assert code == "port-presentation"
     assert message.startswith("s_axis_input: exactly one of a schedule or a sequence")
 
@@ -190,7 +190,7 @@ def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
     point = commit(with_direct_transports(design_space(Stated())), {"kernel.pe": 4})
     assert point.kernel.y.element == ScalarEncoding(DataType["INT9"])
     refused = point.y.query(Channel.netlist)
-    assert "channel-tensor" in {code for code, _ in codes(refused)}
+    assert "channel-tensor" in {code for code, _ in coded_messages(refused)}
 
 
 def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
@@ -223,7 +223,7 @@ def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
         )
 
     wide = design_space(Wide()).compute
-    assert codes(wide.query(PackedDotpKernel.extents)) == {
+    assert coded_messages(wide.query(PackedDotpKernel.extents)) == {
         ("kernel-extents", "k is 14 (x axis 1) and 12 (w axis 0)")
     }
 
@@ -247,5 +247,5 @@ def test_a_producer_states_its_element() -> None:
         kernel = Silent(x_channel=x, y_channel=y)
 
     point = commit(design_space(Placed()), {"kernel.pe": 4})
-    ((code, message),) = codes(point.kernel.y.query(AxiStreamPort.element))
+    ((code, message),) = coded_messages(point.kernel.y.query(AxiStreamPort.element))
     assert code == "port-element" and message.startswith("m_axis_output: a producer states")

@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""§14: planning packages do not run tools.
+"""Planning packages do not run tools.
 
 ``artifacts``' own import rule (the standard library and pyslang, nothing else
 of FINN) is a row of the layer table, ``tests/layering.py``. What lives here is
-§14's claim about tool execution, which the design says "is true
-today and should be a test, not an observation".  It is stated over the whole
-of both ``finn.kernels`` and the retained ``finn.dataflow`` planning modules,
-because moving a package must not remove it from the execution boundary check.
+the rule about tool execution: no module of ``finn.kernels`` or ``finn.dataflow``
+starts a process or spells a tool's command line. It is stated over the whole of
+both packages, so that moving a module within them cannot take it out of the
+check.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ def _docstrings(tree: ast.Module) -> set[int]:
     return ids
 
 
-# -- §14: planning packages do not run tools ----------------------------------
+# -- planning packages do not run tools --------------------------------------
 
 
 def test_no_production_planning_module_can_start_a_process(
@@ -110,13 +110,12 @@ def test_no_production_planning_module_can_start_a_process(
     """The seam between planning a tool run and performing one.
 
     ``finn.kernels`` and ``finn.dataflow`` produce requirements and requests;
-    ``finn.builder.backends`` runs them.  That split is what lets a remote or
-    containerized executor arrive without editing anything here, and an import
-    of ``subprocess`` is how it would quietly stop being true.
+    the flow runs the tools (through ``finn.util.toolchain``).  That split is what
+    lets a remote or containerized executor arrive without editing anything here,
+    and an import of ``subprocess`` is how it would quietly stop being true.
 
-    ``finn.dataflow.testing`` is contributor test support rather than a
-    production realization path.  Its fresh-import assertion deliberately
-    starts a Python interpreter, so it is outside this tool-execution claim.
+    A ``testing`` subpackage of either, contributor test support rather than a
+    production path, would be outside this claim.
     """
 
     violations: list[str] = []

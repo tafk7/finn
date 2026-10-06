@@ -1,17 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""KernelOp: a qonnx ``CustomOp`` that binds one kernel point (boundary note D1).
+"""KernelOp: a qonnx ``CustomOp`` that binds one kernel point.
 
-An op reads its facts from the attached model only (H-002, H-006's reading
-rule): input shapes and datatype annotations, initializers admitted by their
-value summary, and the build target from the model's ``finn.platform``
-metadata. It states its placement once, as data (``kernel``, ``formals``,
-``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node root
-is generated from it, and a partition root places the same kernel. It binds
-through the bind cache, its kernel alone for inference and its node root for its
-choices, replays the choices its node holds, and answers the compiler's queries
-from the result.
+An op reads its facts from the attached model only: input shapes and datatype
+annotations, initializers admitted by their value summary, and the build target
+from the model's ``finn.platform`` metadata. It states its placement once, as
+data (``kernel``, ``formals``, ``references``, ``parameters``;
+``finn.custom_op.kernels.roots``): its node root is generated from it, and a
+partition root places the same kernel. It binds through the bind cache, its
+kernel alone for inference and its node root for its choices, replays the
+choices its node holds, and answers the compiler's queries from the result.
 
 Two kinds of attribute:
 
@@ -132,7 +131,7 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
 
 
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
-    """The tensor an edge's channel carries, as the graph states it (D6): its shape as
+    """The tensor an edge's channel carries, as the graph states it: its shape as
     rows and its annotation."""
     return Tensor(rows(shape(model, tensor, label)), ScalarEncoding(datatype(model, tensor, label)))
 
@@ -462,7 +461,7 @@ class KernelOp(CustomOp):  # type: ignore[misc]
 
     def owned(self) -> dict[str, str]:
         """The tensor of each parameter port whose value this node owns, by port: its
-        channel is this node's to declare (D5), and carries the kernel's views (D6)."""
+        channel is this node's to declare, and carries the kernel's views."""
         return {port: self.onnx_node.input[self.ports.index(port)] for port in self.facts().owned}
 
     def place(self, channels: Mapping[str, Channel]) -> tuple[Kernel, dict[str, str]]:

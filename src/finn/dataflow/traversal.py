@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Logical stream order as a loop nest over a row-major tensor.
+"""Logical beat order as a loop nest over a row-major tensor.
 
 A ``Traversal`` walks an operand of ``shape`` with two loop nests, both listed
 outer to inner. Each iteration of ``beat_loops`` is one beat; each iteration of
@@ -12,16 +12,15 @@ transposes, sliding windows and replay are all ordinary loop nests.
 
 Construction canonicalizes the nests, so two traversals are equal exactly when
 they present the same positions in the same beats and lanes. ``classify``
-compares two traversals of one operand and names the adapter a mismatch needs:
-free lane wiring, a loop-nest reorder with its ``input_gen`` parameters, a width
-conversion, a lane regroup, or none at all.
+compares two traversals of one operand and names the adaptation a mismatch
+needs: free lane wiring, a loop-nest reorder (``Reorder``: its frame, loop
+extents and strides), a width conversion, a lane regroup, or none at all.
 
-A ``BeatSequence`` (the canon's name, without its Regions) is what one end of
-a stream presents of the tensor it carries: its traversal per pass, whether
-the pass repeats (``Repetition``), and the marker rules it offers or requires.
-``unreplayed`` is the boundary rule: the receiver of a stream realizes its own
-replay, while whole-pass repetition stays part of the interface; ``period``
-strips the whole-pass repetition.
+A ``BeatSequence`` is what one end of a channel presents of the tensor it
+carries: its traversal per pass, whether the pass repeats (``Repetition``), and
+the marker rules it offers or requires. ``unreplayed`` is the boundary rule: the
+receiver of a channel realizes its own replay, while whole-pass repetition stays
+part of the interface; ``period`` strips the whole-pass repetition.
 """
 
 from __future__ import annotations
@@ -262,16 +261,16 @@ class Adaptation(Enum):
 
     IDENTITY = "identity"
     LANE_PERMUTATION = "lane_permutation"  # free: wires only
-    REORDER = "reorder"  # buffered loop-nest reorder or replay: input_gen / outer shuffle
-    WIDTH_CONVERSION = "width_conversion"  # same element order, different lanes: DWC
-    LANE_REGROUP = "lane_regroup"  # the lane axis changes: inner shuffle (banked transpose)
+    REORDER = "reorder"  # a buffered loop-nest reorder, or replay
+    WIDTH_CONVERSION = "width_conversion"  # same element order, different lanes
+    LANE_REGROUP = "lane_regroup"  # the lane axis changes (a banked transpose)
     INCOMPATIBLE = "incompatible"  # different positions, or no loop-nest relation
 
 
 @dataclass(frozen=True)
 class Reorder:
-    """``input_gen`` parameters: per frame of ``frame_beats`` input beats, emit the
-    beat at ``sum(index[i] * coefs[i])`` for the nested ``dims`` (outer first)."""
+    """A loop-nest reorder: per frame of ``frame_beats`` input beats, emit the beat
+    at ``sum(index[i] * coefs[i])`` for the nested ``dims`` (outer first)."""
 
     frame_beats: int
     dims: tuple[int, ...]
@@ -387,7 +386,7 @@ class Repetition(Enum):
 
 @dataclass(frozen=True)
 class BeatSequence:
-    """One stream end's view of its tensor: traversal, pass repetition and marker rules.
+    """One channel end's view of its tensor: traversal, pass repetition and marker rules.
 
     For a producer the markers are guarantees; for a consumer, requirements.
     """

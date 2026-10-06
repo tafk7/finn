@@ -271,7 +271,7 @@ _COUNTERS = tuple(
         "ternary_adder",
     )
 )
-# add_multi and its compressor (FinnLib 637d4ed): the compressor's schedule is built at
+# add_multi and its compressor: the compressor's schedule is built at
 # elaboration by headers that add_multi.sv `includes; they are staged beside it and
 # never compiled on their own (``finn.kernels.artifacts.sources.is_header``).
 _ADD_MULTI = (

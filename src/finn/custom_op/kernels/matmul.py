@@ -3,7 +3,7 @@
 
 """The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
 
-H-006's reading rule decides from the graph: weights that are an initializer
+The graph decides which weights the node owns: weights that are an initializer
 are the node's own (``Facts.owned``), the weight channel's known value, which
 its ``source`` stores, keyed by their value summary's digest; weights on any
 other tensor arrive on a channel like any edge. One node root serves both: the

@@ -3,8 +3,8 @@
 
 """Shared case geometry, packing and observation wrapper for dotp RTL checks.
 
-These helpers contain no kernel construction or arithmetic policy. Both the
-physical kernel suite and retained dataflow harness use this single copy.
+These helpers contain no kernel construction or arithmetic policy; the dotp
+sweep (``pure_dot_product_numeric``) uses them.
 """
 
 from __future__ import annotations

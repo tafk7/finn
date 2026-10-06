@@ -21,6 +21,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import (
+    Abi,
     BuildError,
     BusExport,
     Composed,
@@ -29,7 +30,6 @@ from finn.kernels.artifacts.module import (
     Leaf,
     Link,
     LinkEnd,
-    Pins,
     fingerprint,
     merge,
     module_name,
@@ -55,7 +55,7 @@ def stage(*, width: int = 8, data: bytes = b"00\n") -> Leaf:
         "1",
         "stage",
         (("WIDTH", width), ("FLAG", True)),
-        Pins(
+        Abi(
             (
                 *CLOCKS,
                 Signal("idat", Direction.IN, width),
@@ -88,7 +88,7 @@ def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
     assert leaf.parameters == (("FLAG", True), ("WIDTH", 8))
     assert module_name(leaf) == "stage"
     with pytest.raises(BuildError, match="canonical RTL spellings"):
-        replace(leaf, pins=replace(leaf.pins, parameters=(("FLAG", "True"), ("WIDTH", "8"))))
+        replace(leaf, abi=replace(leaf.abi, parameters=(("FLAG", "True"), ("WIDTH", "8"))))
     with pytest.raises(BuildError, match="none of its inputs"):
         replace(leaf, held=Held((("odat", 0),)))
     with pytest.raises(BuildError, match="none of its outputs"):
@@ -98,7 +98,7 @@ def test_a_leaf_spells_its_parameters_and_holds_only_its_own_pins() -> None:
     with pytest.raises(BuildError, match="not an RTL module identifier"):
         replace(leaf, name="two words")
     with pytest.raises(AbiError, match="names one pin twice"):
-        Pins((*CLOCKS, CLOCKS[0]))
+        Abi((*CLOCKS, CLOCKS[0]))
 
 
 def test_a_link_carries_whole_lanes_of_its_words() -> None:
@@ -117,7 +117,7 @@ def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
     assert [label for label, _ in placed.instances] == ["memory.memstream"]
     assert placed.exports[0].instance == "memory.memstream"
     assert placed.exports[0].port == "memory_memstream_s_axilite"
-    # A stream's fragment: its stage below it; its users beside it (^), its boundary None.
+    # A channel's fragment: its stage below it; its users beside it (^), its boundary None.
     stream = Fragment(
         (("adapter.vpc.vpc", stage()),),
         (link(None, "adapter.vpc.vpc"), link("adapter.vpc.vpc", "^compute.packed")),
@@ -128,7 +128,7 @@ def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
         (None, "x.adapter.vpc.vpc"),
         ("x.adapter.vpc.vpc", "compute.packed"),
     ]
-    # Placed in turn under its kernel's node, a user beside the stream stays beside it.
+    # Placed in turn under its kernel's node, a user beside the channel stays beside it.
     deeper = inside.under("mm")
     assert [(item.source.instance, item.sink.instance) for item in deeper.links] == [
         (None, "mm.x.adapter.vpc.vpc"),
@@ -151,7 +151,7 @@ def test_merged_fragments_place_each_label_and_present_each_port_once() -> None:
         )
 
 
-ROOT = Pins(
+ROOT = Abi(
     (
         Signal("ap_clk", Direction.IN, 1, Clock()),
         Signal("ap_rst_n", Direction.IN, 1, Reset(True, True, ("ap_clk",))),

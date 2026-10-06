@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Explicit XSI matrix conformance for physical-only MatMulKernel production builds.
+"""Explicit XSI matrix conformance for MatMulKernel production builds.
 
 Run with Vivado selected (FinnLib is the ``finnlib`` resource). The
 observation wrapper only exposes child pins; all arithmetic and transport RTL
@@ -16,14 +16,14 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np  # type: ignore[import-not-found]
-from qonnx.core.datatype import DataType  # type: ignore[import-not-found]
+import numpy as np
+from qonnx.core.datatype import DataType
 
 from finn.dataflow.gemm import Form
 from finn.kernels.artifacts.abi import abi_pins
 from finn.kernels.target import DspBlock
 from kernels.helpers import WeightDelivery, full_platform, matmul_assembly, print_identity
-from kernels.rtlsim.rtl_transport import drive_observed
+from kernels.sweeps.rtl_transport import drive_observed
 from kernels.xsim import materialize
 
 
@@ -146,7 +146,7 @@ def _instance(label):
 
 
 def _replay_node(module):
-    """The activation stream's adapter feeding dotp, and the frame-marker bit dotp reads."""
+    """The activation channel's adapter feeding dotp, and the frame-marker bit dotp reads."""
     ((source, bit),) = [
         (link.source.instance, f"{marker[0]}[{marker[1] or 0}]")
         for link in module.fragment.links
@@ -290,7 +290,7 @@ def run(
     # Memory images (INIT_FILE) go where the simulation resolves them.
     entry_point, sources, data_files = materialize(built.module, directory)
     top, wrapper, observations = _observation_wrapper(
-        built.module.pins.ports,
+        built.module.abi.pins,
         entry_point,
         directory,
         activation_bits,

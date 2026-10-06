@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Conformance: a kernel placed between boundary streams, checked against its RTL.
+"""Conformance: a kernel placed between boundary channels, checked against its RTL.
 
 ``conformance`` checks one kernel over sampled folding configurations. For
 each sample it
 
-1. places the kernel in a generated ``Root`` between boundary streams, one
+1. places the kernel in a generated ``Root`` between boundary channels, one
    per reference input, commits the sample's factors and the pinned ``choices``,
    and the memories of the adapter chains (each chain forced);
 2. checks the kernel's module against its materialized sources under the
@@ -20,7 +20,7 @@ each sample it
    presents its port's traversal (an input's ``unreplayed``), and
    ``parameters()`` names exactly the module's parameters, and with its
    outputs unplaced the kernel still states every output element (a
-   producer's element never reads its own output stream);
+   producer's element never reads its own output channel);
 4. given an ``xsim`` directory, streams random integers in each input's range
    through the design, free and stalled, and compares every output with
    ``reference``: each input packed in the order its boundary presents, each
@@ -28,7 +28,7 @@ each sample it
    and each output is compared over its first pass.
 
 The adapter sample feeds the first input from a read-only ``MemStreamKernel``
-presenting ``vector_major`` at another lane count, so that input's stream
+presenting ``vector_major`` at another lane count, so that input's channel
 places a width conversion and the adapter is part of the simulated path. A
 kernel without inputs has none.
 
@@ -284,7 +284,7 @@ def _design(
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """A root of the kernel on one stream per tensor; ``fed``'s stream from a memory."""
+    """A root of the kernel on one channel per tensor; ``fed``'s channel from a memory."""
     namespace: dict[str, object] = {}
     for name, tensor in tensors.items():
         inside = fed is not None and fed[0] == name
@@ -379,7 +379,7 @@ def place(
     """The sample's design; the adapter sample's first input fed by a memory.
 
     The memory presents ``vector_major`` at the first lane count, of those
-    dividing the innermost extent, that makes the stream convert widths.
+    dividing the innermost extent, that makes the channel convert widths.
     """
     plain = with_adapter_memories(
         _committed(space_type, sample.factors, inputs, outputs, choices, facts)
@@ -428,14 +428,14 @@ def _check_rtl(
 ) -> set[str] | None:
     """Refuse a module its sources contradict; the source's parameter names, unless declined."""
     top, sources, _ = materialize(leaf, directory)
-    pins = leaf.pins
-    extracted = extract([Path(source) for source in sources], top, pins.parameters)
+    abi = leaf.abi
+    extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
         message = f"{_where(space_type, sample)}: the RTL checker declined {top}: {extracted}"
         warnings.warn(message, RtlDeclined, stacklevel=3)
         return None
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
-    issues = check_against_rtl(pins.ports, extracted.ports)
+    issues = check_against_rtl(abi.pins, extracted.ports)
     assert not issues, f"{_where(space_type, sample)}: {top} refuses its ABI: " + "; ".join(issues)
     # Every declared name, whether or not its value was established.
     return {name for name, _ in extracted.parameters}
@@ -444,7 +444,7 @@ def _check_rtl(
 def _ends(
     point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
-    """The contract the kernel presents on each stream."""
+    """The contract the kernel presents on each channel."""
     ports = _ports(space_type)
     found: dict[str, StreamContract] = {}
     for name in names:
@@ -512,7 +512,7 @@ def _check_unplaced_outputs(
     """With its outputs unplaced, the kernel still states every output element, the same.
 
     A producer's element reads its kernel's facts, choices and input elements,
-    never its own output stream: a compiler infers output types node by node.
+    never its own output channel: a compiler infers output types node by node.
     """
     where, ports = _where(space_type, sample), _ports(space_type)
     probe = getattr(_committed(space_type, sample.factors, inputs, EMPTY, choices, facts), KERNEL)

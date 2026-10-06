@@ -83,8 +83,7 @@ def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> 
     bench.write_text("`timescale 1ns/1ps\n" + testbench)
     vivado = Path(os.environ.get("XILINX_VIVADO", str(Path(str(shutil.which("xelab"))).parents[1])))
     commands = (
-        # Relaxed, as FINN's own flow elaborates (finn_xsi: ``xelab -relax``): FinnLib's
-        # inner_shuffle.sv reads a signal before declaring it, which strict mode refuses.
+        # Relaxed, as FINN's own flow elaborates (finn_xsi: ``xelab -relax``).
         [
             "xvlog",
             "--sv",
@@ -133,7 +132,7 @@ def stream_through(
 ) -> None:
     buses = [
         port
-        for port in module.pins.ports
+        for port in module.abi.pins
         if isinstance(port, Bus) and port.protocol is StandardProtocol.AXIS
     ]
     for side, names, endpoint in (
@@ -153,7 +152,7 @@ def stream_through(
     valid, ready = ("cycle % 3 != 0", "cycle % 4 != 1") if stalled else ("1", "1")
     streams = {**inputs, **outputs}
     lines: list[str] = []
-    for name, info in abi_pins(module.pins.ports).items():
+    for name, info in abi_pins(module.abi.pins).items():
         if isinstance(info.role, (Clock, Reset)) or info.bus in streams:
             continue
         width = "" if info.width == 1 else f"[{info.width - 1}:0] "

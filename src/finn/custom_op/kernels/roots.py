@@ -14,7 +14,7 @@ that are Params or literals. Two things are built with it:
 
 - the **node root** (``node_root``), one class per op, compiled once: the
   formals are its Params, declared as the kernel declares them; each edge's
-  channel, an input's or an output's, carries the tensor the graph states (D6),
+  channel, an input's or an output's, carries the tensor the graph states,
   a Param of its own (``x_tensor``, ``y_tensor``); a parameter port's channel
   carries the kernel's views, its ``contents`` supplied only when the kernel
   holds the value (the view's guard: an initializer the node owns, which the

@@ -12,8 +12,8 @@ extents M, N and K. A ``Form`` says which indices each operand reads:
   also carry ``n``, so each output reads its own.
 
 Weights are stored ``(k, n)``, as ONNX ``MatMul`` and FINN's MVAU initializer
-store them. The stored axis order does not fix a stream's order: every stream
-presents what its schedule derives.
+store them. The stored axis order does not fix the order a port presents: every
+port presents what its schedule derives.
 """
 
 from __future__ import annotations

@@ -124,8 +124,8 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
 
 
 def test_node_member_alias_and_typed_view_exports() -> None:
-    # ValueKey is removed: exports are ViewKeys to views only. A value export
-    # is refused as the wrong kind; the value is re-exported through a View.
+    # Exports are ViewKeys to views only. A value export is refused as the wrong
+    # kind; the value is exported through a View.
     width = ViewKey("width", int)
     physical = ViewKey("physical", int)
 
@@ -146,7 +146,7 @@ def test_node_member_alias_and_typed_view_exports() -> None:
     with pytest.raises(DefinitionError, match="export width has the wrong kind"):
         collect_space(ValueExport)
 
-    # An inline exposed Param is removed: the parent declares the formal and binds it.
+    # The parent declares the formal and binds it to the child.
     class Parent(Space):
         extent: int = Param()
         child = Child(extent=extent)
@@ -353,8 +353,7 @@ def test_inferred_derived_override_cannot_change_value_type() -> None:
 
 
 def test_binding_forms_and_local_edit_ownership() -> None:
-    # The exposed-param binding form is removed (see the inline Param test above);
-    # a reference input is supplied by a node, and a root keeps its values as
+    # A reference input is supplied by a node, and a root keeps its values as
     # runtime parameters.
     class Child(Space):
         size: int = Param()
@@ -392,8 +391,8 @@ def test_binding_forms_and_local_edit_ownership() -> None:
         with pytest.raises(RequestError, match="not an owned Decision"):
             model.decision(0, node.size)
 
-    # decision_ref is removed: a formal is read like any member, and only an owned
-    # fresh Decision is editable through it.
+    # A formal is read like any member, and only an owned fresh Decision is
+    # editable through it.
     point = design_space(Parent())
     assert point.with_choices({Parent.local.size: 8}).local.size == 8
     with pytest.raises(RequestError, match="not an owned Decision"):

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Stream adapters: the hardware a channel places to carry out its plan.
+"""Channel adapters: the hardware a channel places to carry out its plan.
 
 A channel compares what its source presents with what its sink requires and
 derives a plan (``finn.dataflow.plan``): reorders, width conversions and marker
@@ -36,7 +36,7 @@ ports, which the channel checks like any other end.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
-directly, but is not a candidate yet: it emits undefined lanes under bursty input
+directly; it is not a candidate, and a kernel with children places it explicitly
 (``finn.kernels.transpose``).
 """
 

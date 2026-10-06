@@ -12,7 +12,7 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   IP's name as the kernel type;
 - its bus interfaces declared from the module's ABI, none left to Vivado's
   inference: ``ap_clk``, ``ap_clk2x`` when an instance is pumped, ``ap_rst_n``,
-  each boundary stream ``s_axis_<i>``/``m_axis_<j>``, each presented AXI-Lite
+  each boundary channel's AXI-Stream ``s_axis_<i>``/``m_axis_<j>``, each presented AXI-Lite
   bus with a ``Reg0`` register map (the Zynq shell assigns ``Reg*``, SLASH maps
   a ``register`` block);
 - on the partition model, ``vivado_stitch_proj``, ``vivado_stitch_vlnv`` and
@@ -31,7 +31,7 @@ the partition root's boundary channels where the boundary presents them
 The part and the clock period are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
-The partition's choices are its nodes' (D8): the root is replayed from them, a
+The partition's choices are its nodes': the root is replayed from them, a
 Decision with one viable case is forced, and an open Decision or a stale
 choice refuses, named. The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
@@ -171,7 +171,7 @@ class PackagePartition(Transformation):  # type: ignore[misc]
         emitted = emit_module(
             module, project / "src", roots={"finnlib": Path(resources.path("finnlib"))}
         )
-        pins = module.pins.ports
+        pins = module.abi.pins
         script = project / "package.tcl"
         script.write_text(
             package_tcl(

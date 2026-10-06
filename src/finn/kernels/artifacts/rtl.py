@@ -6,9 +6,8 @@
 The declaration is authoritative.  Generated RTL is generated *from* the ABI,
 so parsing it back would be circular, and the ABI is the packaging contract --
 it must not move whenever the RTL moves.  What a checker adds is that **a
-declaration nothing checks is a second authority waiting to disagree**, and the
-tree already contains the disagreement: ``in0_V_TDATA`` in the physical model
-against ``in0_V_tdata`` in the generated text.
+declaration nothing checks is a second authority waiting to disagree**: a pin
+declared ``CLK`` where the source says ``clk`` is one such disagreement.
 
 So this module has exactly two powers.  It can **decline** -- say it could not
 establish anything -- and it can **refuse** a declaration the source
@@ -16,7 +15,7 @@ contradicts.  It cannot fill a field in.  ``no build-time path derives a Kernel
 from RTL``: discovery would make a grammar version bump able to change which
 designs exist.
 
-Three things measured against real sources rather than assumed (the A0 gate):
+Three things measured against real sources rather than assumed:
 
 * **Resolved widths need a parameter binding.**  Neither ``replay_buffer`` nor
   ``dotp_axi`` gives its parameters defaults, so slang cannot elaborate either
@@ -25,8 +24,8 @@ Three things measured against real sources rather than assumed (the A0 gate):
 * **Vendor primitives have no source in any closure we compile.**  ``DSP58``
   and its relatives are black-boxed, which cannot change the top's own ports.
 * **FinnLib places ``\\`default_nettype`` inside module bodies.**  Illegal per
-  LRM 22.8, tolerated by Vivado, rejected by slang, and present in 66 of the
-  155 files we compile.  It is tolerated here by an explicit list rather than
+  LRM 22.8, tolerated by Vivado, rejected by slang, and present in many of the
+  files we compile.  It is tolerated here by an explicit list rather than
   by relaxing the error filter, because the two are different: one names what
   is forgiven and why, the other forgives whatever turns up.  One more code
   Vivado accepts is forgiven only *inside* the constructs that keep it from a
@@ -66,7 +65,7 @@ TOLERATED_DIAGNOSTICS = frozenset(
         # FinnLib writes `default_nettype between the port list and the body.
         # Illegal per LRM 22.8 and unable to change a port width either way.
         "DiagCode(DirectiveInsideDesignElement)",
-        # FinnLib's compressor sources (637d4ed) declare `timescale and the rest of
+        # FinnLib's compressor sources declare `timescale and the rest of
         # FinnLib does not.  A time scale sets delay units, never a port or a parameter.
         "DiagCode(MissingTimeScale)",
     }

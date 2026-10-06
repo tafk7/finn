@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FinnLib memstream as a delivery kernel, and MatMulKernel's memstream candidate.
+"""FinnLib memstream as a delivery kernel, and as the weight channel's source.
 
 The memory image is packed in the consumer's order and shipped as a generated
 INIT_FILE named by its contents. A pumped memory stores each word as two
@@ -83,8 +83,8 @@ def test_a_pumped_memory_stores_half_words_low_first():
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]
-    ports = {port.name: port for port in point.module.pins.ports}
-    assert "clk2x" in ports and point.module.pins.clock_alignments
+    ports = {port.name: port for port in point.module.abi.pins}
+    assert "clk2x" in ports and point.module.abi.clock_alignments
 
 
 def test_idle_interfaces_are_tied_off():
@@ -115,7 +115,7 @@ def test_generated_data_is_a_relative_name_with_bytes():
 
 def test_matmul_memstream_delivery_materializes_its_image(tmp_path):
     built = matmul_assembly(**MATMUL)
-    # The memory is the weight stream's source, below the stream declared before MatMul.
+    # The memory is the weight channel's source, below the channel declared before MatMul.
     assert labels(built.module) == [
         "x.adapter.input_gen.input_gen",
         "w.source.memstream",
@@ -135,6 +135,6 @@ def test_several_weight_sets_take_a_set_index_per_row():
     memstream = dict(placed(built.module, "w.source.memstream").parameters)
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
-    # The memory's choices are the weight stream's, keyed below it.
+    # The memory's choices are the weight channel's, keyed below it.
     keys = {item.key for item in inspection.decisions(built.point)}
     assert {"w.source.memstream.ram_style", "w.source.memstream.pumped_memory"} <= keys

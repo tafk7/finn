@@ -6,7 +6,7 @@
 The node roots bind it to their kernels and to every channel, so a value
 case that requires a capability (``requires``) is refused, by name, on a device
 without it and viable on one with it; the DSP block is the platform's. A bare
-kernel, with no model, keeps the default platform, which refuses nothing.
+kernel, with no model, has no platform: its caller must state one.
 """
 
 from __future__ import annotations

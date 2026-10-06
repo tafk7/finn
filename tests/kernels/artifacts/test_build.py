@@ -21,7 +21,7 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
-from finn.kernels.artifacts.module import BuildError, Composed, Fragment, Leaf, Pins
+from finn.kernels.artifacts.module import Abi, BuildError, Composed, Fragment, Leaf
 
 
 def _leaf(*, width: int = 8, sources: tuple[CopiedSource, ...] | None = None) -> Leaf:
@@ -30,7 +30,7 @@ def _leaf(*, width: int = 8, sources: tuple[CopiedSource, ...] | None = None) ->
         "3",
         "core",
         (("WIDTH", width),),
-        Pins(
+        Abi(
             (Signal("clk", Direction.IN, 1, Clock(Free())),),
             (("WIDTH", str(width)),),
         ),
@@ -55,7 +55,7 @@ def _composed(*, data: bytes = b"01\n", aligned: bool = True) -> Composed:
     alignments = (ClockAlignment("ap_clk", "ap_clk2x"),) if aligned else ()
     leaf = replace(_leaf(), data=(GeneratedData("weights.dat", data),))
     return Composed(
-        "composed", "1", "generated top", Pins(ports, (), alignments), Fragment((("a", leaf),))
+        "composed", "1", "generated top", Abi(ports, (), alignments), Fragment((("a", leaf),))
     )
 
 

@@ -1,21 +1,29 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Small ONNX models of KernelOps, and of the source graphs conversion reads."""
+"""Small ONNX models of KernelOps, and of the source graphs conversion reads.
+
+Also the Chain (``kernels.chain``) as KernelOps with its choices saved, its partition
+root rebuilt, and a KernelOp's schema digest."""
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import numpy as np
-from kernels import test_design as chain
+from kernels import chain
+from kernels.helpers import ADAPTER_RAM_STYLES
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import write_target
-from finn.transformation.kernels import InferKernelTensors, resolve_target
+from finn.custom_op.kernels.base import KernelOp, write_target
+from finn.custom_op.kernels.partition import PartitionRoot, partition_root, save_partition_choices
+from finn.kernels.configure import undecided
+from finn.transformation.kernels import InferKernelTensors, ToKernelOps, resolve_target
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]
@@ -37,7 +45,7 @@ def matmul_model(
     """x (1, 3, 4) -> MatMul ``first`` (domain ``finn.custom_op.kernels``) with w -> y.
 
     ``stored``: w an initializer (the node's own), else a graph input. ``infer``: y
-    stated by ``InferKernelTensors``, as the node root reads it (D6); without it, only
+    stated by ``InferKernelTensors``, as the node root reads it; without it, only
     the node's facts are read.
     """
     weights = np.asarray(weights, dtype=np.float32)
@@ -101,7 +109,7 @@ def thresholding_model(
 
 
 def chain_source(*, annotate_input: bool = True, second_weights: bool = True) -> ModelWrapper:
-    """test_design's Chain as an ONNX model, before conversion: x -> MatMul ``first`` (w1)
+    """The Chain as an ONNX model, before conversion: x -> MatMul ``first`` (w1)
     -> hidden -> MultiThreshold ``activate`` -> levels -> MatMul ``second`` (w2) -> y.
     Only x's shape is known (a fresh graph); w2 is a graph input unless ``second_weights``.
     """
@@ -157,9 +165,76 @@ def lift(model: ModelWrapper, tensor: str) -> None:
     )
 
 
+def schema_digest(cls: type[KernelOp]) -> str:
+    rows = sorted((name, kind, cases) for name, (kind, cases) in cls.schema().items())
+    return hashlib.sha256(repr(rows).encode()).hexdigest()[:16]
+
+
+MATMUL = {
+    "compute": "packed",
+    "compute.packed.pe": chain.PE,
+    "compute.packed.simd": chain.SIMD,
+    "compute.packed.compute_pumping": False,
+    "compute.packed.reducer": "tree",
+    "w.source.memstream.ram_style": "auto",
+    "w.source.memstream.pumped_memory": False,
+    "w.transport": "direct",
+    "x.transport": "direct",
+}
+THRESHOLDING = {
+    "pe": chain.PE,
+    "use_axilite": False,
+    "deep_pipeline": False,
+    "ram_style": "auto",
+    "ultra_stages": 0,
+    "x.transport": "direct",
+}
+
+
+def kernel_model(**options: bool) -> ModelWrapper:
+    """The Chain as KernelOps, each node's choices saved as ``kernels.chain`` configures them."""
+    model = (
+        chain_source(**options)
+        .transform(InferShapes())
+        .transform(ToKernelOps(TARGET))
+        .transform(InferKernelTensors())
+    )
+    for node in model.graph.node:
+        choices = MATMUL if node.op_type == "MatMul" else THRESHOLDING
+        if node.op_type == "MatMul" and model.get_initializer(node.input[1]) is None:
+            # Streamed weights: no value, so no source; the weight edge's transport is
+            # the root's.
+            choices = {k: v for k, v in choices.items() if not k.startswith("w.source.")}
+        if node.output[0] in {output.name for output in model.graph.output}:
+            # A graph output: no KernelOp consumes it, so its producer owns its transport.
+            choices = {**choices, "y.transport": "direct"}
+        model.get_customop_wrapper(node).save(choices)
+    return model
+
+
+def open_memories(root: PartitionRoot) -> tuple[Any, list[str]]:
+    """The root's point and its open adapter memories."""
+    return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
+
+
+def configure_partition(model: ModelWrapper) -> tuple[PartitionRoot, Any]:
+    """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
+    root = partition_root(model, model.graph.node, name="chain")
+    _, styles = open_memories(root)
+    save_partition_choices(model, root, dict.fromkeys(styles, "auto"))
+    root = partition_root(model, model.graph.node, name="chain")
+    point, open_styles = open_memories(root)
+    assert open_styles == [] and root.dropped == ()
+    return root, point
+
+
 __all__ = [
     "DOMAIN",
     "chain_source",
+    "configure_partition",
+    "kernel_model",
+    "open_memories",
+    "schema_digest",
     "H",
     "INT3",
     "THRESHOLDS",

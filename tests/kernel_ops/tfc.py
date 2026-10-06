@@ -12,7 +12,7 @@ and the label select (TopK) after it, both on the host.
 
 Every open kernel choice (folding, memories, adapters) is committed before
 partitioning by ``CommitKernelChoices(PlaceholderPolicy())``, the DSE seam's
-placeholder (G4): 16 lanes where they divide, the whole extent otherwise.
+placeholder: 16 lanes where they divide, the whole extent otherwise.
 """
 
 from __future__ import annotations

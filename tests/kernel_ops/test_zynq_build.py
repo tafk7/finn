@@ -4,9 +4,8 @@
 """ZynqBuild over a model of KernelOps, up to its IP builds: the partitions it prepares,
 and the toolchain it hands to each transformation that runs Vivado or Vitis HLS.
 
-test_design's Chain, its choices saved, as the KernelOps' model; no Vivado and no
-Vitis HLS (the build itself: the TFC_W2A2 build script in the scratchpad's
-records/zynq-kernel-build-2026-10-04).
+The Chain (``kernels.chain``), its choices saved, as the KernelOps' model; no Vivado and no
+Vitis HLS runs (the bitstream build itself is not a test).
 """
 
 from __future__ import annotations
@@ -27,12 +26,12 @@ from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
-from kernel_ops.test_partition import configured, kernel_model
+from kernel_ops.models import configure_partition, kernel_model
 
 
 def test_a_model_of_kernel_ops_becomes_iodma_and_kernel_partitions(tmp_path: Path) -> None:
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
     parent = build.prepare_kernel_partitions(model)
     bodies = [ModelWrapper(getCustomOp(node).get_nodeattr("model")) for node in parent.graph.node]
@@ -92,7 +91,7 @@ def recorded_build(
     for name in replaced:
         monkeypatch.setattr(make_zynq_proj, name, recorder(name))
     model = kernel_model()
-    configured(model)
+    configure_partition(model)
     build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path), toolchain=toolchain)
     return model.transform(build), seen
 

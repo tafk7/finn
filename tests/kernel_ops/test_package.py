@@ -6,7 +6,7 @@
 The Tcl and ``vivado_stitch_ifnames`` come from the module's ABI
 (``finn.kernels.artifacts.ipxact``, checked as text in
 ``tests/kernels/artifacts/test_ipxact.py``). Here: the partition's module from
-its nodes' choices, and one test that packages test_design's Chain and reads
+its nodes' choices, and one test that packages the Chain (``kernels.chain``) and reads
 the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 ``kernel-ops-vivado`` job runs it).
 """
@@ -23,15 +23,15 @@ import pytest
 from finn.custom_op.kernels.base import KernelOpError
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition
-from kernel_ops.test_partition import configured, kernel_model
+from kernel_ops.models import configure_partition, kernel_model
 
 
 def test_the_partition_packages_its_nodes_choices() -> None:
-    _, point = configured(model := kernel_model())
+    _, point = configure_partition(model := kernel_model())
     module = PackagePartition("sdp_1").module(model)
-    assert (module.fragment, module.pins) == (point.module.fragment, point.module.pins)
+    assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
     assert module.stem == "finn_partition"
-    assert [port.name for port in module.pins.ports] == [
+    assert [port.name for port in module.abi.pins] == [
         "ap_clk",
         "ap_rst_n",
         "s_axis_0",
@@ -48,9 +48,9 @@ def test_an_open_decision_refuses_packaging_and_is_named() -> None:
 
 def test_the_graphs_input_order_is_the_port_order() -> None:
     model = kernel_model(second_weights=False)
-    configured(model)
+    configure_partition(model)
     package = PackagePartition("sdp_1")
-    assert {port.name for port in package.module(model).pins.ports} >= {"s_axis_0", "s_axis_1"}
+    assert {port.name for port in package.module(model).abi.pins} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
         package.module(model)
@@ -59,7 +59,7 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
 @pytest.mark.vivado
 @pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
 def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
-    configured(model := kernel_model())
+    configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
     model = model.transform(PackagePartition("sdp_1", directory=project))
     assert model.get_metadata_prop("vivado_stitch_proj") == str(project.resolve())

@@ -67,7 +67,7 @@ def parameters(module, label):
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
-    # Nothing is replayed: the stream only closes each window's frame.
+    # Nothing is replayed: the channel only closes each window's frame.
     assert configured.x.plan.steps == (Step.MARKERS,)
     boundary = configured.x.endpoints.source
     # Rows, then channel folds, then window folds; lane s * PE + p is window
@@ -88,7 +88,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     assert compute["CORE"] == '"dotp_8sx9_dsp58"'
     widths = {
         port.name: next(item.width for item in port.signals if item.logical == "tdata")
-        for port in module.pins.ports
+        for port in module.abi.pins
         if port.name.endswith("_V")
     }
     # PE channels of SIMD window positions per activation beat; the result is exact.
@@ -129,21 +129,21 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
         weight_delivery=WeightDelivery.MEMSTREAM,
         weights=weights,
     )
-    assert "in1_V" not in {port.name for port in built.module.pins.ports}
+    assert "in1_V" not in {port.name for port in built.module.abi.pins}
     # Channel folds, then window folds; PE channels of SIMD taps a beat, SIMD fastest.
     assert len(built.initializer) == 2 * 3
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (12, 12, 4)
 
 
 def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
-    # The root binds its weight stream's tensor to MatMul's weight_tensor, which
+    # The root binds its weight channel's tensor to MatMul's weight_tensor, which
     # follows the realization: open, the tensor waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
     point = matmul_point(**FACTS, weights=weights)
     pending = point.query(matmul_root(MatMulKernel).w.tensor)
     assert isinstance(pending, Unresolved)
     assert {finding.owner for finding in pending.findings} == {"matmul.realization"}
-    # Whether the weight stream has a value is the weights' presence, a fact: its
+    # Whether the weight channel has a value is the weights' presence, a fact: its
     # source is forced while the value itself waits on the realization.
     assert point.w.valued
     assert ("w.source", "memstream") in {

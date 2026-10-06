@@ -48,7 +48,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
             return width > 0
 
         physical = View(complete, requires=(supported,))
-        # Exports are views only (ValueKey is gone): the width is exported as a view.
+        # Exports are views only: the width is exported as a view.
         exported_width = View(width)
         exports = {WIDTH: exported_width, PHYSICAL: physical}
 
@@ -68,7 +68,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         activation = Interface(width=8)
         weights = Interface(width=4)
         optional = Interface(width=16, when=enabled)
-        # The structural choice is a Decision over nodes (was SubspaceChoice + exports).
+        # The structural choice is a Decision over nodes.
         implementation: Interface | Refused = Decision(
             {"normal": Interface(width=32), "refused": Refused()}
         )
@@ -110,8 +110,8 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
 
     class Root(Space):
         extent: int = Param()
-        # An inline exposed Param is gone: the formal is declared on the enclosing
-        # Space class and bound by name.
+        # The formal is declared on the enclosing Space class and bound to the
+        # child by name.
         exposed_value: int = Param(required=False)
         owned = Child(value=Decision(domain=divisors_of(extent)))
         exposed = Child(value=exposed_value)

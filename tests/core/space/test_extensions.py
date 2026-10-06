@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Neutral extension bundles are ordinary declarations composed into a Space class.
 
-``ScopeBuilder`` is gone. Declarations and nodes are plain Python values, and
-``composite(name, members, base=B, exports=...)`` names them as a new Space class
-exactly as a class body would. The typed surface is the base Space class: formals a
-caller binds are declared on ``B``; the members composite adds are reached by
-name (or through inspection handles).
+Declarations and nodes are plain Python values, and ``composite(name, members,
+base=B, exports=...)`` names them as a new Space class exactly as a class body
+would. The typed surface is the base Space class: formals a caller binds are
+declared on ``B``; the members composite adds are reached by name (or through
+inspection handles).
 """
 
 from __future__ import annotations
@@ -136,7 +136,7 @@ def stream_of(node: Space) -> StreamValue:
 def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_available() -> None:
     class Pair(Space):
         limit: int = Param(required=False)
-        # Exposed inline Params are gone: the formals are declared here.
+        # The formals the children take are declared here.
         left_dtype: Encoding = Param(semantics=ENCODING)
         right_dtype: Encoding = Param(semantics=ENCODING)
         left = stream_shape(
