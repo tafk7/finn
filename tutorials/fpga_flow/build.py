@@ -39,6 +39,7 @@ from qonnx.custom_op.registry import getCustomOp
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
 import finn.util.data_packing as dpk
+from finn.util.toolchain import Selection
 
 model_name = "tfc_w1a1"
 platform_name = "fpga"
@@ -135,6 +136,9 @@ cfg = build.DataflowBuildConfig(
         build_cfg.VerificationStepType.STITCHED_IP_RTLSIM,
     ],
     save_intermediate_models=True,
+    # The toolchain names its HLS frontend: vitis-run for Vivado/Vitis 2025.x
+    # (never guessed; the default, vitis_hls, is refused on 2025.x).
+    toolchain=Selection(hls_frontend="vitis-run"),
 )
 model_file = "model.onnx"
 build.build_dataflow_cfg(model_file, cfg)

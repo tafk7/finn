@@ -451,11 +451,12 @@ class DataflowBuildConfig:
     #: In JSON: {"settings": [...], "command_dir": "", "launcher": [], "hls_frontend": "..."}.
     toolchain: Selection = field(default_factory=Selection)
 
-    #: The kernel path's choice step (step_kernel_choices): the strategies that commit
-    #: the KernelOps' open choices, by name (``kernel_choice_strategies`` in
-    #: build_dataflow_steps), run in order. ``placeholder`` is the DSE seam's
-    #: placeholder policy (CommitKernelChoices(PlaceholderPolicy())).
-    kernel_choices: List[str] = field(default_factory=lambda: ["placeholder"])
+    #: The strategy chain of the kernel path's choice step (step_kernel_choices): the
+    #: strategies that commit the KernelOps' open choices, by name
+    #: (``kernel_strategy_lookup`` in build_dataflow_steps), run in order; the choices
+    #: they commit are written to kernel_choices.json. ``placeholder`` is the DSE
+    #: seam's placeholder policy (CommitKernelChoices(PlaceholderPolicy())).
+    kernel_strategies: List[str] = field(default_factory=lambda: ["placeholder"])
 
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:

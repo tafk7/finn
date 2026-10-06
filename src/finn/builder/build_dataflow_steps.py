@@ -666,26 +666,26 @@ def step_infer_kernel_tensors(model: ModelWrapper, cfg: DataflowBuildConfig):
 
 
 #: The strategies the kernel path's choice step can run, by the name a build
-#: configuration's ``kernel_choices`` lists: each makes, from the configuration, the
-#: transformation that commits (and saves on the nodes) the KernelOps' open
+#: configuration's ``kernel_strategies`` lists: each makes, from the configuration,
+#: the transformation that commits (and saves on the nodes) the KernelOps' open
 #: choices. The DSE seam's strategies are registered here as they come.
-kernel_choice_strategies: Dict[str, Callable[[DataflowBuildConfig], Transformation]] = {
+kernel_strategy_lookup: Dict[str, Callable[[DataflowBuildConfig], Transformation]] = {
     "placeholder": lambda cfg: CommitKernelChoices(PlaceholderPolicy()),
 }
 
 
 def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Commit the KernelOps' open choices by the strategies ``cfg.kernel_choices``
-    names, in order (``kernel_choice_strategies``); the committed choices, as the
+    """Commit the KernelOps' open choices by the strategies ``cfg.kernel_strategies``
+    names, in order (``kernel_strategy_lookup``); the committed choices, as the
     nodes hold them, are written to kernel_choices.json (ApplyConfig's form)."""
-    unknown = [name for name in cfg.kernel_choices if name not in kernel_choice_strategies]
+    unknown = [name for name in cfg.kernel_strategies if name not in kernel_strategy_lookup]
     if unknown:
         raise ValueError(
-            f"kernel_choices names no strategy: {unknown} "
-            f"(one of {sorted(kernel_choice_strategies)})"
+            f"kernel_strategies names no strategy: {unknown} "
+            f"(one of {sorted(kernel_strategy_lookup)})"
         )
-    for name in cfg.kernel_choices:
-        model = model.transform(kernel_choice_strategies[name](cfg))
+    for name in cfg.kernel_strategies:
+        model = model.transform(kernel_strategy_lookup[name](cfg))
     os.makedirs(cfg.output_dir, exist_ok=True)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(model), f, indent=2)

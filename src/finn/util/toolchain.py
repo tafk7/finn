@@ -170,14 +170,17 @@ class Selection:
         """The selected installation's environment, captured once.
 
         With settings scripts, they are sourced in Bash over ``base_env`` (by default
-        a clean base: the system PATH and the user, locale, display and licence
-        variables) and the resulting environment is kept; without, ``base_env``
+        a clean base: the system PATH and the user, locale, display, licence and
+        ``LD_PRELOAD`` variables) and the resulting environment is kept; without, ``base_env``
         (by default os.environ) is taken as configured. A local route that names no
         licence gets the machine file's. Raises ``RuntimeError`` when a script fails.
         """
         if base_env is None:
             if self.settings:
                 # A defined clean base, not an attempt to unsource another toolchain.
+                # LD_PRELOAD belongs to the host, not to a toolchain: the image
+                # preloads its libudev.so.1, without which Vivado's licence library
+                # crashes in udev_enumerate_scan_devices (Vivado exits 139).
                 keep = {
                     "HOME",
                     "USER",
@@ -188,6 +191,7 @@ class Selection:
                     "DISPLAY",
                     "XILINXD_LICENSE_FILE",
                     "LM_LICENSE_FILE",
+                    "LD_PRELOAD",
                 }
                 base_env = {k: v for k, v in os.environ.items() if k in keep}
                 base_env["PATH"] = os.defpath
