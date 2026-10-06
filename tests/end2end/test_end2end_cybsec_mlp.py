@@ -38,6 +38,7 @@ import torch.nn as nn
 from brevitas.core.quant import QuantType
 from brevitas.export import export_qonnx
 from brevitas.nn import QuantIdentity, QuantLinear, QuantReLU
+from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
@@ -47,6 +48,9 @@ import finn.builder.build_dataflow_config as build_cfg
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import make_build_dir
 from finn.util.test import load_test_checkpoint_or_skip
+
+# finn.qnn-data's fixtures are not in the wheel: read them from this checkout.
+QNN_DATA = Path(__file__).resolve().parents[2] / "src" / "finn" / "qnn-data"
 
 target_clk_ns = 10
 build_dir = os.environ["FINN_BUILD_DIR"]
@@ -82,7 +86,7 @@ class CybSecMLPForExport(nn.Module):
 @pytest.mark.xdist_group(name="end2end_cybsec")
 @pytest.mark.end2end
 def test_end2end_cybsec_mlp_export():
-    assets_dir = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/cybsec-mlp"
+    assets_dir = str(QNN_DATA / "cybsec-mlp")
     # load up trained net in Brevitas
     input_size = 593
     hidden1 = 64

@@ -11,6 +11,7 @@ Designed to run in GitHub Actions quicktest (no synthesis tools required).
 import pytest
 
 import os
+from pathlib import Path
 from qonnx.custom_op.registry import get_ops_in_domain
 
 import finn.builder.build_dataflow as build
@@ -23,6 +24,9 @@ from finn.analysis.fpgadataflow.res_estimation import (
 )
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.util.basic import make_build_dir
+
+# finn.qnn-data's fixtures are not in the wheel: read them from this checkout.
+QNN_DATA = Path(__file__).resolve().parents[2] / "src" / "finn" / "qnn-data"
 
 
 def _discover_all_hwcustomops():
@@ -106,7 +110,7 @@ def test_estimate_only_steps_defined():
 def test_estimate_only_flow_produces_reports():
     """Test estimate-only flow runs and produces estimate reports without Vivado."""
     output_dir = make_build_dir("test_estimate_flow_")
-    model_file = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/build_dataflow/model.onnx"
+    model_file = str(QNN_DATA / "build_dataflow" / "model.onnx")
 
     cfg = build.DataflowBuildConfig(
         output_dir=output_dir,

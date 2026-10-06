@@ -34,11 +34,15 @@ import os
 import shutil
 import subprocess
 import wget
+from pathlib import Path
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
 from finn.util.basic import make_build_dir
 from finn.util.test import load_test_checkpoint_or_skip
+
+# finn.qnn-data's fixtures are not in the wheel: read them from this checkout.
+QNN_DATA = Path(__file__).resolve().parents[2] / "src" / "finn" / "qnn-data"
 
 target_clk_ns = 10
 build_dir = os.environ["FINN_BUILD_DIR"]
@@ -102,7 +106,7 @@ def test_end2end_ext_weights_download(topology):
 def test_end2end_ext_weights_build(topology):
     model_file = get_checkpoint_name("download", topology)
     load_test_checkpoint_or_skip(model_file)
-    test_data = os.environ["FINN_ROOT"] + "/src/finn/qnn-data/test_ext_weights"
+    test_data = str(QNN_DATA / "test_ext_weights")
     folding_config_file = test_data + "/" + topology + "-w2a2-extw.json"
     specialize_layers_config_file = test_data + "/specialize_layers_config_" + topology + ".json"
     output_dir = make_build_dir("test_end2end_" + topology + "_ext_weights_build")

@@ -6,9 +6,13 @@ import pytest
 import numpy as np
 import os
 import runpy
+from pathlib import Path
 from shutil import copytree
 
 from finn.util.basic import make_build_dir
+
+# The tutorials are not in the wheel: read them from this checkout.
+CHECKOUT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.slow
@@ -20,7 +24,7 @@ def test_fpga_flow_tutorial():
     # folding_config.json, templates/) resolve against a writable directory.
     test_dir = make_build_dir("test_fpga_flow_tutorial_")
     target_dir = test_dir + "/fpga_flow"
-    tutorial_dir = os.environ["FINN_ROOT"] + "/tutorials/fpga_flow"
+    tutorial_dir = CHECKOUT / "tutorials" / "fpga_flow"
     copytree(tutorial_dir, target_dir)
 
     # build.py uses relative paths and a relative output_dir, so run it with the

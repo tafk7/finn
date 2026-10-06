@@ -19,6 +19,13 @@ bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 gate_pytest tests/kernels xsim vivado
 # The KernelOps and their transformations, the layer above finn.kernels.
 gate_pytest tests/kernel_ops xsim vivado
+# finn.util and the rest of FINN's support code (toolchain, resources,
+# installation, containers, CI tooling, the builder's CPU-only flows). Its tests
+# use tests/conftest.py (the seeded RNG, ci/ on sys.path). The slow tests (wheel
+# and editable-environment builds, a build child; tens of seconds each) and the
+# builds to IP or bitfile (end2end) are deselected in either mode, so this step
+# stays at a few minutes.
+gate_pytest --conftest-root tests tests/util xsim vivado end2end slow
 gate_ruff src/finn/kernels tests/kernels \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
     scripts/benchmark-space.py
