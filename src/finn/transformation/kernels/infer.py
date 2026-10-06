@@ -10,8 +10,9 @@ graph order instead:
 
 - a KernelOp first normalizes its value inputs against its inputs' exact types
   (``normalize_inputs``: a Thresholding's thresholds as integers), then answers
-  its outputs from its node root's fact-level views, and the pass writes them;
-  a stated annotation narrower than the exact type is refused, a wider one
+  its outputs from its kernel's fact-level views, bound from the node's facts
+  alone (its node root reads the outputs this pass states), and the pass writes
+  them; a stated annotation narrower than the exact type is refused, a wider one
   replaced (FLOAT32 is no statement);
 - another custom op runs its shape stand-in through ONNX's per-node inference,
   then its own datatype hook;
