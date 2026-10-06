@@ -188,6 +188,8 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         raise KernelOpError(f"{label}: {tensor} is not an initializer")
     if not summary.is_integral:
         raise KernelOpError(f"{label}: {tensor} holds values that are not integers")
+    if summary.minimum is None or summary.maximum is None:  # integral with no range: empty
+        raise KernelOpError(f"{label}: {tensor} is empty: it holds no values")
     try:
         low, high = ordinary_integer_bounds(dtype)
     except DatatypeError:

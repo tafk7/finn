@@ -45,6 +45,14 @@ def test_the_thresholds_must_be_an_initializer_with_a_row_per_channel() -> None:
         op(thresholding_model(thresholds=THRESHOLDS[:1], infer=False)).facts()
 
 
+def test_an_empty_threshold_table_is_refused_by_name() -> None:
+    # A row per channel, none of them holding a threshold: the empty initializer is
+    # vacuously integral and has no range to check against its annotation.
+    empty = np.zeros((len(THRESHOLDS), 0), dtype=np.float32)
+    with pytest.raises(KernelOpError, match="activate: t is empty"):
+        op(thresholding_model(thresholds=empty, infer=False)).facts()
+
+
 def test_the_schema_holds_the_memory_choices_and_bias_is_semantic() -> None:
     schema = Thresholding.schema()
     assert {"pe", "use_axilite", "deep_pipeline", *MEMORY} <= set(schema)
