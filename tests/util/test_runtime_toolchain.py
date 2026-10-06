@@ -442,7 +442,7 @@ def test_legacy_precedence_and_worker_inheritance(tmp_path):
         "PATH": os.defpath,
         "XILINX_VIVADO": str(root),
     }
-    child = build_environment(env, root=root, build_dir=tmp_path / "scratch")
+    child = build_environment(Selection(), env, root=root, build_dir=tmp_path / "scratch")
     assert env["FINN_ROOT"] == "/wrong"
     assert child["VIVADO_PATH"] == str(root)
     assert "VIVADO_PATH" not in env

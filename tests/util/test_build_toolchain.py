@@ -3,7 +3,8 @@
 
 """One toolchain per flow: the dataflow builder, PrepareForLinking and FIFO sizing
 hand the toolchain they are given (or the one they prepare) to each
-transformation that runs a vendor tool.
+transformation that runs a vendor tool. The builder's is the selection its
+configuration names, which also prepares build_dataflow_directory's build process.
 
 The tool steps are replaced by recorders, each checking its call against the
 real constructor; where a real run is needed, the only Vitis HLS on the
@@ -16,8 +17,9 @@ from __future__ import annotations
 import pytest
 
 import inspect
+import json
 import numpy as np
-import os
+import subprocess
 import sys
 from onnx import TensorProto, helper
 from pathlib import Path
@@ -27,7 +29,7 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.util.basic import qonnx_make_model
 
-from finn.builder import build_dataflow_config, build_dataflow_steps
+from finn.builder import build_dataflow, build_dataflow_steps
 from finn.builder.build_dataflow_config import (
     AutoFIFOSizingMethod,
     DataflowBuildConfig,
@@ -38,7 +40,7 @@ from finn.transformation.fpgadataflow import alveo_build, set_fifo_depths
 from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util import hls
-from finn.util.toolchain import Selection, Toolchain
+from finn.util.toolchain import Selection
 
 pytestmark = pytest.mark.util
 
@@ -195,11 +197,11 @@ def test_a_build_prepares_one_toolchain_and_runs_every_tool_step_by_it(monkeypat
     toolchain = object()
     prepared = []
 
-    def legacy_toolchain():
-        prepared.append(toolchain)
+    def prepare(selection):
+        prepared.append(selection)
         return toolchain
 
-    monkeypatch.setattr(build_dataflow_config, "legacy_toolchain", legacy_toolchain)
+    monkeypatch.setattr(Selection, "prepare", prepare)
     steps = build_dataflow_steps
     cfg = builder_config(tmp_path)
 
@@ -239,21 +241,86 @@ def test_a_build_prepares_one_toolchain_and_runs_every_tool_step_by_it(monkeypat
     run(steps.step_loop_body_ipgen_and_stitch)
     assert [name for name, _ in seen] == BUILDER_ORDER
     assert all(given is toolchain for _, given in seen)
-    assert prepared == [toolchain]
+    assert prepared == [cfg.toolchain]
 
 
-def test_the_toolchain_is_prepared_on_first_use_and_not_configured(monkeypatch):
+def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeypatch):
     prepared = []
-    monkeypatch.setattr(
-        build_dataflow_config, "legacy_toolchain", lambda: prepared.append(object()) or prepared[-1]
+
+    def prepare(selection):
+        prepared.append((selection, object()))
+        return prepared[-1][1]
+
+    monkeypatch.setattr(Selection, "prepare", prepare)
+    # The legacy environment selects nothing.
+    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/legacy/tools")
+    monkeypatch.setenv("FINN_HLS_FRONTEND", "vivado_hls")
+    selection = Selection(settings=("/opt/xilinx/settings64.sh",), hls_frontend="vitis-run")
+    cfg = DataflowBuildConfig(
+        output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[], toolchain=selection
     )
-    cfg = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
     assert prepared == []
-    assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0]
-    assert len(prepared) == 1
-    # The serialized build configuration does not carry it.
-    assert "_toolchain" not in cfg.to_json()
-    assert DataflowBuildConfig.from_json(cfg.to_json()) == cfg
+    assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0][1]
+    assert [named for named, _ in prepared] == [selection]
+    # Unset, it is the environment as configured, with Vitis HLS.
+    unset = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
+    assert unset.toolchain == Selection(settings=(), command_dir="", launcher=())
+
+
+def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch):
+    selection = Selection(command_dir="/site/bin", launcher=("ssh", "build"))
+    cfg = DataflowBuildConfig(
+        output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[], toolchain=selection
+    )
+    stated = json.loads(cfg.to_json())["toolchain"]
+    assert stated == {
+        "settings": [],
+        "command_dir": "/site/bin",
+        "launcher": ["ssh", "build"],
+        "hls_frontend": "vitis_hls",
+    }
+    restored = DataflowBuildConfig.from_json(cfg.to_json())
+    assert restored.toolchain == selection and restored == cfg
+    # The prepared toolchain is not serialized with it.
+    monkeypatch.setattr(Selection, "prepare", lambda selection: object())
+    cfg._resolve_toolchain()
+    assert DataflowBuildConfig.from_json(cfg.to_json()) == restored
+
+
+def test_the_build_process_runs_in_the_configured_selection(monkeypatch, tmp_path):
+    """build_dataflow_directory prepares its build process's environment from the
+    selection its JSON configuration names: the settings script sourced over the
+    parent's environment, the selected Vivado's simulator libraries on the loader path."""
+    vivado = tmp_path / "Vivado"
+    (vivado / "lib/lnx64.o").mkdir(parents=True)
+    settings = tmp_path / "settings64.sh"
+    settings.write_text(f"export XILINX_VIVADO={vivado}\nexport SELECTED_BY_SETTINGS=1\n")
+    selection = Selection(settings=(str(settings),), hls_frontend="vitis-run")
+    directory = tmp_path / "build"
+    directory.mkdir()
+    (directory / "model.onnx").write_bytes(identity_model().model.SerializeToString())
+    cfg = builder_config(tmp_path, toolchain=selection)
+    (directory / "dataflow_build_config.json").write_text(cfg.to_json())
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "finn_build"))
+    monkeypatch.setenv("FINN_RESOURCES_FINNLIB", "/parent/finnlib")
+    for variable in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS"):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+    children = []
+
+    def run(argv, cwd, env):
+        children.append((cwd, env))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(build_dataflow.subprocess, "run", run)
+    assert build_dataflow.build_dataflow_directory(str(directory)) == 0
+    ((cwd, env),) = children
+    assert cwd == str(directory)
+    assert env["SELECTED_BY_SETTINGS"] == "1"
+    assert env["XILINX_VIVADO"] == env["VIVADO_PATH"] == str(vivado)
+    assert env["LD_LIBRARY_PATH"] == str(vivado / "lib/lnx64.o")
+    assert env["FINN_BUILD_DIR"] == str(tmp_path / "finn_build")
+    assert env["FINN_RESOURCES_FINNLIB"] == "/parent/finnlib"
 
 
 #: A Vitis HLS that reports 2024.2 and, given a node's script, makes the IP
@@ -278,18 +345,18 @@ def legacy_refused():
 def test_the_builder_runs_hls_synthesis_in_its_prepared_toolchain(monkeypatch, tmp_path):
     """step_hw_codegen and step_hw_ipgen for real on an MVAU, in two workers (the
     toolchain reaches them pickled): its synthesis runs in the toolchain the build
-    configuration prepared, whose PATH holds only a fake Vitis HLS."""
+    configuration names, whose command directory holds only a fake Vitis HLS."""
     tools = tmp_path / "tools"
     tools.mkdir()
     vitis_hls = tools / "vitis_hls"
     vitis_hls.write_text("#!" + sys.executable + "\n" + FAKE_VITIS_HLS)
     vitis_hls.chmod(0o755)
-    toolchain = Toolchain(Selection(), {"PATH": f"{tools}:{os.defpath}"})
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "2")
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
-    monkeypatch.setattr(build_dataflow_config, "legacy_toolchain", lambda: toolchain)
     monkeypatch.setattr(hls, "legacy_toolchain", legacy_refused)
-    cfg = builder_config(tmp_path, fpga_part=ALVEO_PART)
+    cfg = builder_config(
+        tmp_path, fpga_part=ALVEO_PART, toolchain=Selection(command_dir=str(tools))
+    )
     model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
     model = build_dataflow_steps.step_hw_codegen(model, cfg)
     model = build_dataflow_steps.step_hw_ipgen(model, cfg)
