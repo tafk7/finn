@@ -12,7 +12,7 @@ batch. Refusals are raised as ``ValueError`` with their findings.
 A Decision whose one viable case is forced needs no commitment (the engine's
 ``inspection.forced``); ``inspection.admission`` reads a kernel's own refusal,
 its ``admission`` member. ``undecided`` names the open Decisions: neither
-committed nor forced.
+committed nor forced; ``chosen`` the committed ones, the choices made on purpose.
 """
 
 from __future__ import annotations
@@ -82,4 +82,15 @@ def undecided(point: Space, pattern: str) -> list[str]:
     return found
 
 
-__all__ = ["commit", "describe", "undecided"]
+def chosen(point: Space) -> dict[str, object]:
+    """Every Decision ``point`` commits, by key: the choices made on purpose (a forced
+    Decision is never committed)."""
+    found: dict[str, object] = {}
+    for item in inspection.decisions(point):
+        state = point.field(item.reference).state
+        if isinstance(state, Available) and state.value.status == "committed":
+            found[item.key] = state.value.value
+    return found
+
+
+__all__ = ["chosen", "commit", "describe", "undecided"]

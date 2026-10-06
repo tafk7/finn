@@ -53,7 +53,6 @@ from functools import partial
 from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
-from qonnx.transformation.base import Transformation
 from qonnx.transformation.bipolar_to_xnor import ConvertBipolarMatMulToXnorPopcount
 from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.general import (
@@ -69,7 +68,6 @@ from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.util.basic import get_by_name
 from qonnx.util.cleanup import cleanup_model
 from shutil import copy
-from typing import Callable, Dict
 
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
@@ -150,13 +148,13 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
 )
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import (
-    CommitKernelChoices,
     InferKernelTensors,
-    PlaceholderPolicy,
     ToKernelOps,
+    explore_kernel_choices,
     kernel_choices_config,
     resolve_target,
     shell_target,
+    strategy,
 )
 from finn.transformation.kernels.package import ElaboratePartition, configured_root
 from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
@@ -665,28 +663,21 @@ def step_infer_kernel_tensors(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model.transform(InferKernelTensors())
 
 
-#: The strategies the kernel path's choice step can run, by the name a build
-#: configuration's ``kernel_strategies`` lists: each makes, from the configuration,
-#: the transformation that commits (and saves on the nodes) the KernelOps' open
-#: choices. The DSE seam's strategies are registered here as they come.
-kernel_strategy_lookup: Dict[str, Callable[[DataflowBuildConfig], Transformation]] = {
-    "placeholder": lambda cfg: CommitKernelChoices(PlaceholderPolicy()),
-}
-
-
 def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Commit the KernelOps' open choices by the strategies ``cfg.kernel_strategies``
-    names, in order (``kernel_strategy_lookup``); the committed choices, as the
-    nodes hold them, are written to kernel_choices.json (ApplyConfig's form)."""
-    unknown = [name for name in cfg.kernel_strategies if name not in kernel_strategy_lookup]
-    if unknown:
-        raise ValueError(
-            f"kernel_strategies names no strategy: {unknown} "
-            f"(one of {sorted(kernel_strategy_lookup)})"
-        )
-    for name in cfg.kernel_strategies:
-        model = model.transform(kernel_strategy_lookup[name](cfg))
-    os.makedirs(cfg.output_dir, exist_ok=True)
+    """Explore the KernelOps' open choices through the DSE seam by the strategies
+    ``cfg.kernel_exploration`` lists, in order (finn.transformation.kernels.strategy:
+    each a spec, {"strategy": name, **parameters}), and save them on their nodes
+    (explore_kernel_choices). Nothing else of the configuration is read: a strategy
+    carries its own objective (target_fps, folding_config_file and auto_fifo_depths
+    are the standard flow's). Writes report/kernel_choices.json (the strategies, the
+    dropped choices with why, per member cycles and buffering, the bottleneck,
+    attempts and time per strategy) and kernel_choices.json (the nodes' choices,
+    sparse, ApplyConfig's form, which a "pinned" strategy reads back)."""
+    strategies = [strategy(spec) for spec in cfg.kernel_exploration]
+    explored = explore_kernel_choices(model, strategies, fresh=cfg.kernel_exploration_fresh)
+    os.makedirs(cfg.output_dir + "/report", exist_ok=True)
+    with open(cfg.output_dir + "/report/kernel_choices.json", "w") as f:
+        json.dump(explored.report, f, indent=2)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(model), f, indent=2)
     return model

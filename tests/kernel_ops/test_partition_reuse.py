@@ -27,9 +27,10 @@ from finn.custom_op.kernels.partition import (
     PartitionKey,
     PartitionRoot,
     partition_root,
-    save_partition_choices,
+    persist,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.configure import commit
 from finn.transformation.kernels import InferKernelTensors, resolve_target
 from kernel_ops.models import (
     INT3,
@@ -65,10 +66,10 @@ def test_the_same_facts_reuse_the_class_never_a_point() -> None:
     # reaches the next root and leaves the first one's open.
     _, styles = open_memories(first)
     assert styles
-    save_partition_choices(model, first, dict.fromkeys(styles, "auto"))
+    persist(model, first, commit(first.point, dict.fromkeys(styles, "auto")))
     configured, reused = root(model, "chain")
     assert reused and type(configured.point) is type(first.point)
-    assert open_memories(configured)[1] == [] and configured.dropped == ()
+    assert open_memories(configured)[1] == [] and not configured.dropped
     assert open_memories(first)[1] == styles
 
 

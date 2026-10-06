@@ -145,6 +145,11 @@ class DotpAxiKernel(Kernel):
         return reject("dotp-core", "dotp_axi is placed through one of its core kernels")
 
     @derived
+    def frame_cycles(self) -> int:
+        """Its schedule's beats, one a cycle at best."""
+        return self.schedule.beat_count
+
+    @derived
     def x_index(self) -> tuple[Index, ...]:
         return self.form.x
 
@@ -361,7 +366,7 @@ class PackedDotpKernel(DotpAxiKernel):
     core = "dotp"
 
     #: How add_multi reduces the SIMD products: a choice within this core. The order of
-    #: its cases states no preference; a policy ranks them (``CommitKernelChoices``).
+    #: its cases states no preference; a strategy ranks them (``finn.kernels.explore``).
     reducer: str = Decision(values=REDUCERS)
 
     @derived

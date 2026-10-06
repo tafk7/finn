@@ -578,7 +578,9 @@ class Decision(ValueDecl[T], Generic[T]):
     nothing. ``requires=`` states what a value Decision's cases need
     (``requires(platform.uram, "uram-absent: ...", cases=("ultra",))``): a case
     whose fact does not hold is refused with that finding, at a commitment and
-    when forcing reads its viability.
+    when forcing reads its viability. ``ordered=True`` states that listed values
+    are in an order (a domain states its own, ``divisors_of``); otherwise they
+    are unordered.
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
@@ -625,6 +627,7 @@ class Decision(ValueDecl[T], Generic[T]):
         requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
+        ordered: bool = False,
     ) -> T: ...
 
     @overload
@@ -651,6 +654,7 @@ class Decision(ValueDecl[T], Generic[T]):
         when: object = None,
         name: object = None,
         optional: object = False,
+        ordered: object = None,
         **shared: object,
     ) -> Any:
         if entries is not None:
@@ -662,6 +666,7 @@ class Decision(ValueDecl[T], Generic[T]):
                     ("semantics", semantics),
                     ("requires", requires),
                     ("name", name),
+                    ("ordered", ordered),
                 )
                 if value is not None
             }
@@ -691,6 +696,10 @@ class Decision(ValueDecl[T], Generic[T]):
             raise DefinitionError("semantics= must be a ValueSemantics")
         if domain is not None and not isinstance(domain, Domain):
             raise DefinitionError("domain= must be a Domain")
+        if ordered is not None and (domain is not None or type(ordered) is not bool):
+            raise DefinitionError(
+                "ordered= is a bool, for listed values= (a domain= states its own order)"
+            )
         instance = cast(Decision[object], super().__new__(cls))
         object.__setattr__(instance, "_body", _class_body())
         explicit = cast("ValueSemantics[object] | None", semantics)
@@ -701,7 +710,7 @@ class Decision(ValueDecl[T], Generic[T]):
         instance.domain = (
             cast(Domain[object], domain)
             if domain is not None
-            else finite(cast(Iterable[object], values), explicit)
+            else finite(cast(Iterable[object], values), explicit, ordered=ordered is True)
         )
         if requires is not None:
             stated = tuple(cast(Iterable[object], requires))

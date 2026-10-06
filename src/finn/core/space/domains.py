@@ -8,6 +8,12 @@ case needs, each refused with its own named finding. Membership is the base's
 and then every applicable requirement; enumeration stays the declared cases,
 so the domain does not move with the facts. A case whose requirement fails is
 not viable, which forcing reads (``finn.core.space._forcing``).
+
+A domain is **ordered** when its cases have an order by construction, which its
+enumeration follows: the divisors of an extent ascending, an integer range. A
+domain over listed values is unordered unless declared ordered
+(``Decision(values=..., ordered=True)``). The order is information for a
+policy (the DSE seam reads it); validity never depends on it.
 """
 
 from __future__ import annotations
@@ -73,7 +79,8 @@ class Domain(Generic[T]):
     Neither constructing nor binding a domain invokes its callbacks. Enumeration
     is advisory: every assignment goes through membership independently.
     ``requirements`` refuse the cases they apply to when their fact does not
-    hold; their facts are linked beside the dependencies.
+    hold; their facts are linked beside the dependencies. ``ordered`` states that
+    the cases have an order by construction, which the enumeration follows.
     """
 
     dependencies: tuple[tuple[str, object], ...]
@@ -82,6 +89,7 @@ class Domain(Generic[T]):
     value_semantics: ValueSemantics[T] | None = None
     _finite_values: tuple[T, ...] | None = None
     requirements: tuple[Requirement, ...] = ()
+    ordered: bool = False
 
     def __post_init__(self) -> None:
         names = tuple(name for name, _ in self.dependencies)
@@ -106,7 +114,8 @@ class Domain(Generic[T]):
         ):
             raise DefinitionError("domain and decision have incompatible value semantics")
         if self._finite_values is not None:
-            return replace(finite(self._finite_values, semantics), requirements=self.requirements)
+            bound = finite(self._finite_values, semantics, ordered=self.ordered)
+            return replace(bound, requirements=self.requirements)
         return replace(self, value_semantics=semantics)
 
     def _own(self, dependency_values: Mapping[str, object]) -> dict[str, object]:
@@ -178,30 +187,33 @@ class Domain(Generic[T]):
             raise EvaluationError(owner, "domain enumeration", str(cause)) from cause
 
 
-def finite(values: Iterable[T], semantics: ValueSemantics[T] | None = None) -> Domain[T]:
+def finite(
+    values: Iterable[T], semantics: ValueSemantics[T] | None = None, *, ordered: bool = False
+) -> Domain[T]:
     """Finite membership uses declared equality and supports unhashable values.
 
     A Decision binds this domain to its semantics before use. Passing semantics
-    here also makes direct domain use safe for mutable definition values.
+    here also makes direct domain use safe for mutable definition values. The
+    values are unordered unless ``ordered``: listed in their order.
     """
 
-    ordered = tuple(values)
+    listed = tuple(values)
     if semantics is not None:
-        ordered = tuple(semantics.freeze(value) for value in ordered)
+        listed = tuple(semantics.freeze(value) for value in listed)
 
     def accepts(*, candidate: T) -> bool:
         if semantics is None:
             raise DefinitionError(
                 "a finite domain must be bound to value semantics before evaluation"
             )
-        return _contains(ordered, candidate, semantics)
+        return _contains(listed, candidate, semantics)
 
     def candidates() -> tuple[T, ...]:
         # The public enumeration method snapshots each result. The callback is
         # declaration data consumed only through that evaluation boundary.
-        return ordered
+        return listed
 
-    return Domain((), accepts, candidates, semantics, ordered)
+    return Domain((), accepts, candidates, semantics, listed, ordered=ordered)
 
 
 def domain(
@@ -209,13 +221,16 @@ def domain(
     accepts: Callable[..., bool | QueryResult[bool]],
     candidates: Callable[..., Iterable[T] | QueryResult[Iterable[T]]] | None = None,
     semantics: ValueSemantics[T] | None = None,
+    ordered: bool = False,
     **dependencies: object,
 ) -> Domain[T]:
-    return Domain(tuple(dependencies.items()), accepts, candidates, semantics)
+    """A domain over ``dependencies``; ``ordered`` when its cases have an order by
+    construction (an integer range), which ``candidates`` follows."""
+    return Domain(tuple(dependencies.items()), accepts, candidates, semantics, ordered=ordered)
 
 
 def divisors_of(extent: object) -> Domain[int]:
-    """Positive divisors of a declared positive integer extent."""
+    """Positive divisors of a declared positive integer extent, ascending (ordered)."""
 
     def accepts(*, candidate: int, extent: int) -> bool:
         return type(extent) is int and extent > 0 and candidate > 0 and extent % candidate == 0
@@ -239,6 +254,7 @@ def divisors_of(extent: object) -> Domain[int]:
         accepts=accepts,
         candidates=cast(Callable[..., Iterable[int] | QueryResult[Iterable[int]]], candidates),
         semantics=default_semantics(int),
+        ordered=True,
         extent=extent,
     )
 

@@ -65,11 +65,13 @@ _BUSY = object()
 @dataclass(frozen=True)
 class Verdict:
     """A Decision's viable cases (None: not applicable, or not enumerable here), why
-    each other case is not viable, and the Decisions read with the value seen."""
+    each other case is not viable, and the Decisions read with the value seen.
+    ``membership``: applicable, and known by its domain's membership only."""
 
     cases: tuple[object, ...] | None
     reasons: Mapping[str, str]
     reads: Mapping[int, object]
+    membership: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,15 @@ class Viable:
     key: str
     cases: tuple[object, ...]
     refused: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class Open:
+    """An open Decision whose cases are not enumerable, for inspection: known by its
+    domain's membership only (a FIFO's depth), and whether that domain is ordered."""
+
+    key: str
+    ordered: bool
 
 
 @dataclass(frozen=True)
@@ -264,7 +275,7 @@ def _verdict(current: Snapshot, index: int) -> Verdict:
     listed = _runtime.enumeration(current, index)
     reads = _reads(current, (*guard, *listed.dependencies), index)
     if not isinstance(listed.result, Available) or listed.result.value is None:
-        return Verdict(None, {}, reads)
+        return Verdict(None, {}, reads, isinstance(listed.result, Available))
     candidates = tuple(cast("Iterable[object]", listed.result.value))
     choice = linked.selector_choices.get(index)
     if choice is not None:
@@ -324,4 +335,14 @@ def _find(snapshot: Snapshot) -> Found:
     )
 
 
-__all__ = ["NOTHING", "Forced", "Found", "Verdict", "Viable", "admitted", "forced", "inherited"]
+__all__ = [
+    "NOTHING",
+    "Forced",
+    "Found",
+    "Open",
+    "Verdict",
+    "Viable",
+    "admitted",
+    "forced",
+    "inherited",
+]

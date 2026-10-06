@@ -63,6 +63,8 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         for item in inspection.members(point)
         if item.kind == "view" and item.scope == "compute"
     ] == [
+        "compute.buffering",
+        "compute.cycles",
         "compute.module",
         "compute.netlist",
     ]

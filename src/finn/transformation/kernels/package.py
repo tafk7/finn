@@ -90,8 +90,9 @@ def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[s
     root = partition_root(model, model.graph.node)
     if root.dropped:
         raise KernelOpError(
-            f"{label}: stale choices, refused by the partition: " + ", ".join(root.dropped),
-            root.dropped,
+            f"{label}: stale choices, refused by the partition: "
+            + "; ".join(f"{key}: {why}" for key, why in root.dropped.items()),
+            tuple(root.dropped),
         )
     point = root.point
     open_keys = undecided(point, "*")

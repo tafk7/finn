@@ -80,3 +80,18 @@ def test_what_no_chain_repairs_is_unrealizable() -> None:
     half = Traversal.over((4,), ((0, 1, 2),), ((0, 2, 1),))
     with pytest.raises(Unrealizable):
         plan(BeatSequence(vector_major((4,), 2)), BeatSequence(half))
+
+
+def test_a_plan_splits_at_the_transport_after_its_leading_width_conversions() -> None:
+    wide = vector_major((R, K), 4)
+    found = plan(BeatSequence(wide), REPLAYED)
+    assert found.output.steps == (Step.WIDTH,)
+    assert found.input.steps == (Step.REORDER, Step.MARKERS)
+    assert found.output.hops[-1].sink == found.input.hops[0].source
+    # A width conversion after a reorder stays on the consumer's side.
+    ones = vector_major((4, 4), 1)
+    after = plan(BeatSequence(ones), BeatSequence(tile(4, 4, 2, 2)))
+    assert not after.output and after.input.steps == (Step.REORDER, Step.WIDTH)
+    # A width conversion alone is the producer's side; nothing is left after the transport.
+    alone = plan(BeatSequence(wide), BeatSequence(ROWS))
+    assert alone.output.steps == (Step.WIDTH,) and not alone.input

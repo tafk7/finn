@@ -10,8 +10,8 @@ post-processing, streamline), then ``ToKernelOps``, ``InferKernelTensors`` and
 ``CreateDataflowPartition``: the input flatten (a Reshape) before the partition
 and the label select (TopK) after it, both on the host.
 
-Every open kernel choice (folding, memories, adapters) is committed before
-partitioning by ``CommitKernelChoices(PlaceholderPolicy())``, the DSE seam's
+Every open kernel choice (folding, memories, transports) is explored before
+partitioning by ``ExploreKernelChoices([Placeholder()])``, the DSE seam's
 placeholder: 16 lanes where they divide, the whole extent otherwise.
 """
 
@@ -31,11 +31,11 @@ from qonnx.transformation.general import (
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.kernels.explore import Placeholder
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import (
-    CommitKernelChoices,
+    ExploreKernelChoices,
     InferKernelTensors,
-    PlaceholderPolicy,
     ToKernelOps,
     resolve_target,
 )
@@ -109,11 +109,11 @@ def streamlined(directory: Path) -> ModelWrapper:
 def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The streamlined ``source`` by hand through the kernel path, as the builder's
     kernel-path phase runs it: the parent graph (Reshape, the partition, TopK) and the
-    partition's body, every choice committed by the placeholder policy."""
+    partition's body, every choice explored by the placeholder."""
     model = (
         source.transform(ToKernelOps(ULTRA96))
         .transform(InferKernelTensors())
-        .transform(CommitKernelChoices(PlaceholderPolicy()))
+        .transform(ExploreKernelChoices([Placeholder()]))
     )
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
     sdp = getCustomOp(parent.graph.node[1])
@@ -123,6 +123,6 @@ def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, Mode
 
 def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapper]:
     """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
-    partition's body, every choice committed by the placeholder policy."""
+    partition's body, every choice explored by the placeholder."""
     source = streamlined(directory)
     return (source, *partition(source, directory))

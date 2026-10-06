@@ -263,6 +263,12 @@ class MemStreamKernel(Kernel):
         return BeatSequence(self.form, Repetition.CYCLIC)
 
     @derived
+    def frame_cycles(self) -> int:
+        """Its output's beats a pass (a set's, with several), one a cycle at best: a
+        memory states no schedule, its stream is its form."""
+        return self.form.beats
+
+    @derived
     def word_factors(self) -> dict[Index, int]:
         """The lanes of a word: the form's lanes, carried by an idle output too."""
         return {LANE: self.form.lanes}

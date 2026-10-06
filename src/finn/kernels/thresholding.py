@@ -108,6 +108,7 @@ def stage_counts(stages: object) -> Domain[int]:
         accepts=accepts,
         candidates=candidates,
         semantics=default_semantics(int),
+        ordered=True,
         stages=stages,
     )
 
@@ -368,6 +369,11 @@ class ThresholdingAxiKernel(Kernel):
         """Row-major over the input's axes, ``c`` (the table's C) split by PE innermost."""
         indices = self.indices
         return self.bound_schedule(indices, self.factors, extents={c: self.channels})
+
+    @derived
+    def frame_cycles(self) -> int:
+        """Its schedule's beats, one a cycle at best."""
+        return self.schedule.beat_count
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:

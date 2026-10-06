@@ -23,9 +23,16 @@ connection, realized as wires, and not a step; so is a marker closing every beat
 (``LevelEnd.constant``), which every sequence carries. An empty plan connects
 the ends directly.
 
-The plan says what must happen, not which hardware does it: a channel's
-``adapter`` Decision chooses a realization, and each candidate refuses a plan
-it cannot carry out. ``Unrealizable`` names what no chain can repair: another
+The plan splits at the channel's transport (direct wires or a FIFO): its
+``output`` side, the width conversions before the first reorder or marker step,
+is carried out on the producer's side of the transport; its ``input`` side, the
+rest (a reorder, replay included, the markers, and a width conversion after a
+reorder), on the consumer's. Markers are made after the transport, which
+carries data words only.
+
+The plan says what must happen, not which hardware does it: a channel's two
+adapter Decisions, one a side, choose a realization, and each candidate refuses
+a plan it cannot carry out. ``Unrealizable`` names what no chain can repair: another
 element order or positions, or a single pass feeding a cyclic consumer.
 """
 
@@ -80,6 +87,26 @@ class Plan:
 
     def describe(self) -> str:
         return " -> ".join(step.value for step in self.steps) or "direct"
+
+    @property
+    def output(self) -> Plan:
+        """The producer's side of the transport: the width conversions before the first
+        reorder or marker step."""
+        return Plan(self.hops[: self._transport])
+
+    @property
+    def input(self) -> Plan:
+        """The consumer's side of the transport: every step from the first reorder or
+        marker step on."""
+        return Plan(self.hops[self._transport :])
+
+    @property
+    def _transport(self) -> int:
+        """Where the transport sits: before the first step that is no width conversion."""
+        return next(
+            (index for index, hop in enumerate(self.hops) if hop.step is not Step.WIDTH),
+            len(self.hops),
+        )
 
 
 class Unrealizable(ValueError):

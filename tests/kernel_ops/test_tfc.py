@@ -80,7 +80,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     for name in (LOGITS, source.graph.output[0].name):
         assert np.array_equal(produced[name], expected[name])
     root = partition_root(body, body.graph.node)
-    assert undecided(root.point, "*") == [] and root.dropped == ()
+    assert undecided(root.point, "*") == [] and not root.dropped
     assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
     write_boundary_facts(body)
     assert partition_facts(body) == FACTS

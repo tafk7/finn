@@ -469,12 +469,22 @@ class DataflowBuildConfig:
         default_factory=Selection, metadata=config(decoder=_toolchain_selection)
     )
 
-    #: The strategy chain of the kernel path's choice step (step_kernel_choices): the
-    #: strategies that commit the KernelOps' open choices, by name
-    #: (``kernel_strategy_lookup`` in build_dataflow_steps), run in order; the choices
-    #: they commit are written to kernel_choices.json. ``placeholder`` is the DSE
-    #: seam's placeholder policy (CommitKernelChoices(PlaceholderPolicy())).
-    kernel_strategies: List[str] = field(default_factory=lambda: ["placeholder"])
+    #: The kernel path's exploration (step_kernel_choices): the strategies that choose
+    #: the KernelOps' open choices through the DSE seam, run as written, each a spec
+    #: with its own parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
+    #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
+    #: ``{"strategy": "target_throughput", "fps": ..., "relax": true}`` (the least
+    #: parallelism meeting fps at the target's clock), ``{"strategy": "placeholder"}``
+    #: (every choice left, by a fixed rank). A choice left open after the list is
+    #: refused by name. The kernel path reads no other field for it (not target_fps,
+    #: folding_config_file or auto_fifo_depths).
+    kernel_exploration: List[Dict[str, Any]] = field(
+        default_factory=lambda: [{"strategy": "placeholder"}]
+    )
+
+    #: Clear the KernelOps' saved choices before exploring: re-explore from scratch.
+    #: Otherwise a saved choice is pinned and the exploration fills only open ones.
+    kernel_exploration_fresh: bool = False
 
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:
