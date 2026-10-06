@@ -38,6 +38,13 @@ from what the channel carries what it may (the packed core's
 dense realization of a depthwise operation reads block-diagonal weights, so it
 needs a value on its weight channel (``matmul-realization``).
 
+The result's range is derived from what the weight channel carries: with a
+value, the exact range of each output column's dot products over the
+activation datatype (``column_range``), unioned over the columns; without one,
+every dot product of the two datatypes' values. The accumulator is the
+smallest signed INT holding it (``result_type``), and the result element states
+the range (``result_tensor``, the core's ``result_range``).
+
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and channels. Each core owns its folding factors (``compute.<core>.pe``,
   ``.simd``, ``.compute_pumping``) and derives every channel's beat sequence
@@ -81,6 +88,7 @@ from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerTensorValue,
+    integer_columns,
     integer_shape,
     integers,
 )
@@ -93,17 +101,45 @@ _CARRIED = (
 """Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
-def exact_result_dtype(
+def signed_integer_dtype(least: int, greatest: int) -> QONNXDataType:
+    """The smallest signed INT holding every integer of ``[least, greatest]``."""
+    bits = max(1, greatest.bit_length() + 1, (~least).bit_length() + 1 if least < 0 else 1)
+    return resolve_qonnx_datatype_name(f"INT{bits}")
+
+
+def datatype_range(
     vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
-) -> QONNXDataType:
-    """Smallest signed INT covering every full-range integer dot product."""
+) -> tuple[int, int]:
+    """The least and greatest dot product of ``vector_length`` values of each datatype."""
     require_positive(vector_length, "vector_length")
     activation = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
     weights = ordinary_integer_bounds(canonical_qonnx_datatype(weights_dtype))
     products = tuple(a * w for a in activation for w in weights)
-    lower, upper = vector_length * min(products), vector_length * max(products)
-    bits = max(1, upper.bit_length() + 1, (~lower).bit_length() + 1 if lower < 0 else 1)
-    return resolve_qonnx_datatype_name(f"INT{bits}")
+    return vector_length * min(products), vector_length * max(products)
+
+
+def exact_result_dtype(
+    vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
+) -> QONNXDataType:
+    """Smallest signed INT covering every full-range integer dot product."""
+    return signed_integer_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
+
+
+def column_range(activation_dtype: QONNXDataType, weights: IntegerTensor) -> tuple[int, int]:
+    """The least and greatest dot product of any column of ``weights`` (``(..., k, n)``,
+    reduced over ``k``) with activations of ``activation_dtype``.
+
+    A column whose positive weights sum to P and negative ones to N meets activations
+    in [lo, hi] (an ordinary integer type: lo <= 0 <= hi) over [lo * P + hi * N,
+    hi * P + lo * N], each term taking its extremes independently. Every partial sum
+    lies within it too, since each term's range holds 0.
+    """
+    low, high = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
+    columns = integer_columns(weights)
+    return (
+        min(low * positive + high * negative for positive, negative in columns),
+        max(high * positive + low * negative for positive, negative in columns),
+    )
 
 
 def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
@@ -188,12 +224,23 @@ class MatMulKernel(Kernel):
         """The datapath's K: the window times the channels when densely realized."""
         return self.k * self.n if self.dense_view else self.k
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    def result_type(self) -> QONNXDataType | Rejected:
+    @derived
+    def result_range(self) -> tuple[int, int] | Rejected:
+        """The results' least and greatest value: with a value on the weight channel, its
+        columns' over the activation datatype (``column_range``, per output column); without
+        one, every dot product of the two datatypes' values (``datatype_range``)."""
         try:
-            return exact_result_dtype(self.k, self.activation_dtype, self.weights_dtype)
+            if self.stored:
+                return column_range(self.activation_dtype, self.w_channel.contents)
+            return datatype_range(self.k, self.activation_dtype, self.weights_dtype)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def result_type(self) -> QONNXDataType:
+        """The accumulator: the smallest signed INT holding the result range."""
+        least, greatest = self.result_range
+        return signed_integer_dtype(least, greatest)
 
     @constraint
     def extents_supported(self) -> bool | Rejected:
@@ -203,8 +250,13 @@ class MatMulKernel(Kernel):
 
     # The tensors the channels carry.
 
-    def _tensor(self, shape: tuple[int, ...], dtype: QONNXDataType) -> Tensor | Rejected:
-        element = admit_element(dtype)
+    def _tensor(
+        self,
+        shape: tuple[int, ...],
+        dtype: QONNXDataType,
+        value_range: tuple[int, int] | None = None,
+    ) -> Tensor | Rejected:
+        element = admit_element(dtype, value_range)
         if isinstance(element, Rejected):
             return element
         try:
@@ -226,7 +278,8 @@ class MatMulKernel(Kernel):
 
     @view
     def result_tensor(self) -> Tensor | Rejected:
-        return self._tensor((self.m, self.n), self.result_type)
+        """(M, N), the accumulator over the result range."""
+        return self._tensor((self.m, self.n), self.result_type, self.result_range)
 
     # The channels it sits on, supplied by its parent.
     x_channel: Channel = Param(required=False)
@@ -269,6 +322,7 @@ class MatMulKernel(Kernel):
         form=datapath,
         reshape_activations=dense_view,
         result_dtype=result_type,
+        result_range=result_range,
         platform=platform,
         x_channel=x_channel,
         w_channel=w_channel,
@@ -291,4 +345,11 @@ class MatMulKernel(Kernel):
         return "finn_matmul"
 
 
-__all__ = ["MatMulKernel", "block_diagonal", "exact_result_dtype"]
+__all__ = [
+    "MatMulKernel",
+    "block_diagonal",
+    "column_range",
+    "datatype_range",
+    "exact_result_dtype",
+    "signed_integer_dtype",
+]

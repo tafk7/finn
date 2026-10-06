@@ -21,7 +21,7 @@ from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from kernels.chain import (
     HIDDEN,
     INPUTS,
@@ -149,8 +149,11 @@ def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_pro
     # Whether a source's values fit the range its channel states is the channel's
     # (channel-tensor), not MatMul's.
     assert carried(plain_a, ScalarEncoding(W, (-3, 3)), plain_h) == accepted
-    assert carried(plain_a, tight, plain_h, known=False) == accepted
-    refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), plain_h, known=False)
+    # Unknown, the result is the datatypes' (K7), wider than W1's columns'.
+    unknown_h = ScalarEncoding(exact_result_dtype(INPUTS, A, W))
+    assert isinstance(carried(plain_a, tight, plain_h, known=False), Rejected)
+    assert carried(plain_a, tight, unknown_h, known=False) == accepted
+    refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), unknown_h, known=False)
     assert isinstance(refused, Rejected) and "w_channel" in str(refused)
 
 

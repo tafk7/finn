@@ -99,14 +99,15 @@ class IntegerTensorValue:
 
     Its producer states it. Nested int tuples make one by a single walk (``of``); a
     producer that holds the integers in another form states the facts and how to load
-    them (a KernelOp's initializer, an array: loaded only when a memory image is
-    packed). Loading checks the stated shape and range. A memory image reads them as
+    them (a KernelOp's initializer, an array: loaded when first read, by a memory image
+    or the column sums a consumer derives a range from, ``columns``). Loading checks the
+    stated shape and range. A memory image and the column sums read them as
     ``row_major``: a read-only int64 array when the stated range fits in 64 bits, so
     the integers of an array are never made Python ints. Immutable; a copy is the value
     itself.
     """
 
-    __slots__ = ("shape", "range", "digest", "_load", "_integers", "_array")
+    __slots__ = ("shape", "range", "digest", "_load", "_integers", "_array", "_columns")
 
     shape: tuple[int, ...]
     range: tuple[int, int]
@@ -114,6 +115,7 @@ class IntegerTensorValue:
     _load: Callable[[], Sequence[int]]
     _integers: tuple[int, ...] | None
     _array: npt.NDArray[np.int64] | None
+    _columns: tuple[tuple[int, int], ...] | None
 
     def __init__(
         self,
@@ -134,6 +136,7 @@ class IntegerTensorValue:
         object.__setattr__(self, "_load", load)
         object.__setattr__(self, "_integers", None)
         object.__setattr__(self, "_array", None)
+        object.__setattr__(self, "_columns", None)
 
     @classmethod
     def of(cls, values: object) -> IntegerTensorValue:
@@ -184,6 +187,33 @@ class IntegerTensorValue:
         array when the stated range fits in 64 bits, else ``integers``. Loaded on first
         read and checked as ``integers`` is."""
         return self._int64() if self._fits else self.integers
+
+    @property
+    def columns(self) -> tuple[tuple[int, int], ...]:
+        """For each column, the sum of its positive and the sum of its negative integers:
+        a column is every position of the next-to-last axis at one position of the others
+        (an operand ``(..., k, n)`` reduced over ``k``), row-major; a vector is one column.
+        Computed once and kept: by numpy from ``row_major`` where the sums fit in 64 bits,
+        exactly from ``integers`` otherwise."""
+        found = self._columns
+        if found is None:
+            shape = self.shape if len(self.shape) > 1 else (*self.shape, 1)
+            outer, rows, width = prod(shape[:-2]), shape[-2], shape[-1]
+            if max(-self.range[0], self.range[1]) * rows < 2**63:  # the sums fit int64
+                values = self._int64().reshape(outer, rows, width)
+                positive = np.where(values > 0, values, 0).sum(axis=1).ravel()
+                negative = np.where(values < 0, values, 0).sum(axis=1).ravel()
+                found = tuple(zip(map(int, positive), map(int, negative)))
+            else:
+                flat = self.integers
+                sums = [[0, 0] for _ in range(outer * width)]
+                for row in range(outer * rows):
+                    first = (row // rows) * width
+                    for column, value in enumerate(flat[row * width : (row + 1) * width]):
+                        sums[first + column][value < 0] += value
+                found = tuple((positive, negative) for positive, negative in sums)
+            object.__setattr__(self, "_columns", found)
+        return found
 
     @property
     def _fits(self) -> bool:
@@ -267,6 +297,11 @@ def integer_range(values: object) -> tuple[int, int]:
     return _value(values).range
 
 
+def integer_columns(values: object) -> tuple[tuple[int, int], ...]:
+    """Each column's sum of positive and of negative integers (``IntegerTensorValue.columns``)."""
+    return _value(values).columns
+
+
 def _value(values: object) -> IntegerTensorValue:
     return values if type(values) is IntegerTensorValue else IntegerTensorValue.of(values)
 
@@ -318,6 +353,7 @@ __all__ = [
     "THRESHOLD_TABLE",
     "ThresholdTable",
     "integer_bytes",
+    "integer_columns",
     "integer_digest",
     "integer_range",
     "integer_shape",

@@ -27,10 +27,11 @@ and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
 
-The result's element is ``result_dtype``, the accumulator encoding its parent
-chooses (its channel refuses another), not a proof that an arbitrary frame fits
-it: the parent must bound each frame's accumulation to it (including
-intermediate sums).
+The result's element is ``result_dtype`` over ``result_range`` (the datatype's
+own by default), the accumulator encoding and the range its parent states (its
+channel refuses another), not a proof that an arbitrary frame fits it: the
+parent must bound each frame's accumulation to it (including intermediate
+sums).
 """
 
 from __future__ import annotations
@@ -92,9 +93,11 @@ class DotpAxiKernel(Kernel):
 
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
-    # The accumulator encoding it produces: its parent's choice (MatMul binds its
-    # result type), so that it is known before the results channel exists.
+    # The accumulator encoding it produces and the range of its results: its parent's
+    # statement (MatMul binds its result type and range), so that they are known before
+    # the results channel exists. ``()`` is the datatype's own range.
     result_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    result_range: tuple[int, ...] = Param(default=())
     platform: Platform = Param()
     # The channels dotp sits on: reference inputs, each a Channel placed beside it.
     x_channel: Channel = Param(required=False)
@@ -170,6 +173,7 @@ class DotpAxiKernel(Kernel):
         lanes=(n,),
         reduces=(k,),
         dtype=result_dtype,
+        value_range=result_range,
     )
 
     @derived

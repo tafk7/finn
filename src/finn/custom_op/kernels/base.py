@@ -10,8 +10,8 @@ value its channel carries (``Facts.values``), and the channel's tensor states
 its range. It states its placement once, as data (``kernel``, ``formals``,
 ``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
 root is generated from it, and a partition root places the same kernel. It
-binds through the bind cache, its kernel alone for inference and its node root
-for its choices, replays the choices its node holds, and answers the
+binds its node root through the bind cache, on its inputs for inference and
+whole for its choices, replays the choices its node holds, and answers the
 compiler's queries from the result.
 
 Two kinds of attribute:
@@ -405,19 +405,28 @@ class KernelOp(CustomOp):
         """What binding this node reads, from the attached model."""
         raise NotImplementedError
 
-    def edges(self) -> dict[str, Tensor]:
-        """The tensor of each channel of the node root, by port, as the graph states it:
-        each input's (an initializer's over its values' range) and each output's."""
+    def input_edges(self) -> dict[str, Tensor]:
+        """The tensor of each input channel of the node root, by port, as the graph states
+        it (an initializer's over its values' range)."""
         model, node = self.model(), self.onnx_node
-        found = {
+        return {
             port: edge_tensor(model, tensor, self.label)
             for port, tensor in zip(self.ports, node.input)
             if port is not None
         }
-        return found | {
+
+    def output_edges(self) -> dict[str, Tensor]:
+        """The tensor of each output channel of the node root, by port, as the graph
+        states it: known once inference has written it."""
+        model, node = self.model(), self.onnx_node
+        return {
             port: edge_tensor(model, tensor, self.label)
             for port, tensor in zip(self.outputs, node.output)
         }
+
+    def edges(self) -> dict[str, Tensor]:
+        """The tensor of each channel of the node root, by port, inputs and outputs."""
+        return self.input_edges() | self.output_edges()
 
     def base(self) -> Kernel:
         """The node root bound from this node's facts, nothing chosen."""
@@ -522,7 +531,8 @@ class KernelOp(CustomOp):
         default."""
 
     def output_tensors(self) -> Shapes:
-        """Each output's ONNX shape and datatype, from the kernel's fact-level views."""
+        """Each output's ONNX shape and datatype, from the kernel's fact-level views
+        (``view``)."""
         raise NotImplementedError
 
     def infer_output_tensors(self, model: ModelWrapper) -> Shapes:
@@ -548,10 +558,11 @@ class KernelOp(CustomOp):
         return [f"{self.label}: {describe([result])}"] if isinstance(result, Rejected) else []
 
     def view(self, name: str) -> Any:
-        """A fact-level view of the op's kernel, bound alone from the node's formals
+        """A fact-level view of the op's kernel in its node root bound on its inputs
         (``result_tensor``, ``result_dtype``): what inference reads, before any output of
-        the node is known."""
-        kernel = BIND_CACHE.kernel(self.facts())
+        the node is known. It reads the kernel's facts and its input channels' tensors and
+        values (MatMul's result range, its weight channel's value)."""
+        kernel = getattr(BIND_CACHE.inputs(self.facts()), self.member)
         answer = kernel.query(getattr(type(kernel), name))
         if not isinstance(answer, Available):
             raise KernelOpError(f"{self.label}: {describe([answer])}")

@@ -86,10 +86,18 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     model.set_tensor_datatype("w", INT3)
     streamed = kernel_op(model, model.graph.node[0])
     assert streamed.facts().owned == ()
+    # The output was inferred from the stored weights' columns; unknown, they give the
+    # datatypes' wider range, so the graph's y is stale: the node refuses it, and so would
+    # inference (a narrower statement). Lifting changes the node's facts, so it clears
+    # what the node stated downstream, and inference states it again.
+    (stale,) = streamed.verify_node()
+    assert "matmul-tensor" in stale
+    model.set_tensor_datatype("y", None)
+    model = model.transform(InferKernelTensors())
+    streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's.
     point: Any = streamed.point()
     assert point.matmul.compute.pe == 2 and streamed.verify_node() == []
-    model = model.transform(InferKernelTensors())
     assert partition_root(model, model.graph.node).dropped == ("w.source.memstream.ram_style",)
 
 

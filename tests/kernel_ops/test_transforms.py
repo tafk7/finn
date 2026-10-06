@@ -83,7 +83,8 @@ def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
         "levels": ([chain.ROWS, chain.HIDDEN], chain.T.name),
         "y": ([chain.ROWS, chain.OUTPUTS], chain.Y.name),
     }
-    assert (chain.H.name, chain.T.name, chain.Y.name) == ("INT8", "UINT2", "INT7")
+    # Each MatMul's from its weights' columns (K7).
+    assert (chain.H.name, chain.T.name, chain.Y.name) == ("INT6", "UINT2", "INT5")
     after = model.transform(InferShapes()).transform(InferDataTypes())
     assert tensors(after) == tensors(model)
 
@@ -93,12 +94,12 @@ def test_an_unannotated_input_and_a_narrower_annotation_are_refused() -> None:
         converted(annotate_input=False).transform(InferKernelTensors())
     narrow = converted()
     narrow.set_tensor_datatype("hidden", chain.T)
-    with pytest.raises(KernelOpError, match="hidden is annotated UINT2, narrower than INT8"):
+    with pytest.raises(KernelOpError, match="hidden is annotated UINT2, narrower than INT6"):
         narrow.transform(InferKernelTensors())
     # A wider statement is replaced by the exact type.
     wide = converted()
     wide.set_tensor_datatype("hidden", DataType["INT16"])
-    assert tensors(wide.transform(InferKernelTensors()))["hidden"][1] == "INT8"
+    assert tensors(wide.transform(InferKernelTensors()))["hidden"][1] == "INT6"
 
 
 @pytest.mark.parametrize("second_weights", (True, False))

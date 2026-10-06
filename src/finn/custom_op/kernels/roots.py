@@ -20,6 +20,9 @@ things are built with it:
   port's channel also carries its ``contents``, a Param supplied only when the
   node owns the value (an initializer, which the channel's ``source`` then
   stores; weights on a graph tensor arrive like any edge, with no source).
+  An output's channel is present once its tensor is supplied: bound on its
+  inputs alone, the root answers inference (a result derived from an input
+  channel's value), and inference states the outputs it is then bound with.
   Every channel is a boundary, ``in<i>_V`` and ``out<j>_V`` by ONNX position:
   a kernel's cores bind their extents from the ports on its channels
   (``kernel-extents``), so a node alone can commit its own choices only on
@@ -39,7 +42,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast, get_type_hints
 
-from finn.core.space import Param, composite
+from finn.core.space import Param, composite, default_semantics, supplied
 from finn.core.space.declarations import UNSUPPLIED
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
@@ -86,10 +89,17 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
         for index, port in enumerate(ports):
             if port is None:
                 continue
-            tensor: Tensor = Param()
+            output = side == "out"
+            # An output's tensor is optional; its semantics stated, since its guard reads it
+            # before the class is collected.
+            tensor: Tensor = (
+                Param(required=False, semantics=default_semantics(Tensor)) if output else Param()
+            )
             members[f"{port}_tensor"] = tensor
             annotations[f"{port}_tensor"] = Tensor
             stated: dict[str, Any] = {}
+            if output:
+                members[f"{port}_stated"] = stated["when"] = supplied(tensor)
             if port in op.parameters:
                 contents: IntegerTensor = Param(required=False, semantics=INTEGER_TENSOR)
                 members[f"{port}_contents"] = stated["contents"] = contents

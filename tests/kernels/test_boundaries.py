@@ -108,15 +108,17 @@ for memory in ("none", "memstream"):
         weights_dtype=DataType["INT3"],
         platform=PLATFORM,
     )
-    # Stored weights are the weight channel's value, which its source stores.
-    stored = {}
+    # Stored weights are the weight channel's value, which its source stores; the
+    # result is their columns' (the identity's: INT3), or the datatypes' (INT8).
+    stored, result = {}, INT8
     if memory == "memstream":
         stored["contents"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+        result = INT3
 
     class Placed(Root):
         x = Channel(tensor=Tensor((2, 4), INT3), port="in0_V", platform=PLATFORM)
         w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM, **stored)
-        y = Channel(tensor=Tensor((2, 4), INT8), port="out0_V", platform=PLATFORM)
+        y = Channel(tensor=Tensor((2, 4), result), port="out0_V", platform=PLATFORM)
         matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
 
     choices = {
@@ -142,7 +144,7 @@ for memory in ("none", "memstream"):
             "x.adapter.input_gen.input_gen.ram_style": "auto",
         },
     )
-    assert root.matmul.result_type == DataType["INT8"]
+    assert root.matmul.result_type == result.dtype
     assert isinstance(root.module, Composed) and root.module.fragment.instances
 """
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)

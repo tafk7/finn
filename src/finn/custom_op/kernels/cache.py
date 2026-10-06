@@ -1,23 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The bind cache: kernel and node-root points keyed by the facts they were bound from, by value.
+"""The bind cache: node-root points keyed by the facts they were bound from, by value.
 
 qonnx builds a fresh op instance for every query, and a point answers each query
 from what it has evaluated (its views, its forced Decisions), which a fresh
 binding would derive again. So an op binds through one process-wide cache,
-three kinds of point:
+three kinds of point, all of its node root:
 
-- its **kernel** alone, from the kernel's formals: what inference reads (the
-  fact-level views, ``result_tensor``), before any output of the node is known;
-- its **node root**, nothing chosen, from the same formals, the tensor of each
-  channel the graph states (``x_tensor``, ``w_tensor``, ``y_tensor``) and the
-  value of each initializer the node owns (``w_contents``);
-- a node root with **choices** replayed, because replay evaluates a new
+- **on its inputs**, from the kernel's formals, the tensor of each input channel
+  the graph states (``x_tensor``, ``w_tensor``) and the value of each
+  initializer the node owns (``w_contents``), its outputs absent: what
+  inference reads (``result_tensor``, which may derive from an input channel's
+  value), before any output of the node is known;
+- **whole**, nothing chosen: the same and each output's tensor (``y_tensor``);
+- whole with **choices** replayed, because replay evaluates a new
   configuration from its facts again.
 
 A key is the facts by value, an initializer by its value summary's
-``content_digest``, beside the class it binds.
+``content_digest``, beside the class it binds, and the tensors bound.
 
 Points are immutable (replay returns successors), so sharing one across op
 instances and models is sound, and keys are values, so nothing is ever
@@ -44,17 +45,18 @@ V = TypeVar("V")
 
 @dataclass(frozen=True)
 class Facts:
-    """What binding a node reads: its op's node root and kernel classes; the key that
-    identifies the kernel's formals and the node's values by value; the formals (a thunk,
-    called only on a miss); the tensor of each channel, by port, as the graph states it (a
-    thunk: an output's is known only once inference wrote it); the value of each
-    parameter port the node owns (an initializer's), by port (a thunk); and those ports."""
+    """What binding a node reads: its op's node root class; the key that identifies the
+    kernel's formals and the node's values by value; the formals (a thunk, called only
+    on a miss); the tensor of each input channel and of each output channel, by port, as
+    the graph states them (thunks: an output's is known only once inference wrote it);
+    the value of each parameter port the node owns (an initializer's), by port (a thunk);
+    and those ports."""
 
     root: type[Kernel]
-    kernel: type[Kernel]
     key: tuple[Hashable, ...]
     formals: Callable[[], dict[str, object]]
-    edges: Callable[[], dict[str, Tensor]]
+    inputs: Callable[[], dict[str, Tensor]]
+    outputs: Callable[[], dict[str, Tensor]]
     values: Callable[[], dict[str, IntegerTensorValue]] = dict
     owned: tuple[str, ...] = ()
 
@@ -88,26 +90,18 @@ class LeastRecentlyUsed(Generic[V]):
 
 
 class BindCache(LeastRecentlyUsed[Kernel]):
-    """Kernels and base points by facts, replayed points by facts and choices; a bounded
-    LRU."""
+    """Points by facts, replayed points by facts and choices; a bounded LRU."""
 
     def __init__(self, size: int = 128) -> None:
         super().__init__(size)
 
-    def kernel(self, facts: Facts) -> Kernel:
-        """The op's kernel alone, bound from the formals in ``facts``."""
-        return self.get(
-            (facts.kernel, *facts.key),
-            lambda: design_space(cast(Any, facts.kernel)(**facts.formals())),
-        )
-
-    def _root_key(self, facts: Facts) -> tuple[tuple[Hashable, ...], dict[str, Tensor]]:
-        edges = facts.edges()
-        return (facts.root, *facts.key, *sorted(edges.items())), edges
-
-    def point(self, facts: Facts) -> Kernel:
-        """The node root bound from ``facts``, nothing chosen."""
-        key, edges = self._root_key(facts)
+    def _bound(
+        self, facts: Facts, outputs: bool
+    ) -> tuple[tuple[Hashable, ...], Callable[[], Kernel]]:
+        """The key of the root bound on its inputs, and its outputs too when ``outputs``;
+        and how to bind it."""
+        edges = facts.inputs() | (facts.outputs() if outputs else {})
+        key = (facts.root, *facts.key, outputs, *sorted(edges.items()))
 
         def bind() -> Kernel:
             tensors = {f"{port}_tensor": tensor for port, tensor in edges.items()}
@@ -117,7 +111,15 @@ class BindCache(LeastRecentlyUsed[Kernel]):
             )
             return bound
 
-        return self.get(key, bind)
+        return key, bind
+
+    def inputs(self, facts: Facts) -> Kernel:
+        """The node root bound on its inputs from ``facts``, its outputs absent."""
+        return self.get(*self._bound(facts, outputs=False))
+
+    def point(self, facts: Facts) -> Kernel:
+        """The node root bound from ``facts``, nothing chosen."""
+        return self.get(*self._bound(facts, outputs=True))
 
     def configured(
         self, facts: Facts, choices: Mapping[str, object], build: Callable[[Kernel], Kernel]
@@ -125,7 +127,7 @@ class BindCache(LeastRecentlyUsed[Kernel]):
         """The point ``build`` replays ``choices`` onto from the base point; a refusal
         raises out of ``build`` and caches nothing."""
         chosen = tuple(sorted((key, type(value).__name__, value) for key, value in choices.items()))
-        key, _ = self._root_key(facts)
+        key, _ = self._bound(facts, outputs=True)
         return self.get((*key, chosen), lambda: build(self.point(facts)))
 
 

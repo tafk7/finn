@@ -67,7 +67,7 @@ def test_facts_come_from_the_model() -> None:
     assert "weights" not in formals
     value = IntegerTensorValue.of(tuple(tuple(int(v) for v in row) for row in WEIGHTS))
     assert facts.values() == {"w": value}
-    assert facts.edges()["w"].element.value_range == value.range
+    assert facts.inputs()["w"].element.value_range == value.range
     # The output keeps the input's leading axes.
     assert op(model).output_tensors() == {
         "y": ((1, 3, 4), op(model).view("result_tensor").element.dtype)

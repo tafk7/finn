@@ -22,21 +22,23 @@ from finn.core.space import derived, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from finn.kernels.matmul import MatMulKernel, column_range, signed_integer_dtype
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
 
 ROWS, INPUTS, HIDDEN, OUTPUTS, PE, SIMD = 3, 4, 4, 4, 2, 2
 A = W = DataType["INT3"]
-H = exact_result_dtype(INPUTS, A, W)
 T = DataType["UINT2"]
-Y = exact_result_dtype(HIDDEN, T, W)
 THRESHOLDS = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(HIDDEN)),)
 # The smallest type of H's signedness holding THRESHOLDS: what the ordered pass annotates.
 THRESHOLD_DTYPE = DataType["INT5"]
 W1 = tuple(tuple((3 * n + 2 * k) % 7 - 3 for n in range(HIDDEN)) for k in range(INPUTS))
 W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range(HIDDEN))
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
+# Each MatMul's result: its weights' columns over its activations' datatype (K7):
+# INT6 over [-28, 28] and INT5 over [-15, 12].
+H = signed_integer_dtype(*column_range(A, W1))
+Y = signed_integer_dtype(*column_range(T, W2))
 
 
 def matmul(

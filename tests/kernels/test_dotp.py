@@ -74,6 +74,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.form",
         "compute.reshape_activations",
         "compute.result_dtype",
+        "compute.result_range",
         "compute.platform",
         "compute.x_channel",
         "compute.w_channel",

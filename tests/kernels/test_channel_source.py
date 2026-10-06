@@ -65,6 +65,8 @@ FACTS = dict(
     platform=FULL_DSP48E2,
 )
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
+# The result of WEIGHTS' columns over INT3 activations (K7): [-30, 40].
+INT7 = ScalarEncoding(DataType["INT7"])
 
 
 def base(**facts):
@@ -193,6 +195,20 @@ def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
 
 
+def test_the_result_range_follows_what_the_weight_channel_carries():
+    """With a value on the weight channel, each output column's dot products over the
+    activation datatype, unioned over columns; without one, the datatypes' (K7). The
+    core states the range on what it produces."""
+    stored, external = base(weights=WEIGHTS), base()
+    assert stored.matmul.result_range == (-30, 40)
+    assert stored.matmul.result_type == DataType["INT7"]
+    assert external.matmul.result_range == (-48, 64)
+    assert external.matmul.result_type == DataType["INT8"]
+    core = configured(stored, style="block").matmul.compute
+    assert core.y.element == ScalarEncoding(DataType["INT7"], (-30, 40))
+    assert core.parameters()["ACCU_WIDTH"] == 7
+
+
 def test_the_cores_do_not_wait_on_the_source():
     point = commit(base(weights=WEIGHTS), {"matmul.compute": "packed"})
     point = commit(
@@ -275,7 +291,7 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
             sets=2,
             platform=FULL_DSP48E2,
         )
-        y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=FULL_DSP48E2)
+        y = Channel(tensor=Tensor((3, 4), INT7), port="out0_V", platform=FULL_DSP48E2)
         matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
 
     point = design_space(Unindexed())
@@ -295,7 +311,7 @@ def placed_with(platform: Platform):
     class OnPlatform(Root):
         x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
         w = Channel(tensor=Tensor((4, 4), INT3), contents=WEIGHTS, platform=platform)
-        y = Channel(tensor=Tensor((3, 4), INT8), port="out0_V", platform=platform)
+        y = Channel(tensor=Tensor((3, 4), INT7), port="out0_V", platform=platform)
         matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
 
     return design_space(OnPlatform())

@@ -76,9 +76,9 @@ class MatMul(KernelOp):
             weights_dtype.name,
             platform,
         )
-        root = self.root()
+        root, edges = self.root(), (self.input_edges, self.output_edges)
         if model.get_initializer(b) is None:
-            return Facts(root, MatMulKernel, (*key, None), lambda: common, self.edges)
+            return Facts(root, (*key, None), lambda: common, *edges)
         digest = admitted(model, b, weights_dtype, label)
 
         def values() -> dict[str, IntegerTensorValue]:
@@ -87,7 +87,7 @@ class MatMul(KernelOp):
                 raise KernelOpError(f"{label}: {b} is not an initializer")
             return {"w": integer_tensor(stored)}
 
-        return Facts(root, MatMulKernel, (*key, digest), lambda: common, self.edges, values, ("w",))
+        return Facts(root, (*key, digest), lambda: common, *edges, values, ("w",))
 
     def output_tensors(self) -> Shapes:
         result = self.view("result_tensor")

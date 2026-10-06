@@ -129,7 +129,7 @@ class Thresholding(KernelOp):
             platform,
             digest,
         )
-        return Facts(self.root(), ThresholdingAxiKernel, key, formals, self.edges)
+        return Facts(self.root(), key, formals, self.input_edges, self.output_edges)
 
     def output_tensors(self) -> Shapes:
         dims = shape(self.model(), self.onnx_node.input[0], self.label)

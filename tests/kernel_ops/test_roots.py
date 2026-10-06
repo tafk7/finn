@@ -42,12 +42,14 @@ FACTS: dict[str, Any] = dict(
 WEIGHTS = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
 X = Tensor((3, 4), ScalarEncoding(INT3))
 W = Tensor((4, 4), ScalarEncoding(INT3, (-1, 1)))  # the initializer's, over its values' range
-Y = Tensor((3, 4), ScalarEncoding(dtype("INT8")))
+Y = Tensor((3, 4), ScalarEncoding(dtype("INT8")))  # INT3 x INT3 over 4 terms: [-48, 64]
+# The stored weights' columns over INT3 activations: [-10, 11], [-7, 7], [-11, 10], [-10, 11].
+Y_STORED = Tensor((3, 4), ScalarEncoding(dtype("INT5")))
 
 
 def stored(x: Tensor = X) -> Any:
     return design_space(
-        MatMul.root()(**FACTS, x_tensor=x, w_tensor=W, w_contents=WEIGHTS, y_tensor=Y)
+        MatMul.root()(**FACTS, x_tensor=x, w_tensor=W, w_contents=WEIGHTS, y_tensor=Y_STORED)
     )
 
 
@@ -78,8 +80,17 @@ def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
 
 
 def test_the_views_answer_from_facts() -> None:
-    # Inference reads the kernel alone: its result from the facts.
-    assert design_space(MatMulKernel(**FACTS)).result_tensor == Y
+    # Inference reads the node root bound on its inputs, its output absent: the result
+    # from the facts and the weight channel. Without a value, the datatypes' range; with
+    # one, its columns' (K7), each stated on the result element.
+    root = MatMul.root()
+    streamed = design_space(
+        root(**FACTS, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)))
+    )
+    assert streamed.matmul.result_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), (-48, 64)))
+    owned = design_space(root(**FACTS, x_tensor=X, w_tensor=W, w_contents=WEIGHTS))
+    assert owned.matmul.result_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT5"), (-11, 11)))
+    assert design_space(MatMulKernel(**FACTS)).result_tensor == streamed.matmul.result_tensor
     # The weight channel carries the graph's statement: the values' range, and the value,
     # which its source restates.
     point = stored()
@@ -115,17 +126,16 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
 def facts(digest: str, *, size: int = 4) -> Facts:
     weights = tuple(tuple((r + c) % 3 - 1 for c in range(size)) for r in range(size))
     formals = dict(FACTS, k=size, n=size)
-    edges = {
+    inputs = {
         "x": Tensor((3, size), ScalarEncoding(INT3)),
         "w": Tensor((size, size), ScalarEncoding(INT3, (-1, 1))),
-        "y": Y,
     }
     return Facts(
         MatMul.root(),
-        MatMulKernel,
         ("MatMul", 1, size, digest),
         lambda: formals,
-        lambda: edges,
+        lambda: inputs,
+        lambda: {"y": Y_STORED},
         lambda: {"w": IntegerTensorValue.of(weights)},
         ("w",),
     )
