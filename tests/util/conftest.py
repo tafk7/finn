@@ -23,8 +23,9 @@ def hls_toolchain():
 
 #: Vivado, xelab, g++, Vitis HLS and vitis-run in one script: each notes its
 #: name in the calls.log beside it and leaves what its caller checks for. Vivado
-#: a stitched IP's wrapper and source list; xelab a simulation library; g++ an executable that
-#: reports a finished XSI run; the HLS frontends a node's IP and Verilog.
+#: a stitched IP's wrapper and source list; xelab a simulation library; g++ an
+#: executable that reports a finished XSI run and its loader path; the HLS
+#: frontends a node's IP and Verilog.
 FAKE_TOOL = """
 import os, sys
 tool = os.path.basename(sys.argv[0])
@@ -51,7 +52,7 @@ elif tool == "g++":
     with open(out, "w") as executable:
         executable.write(
             "#!/bin/sh\\nprintf 'cycles\\\\t100\\\\nlatency_cycles\\\\t60\\\\nTIMEOUT\\\\t0\\\\n'"
-            " > results.txt\\n"
+            " > results.txt\\necho \\"$LD_LIBRARY_PATH\\" > loader_path.txt\\n"
         )
     os.chmod(out, 0o755)
 elif tool in ("vitis_hls", "vitis-run"):
@@ -88,13 +89,14 @@ def fake_tools(tmp_path, monkeypatch):
     """Makes command directories of fake tools, by name; ``machine=True`` names
     the machine's (FINN_TOOL_DIR_OVERRIDE). Builds go under tmp_path, one worker
     each, and the toolchain's installations are empty directories under it:
-    HLS (headers for cppsim) and a Vivado whose path gives its release."""
+    HLS (headers for cppsim) and a Vivado whose path gives its release, with a
+    simulation kernel directory."""
     monkeypatch.delenv("FINN_TOOL_DIR_OVERRIDE", raising=False)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "1")
     (tmp_path / "hls").mkdir()
     monkeypatch.setenv("XILINX_HLS", str(tmp_path / "hls"))
-    (tmp_path / "2024.2/Vivado").mkdir(parents=True)
+    (tmp_path / "2024.2/Vivado/lib/lnx64.o").mkdir(parents=True)
     monkeypatch.setenv("XILINX_VIVADO", str(tmp_path / "2024.2/Vivado"))
 
     def make(name: str, *, machine: bool = False) -> FakeTools:

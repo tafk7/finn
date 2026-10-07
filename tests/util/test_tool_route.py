@@ -14,7 +14,9 @@ import pytest
 
 import numpy as np
 import onnx.helper as oh
+import os
 from onnx import TensorProto
+from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
@@ -128,6 +130,10 @@ def test_bare_simulation_and_stitching_run_under_the_site_directory(fake_tools, 
     assert site.calls[3:] == ["vivado"]
     assert xsi_fifosim(model, 1)["cycles"] == 100
     assert site.calls[4:] == ["xelab", "g++"]
+    # The C++ driver ran with the simulation kernel on its loader path.
+    driver = Path(model.get_metadata_prop("rtlsim_so").split("xsim.dir")[0])
+    kernel = Path(os.environ["XILINX_VIVADO"]) / "lib/lnx64.o"
+    assert (driver / "loader_path.txt").read_text().split(":")[0].strip() == str(kernel)
 
 
 def mvau_model():

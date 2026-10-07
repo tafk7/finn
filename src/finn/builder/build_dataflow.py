@@ -55,7 +55,6 @@ from finn.builder.build_dataflow_steps import (
     _maybe_enable_verify_behavioral,
     build_dataflow_step_lookup,
 )
-from finn.util._legacy_build_env import build_environment
 
 
 # adapted from https://stackoverflow.com/a/39215961
@@ -308,8 +307,14 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     with open(json_filename) as f:
         cfg = DataflowBuildConfig.from_json(f.read())
     # Isolate cwd and the pre-start native loader environment for this worker
-    # tree, from the toolchain the configuration selects. Relative config paths
-    # retain their historical directory semantics.
+    # tree, from the toolchain the configuration selects, prepared over this
+    # environment so that the child keeps FINN's own settings beside the tools'.
+    # The build directory is resolved here, where a relative FINN_BUILD_DIR
+    # means what it says. Relative config paths retain their historical
+    # directory semantics.
+    scratch = resources.scratch()
+    scratch.mkdir(parents=True, exist_ok=True)
+    toolchain = cfg._resolve_selection().prepare({**os.environ, "FINN_BUILD_DIR": str(scratch)})
     child = subprocess.run(
         [
             sys.executable,
@@ -320,7 +325,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
             "DataflowBuildConfig.from_json(open('dataflow_build_config.json').read())))",
         ],
         cwd=path_to_cfg_dir,
-        env=build_environment(cfg._resolve_selection()),
+        env=toolchain.simulation_environment(),
     )
     return child.returncode
 

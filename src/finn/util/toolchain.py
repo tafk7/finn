@@ -232,6 +232,17 @@ class Selection:
         return Toolchain(self, environment)
 
 
+#: The simulator libraries an XSI simulation loads, by the installation that has
+#: them: the Vivado simulation kernel (``finn_xsi``), and the floating-point
+#: operators HLS-generated code links. docker/finn-toolchain.sh puts the same
+#: directories on a native shell's loader path.
+SIMULATION_LIBRARIES = (
+    ("XILINX_VIVADO", "lib/lnx64.o"),
+    ("XILINX_VITIS", "lnx64/tools/fpo_v7_1"),
+    ("XILINX_HLS", "lnx64/tools/fpo_v7_1"),
+)
+
+
 @dataclass(frozen=True)
 class Toolchain:
     """A selection with its prepared environment, a read-only snapshot: every tool
@@ -282,6 +293,25 @@ class Toolchain:
             "This toolchain names no HLS installation (XILINX_HLS or XILINX_VITIS) "
             "for HLS C++ headers and C simulation libraries"
         )
+
+    def simulation_environment(self) -> dict[str, str]:
+        """This environment with the loader path an XSI simulation needs: the
+        simulator libraries of its installations (``SIMULATION_LIBRARIES``, those
+        that exist) ahead of its ``LD_LIBRARY_PATH``. The loader reads the path when
+        a process starts, so this is the environment of a new process that
+        simulates: the build process of ``build_dataflow_directory``, an XSI C++
+        driver."""
+        environment = dict(self.environment)
+        libraries = [
+            str(Path(environment[variable]) / suffix)
+            for variable, suffix in SIMULATION_LIBRARIES
+            if environment.get(variable) and (Path(environment[variable]) / suffix).is_dir()
+        ]
+        if environment.get("LD_LIBRARY_PATH"):
+            libraries.append(environment["LD_LIBRARY_PATH"])
+        if libraries:
+            environment["LD_LIBRARY_PATH"] = ":".join(libraries)
+        return environment
 
     def run(
         self,

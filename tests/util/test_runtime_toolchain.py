@@ -14,7 +14,6 @@ import time
 from pathlib import Path
 
 from finn import resources
-from finn.util._legacy_build_env import build_environment
 from finn.util.hls import CallHLS
 from finn.util.resources import tcl_quote
 from finn.util.toolchain import Selection, Toolchain, run_process
@@ -445,21 +444,37 @@ def test_frontend_availability_does_not_override_compatibility(tmp_path):
         tc.hls_command("build.tcl")
 
 
-def test_legacy_precedence_and_worker_inheritance(tmp_path):
-    env = {"FINN_BUILD_DIR": "/wrong/build", "PATH": os.defpath}
-    child = build_environment(Selection(), env, build_dir=tmp_path / "scratch")
-    assert env["FINN_BUILD_DIR"] == "/wrong/build"
+def test_the_simulation_environment_loads_the_simulator_libraries_in_workers(tmp_path):
+    """The simulator libraries that exist come first on the loader path, ahead of
+    the environment's own, in a new process and the workers it starts; the
+    toolchain's environment is left as it was."""
+    vivado, vitis = tmp_path / "Vivado", tmp_path / "Vitis"
+    (vivado / "lib/lnx64.o").mkdir(parents=True)
+    vitis.mkdir()  # no floating-point operator libraries: not on the path
+    env = {
+        "PATH": os.defpath,
+        "XILINX_VIVADO": str(vivado),
+        "XILINX_VITIS": str(vitis),
+        "LD_LIBRARY_PATH": "/parent/lib",
+    }
+    toolchain = Selection().prepare(env)
+    child = toolchain.simulation_environment()
+    assert child["LD_LIBRARY_PATH"] == f"{vivado}/lib/lnx64.o:/parent/lib"
+    assert toolchain.environment["LD_LIBRARY_PATH"] == "/parent/lib"
     result = run_process(
         [
             sys.executable,
             "-c",
             "import multiprocessing,os; "
-            'p=multiprocessing.Process(target=lambda: print(os.environ["FINN_BUILD_DIR"])); '
+            'p=multiprocessing.Process(target=lambda: print(os.environ["LD_LIBRARY_PATH"])); '
             "p.start(); p.join()",
         ],
         env=child,
     )
-    assert result.stdout.decode().strip() == str(tmp_path / "scratch")
+    assert result.stdout.decode().strip() == child["LD_LIBRARY_PATH"]
+    assert (
+        "LD_LIBRARY_PATH" not in Selection().prepare({"PATH": os.defpath}).simulation_environment()
+    )
 
 
 def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):

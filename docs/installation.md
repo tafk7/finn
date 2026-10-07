@@ -396,13 +396,15 @@ builds ahead of time; `--check` only checks prerequisites.
 
 `build_dataflow project/` remains the ordinary public build command. Pending P6
 integration of the private build-engine branch, the archived implementation runs the
-existing model/configuration in a fresh child, with that directory as cwd and
-legacy build/loader settings prepared before Python starts. Workers inherit that
+existing model/configuration in a fresh child, with that directory as cwd, in the
+environment of the configuration's toolchain (the machine's when it names none),
+the build directory resolved and the simulator libraries on the loader path
+(`Toolchain.simulation_environment()`) before Python starts. Workers inherit that
 environment. The API `build_dataflow_directory` uses the same boundary.
 `build_dataflow_cfg` remains in-process for custom Python callbacks: callers using
 XSI there must supply its loader environment before interpreter startup. Concurrent
 in-process builds still share legacy configuration, stdout and logger state; use
-separate build processes. See [the compatibility ledger](legacy-build-env-ledger.md).
+separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
 `finn.util.toolchain.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a

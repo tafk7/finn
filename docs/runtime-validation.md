@@ -239,7 +239,7 @@ custom testbench files, not parent closures. No actual AMD XSI session was run.
 Real output/cycle/trace equivalence, AXI/external-memory/MLO/characterization cases,
 concurrent native reuse and workload/startup/transfer measurements remain open.
 
-`src/finn/builder/` and `_legacy_build_env.py` remain unchanged from the handoff.
+`src/finn/builder/` remained unchanged from the handoff.
 P6 must integrate the actual private build-engine implementation and retire/reconcile
 the whole-build worker. The existing C++ performance harness and its legacy command/
 loader seam remain integration-sensitive; broad path/config/allocation/logging

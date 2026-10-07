@@ -351,19 +351,18 @@ def rtlsim_exec_cppxsi(
     toolchain.run("g++", build_args, cwd=sim_base, replay=sim_base + "/compile_rtlsim.sh")
     assert os.path.isfile(sim_base + "/rtlsim_xsi"), "Failed to compile rtlsim executable"
 
-    # launch the rtlsim executable
-    # important to specify LD_LIBRARY_PATH here for XSI to work correctly
-    runsim_env = os.environ.copy()
-    runsim_env["LD_LIBRARY_PATH"] = vivado + "/lib/lnx64.o"
+    # launch the rtlsim executable, with the simulator libraries on its loader
+    # path; the script states that path too, for running it again by hand
+    runsim_env = toolchain.simulation_environment()
     runsim_cmd = ["bash", "run_rtlsim.sh"]
     with open(sim_base + "/run_rtlsim.sh", "w") as f:
-        ld_path = runsim_env["LD_LIBRARY_PATH"]
+        ld_path = runsim_env.get("LD_LIBRARY_PATH", "")
         f.write(
             f"LD_LIBRARY_PATH={shlex.quote(ld_path)}"
             " ./rtlsim_xsi > rtlsim_xsi_log.txt"
             " 2> rtlsim_xsi_stderr.log"
         )
-    launch_process_helper(runsim_cmd, cwd=sim_base)
+    launch_process_helper(runsim_cmd, proc_env=runsim_env, cwd=sim_base)
 
     # parse results file and return dict
     results_filename = sim_base + "/results.txt"
