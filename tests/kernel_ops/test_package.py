@@ -62,9 +62,15 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
         package.module(model)
 
 
-def test_the_chains_emitted_top_elaborates_before_vivado(tmp_path: Path) -> None:
+def test_the_chains_emitted_top_elaborates_before_vivado(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     configure_partition(model := kernel_model())
     reaches_vivado(model, "sdp_1", tmp_path / "project")
+    # The check says that it ran, what it checked, and its time.
+    (line,) = capsys.readouterr().out.splitlines()
+    assert line.startswith("sdp_1: slang elaborated finn_partition")
+    assert "its 4 ports agree with the pins (" in line and line.endswith(" s)")
 
 
 def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
