@@ -46,7 +46,10 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     default_build_dataflow_steps,
 )
-from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
+from finn.builder.build_dataflow_phases import (
+    build_dataflow_phase_lookup,
+    recorded_step_times,
+)
 from finn.builder.build_dataflow_steps import (
     _maybe_enable_verify_behavioral,
     build_dataflow_step_lookup,
@@ -150,7 +153,9 @@ def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: 
 def _run_build_steps(model, cfg, build_dataflow_steps, log):
     """Run the resolved build steps in order, logging to `log`.
 
-    Returns 0 on success and -1 on the first failing step.
+    Writes time_per_step.json: the seconds each step took, by name, and for a phase
+    also each step it ran, as ``<phase>/<step>``. Returns 0 on success and -1 on the
+    first failing step.
     """
     step_num = 1
     time_per_step = dict()
@@ -170,12 +175,15 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
                 print("Running step: %s [%d/%d]" % (step_name, step_num, len(build_dataflow_steps)))
             # run the step
             step_start = time.time()
-            model = transform_step(model, cfg)
+            with recorded_step_times() as inner_times:
+                model = transform_step(model, cfg)
             step_end = time.time()
             # restore stdout/stderr
             sys.stdout = stdout_orig
             sys.stderr = stderr_orig
             time_per_step[step_name] = step_end - step_start
+            for inner_name, seconds in inner_times.items():
+                time_per_step[f"{step_name}/{inner_name}"] = seconds
             chkpt_name = "%s.onnx" % (step_name)
             if cfg.save_intermediate_models:
                 intermediate_model_dir = cfg.output_dir + "/intermediate_models"
