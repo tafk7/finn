@@ -56,7 +56,8 @@ def test_every_suite_runs_and_reports(tmp_path: Path) -> None:
         "guarded scope depth",
     ]
     assert [item["fixture"] for item in report["batch_updates"]] == ["independent", "dependent"]
-    assert report["replacement_validation"]["validated"] == SIZES["batch"]
+    # Only the changed choice is admitted again; the retained ones keep their admissions.
+    assert report["replacement_validation"]["validated"] == 1
     assert [item["inactive_callbacks"] for item in report["narrow_queries"]] == [0, 0]
     assert [item["leaf_callbacks_per_query"] for item in report["wide_choices"]] == [1, 1]
     assert report["cache_reclamation"]["alive_after_configurations_released"] == 0
