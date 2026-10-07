@@ -72,7 +72,9 @@ class DecisionInfo(Generic[T]):
 
     ``space_type`` is the Space class whose scope declares it (a candidate's, for a
     choice nested under a Decision over nodes); ``ordered``, whether its domain
-    states an order of its cases (``Domain.ordered``).
+    states an order of its cases (``Domain.ordered``); ``required``, whether it
+    has no safe baseline (``Decision(required=True)``): no completion takes its
+    first case.
     """
 
     reference: DecisionHandle[T]
@@ -83,6 +85,7 @@ class DecisionInfo(Generic[T]):
     cases: tuple[str, ...] = ()
     space_type: type[Space] | None = None
     ordered: bool = False
+    required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -234,6 +237,7 @@ def _decision_info(
         () if choice is None else tuple(name for name, _ in choice.cases),
         linked.scopes[node.scope].space_type,
         choice is None and node.domain is not None and node.domain.ordered,
+        node.required_choice,
     )
 
 

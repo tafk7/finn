@@ -580,7 +580,10 @@ class Decision(ValueDecl[T], Generic[T]):
     whose fact does not hold is refused with that finding, at a commitment and
     when forcing reads its viability. ``ordered=True`` states that listed values
     are in an order (a domain states its own, ``divisors_of``); otherwise they
-    are unordered.
+    are unordered. ``required=True`` states that the choice has no safe baseline:
+    its first case is no default a completion may take. It does not change what
+    the Decision accepts or how it evaluates; inspection reports it
+    (``DecisionInfo.required``), for the explorer and the generator that read it.
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
@@ -603,6 +606,8 @@ class Decision(ValueDecl[T], Generic[T]):
     domain: Domain[T]
     explicit: ValueSemantics[T] | None
     resolved: bool
+    # No safe baseline: no completion takes its first case (``required=True``).
+    required: bool
     # Where this Decision supplies a formal (for the shared-decision rule).
     sites: list[str]
 
@@ -613,6 +618,7 @@ class Decision(ValueDecl[T], Generic[T]):
         /,
         *,
         optional: bool = False,
+        required: bool = False,
         when: Guard = None,
         **shared: object,
     ) -> Any: ...
@@ -628,6 +634,7 @@ class Decision(ValueDecl[T], Generic[T]):
         when: Guard = None,
         name: str | None = None,
         ordered: bool = False,
+        required: bool = False,
     ) -> T: ...
 
     @overload
@@ -640,6 +647,7 @@ class Decision(ValueDecl[T], Generic[T]):
         requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
+        required: bool = False,
     ) -> T: ...
 
     def __new__(
@@ -655,8 +663,11 @@ class Decision(ValueDecl[T], Generic[T]):
         name: object = None,
         optional: object = False,
         ordered: object = None,
+        required: object = False,
         **shared: object,
     ) -> Any:
+        if type(required) is not bool:
+            raise DefinitionError(f"Decision{at(source_origin())}: required= is True or False")
         if entries is not None:
             reserved = {
                 key: value
@@ -678,7 +689,9 @@ class Decision(ValueDecl[T], Generic[T]):
                 )
             from ._nodes import entry_choice
 
-            return entry_choice(entries, shared, optional=optional, when=_guard(when))
+            return entry_choice(
+                entries, shared, optional=optional, required=required, when=_guard(when)
+            )
         if shared or optional is not False:
             raise DefinitionError(
                 "optional= and shared bindings apply to a Decision over candidate entries: "
@@ -718,6 +731,7 @@ class Decision(ValueDecl[T], Generic[T]):
                 raise DefinitionError("requires= takes requirements, as built by requires()")
             instance.domain = requiring(instance.domain, *cast(tuple[Requirement, ...], stated))
         instance.sites = []
+        instance.required = required
         if name is not None:
             instance.name = local_name(cast(str, name), "decision name")
         return instance
