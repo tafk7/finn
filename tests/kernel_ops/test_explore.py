@@ -22,7 +22,14 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.partition import partition_root
-from finn.kernels.explore import ExploreError, Pinned, Placeholder, Seam, TargetThroughput
+from finn.kernels.explore import (
+    ExploreError,
+    Pinned,
+    Placeholder,
+    Seam,
+    SizeFifos,
+    TargetThroughput,
+)
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
@@ -56,8 +63,9 @@ def test_a_spec_names_its_strategy_and_its_parameters() -> None:
     made = strategy({"strategy": "target_throughput", "fps": 1000, "relax": False})
     assert isinstance(made, TargetThroughput) and made.fps == 1000 and not made.relax
     assert isinstance(strategy({"strategy": "placeholder"}), Placeholder)
+    assert isinstance(strategy({"strategy": "size_fifos", "margin": 2}), SizeFifos)
     with pytest.raises(ValueError, match="names no kernel strategy"):
-        strategy({"strategy": "size_fifos"})
+        strategy({"strategy": "max_throughput"})
     with pytest.raises(ValueError, match="unexpected keyword argument 'cycles'"):
         strategy({"strategy": "placeholder", "cycles": 3})
 
@@ -69,8 +77,9 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     assert saved["first"]["compute.packed.pe"] == 2 and saved["second"]["x.transport"] == "direct"
     report = explored.report
     assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 12}
-    # levels: the replay of a frame of two beats of two 2-bit levels.
-    assert report["members"]["levels"] == {"cycles": 12, "buffering": 2 * 2 * 2}
+    # levels: the replay of a frame of two beats of two 2-bit levels, in input_gen's
+    # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
+    assert report["members"]["levels"] == {"cycles": 12, "buffering": 8 * 2 * 2}
     (placeholder,) = report["strategies"]
     assert placeholder["strategy"] == "placeholder" and placeholder["attempts"] > 0
     assert json.loads(json.dumps(report)) == report

@@ -28,7 +28,8 @@ outputs unused.
   ``TLAST`` when what it presents carries a marker; or, given ``signals``
   (data, valid, ready), those ready/valid pins, without a marker. Placed with
   a schedule, it exports its read of the tensor under ``ACCESS``, from which
-  its kernel binds its indices' extents. Left without a channel it is idle,
+  its kernel binds its indices' extents, and its contract states its ``pace``
+  (when it presents each beat, ``Schedule.beat_times``). Left without a channel it is idle,
   with the pins of its ``dtype`` and of the ``factors`` of its ``lanes``.
 """
 
@@ -51,7 +52,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule
+from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint
@@ -181,7 +182,9 @@ class AxiStreamPort(Port):
     its marker closes (``closes``), read through a row-major view when
     ``reshaped``; or, for a traversal no schedule derives, a given ``sequence``.
     Exactly one of the two. Placed with a schedule, it exports its read of the
-    tensor (``ACCESS``), from which its kernel binds its indices' extents.
+    tensor (``ACCESS``), from which its kernel binds its indices' extents, and its
+    contract states its pace (``Pace``: the schedule with its ``reduces`` and
+    ``holds``), so a channel reads when each end presents its beats.
 
     Its element is ``dtype`` when given, placed or idle (its channel refuses
     another), and otherwise its channel's. A producer (an initiator) must give
@@ -343,8 +346,10 @@ class AxiStreamPort(Port):
         markers = (
             ((transport.markers[0].signal, presented.markers[0]),) if transport.markers else ()
         )
+        schedule = self.schedule
+        pace = None if schedule is None else Pace(schedule, self.reduces, self.holds)
         return StreamContract(
-            transport, self.element, presented.form, presented.repetition, markers
+            transport, self.element, presented.form, presented.repetition, markers, pace
         )
 
     exports = {

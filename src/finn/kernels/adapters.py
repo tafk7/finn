@@ -33,7 +33,8 @@ as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
 and each becomes a ``Stage``: the child's module and the contracts of its two
 ports, which the channel checks like any other end. Its cost reads the
 realization alone, never a child's choices: ``beats``, the most beats any of its
-ports carries, and ``held_bits``, the frames its ``input_gen`` stages hold.
+ports carries, and ``held_bits``, the buffers its ``input_gen`` stages allocate
+(``BUF_SIZE`` words each, read from the RTL: ``nest_geometry``).
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
@@ -65,7 +66,7 @@ from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.input_generator import GeometryError, InputGeneratorKernel, nest_geometry
 from finn.kernels.target import Platform
 from finn.kernels.transport import StreamContract
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
@@ -298,14 +299,21 @@ class StreamAdapter(Space):
         )
 
     @view
-    def held_bits(self) -> int:
-        """The bits its ``input_gen`` stages hold: each its frame of input words."""
+    def held_bits(self) -> int | Rejected:
+        """The bits its ``input_gen`` stages hold: each its buffer, ``BUF_SIZE`` input
+        words as the RTL derives it (``nest_geometry``), not one frame."""
         bits = self.tensor.element.bits
-        return sum(
-            stage.module.frame * stage.source.form.lanes * bits
-            for stage in self.realization
-            if isinstance(stage.module, Generate)
-        )
+        held = 0
+        for stage in self.realization:
+            module = stage.module
+            if not isinstance(module, Generate):
+                continue
+            try:
+                words = nest_geometry(module.frame, module.dims, module.coefs).buffer_words
+            except GeometryError as error:
+                return reject("adapter-buffer", str(error))
+            held += words * stage.source.form.lanes * bits
+        return held
 
     # The facts of every stage a chain can name; each chain reads its own.
     @derived

@@ -446,6 +446,7 @@ for Ultra96 (`dataflow_build_config.json`; the environment as configured, so
   "steps": ["phase_kernel_path", "phase_generate_outputs"],
   "kernel_exploration": [
     {"strategy": "target_throughput", "fps": 1000000},
+    {"strategy": "size_fifos"},
     {"strategy": "placeholder"}
   ],
   "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
@@ -456,8 +457,11 @@ for Ultra96 (`dataflow_build_config.json`; the environment as configured, so
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:
 `target_throughput` folds the least parallelism that meets `fps` at the target's
-clock, `pinned` commits a `kernel_choices.json` (`"path"`), and `placeholder`
-takes every choice left by a fixed rank (the default list is just it). A choice
+clock, `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
+each channel's FIFO from both ends' beat patterns at the bottleneck (`direct`
+where none is needed; `"margin"` words added to a FIFO it places, default 0), and
+`placeholder` takes every choice left by a fixed rank (the default list is just
+it). A choice
 left open after the list is refused by name. The chosen choices are written to
 `kernel_choices.json`, and what the exploration found (per-member cycles and
 buffering, the bottleneck, attempts and time per strategy) to

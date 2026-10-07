@@ -40,6 +40,10 @@ The strategies, each an objective and its constraints searched through the seam:
   takes), committed as one batch;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame);
+- ``SizeFifos()``: every open transport sized at the bottleneck period from
+  both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
+  of the least depth that keeps each producer within its idle time, proposed in
+  one batch; it runs after folding;
 - ``Placeholder()``: every enumerable choice left, by a fixed rank
   (``PlaceholderPolicy``), not a design; ``Ranked(policy)`` is any rank-style
   policy as an explorer.
@@ -54,7 +58,7 @@ from itertools import product
 from math import floor
 from os import PathLike
 from types import MappingProxyType
-from typing import Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
 
 from finn.core.space import (
     Available,
@@ -67,7 +71,10 @@ from finn.core.space import (
     inspection,
 )
 from finn.kernels.base import BUFFERING, CYCLES
+from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, describe
+from finn.kernels.fifo import FifoKernel
+from finn.kernels.fifo_sizing import Sized, size
 from finn.kernels.target import Platform
 
 S = TypeVar("S", bound=Space)
@@ -169,6 +176,12 @@ class Seam:
         if not self._decisions:
             self._decisions = {item.key: item for item in inspection.decisions(point)}
         return self._decisions
+
+    def declared(self, point: Space) -> Mapping[str, type[Space] | None]:
+        """Every Decision of the root by key, open or not, applicable or not (one nested
+        under a selector's case that is not selected), with the Space class that
+        declares it: what lies under a choice's cases, found by structure."""
+        return {key: info.space_type for key, info in self._info(point).items()}
 
     def owner(self, key: str) -> tuple[str, str] | None:
         """The owner that persists ``key``, and the key there (its attribute)."""
@@ -646,6 +659,236 @@ class TargetThroughput(TargetCycles):
         return {**super().report(), "fps": self.fps}
 
 
+# -- FIFO sizing ---------------------------------------------------------------------------
+
+
+@dataclass
+class _Transport:
+    """An open transport the strategy sizes: its choice, the channel it belongs to, its
+    direct and FIFO cases, the FIFO's depth and memory keys under the latter, and why
+    the FIFO case is not viable, if it is not."""
+
+    choice: Choice
+    channel: str
+    direct: object
+    fifo: object
+    depth: str
+    ram_style: str
+    fifo_refused: str | None
+
+
+@dataclass
+class _Proposal:
+    """A channel's sizing and, when the seam refused its FIFO, why."""
+
+    sized: Sized
+    refused: str | None = None
+
+    @property
+    def placed(self) -> bool:
+        return bool(self.sized.depth) and self.refused is None
+
+    def row(self) -> dict[str, object]:
+        sized, placed = self.sized, self.placed
+        why = sized.why if self.refused is None else f"{sized.why}; refused: {self.refused}"
+        return {
+            "transport": "fifo" if placed else "direct",
+            "depth": sized.depth if placed else 0,
+            "least": sized.least,
+            "word_bits": sized.word_bits,
+            "bits": sized.bits if placed else 0,
+            "why": why,
+        }
+
+
+class SizeFifos:
+    """The FIFO-sizing strategy (K12, DSE8, DSE14, FS1, FS4): a depth for every open
+    transport, from both ends' beat patterns at the bottleneck period.
+
+    It reads the period from the seam's cost (every member's cycles must be known: it
+    runs after folding), and the open transports from its choices: an open choice on a
+    ``Channel`` one of whose cases nests the Decisions a ``FifoKernel`` declares (its
+    ``depth`` and ``ram_style``) and another nothing. For each it reads the channel's
+    ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the producer
+    within its idle time, FS1) and proposes, all in one batch, ``direct`` or the FIFO
+    case with its depth (the least DEPTH whose storage holds the least words plus
+    ``margin``) and ``ram_style`` (``auto``:
+    FinnLib's own selection by depth and width, until resources are exported; FS4). A
+    channel the model does not read (a boundary, a memory source) is direct, with why.
+    Where the seam refuses a channel's FIFO, that channel falls back to direct, its
+    refusal reported, and the batch is attempted again.
+
+    ``method`` is ``"analytical"`` (K12), the only one; ``frames`` the frames the
+    model runs to reach its periodic state.
+    """
+
+    strategy = "size_fifos"
+
+    def __init__(
+        self,
+        method: str = "analytical",
+        margin: int = 0,
+        ram_style: str = "auto",
+        frames: int = 16,
+    ) -> None:
+        if method != "analytical":
+            raise ExploreError(f"no FIFO-sizing method {method!r}; only 'analytical'")
+        if margin < 0:
+            raise ExploreError(f"a margin of {margin} words is none")
+        if frames < 1:
+            raise ExploreError(f"a model of {frames} frames is none")
+        self.method = method
+        self.margin = margin
+        self.ram_style = ram_style
+        self.frames = frames
+        self.period: int | None = None
+        self.proposals: dict[str, _Proposal] = {}
+
+    def explore(self, seam: Seam, point: S) -> S:
+        cost = seam.cost(point)
+        bottleneck = cost.bottleneck
+        if bottleneck is None:
+            unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
+            raise ExploreError(
+                "sizing FIFOs needs every member's cycles: "
+                + "; ".join(f"{name}: {why}" for name, why in unknown.items())
+            )
+        self.period = bottleneck.cycles
+        transports = self._transports(seam, point)
+        proposals: dict[str, _Proposal] = {}
+        for transport in transports:
+            sized = size(
+                _member(point, transport.channel),
+                bottleneck.cycles,
+                margin=self.margin,
+                ram_style=self.ram_style,
+                frames=self.frames,
+            )
+            # A FIFO case the channel refuses before any attempt is a refusal only where
+            # a FIFO is needed.
+            proposals[transport.channel] = _Proposal(
+                sized, transport.fifo_refused if sized.depth else None
+            )
+        self.proposals = proposals
+        while transports:
+            batch: dict[str, object] = {}
+            for transport in transports:
+                if proposals[transport.channel].placed:
+                    batch[transport.choice.key] = transport.fifo
+                    batch[transport.depth] = proposals[transport.channel].sized.depth
+                    batch[transport.ram_style] = self.ram_style
+                else:
+                    batch[transport.choice.key] = transport.direct
+            outcome = seam.attempt(point, batch)
+            if isinstance(outcome, Accepted):
+                return outcome.point
+            # A refusal of a key of a channel whose FIFO is placed, or of the channel
+            # itself, drops that FIFO: the channel is proposed direct, and why is kept.
+            dropped = False
+            for key, why in outcome.why.items():
+                for transport in transports:
+                    channel = transport.channel
+                    if proposals[channel].placed and (
+                        key == channel or key.startswith(f"{channel}.")
+                    ):
+                        proposals[channel].refused = f"{key}: {why}"
+                        dropped = True
+            if not dropped:
+                raise ExploreError(
+                    "sizing FIFOs: refused: "
+                    + "; ".join(f"{k}: {w}" for k, w in sorted(outcome.why.items()))
+                )
+        return point
+
+    def report(self) -> dict[str, object]:
+        proposals = self.proposals.values()
+        return {
+            "strategy": self.strategy,
+            "method": self.method,
+            "margin": self.margin,
+            "ram_style": self.ram_style,
+            "frames": self.frames,
+            "period": self.period,
+            "fifo_bits": sum(each.sized.bits for each in proposals if each.placed),
+            "channels": self.channels(),
+        }
+
+    def channels(self) -> dict[str, dict[str, object]]:
+        """Each channel it sized: its transport, depth, the least words the model found,
+        the word's and the FIFO's bits, and why."""
+        return {name: each.row() for name, each in self.proposals.items()}
+
+    def _transports(self, seam: Seam, point: Space) -> list[_Transport]:
+        declared = seam.declared(point)
+        found: list[_Transport] = []
+        for choice in seam.choices(point):
+            if choice.cases is None:
+                continue
+            # Every case with Decisions under it, viable or not (a FIFO its channel
+            # refuses is still a FIFO), and every viable case.
+            prefix = f"{choice.key}."
+            under = {
+                key[len(prefix) :].partition(".")[0] for key in declared if key.startswith(prefix)
+            }
+            cases = (*choice.cases, *sorted(case for case in under if case not in choice.cases))
+            nested = {
+                case: {
+                    key: space_type
+                    for key, space_type in declared.items()
+                    if key.startswith(f"{prefix}{case}.")
+                }
+                for case in cases
+            }
+            fifos = [
+                case
+                for case, keys in nested.items()
+                if any(
+                    space_type is not None and issubclass(space_type, FifoKernel)
+                    for space_type in keys.values()
+                )
+            ]
+            directs = [case for case, keys in nested.items() if not keys]
+            channel = choice.key.rpartition(".")[0]
+            if len(fifos) != 1 or len(directs) != 1 or directs[0] not in choice.cases:
+                continue
+            if not isinstance(_member(point, channel), Channel):
+                continue
+            fifo = {
+                key.rpartition(".")[2]: key
+                for key, space_type in nested[fifos[0]].items()
+                if space_type is not None and issubclass(space_type, FifoKernel)
+            }
+            if set(fifo) != {"depth", "ram_style"}:
+                continue
+            refused = None
+            if fifos[0] not in choice.cases:
+                refused = (
+                    choice.refused.get(repr(fifos[0]))
+                    or choice.refused.get(str(fifos[0]))
+                    or "not viable"
+                )
+            found.append(
+                _Transport(
+                    choice,
+                    channel,
+                    directs[0],
+                    fifos[0],
+                    fifo["depth"],
+                    fifo["ram_style"],
+                    refused,
+                )
+            )
+        return found
+
+
+def _member(point: object, path: str) -> Any:
+    """The member at a dotted ``path`` below ``point``."""
+    found = point
+    for name in path.split("."):
+        found = getattr(found, name)
+    return found
+
+
 __all__ = [
     "Accepted",
     "Bottleneck",
@@ -660,6 +903,7 @@ __all__ = [
     "Ranked",
     "Refused",
     "Seam",
+    "SizeFifos",
     "TargetCycles",
     "TargetThroughput",
     "explore",

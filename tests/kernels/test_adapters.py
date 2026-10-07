@@ -215,13 +215,15 @@ def test_a_channel_s_cost_waits_on_no_memory_style():
     assert "x.adapter.input_gen.input_gen.ram_style" in {
         item.key for item in inspection.viable(point)
     }
-    # Nine beats a frame through the input_gen, which holds its frame of 4 x 4-bit words.
+    # Nine beats a frame through the input_gen, which holds its buffer of 4 x 4-bit
+    # words: BUF_SIZE 16 for the transpose nest {3, 3} {1, 3} (MAX_OCCUPANCY 13), not
+    # its frame of nine.
     assert point.x.query(Channel.cycles).value == 9
-    assert point.x.query(Channel.buffering).value == 9 * 4 * 4
+    assert point.x.query(Channel.buffering).value == 16 * 4 * 4
     # A FIFO's depth adds its words, and no cycles.
     deep = commit(point, {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32})
     assert deep.x.query(Channel.cycles).value == 9
-    assert deep.x.query(Channel.buffering).value == 9 * 4 * 4 + 32 * 4 * 4
+    assert deep.x.query(Channel.buffering).value == 16 * 4 * 4 + 32 * 4 * 4
     # A channel of wires takes no cycles of its own.
     direct = adapted(vector_major((ROWS, CHANNELS), 4), 4)
     assert direct.x.query(Channel.cycles).value == 0

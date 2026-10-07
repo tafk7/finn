@@ -42,6 +42,12 @@ unpacked array (``thresholding_axi``'s ``THRESHOLDS``) or a real
 established*.  The module is not declined for it: the ports and their widths
 are what slang resolved under the binding, and nothing the checker compares
 reads a parameter value.
+
+**One read, beside the checker** (decision FS6): ``evaluate`` returns the
+integer and integer-array constants a module derives at elaboration under a
+binding, for an analysis that must agree with the RTL's own derivation (an
+``input_gen``'s buffer size and pointer increments) rather than copy it. It
+fills no declaration: a kernel's pins and parameters stay declared and checked.
 """
 
 from __future__ import annotations
@@ -225,19 +231,20 @@ def _report(
     return tuple(line for line in client.getString().splitlines() if line)
 
 
-def extract(
-    files: Sequence[Path], top: str, parameters: Sequence[tuple[str, str]] = ()
-) -> Extraction:
-    """Elaborate ``top`` and report its ports, widths, parameter names and values.
+@dataclass
+class _Elaborated:
+    """An elaborated top's body, with what it reads kept alive: pyslang's symbols refer
+    to the compilation, the source manager and the trees without owning them."""
 
-    ``parameters`` is the binding the declaration supplies.  Without it a
-    module whose parameters have no defaults cannot be elaborated at all, and
-    the checker declines rather than inventing widths.  A parameter value that
-    is not an integer or a string is reported as ``None`` rather than declining
-    the module (``ExtractedModule``).  Headers among ``files`` are not parsed
-    on their own; their directories are searched for every `include.
-    """
+    body: ast.InstanceBodySymbol
+    compilation: ast.Compilation
+    sources: pyslang.SourceManager
+    trees: tuple[syntax.SyntaxTree, ...]
 
+
+def _elaborate(
+    files: Sequence[Path], top: str, parameters: Sequence[tuple[str, str]]
+) -> _Elaborated | Declined:
     options = ast.CompilationOptions()
     options.topModules = {top}
     # A vendor primitive has no source in any closure we compile.  Treating it
@@ -265,7 +272,45 @@ def extract(
     ]
     if not instances:
         return Declined("no such top-level module", (top,))
-    body = instances[0].body
+    return _Elaborated(instances[0].body, compilation, sources, tuple(trees))
+
+
+def _undeclared(
+    body: ast.InstanceBodySymbol, parameters: Sequence[tuple[str, str]]
+) -> Declined | None:
+    """A binding naming a parameter the module does not declare: slang ignores such an
+    override, so a typo would otherwise pass as agreement."""
+    declared = {
+        member.name
+        for member in body
+        if type(member).__name__ in ("ParameterSymbol", "TypeParameterSymbol")
+        and not member.isLocalParam
+    }
+    unknown = sorted({name for name, _ in parameters} - declared)
+    if unknown:
+        return Declined(
+            "parameter binding names something the module does not declare", tuple(unknown)
+        )
+    return None
+
+
+def extract(
+    files: Sequence[Path], top: str, parameters: Sequence[tuple[str, str]] = ()
+) -> Extraction:
+    """Elaborate ``top`` and report its ports, widths, parameter names and values.
+
+    ``parameters`` is the binding the declaration supplies.  Without it a
+    module whose parameters have no defaults cannot be elaborated at all, and
+    the checker declines rather than inventing widths.  A parameter value that
+    is not an integer or a string is reported as ``None`` rather than declining
+    the module (``ExtractedModule``).  Headers among ``files`` are not parsed
+    on their own; their directories are searched for every `include.
+    """
+
+    elaborated = _elaborate(files, top, parameters)
+    if isinstance(elaborated, Declined):
+        return elaborated
+    body = elaborated.body
 
     ports: list[ObservedPort] = []
     for port in body.portList:
@@ -293,16 +338,63 @@ def extract(
             continue
         (local if member.isLocalParam else declared).append((member.name, value))
 
-    supplied = {name for name, _ in parameters}
-    unknown = sorted(supplied - {name for name, _ in declared})
-    if unknown:
-        # slang ignores an override for a parameter that does not exist, so a
-        # typo would otherwise pass as agreement.
-        return Declined(
-            "parameter binding names something the module does not declare", tuple(unknown)
-        )
+    undeclared = _undeclared(body, parameters)
+    if undeclared is not None:
+        return undeclared
 
     return ExtractedModule(top, tuple(ports), tuple(declared), tuple(local))
+
+
+Evaluated = Union[int, tuple[int, ...]]
+"""An integer constant, or an unpacked array of them."""
+
+
+def _evaluated(value: pyslang.ConstantValue) -> Evaluated | None:
+    inner = value.value
+    if isinstance(inner, list):
+        elements = [_evaluated(element) for element in inner]
+        if not all(isinstance(element, int) for element in elements):
+            return None
+        return tuple(element for element in elements if isinstance(element, int))
+    if not isinstance(inner, pyslang.SVInt) or inner.hasUnknown:
+        return None
+    return int(inner)
+
+
+def evaluate(
+    files: Sequence[Path],
+    top: str,
+    parameters: Sequence[tuple[str, str]],
+    names: Sequence[str],
+) -> Mapping[str, Evaluated] | Declined:
+    """The values slang evaluates for ``top``'s parameters and localparams ``names`` under
+    the binding ``parameters``: each an integer or an unpacked array of integers.
+
+    The one place a value is read from the RTL rather than checked against it: an
+    analysis that must agree with what the RTL derives at elaboration (an
+    ``input_gen``'s buffer, decision FS6) reads it here instead of copying the
+    derivation. It declines when the module does not elaborate, the binding names
+    an undeclared parameter, or a named value is missing or of another kind.
+    """
+
+    elaborated = _elaborate(files, top, parameters)
+    if isinstance(elaborated, Declined):
+        return elaborated
+    body = elaborated.body
+    undeclared = _undeclared(body, parameters)
+    if undeclared is not None:
+        return undeclared
+    found: dict[str, Evaluated] = {}
+    for member in body:
+        if type(member).__name__ == "ParameterSymbol" and member.name in names:
+            value = _evaluated(member.value)
+            if value is None:
+                return Declined("not an integer or an array of integers", (member.name,))
+            found[member.name] = value
+    missing = [name for name in names if name not in found]
+    if missing:
+        return Declined("no such parameter or localparam", tuple(missing))
+    return MappingProxyType(found)
 
 
 def check_abi(
@@ -335,6 +427,8 @@ __all__ = [
     "Declined",
     "Extraction",
     "ExtractedModule",
+    "Evaluated",
     "check_abi",
+    "evaluate",
     "extract",
 ]

@@ -14,12 +14,28 @@ On a channel, ``input_gen`` is a stage of the channel's adapter
 (``finn.kernels.adapters``), which derives these facts from the channel's plan.
 Its buffer's ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
 UltraRAM. The buffer starts empty, so no initial contents are asked of it.
+
+What the buffer does is read from the RTL, not copied (decision FS6):
+``nest_geometry`` elaborates FinnLib's ``input_gen.sv`` with slang at a nest's
+parameters and reads the constants it derives (``BUF_SIZE``, ``MAX_OCCUPANCY``,
+``R_FLAG``, ``TERMINAL_RP_INC``, ``TERMINAL_FP_INC``). Only the runtime rule
+stays here: ``nest_buffer`` steps the read and free pointers by those increments
+over a frame, as the RTL's nest counters select them, and states which word each
+output beat reads and how many words are freed after it. The buffer accepts a
+word while fewer than ``BUF_SIZE - 1`` accepted words are unfreed. FinnLib is the
+``finnlib`` resource as FINN resolves it (``finn.resources``), the copy every
+emitted module takes this source from.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from functools import cache
+from math import prod
+from pathlib import Path
 
+from finn import resources
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -32,6 +48,7 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
@@ -39,6 +56,7 @@ from finn.kernels.transport import MarkerKind, StreamMarker
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 
 _INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",))
 
 
 def _vector(values: IntegerVector) -> str:
@@ -115,7 +133,125 @@ class InputGeneratorKernel(Kernel):
         }
 
     def sources(self) -> tuple[CopiedSource, ...]:
-        return (CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",)),)
+        return (SOURCE,)
 
 
-__all__ = ["InputGeneratorKernel"]
+# -- the buffer, as the RTL derives it -------------------------------------------------------
+
+
+class GeometryError(ValueError):
+    """A nest whose buffer could not be read from the RTL: slang declined, named."""
+
+
+@dataclass(frozen=True)
+class NestGeometry:
+    """``input_gen``'s elaboration-time constants for one nest, as its RTL evaluates them.
+
+    ``buffer_words`` is ``BUF_SIZE``; per level ``0 … D`` (``D``: the default
+    innermost advance), ``frees`` is ``R_FLAG``, ``read_steps`` is
+    ``TERMINAL_RP_INC`` and ``free_steps`` the words ``TERMINAL_FP_INC`` frees (the
+    RTL stores it negated).
+    """
+
+    buffer_words: int
+    max_occupancy: int
+    frees: tuple[bool, ...]
+    read_steps: tuple[int, ...]
+    free_steps: tuple[int, ...]
+
+    @property
+    def capacity(self) -> int:
+        """The accepted words it holds unfreed at most: ``BUF_SIZE - 1``."""
+        return self.buffer_words - 1
+
+
+_CONSTANTS = ("BUF_SIZE", "MAX_OCCUPANCY", "R_FLAG", "TERMINAL_RP_INC", "TERMINAL_FP_INC")
+
+
+@cache
+def _evaluated(
+    source: Path, frame_words: int, dims: tuple[int, ...], strides: tuple[int, ...]
+) -> NestGeometry:
+    # DATA_WIDTH and RAM_STYLE enter none of the nest computations: one word bit.
+    binding = (
+        ("COEFS", _vector(strides)),
+        ("D", str(len(dims))),
+        ("DATA_WIDTH", "1"),
+        ("DIMS", _vector(dims)),
+        ("FM_SIZE", str(frame_words)),
+    )
+    found = evaluate((source,), "input_gen", binding, _CONSTANTS)
+    if isinstance(found, Declined):
+        raise GeometryError(f"input_gen {dict(binding)}: {found}")
+    buffer, occupancy, frees, reads, negated = (found[name] for name in _CONSTANTS)
+    assert isinstance(buffer, int) and isinstance(occupancy, int)
+    assert isinstance(frees, tuple) and isinstance(reads, tuple) and isinstance(negated, tuple)
+    return NestGeometry(
+        buffer, occupancy, tuple(map(bool, frees)), reads, tuple(-step for step in negated)
+    )
+
+
+def nest_geometry(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestGeometry:
+    """The constants FinnLib's ``input_gen`` derives for ``FM_SIZE``, ``DIMS`` and
+    ``COEFS``, elaborated with slang (once per nest and source); ``GeometryError`` when
+    slang declines."""
+    source = Path(resources.path(SOURCE.root)) / SOURCE.path
+    return _evaluated(source, frame_words, tuple(dims), tuple(strides))
+
+
+@dataclass(frozen=True)
+class NestBuffer:
+    """What ``input_gen``'s buffer does with one frame.
+
+    ``capacity`` is the words it accepts beyond those it has freed (``BUF_SIZE -
+    1``); per output beat of a frame, in order, ``reads`` is the input word of the
+    frame it presents and ``freed`` the words of the frame freed once it is
+    presented. An input word is accepted while fewer than ``capacity`` accepted
+    words are unfreed; a beat is presented once the word it reads was accepted.
+    """
+
+    capacity: int
+    reads: tuple[int, ...]
+    freed: tuple[int, ...]
+
+
+def nest_buffer(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestBuffer:
+    """``input_gen``'s buffer over one frame: its pointers stepped as its nest counters
+    select the increments ``nest_geometry`` read from the RTL.
+
+    At each output beat, the outermost level the beat completes (with every level
+    inside it) selects the read pointer's increment and, where that level frees
+    (``R_FLAG``), the free pointer's; a beat completing no loop advances by the
+    innermost default (level ``D``).
+    """
+    geometry = nest_geometry(frame_words, dims, strides)
+    depth = len(dims)
+    reads: list[int] = []
+    freed: list[int] = []
+    read = free = 0
+    counters = [0] * depth
+    for _ in range(prod(dims)):
+        reads.append(read)
+        level = depth
+        while level > 0 and counters[level - 1] == dims[level - 1] - 1:
+            level -= 1
+        read += geometry.read_steps[level]
+        if geometry.frees[level]:
+            free += geometry.free_steps[level]
+        freed.append(free)
+        for inner in range(depth - 1, level - 1, -1):
+            counters[inner] = 0
+        if level > 0:
+            counters[level - 1] += 1
+    return NestBuffer(geometry.capacity, tuple(reads), tuple(freed))
+
+
+__all__ = [
+    "SOURCE",
+    "GeometryError",
+    "InputGeneratorKernel",
+    "NestBuffer",
+    "NestGeometry",
+    "nest_buffer",
+    "nest_geometry",
+]

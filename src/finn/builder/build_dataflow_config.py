@@ -474,10 +474,11 @@ class DataflowBuildConfig:
     #: with its own parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
     #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
     #: ``{"strategy": "target_throughput", "fps": ..., "relax": true}`` (the least
-    #: parallelism meeting fps at the target's clock), ``{"strategy": "placeholder"}``
-    #: (every choice left, by a fixed rank). A choice left open after the list is
-    #: refused by name. The kernel path reads no other field for it (not target_fps,
-    #: folding_config_file or auto_fifo_depths).
+    #: parallelism meeting fps at the target's clock), ``{"strategy": "size_fifos",
+    #: "margin": 0}`` (each channel's FIFO from both ends' beat patterns, after
+    #: folding), ``{"strategy": "placeholder"}`` (every choice left, by a fixed rank).
+    #: A choice left open after the list is refused by name. The kernel path reads no
+    #: other field for it (not target_fps, folding_config_file or auto_fifo_depths).
     kernel_exploration: List[Dict[str, Any]] = field(
         default_factory=lambda: [{"strategy": "placeholder"}]
     )
