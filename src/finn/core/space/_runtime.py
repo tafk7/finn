@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Callable, Collection, Generator, Mapping
 from dataclasses import dataclass, field, replace
 from threading import RLock
 from types import MappingProxyType
@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 
 
+_NONE: frozenset[int] = frozenset()
+
+
 @dataclass(frozen=True, slots=True)
 class Evaluation:
     result: QueryResult[object]
@@ -50,6 +53,41 @@ class Evaluation:
     assessment: Assessment | None = None
     # Method reads that went straight to a forwarding alias's source: (alias, source).
     via: tuple[tuple[int, int], ...] = ()
+    # Every Decision read, directly or through another evaluation (``read_decisions``).
+    decisions: frozenset[int] = _NONE
+
+
+def read_decisions(
+    snapshot: Snapshot, dependencies: Collection[int], via: Collection[tuple[int, int]]
+) -> frozenset[int]:
+    """The Decisions an evaluation of ``snapshot`` read: those among its dependencies,
+    and every one its dependencies read, and a forwarding alias it read through its
+    source, as far as the cache holds them. A successful evaluation's dependencies all
+    succeeded first, so they are cached."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    found = _NONE
+    for read in (*dependencies, *(alias for alias, _ in via)):
+        entry = cache.get(read)
+        if entry is not None and entry.decisions and not entry.decisions <= found:
+            found = entry.decisions if not found else found | entry.decisions
+        if read not in found and nodes[read].kind == "decision":
+            found = found | {read}
+    return found
+
+
+def unaffected(
+    cache: Mapping[int, Evaluation], decisions: Collection[int]
+) -> dict[int, Evaluation]:
+    """The evaluations of ``cache`` that are none of ``decisions`` and read none of them,
+    directly or through another. Where only those Decisions' answers differ, these
+    answer the same: an evaluation is a function of what it read. What a kept
+    evaluation read is kept with it, so its evidence stays complete."""
+    seeds = decisions if isinstance(decisions, (set, frozenset)) else frozenset(decisions)
+    return {
+        index: entry
+        for index, entry in cache.items()
+        if index not in seeds and seeds.isdisjoint(entry.decisions)
+    }
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -59,7 +97,9 @@ class Snapshot:
     An open Decision with one viable case reads as that case (``forcing``), false
     only on the copies forcing evaluates on. ``found`` holds the snapshot's forced
     Decisions once found; ``verdicts`` are the ones its base found, which forcing
-    reuses where the change did not reach (``finn.core.space._forcing``).
+    reuses where the change did not reach (``finn.core.space._forcing``). A
+    successor's cache starts from what its base and its trial evaluated that the
+    change does not reach (``_TrialSnapshot``).
     """
 
     model: Model[Space]
@@ -91,6 +131,21 @@ class _TrialSnapshot(Snapshot):
     does not change. A Decision the base does not force reads as the configuration
     the trial would publish forces it (``successor``): found once, and that
     configuration is the one published.
+
+    What was evaluated is kept where the change cannot reach it:
+
+    - The trial starts from its base's evaluations that read no Decision. Every
+      candidate is admitted on its first read in the trial (``admit`` refuses one
+      already resolved), so nothing that read one, and no Decision's own answer, is
+      inherited; an evaluation that read none answers the same in any configuration.
+    - The successor starts from its base's evaluations that read no Decision the
+      change touched (added, removed or replaced: not the identical value) and no
+      Decision open in the base (a forced value may differ), and on publication
+      gains the trial's that read no Decision open in the successor: the trial's
+      candidates are the successor's assignments, each admitted before it was read.
+      A candidate's own answer is taken as the successor gives it, without the
+      reads of its admission; what read it counts those reads among its own, which
+      only keeps less.
     """
 
     __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor")
@@ -104,6 +159,7 @@ class _TrialSnapshot(Snapshot):
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
         pending: dict[int, object] = {}
         super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
+        self.cache.update(unaffected(base.cache, base.linked.decisions))
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
@@ -123,13 +179,22 @@ class _TrialSnapshot(Snapshot):
         if self._successor is None:
             from ._forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
 
+            base, candidates = self._base, self._candidates
             successor = Snapshot(
                 self.model,
                 self.parameters,
-                self._candidates,
+                candidates,
                 forcing=self.forcing,
-                verdicts=inherited(self._base),
+                verdicts=inherited(base),
             )
+            reached = [
+                index
+                for index in self.linked.decisions
+                if index not in base.assignments
+                or index not in candidates
+                or base.assignments[index] is not candidates[index]
+            ]
+            successor.cache.update(unaffected(base.cache, reached))
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -139,7 +204,15 @@ class _TrialSnapshot(Snapshot):
             raise RuntimeError("a admission trial can only be published once")
         object.__setattr__(self, "_published", True)
         # Every candidate was admitted: the successor's assignments are the pending ones.
-        return self.successor()
+        successor = self.successor()
+        candidates = self._candidates
+        open_ = frozenset(index for index in self.linked.decisions if index not in candidates)
+        for index, entry in unaffected(self.cache, open_).items():
+            if index in candidates:
+                # As the successor's decision frame answers: without its admission's reads.
+                entry = Evaluation(entry.result)
+            successor.cache.setdefault(index, entry)
+        return successor
 
 
 def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
@@ -514,7 +587,7 @@ def supplied_provenance(snapshot: Snapshot, evaluation: Evaluation, index: int) 
             },
             annotated if assessment.result is result else assessment.result,
         )
-    return Evaluation(annotated, evaluation.dependencies, assessment, evaluation.via)
+    return replace(evaluation, result=annotated, assessment=assessment)
 
 
 def _self_point(snapshot: Snapshot, scope: int) -> Space:
@@ -737,4 +810,6 @@ __all__ = [
     "enumeration",
     "evaluate",
     "membership",
+    "read_decisions",
+    "unaffected",
 ]

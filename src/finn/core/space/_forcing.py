@@ -22,10 +22,14 @@ for both kinds.
 A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
 visible to the next (an adapter after the core it feeds is found in the same
-round), evaluated on copies that do not force themselves. Each copy (one per
+round), evaluated on copies that do not force themselves. The first copy starts
+from the snapshot's evaluations that read no open Decision. Each copy (one per
 forced value, one per case of a Decision over nodes) extends the one before it by
 one Decision and starts from that one's evaluations that did not read it, so a
-case's trial re-derives only what the case reaches. A trial reads its
+case's trial re-derives only what the case reaches. The snapshot then keeps what
+the last copy evaluated that read no refused Decision: there, every other open
+Decision reads as it does on the snapshot. An evaluation records every Decision it
+read (``Evaluation.decisions``), so each of these is one pass. A trial reads its
 base's forced values for the Decisions it does not change; where the base
 forces nothing, the forced values of the configuration it would publish, found
 once and published with it, so a batch may commit a choice nested under a
@@ -164,19 +168,14 @@ def _describe(result: Rejected) -> str:
 def _reads(snapshot: Snapshot, roots: Iterable[int], own: int) -> dict[int, object]:
     """Every Decision the evaluation of ``roots`` read in ``snapshot`` (but ``own``), with
     the value it had there (``OPEN`` if none)."""
-    linked = snapshot.linked
-    pending, seen = list(roots), set()
+    nodes, cache, assignments = snapshot.linked.nodes, snapshot.cache, snapshot.assignments
     found: dict[int, object] = {}
-    while pending:
-        index = pending.pop()
-        if index in seen:
-            continue
-        seen.add(index)
-        if linked.nodes[index].kind == "decision" and index != own:
-            found[index] = snapshot.assignments.get(index, OPEN)
-        entry = snapshot.cache.get(index)
-        if entry is not None:
-            pending.extend(entry.dependencies)
+    for root in roots:
+        entry = cache.get(root)
+        read = (root,) if nodes[root].kind == "decision" else ()
+        for index in (*read, *(entry.decisions if entry is not None else ())):
+            if index != own:
+                found[index] = assignments.get(index, OPEN)
     return found
 
 
@@ -185,17 +184,7 @@ def _extended(base: Snapshot, assignments: Mapping[int, object], added: int) -> 
     Decision ``added``. It starts from every evaluation of ``base`` that did not read
     ``added``, directly or through another: those answer the same in the copy."""
     copy = Snapshot(base.model, base.parameters, assignments, forcing=False)
-    readers: dict[int, list[int]] = {}
-    for index, entry in base.cache.items():
-        for read in (*entry.dependencies, *(node for pair in entry.via for node in pair)):
-            readers.setdefault(read, []).append(index)
-    stale, pending = {added}, [added]
-    while pending:
-        for reader in readers.get(pending.pop(), ()):
-            if reader not in stale:
-                stale.add(reader)
-                pending.append(reader)
-    copy.cache.update((index, entry) for index, entry in base.cache.items() if index not in stale)
+    copy.cache.update(_runtime.unaffected(base.cache, (added,)))
     return copy
 
 
@@ -296,11 +285,14 @@ def _find(snapshot: Snapshot) -> Found:
     }
     values: dict[int, object] = {}
 
-    current = Snapshot(snapshot.model, snapshot.parameters, snapshot.assignments, forcing=False)
     open_ = sorted(
         (index for index in linked.decisions if index not in snapshot.assignments),
         key=linked.ranks.__getitem__,
     )
+    # The copy starts from the snapshot's evaluations that read no open Decision: an
+    # open Decision reads as unassigned on the copy, and as forced on the snapshot.
+    current = Snapshot(snapshot.model, snapshot.parameters, snapshot.assignments, forcing=False)
+    current.cache.update(_runtime.unaffected(snapshot.cache, open_))
     refused: dict[int, Rejected] = {}
     progressed = True
     while progressed:
@@ -330,6 +322,11 @@ def _find(snapshot: Snapshot) -> Found:
                         ),
                     )
                 )
+    # The last copy assigns every forced value as the snapshot reads it, and an open
+    # Decision that is not forced reads as unassigned on both, unless it is refused:
+    # what the copy evaluated that read no refused Decision answers the same here.
+    for index, entry in _runtime.unaffected(current.cache, refused).items():
+        snapshot.cache.setdefault(index, entry)
     return Found(
         MappingProxyType(values), MappingProxyType(dict(refused)), MappingProxyType(verdicts)
     )

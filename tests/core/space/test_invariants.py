@@ -45,7 +45,8 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
     second = first.with_choices(style="fast")
     assert second.query(Example.cycles) == Available(4)
     assert second.inspect(Example.physical) == before
-    assert first.cycles == 4 and calls == [4, 4]
+    # The successor keeps what its base evaluated that read no Decision the change touched.
+    assert first.cycles == 4 and calls == [4]
     assert isinstance(first.query(Example.style), Unresolved)
     # Replacement is allowed to change an already-settled computation.
     assert second.with_choices(lanes=1).cycles == 8

@@ -217,7 +217,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     assert len(admitted) == len(members)
     assert all(outcome.status == "changed" for outcome in report.outcomes)
     assert report.instance.query(limit) == Available(100)
-    assert limits == [100, 100]  # publication starts a separate cache
+    assert limits == [100]  # the successor keeps the trial's evaluation: it read no Decision
 
     limits.clear()
     admitted.clear()

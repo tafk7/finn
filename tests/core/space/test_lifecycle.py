@@ -62,7 +62,7 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     assert design_space(Example()).try_with_choices().accepted
 
 
-def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
+def test_successor_retains_only_the_outputs_its_change_does_not_reach() -> None:
     produced: list[ReferenceType[Payload]] = []
 
     class Example(Space):
@@ -77,14 +77,18 @@ def test_successor_does_not_retain_its_predecessors_output_cache() -> None:
 
     earlier = design_space(Example()).with_choices(factor=1)
     earlier.query(Example.output)
-    later = earlier.with_choices(extra=3)
-    assert produced[0]() is not None
+    replaced = earlier.with_choices(factor=2)
+    kept = earlier.with_choices(extra=3)
     del earlier
     gc.collect()
-    assert produced[0]() is None
-    assert later.query(Example.output) == Available(Payload(1))
+    assert produced[0]() is not None  # kept's: its change does not reach the output
+    assert kept.query(Example.output) == Available(Payload(1))
+    assert len(produced) == 1
+    del kept
+    gc.collect()
+    assert produced[0]() is None  # replaced never held it
+    assert replaced.query(Example.output) == Available(Payload(2))
     assert len(produced) == 2
-    assert produced[1]() is not None
 
 
 def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
