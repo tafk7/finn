@@ -114,6 +114,7 @@ SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-dotp", "kernels.sweeps.pure_dot_product_numeric", ()),
     ("sweep-dotp-stress", "kernels.sweeps.pure_dot_product_numeric", ("--stress",)),
     ("sweep-adapters", "kernels.sweeps.adapter_numeric", ()),
+    ("sweep-thresholds", "kernels.sweeps.threshold_numeric", ()),
 )
 SMOKE_SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-packed", "kernels.sweeps.matmul_numeric", ("--case", "packed")),

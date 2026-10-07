@@ -259,7 +259,10 @@ def drive_observed(
 
 
 class _AxiLiteWriter:
-    """Carry out AXI-Lite writes one at a time: address and data, then the response."""
+    """Carry out AXI-Lite writes one at a time: address and data, then the response.
+
+    AWPROT and ARPROT are driven when the bus has them (a FinnLib wrapper ignores
+    them and does not present them)."""
 
     def __init__(self, top: Any, bus: str, writes: list[tuple[int, int]]) -> None:
         self.pins = {
@@ -281,9 +284,14 @@ class _AxiLiteWriter:
                 "RREADY",
             )
         }
-        missing = [name for name, port in self.pins.items() if port is None]
+        missing = [
+            name
+            for name, port in self.pins.items()
+            if port is None and name not in ("AWPROT", "ARPROT")
+        ]
         if missing:
             raise ValueError(f"{bus}: missing AXI-Lite pins {missing}")
+        self.pins = {name: port for name, port in self.pins.items() if port is not None}
         self.writes = list(writes)
         self.address = self.data = self.response = False
         self.started = False
@@ -292,7 +300,8 @@ class _AxiLiteWriter:
         pins = self.pins
         if not self.started:
             self.started = True
-            return {pins[name]: "0" for name in ("ARVALID", "ARPROT", "ARADDR", "RREADY")}
+            idle = ("ARVALID", "ARPROT", "ARADDR", "RREADY")
+            return {pins[name]: "0" for name in idle if name in pins}
         updates: dict[Any, str] = {}
         if self.address and pins["AWREADY"].read().as_bool():
             self.address = False
@@ -313,7 +322,7 @@ class _AxiLiteWriter:
             {
                 pins["AWVALID"]: "1",
                 pins["AWADDR"]: f"{address:x}",
-                pins["AWPROT"]: "0",
+                **({pins["AWPROT"]: "0"} if "AWPROT" in pins else {}),
                 pins["WVALID"]: "1",
                 pins["WDATA"]: f"{data:x}",
                 pins["WSTRB"]: "f",
