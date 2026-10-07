@@ -194,6 +194,7 @@ def test_a_build_prepares_one_toolchain_and_runs_every_tool_step_by_it(monkeypat
     # The bitfile step's reports, copied from where the shell build left them.
     monkeypatch.setattr(build_dataflow_steps, "copy", lambda *args: None)
     monkeypatch.setattr(build_dataflow_steps, "post_synth_res", lambda model: {})
+    monkeypatch.setattr(build_dataflow_steps, "delivered_clock", lambda *args: {})
     toolchain = object()
     prepared = []
 
