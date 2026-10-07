@@ -20,10 +20,12 @@ may only add resources; the project may also redefine them.
 ``FINN_RESOURCES_<NAME>=/dir`` replaces a resource with a local directory,
 unverified.
 
-Fetched resources live in FINN_RESOURCES_DIR (default ``$FINN_HOME/resources``,
-with FINN_HOME defaulting to ``~/.finn``); the read-only system cache
-FINN_RESOURCES_SYSTEM_CACHE (default /opt/finn/resources, if it exists) is
-searched too. FINN_RESOURCES_OFFLINE=1 turns a fetch into an error.
+FINN's per-user directory is ``home()`` (FINN_HOME, default ``~/.finn``), its
+build directory ``scratch()`` (FINN_BUILD_DIR, default ``$FINN_HOME/build``).
+Fetched resources live in FINN_RESOURCES_DIR (default ``$FINN_HOME/resources``);
+the read-only system cache FINN_RESOURCES_SYSTEM_CACHE (default
+/opt/finn/resources, if it exists) is searched too. FINN_RESOURCES_OFFLINE=1
+turns a fetch into an error.
 
 This package uses only the standard library, so an image build can run it
 before FINN is installed: ``PYTHONPATH=src python -m finn.resources``.
@@ -34,7 +36,7 @@ from pathlib import Path
 
 from . import _declare, _store
 from ._declare import PREFIX, DeclarationError, Resource, ResourceError
-from ._store import home, tree_digest
+from ._store import home, scratch, tree_digest
 
 __all__ = [
     "DeclarationError",
@@ -46,6 +48,7 @@ __all__ = [
     "home",
     "path",
     "paths",
+    "scratch",
     "status",
     "tree_digest",
 ]

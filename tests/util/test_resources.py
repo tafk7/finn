@@ -718,3 +718,17 @@ def test_finn_sources_are_resources_a_directory_can_replace(project, tmp_path, m
     monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(tmp_path / "my-rtllib"))
     assert resource_path("rtllib", "mvu/mvu.sv") == str(tmp_path / "my-rtllib/mvu/mvu.sv")
     assert resource_path("custom_hls") == resources.path("custom-hls")
+
+
+def test_the_build_directory_is_a_machine_setting_beside_home(tmp_path, monkeypatch):
+    """FINN_BUILD_DIR, absolute, else $FINN_HOME/build; named, never created."""
+    environ = {"FINN_HOME": str(tmp_path / "home")}
+    assert resources.scratch(environ) == tmp_path / "home" / "build"
+    environ["FINN_BUILD_DIR"] = str(tmp_path / "scratch")
+    assert resources.scratch(environ) == tmp_path / "scratch"
+    monkeypatch.chdir(tmp_path)
+    assert resources.scratch({"FINN_BUILD_DIR": "relative"}) == tmp_path / "relative"
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "from-environment"))
+    assert resources.scratch() == tmp_path / "from-environment"
+    names = {"build", "scratch", "relative", "from-environment"}
+    assert not any(path.name in names for path in tmp_path.rglob("*"))

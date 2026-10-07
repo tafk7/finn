@@ -38,7 +38,7 @@ import time
 from qonnx.util.basic import roundup_to_integer_multiple
 from typing import Optional, Tuple
 
-from finn.util._legacy_build_env import build_directory
+from finn import resources
 from finn.util.resources import resource_path
 from finn.util.toolchain import Selection, machine_toolchain, run_process
 
@@ -175,7 +175,7 @@ def make_build_dir(prefix=""):
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files
     will survive on the host after the FINN Docker container exits."""
-    build_dir = build_directory()
+    build_dir = resources.scratch()
     os.makedirs(build_dir, exist_ok=True)
     new_dir = tempfile.mkdtemp(prefix=prefix, dir=build_dir)
     os.chmod(new_dir, 0o755)

@@ -8,19 +8,13 @@ from pathlib import Path
 from finn import resources
 
 
-def build_directory(path=None, environ=None):
-    env = os.environ if environ is None else environ
-    value = path if path is not None else env.get("FINN_BUILD_DIR")
-    return str(Path(value or resources.home(env) / "build").expanduser().resolve())
-
-
 def build_environment(selection, environ=None, *, build_dir=None):
     """Prepare the child tree of an explicit build entry point: the parent's
     environment, FINN_BUILD_DIR resolved, with the toolchain
     ``selection`` (a ``finn.util.toolchain.Selection``, the build configuration's)
     prepared over it, and the loader paths of its simulator libraries."""
     env = dict(os.environ if environ is None else environ)
-    env["FINN_BUILD_DIR"] = build_directory(build_dir, env)
+    env["FINN_BUILD_DIR"] = str(Path(build_dir).resolve() if build_dir else resources.scratch(env))
     Path(env["FINN_BUILD_DIR"]).mkdir(parents=True, exist_ok=True)
     # Loader paths must exist BEFORE Python starts. Retain the XSI limitation
     # here; ordinary imports and resource operations never call this function.

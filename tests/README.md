@@ -6,7 +6,8 @@ Help keep FINN's testing suite fast, deterministic, and parallelisable when writ
 
 Never write scratch files into the repo root or CWD. Collisions are guaranteed when tests run in parallel. Instead:
 
-- Use `make_build_dir()` to allocate a unique directory under `FINN_BUILD_DIR`.
+- Use `make_build_dir()` to allocate a unique directory in the build directory,
+  `finn.resources.scratch()` (`FINN_BUILD_DIR`, by default `$FINN_HOME/build`).
 - Use `robust_rmtree()` to tear down the test.
 - If the test's outputs are useful for diagnosis, you may keep the outputs if the test failed.
 
