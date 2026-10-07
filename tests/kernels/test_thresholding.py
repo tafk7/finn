@@ -8,7 +8,6 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Available, DefinitionError, Rejected, Unresolved, design_space
