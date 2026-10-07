@@ -154,7 +154,9 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
         saved = np.load(path)
         assert list(saved) == [name] == ["MatMul_3_out0"]
         reference = execute_onnx(source, {source.graph.input[0].name: images[index][None]}, True)
-        assert np.array_equal(saved[name], reference[name]) and saved[name].shape == (1, 10)
+        expected = reference[name]
+        assert expected is not None and np.array_equal(saved[name], expected)
+        assert saved[name].shape == (1, 10)
 
 
 @pytest.mark.slow

@@ -68,6 +68,7 @@ from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.util.basic import get_by_name
 from qonnx.util.cleanup import cleanup_model
 from shutil import copy
+from typing import Any
 
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
@@ -1480,7 +1481,12 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig):
 PL_CLOCKS = ("clk_pl_0", "clk_fpga_0")
 
 
-def delivered_clock(timing_report, period_ns, cycles=None, objective_fps=None):
+def delivered_clock(
+    timing_report: str,
+    period_ns: float,
+    cycles: int | None = None,
+    objective_fps: float | None = None,
+) -> dict[str, Any]:
     """The clock the routed design delivers (a PL clock of the timing report's clock
     summary) beside the period asked, and, given the partition's bottleneck
     ``cycles`` a frame, the frames a second at each; ``objective_fps`` is the
@@ -1495,7 +1501,7 @@ def delivered_clock(timing_report, period_ns, cycles=None, objective_fps=None):
             f"its clock summary lists {sorted(clocks)}",
         }
     delivered, mhz = clocks[name]["period_ns"], clocks[name]["mhz"]
-    report = {
+    report: dict[str, Any] = {
         "clock": name,
         "target_period_ns": period_ns,
         "delivered_period_ns": delivered,

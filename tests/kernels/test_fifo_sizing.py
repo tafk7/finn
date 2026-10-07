@@ -21,6 +21,7 @@ import finn.kernels.explore as explore_module
 from finn import resources
 from finn.core.space import design_space
 from finn.kernels import input_generator
+from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel
 from finn.kernels.explore import (
     ExploreError,
@@ -70,7 +71,6 @@ def test_input_gen_s_constants_are_evaluated_once_per_nest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[object] = []
-    evaluate = input_generator.evaluate
 
     def counted(*args: Any) -> Any:
         calls.append(args)
