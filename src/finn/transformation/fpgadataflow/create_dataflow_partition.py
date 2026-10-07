@@ -26,6 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -38,6 +39,9 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     is_kernel_partition,
 )
 from finn.util.basic import make_build_dir
+
+#: The domain of the StreamingDataflowPartition nodes the parent graph holds.
+PARTITION_DOMAIN = "finn.custom_op.fpgadataflow"
 
 
 class CreateDataflowPartition(Transformation):
@@ -52,7 +56,8 @@ class CreateDataflowPartition(Transformation):
     KernelOp has no ``slr`` or ``mem_port``, and its partition's
     StreamingDataflowPartition takes ``slr`` -1 (none) and no ``mem_port``, for
     whoever places partitions to set. The KernelOps must be contiguous: a graph
-    op between two of them refuses (a partition may not depend on itself)."""
+    op between two of them refuses (a partition may not depend on itself). The
+    parent graph imports the domain of the partition nodes it holds."""
 
     def __init__(self, partition_model_dir=None):
         super().__init__()
@@ -98,6 +103,9 @@ class CreateDataflowPartition(Transformation):
         )
         # change node types to StreamingDataflowPartition
         p_nodes = parent_model.get_nodes_by_op_type("GenericPartition")
+        imported = {opset.domain for opset in parent_model.model.opset_import}
+        if p_nodes and PARTITION_DOMAIN not in imported:
+            parent_model.model.opset_import.append(helper.make_opsetid(PARTITION_DOMAIN, 1))
         for partition_ind, p_node in enumerate(p_nodes):
             # go into partition to extract some info
             p_node_inst = getCustomOp(p_node)
@@ -106,7 +114,7 @@ class CreateDataflowPartition(Transformation):
             if is_kernel_partition(p_model):
                 # KernelOps carry no placement: the partition's is unset
                 p_node.op_type = "StreamingDataflowPartition"
-                p_node.domain = "finn.custom_op.fpgadataflow"
+                p_node.domain = PARTITION_DOMAIN
                 new_p_node_inst = getCustomOp(p_node)
                 new_p_node_inst.set_nodeattr("partition_id", partition_ind)
                 new_p_node_inst.set_nodeattr("slr", -1)
@@ -132,7 +140,7 @@ class CreateDataflowPartition(Transformation):
             assert nmemports <= 1, """Too many memory ports per partition"""
             # done, change node type and add info in parent graph
             p_node.op_type = "StreamingDataflowPartition"
-            p_node.domain = "finn.custom_op.fpgadataflow"
+            p_node.domain = PARTITION_DOMAIN
             new_p_node_inst = getCustomOp(p_node)
             new_p_node_inst.set_nodeattr("partition_id", partition_ind)
             new_p_node_inst.set_nodeattr("slr", slr)
