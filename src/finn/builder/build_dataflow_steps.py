@@ -674,17 +674,22 @@ def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig):
     each a spec, {"strategy": name, **parameters}), and save them on their nodes
     (explore_kernel_choices). Nothing else of the configuration is read: a strategy
     carries its own objective (target_fps, folding_config_file and auto_fifo_depths
-    are the standard flow's). Writes report/kernel_choices.json (the strategies, the
-    dropped choices with why, per member cycles and buffering, the bottleneck,
-    attempts and time per strategy) and kernel_choices.json (the nodes' choices,
-    sparse, ApplyConfig's form, which a "pinned" strategy reads back)."""
+    are the standard flow's). Writes report/kernel_exploration.json (the strategies,
+    each with the choices it committed, attempts and time; every committed choice with
+    the strategy that made it; whether FIFOs were sized; the dropped choices with why,
+    per member cycles and buffering, the bottleneck) and kernel_choices.json (the
+    nodes' choices, sparse, ApplyConfig's form, which a "pinned" strategy reads back),
+    and logs what each strategy committed and whether FIFOs were sized."""
     strategies = [strategy(spec) for spec in cfg.kernel_exploration]
     explored = explore_kernel_choices(model, strategies, fresh=cfg.kernel_exploration_fresh)
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-    with open(cfg.output_dir + "/report/kernel_choices.json", "w") as f:
+    with open(cfg.output_dir + "/report/kernel_exploration.json", "w") as f:
         json.dump(explored.report, f, indent=2)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(model), f, indent=2)
+    for each in explored.report["strategies"]:
+        print(f"Kernel choices: {each['strategy']} committed {each['committed']}")
+    print(f"FIFOs: {explored.report['fifos']}")
     return model
 
 

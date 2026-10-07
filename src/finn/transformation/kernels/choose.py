@@ -16,9 +16,11 @@ point the one before returned, and then:
   (``persist``): a saved choice is never changed (an explorer fills open choices
   only), and a stale one is cleared;
 - keeps what it found (``explored``): the configured point, its cost and the
-  report (the strategies, the dropped choices with why, per member cycles and
-  buffering, the bottleneck, attempts and time per strategy), so an outer search
-  can compare.
+  report (the strategies, each with the choices it committed, attempts and time;
+  every committed choice by its owner, with the strategy that made it, ``saved``
+  for one the model held before; whether FIFOs were sized; the dropped choices with
+  why, per member cycles and buffering, the bottleneck), so an outer search can
+  compare.
 
 ``fresh`` clears the nodes' choices before the root is built, so the strategies
 explore from scratch; otherwise a saved choice is pinned and an exploration
@@ -105,6 +107,30 @@ def _cost_report(seam: Seam, cost: Cost) -> dict[str, object]:
     }
 
 
+def _choices_by_owner(seam: Seam, made_by: Mapping[str, str]) -> dict[str, dict[str, str]]:
+    """Each committed choice, by the node and attribute that persist it (as
+    ``kernel_choices.json`` names it), with who made it."""
+    found: dict[str, dict[str, str]] = {}
+    for key, strategy_name in made_by.items():
+        node, attribute = seam.owner(key) or ("", key)
+        found.setdefault(node, {})[attribute] = strategy_name
+    return found
+
+
+def _fifos(strategies: Sequence[Explorer], explorers: Sequence[Mapping[str, Any]]) -> str:
+    """Whether FIFOs were sized, said so that a chain without sizing does not read as
+    sized: by ``size_fifos`` (the channels it sized), or not, and why."""
+    sized = [
+        report for explorer, report in zip(strategies, explorers) if isinstance(explorer, SizeFifos)
+    ]
+    if not sized:
+        return "not sized (no size_fifos in the chain)"
+    channels = sum(len(report["channels"]) for report in sized)
+    if not channels:
+        return "not sized: size_fifos found no open transport (each was saved before)"
+    return f"sized by size_fifos: {channels} channels"
+
+
 def explore_kernel_choices(
     model: ModelWrapper, strategies: Sequence[Explorer], *, fresh: bool = False
 ) -> Explored:
@@ -121,13 +147,20 @@ def explore_kernel_choices(
     root = partition_root(model, nodes)
     seam = Seam(root.members, root.owners, read_target(model).platform)
     point = root.point
+    # Who made each choice: the model before the strategies, or the strategy that
+    # committed it (the point it returned commits the choice, the one before did not).
+    made_by = dict.fromkeys(seam.chosen(point), "saved")
     explorers: list[dict[str, object]] = []
     for explorer in strategies:
         attempts, began = seam.attempts, time.perf_counter()
         point = explorer.explore(seam, point)
+        report = explorer.report()
+        committed = [key for key in seam.chosen(point) if key not in made_by]
+        made_by.update(dict.fromkeys(committed, str(report["strategy"])))
         explorers.append(
             {
-                **explorer.report(),
+                **report,
+                "committed": len(committed),
                 "attempts": seam.attempts - attempts,
                 "seconds": round(time.perf_counter() - began, 3),
             }
@@ -149,6 +182,8 @@ def explore_kernel_choices(
     cost = seam.cost(point)
     report = {
         "strategies": explorers,
+        "choices": _choices_by_owner(seam, made_by),
+        "fifos": _fifos(strategies, explorers),
         "fresh": fresh,
         "dropped": dict(root.dropped),
         **_cost_report(seam, cost),

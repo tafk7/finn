@@ -79,7 +79,7 @@ KERNEL_PATH_REFUSED = {
     DataflowOutputType.OOC_SYNTH: "there is no out-of-context synthesis of the partition; "
     "step_synthesize_bitfile reports the placed design (post_synth_resources.json)",
     DataflowOutputType.RTLSIM_PERFORMANCE: "step_kernel_choices reports each member's "
-    "cycles and the bottleneck (report/kernel_choices.json); no step measures them "
+    "cycles and the bottleneck (report/kernel_exploration.json); no step measures them "
     "in simulation",
     DataflowOutputType.PORTABLE_RTL: "step_synthesize_bitfile emits the partition's RTL "
     "into its packaged IP; no step exports it as a portable project",

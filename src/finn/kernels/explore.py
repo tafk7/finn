@@ -371,7 +371,6 @@ class Ranked:
 
     def __init__(self, policy: RankPolicy) -> None:
         self.policy = policy
-        self.committed = 0
 
     def explore(self, seam: Seam, point: S) -> S:
         while True:
@@ -379,10 +378,9 @@ class Ranked:
             if choice is None:
                 return point
             point = self._commit(seam, point, choice)
-            self.committed += 1
 
     def report(self) -> dict[str, object]:
-        return {"strategy": self.strategy, "committed": self.committed}
+        return {"strategy": self.strategy}
 
     def _commit(self, seam: Seam, point: S, choice: Choice) -> S:
         assert choice.cases is not None
@@ -481,7 +479,6 @@ class Pinned:
         ):
             raise ExploreError(f"{self.path}: not a {{node: {{attribute: value}}}} file")
         self.choices: dict[str, dict[str, object]] = loaded
-        self.committed = 0
 
     def explore(self, seam: Seam, point: S) -> S:
         held = seam.chosen(point)
@@ -504,11 +501,10 @@ class Pinned:
                 f"{self.path}: refused choices: "
                 + "; ".join(f"{k}: {w}" for k, w in sorted(outcome.why.items()))
             )
-        self.committed = len(batch)
         return outcome.point
 
     def report(self) -> dict[str, object]:
-        return {"strategy": self.strategy, "path": self.path, "committed": self.committed}
+        return {"strategy": self.strategy, "path": self.path}
 
 
 # -- throughput ----------------------------------------------------------------------------

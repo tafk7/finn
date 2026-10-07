@@ -260,7 +260,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         for node, held in kernel_choices_config(model).items()
     }
     assert folding == SET_FOLDING
-    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_choices.json").read_text())
+    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     target, placeholder = report["strategies"]
     assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
         "target_throughput",
@@ -268,6 +268,13 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         None,
     )
     assert placeholder["strategy"] == "placeholder"
+    # Of TFC's 45 choices, the target throughput commits the folding (12), the
+    # placeholder the rest; the report names each one's strategy, and that no FIFO
+    # was sized.
+    assert (target["committed"], placeholder["committed"]) == (12, 33)
+    made_by = [name for held in report["choices"].values() for name in held.values()]
+    assert (made_by.count("target_throughput"), made_by.count("placeholder")) == (12, 33)
+    assert report["fifos"] == "not sized (no size_fifos in the chain)"
     # Four members tie at the bottleneck: the first layer's activations, its weights,
     # its thresholds and its MatMul.
     assert report["bottleneck"] == {
@@ -293,12 +300,17 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
         model = step_kernel_choices(
             step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg), cfg
         )
-        report = json.loads((Path(cfg.output_dir) / "report" / "kernel_choices.json").read_text())
+        report = json.loads(
+            (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
+        )
         explored[name] = (kernel_choices_config(model), report)
     (sized, report), (plain, _) = explored["sized"], explored["plain"]
     assert sized == plain
     sizing = report["strategies"][1]
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 196, 0)
+    # It commits the 13 transports the placeholder commits without it.
+    assert [each["committed"] for each in report["strategies"]] == [12, 13, 20]
+    assert report["fifos"] == "sized by size_fifos: 13 channels"
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
