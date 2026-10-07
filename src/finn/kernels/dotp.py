@@ -332,10 +332,12 @@ _ADD_MULTI = (
 
 
 #: add_multi's two reductions of a lane's SIMD products (FinnLib dotp's ``REDUCER``): a
-#: compressor tree of LUT counters with its pipeline registers at its output, or a binary
-#: adder tree with them between its levels. Same latency and results; neither dominates
-#: in area, timing or synthesis cost.
-REDUCERS = ("compressor", "tree")
+#: binary adder tree with its pipeline registers between its levels, or a compressor tree
+#: of LUT counters with them at its output. Same latency and results. The adder tree is
+#: the baseline, listed first: it meets timing with the larger margin, and one synthesis
+#: of a packed dotp takes about 3 GB of memory with it against about 37 GB with the
+#: compressor. The compressor saves LUTs and registers at wide SIMD.
+REDUCERS = ("tree", "compressor")
 
 
 def _dotp_axi(core: str) -> CopiedSource:
@@ -365,8 +367,8 @@ class PackedDotpKernel(DotpAxiKernel):
     version = 1
     core = "dotp"
 
-    #: How add_multi reduces the SIMD products: a choice within this core. The order of
-    #: its cases states no preference; a strategy ranks them (``finn.kernels.explore``).
+    #: How add_multi reduces the SIMD products: a choice within this core, its baseline
+    #: first (``REDUCERS``: why the adder tree).
     reducer: str = Decision(values=REDUCERS)
 
     @derived
