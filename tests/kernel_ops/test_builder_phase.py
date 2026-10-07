@@ -106,10 +106,13 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
     source_file = tmp_path / "streamlined.onnx"
     source.save(str(source_file))
-    image = np.random.default_rng(3).integers(0, 256, size=SHAPE).astype(np.float32)
-    expected = execute_onnx(source, {source.graph.input[0].name: image})
-    np.save(tmp_path / "input.npy", image)
-    np.save(tmp_path / "expected_output.npy", expected[source.graph.output[0].name])
+    images = np.random.default_rng(3).integers(0, 256, size=(3, *SHAPE[1:])).astype(np.float32)
+    labels = [
+        execute_onnx(source, {source.graph.input[0].name: image[None]})[source.graph.output[0].name]
+        for image in images
+    ]
+    np.save(tmp_path / "input.npy", images)
+    np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
         stop_step="phase_kernel_path",
@@ -139,10 +142,19 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert json.loads((output / "kernel_choices.json").read_text()) == json.loads(
         json.dumps(kernel_choices_config(seen["step_kernel_choices"]))
     )
-    # The verification the configuration asked for: the parent graph with the partition,
-    # executed, gives the expected label.
-    verified = list((output / "verification_output").glob("verify_kernel_partition_python_*"))
-    assert [path.name for path in verified] == ["verify_kernel_partition_python_0_SUCCESS.npy"]
+    # The verification the configuration asked for: on each of the three inputs, the
+    # partition's own output (the last MatMul's INT8 logits, not the parent's label),
+    # the parent graph executed with it, equals the streamlined model's.
+    verified = sorted((output / "verification_output").glob("verify_kernel_partition_python_*"))
+    assert [path.name for path in verified] == [
+        f"verify_kernel_partition_python_{index}_SUCCESS.npz" for index in range(3)
+    ]
+    for index, path in enumerate(verified):
+        (name,) = [item.name for item in built.graph.output]
+        saved = np.load(path)
+        assert list(saved) == [name] == ["MatMul_3_out0"]
+        reference = execute_onnx(source, {source.graph.input[0].name: images[index][None]}, True)
+        assert np.array_equal(saved[name], reference[name]) and saved[name].shape == (1, 10)
 
 
 @pytest.mark.slow

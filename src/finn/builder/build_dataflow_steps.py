@@ -655,13 +655,23 @@ def kernel_target(cfg: DataflowBuildConfig):
     return resolve_target(cfg._resolve_fpga_part(), cfg.synth_clk_period_ns, _kernel_shell(cfg))
 
 
+def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
+    """Where step_kernel_ops keeps the model it converts, the reference of the
+    partition's Python check."""
+    return cfg.output_dir + "/intermediate_models/kernel_path_source.onnx"
+
+
 def step_kernel_ops(model: ModelWrapper, cfg: DataflowBuildConfig):
     """State the build target in the model (kernel_target) and rewrite each node a
     KernelOp binds (MatMul, MultiThreshold) as one: ToKernelOps. The build is on the
     kernel path from here, so the configuration is checked for it first: what only the
     HWCustomOp path makes is refused, naming the step that does it on the kernel path
-    (build_dataflow_checks.kernel_path_checks)."""
+    (build_dataflow_checks.kernel_path_checks). When KERNEL_PARTITION_PYTHON is asked,
+    the model it converts is kept as that check's reference (kernel_path_source.onnx)."""
     refuse_kernel_path_config(cfg)
+    if VerificationStepType.KERNEL_PARTITION_PYTHON in cfg._resolve_verification_steps():
+        os.makedirs(os.path.dirname(_kernel_path_source(cfg)), exist_ok=True)
+        model.save(_kernel_path_source(cfg))
     return model.transform(ToKernelOps(kernel_target(cfg)))
 
 
@@ -701,20 +711,71 @@ def step_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
     return _dataflow_partition(model, cfg)
 
 
+def verify_kernel_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> bool:
+    """The partition's own outputs, for each input ``verify_input_npy`` states: the
+    parent graph executed with the partition of KernelOps, against the model the
+    kernel path started from (step_kernel_ops' kernel_path_source.onnx) on the same
+    input, value for value. Each input's partition outputs are saved as
+    verification_output/verify_kernel_partition_python_<index>_<SUCCESS|FAIL>.npz."""
+    source_file = _kernel_path_source(cfg)
+    if not os.path.isfile(source_file):
+        raise FileNotFoundError(
+            f"{source_file}: the kernel path's source, which step_kernel_ops keeps when "
+            "KERNEL_PARTITION_PYTHON is asked, is not there (did the build start after it?)"
+        )
+    assert cfg.save_intermediate_models, "Enable save_intermediate_models for verification"
+    intermediate = cfg.output_dir + "/intermediate_models"
+    verify_out_dir = cfg.output_dir + "/verification_output"
+    os.makedirs(verify_out_dir, exist_ok=True)
+    child_file = intermediate + "/verify_kernel_partition_python.onnx"
+    model.save(child_file)
+    parent_file = intermediate + "/dataflow_parent.onnx"
+    source = ModelWrapper(source_file)
+    source_input = source.graph.input[0].name
+    ishape = tuple(source.get_tensor_shape(source_input))
+    outputs = [item.name for item in model.graph.output]
+    inputs = np.load(cfg.verify_input_npy)
+    all_match = True
+    for index in range(inputs.shape[0]):
+        frame = inputs[index : index + 1].reshape((1,) + ishape[1:])
+        built = execute_parent(parent_file, child_file, frame, return_full_ctx=True)
+        expected = execute_onnx(source, {source_input: frame}, True)
+        mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
+        for name in mismatched:
+            print(
+                f"kernel_partition_python: input {index}: {name} differs from the source's in "
+                f"{int(np.sum(built[name] != expected[name]))} of {built[name].size} values"
+            )
+        result = "FAIL" if mismatched else "SUCCESS"
+        all_match = all_match and not mismatched
+        np.savez(
+            f"{verify_out_dir}/verify_kernel_partition_python_{index}_{result}.npz",
+            **{name: built[name] for name in outputs},
+        )
+    print(
+        f"kernel_partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
+        f"inputs of {cfg.verify_input_npy}, against the model the kernel path started from"
+    )
+    return all_match
+
+
 def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Check the kernel path's partition before a shell builds it.
 
     Always: its choices replay to a configured root (none stale, none open, its
     ports its graph's inputs and outputs in order; configured_root), and it states
     the configuration's target. As ``verify_steps`` asks:
-    KERNEL_PARTITION_PYTHON executes the parent graph with the partition against
-    the expected output; KERNEL_PARTITION_ELABORATION compiles and elaborates the
-    partition's emitted RTL in XSim, through the build's toolchain."""
+    KERNEL_PARTITION_PYTHON compares the partition's own outputs, with the parent
+    graph executed, against the model the kernel path started from, on each input
+    verify_input_npy states (verify_kernel_partition_python);
+    KERNEL_PARTITION_ELABORATION compiles and elaborates the partition's emitted RTL
+    in XSim, through the build's toolchain."""
     configured_root(model, "the kernel path's partition")
     shell_target(model, cfg._resolve_fpga_part(), _kernel_shell(cfg), cfg.synth_clk_period_ns)
     verify_steps = cfg._resolve_verification_steps()
     if VerificationStepType.KERNEL_PARTITION_PYTHON in verify_steps:
-        verify_step(model, cfg, "kernel_partition_python", need_parent=True)
+        matched = verify_kernel_partition_python(model, cfg)
+        print("Verification for kernel_partition_python : " + ("SUCCESS" if matched else "FAIL"))
     if VerificationStepType.KERNEL_PARTITION_ELABORATION in verify_steps:
         directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
         model.transform(

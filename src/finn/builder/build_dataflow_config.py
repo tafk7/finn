@@ -96,8 +96,9 @@ class VerificationStepType(str, Enum):
     NODE_BY_NODE_RTLSIM = "node_by_node_rtlsim"
     #: verify after step_create_stitched_ip, using stitched-ip Verilog
     STITCHED_IP_RTLSIM = "stitched_ip_rtlsim"
-    #: verify the kernel path's partition (step_verify_kernel_partition): the parent
-    #: graph with the partition of KernelOps, using Python execution
+    #: verify the kernel path's partition (step_verify_kernel_partition): its own
+    #: outputs, the parent graph with the partition of KernelOps executed in Python,
+    #: against the model the kernel path started from, on each verify_input_npy input
     KERNEL_PARTITION_PYTHON = "kernel_partition_python"
     #: verify the kernel path's partition (step_verify_kernel_partition): its emitted
     #: RTL compiles and elaborates in XSim (xvlog, xelab); needs Vivado
