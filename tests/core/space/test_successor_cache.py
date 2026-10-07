@@ -1,11 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""What a successor keeps of its base's evaluations, and what forcing keeps of its own.
+"""What a successor and a trial keep of their base's evaluations, and what forcing
+keeps of its own.
 
 A published successor starts from its base's evaluations that read no Decision the
 change touched and no open Decision, and from its trial's that read no Decision open
-in it; forcing's copies hand back what reads no refused Decision. Each answers as a
-configuration built from nothing with the same choices does, evidence included.
+in it; forcing's copies hand back what reads no refused Decision. A trial takes a
+retained choice's admission as its base recorded it while that admission read no
+Decision the change touched, and starts from what reads only such choices. Each
+answers as a configuration built from nothing with the same choices does, evidence
+included.
 """
 
 from __future__ import annotations
@@ -119,8 +123,9 @@ def test_forcing_keeps_its_evaluations_on_the_configuration_except_a_refused_rea
 
 
 def test_a_retained_choice_is_admitted_again_whatever_its_base_evaluated() -> None:
-    """The trial starts only from evaluations that read no Decision: every candidate,
-    a retained one too, is admitted on its first read in the trial."""
+    """A retained choice whose admission read what the change touched is admitted
+    again, and so is one whose admission read it, even through an evaluation of a
+    configuration: neither, nor what read them, is inherited."""
 
     def within(*, candidate: int, limit: int) -> bool:
         return candidate <= limit
@@ -149,6 +154,50 @@ def test_a_retained_choice_is_admitted_again_whatever_its_base_evaluated() -> No
     }
     kept = base.try_with_choices({Bounded.limit: 2})
     assert kept.accepted and kept.instance.doubled == 4
+
+
+def test_a_retained_admission_the_change_does_not_reach_is_reused_with_what_read_it() -> None:
+    calls: list[str] = []
+
+    def within(owner: str) -> Any:
+        def accepts(*, candidate: int, limit: int) -> bool:
+            calls.append(owner)
+            return candidate <= limit
+
+        return accepts
+
+    class Fold(Space):
+        width: int = Param()
+        lanes: int = Decision(domain=domain(accepts=within("lanes"), limit=width))
+
+        @derived
+        def cycles(self) -> int:
+            calls.append("cycles")
+            return self.width // self.lanes
+
+        # Its admission reads ``cycles``, which reads the retained ``lanes``.
+        depth: int = Decision(domain=domain(accepts=within("depth"), limit=cycles))
+        finish: str = Decision(values=("matte", "gloss"))
+
+    base = commit(design_space(Fold(width=8)), {"lanes": 2, "depth": 4})
+    calls.clear()
+    glossy = commit(base, {"finish": "gloss"})
+    assert calls == [] and glossy.depth == 4
+    deeper = commit(glossy, {"depth": 3})
+    assert calls == ["depth"]  # ``cycles`` is inherited: it read ``lanes`` only
+    calls.clear()
+    wider = commit(deeper, {"lanes": 4, "depth": 2})
+    assert sorted(calls) == ["cycles", "depth", "lanes"]
+    # A refusal reads the same whether the trial reused ``lanes`` or admitted it again.
+    reused = deeper.try_with_choices({Fold.depth: 5})
+    admitted = wider.try_with_choices({Fold.lanes: 2, Fold.depth: 5})
+    refusals = [
+        {item.owner: item.result for item in report.outcomes if item.status == "refused"}
+        for report in (reused, admitted)
+    ]
+    assert refusals[0] == refusals[1] and list(refusals[0]) == ["depth"]
+    fresh = commit(design_space(Fold(width=8)), {"lanes": 2, "depth": 3, "finish": "gloss"})
+    assert inspection.explain(deeper, Fold.depth) == inspection.explain(fresh, Fold.depth)
 
 
 def test_a_successor_answers_as_a_configuration_built_from_nothing() -> None:
