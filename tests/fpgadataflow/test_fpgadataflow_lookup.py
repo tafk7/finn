@@ -29,6 +29,7 @@
 
 import pytest
 
+import json
 import numpy as np
 import torch
 from brevitas.export import export_qonnx
@@ -231,7 +232,7 @@ def _test_fpgadataflow_lookup_external(build_dir):
     model = model.transform(PrepareIP(fpga_part, 10))
     model = model.transform(HLSSynthIP())
     model = model.transform(CreateStitchedIP(fpga_part, 10.0))
-    ifnames = eval(model.get_metadata_prop("vivado_stitch_ifnames"))
+    ifnames = json.loads(model.get_metadata_prop("vivado_stitch_ifnames"))
     # check some generated files/interfaces for the generated stitched IP
     assert ifnames["aximm"] == [["m_axi_gmem0", 32]]
     assert ifnames["s_axis"] == [["s_axis_0", 32]]

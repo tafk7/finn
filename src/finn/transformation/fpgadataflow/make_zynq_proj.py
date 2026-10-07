@@ -27,6 +27,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import json
 import multiprocessing as mp
 import os
 from qonnx.core.modelwrapper import ModelWrapper
@@ -117,7 +118,7 @@ class MakeZYNQProject(Transformation):
             )
             config.append("update_ip_catalog -rebuild -scan_changes")
 
-            ifnames = eval(kernel_model.get_metadata_prop("vivado_stitch_ifnames"))
+            ifnames = json.loads(kernel_model.get_metadata_prop("vivado_stitch_ifnames"))
 
             # gather info on connectivity
             # assume each node connected to outputs/inputs is DMA:

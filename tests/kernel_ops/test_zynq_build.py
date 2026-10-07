@@ -12,6 +12,7 @@ test).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -244,3 +245,28 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
         code = Path(dma.get_nodeattr("code_gen_dir_ipgen"))
         assert (code / "synthesized_here").is_file()
         assert dma.get_nodeattr("ipgen_path") == f"{code}/project_{dma.onnx_node.name}"
+
+
+def test_the_project_reads_interface_names_as_json_and_never_executes_them(
+    tmp_path: Path,
+) -> None:
+    """MakeZYNQProject reads each partition's ``vivado_stitch_ifnames`` as the JSON its
+    writers write: a value that is Python, not JSON, is refused unexecuted."""
+    parent = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path)).prepare_kernel_partitions(
+        zynq_model()
+    )
+    executed = tmp_path / "executed"
+    for node in parent.graph.node:
+        body_file = getCustomOp(node).get_nodeattr("model")
+        body = ModelWrapper(body_file)
+        for inner in body.get_nodes_by_op_type("IODMA_hls"):
+            getCustomOp(inner).set_nodeattr("ip_path", str(tmp_path))
+        body.set_metadata_prop("vivado_stitch_proj", str(tmp_path))
+        body.set_metadata_prop("vivado_stitch_vlnv", "xilinx.com:hls:partition:1.0")
+        body.set_metadata_prop(
+            "vivado_stitch_ifnames", f"__import__('pathlib').Path({str(executed)!r}).touch()"
+        )
+        body.save(body_file)
+    with pytest.raises(json.JSONDecodeError):
+        parent.transform(make_zynq_proj.MakeZYNQProject("Ultra96", 5.0, toolchain=object()))
+    assert not executed.exists()

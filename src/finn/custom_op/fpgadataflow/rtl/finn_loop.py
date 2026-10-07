@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import copy
+import json
 import math
 import numpy as np
 import os
@@ -1100,7 +1101,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
         loop_body_ipstitch_path = loop_body.get_metadata_prop("vivado_stitch_proj")
         loop_body_vlnv = loop_body.get_metadata_prop("vivado_stitch_vlnv")
-        loop_body_intf_names = eval(loop_body.get_metadata_prop("vivado_stitch_ifnames"))
+        loop_body_intf_names = json.loads(loop_body.get_metadata_prop("vivado_stitch_ifnames"))
         ip_dirs = ["list"]
         ip_dirs += collect_ip_dirs(loop_body, loop_body_ipstitch_path)
         ip_dirs_str = "[%s]" % ("list " + " ".join(tcl_quote(p) for p in ip_dirs[1:]))
@@ -1327,7 +1328,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         intf_names["ap_none"] = []
 
         loop_body = self.get_nodeattr("body")
-        loop_body_intf = eval(loop_body.get_metadata_prop("vivado_stitch_ifnames"))
+        loop_body_intf = json.loads(loop_body.get_metadata_prop("vivado_stitch_ifnames"))
         for intf in loop_body_intf["aximm"]:
             intf_names["aximm"].append(intf)
 

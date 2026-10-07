@@ -62,7 +62,7 @@ def has_s_axis_port(node_onnx, node_inp_ind):
 def prep_rtlsim_io_dict(model, execution_context):
     # extract i/o info to prepare io_dict
     io_dict = {"inputs": {}, "outputs": {}}
-    if_dict = eval(model.get_metadata_prop("vivado_stitch_ifnames"))
+    if_dict = json.loads(model.get_metadata_prop("vivado_stitch_ifnames"))
     # go over and prepare inputs, skipping those without an s_axis port so that
     # the rest stay aligned with if_dict
     i = -1
@@ -251,7 +251,7 @@ def rtlsim_exec_cppxsi(
     assert (
         ifnames is not None
     ), "Couldn't find stitched-IP interface names, did you run IP stitching first?"
-    ifnames = eval(ifnames)
+    ifnames = json.loads(ifnames)
     if "aximm" in ifnames.keys() and ifnames["aximm"] != []:
         assert (
             False
