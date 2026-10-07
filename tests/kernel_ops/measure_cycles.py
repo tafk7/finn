@@ -6,8 +6,8 @@
 ``python -m kernel_ops.measure_cycles OUT [--frames N] [--only chain|tfc] [--work DIR]``
 (from ``tests``, FinnLib
 and Vivado selected) builds each partition as the kernel path builds it (the
-Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at the placeholder
-policy's folding, ``kernel_ops.tfc``) and measures, with ``kernels.xsim.measure``,
+Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
+``kernel_ops.tfc``) and measures, with ``kernels.xsim.measure``,
 ``N`` frames streamed back to back, never stalled:
 
 - the **stitched** partition, its root's latency, interval and total, and each

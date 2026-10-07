@@ -6,7 +6,7 @@
 The Tcl and ``vivado_stitch_ifnames`` come from the module's ABI
 (``finn.kernels.artifacts.ipxact``, checked as text in
 ``tests/kernels/artifacts/test_ipxact.py``). Here: the partition's module from
-its nodes' choices; that the emitted top is elaborated before Vivado runs (a
+its nodes' choices, completed; that the emitted top is elaborated before Vivado runs (a
 toolchain double stands for Vivado, so these run in the fast gate); and one test
 that packages the Chain (``kernels.chain``) and reads
 the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
@@ -23,7 +23,7 @@ from typing import cast
 
 import pytest
 
-from finn.custom_op.kernels.base import KernelOpError
+from finn.custom_op.kernels.base import KernelOpError, kernel_op
 from finn.kernels.artifacts import build
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition
@@ -45,11 +45,25 @@ def test_the_partition_packages_its_nodes_choices() -> None:
     ]
 
 
-def test_an_open_decision_refuses_packaging_and_is_named() -> None:
-    with pytest.raises(KernelOpError, match="open Decisions") as refused:
-        PackagePartition("sdp_1").module(kernel_model())
-    assert refused.value.keys
-    assert all(key.endswith("ram_style") for key in refused.value.keys)
+def test_an_open_choice_is_completed_for_packaging_and_never_saved() -> None:
+    # The adapters' memories are left open: the baseline completion takes their first
+    # case, auto, as configure_partition commits them, on a copy.
+    model = kernel_model()
+    held = {node.name: kernel_op(model, node).choices() for node in model.graph.node}
+    _, point = configure_partition(kernel_model())
+    module = PackagePartition("sdp_1").module(model)
+    assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
+    assert {node.name: kernel_op(model, node).choices() for node in model.graph.node} == held
+
+
+def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
+    # A FIFO saved with no depth: the depth is required, so no completion takes one.
+    model = kernel_model()
+    second = kernel_op(model, model.graph.node[2])
+    second.save({**second.choices(), "x.transport": "fifo"})
+    with pytest.raises(KernelOpError, match=r"open Decisions.*depth \(required\)") as refused:
+        PackagePartition("sdp_1").module(model)
+    assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
 
 
 def test_the_graphs_input_order_is_the_port_order() -> None:

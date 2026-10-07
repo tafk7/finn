@@ -31,9 +31,13 @@ the partition root's boundary channels where the boundary presents them
 The part and the clock period are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
-The partition's choices are its nodes': the root is replayed from them, a
-Decision with one viable case is forced, and an open Decision or a stale
-choice refuses, named. The body's graph
+The partition's choices are its nodes': the root is replayed from them (a
+stale choice refuses, named), a Decision with one viable case is forced, and
+what is open is completed on a copy by the build's completion policy
+(``finn.kernels.explore.Completion``, ``Baseline()`` by default: every open
+choice at its kernel's baseline, the open transports sized on the completed
+copy), which is never stored; a choice the policy leaves open (a required one)
+refuses, named. The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
@@ -73,6 +77,7 @@ from finn.kernels.artifacts.module import Abi
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import undecided
+from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
 from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
@@ -84,11 +89,14 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 
-def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[str, str], ...]]:
+def configured_root(
+    model: ModelWrapper, label: str, completion: Completion | None = None
+) -> tuple[Any, tuple[tuple[str, str], ...]]:
     """A partition model's root point, replayed from its nodes (a Decision with one
-    viable case is forced, nothing to commit), and its boundary (tensor, port). A
-    stale choice, an open Decision, or graph inputs and outputs out of port order
-    refuse, named."""
+    viable case is forced, nothing to commit) and completed by ``completion``
+    (``Baseline()`` by default) on a copy, as hardware generation builds it, and its
+    boundary (tensor, port). A stale choice, a choice the completion leaves open (a
+    required one), or graph inputs and outputs out of port order refuse, named."""
     root = partition_root(model, model.graph.node)
     if root.dropped:
         raise KernelOpError(
@@ -96,11 +104,19 @@ def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[s
             + "; ".join(f"{key}: {why}" for key, why in root.dropped.items()),
             tuple(root.dropped),
         )
-    point = root.point
+    policy = Baseline() if completion is None else completion
+    seam = Seam(root.members, root.owners, read_target(model).platform, policy)
+    try:
+        completed = policy.complete(seam, root.point, sizing=True)
+    except ExploreError as error:
+        raise KernelOpError(f"{label}: the {policy.name} completion refuses: {error}") from error
+    point = completed.point
     open_keys = undecided(point, "*")
     if open_keys:
+        required = {choice.key for choice in completed.open if choice.required}
+        named = [key + (" (required)" if key in required else "") for key in open_keys]
         raise KernelOpError(
-            f"{label}: open Decisions, to choose before packaging: " + ", ".join(open_keys),
+            f"{label}: open Decisions, to choose before packaging: " + ", ".join(named),
             tuple(open_keys),
         )
     ports = dict(root.boundary)
@@ -140,9 +156,12 @@ def boundary_facts(
     return found
 
 
-def write_boundary_facts(model: ModelWrapper, label: str = "partition") -> None:
-    """State a partition model's boundary facts (``finn.partition``), from its root."""
-    point, boundary = configured_root(model, label)
+def write_boundary_facts(
+    model: ModelWrapper, label: str = "partition", completion: Completion | None = None
+) -> None:
+    """State a partition model's boundary facts (``finn.partition``), from its root
+    completed by ``completion`` (``configured_root``)."""
+    point, boundary = configured_root(model, label, completion)
     inputs, outputs = boundary_facts(model, point, boundary, label)
     model.set(PARTITION_INPUTS, inputs)
     model.set(PARTITION_OUTPUTS, outputs)
@@ -180,7 +199,10 @@ class PackagePartition(Transformation):
     model's target. ``directory`` is the project (``vivado_stitch_proj``), a new
     build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
     (a flow passes its own, so that one build runs Vivado by one route), by default
-    the machine's (``finn.util.toolchain.machine_toolchain``).
+    the machine's (``finn.util.toolchain.machine_toolchain``); ``completion`` the
+    policy that completes the open choices (``configured_root``), the build's, by
+    default ``Baseline()``, so that a saved model packaged outside the builder
+    completes as the builder's default does.
     """
 
     def __init__(
@@ -190,22 +212,23 @@ class PackagePartition(Transformation):
         run_synth: bool = False,
         directory: Path | None = None,
         toolchain: Toolchain | None = None,
+        completion: Completion | None = None,
     ) -> None:
         super().__init__()
         self.ip_name = ip_name
         self.run_synth = run_synth
         self.directory = directory
         self.toolchain = toolchain
+        self.completion = completion
 
     def module(self, model: ModelWrapper) -> Any:
-        """The partition's module: its root replayed from the nodes, every Decision
-        committed or forced."""
-        point, _ = configured_root(model, self.ip_name)
+        """The partition's module: its root replayed from the nodes and completed."""
+        point, _ = configured_root(model, self.ip_name, self.completion)
         return point.module
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         built = read_target(model)
-        point, boundary = configured_root(model, self.ip_name)
+        point, boundary = configured_root(model, self.ip_name, self.completion)
         module = point.module
         project = Path(
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
@@ -252,17 +275,25 @@ class ElaboratePartition(Transformation):
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
     ``elaborate.log``), a new build directory by default; ``toolchain`` is the
     prepared toolchain the simulator runs in, by default the configured
-    machine's (``machine_toolchain``). A failed compilation or elaboration
-    raises ``KernelOpError``, naming the log.
+    machine's; ``completion`` the policy that completes the open choices
+    (``configured_root``), by default ``Baseline()``. A failed compilation or
+    elaboration raises ``KernelOpError``, naming the log.
     """
 
-    def __init__(self, *, directory: Path | None = None, toolchain: Toolchain | None = None):
+    def __init__(
+        self,
+        *,
+        directory: Path | None = None,
+        toolchain: Toolchain | None = None,
+        completion: Completion | None = None,
+    ):
         super().__init__()
         self.directory = directory
         self.toolchain = toolchain
+        self.completion = completion
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        point, _ = configured_root(model, "the partition")
+        point, _ = configured_root(model, "the partition", self.completion)
         directory = Path(
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()

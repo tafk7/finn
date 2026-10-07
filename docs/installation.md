@@ -451,8 +451,7 @@ stays empty):
   "steps": ["phase_kernel_path", "phase_generate_outputs"],
   "kernel_exploration": [
     {"strategy": "target_throughput", "fps": 1000000},
-    {"strategy": "size_fifos"},
-    {"strategy": "placeholder"}
+    {"strategy": "size_fifos"}
   ],
   "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
   "toolchain": {"hls_frontend": "vitis-run"}
@@ -464,14 +463,20 @@ through the DSE seam, run as written, each with its own parameters:
 `target_throughput` folds the least parallelism that meets `fps` at the target's
 clock, `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
 each channel's FIFO from both ends' beat patterns at the bottleneck (`direct`
-where none is needed; `"margin"` words added to a FIFO it places, default 0), and
-`placeholder` takes every choice left by a fixed rank (the default list is just
-it). A choice
-left open after the list is refused by name. The chosen choices are written to
-`kernel_choices.json`, and what the exploration found (the strategies, each with
-the choices it committed, attempts and time; every choice with the strategy that
-made it; whether FIFOs were sized; per-member cycles and buffering, the
-bottleneck) to `report/kernel_exploration.json`.
+where none is needed; `"margin"` words added to a FIFO it places, default 0). The
+default list is empty. What no strategy chose stays open, and the completion
+policy `kernel_completion` completes it wherever the partition is costed or
+built, on a copy that is never saved: `baseline` (the default) takes each open
+choice's first viable case, which every kernel lists as its baseline (the least
+parallelism, `auto` memories), and when the partition is built sizes its FIFOs at
+that folding; `placeholder`, for debugging, also completes a required choice, and
+says `DEBUG: completed by placeholder` for every value it takes. A required choice
+left open (a FIFO's depth) is refused by name when the partition is built. The
+choices the strategies made are written to `kernel_choices.json`, and what the
+exploration found (the strategies, each with the choices it committed, attempts
+and time; every choice with the strategy that made it; every completed value and
+who completed it; whether FIFOs were sized; per-member cycles and buffering, the
+bottleneck, of the point as it is built) to `report/kernel_exploration.json`.
 
 Explicit selections, and a dataflow build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the

@@ -10,9 +10,10 @@ post-processing, streamline), then ``ToKernelOps``, ``InferKernelTensors`` and
 ``CreateDataflowPartition``: the input flatten (a Reshape) before the partition
 and the label select (TopK) after it, both on the host.
 
-Every open kernel choice (folding, memories, transports) is explored before
-partitioning by ``ExploreKernelChoices([Placeholder()])``, the DSE seam's
-placeholder: 16 lanes where they divide, the whole extent otherwise.
+Every open kernel choice (folding, memories, transports) is committed before
+partitioning, ranked by hand (``ExploreKernelChoices([Ranked(Lanes(16))])``,
+``kernels.helpers.Lanes``): 16 lanes where they divide, the whole extent otherwise,
+every other choice its kernel's baseline.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from kernels.helpers import Lanes
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -32,7 +34,7 @@ from qonnx.transformation.general import (
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.kernels.explore import Placeholder
+from finn.kernels.explore import Ranked
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import (
     ExploreKernelChoices,
@@ -42,6 +44,8 @@ from finn.transformation.kernels import (
 )
 
 SHAPE = (1, 1, 28, 28)
+LANES = Lanes(16)
+"""The fixture's chain: every choice ranked by hand, at 16 lanes."""
 ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")
 """TFC's target: Ultra96 in the Zynq shell (no UltraRAM, no doubled clock)."""
 
@@ -115,11 +119,11 @@ def streamlined(directory: Path) -> ModelWrapper:
 def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The streamlined ``source`` by hand through the kernel path, as the builder's
     kernel-path phase runs it: the parent graph (Reshape, the partition, TopK) and the
-    partition's body, every choice explored by the placeholder."""
+    partition's body, every choice committed at 16 lanes (``LANES``)."""
     model = (
         source.transform(ToKernelOps(ULTRA96))
         .transform(InferKernelTensors())
-        .transform(ExploreKernelChoices([Placeholder()]))
+        .transform(ExploreKernelChoices([Ranked(LANES)]))
     )
     parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
     sdp = getCustomOp(parent.graph.node[1])
@@ -129,6 +133,6 @@ def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, Mode
 
 def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapper]:
     """The streamlined source, the parent graph (Reshape, the partition, TopK) and the
-    partition's body, every choice explored by the placeholder."""
+    partition's body, every choice committed at 16 lanes (``LANES``)."""
     source = streamlined(directory)
     return (source, *partition(source, directory))

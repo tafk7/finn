@@ -391,6 +391,7 @@ class _Lowering:
             changes["domain"], changes["domain_arguments"] = self.domain(
                 source_scope, declaration, node.semantics, owner=node.key
             )
+            changes["required_choice"] = declaration.required
             if replaced is not None:
                 changes["contract"], changes["contract_arguments"] = self.contract(
                     scope, replaced, node

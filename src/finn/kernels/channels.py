@@ -205,8 +205,10 @@ class ChannelFifo(Space):
 
     buffer = FifoKernel(
         word_bits=word_bits,
+        # No depth is a safe baseline: a FIFO is chosen by sizing it (SizeFifos).
         depth=Decision(
-            domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True)
+            domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
+            required=True,
         ),
         platform=platform,
     )

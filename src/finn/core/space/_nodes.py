@@ -735,6 +735,7 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
     object.__setattr__(decision, "_body", _class_body())
     decision.replaces = None
     decision.strict = False
+    decision.required = False
     candidates: dict[str, NodeDecl | None] = {}
     for key, value in values.items():
         local_name(cast(str, key), "candidate key")
@@ -769,6 +770,7 @@ def entry_choice(
     shared: Mapping[str, object],
     *,
     optional: object,
+    required: bool = False,
     when: ValueRef[bool] | None,
 ) -> NodeChoice:
     """``Decision({"a": A, "b": B(own=...)}, shared=..., optional=...)``: a Decision over nodes.
@@ -824,6 +826,7 @@ def entry_choice(
         values[key] = node
     choice = node_choice(values, when=when)
     choice._space_decision().strict = True
+    choice._space_decision().required = required
     return choice
 
 

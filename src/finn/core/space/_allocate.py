@@ -546,6 +546,8 @@ class _Allocation:
                 domain=cast(Domain[object], finite(selection.keys, STRING)),
             )
             self.table.provenance[selector] = provenance
+        if decision.required and not (pinned or never):
+            self.table.nodes[selector] = replace(self.table.nodes[selector], required_choice=True)
         scope.named_members[name] = selector
         if slot is not None:
             self.table.provenance[selector] = slot.provenance

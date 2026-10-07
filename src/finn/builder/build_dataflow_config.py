@@ -477,23 +477,36 @@ class DataflowBuildConfig:
         default=None, metadata=config(decoder=_toolchain_selection)
     )
 
+    # The kernel path's choices: what explores them, and what completes the rest. The
+    # three fields read nothing else of this configuration, and nothing else reads
+    # them but the kernel path's steps, so that the kernel path's own configuration
+    # takes them over as they are.
+
     #: The kernel path's exploration (step_kernel_choices): the strategies that choose
     #: the KernelOps' open choices through the DSE seam, run as written, each a spec
     #: with its own parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
     #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
     #: ``{"strategy": "target_throughput", "fps": ..., "relax": true}`` (the least
     #: parallelism meeting fps at the target's clock), ``{"strategy": "size_fifos",
-    #: "margin": 0}`` (each channel's FIFO from both ends' beat patterns, after
-    #: folding), ``{"strategy": "placeholder"}`` (every choice left, by a fixed rank).
-    #: A choice left open after the list is refused by name. The kernel path reads no
-    #: other field for it (not target_fps, folding_config_file or auto_fifo_depths).
-    kernel_exploration: List[Dict[str, Any]] = field(
-        default_factory=lambda: [{"strategy": "placeholder"}]
-    )
+    #: "margin": 0}`` (each channel's FIFO from both ends' beat patterns). None by
+    #: default: what no strategy chooses stays open, and kernel_completion completes
+    #: it. The kernel path reads no other field for it (not target_fps,
+    #: folding_config_file or auto_fifo_depths).
+    kernel_exploration: List[Dict[str, Any]] = field(default_factory=list)
 
     #: Clear the KernelOps' saved choices before exploring: re-explore from scratch.
     #: Otherwise a saved choice is pinned and the exploration fills only open ones.
     kernel_exploration_fresh: bool = False
+
+    #: The completion policy (finn.transformation.kernels.KERNEL_COMPLETIONS) that
+    #: completes what no strategy chose, on a copy that is never saved, wherever the
+    #: partition is costed or built: ``baseline``, every open choice at its kernel's
+    #: baseline (its first viable case: the least parallelism, ``auto`` memories) and,
+    #: when the partition is built, its FIFOs sized at that folding; a required choice
+    #: (a FIFO's depth) is refused, named. ``placeholder``, for debugging, also takes
+    #: the first case of a required choice. report/kernel_exploration.json lists every
+    #: value completed.
+    kernel_completion: str = "baseline"
 
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:

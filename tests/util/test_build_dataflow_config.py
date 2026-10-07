@@ -40,11 +40,13 @@ def test_an_undeclared_toolchain_key_is_refused_naming_it():
 def test_declared_keys_are_read():
     stated = {
         **STATED,
-        "kernel_exploration": [{"strategy": "placeholder"}],
+        "kernel_exploration": [{"strategy": "size_fifos"}],
+        "kernel_completion": "placeholder",
         "toolchain": {"settings": ["/tools/settings64.sh"], "hls_frontend": "vitis-run"},
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
-    assert cfg.kernel_exploration == [{"strategy": "placeholder"}]
+    assert cfg.kernel_exploration == [{"strategy": "size_fifos"}]
+    assert cfg.kernel_completion == "placeholder"
     assert cfg.toolchain == Selection(settings=("/tools/settings64.sh",), hls_frontend="vitis-run")
 
 
@@ -53,3 +55,8 @@ def test_the_example_configuration_is_read():
     example = Path(finn.builder.__file__).parents[1] / "qnn-data/build_dataflow"
     stated = (example / "dataflow_build_config.json").read_text()
     assert DataflowBuildConfig.from_json(stated).output_dir
+
+
+def test_the_kernel_path_explores_nothing_and_completes_with_the_baseline_by_default():
+    cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
+    assert cfg.kernel_exploration == [] and cfg.kernel_completion == "baseline"

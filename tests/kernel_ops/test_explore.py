@@ -16,16 +16,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
+from finn.custom_op.kernels.base import kernel_op, read_target, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.explore import (
+    Baseline,
     ExploreError,
     Pinned,
     Placeholder,
+    Ranked,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -33,11 +36,13 @@ from finn.kernels.explore import (
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
+    completion,
     explore_kernel_choices,
     kernel_choices_config,
     resolve_target,
     strategy,
 )
+from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import matmul_model
 from kernel_ops.test_choose import choices, kernel_model
 
@@ -62,17 +67,26 @@ def test_a_choice_names_the_node_and_attribute_that_persist_it() -> None:
 def test_a_spec_names_its_strategy_and_its_parameters() -> None:
     made = strategy({"strategy": "target_throughput", "fps": 1000, "relax": False})
     assert isinstance(made, TargetThroughput) and made.fps == 1000 and not made.relax
-    assert isinstance(strategy({"strategy": "placeholder"}), Placeholder)
     assert isinstance(strategy({"strategy": "size_fifos", "margin": 2}), SizeFifos)
     with pytest.raises(ValueError, match="names no kernel strategy"):
         strategy({"strategy": "max_throughput"})
     with pytest.raises(ValueError, match="unexpected keyword argument 'cycles'"):
-        strategy({"strategy": "placeholder", "cycles": 3})
+        strategy({"strategy": "size_fifos", "cycles": 3})
+    # The placeholder is a completion policy, no strategy.
+    with pytest.raises(ValueError, match="names no kernel strategy"):
+        strategy({"strategy": "placeholder"})
+
+
+def test_a_build_names_its_completion_policy() -> None:
+    assert isinstance(completion("baseline"), Baseline)
+    assert isinstance(completion("placeholder"), Placeholder)
+    with pytest.raises(ValueError, match="names no kernel completion policy"):
+        completion("minimum")
 
 
 def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     model = kernel_model()
-    explored = explore_kernel_choices(model, [Placeholder(lanes=2)])
+    explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
     saved = choices(model)
     assert saved["first"]["compute.packed.pe"] == 2 and saved["second"]["x.transport"] == "direct"
     report = explored.report
@@ -80,19 +94,80 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     # levels: the replay of a frame of two beats of two 2-bit levels, in input_gen's
     # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
     assert report["members"]["levels"] == {"cycles": 12, "buffering": 8 * 2 * 2}
-    (placeholder,) = report["strategies"]
-    assert placeholder["strategy"] == "placeholder" and placeholder["attempts"] > 0
+    (ranked,) = report["strategies"]
+    assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0
+    # Nothing was left to complete.
+    assert report["completed"] == {} and report["completion"] == {"policy": "baseline", "open": []}
     assert json.loads(json.dumps(report)) == report
     # The model replays to the explored point: nothing open, nothing stale.
     root = partition_root(model, model.graph.node)
     assert inspection.viable(root.point) == () and not root.dropped
 
 
-def test_a_choice_left_open_is_refused_by_name_and_nothing_is_saved() -> None:
+def test_what_no_strategy_chose_is_completed_on_a_copy_and_never_saved() -> None:
+    """With no strategy, nothing is saved: the report lists every value the baseline
+    completion takes, by owner, and the cost of the completed point; hardware
+    generation completes the same values."""
     model = kernel_model()
-    with pytest.raises(KernelOpError, match="open choices no strategy chose: .*first.compute"):
-        explore_kernel_choices(model, [])
+    explored = explore_kernel_choices(model, [])
     assert choices(model) == {"first": {}, "activate": {}, "second": {}}
+    report = explored.report
+    assert report["strategies"] == [] and report["choices"] == {}
+    completed = report["completed"]
+    # The baseline: the least folding, the adder tree, auto memories.
+    assert completed["first"]["compute.packed.pe"] == {"value": 1, "by": "baseline"}
+    assert completed["first"]["compute.packed.simd"] == {"value": 1, "by": "baseline"}
+    assert completed["first"]["compute.packed.reducer"] == {"value": "tree", "by": "baseline"}
+    assert completed["first"]["w.source.memstream.ram_style"]["value"] == "auto"
+    assert report["completion"]["open"] == [] and report["bottleneck"] is not None
+    # The transports are sized on the completed copy (at hardware generation, sizing
+    # is the default completion's): a choice of size_fifos, never saved either.
+    assert completed["second"]["x.transport"]["by"] == "size_fifos"
+    assert report["fifos"].startswith("sized at completion by baseline: ")
+    assert explored.completed is not None
+    values = {
+        f"{node}.{attribute}": entry["value"]
+        for node, held in completed.items()
+        for attribute, entry in held.items()
+    }
+    point, _ = configured_root(model, "the chain")
+    seam = seam_of(model)[0]
+    assert {
+        f"{node}.{attribute}": value
+        for key, value in seam.chosen(point).items()
+        for node, attribute in [seam.owner(key) or ("", key)]
+    } == values
+    # The point the exploration returns is the committed one: still open.
+    assert explored.point is not explored.completed.point
+    assert inspection.viable(explored.point) != ()
+
+
+def test_a_strategy_that_reads_completed_values_is_flagged_and_its_choices_saved() -> None:
+    """Q-B: a strategy that reads the completed copy (``Seam.complete``) commits as any
+    other (DSE12); the report flags it, naming what it read."""
+
+    class Reader:
+        strategy = "reader"
+
+        def explore(self, seam: Seam, point: Any) -> Any:
+            seam.complete(point)
+            return point
+
+        def report(self) -> dict[str, object]:
+            return {"strategy": self.strategy}
+
+    model = kernel_model()
+    report = explore_kernel_choices(model, [Reader(), SizeFifos()]).report
+    reader, sizing = report["strategies"]
+    assert reader["read_completed"].startswith("read completed choices: ")
+    assert "first.compute.packed.pe" in reader["read_completed"]
+    # Sizing before folding sizes at the completed folding, and its transports are saved.
+    assert sizing["read_completed"].startswith("sized at completed folding (read completed ")
+    assert choices(model)["second"]["x.transport"] in ("direct", "fifo")
+    assert {"saved", "size_fifos"} >= {
+        name for held in report["choices"].values() for name in held.values()
+    }
+    assert "first" not in report["choices"] or "compute.packed.pe" not in report["choices"]["first"]
 
 
 def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> None:
@@ -105,7 +180,7 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
             }
         )
     )
-    model = kernel_model().transform(ExploreKernelChoices([Pinned(pinned), Placeholder(lanes=2)]))
+    model = kernel_model().transform(ExploreKernelChoices([Pinned(pinned), Ranked(Lanes(2))]))
     saved = choices(model)
     assert saved["first"]["compute.packed.pe"] == 1 and saved["first"]["compute.packed.simd"] == 2
     assert saved["second"]["x.transport.fifo.buffer.depth"] == 8
@@ -126,18 +201,14 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
 
 def test_saved_choices_are_pinned_and_fresh_explores_again() -> None:
     model = kernel_model()
-    explore_kernel_choices(model, [Placeholder(lanes=2)])
+    explore_kernel_choices(model, [Ranked(Lanes(2))])
     # A strategy fills only open choices: the saved folding stays.
-    resumed = explore_kernel_choices(
-        model, [TargetThroughput(1_000_000_000 // (5 * 3)), Placeholder()]
-    )
+    resumed = explore_kernel_choices(model, [TargetThroughput(1_000_000_000 // (5 * 3))])
     assert choices(model)["first"]["compute.packed.pe"] == 2
     assert resumed.report["strategies"][0]["attempts"] == 0
     # Fresh clears the nodes' choices first: 6 cycles a frame (the activation's) folds
     # each MatMul to PE 2, SIMD 4.
-    explore_kernel_choices(
-        model, [TargetThroughput(1_000_000_000 // (5 * 6)), Placeholder()], fresh=True
-    )
+    explore_kernel_choices(model, [TargetThroughput(1_000_000_000 // (5 * 6))], fresh=True)
     assert choices(model)["first"]["compute.packed.pe"] == 2
     assert choices(model)["first"]["compute.packed.simd"] == 4
 
@@ -145,10 +216,11 @@ def test_saved_choices_are_pinned_and_fresh_explores_again() -> None:
 def test_every_committed_choice_names_the_strategy_that_made_it() -> None:
     """The report attributes each choice the model holds after the exploration: to the
     strategy that committed it, or ``saved`` when the model held it before; each
-    strategy counts its own, and says whether FIFOs were sized."""
+    strategy counts its own, and says whether FIFOs were sized. What no strategy chose
+    is completed, never attributed to one."""
     model = kernel_model()
     first = explore_kernel_choices(
-        model, [TargetThroughput(1_000_000_000 // (5 * 6)), Placeholder()]
+        model, [TargetThroughput(1_000_000_000 // (5 * 6)), SizeFifos()]
     ).report
     made_by = {
         (node, attribute): strategy_name
@@ -160,15 +232,18 @@ def test_every_committed_choice_names_the_strategy_that_made_it() -> None:
         (node, attribute) for node, held in choices(model).items() for attribute in held
     }
     assert made_by[("first", "compute.packed.pe")] == "target_throughput"
-    assert made_by[("second", "x.transport")] == "placeholder"
-    target, placeholder = first["strategies"]
+    assert made_by[("second", "x.transport")] == "size_fifos"
+    assert ("first", "compute.packed.reducer") not in made_by
+    assert first["completed"]["first"]["compute.packed.reducer"]["by"] == "baseline"
+    target, sizing = first["strategies"]
     assert target["committed"] == sum(v == "target_throughput" for v in made_by.values()) > 0
-    assert placeholder["committed"] == sum(v == "placeholder" for v in made_by.values()) > 0
-    assert first["fifos"] == "not sized (no size_fifos in the chain)"
+    assert sizing["committed"] == sum(v == "size_fifos" for v in made_by.values()) > 0
+    assert "read_completed" not in sizing
+    assert first["fifos"].startswith("sized by size_fifos: ")
     # Explored again, everything is the model's own: saved, nothing committed.
-    again = explore_kernel_choices(model, [SizeFifos(), Placeholder()]).report
+    again = explore_kernel_choices(model, [SizeFifos()]).report
     assert {v for held in again["choices"].values() for v in held.values()} == {"saved"}
-    assert [each["committed"] for each in again["strategies"]] == [0, 0]
+    assert [each["committed"] for each in again["strategies"]] == [0]
     assert again["fifos"] == "not sized: size_fifos found no open transport (each was saved before)"
 
 
@@ -185,7 +260,7 @@ def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() ->
     keys inapplicable): replay drops them with why, exploring chooses the core and its
     folding again, and saving clears the stale attributes."""
     model = int8_matmul()
-    explore_kernel_choices(model, [Placeholder()])
+    explore_kernel_choices(model, [Ranked(Lanes())])
     saved = kernel_op(model, model.graph.node[0]).choices()
     assert "compute.packed.pe" in saved and "compute" not in saved
     write_target(model, VCK190)
@@ -193,7 +268,7 @@ def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() ->
     root = partition_root(model, model.graph.node)
     assert "first.compute.packed.pe" in root.dropped
     assert "first.compute" in {item.key for item in inspection.viable(root.point)}
-    explored = explore_kernel_choices(model, [Placeholder()])
+    explored = explore_kernel_choices(model, [Ranked(Lanes())])
     assert "first.compute.packed.pe" in explored.report["dropped"]
     held = kernel_op(model, model.graph.node[0]).choices()
     assert "compute" in held

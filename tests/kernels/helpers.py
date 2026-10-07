@@ -58,6 +58,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.explore import Choice
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, block_diagonal
 from finn.kernels.target import DspBlock, Platform
@@ -414,9 +415,27 @@ TRANSPORTS = "*.transport"
 
 
 def with_direct_transports(point: S) -> S:
-    """Each channel's open transport direct: the placeholder policy's choice."""
+    """Each channel's open transport direct: its baseline, the first case."""
     open_ = undecided(point, TRANSPORTS)
     return commit(point, dict.fromkeys(open_, "direct")) if open_ else point
+
+
+class Lanes:
+    """A rank policy for tests (``finn.kernels.explore.Ranked``) that folds by hand: an
+    ordered choice of integers at ``lanes`` where that case is viable, otherwise at its
+    largest viable case; every other choice, and every choice with no ``lanes``, in its
+    domain's order, the kernel's baseline first. A test that needs a choice made on
+    purpose states it so; ``Lanes()`` ranks as the baseline completion takes."""
+
+    def __init__(self, lanes: int | None = None) -> None:
+        self.lanes = lanes
+
+    def rank(self, choice: Choice) -> Sequence[object]:
+        cases = choice.cases or ()
+        if self.lanes is None or not choice.ordered:
+            return cases
+        factors = sorted((case for case in cases if isinstance(case, int)), reverse=True)
+        return sorted(factors, key=lambda factor: factor != self.lanes)
 
 
 class WeightDelivery(Enum):
