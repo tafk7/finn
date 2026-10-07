@@ -79,10 +79,14 @@ def build_environment(selection, environ=None, *, root=None, build_dir=None):
     # FINN's own variables (resources, build directory) beside the tools'.
     env = dict(selection.prepare(env).environment)
     # The aliases again, for the child's remaining readers of the legacy names
-    # (build_dataflow_checks requires VITIS_PATH for an Alveo bitfile).
+    # (build_dataflow_checks requires VITIS_PATH for an Alveo bitfile). They
+    # follow the prepared roots only: an inherited alias would name the parent's
+    # installation beside, or without, the selected one.
     for primary, alias in _ROOT_ALIASES:
         if env.get(primary):
-            env.setdefault(alias, env[primary])
+            env[alias] = env[primary]
+        else:
+            env.pop(alias, None)
     libraries = []
     for variable, suffix in (
         ("XILINX_VIVADO", "lib/lnx64.o"),
