@@ -385,11 +385,13 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
         if isinstance(outcome, _Failure):
             failures[task.identity] = outcome
         else:
+            dependencies, via = tuple(task.context.dependencies), tuple(task.context.via.items())
             outcome = _runtime.Evaluation(
                 outcome.result,
-                tuple(task.context.dependencies),
+                dependencies,
                 outcome.assessment,
-                tuple(task.context.via.items()),
+                via,
+                _runtime.read_decisions(snapshot, dependencies, via),
             )
             outcome = _runtime.supplied_provenance(snapshot, outcome, task.context.index)
             if isinstance(task.identity, int):

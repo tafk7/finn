@@ -301,7 +301,7 @@ def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> Non
     assert revised.local == 1
 
 
-def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_starts_a_fresh_cache() -> None:
+def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reaches() -> None:
     calls: list[int] = []
 
     class Example(Space):
@@ -323,7 +323,9 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_starts_a_fresh_cac
     revised = first.with_choices(choice=2)
     assert calls == [1]
     assert state(revised).parameters is state(first).parameters
-    assert state(revised).cache == {}
+    linked = state(revised).linked
+    kept = {linked.nodes[index].key for index in state(revised).cache}
+    assert kept <= {"source", "choice"}  # what read the replaced choice is not kept
     assert revised.result == 3
     assert calls == [1, 2]
 
