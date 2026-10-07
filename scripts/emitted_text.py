@@ -114,6 +114,7 @@ SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-dotp", "kernels.sweeps.pure_dot_product_numeric", ()),
     ("sweep-dotp-stress", "kernels.sweeps.pure_dot_product_numeric", ("--stress",)),
     ("sweep-adapters", "kernels.sweeps.adapter_numeric", ()),
+    ("sweep-thresholds", "kernels.sweeps.threshold_numeric", ()),
 )
 SMOKE_SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-packed", "kernels.sweeps.matmul_numeric", ("--case", "packed")),
@@ -956,11 +957,17 @@ def _publish(source: Path, target: Path, blank: bool) -> None:
         destination.write_bytes(data)
 
 
+def _has_module(root: Path, job: Job) -> bool:
+    """Whether the checkout at ``root`` has the module a sweep job runs."""
+    return (root / "tests" / (job.args[0].replace(".", "/") + ".py")).is_file()
+
+
 def emit(target: Target, out: Path, work: Path, blank: bool, strict: bool = True) -> dict[str, Any]:
     """The emitted text into ``out`` (designs, ipxact, package); the keys of its jobs.
 
     Unless ``strict``, an evidence section (IP-XACT, package) the checkout cannot
-    emit says why in its ``unavailable.txt`` (an older checkout's API: compare);
+    emit says why in its ``unavailable.txt``, and a numeric sweep whose module the
+    checkout does not have is not one of its jobs (an older checkout: compare);
     the designs, which the keys digest, are always required.
     """
     if out.exists():
@@ -968,6 +975,8 @@ def emit(target: Target, out: Path, work: Path, blank: bool, strict: bool = True
     out.mkdir(parents=True)
     work.mkdir(parents=True, exist_ok=True)
     listed = jobs(target.root, finnlib=target.finnlib)
+    if not strict:
+        listed = [job for job in listed if job.kind != "sweep" or _has_module(target.root, job)]
     keys = compute_keys(target, listed, work / "keys", ipxact=work / "ipxact")
     failed = {name: entry["error"] for name, entry in keys["jobs"].items() if entry.get("error")}
     if failed:

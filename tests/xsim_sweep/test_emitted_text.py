@@ -331,6 +331,17 @@ def test_a_job_runs_unless_the_baseline_passed_it_under_the_same_key() -> None:
     }
 
 
+def test_an_older_checkout_has_only_the_sweeps_whose_modules_it_has(tmp_path: Path) -> None:
+    """compare emits an older commit's text: a sweep added since is no job of it, and so
+    runs as one not in the baseline."""
+    sweep = tool.Job("sweep-new", "sweep", ("kernels.sweeps.new_numeric",))
+    module = tmp_path / "tests/kernels/sweeps/new_numeric.py"
+    assert not tool._has_module(tmp_path, sweep)
+    module.parent.mkdir(parents=True)
+    module.write_text("")
+    assert tool._has_module(tmp_path, sweep)
+
+
 def test_a_summary_reports_skipped_jobs_and_fails_on_a_baseline_that_did_not_pass(
     tmp_path: Path,
 ) -> None:

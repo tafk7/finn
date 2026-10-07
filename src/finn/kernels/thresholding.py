@@ -3,22 +3,27 @@
 
 """Integer profile of FinnLib thresholding_axi, including resident parameter sets.
 
-thresholds[set][channel][threshold] is an immutable, sorted table of numerical
-integers. Its shape owns SETS, C and N. The input is sign/zero extended or
-saturated to the threshold dtype before comparison, as the native RTL specifies.
-Output is the threshold count plus bias. Runtime writes must preserve sorted
-rows. With multiple sets, each input beat requires a matching set-selector beat.
+thresholds[set][row][threshold] is an immutable, sorted table of numerical
+integers. Its shape owns SETS, C and N: C is the RTL's number of threshold rows,
+which it applies round-robin over the flat input stream. A table has one row for
+each channel, or one row shared by every channel (C = 1: each PE lane keeps one
+copy of it, and a runtime write reaches every lane). The input is sign/zero
+extended or saturated to the threshold dtype before comparison, as the native
+RTL specifies. Output is the threshold count plus bias. Runtime writes must
+preserve sorted rows. With multiple sets, each input beat requires a matching
+set-selector beat.
 
-PE, the channels a beat, is a Decision over the divisors of the table's C,
-known before placement, so a flat build commits it as a choice. Placed, the
-input and output walk one schedule row-major, ``c`` split by PE innermost;
-their tensors bind the extents, and the channel count must agree with the
-table's (``kernel-extents``). The set port indexes beats, which no index of a
-tensor expresses, so it presents a given sequence.
+PE, the channels a beat, is a Decision over the divisors of the input's
+channels; flat, with no channel to bind them, it is any PE the RTL takes with
+the table's C (``lane_counts``), committed as a choice. Placed, the input and
+output walk one schedule row-major, ``c`` split by PE innermost; their tensors
+bind the extents, and the table has one row or one row a channel
+(``threshold-rows``). The set port indexes beats, which no index of a tensor
+expresses, so it presents a given sequence.
 
 The threshold memories are the kernel's choice of resource, by pipeline stage.
 The RTL compares through M = clog2(N + 1) stages; stage s keeps one memory per
-PE lane, of depth ``base * 2**s`` (``base`` the channel folds; with several sets,
+PE lane, of depth ``base * 2**s`` (``base`` the row folds, C / PE or 1; with several sets,
 the sets times the folds rounded up to a power of two), and assigns each a
 resource monotone in depth from its two depth triggers. So the expressible assignments are: the
 deepest ``ultra_stages`` in UltraRAM, the ``block_stages`` above them in block
@@ -47,6 +52,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
 from finn.core.space import (
     ConstraintGroup,
@@ -75,7 +81,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import CLOCK, RESET, Kernel
+from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
@@ -113,6 +119,34 @@ def stage_counts(stages: object) -> Domain[int]:
     )
 
 
+def lane_counts(rows: object) -> Domain[int]:
+    """PE's domain: the divisors of the input's channels, once a placed port binds them;
+    flat, any PE the RTL takes with the table's ``rows`` (C a multiple of PE, or PE of C)."""
+    divisors = divisors_of(1).candidates
+    assert divisors is not None
+
+    def accepts(*, candidate: int, rows: int, extents: Mapping[Index, int]) -> bool:
+        if type(candidate) is not int or candidate < 1:
+            return False
+        if c in extents:
+            return extents[c] % candidate == 0
+        return candidate < 1 << 32 and (rows % candidate == 0 or candidate % rows == 0)
+
+    def candidates(*, rows: int, extents: Mapping[Index, int]) -> tuple[int, ...] | Rejected:
+        if c not in extents:
+            return reject("kernel-extents", f"{c!r} is bound by no placed port")
+        return tuple(cast("tuple[int, ...]", divisors(extent=extents[c])))
+
+    return domain(
+        accepts=accepts,
+        candidates=candidates,
+        semantics=default_semantics(int),
+        ordered=True,
+        rows=rows,
+        extents=Kernel.extents,
+    )
+
+
 class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = 1
@@ -129,7 +163,7 @@ class ThresholdingAxiKernel(Kernel):
         refuses a table that is not rectangular)."""
         table = self.thresholds
         if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "nonempty sets/channels/thresholds are required")
+            return reject("threshold-shape", "nonempty sets/rows/thresholds are required")
         return len(table), len(table[0]), len(table[0][0])
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -146,12 +180,12 @@ class ThresholdingAxiKernel(Kernel):
         return resolve_qonnx_datatype_name(f"INT{bits}")
 
     @derived
-    def channels(self) -> int:
-        """C, the table's: known before placement, so a flat build has its factor domain."""
+    def rows(self) -> int:
+        """C, the table's rows: one a channel, or one shared by every channel."""
         return self.shape[1]
 
-    # PE channels a beat; PE above C would carry rows in the lanes, not modelled yet.
-    pe: int = Decision(domain=divisors_of(channels))
+    channels = extent_of(c)  # the input's channels, bound by placement
+    pe: int = Decision(domain=lane_counts(rows))  # channels a beat
     # Where a parent places it: the channels it sits on, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
     input_channel: Channel = Param(required=False)
@@ -219,8 +253,8 @@ class ThresholdingAxiKernel(Kernel):
 
     def stage_depth(self, stage: int) -> int:
         """The depth of a stage's memory, as the RTL computes it from SETS, C and PE."""
-        (sets, channels, _), pe = self.shape, self.pe
-        folds = 1 if pe >= channels else channels // pe
+        (sets, rows, _), pe = self.shape, self.pe
+        folds = 1 if pe >= rows else rows // pe
         base = sets * (1 << (folds - 1).bit_length()) if sets > 1 else folds
         return base << stage
 
@@ -255,13 +289,11 @@ class ThresholdingAxiKernel(Kernel):
 
     @constraint
     def table_supported(self) -> bool | Rejected:
-        table, (_, channels, count) = self.thresholds, self.shape
-        if any(
-            len(group) != channels or any(len(row) != count for row in group) for group in table
-        ):
+        table, (_, rows, count) = self.thresholds, self.shape
+        if any(len(group) != rows or any(len(row) != count for row in group) for group in table):
             return reject(
                 "threshold-shape",
-                "thresholds must be a rectangular (sets, channels, thresholds) table",
+                "thresholds must be a rectangular (sets, rows, thresholds) table",
             )
         try:
             minimum, maximum = ordinary_integer_bounds(self.threshold_dtype)
@@ -315,9 +347,9 @@ class ThresholdingAxiKernel(Kernel):
     @derived
     def config_bus(self) -> Bus | Rejected:
         """The AXI-Lite configuration bus, present in every configuration."""
-        (_, channels, count), pe = self.shape, self.pe
+        (_, rows, count), pe = self.shape, self.pe
         bits = self.threshold_dtype.bitwidth()
-        cf, cpe = max(1, channels // pe), min(channels, pe)
+        cf, cpe = max(1, rows // pe), min(rows, pe)
         address_bits = (
             sum((value - 1).bit_length() for value in (cf, cpe, count, (bits + 31) // 32)) + 2
         )
@@ -366,9 +398,15 @@ class ThresholdingAxiKernel(Kernel):
 
     @derived
     def schedule(self) -> Schedule | Rejected:
-        """Row-major over the input's axes, ``c`` (the table's C) split by PE innermost."""
-        indices = self.indices
-        return self.bound_schedule(indices, self.factors, extents={c: self.channels})
+        """Row-major over the input's axes, ``c`` (the input's channels) split by PE
+        innermost; the table has one row, or one row a channel."""
+        rows, channels = self.rows, self.channels
+        if rows not in (1, channels):
+            return reject(
+                "threshold-rows",
+                f"{rows} threshold rows are neither one nor the {channels} channels",
+            )
+        return self.bound_schedule(self.indices, self.factors)
 
     @derived
     def frame_cycles(self) -> int:
@@ -415,7 +453,7 @@ class ThresholdingAxiKernel(Kernel):
     )
 
     def parameters(self) -> Mapping[str, int | str]:
-        table, (sets, channels, count) = self.thresholds, self.shape
+        table, (sets, rows, count) = self.thresholds, self.shape
         a, bits = self.input_dtype, self.threshold_dtype.bitwidth()
         mask = (1 << bits) - 1
         image = (
@@ -435,7 +473,7 @@ class ThresholdingAxiKernel(Kernel):
             "WI": a.bitwidth(),
             "WT": bits,
             "N": count,
-            "C": channels,
+            "C": rows,
             "PE": self.pe,
             "SIGNED": int(a.signed()),
             "FPARG": 0,

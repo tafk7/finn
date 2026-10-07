@@ -72,6 +72,7 @@ from finn.kernels.vpc import VpcKernel
 from kernels.adapted import columns_first
 from kernels.conformance import (
     MODES,
+    ControlPort,
     NonConformance,
     Sample,
     _settle_known,
@@ -171,6 +172,31 @@ def thresholding() -> dict[str, Any]:
     )
 
 
+# One row shared by every channel (C = 1), PE above it: each lane keeps the row; with
+# AXI-Lite, the wrapper's configuration addresses N alone.
+SHARED_CHANNELS = 8
+SHARED_ROW = (-3, 0, 2)
+
+
+def shared_row(*, axilite: bool = False) -> dict[str, Any]:
+    def reference(input_channel: np.ndarray) -> dict[str, np.ndarray]:
+        return {"output_channel": (input_channel[..., None] >= np.array(SHARED_ROW)).sum(axis=-1)}
+
+    facts: dict[str, object] = {**THRESHOLDING_FACTS, "thresholds": ((SHARED_ROW,),)}
+    choices = {**THRESHOLDING_CHOICES, "use_axilite": axilite}
+    if axilite:
+        facts["control"] = ControlPort("s_axilite")
+    return dict(
+        space_type=ThresholdingAxiKernel,
+        inputs={"input_channel": tensor((PIXELS, SHARED_CHANNELS), "INT4")},
+        outputs={"output_channel": (PIXELS, SHARED_CHANNELS)},
+        reference=reference,
+        factors=({"pe": 4},) if axilite else ({"pe": 1}, {"pe": 4}, {"pe": SHARED_CHANNELS}),
+        choices=choices,
+        facts=facts,
+    )
+
+
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
 
 r, c = Index("r"), Index("c")
@@ -186,7 +212,7 @@ class RowsFirst(ThresholdingAxiKernel):
     def schedule(self) -> Schedule | Rejected:
         *outer, last = self.indices
         order = (last, *outer) if type(self).channels_outer else (*outer, last)
-        return self.bound_schedule(tuple(order), self.factors, extents={last: self.channels})
+        return self.bound_schedule(tuple(order), self.factors)
 
 
 class ChannelsFirst(RowsFirst):
@@ -240,10 +266,13 @@ class LanesInOrder(ThresholdingAxiKernel):
     id = "test.thresholding_axi.lanes_in_order"
 
     @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        # The window axis binds nothing: the split's extents are the author's, a row a channel.
+        return self._bound({co: self.rows // 3, ci: 3})
+
+    @derived
     def schedule(self) -> Schedule | Rejected:
-        # The window axis binds nothing: the split's extents are the author's.
-        split = {co: self.channels // 3, ci: 3}
-        return self.bound_schedule((r, co, ci), factors=split, extents=split)
+        return self.bound_schedule((r, co, ci), factors={co: self.rows // 3, ci: 3})
 
     input, output = split_ports(schedule, (co, ci))
 
@@ -553,6 +582,8 @@ CASES = {
     "dotp-int8": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8),
     "dotp-int8-depthwise": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8, Form.DEPTHWISE),
     "thresholding": thresholding,
+    "thresholding-shared-row": shared_row,
+    "thresholding-shared-row-axilite": lambda: shared_row(axilite=True),
     "thresholding-rows-first": lambda: scheduled(RowsFirst),
     "thresholding-lanes-in-order": lambda: split(LanesInOrder),
     "eltwise": eltwise,

@@ -6,7 +6,7 @@
 #   - each conformance XSim test in its own pytest process,
 #   - the rest of the kernel suite, the KernelOps' XSim tests and their Vivado tests
 #     (packaging; marker vivado), with Vivado selected,
-#   - the numeric XSI sweeps (MatMul, dotp, adapters), one simulation per process.
+#   - the numeric XSI sweeps (MatMul, dotp, adapters, thresholds), one simulation per process.
 #
 # For "XSim from a commit", run it in a worktree or clone at that commit: natively
 # with its own .venv (uv sync), or in a sandbox with the image's environment.

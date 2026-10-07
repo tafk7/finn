@@ -240,7 +240,7 @@ def test_a_shape_the_inference_cannot_know_is_not_overwritten() -> None:
 @pytest.mark.parametrize(
     "thresholds, dtype, table, annotation",
     [
-        # Rounded up; a broadcast row (one for every channel) becomes 16 rows.
+        # Rounded up; the row for every channel stays one row.
         ([[63.75, 191.25]], "UINT8", [64, 192], "UINT8"),
         # Clipped to max + 1 of the input: annotated by what it holds, not by the input.
         ([[0.5, 300.0]], "UINT8", [1, 256], "UINT9"),
@@ -254,7 +254,7 @@ def test_the_thresholds_become_integers_against_the_input_type(
     source = tfc_input(thresholds, dtype=dtype)
     model = through_the_kernel_path(source)
     values = model.get_initializer("thresholds")
-    assert values.shape == (16, len(table))
+    assert values.shape == (1, len(table))
     assert (values == np.array(table, dtype=np.float32)).all()
     assert model.get_tensor_datatype("thresholds").name == annotation
     # Exact: every value of the input type, in both graphs.

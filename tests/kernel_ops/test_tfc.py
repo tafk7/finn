@@ -82,6 +82,13 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     root = partition_root(body, body.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
+    # The input's one threshold row, shared by its 784 pixels, is bound as it is
+    # (thresholding_axi's C = 1), not tiled to 784 rows.
+    first = body.graph.node[0]
+    assert body.get_initializer(first.input[1]).shape == (1, 2)
+    leaves = dict(root.point.module.fragment.instances)
+    parameters = dict(leaves[first.name].parameters)
+    assert parameters["C"] == 1 and len(parameters["THRESHOLDS"]) < 32
     write_boundary_facts(body)
     assert partition_facts(body) == FACTS
     # Python ints: the packed words are wider than numpy's integers.

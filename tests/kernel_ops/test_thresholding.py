@@ -38,11 +38,33 @@ def test_facts_and_the_output() -> None:
     assert op(thresholding_model()).output_tensors()["y"][1].name == "UINT2"
 
 
-def test_the_thresholds_must_be_an_initializer_with_a_row_per_channel() -> None:
+def test_the_thresholds_must_be_an_initializer_with_one_row_or_a_row_per_channel() -> None:
     with pytest.raises(KernelOpError, match="must be an initializer"):
         op(thresholding_model(stored=False, infer=False)).facts()
-    with pytest.raises(KernelOpError, match=r"\(1, 3\), not one row for each of the 4 channels"):
-        op(thresholding_model(thresholds=THRESHOLDS[:1], infer=False)).facts()
+    with pytest.raises(KernelOpError, match=r"\(2, 3\), neither one row .* its 4 channels"):
+        op(thresholding_model(thresholds=THRESHOLDS[:2], infer=False)).facts()
+
+
+def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
+    """The graph's (1, N) row stays one row; the kernel binds C = 1 and takes its
+    channels and PE's domain from the input."""
+    model = thresholding_model(thresholds=THRESHOLDS[:1], bias=-1)
+    assert model.get_initializer("t").shape == (1, 3)
+    assert op(model).facts().formals()["thresholds"] == ((tuple(int(v) for v in THRESHOLDS[0]),),)
+    op(model).save({"pe": 4, "use_axilite": False, "deep_pipeline": False, **MEMORY})
+    activate = op(model).point().activate
+    parameters = dict(activate.module.parameters)
+    assert (parameters["C"], parameters["PE"]) == (1, 4)
+    assert parameters["THRESHOLDS"] == "'{'{'{5'h17, 5'h1, 5'h8}}}"  # INT5, as normalized
+    # One row a lane: stage 1 holds two words, whatever the channels.
+    assert parameters["DEPTH_TRIGGER_BRAM"] == 2
+    with pytest.raises(KernelOpError) as error:
+        op(model).save({"pe": 3})  # not a divisor of the input's 4 channels
+    assert error.value.keys == ("pe",)
+    values = np.arange(-12, 12, dtype=np.float32).reshape(3, 8)[:, :4]
+    produced = execute_onnx(model, {"x": values})["y"]
+    expected = execute_onnx(multithreshold(model), {"x": values})["y"]
+    assert np.array_equal(produced, expected)
 
 
 def test_an_empty_threshold_table_is_refused_by_name() -> None:
