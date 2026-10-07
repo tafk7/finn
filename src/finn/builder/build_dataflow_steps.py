@@ -86,6 +86,7 @@ from finn.analysis.fpgadataflow.res_estimation import (
 from finn.analysis.fpgadataflow.validate_dataflow_conversion import (
     validate_dataflow_conversion,
 )
+from finn.builder.build_dataflow_checks import refuse_kernel_path_config
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -654,7 +655,11 @@ def kernel_target(cfg: DataflowBuildConfig):
 
 def step_kernel_ops(model: ModelWrapper, cfg: DataflowBuildConfig):
     """State the build target in the model (kernel_target) and rewrite each node a
-    KernelOp binds (MatMul, MultiThreshold) as one: ToKernelOps."""
+    KernelOp binds (MatMul, MultiThreshold) as one: ToKernelOps. The build is on the
+    kernel path from here, so the configuration is checked for it first: what only the
+    HWCustomOp path makes is refused, naming the step that does it on the kernel path
+    (build_dataflow_checks.kernel_path_checks)."""
+    refuse_kernel_path_config(cfg)
     return model.transform(ToKernelOps(kernel_target(cfg)))
 
 

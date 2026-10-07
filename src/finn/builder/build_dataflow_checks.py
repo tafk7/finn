@@ -9,14 +9,16 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
     ShellFlowType,
+    VerificationStepType,
     verify_step_prereqs,
 )
+from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.util.basic import (
     get_vivado_version,
     part_map,
@@ -58,8 +60,91 @@ def _check(name, severity, condition, msg_fail, suggestion=None):
     return Check(name, severity, False, msg_fail, suggestion)
 
 
-def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
-    """Run all configuration checks and return report."""
+class KernelPathConfigError(AssertionError):
+    """A build configuration the kernel path cannot build, each refusal named."""
+
+
+def holds_kernel_ops(model: Any) -> bool:
+    """Whether the model holds KernelOps (finn.custom_op.kernels): it is on the kernel
+    path, whose steps decide nothing of the HWCustomOp path's."""
+    return any(node.domain == KERNEL_OPS_DOMAIN for node in model.graph.node)
+
+
+#: The outputs and verifications only the HWCustomOp path makes, each with what the
+#: kernel path does instead: asked for on the kernel path, its steps would run the
+#: HWCustomOp path's transformations on KernelOps.
+KERNEL_PATH_REFUSED = {
+    DataflowOutputType.STITCHED_IP: "step_synthesize_bitfile packages the partition as IP "
+    "(ZynqBuild's PackagePartition); there is no stitched IP of its own",
+    DataflowOutputType.OOC_SYNTH: "there is no out-of-context synthesis of the partition; "
+    "step_synthesize_bitfile reports the placed design (post_synth_resources.json)",
+    DataflowOutputType.RTLSIM_PERFORMANCE: "step_kernel_choices reports each member's "
+    "cycles and the bottleneck (report/kernel_choices.json); no step measures them "
+    "in simulation",
+    DataflowOutputType.PORTABLE_RTL: "step_synthesize_bitfile emits the partition's RTL "
+    "into its packaged IP; no step exports it as a portable project",
+    VerificationStepType.STITCHED_IP_RTLSIM: "step_verify_kernel_partition checks the "
+    "partition (kernel_partition_python, kernel_partition_elaboration)",
+}
+
+
+def kernel_path_checks(cfg: DataflowBuildConfig) -> List[Check]:
+    """The checks of a build on the kernel path (one whose model holds KernelOps): it
+    refuses the outputs and verifications only the HWCustomOp path makes, naming the
+    step that does it on the kernel path (KERNEL_PATH_REFUSED), and a bitfile in a shell
+    other than Zynq's. Run before the build when the model it starts from holds
+    KernelOps, and by step_kernel_ops when it makes them (refuse_kernel_path_config)."""
+    checks = []
+    asked = {*(cfg.generate_outputs or ()), *cfg._resolve_verification_steps()}
+    for refused, instead in KERNEL_PATH_REFUSED.items():
+        if refused in asked:
+            checks.append(
+                _check(
+                    "kernel_path_output",
+                    Severity.ERROR,
+                    False,
+                    f"{refused.value}: the kernel path does not make it: {instead}",
+                    f"Remove {refused.name} from "
+                    + (
+                        "verify_steps"
+                        if isinstance(refused, VerificationStepType)
+                        else "generate_outputs"
+                    ),
+                )
+            )
+    has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
+    if has_bitfile and cfg.shell_flow_type != ShellFlowType.VIVADO_ZYNQ:
+        checks.append(
+            _check(
+                "kernel_path_shell",
+                Severity.ERROR,
+                False,
+                f"The kernel path builds a bitfile in the Zynq shell only, not in "
+                f"{cfg.shell_flow_type}: step_synthesize_bitfile's other shells build "
+                "HWCustomOp partitions",
+                "Set shell_flow_type to VIVADO_ZYNQ, or remove BITFILE from generate_outputs",
+            )
+        )
+    return checks
+
+
+def refuse_kernel_path_config(cfg: DataflowBuildConfig) -> None:
+    """Refuse a configuration the kernel path cannot build (kernel_path_checks), every
+    refusal named; mute_config_assertions mutes it as it does the build's checks."""
+    failed = [check for check in kernel_path_checks(cfg) if not check.passed]
+    if not failed:
+        return
+    named = "; ".join(f"{check.name}: {check.message}" for check in failed)
+    if cfg.mute_config_assertions:
+        print(f"WARNING: muted by mute_config_assertions=True: {named}")
+        return
+    raise KernelPathConfigError(f"The kernel path refuses the configuration: {named}")
+
+
+def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report:
+    """Run all configuration checks and return report. ``model`` is the model the
+    build starts from: one that holds KernelOps is on the kernel path
+    (kernel_path_checks), and the HWCustomOp path's checks do not apply to it."""
     v = get_vivado_version()
     checks = []
 
@@ -79,10 +164,22 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
         # steps/start_step/stop_step can't be resolved; that will fail on its
         # own once the build actually starts, nothing more to check here
         resolved_names = all_names = None
-    # A build through the kernel path (KernelOps) runs none of the HWCustomOp
-    # path's conversion, folding or specialization: their checks do not apply.
-    kernel_path = all_names is not None and bool(
-        all_names & {"phase_kernel_path", "step_kernel_ops"}
+    # A build is on the kernel path when its model holds KernelOps: the model it
+    # starts from here, or the one step_kernel_ops makes, which checks it then. Each
+    # HWCustomOp path check applies where the step it is about runs.
+    kernel_path = model is not None and holds_kernel_ops(model)
+    if kernel_path:
+        checks += kernel_path_checks(cfg)
+    folds = all_names is not None and bool(
+        all_names
+        & {
+            "phase_optimize_hardware",
+            "step_target_fps_parallelization",
+            "step_apply_folding_config",
+        }
+    )
+    converts = all_names is not None and bool(
+        all_names & {"phase_convert_to_hardware", "step_convert_to_hw"}
     )
     alveo_boards = set(vitis_part_map.keys())
     pynq_boards = set(pynq_part_map.keys())
@@ -293,6 +390,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     )
     if (
         needs_folding
+        and folds
         and not kernel_path
         and cfg.target_fps is None
         and cfg.folding_config_file is None
@@ -309,19 +407,6 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
                 "Set target_fps for automatic folding, or provide folding_config_file "
                 "for manual PE/SIMD settings, so a slow build isn't mistaken for "
                 "a deliberate choice",
-            )
-        )
-
-    if kernel_path and has_bitfile and cfg.shell_flow_type != ShellFlowType.VIVADO_ZYNQ:
-        checks.append(
-            _check(
-                "kernel_path_shell",
-                Severity.ERROR,
-                False,
-                f"The kernel path builds a bitfile in the Zynq shell only, not in "
-                f"{cfg.shell_flow_type}: step_synthesize_bitfile's other shells build "
-                "HWCustomOp partitions",
-                "Set shell_flow_type to VIVADO_ZYNQ, or remove BITFILE from generate_outputs",
             )
         )
 
@@ -424,7 +509,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
             )
         )
 
-    if not cfg.standalone_thresholds and not kernel_path:
+    if not cfg.standalone_thresholds and converts and not kernel_path:
         checks.append(
             _check(
                 "standalone_thresholds",

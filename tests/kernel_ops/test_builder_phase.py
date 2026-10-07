@@ -24,6 +24,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow_checks import (
+    KernelPathConfigError,
+    Severity,
+    run_all_config_checks,
+)
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -41,7 +46,7 @@ from finn.builder.build_dataflow_steps import (
 from finn.custom_op.kernels.base import KernelOpError, read_target
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.transformation.kernels import kernel_choices_config
-from kernel_ops.models import matmul_model
+from kernel_ops.models import chain_source, kernel_model, matmul_model
 from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -160,6 +165,63 @@ def test_the_verification_refuses_a_partition_for_another_target(
     cfg.synth_clk_period_ns = 4.0
     with pytest.raises(KernelOpError, match="period_ns: the model states 5.0, the build 4.0"):
         step_verify_kernel_partition(body, cfg)
+
+
+def failed_checks(cfg: DataflowBuildConfig, model: ModelWrapper) -> dict[str, list[str]]:
+    """The configuration errors of a build of ``model``, their messages by name."""
+    failed: dict[str, list[str]] = {}
+    for check in run_all_config_checks(cfg, model).checks:
+        if not check.passed and check.severity == Severity.ERROR:
+            failed.setdefault(check.name, []).append(check.message)
+    return failed
+
+
+def test_the_kernel_path_refuses_what_only_the_hw_custom_op_path_makes(tmp_path: Path) -> None:
+    """step_kernel_ops, where a build takes the kernel path, refuses the outputs and
+    verifications only the HWCustomOp path makes, each naming the step that does it on
+    the kernel path, before it converts anything."""
+    cfg = config(
+        tmp_path,
+        generate_outputs=[
+            DataflowOutputType.STITCHED_IP,
+            DataflowOutputType.RTLSIM_PERFORMANCE,
+            DataflowOutputType.PORTABLE_RTL,
+            DataflowOutputType.BITFILE,
+        ],
+        verify_steps=[VerificationStepType.STITCHED_IP_RTLSIM],
+    )
+    with pytest.raises(KernelPathConfigError) as refused:
+        step_kernel_ops(chain_source(), cfg)
+    message = str(refused.value)
+    for output, step in (
+        ("stitched_ip:", "step_synthesize_bitfile packages the partition"),
+        ("rtlsim_performance:", "step_kernel_choices reports each member's cycles"),
+        ("portable_rtl:", "step_synthesize_bitfile emits the partition's RTL"),
+        ("stitched_ip_rtlsim:", "step_verify_kernel_partition checks the partition"),
+    ):
+        assert f"{output} the kernel path does not make it: {step}" in message
+    # The outputs it makes are accepted.
+    cfg = config(tmp_path, generate_outputs=[DataflowOutputType.BITFILE])
+    converted = step_kernel_ops(chain_source(), cfg)
+    assert {node.domain for node in converted.graph.node} >= {KERNEL_OPS_DOMAIN}
+
+
+def test_a_build_from_kernel_ops_is_on_the_kernel_path_whatever_its_steps(
+    tmp_path: Path,
+) -> None:
+    """The build's checks read the path from the model it starts from: one of KernelOps
+    built by its outputs phase alone is checked as the kernel path (its refusals, and
+    none of the HWCustomOp path's folding checks); a model without KernelOps through
+    the HWCustomOp path's phases is not."""
+    stitched = [DataflowOutputType.STITCHED_IP, DataflowOutputType.BITFILE]
+    cfg = config(tmp_path, steps=["phase_generate_outputs"], generate_outputs=stitched)
+    failed = failed_checks(cfg, kernel_model())
+    assert list(failed) == ["kernel_path_output"]
+    assert failed["kernel_path_output"][0].startswith("stitched_ip: the kernel path")
+    cfg = config(tmp_path, steps=None, generate_outputs=stitched)
+    failed = failed_checks(cfg, chain_source())
+    assert "kernel_path_output" not in failed
+    assert "folding_missing" in failed
 
 
 def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:

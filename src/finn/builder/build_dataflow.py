@@ -242,7 +242,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     _maybe_enable_verify_behavioral(cfg)
 
     # Run configuration checks
-    config_report = run_all_config_checks(cfg)
+    config_report = run_all_config_checks(cfg, model)
     print(format_report(config_report))
     report_path = save_report(config_report, cfg.output_dir)
     print(f"Configuration check report saved to: {report_path}")
