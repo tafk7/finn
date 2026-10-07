@@ -75,13 +75,16 @@ LAYERS: tuple[Layer, ...] = (
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
     Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
-    # Kernels bound to RTL/HLS sources. They never read an ONNX graph.
+    # Kernels bound to RTL/HLS sources. They never read an ONNX graph. One module of
+    # util: the resource store (standard library only), where an input_gen's buffer
+    # is read from FinnLib's RTL as FINN resolves FinnLib (decision FS6).
     Layer(
         "kernels",
         ("finn.kernels",),
         ("space", "dataflow", "kernels.artifacts"),
         ("qonnx.core.datatype", "numpy", "pyslang"),
         "tests/kernels",
+        also=("finn.resources",),
     ),
     # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
     Layer(

@@ -39,6 +39,7 @@ from finn.kernels.artifacts.rtl import (
     Declined,
     ExtractedModule,
     check_abi,
+    evaluate,
     extract,
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
@@ -744,3 +745,43 @@ def test_the_parse_rate_over_everything_we_compile_is_recorded(
     # is that the checker reaches the great majority, so the guarantee is
     # worth having.
     assert len(failed) / len(real) < 0.05
+
+
+# -- evaluated constants (decision FS6) -----------------------------------------
+
+
+INPUT_GEN_REPLAY = (
+    ("COEFS", "'{0, 1}"),
+    ("D", "2"),
+    ("DATA_WIDTH", "8"),
+    ("DIMS", "'{4, 49}"),
+    ("FM_SIZE", "49"),
+)
+
+
+def test_an_elaborated_constant_is_read_integer_or_array() -> None:
+    """``input_gen``'s nest constants, arrays included, as slang evaluates them."""
+
+    source = (finnlib_root() / "rtl/shape/input_gen.sv",)
+    names = ("BUF_SIZE", "MAX_OCCUPANCY", "R_FLAG", "TERMINAL_RP_INC", "TERMINAL_FP_INC", "DIMS")
+    found = evaluate(source, "input_gen", INPUT_GEN_REPLAY, names)
+    assert not isinstance(found, Declined), found
+    assert dict(found) == {
+        "BUF_SIZE": 128,
+        "MAX_OCCUPANCY": 97,
+        "R_FLAG": (1, 0, 0),
+        "TERMINAL_RP_INC": (1, -48, 1),
+        "TERMINAL_FP_INC": (-49, 0, 0),
+        "DIMS": (4, 49),
+    }
+
+
+def test_an_evaluation_declines_what_it_cannot_establish(tmp_path: Path) -> None:
+    source = (finnlib_root() / "rtl/shape/input_gen.sv",)
+    missing = evaluate(source, "input_gen", INPUT_GEN_REPLAY, ("NO_SUCH",))
+    assert isinstance(missing, Declined) and missing.details == ("NO_SUCH",)
+    typo = evaluate(source, "input_gen", (*INPUT_GEN_REPLAY, ("DEPHT", "3")), ("BUF_SIZE",))
+    assert isinstance(typo, Declined) and typo.details == ("DEPHT",)
+    real = tmp_path / "real.sv"
+    real.write_text("module real_ #(parameter real S = 1.5) ();\nendmodule\n")
+    assert isinstance(evaluate((real,), "real_", (), ("S",)), Declined)

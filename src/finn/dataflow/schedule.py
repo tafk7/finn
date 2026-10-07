@@ -36,6 +36,12 @@ reads a depthwise operand ``(M, K, N)`` as ``(M, K * N)``.
 ``closing`` is the marker a reduction ends with: the reduced indices must be
 the innermost beats.
 
+``beat_times`` is the same projection told as times: the schedule beat at which
+each of a port's beats is presented, a reduced index's on its last step and a
+held one's on its first. A ``Pace`` is a port's schedule with its ``reduces`` and
+``holds``: its beat times and its kernel's beats a frame, which a channel's ends
+state with their contracts so that a FIFO between them can be sized.
+
 ``bind_extents`` gives the indices their extents from the tensors the ports
 read (each an ``Access``), so a kernel states which index addresses which
 axis and never writes an extent getter:
@@ -255,6 +261,39 @@ class Schedule:
         except ValueError as error:
             raise Refused(str(error)) from error
 
+    def beat_times(
+        self, *, reduces: Sequence[Index] = (), holds: Sequence[Index] = ()
+    ) -> tuple[int, ...]:
+        """The schedule beat at which each beat of a port is presented, in its order.
+
+        The port is ``present``'s with the same ``reduces`` and ``holds``: it steps
+        through every other index, one beat each schedule beat that reads it. A
+        reduced index's beat is presented on its last step (when the reduction
+        closes), a held one's on its first (before the run). A port reading every
+        beat is ``0, 1, …, beat_count - 1``; an output closing a reduction of ``s``
+        steps innermost is ``s - 1, 2s - 1, …``. Times count schedule beats from the
+        frame's first: one a clock cycle when the kernel runs at its rate (K10),
+        before its pipeline's constant latency.
+        """
+        known = set(self.order)
+        for named in (*reduces, *holds):
+            if named not in known:
+                raise Refused(f"{named!r} is not an index of the schedule")
+        if set(reduces) & set(holds):
+            raise Refused("an index is reduced or held, not both")
+        # Each index's weight in the beat count: the beats of every index inside it.
+        weight: dict[Index, int] = {}
+        inner = 1
+        for index in reversed(self.order):
+            weight[index], inner = inner, inner * self.steps(index)
+        times = [sum((self.steps(index) - 1) * weight[index] for index in reduces)]
+        for index in self.order:
+            if index in reduces or index in holds:
+                continue
+            step = weight[index]
+            times = [time + beat * step for time in times for beat in range(self.steps(index))]
+        return tuple(times)
+
     def closing(self, reduces: Sequence[Index]) -> LevelEnd:
         """The marker ending each reduction: the reduced indices must be the innermost beats."""
         order = self.order
@@ -262,6 +301,29 @@ class Schedule:
         if not reduces or sorted(suffix) != sorted(reduces):
             raise Refused(f"the reduced {list(reduces)} are not the innermost of {list(order)}")
         return LevelEnd(prod(self.steps(index) for index in reduces))
+
+
+@dataclass(frozen=True)
+class Pace:
+    """When a port presents its beats: its kernel's ``schedule`` and the indices the
+    port is presented after (``reduces``) or before (``holds``), as it presents them.
+
+    ``times`` is each beat's schedule beat (``Schedule.beat_times``), ``span`` the
+    beats its kernel takes a frame: a port's beats lie within its span, and the rest
+    of a period is its kernel's idle time.
+    """
+
+    schedule: Schedule
+    reduces: tuple[Index, ...] = ()
+    holds: tuple[Index, ...] = ()
+
+    @property
+    def times(self) -> tuple[int, ...]:
+        return self.schedule.beat_times(reduces=self.reduces, holds=self.holds)
+
+    @property
+    def span(self) -> int:
+        return self.schedule.beat_count
 
 
 @dataclass(frozen=True)
@@ -363,4 +425,4 @@ def bind_extents(
     return bound
 
 
-__all__ = ["Access", "Affine", "Index", "Refused", "Schedule", "bind_extents"]
+__all__ = ["Access", "Affine", "Index", "Pace", "Refused", "Schedule", "bind_extents"]

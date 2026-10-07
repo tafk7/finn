@@ -58,6 +58,50 @@ def _selected(depth: int, bits: int, style: str) -> str:
     return "block" if depth <= 2028 else "ultra"
 
 
+def fifo_storage(depth: int, bits: int, style: str) -> FifoStorage | None:
+    """The storage the native RTL implements for DEPTH, DATA_WIDTH and the RAM_STYLE it
+    is given, and the words it accepts; ``None`` when its memory size overflows."""
+    effective = _selected(depth, bits, style)
+    if effective == "shift":
+        capacity = max(5, depth)
+    elif effective == "distributed":
+        # DEPTH - 1 LUTRAM entries behind one output register.
+        capacity = depth
+    else:
+        # Native memory decomposition; include the BRAM read pipeline or
+        # the URAM credit-limited output queue in accepted-word capacity.
+        ultra = effective == "ultra"
+        required = depth - (17 if ultra else 1)
+        lo, hi = (required - 1).bit_length(), 0
+        if lo > (12 if ultra else 9):
+            remainder_bits = (required - (1 << (lo - 1)) - 1).bit_length()
+            if remainder_bits < lo - 1:
+                lo, hi = lo - 1, max(1, remainder_bits)
+        if lo >= 32:
+            return None
+        capacity = (1 << lo) + ((1 << hi) if hi else 0) + (17 if ultra else 2)
+    return FifoStorage(effective, capacity)
+
+
+def _given(depth: int, bits: int, style: str, uram: bool) -> str:
+    """The RAM_STYLE the RTL is given for ``style``: block RAM where ``auto`` would
+    resolve to UltraRAM a platform without it lacks."""
+    if style == "auto" and not uram and _selected(depth, bits, style) == "ultra":
+        return "block"
+    return style
+
+
+def least_depth_holding(words: int, bits: int, style: str, uram: bool) -> int:
+    """The least DEPTH (two at least) whose native storage accepts ``words`` words: a
+    shallow FIFO is a shift register of five words, so DEPTH 2 holds up to five."""
+    depth = 2
+    while True:
+        found = fifo_storage(depth, bits, _given(depth, bits, style, uram))
+        if found is not None and found.capacity >= words:
+            return depth
+        depth += 1
+
+
 class FifoKernel(Kernel):
     id = "finnlib.fifo"
     version = 2
@@ -86,35 +130,14 @@ class FifoKernel(Kernel):
     def rtl_ram_style(self) -> str:
         """The RAM_STYLE the RTL is given: ``ram_style``, except an ``auto`` the RTL would
         resolve to UltraRAM the platform lacks, which is block RAM."""
-        style = self.ram_style
-        if style == "auto" and not self.platform.uram:
-            if _selected(self.depth, self.word_bits, style) == "ultra":
-                return "block"
-        return style
+        return _given(self.depth, self.word_bits, self.ram_style, self.platform.uram)
 
     @view(requires=(geometry_supported,))
     def storage(self) -> FifoStorage | Rejected:
-        depth = self.depth
-        effective = _selected(depth, self.word_bits, self.rtl_ram_style)
-        if effective == "shift":
-            capacity = max(5, depth)
-        elif effective == "distributed":
-            # DEPTH - 1 LUTRAM entries behind one output register.
-            capacity = depth
-        else:
-            # Native memory decomposition; include the BRAM read pipeline or
-            # the URAM credit-limited output queue in accepted-word capacity.
-            ultra = effective == "ultra"
-            required = depth - (17 if ultra else 1)
-            lo, hi = (required - 1).bit_length(), 0
-            if lo > (12 if ultra else 9):
-                remainder_bits = (required - (1 << (lo - 1)) - 1).bit_length()
-                if remainder_bits < lo - 1:
-                    lo, hi = lo - 1, max(1, remainder_bits)
-            if lo >= 32:
-                return reject("fifo-capacity", "native memory size overflows unsigned int")
-            capacity = (1 << lo) + ((1 << hi) if hi else 0) + (17 if ultra else 2)
-        return FifoStorage(effective, capacity)
+        found = fifo_storage(self.depth, self.word_bits, self.rtl_ram_style)
+        if found is None:
+            return reject("fifo-capacity", "native memory size overflows unsigned int")
+        return found
 
     @constraint
     def capacity_supported(self) -> bool | Rejected:
@@ -142,4 +165,4 @@ class FifoKernel(Kernel):
         return (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
 
 
-__all__ = ["FifoKernel", "FifoStorage"]
+__all__ = ["FifoKernel", "FifoStorage", "fifo_storage", "least_depth_holding"]

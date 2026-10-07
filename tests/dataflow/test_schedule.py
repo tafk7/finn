@@ -16,7 +16,7 @@ from itertools import permutations, product
 import pytest
 
 from finn.dataflow.gemm import Form, k, m, n
-from finn.dataflow.schedule import Affine, Index, Refused, Schedule
+from finn.dataflow.schedule import Affine, Index, Pace, Refused, Schedule
 from finn.dataflow.traversal import (
     Adaptation,
     LevelEnd,
@@ -277,3 +277,53 @@ def test_an_index_outside_the_schedule_has_no_extent_or_factor() -> None:
         schedule.extent(q)
     with pytest.raises(Refused, match=r"^q is not an index of the schedule$"):
         schedule.factor(q)
+
+
+# -- beat times ---------------------------------------------------------------------------
+
+
+def _beats_where(schedule: Schedule, keep: Callable[[dict[Index, int]], bool]) -> tuple[int, ...]:
+    """The schedule beats, numbered in order, at which ``keep`` holds: an enumeration."""
+    order = schedule.order
+    steps = [range(schedule.steps(index)) for index in order]
+    return tuple(
+        beat for beat, values in enumerate(product(*steps)) if keep(dict(zip(order, values)))
+    )
+
+
+def test_a_port_reading_every_beat_is_presented_each_beat() -> None:
+    schedule = gemm(2, 8, 12, pe=2, simd=3)
+    assert schedule.beat_times() == tuple(range(schedule.beat_count))
+
+
+def test_an_output_closing_a_reduction_is_presented_on_its_last_step() -> None:
+    schedule = gemm(2, 8, 12, pe=2, simd=3)
+    last = schedule.steps(k) - 1
+    assert schedule.beat_times(reduces=(k,)) == _beats_where(schedule, lambda at: at[k] == last)
+    assert schedule.beat_times(reduces=(k,))[:3] == (3, 7, 11)
+
+
+def test_a_held_operand_is_presented_before_its_run() -> None:
+    schedule = gemm(2, 8, 12, pe=2, simd=3)
+    assert schedule.beat_times(holds=(k,)) == _beats_where(schedule, lambda at: at[k] == 0)
+
+
+def test_beat_times_count_the_beats_the_port_presents() -> None:
+    schedule = gemm(2, 8, 12, pe=2, simd=3)
+    form = schedule.present((2, 8), (m, n), lanes=(n,), reduces=(k,))
+    assert len(schedule.beat_times(reduces=(k,))) == form.beats
+
+
+def test_beat_times_name_indices_of_the_schedule() -> None:
+    schedule = gemm(2, 8, 12, pe=2, simd=3)
+    with pytest.raises(Refused, match="not an index"):
+        schedule.beat_times(reduces=(Index("q"),))
+    with pytest.raises(Refused, match="not both"):
+        schedule.beat_times(reduces=(k,), holds=(k,))
+
+
+def test_a_pace_is_a_ports_beat_times_and_its_kernels_span() -> None:
+    schedule = gemm(2, 8, 12, pe=2, simd=3)
+    pace = Pace(schedule, reduces=(k,))
+    assert pace.times == schedule.beat_times(reduces=(k,))
+    assert pace.span == schedule.beat_count == 32

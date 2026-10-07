@@ -212,3 +212,44 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         "members": ["MultiThreshold_0_out0", "MatMul_0_param0", "MultiThreshold_0", "MatMul_0"],
         "cycles": 196,
     }
+
+
+@pytest.mark.slow
+def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
+    source: ModelWrapper, tmp_path: Path
+) -> None:
+    """Criterion 3 (FS5): SizeFifos in the chain after the target throughput proposes
+    ``direct`` for every TFC channel, says why, and leaves every choice as the chain
+    without it makes them."""
+    target = {"strategy": "target_throughput", "fps": 1_000_000}
+    explored: dict[str, Any] = {}
+    for name, specs in (
+        ("sized", [target, {"strategy": "size_fifos"}, {"strategy": "placeholder"}]),
+        ("plain", [target, {"strategy": "placeholder"}]),
+    ):
+        cfg = config(tmp_path / name, kernel_exploration=specs)
+        model = step_kernel_choices(
+            step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg), cfg
+        )
+        report = json.loads((Path(cfg.output_dir) / "report" / "kernel_choices.json").read_text())
+        explored[name] = (kernel_choices_config(model), report)
+    (sized, report), (plain, _) = explored["sized"], explored["plain"]
+    assert sized == plain
+    sizing = report["strategies"][1]
+    assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 196, 0)
+    rows = sizing["channels"]
+    assert {row["transport"] for row in rows.values()} == {"direct"}
+    whys = {name: row["why"] for name, row in rows.items()}
+    assert whys["Reshape_0_out0"] == whys["MatMul_3_out0"] == "a boundary: not modelled"
+    assert {whys[f"MatMul_{index}_param0"] for index in range(4)} == {
+        "a memory source: paced by its consumer"
+    }
+    # Every activation between two layers: the consumer, or its input_gen's buffer of
+    # frames, takes each word no later than the producer's idle time allows.
+    inner = [f"MultiThreshold_{index}_out0" for index in range(4)]
+    inner += [f"MatMul_{index}_out0" for index in range(3)]
+    assert {whys[name] for name in inner} == {"direct absorbs it"}
+    assert len(rows) == 2 + 4 + len(inner)
+    # The partition's buffering: the input_gens' buffers as the RTL allocates them
+    # (BUF_SIZE words), 4096 + 3 x 512 bits at SetFolding's folding.
+    assert report["buffering"] == 5632

@@ -81,7 +81,7 @@ waits on no admission and reads no memory style: under ``CYCLES`` the clock
 cycles a frame takes through its own stages (the most beats its source's or an
 adapter's port carries a frame; a FIFO presents what arrives, so it adds none,
 and a channel of wires takes none of its own), under ``BUFFERING`` the bits its
-stages hold (an adapter's frames, a FIFO's depth).
+stages hold (an adapter's ``input_gen`` buffers, a FIFO's depth).
 
 The Space class refers to itself (``index``) and, through its source's port, is
 referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
@@ -583,7 +583,7 @@ class Channel(Space):
 
     @derived
     def held_bits(self) -> int:
-        """The bits its stages hold between its ends: the adapters' frames, a FIFO's
+        """The bits its stages hold between its ends: the adapters' buffers, a FIFO's
         depth."""
         held: int = self.transport_held
         if self.output_adapting:

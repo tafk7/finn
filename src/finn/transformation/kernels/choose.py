@@ -27,8 +27,8 @@ resumes from what was saved.
 A strategy is written as a spec, ``{"strategy": name, **parameters}``
 (``strategy(spec)``, the names ``KERNEL_STRATEGIES``), as a build configuration
 lists them: ``[{"strategy": "target_throughput", "fps": 1000000}, {"strategy":
-"placeholder"}]``. A list runs as written: nothing is appended, and nothing is
-read from anywhere else.
+"size_fifos"}, {"strategy": "placeholder"}]``. A list runs as written: nothing is
+appended, and nothing is read from anywhere else.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from finn.kernels.explore import (
     Pinned,
     Placeholder,
     Seam,
+    SizeFifos,
     TargetThroughput,
 )
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
@@ -58,10 +59,12 @@ if TYPE_CHECKING:
 KERNEL_STRATEGIES: Mapping[str, Callable[..., Explorer]] = {
     "pinned": Pinned,
     "target_throughput": TargetThroughput,
+    "size_fifos": SizeFifos,
     "placeholder": Placeholder,
 }
 """The strategies a spec names, each made from the spec's other keys: ``pinned``
-(``path``), ``target_throughput`` (``fps``, ``relax``), ``placeholder`` (``lanes``)."""
+(``path``), ``target_throughput`` (``fps``, ``relax``), ``size_fifos`` (``method``,
+``margin``, ``ram_style``, ``frames``), ``placeholder`` (``lanes``)."""
 
 
 def strategy(spec: Mapping[str, Any]) -> Explorer:
