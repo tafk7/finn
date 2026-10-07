@@ -271,7 +271,8 @@ def replacement_validation(api, count: int) -> dict[str, object]:
     revised = configured.with_choices(configured.field(first).change(1))
     seconds = time.perf_counter() - started
     assert revised is not configured
-    assert work["membership"] == count
+    # Only the changed choice is admitted again: no retained choice's admission read it.
+    assert work["membership"] == 1
     return {
         "choices": count,
         "changed": 1,
@@ -803,8 +804,9 @@ def markdown(report: dict[str, object]) -> str:
         replacement = report["replacement_validation"]
         lines += [
             "",
-            f"Replacing 1 of {replacement['choices']} choices revalidated "
-            f"{replacement['validated']} memberships in {replacement['seconds']:.6f} s.",
+            f"Replacing 1 of {replacement['choices']} independent choices ran "
+            f"{replacement['validated']} memberships in {replacement['seconds']:.6f} s; "
+            "the retained choices keep their admissions.",
             "",
             "| Choices | Selected callbacks | Inactive callbacks | "
             "Demanded nodes | Edges | Cold µs | Cached µs |",

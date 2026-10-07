@@ -99,7 +99,9 @@ class Snapshot:
     Decisions once found; ``verdicts`` are the ones its base found, which forcing
     reuses where the change did not reach (``finn.core.space._forcing``). A
     successor's cache starts from what its base and its trial evaluated that the
-    change does not reach (``_TrialSnapshot``).
+    change does not reach, and ``admissions`` holds the Decisions each assignment's
+    admission read, which a later trial reuses where the change does not reach them
+    (``_TrialSnapshot``).
     """
 
     model: Model[Space]
@@ -108,6 +110,7 @@ class Snapshot:
     lock: RLock = field(default_factory=RLock, repr=False)
     forcing: bool = True
     verdicts: Mapping[int, object] = field(default_factory=dict, repr=False)
+    admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
     found: object = field(default=None, init=False, repr=False)
@@ -122,6 +125,42 @@ class Snapshot:
         return self.model.linked
 
 
+def _touched(base: Snapshot, candidates: Mapping[int, object]) -> list[int]:
+    """The Decisions a change from ``base`` to ``candidates`` touches: added, removed
+    or replaced (not the identical value), and every one open in the base, where a
+    forced value may differ."""
+    assignments = base.assignments
+    return [
+        index
+        for index in base.linked.decisions
+        if index not in assignments
+        or index not in candidates
+        or assignments[index] is not candidates[index]
+    ]
+
+
+def _reusable(
+    base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
+) -> dict[int, frozenset[int]]:
+    """The retained choices whose admission read nothing the change touched, with the
+    Decisions it read: each would be admitted identically. An admission that read a
+    retained choice through an evaluation of the base recorded that choice and not
+    its admission's reads, so a choice is reusable only while every Decision its
+    admission read is reusable too; a touched Decision never is."""
+    excluded = frozenset(touched)
+    reusable = {
+        index: read
+        for index, read in base.admissions.items()
+        if index in candidates and index not in excluded
+    }
+    while True:
+        lost = [index for index, read in reusable.items() if not read <= reusable.keys()]
+        if not lost:
+            return reusable
+        for index in lost:
+            del reusable[index]
+
+
 class _TrialSnapshot(Snapshot):
     """Private complete candidates, admitted on demand before value publication.
 
@@ -134,37 +173,49 @@ class _TrialSnapshot(Snapshot):
 
     What was evaluated is kept where the change cannot reach it:
 
-    - The trial starts from its base's evaluations that read no Decision. Every
-      candidate is admitted on its first read in the trial (``admit`` refuses one
-      already resolved), so nothing that read one, and no Decision's own answer, is
-      inherited; an evaluation that read none answers the same in any configuration.
+    - A retained choice whose admission read no Decision the change touched, and
+      only retained choices so admitted (``_reusable``), is admitted identically:
+      the trial takes its admission as the base recorded it. Every other candidate
+      is admitted on its first read in the trial.
+    - The trial starts from its base's evaluations that read no Decision but those
+      reused choices. So nothing that read another candidate is inherited, and
+      ``admit`` still refuses a candidate already resolved; a retained choice whose
+      admission now fails refuses what reads it.
     - The successor starts from its base's evaluations that read no Decision the
-      change touched (added, removed or replaced: not the identical value) and no
-      Decision open in the base (a forced value may differ), and on publication
-      gains the trial's that read no Decision open in the successor: the trial's
-      candidates are the successor's assignments, each admitted before it was read.
-      A candidate's own answer is taken as the successor gives it, without the
-      reads of its admission; what read it counts those reads among its own, which
-      only keeps less.
+      change touched (``_touched``), and on publication gains the trial's that read
+      no Decision open in the successor: the trial's candidates are the successor's
+      assignments, each admitted before it was read. A candidate's own answer is
+      taken as the successor gives it, without the reads of its admission; what
+      read it counts those reads among its own, which only keeps less. The
+      successor records each candidate's admission reads (``admissions``).
     """
 
-    __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor")
+    __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor", "_touches")
 
     _pending: dict[int, object]
     _published: bool
     _candidates: Mapping[int, object]
     _base: Snapshot
     _successor: Snapshot | None
+    _touches: list[int]
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
-        pending: dict[int, object] = {}
         super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
-        self.cache.update(unaffected(base.cache, base.linked.decisions))
+        candidates = MappingProxyType(dict(candidates))
+        touched = _touched(base, candidates)
+        reused = _reusable(base, candidates, touched)
+        pending = {index: candidates[index] for index in reused}
+        held = [index for index in base.linked.decisions if index not in reused]
+        self.cache.update(unaffected(base.cache, held))
+        for index, read in reused.items():
+            # As the decision frame admits it, with its admission's reads.
+            self.cache[index] = Evaluation(Available(candidates[index]), decisions=read)
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "_successor", None)
+        object.__setattr__(self, "_touches", touched)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
-        object.__setattr__(self, "_candidates", MappingProxyType(dict(candidates)))
+        object.__setattr__(self, "_candidates", candidates)
         object.__setattr__(self, "_published", False)
 
     def admit(self, node_index: int, value: object) -> None:
@@ -179,22 +230,15 @@ class _TrialSnapshot(Snapshot):
         if self._successor is None:
             from ._forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
 
-            base, candidates = self._base, self._candidates
+            base = self._base
             successor = Snapshot(
                 self.model,
                 self.parameters,
-                candidates,
+                self._candidates,
                 forcing=self.forcing,
                 verdicts=inherited(base),
             )
-            reached = [
-                index
-                for index in self.linked.decisions
-                if index not in base.assignments
-                or index not in candidates
-                or base.assignments[index] is not candidates[index]
-            ]
-            successor.cache.update(unaffected(base.cache, reached))
+            successor.cache.update(unaffected(base.cache, self._touches))
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -206,6 +250,11 @@ class _TrialSnapshot(Snapshot):
         # Every candidate was admitted: the successor's assignments are the pending ones.
         successor = self.successor()
         candidates = self._candidates
+        object.__setattr__(
+            successor,
+            "admissions",
+            MappingProxyType({index: self.cache[index].decisions for index in candidates}),
+        )
         open_ = frozenset(index for index in self.linked.decisions if index not in candidates)
         for index, entry in unaffected(self.cache, open_).items():
             if index in candidates:
