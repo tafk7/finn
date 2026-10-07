@@ -329,13 +329,12 @@ RESOURCE_SETTINGS = ("FILES", "DIR", "OFFLINE", "SYSTEM_CACHE")
 def add_resource_overrides(out):
     """Make finn.resources' host-side settings work inside the container.
 
-    FINN_RESOURCES_<NAME> (and the FINN_HLSLIB_PATH alias) and FINN_RESOURCES_DIR
-    name host directories: each is mounted at its own path, writable, since it
-    is the user's checkout or cache. FINN_RESOURCES_FILES lists declaration files,
-    whose directories are mounted read-only. Paths are passed in absolute, so a
-    relative one means the same directory inside as on the host (relative to the
-    checkout, where docker/run runs). Source URLs and the offline switch pass
-    through unchanged.
+    FINN_RESOURCES_<NAME> and FINN_RESOURCES_DIR name host directories: each is
+    mounted at its own path, writable, since it is the user's checkout or cache.
+    FINN_RESOURCES_FILES lists declaration files, whose directories are mounted
+    read-only. Paths are passed in absolute, so a relative one means the same
+    directory inside as on the host (relative to the checkout, where docker/run
+    runs). Source URLs and the offline switch pass through unchanged.
     """
 
     def mount(path, mode, reason):
@@ -345,7 +344,7 @@ def add_resource_overrides(out):
             out["mounts"].append({"source": path, "target": path, "mode": mode, "reason": reason})
 
     for variable, value in sorted(os.environ.items()):
-        if not value or not (variable.startswith(RESOURCES) or variable == "FINN_HLSLIB_PATH"):
+        if not value or not variable.startswith(RESOURCES):
             continue
         setting = variable[len(RESOURCES) :]
         if setting == "SYSTEM_CACHE":

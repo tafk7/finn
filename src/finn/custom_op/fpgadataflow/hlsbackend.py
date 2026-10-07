@@ -35,12 +35,11 @@ from qonnx.core.datatype import DataType
 
 from finn import resources, xsi
 from finn.custom_op.fpgadataflow import templates
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import CppBuilder, make_build_dir
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.hls import CallHLS
 from finn.util.resources import resource_path, tcl_quote
-from finn.util.toolchain import Toolchain, run_process
+from finn.util.toolchain import Toolchain, machine_toolchain, run_process
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
@@ -114,16 +113,22 @@ class HLSBackend(ABC):
                         verilog_files += [f]
         return verilog_files
 
-    def prepare_rtlsim(self, behav=False):
+    def prepare_rtlsim(self, behav=False, toolchain=None):
         """Creates a xsi emulation library for the RTL code generated
-        for this node, sets the rtlsim_so attribute to its path."""
+        for this node, by ``toolchain``'s xelab, and sets the rtlsim_so attribute
+        to its path."""
 
         verilog_files = self.get_all_verilog_filenames(abspath=True)
         single_src_dir = make_build_dir("rtlsim_" + self.onnx_node.name + "_")
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")
         ret = finnxsi.compile_sim_obj(
-            self.get_verilog_top_module_name(), verilog_files, single_src_dir, debug, behav
+            self.get_verilog_top_module_name(),
+            verilog_files,
+            single_src_dir,
+            debug,
+            behav,
+            toolchain=toolchain,
         )
         # save generated lib filename in attribute
         self.set_nodeattr("rtlsim_so", ret[0] + "/" + ret[1])
@@ -195,7 +200,7 @@ class HLSBackend(ABC):
 
     def ipgen_singlenode_code(self, fpgapart=None, toolchain: Toolchain | None = None):
         """Builds the bash script for IP generation using the CallHLS utility, and runs
-        it in ``toolchain`` (by default the legacy environment's)."""
+        it in ``toolchain`` (by default the machine's)."""
         node = self.onnx_node
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         builder = CallHLS(toolchain=toolchain)
@@ -258,7 +263,7 @@ class HLSBackend(ABC):
         finn.util.basic and executes the script to produce the executable,
         against the HLS installation the toolchain names."""
         code_gen_dir = self.get_nodeattr("code_gen_dir_cppsim")
-        toolchain = toolchain or legacy_toolchain()
+        toolchain = toolchain or machine_toolchain()
         hls_path = str(toolchain.hls_installation())
         builder = CppBuilder(toolchain=toolchain)
         builder.append_includes(

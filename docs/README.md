@@ -17,7 +17,7 @@ Environment and runtime:
 
 * [Installation and development](installation.md)
 * [Environment design](environment.md)
-* [Remaining legacy environment obligations](legacy-build-env-ledger.md)
+* [Machine settings and remaining build environment obligations](legacy-build-env-ledger.md)
 * [Runtime validation record](runtime-validation.md)
 
 The experimental `finn.core.space`, `finn.dataflow` and `finn.kernels`

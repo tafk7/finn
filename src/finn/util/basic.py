@@ -38,9 +38,9 @@ import time
 from qonnx.util.basic import roundup_to_integer_multiple
 from typing import Optional, Tuple
 
-from finn.util._legacy_build_env import build_directory, checkout_root
+from finn import resources
 from finn.util.resources import resource_path
-from finn.util.toolchain import Selection, run_process
+from finn.util.toolchain import Selection, machine_toolchain, run_process
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
@@ -109,30 +109,6 @@ part_map["VCK190"] = "xcvc1902-vsva2197-2MP-e-S"
 hbm_boards = {"U50", "U55C", "V80"}
 
 
-def get_rtlsim_trace_depth():
-    """Return the trace depth for rtlsim. Controllable
-    via the RTLSIM_TRACE_DEPTH environment variable. If the env.var. is
-    undefined, the default value of 1 is returned. A trace depth of 1
-    will only show top-level signals and yield smaller .vcd files.
-
-    The following depth values are of interest for whole-network stitched IP
-    rtlsim:
-    - level 1 shows top-level input/output streams
-    - level 2 shows per-layer input/output streams
-    - level 3 shows per full-layer I/O including FIFO count signals
-    """
-
-    try:
-        return int(os.environ["RTLSIM_TRACE_DEPTH"])
-    except KeyError:
-        return 1
-
-
-def get_finn_root():
-    """Legacy checkout-only API; package data uses resource_path instead."""
-    return checkout_root()
-
-
 def fifo_rtl_files(abspath=True, gauge=False):
     """Return the shared FIFO RTL sources, referenced in place so that the flat
     elaboration namespace only ever sees one declaration of module fifo."""
@@ -199,7 +175,7 @@ def make_build_dir(prefix=""):
     """Creates a folder with given prefix to be used as a build dir.
     Use this function instead of tempfile.mkdtemp to ensure any generated files
     will survive on the host after the FINN Docker container exits."""
-    build_dir = build_directory()
+    build_dir = resources.scratch()
     os.makedirs(build_dir, exist_ok=True)
     new_dir = tempfile.mkdtemp(prefix=prefix, dir=build_dir)
     os.chmod(new_dir, 0o755)
@@ -229,7 +205,8 @@ def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
 
 class CppBuilder:
     """Builds the g++ compiler command to produces the executable of the c++ code
-    in code_gen_dir which is passed to the function build() of this class."""
+    in code_gen_dir which is passed to the function build() of this class, and
+    runs it by ``toolchain`` (by default the machine's)."""
 
     def __init__(self, toolchain=None):
         self.toolchain = toolchain
@@ -255,7 +232,7 @@ class CppBuilder:
         """Compile with argv, explicit cwd/environment, checked status and replay logs."""
         self.code_gen_dir = os.fspath(code_gen_dir)
         self.compile_script = os.path.join(self.code_gen_dir, "compile.sh")
-        toolchain = self.toolchain or Selection().prepare()
+        toolchain = self.toolchain or machine_toolchain()
         args = ["-o", self.executable_path, *self.cpp_files, *self.include_paths]
         self.compile_components = toolchain.command("g++", *args)
         return toolchain.run(
@@ -318,32 +295,6 @@ def which(program):
                 return exe_file
 
     return None
-
-
-_XILINX_TOOL_DIR_ENV = "FINN_TOOL_DIR_OVERRIDE"
-
-
-def resolve_xilinx_tool(tool_name):
-    """Resolve the command used to invoke a Xilinx tool. Update the following
-    list if new tools use this resolver.
-
-    Default names:
-    - vivado
-    - vitis_hls
-    - vitis-run
-    - v++
-    - xelab
-    - slashkit
-
-    With FINN_TOOL_DIR_OVERRIDE set, the command resolves to
-    <override>/<tool_name>, otherwise the bare tool_name is used.
-    The single directory override is all a tool-wrapping site (e.g. an LSF
-    bsub dispatcher) needs: point it at a shim dir whose filenames match the
-    bare tool names. Raises FileNotFoundError when the resolved command is
-    not found, so all the default names must have a corresponding shim filename.
-    """
-    selection = Selection(command_dir=os.environ.get(_XILINX_TOOL_DIR_ENV, ""))
-    return selection.prepare().command(tool_name)[0]
 
 
 mem_primitives_versal = {

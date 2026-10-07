@@ -44,10 +44,13 @@ class CompileCppSim(NodeLocalTransformation):
 
     * num_workers (int or None) number of parallel workers, see documentation in
       NodeLocalTransformation for more details.
+    * toolchain (finn.util.toolchain.Toolchain or None) the prepared toolchain
+      whose g++ and HLS installation compile each node; None for the default.
     """
 
-    def __init__(self, num_workers=None):
+    def __init__(self, num_workers=None, toolchain=None):
         super().__init__(num_workers=num_workers)
+        self.toolchain = toolchain
 
     def applyNodeLocal(self, node):
         op_type = node.op_type
@@ -62,7 +65,7 @@ class CompileCppSim(NodeLocalTransformation):
                 attribute "code_gen_dir_cppsim" is not set. Please run
                 Transformation PrepareCppSim first."""
                 # call the compilation function for this node
-                inst.compile_singlenode_code()
+                inst.compile_singlenode_code(toolchain=self.toolchain)
                 # ensure that executable path is now set
                 assert (
                     inst.get_nodeattr("executable_path") != ""

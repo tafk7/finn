@@ -64,6 +64,7 @@ from shutil import copy, copytree
 
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
+from finn import resources
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.core.onnx_exec import execute_onnx, execute_parent
 from finn.transformation.fpgadataflow.alveo_build import (
@@ -119,7 +120,10 @@ from finn.util.test import (
     load_test_checkpoint_or_skip,
 )
 
-build_dir = os.environ["FINN_BUILD_DIR"]
+# Checkpoints shared by this module's tests, which may run in separate processes:
+# the build directory itself, not a directory allocated in it.
+build_dir = str(resources.scratch())
+os.makedirs(build_dir, exist_ok=True)
 target_clk_ns = 20
 mem_mode = "internal_decoupled"
 rtlsim_trace = False
@@ -747,7 +751,6 @@ class TestEnd2End:
         monkeypatch.setenv("LIVENESS_THRESHOLD", str(int(latency * 1.1)))
         if rtlsim_trace:
             model.set_metadata_prop("rtlsim_trace", "%s_w%da%d.vcd" % (topology, wbits, abits))
-            monkeypatch.setenv("RTLSIM_TRACE_DEPTH", "3")
         rtlsim_chkpt = get_checkpoint_name(board, topology, wbits, abits, "ipstitch_rtlsim")
         model.save(rtlsim_chkpt)
         parent_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_parent")

@@ -46,13 +46,12 @@ from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
 from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.create import adjacency_list
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.resources import resource_path, tcl_quote
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
@@ -261,9 +260,10 @@ class FINNLoop(HWCustomOp, RTLBackend):
         inst = getCustomOp(node)
         return inst.get_number_output_values()
 
-    def prepare_rtlsim(self, behav=False):
+    def prepare_rtlsim(self, behav=False, toolchain=None):
         """Creates a xsi emulation library for the RTL code generated
-        for this node, sets the rtlsim_so attribute to its path."""
+        for this node, by ``toolchain``'s xelab, and sets the rtlsim_so attribute
+        to its path."""
 
         vivado_stitch_proj_dir = self.get_nodeattr("code_gen_dir_ipgen")
         with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
@@ -274,7 +274,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")
         rtlsim_so = finnxsi.compile_sim_obj(
-            top_module_name, all_verilog_srcs, single_src_dir, debug, behav
+            top_module_name, all_verilog_srcs, single_src_dir, debug, behav, toolchain=toolchain
         )
         # save generated lib filename in attribute
         sim_base, sim_rel = rtlsim_so
@@ -688,7 +688,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
     def ipgen_singlenode_code(self, fpgapart=None, toolchain: Toolchain | None = None):
         """Packages the loop as an IP with Vivado, run in ``toolchain`` (by default the
-        legacy environment's)."""
+        machine's, ``finn.util.toolchain.machine_toolchain``)."""
         prjname = "MakeLoopIP"
         block_name = self.onnx_node.name
         vivado_stitch_proj_dir = self.get_nodeattr("code_gen_dir_ipgen")
@@ -1289,7 +1289,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
 
         # create a shell script and call Vivado
         make_project_sh = vivado_stitch_proj_dir + "/make_loop_ip.sh"
-        (toolchain or legacy_toolchain()).run(
+        (toolchain or machine_toolchain()).run(
             "vivado",
             ["-mode", "batch", "-source", "make_loop_ip.tcl"],
             cwd=vivado_stitch_proj_dir,

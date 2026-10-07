@@ -63,6 +63,7 @@ import finn.builder.build_dataflow_config as build_cfg
 import finn.transformation.fpgadataflow.convert_to_hw_layers as to_hw
 import finn.transformation.streamline.absorb as absorb
 import finn.transformation.streamline.reorder as reorder
+from finn import resources
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
 from finn.core.onnx_exec import execute_onnx
 from finn.transformation.fpgadataflow.annotate_cycles import AnnotateCycles
@@ -99,7 +100,10 @@ from finn.util.test import (
     resize_smaller_side,
 )
 
-build_dir = os.environ["FINN_BUILD_DIR"]
+# Checkpoints shared by this module's tests, which may run in separate processes:
+# the build directory itself, not a directory allocated in it.
+build_dir = str(resources.scratch())
+os.makedirs(build_dir, exist_ok=True)
 
 # Detect Vivado version to determine FPGA part
 # Use V80 (Slash) when Vivado 2025.1, otherwise use Versal xcvm1802

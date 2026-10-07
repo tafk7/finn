@@ -1287,11 +1287,14 @@ def test_resource_overrides_are_mounted_and_passed(tmp_path):
     decl = tmp_path / "decl"
     decl.mkdir()
     (decl / "extra.toml").write_text("")
+    retired = tmp_path / "retired"
+    retired.mkdir()
     data = json.loads(
         _inspect(
             {
                 "FINN_RESOURCES_FINNLIB": str(finnlib),
-                "FINN_HLSLIB_PATH": str(finnlib),
+                "FINN_RESOURCES_HLSLIB": str(finnlib),
+                "FINN_HLSLIB_PATH": str(retired),
                 "FINN_RESOURCES_DIR": str(cache),
                 "FINN_RESOURCES_FILES": str(decl / "extra.toml"),
                 "FINN_RESOURCES_OFFLINE": "1",
@@ -1310,6 +1313,7 @@ def test_resource_overrides_are_mounted_and_passed(tmp_path):
     assert data["env"]["FINN_RESOURCES_OFFLINE"] == "1"
     assert data["env"]["FINN_RESOURCES_HLSLIB_URL"] == "https://git.example/hlslib.git"
     assert "FINN_RESOURCES_SYSTEM_CACHE" not in data["env"]  # the image's own
+    assert "FINN_HLSLIB_PATH" not in data["env"]  # a retired name selects nothing
 
 
 def test_relative_resource_override_becomes_absolute(tmp_path):

@@ -72,10 +72,7 @@ def declare(project, text):
 def project(tmp_path, monkeypatch):
     """An empty project as the working directory, with private caches."""
     for variable in list(os.environ):
-        if variable.startswith("FINN_RESOURCES_") or variable in (
-            "FINN_HLSLIB_PATH",
-            "FINN_BOARD_FILES_PATH",
-        ):
+        if variable.startswith("FINN_RESOURCES_"):
             monkeypatch.delenv(variable)
     monkeypatch.setenv("FINN_HOME", str(tmp_path / "finn-home"))
     monkeypatch.setenv("FINN_RESOURCES_SYSTEM_CACHE", str(tmp_path / "system-cache"))
@@ -241,7 +238,7 @@ def test_offline_and_no_fetch_report_the_fetch_command(boards, monkeypatch):
     assert resources.status("kv260-boards").state == "missing"
 
 
-def test_overrides_and_compatibility_variables(boards, tmp_path, monkeypatch):
+def test_overrides(boards, tmp_path, monkeypatch):
     local = tmp_path / "local $ checkout"
     local.mkdir()
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(local))
@@ -253,17 +250,11 @@ def test_overrides_and_compatibility_variables(boards, tmp_path, monkeypatch):
     with pytest.raises(resources.ResourceError, match="FINN_RESOURCES_KV260_BOARDS"):
         resources.path("kv260-boards")
 
-    # FINN_HLSLIB_PATH is an alias; the resource's own variable wins.
+    # The retired names select nothing: only the resource's own variable is read.
     monkeypatch.setenv("FINN_HLSLIB_PATH", str(local))
-    assert resources.path("hlslib") == str(local)
-    monkeypatch.setenv("FINN_RESOURCES_HLSLIB", str(tmp_path))
-    assert resources.path("hlslib") == str(tmp_path)
-
-    # The removed all-or-nothing board variable is reported, not silently ignored.
     monkeypatch.setenv("FINN_BOARD_FILES_PATH", str(local))
     resources._cache.clear()
-    with pytest.warns(UserWarning, match="FINN_BOARD_FILES_PATH is no longer used"):
-        resources.declarations()
+    assert resources.status("hlslib").state != "override"
 
 
 def _fetch_in_child(queue):
@@ -534,15 +525,12 @@ def test_cli_clean_and_check(boards, tmp_path, capsys, monkeypatch):
     assert cli(capsys, "check")[0] == 0
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(tmp_path / "missing"))
     monkeypatch.setenv("FINN_RESOURCES_KV206_BOARDS", str(tmp_path))
-    monkeypatch.setenv("FINN_BOARD_FILES_PATH", str(tmp_path))
     monkeypatch.setenv("FINN_RESOURCES_OFFLINE", "1")
     resources._cache.clear()
-    with pytest.warns(UserWarning):
-        code, out, _ = cli(capsys, "check")
+    code, out, _ = cli(capsys, "check")
     assert code == 1
     assert "FINN_RESOURCES_KV260_BOARDS=" in out and "is not a directory" in out
     assert "FINN_RESOURCES_KV206_BOARDS matches no declared resource" in out
-    assert "FINN_BOARD_FILES_PATH is set but no longer used" in out
     assert "offline, and not in any cache: hlslib" in out
 
 
@@ -730,3 +718,17 @@ def test_finn_sources_are_resources_a_directory_can_replace(project, tmp_path, m
     monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(tmp_path / "my-rtllib"))
     assert resource_path("rtllib", "mvu/mvu.sv") == str(tmp_path / "my-rtllib/mvu/mvu.sv")
     assert resource_path("custom_hls") == resources.path("custom-hls")
+
+
+def test_the_build_directory_is_a_machine_setting_beside_home(tmp_path, monkeypatch):
+    """FINN_BUILD_DIR, absolute, else $FINN_HOME/build; named, never created."""
+    environ = {"FINN_HOME": str(tmp_path / "home")}
+    assert resources.scratch(environ) == tmp_path / "home" / "build"
+    environ["FINN_BUILD_DIR"] = str(tmp_path / "scratch")
+    assert resources.scratch(environ) == tmp_path / "scratch"
+    monkeypatch.chdir(tmp_path)
+    assert resources.scratch({"FINN_BUILD_DIR": "relative"}) == tmp_path / "relative"
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "from-environment"))
+    assert resources.scratch() == tmp_path / "from-environment"
+    names = {"build", "scratch", "relative", "from-environment"}
+    assert not any(path.name in names for path in tmp_path.rglob("*"))

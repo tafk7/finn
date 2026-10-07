@@ -37,6 +37,7 @@ import time
 import traceback
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn import resources
 from finn.builder.build_dataflow_checks import (
     format_report,
     run_all_config_checks,
@@ -54,7 +55,6 @@ from finn.builder.build_dataflow_steps import (
     _maybe_enable_verify_behavioral,
     build_dataflow_step_lookup,
 )
-from finn.util._legacy_build_env import build_directory, build_environment
 
 
 # adapted from https://stackoverflow.com/a/39215961
@@ -230,9 +230,9 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
         )
         model = ModelWrapper(intermediate_model_filename)
     assert type(model) is ModelWrapper
-    finn_build_dir = build_directory()
+    finn_build_dir = resources.scratch()
 
-    print("Intermediate outputs will be generated in " + finn_build_dir)
+    print("Intermediate outputs will be generated in " + str(finn_build_dir))
     print("Final outputs will be generated in " + cfg.output_dir)
     print("Build log is at " + cfg.output_dir + "/build_dataflow.log")
     # create the output dir if it doesn't exist
@@ -307,8 +307,14 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     with open(json_filename) as f:
         cfg = DataflowBuildConfig.from_json(f.read())
     # Isolate cwd and the pre-start native loader environment for this worker
-    # tree, from the toolchain the configuration selects. Relative config paths
-    # retain their historical directory semantics.
+    # tree, from the toolchain the configuration selects, prepared over this
+    # environment so that the child keeps FINN's own settings beside the tools'.
+    # The build directory is resolved here, where a relative FINN_BUILD_DIR
+    # means what it says. Relative config paths retain their historical
+    # directory semantics.
+    scratch = resources.scratch()
+    scratch.mkdir(parents=True, exist_ok=True)
+    toolchain = cfg._resolve_selection().prepare({**os.environ, "FINN_BUILD_DIR": str(scratch)})
     child = subprocess.run(
         [
             sys.executable,
@@ -319,7 +325,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
             "DataflowBuildConfig.from_json(open('dataflow_build_config.json').read())))",
         ],
         cwd=path_to_cfg_dir,
-        env=build_environment(cfg.toolchain),
+        env=toolchain.simulation_environment(),
     )
     return child.returncode
 

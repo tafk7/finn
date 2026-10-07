@@ -95,6 +95,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.core.onnx_exec import execute_onnx, execute_parent
+from finn.core.rtlsim_exec import prepare_stitched_rtlsim
 from finn.transformation.fpgadataflow.absorb_into_requant import (
     AbsorbElementwiseOpsIntoRequant,
 )
@@ -169,7 +170,6 @@ from finn.transformation.qonnx.quant_act_to_multithreshold import (
 from finn.transformation.streamline import Streamline
 from finn.transformation.streamline.reorder import MakeMaxPoolNHWC
 from finn.transformation.streamline.round_thresholds import RoundAndClipThresholds
-from finn.util.basic import get_rtlsim_trace_depth
 from finn.util.config import (
     extract_model_config_consolidate_shuffles,
     extract_model_config_to_json,
@@ -1008,7 +1008,9 @@ def step_minimize_bit_width(model: ModelWrapper, cfg: DataflowBuildConfig):
     if VerificationStepType.FOLDED_HLS_CPPSIM in cfg._resolve_verification_steps():
         # prepare cppsim
         model = model.transform(PrepareCppSim(), apply_to_subgraphs=True)
-        model = model.transform(CompileCppSim(), apply_to_subgraphs=True)
+        model = model.transform(
+            CompileCppSim(toolchain=cfg._resolve_toolchain()), apply_to_subgraphs=True
+        )
         model = model.transform(SetExecMode("cppsim"), apply_to_subgraphs=True)
         # Set iteration context path on FINNLoop nodes if verify_save_full_context is enabled
         if cfg.verify_save_full_context:
@@ -1089,7 +1091,11 @@ def step_hw_ipgen(model: ModelWrapper, cfg: DataflowBuildConfig):
                 for node in model.graph.node:
                     node_inst = getCustomOp(node)
                     node_inst.set_nodeattr("rtlsim_trace", f"{abspath}/{node.name}_rtlsim.wdb")
-            model = model.transform(PrepareRTLSim(behav=cfg.verify_rtlsim_behavioral))
+            model = model.transform(
+                PrepareRTLSim(
+                    behav=cfg.verify_rtlsim_behavioral, toolchain=cfg._resolve_toolchain()
+                )
+            )
             model = model.transform(SetExecMode("rtlsim"))
             verify_step(model, cfg, "node_by_node_rtlsim", need_parent=True)
             # Clear rtlsim_trace attributes to prevent later simulations from
@@ -1135,7 +1141,7 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
                         "rtlsim_trace",
                         os.path.abspath(report_dir) + f"/{node.name}_fifosim_trace.wdb",
                     )
-            model = model.transform(PrepareRTLSim(behav=True))
+            model = model.transform(PrepareRTLSim(behav=True, toolchain=cfg._resolve_toolchain()))
             model = model.transform(AnnotateCycles())
             period = model.analysis(dataflow_performance)["max_cycles"] + 10
             model = model.transform(DeriveCharacteristic(period))
@@ -1330,6 +1336,11 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig):
                 verify_model.set_metadata_prop("rtlsim_trace", abspath + "/verify_rtlsim.wdb")
             if cfg.verify_rtlsim_behavioral:
                 verify_model.set_metadata_prop("rtlsim_behavioral", "1")
+            # Compiled here, by the build's toolchain: the verification below
+            # reaches the stitched child only through the parent's partition node.
+            prepare_stitched_rtlsim(
+                verify_model, cfg.verify_rtlsim_behavioral, toolchain=cfg._resolve_toolchain()
+            )
             # MLO and non-MLO both route through the parent (need_parent=True); the
             # stitched child self-derives its FINNLoop memory-init pre-hook.
             verify_step(
@@ -1401,11 +1412,8 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
         report_dir = cfg.output_dir + "/report"
         os.makedirs(report_dir, exist_ok=True)
         rtlsim_bs = int(cfg.rtlsim_batch_size)
-        orig_rtlsim_trace_depth = get_rtlsim_trace_depth()
         assert rtlsim_bs > 0, "rtlsim batch size must be >0"
         if cfg.verify_save_rtlsim_waveforms:
-            # set depth to 3 for layer-by-layer visibility
-            os.environ["RTLSIM_TRACE_DEPTH"] = "3"
             model.set_metadata_prop(
                 "rtlsim_trace",
                 "%s/rtlsim_perf_batch_%d.wdb" % (os.path.abspath(report_dir), rtlsim_bs),
@@ -1418,7 +1426,13 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
         # Use behav=False for performance measurement to use real RTL components
         # instead of behavioral models (FINN_SIMULATION affects FIFOs, MVU, LayerNorm,
         # and RTL elementwise ops)
-        rtlsim_perf_dict = xsi_fifosim(model, rtlsim_bs, max_iters=max_iters, behav=False)
+        rtlsim_perf_dict = xsi_fifosim(
+            model,
+            rtlsim_bs,
+            max_iters=max_iters,
+            behav=False,
+            toolchain=cfg._resolve_toolchain(),
+        )
         # keep keys consistent between the Python and C++-styles
         for key, val in rtlsim_perf_dict.items():
             if "max_count" in key:
@@ -1429,9 +1443,6 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
 
         with open(report_dir + "/rtlsim_performance.json", "w") as f:
             json.dump(rtlsim_perf_dict, f, indent=2)
-        if cfg.verify_save_rtlsim_waveforms:
-            # restore original trace depth
-            os.environ["RTLSIM_TRACE_DEPTH"] = str(orig_rtlsim_trace_depth)
 
     else:
         print(

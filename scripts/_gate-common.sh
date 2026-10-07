@@ -39,9 +39,8 @@ MYPY_BIN=${MYPY_BIN:-mypy}
 export PYTHON_BIN RUFF_BIN MYPY_BIN
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONPATH="$ROOT/src:$ROOT/tests"
-# A test finds the checkout from its own path, and FINN's sources read FINN_ROOT
-# only at the legacy boundary (finn.util._legacy_build_env), which no gated test
-# relies on. Unset, it cannot make a test pass in one caller's shell and fail in
+# A test finds the checkout from its own path, and FINN's sources never read
+# FINN_ROOT. Unset, it cannot make a test pass in one caller's shell and fail in
 # another's.
 unset FINN_ROOT
 # pytest's options are the gate's (gate_pytest, and .pytest.ini). A caller's

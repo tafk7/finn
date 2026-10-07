@@ -45,6 +45,7 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.builder.build_dataflow as build
 import finn.builder.build_dataflow_config as build_cfg
+from finn import resources
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import make_build_dir
 from finn.util.test import load_test_checkpoint_or_skip
@@ -53,7 +54,10 @@ from finn.util.test import load_test_checkpoint_or_skip
 QNN_DATA = Path(__file__).resolve().parents[2] / "src" / "finn" / "qnn-data"
 
 target_clk_ns = 10
-build_dir = os.environ["FINN_BUILD_DIR"]
+# Checkpoints shared by this module's tests, which may run in separate processes:
+# the build directory itself, not a directory allocated in it.
+build_dir = str(resources.scratch())
+os.makedirs(build_dir, exist_ok=True)
 
 
 def get_checkpoint_name(step):

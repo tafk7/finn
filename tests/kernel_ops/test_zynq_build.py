@@ -173,7 +173,7 @@ def test_a_build_runs_its_tools_through_the_toolchain_it_is_given(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     given = object()
-    monkeypatch.setattr(make_zynq_proj, "legacy_toolchain", lambda: pytest.fail("prepared"))
+    monkeypatch.setattr(make_zynq_proj, "machine_toolchain", lambda: pytest.fail("prepared"))
     _, seen = recorded_build(monkeypatch, tmp_path, given)
     assert seen == [(name, given) for name in TOOL_ORDER]
 
@@ -183,11 +183,11 @@ def test_a_build_prepares_its_default_toolchain_once(
 ) -> None:
     prepared: list[object] = []
 
-    def legacy_toolchain() -> object:
+    def machine_toolchain() -> object:
         prepared.append(object())
         return prepared[-1]
 
-    monkeypatch.setattr(make_zynq_proj, "legacy_toolchain", legacy_toolchain)
+    monkeypatch.setattr(make_zynq_proj, "machine_toolchain", machine_toolchain)
     _, seen = recorded_build(monkeypatch, tmp_path, None)
     assert len(prepared) == 1
     assert [name for name, _ in seen] == TOOL_ORDER
@@ -207,10 +207,10 @@ open("synthesized_here", "w").close()
 """
 
 
-def legacy_refused() -> object:
+def machine_refused() -> object:
     # An Exception, not pytest.fail: it is raised in a pool worker, which passes
     # an Exception back to the parent and dies on a BaseException.
-    raise AssertionError("the legacy toolchain was prepared")
+    raise AssertionError("the machine toolchain was prepared")
 
 
 def test_hls_synthesis_runs_in_the_builds_toolchain(
@@ -227,8 +227,8 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
     toolchain = Toolchain(Selection(), {"PATH": f"{tools}:{os.defpath}"})
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "2")
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
-    monkeypatch.setattr(make_zynq_proj, "legacy_toolchain", legacy_refused)
-    monkeypatch.setattr(hls, "legacy_toolchain", legacy_refused)
+    monkeypatch.setattr(make_zynq_proj, "machine_toolchain", machine_refused)
+    monkeypatch.setattr(hls, "machine_toolchain", machine_refused)
     parent, seen = recorded_build(
         monkeypatch,
         tmp_path / "partitions",

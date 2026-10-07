@@ -13,9 +13,8 @@ the one way a tool process is started and reaped.
   killed whole on timeout or cancellation.
 
 A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
-so that one build runs every tool through one route; ``finn.util._legacy_build_env``
-derives the default one from the legacy environment variables. Nothing is
-discovered or activated on import.
+so that one build runs every tool through one route; without one, it runs by the
+machine's (``machine_toolchain``). Nothing is discovered or activated on import.
 """
 
 from __future__ import annotations
@@ -233,6 +232,17 @@ class Selection:
         return Toolchain(self, environment)
 
 
+#: The simulator libraries an XSI simulation loads, by the installation that has
+#: them: the Vivado simulation kernel (``finn_xsi``), and the floating-point
+#: operators HLS-generated code links. docker/finn-toolchain.sh puts the same
+#: directories on a native shell's loader path.
+SIMULATION_LIBRARIES = (
+    ("XILINX_VIVADO", "lib/lnx64.o"),
+    ("XILINX_VITIS", "lnx64/tools/fpo_v7_1"),
+    ("XILINX_HLS", "lnx64/tools/fpo_v7_1"),
+)
+
+
 @dataclass(frozen=True)
 class Toolchain:
     """A selection with its prepared environment, a read-only snapshot: every tool
@@ -267,7 +277,7 @@ class Toolchain:
             and shutil.which(executable, path=self.environment.get("PATH", "")) is None
         ):
             raise FileNotFoundError(
-                f"{executable} not found (FINN_TOOL_DIR_OVERRIDE={selection.command_dir!r})"
+                f"{executable} not found (command_dir={selection.command_dir!r})"
             )
         return [*selection.launcher, executable, *(os.fspath(arg) for arg in args)]
 
@@ -283,6 +293,25 @@ class Toolchain:
             "This toolchain names no HLS installation (XILINX_HLS or XILINX_VITIS) "
             "for HLS C++ headers and C simulation libraries"
         )
+
+    def simulation_environment(self) -> dict[str, str]:
+        """This environment with the loader path an XSI simulation needs: the
+        simulator libraries of its installations (``SIMULATION_LIBRARIES``, those
+        that exist) ahead of its ``LD_LIBRARY_PATH``. The loader reads the path when
+        a process starts, so this is the environment of a new process that
+        simulates: the build process of ``build_dataflow_directory``, an XSI C++
+        driver."""
+        environment = dict(self.environment)
+        libraries = [
+            str(Path(environment[variable]) / suffix)
+            for variable, suffix in SIMULATION_LIBRARIES
+            if environment.get(variable) and (Path(environment[variable]) / suffix).is_dir()
+        ]
+        if environment.get("LD_LIBRARY_PATH"):
+            libraries.append(environment["LD_LIBRARY_PATH"])
+        if libraries:
+            environment["LD_LIBRARY_PATH"] = ":".join(libraries)
+        return environment
 
     def run(
         self,
@@ -385,3 +414,46 @@ class Toolchain:
             _HLS_CAPABLE.add(capability)
         args = ["--mode", "hls", "--tcl", script] if frontend == "vitis-run" else ["-f", script]
         return frontend, args
+
+
+#: The machine setting that names a site command directory: wrappers for
+#: ``vivado``, ``xelab``, ``v++``, ``g++``, ... that may hand a tool to a compute
+#: farm (ci/README.md, "Running tools on LSF"). The name is the Jenkins site
+#: configuration's.
+COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
+
+
+def machine_selection(environ: Mapping[str, str] | None = None) -> Selection:
+    """The selection a tool runs by when its caller names none: this machine's
+    environment as configured (``scripts/activate.sh``, ``docker/run``,
+    ``finn-toolchain.sh``; no settings script is sourced), under the site command
+    directory ``FINN_TOOL_DIR_OVERRIDE`` names, if it names one, with the HLS
+    frontend of the machine file's ``FINN_XILINX_VERSION``
+    (``machine_hls_frontend``). A selection a caller states (a build
+    configuration's ``toolchain``) is used as stated instead: its
+    ``command_dir`` and ``hls_frontend`` win."""
+    environ = os.environ if environ is None else environ
+    return Selection(
+        command_dir=environ.get(COMMAND_DIR_SETTING, ""),
+        hls_frontend=machine_hls_frontend(environ),
+    )
+
+
+def machine_hls_frontend(environ: Mapping[str, str] | None = None) -> str:
+    """The HLS frontend of the release the machine file selects
+    (``FINN_XILINX_VERSION``, which the environment may override): ``vitis-run``
+    from 2025.1, else ``vitis_hls``, which is also the frontend when it names no
+    release. ``ValueError`` when the release is not ``YEAR.MINOR``."""
+    version = machine_file.settings(environ).get("FINN_XILINX_VERSION")
+    if version is None:
+        return "vitis_hls"
+    match = re.fullmatch(r"(20\d{2})\.(\d+)", version)
+    if match is None:
+        raise ValueError(f"FINN_XILINX_VERSION={version} is not a release (YEAR.MINOR)")
+    return "vitis-run" if tuple(map(int, match.groups())) >= (2025, 1) else "vitis_hls"
+
+
+def machine_toolchain() -> Toolchain:
+    """``machine_selection()`` prepared over this process's environment: the
+    toolchain of a transformation called without one."""
+    return machine_selection().prepare()

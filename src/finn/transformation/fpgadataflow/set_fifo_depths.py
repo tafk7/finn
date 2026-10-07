@@ -45,9 +45,8 @@ from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 
 
 def check_fifo_gauge_overflow(node_name, observed):
@@ -183,14 +182,18 @@ class CapConvolutionFIFODepths(Transformation):
         return (model, False)
 
 
-def xsi_fifosim(model, n_inferences, max_iters=None, throttle_cycles=0, behav=True):
+def xsi_fifosim(
+    model, n_inferences, max_iters=None, throttle_cycles=0, behav=True, *, toolchain=None
+):
     """Create a XSI model of stitched IP and use a simple C++
     driver to drive the input stream. Useful for FIFO sizing, latency
     and throughput measurement. If max_iters is None, use the default
     liveness threshold instead. throttle_cycles can be used for throttling
     the input stream every time a frame is finished.
     If behav=True (default), FINN_SIMULATION is defined and fifo_gauge is used.
-    If behav=False, the synthesizable fifo.sv is used instead (no debug logging)."""
+    If behav=False, the synthesizable fifo.sv is used instead (no debug logging).
+    ``toolchain`` (a prepared ``Toolchain``, None for the default) compiles the
+    simulation and its driver."""
 
     iname = model.get_first_global_in()
     first_node = model.find_consumer(iname)
@@ -208,6 +211,7 @@ def xsi_fifosim(model, n_inferences, max_iters=None, throttle_cycles=0, behav=Tr
         timeout_cycles=max_iters,
         throttle_cycles=throttle_cycles,
         behav=behav,
+        toolchain=toolchain,
     )
 
     return ret_dict
@@ -227,8 +231,8 @@ class InsertAndSetFIFODepths(Transformation):
     :parameter fifosim_input_throttle: use input throttling based on dataflow analysis
         while doing simulation-based FIFO sizing
     :parameter toolchain: the prepared ``finn.util.toolchain.Toolchain`` the sizing's
-        HLS synthesis and stitched IP run in (HLSSynthIP, CreateStitchedIP); by
-        default the legacy environment's, prepared once
+        HLS synthesis, stitched IP and simulation run in (HLSSynthIP,
+        CreateStitchedIP, xsi_fifosim); by default the machine's, prepared once
 
     Assumed input graph properties:
 
@@ -442,7 +446,7 @@ class InsertAndSetFIFODepths(Transformation):
         latency = perf["critical_path_cycles"]
         max_cycles = perf["max_cycles"]
         model = model.transform(PrepareIP(self.fpgapart, self.clk_ns))
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         model = model.transform(HLSSynthIP(toolchain=toolchain))
         model = model.transform(CreateStitchedIP(self.fpgapart, self.clk_ns, toolchain=toolchain))
         model.set_metadata_prop("exec_mode", "rtlsim")
@@ -460,7 +464,11 @@ class InsertAndSetFIFODepths(Transformation):
             throttle_cycles = 0
 
         sim = xsi_fifosim(
-            model, self.cfg_n_inferences, max_iters=max_iters, throttle_cycles=throttle_cycles
+            model,
+            self.cfg_n_inferences,
+            max_iters=max_iters,
+            throttle_cycles=throttle_cycles,
+            toolchain=toolchain,
         )
 
         for ind, node in enumerate(fifo_nodes):

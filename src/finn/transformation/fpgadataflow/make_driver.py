@@ -54,11 +54,10 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     kernel_partition_ports,
 )
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray, to_external_tensor
 from finn.util.rtlsim import dat_file_to_numpy_array
-from finn.util.toolchain import run_process
+from finn.util.toolchain import machine_toolchain, run_process
 
 from . import template_driver
 
@@ -291,7 +290,7 @@ class MakeCPPDriver(Transformation):
 
         # Path of the xclbin in the finn compiler project
         # Get kernel names using xclbinutil
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         toolchain.run(
             "xclbinutil",
             ["-i", bitfile_path, "--dump-section", "IP_LAYOUT:JSON:ip_layout.json", "--force"],

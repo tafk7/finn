@@ -36,6 +36,15 @@ def home(environ=None):
     return Path(env.get("FINN_HOME") or Path.home() / ".finn").expanduser()
 
 
+def scratch(environ=None):
+    """FINN's build directory, where builds and tests allocate their working
+    directories: FINN_BUILD_DIR, by default ``$FINN_HOME/build``. Absolute, and
+    not created here."""
+    env = os.environ if environ is None else environ
+    value = env.get("FINN_BUILD_DIR")
+    return (Path(value).expanduser() if value else home(env) / "build").resolve()
+
+
 def tree_digest(path):
     """Content digest of a directory tree: sorted relative paths and file hashes.
 

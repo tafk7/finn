@@ -51,7 +51,7 @@ class HLSSynthIP(NodeLocalTransformation):
       NodeLocalTransformation for more details.
     * toolchain (finn.util.toolchain.Toolchain or None) the prepared toolchain each
       node's synthesis runs in (a flow passes its own, so that one build runs its
-      tools by one route); by default the legacy environment's.
+      tools by one route); by default the machine's (``machine_toolchain``).
     """
 
     def __init__(self, fpgapart=None, num_workers=None, toolchain: Toolchain | None = None):

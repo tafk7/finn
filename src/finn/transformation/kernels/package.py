@@ -78,7 +78,7 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION_OUTPUTS,
 )
 from finn.util.basic import make_build_dir
-from finn.util.toolchain import Selection, Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -180,7 +180,7 @@ class PackagePartition(Transformation):
     model's target. ``directory`` is the project (``vivado_stitch_proj``), a new
     build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
     (a flow passes its own, so that one build runs Vivado by one route), by default
-    the configured environment's (``Selection().prepare()``).
+    the machine's (``finn.util.toolchain.machine_toolchain``).
     """
 
     def __init__(
@@ -227,7 +227,7 @@ class PackagePartition(Transformation):
                 run_synth=self.run_synth,
             )
         )
-        toolchain = self.toolchain or Selection().prepare()
+        toolchain = self.toolchain or machine_toolchain()
         toolchain.run(
             "vivado",
             ["-mode", "batch", "-nojournal", "-log", "package.log", "-source", "package.tcl"],
@@ -252,7 +252,7 @@ class ElaboratePartition(Transformation):
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
     ``elaborate.log``), a new build directory by default; ``toolchain`` is the
     prepared toolchain the simulator runs in, by default the configured
-    environment's (``Selection().prepare()``). A failed compilation or elaboration
+    machine's (``machine_toolchain``). A failed compilation or elaboration
     raises ``KernelOpError``, naming the log.
     """
 
@@ -270,7 +270,7 @@ class ElaboratePartition(Transformation):
         emitted = emit_module(
             point.module, directory / "src", roots={"finnlib": Path(resources.path("finnlib"))}
         )
-        toolchain = self.toolchain or Selection().prepare()
+        toolchain = self.toolchain or machine_toolchain()
         vivado = toolchain.environment.get("XILINX_VIVADO")
         if not vivado:
             raise KernelOpError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")
