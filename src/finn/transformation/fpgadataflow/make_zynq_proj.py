@@ -302,7 +302,10 @@ class ZynqBuild(Transformation):
     Vivado and Vitis HLS run of the build goes through (PackagePartition,
     HLSSynthIP, CreateStitchedIP, MakeZYNQProject); by default the machine's,
     prepared once. ``vivado_jobs`` is how many runs Vivado launches
-    at once in the project (MakeZYNQProject's ``jobs``).
+    at once in the project (MakeZYNQProject's ``jobs``). ``completion`` is the
+    ``finn.kernels.explore.Completion`` that completes the KernelOps' open choices
+    where the partition is built (its boundary facts and PackagePartition), the
+    build's; by default ``Baseline()``.
     """
 
     def __init__(
@@ -313,10 +316,12 @@ class ZynqBuild(Transformation):
         partition_model_dir=None,
         toolchain=None,
         vivado_jobs=None,
+        completion=None,
     ):
         super().__init__()
         self.toolchain = toolchain
         self.vivado_jobs = vivado_jobs
+        self.completion = completion
         self.fpga_part = pynq_part_map[platform]
         self.axi_port_width = pynq_native_port_width[platform]
         self.period_ns = period_ns
@@ -338,7 +343,7 @@ class ZynqBuild(Transformation):
         for node in model.graph.node:
             body_file = getCustomOp(node).get_nodeattr("model")
             body = ModelWrapper(body_file)
-            write_boundary_facts(body, "the KernelOps' partition")
+            write_boundary_facts(body, "the KernelOps' partition", self.completion)
             body.save(body_file)
         # InsertIODMA inserts IODMA_hls nodes, already specialized.
         model = model.transform(InsertIODMA(self.axi_port_width))
@@ -383,7 +388,11 @@ class ZynqBuild(Transformation):
             kernel_model = ModelWrapper(dataflow_model_filename)
             if is_kernel_partition(kernel_model):
                 kernel_model = kernel_model.transform(
-                    PackagePartition(sdp_node.onnx_node.name, toolchain=toolchain)
+                    PackagePartition(
+                        sdp_node.onnx_node.name,
+                        toolchain=toolchain,
+                        completion=self.completion,
+                    )
                 )
                 kernel_model.set_metadata_prop("platform", "zynq-iodma")
                 kernel_model.save(dataflow_model_filename)

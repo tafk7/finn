@@ -6,7 +6,8 @@ range's smallest encoding (``UINT`` when no result is negative), each core accum
 it, and the owner of known weights states them narrowed to their values.
 
 Each case is a small ONNX graph (standard ``MatMul`` and ``MultiThreshold``) through
-``ToKernelOps``, ``InferKernelTensors`` and the placeholder policy, at two lanes:
+``ToKernelOps``, ``InferKernelTensors`` and every choice ranked by hand, at two lanes
+(``kernels.helpers.Lanes``):
 
 - ``unsigned``: UINT2 activations meet non-negative INT4-typed weights, so the first
   MatMul's results are ``UINT``; a Thresholding reads them, and a second MatMul its
@@ -28,6 +29,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from kernels.helpers import Lanes
 from kernels.xsim import pack, requires_xsim, stream_through
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
@@ -40,7 +42,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.partition import partition_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.configure import undecided
-from finn.kernels.explore import Placeholder
+from finn.kernels.explore import Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
@@ -175,7 +177,7 @@ def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) ->
         for node in model.graph.node:
             if node.op_type == "MatMul":
                 kernel_op(model, node).save({"compute": compute})
-    return model.transform(ExploreKernelChoices([Placeholder(lanes=2)]))
+    return model.transform(ExploreKernelChoices([Ranked(Lanes(2))]))
 
 
 def _matmuls(model: ModelWrapper) -> list[Any]:

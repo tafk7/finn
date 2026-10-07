@@ -43,10 +43,21 @@ The strategies, each an objective and its constraints searched through the seam:
 - ``SizeFifos()``: every open transport sized at the bottleneck period from
   both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
-  one batch; it runs after folding;
-- ``Placeholder()``: every enumerable choice left, by a fixed rank
-  (``PlaceholderPolicy``), not a design; ``Ranked(policy)`` is any rank-style
-  policy as an explorer.
+  one batch; it runs after folding, or reads the folding completed;
+- ``Ranked(policy)``: any rank-style policy as an explorer.
+
+What no strategy chose stays open: a point is complete only where it is costed
+or generated, and there a **completion policy** completes it, on a copy that is
+never stored (``Completion``). A kernel lists each Decision's cases baseline
+first, its author's knowledge with the reason beside it; a ``Decision(required=
+True)`` has no safe baseline. ``Baseline()`` takes the first viable case of every
+open choice that is not required; at hardware generation it also sizes the open
+transports on the completed copy (``SizeFifos``), so that a default design runs
+at its bottleneck period. ``Placeholder()``, for debugging, also takes the first
+case of a required choice, and refuses one known by membership only, by name. A
+strategy reads a completed copy through ``Seam.complete``, which the seam
+records (``Seam.reads``): what a strategy committed from completed values is
+stored, and reported as such.
 """
 
 from __future__ import annotations
@@ -97,7 +108,9 @@ class Choice:
     refused, ``refused`` then naming why for each); ``None`` for a Decision known by
     membership only, whose value an explorer proposes. ``ordered``: the domain states
     an order of its cases (``divisors_of``, an integer range). ``owner``: the node and
-    attribute that persist it, when the seam knows the owners.
+    attribute that persist it, when the seam knows the owners. ``required``: it has
+    no safe baseline (``Decision(required=True)``), so no completion but the debug
+    one takes its first case.
     """
 
     key: str
@@ -106,6 +119,7 @@ class Choice:
     cases: tuple[object, ...] | None
     ordered: bool
     refused: Mapping[str, str] = field(default_factory=dict)
+    required: bool = False
 
 
 @dataclass
@@ -155,20 +169,26 @@ class Cost:
 
 class Seam:
     """The seam over the points of one root: its ``members`` (whose cost it reads); for
-    each member, the owner that persists its choices and the owner's key prefix; and
-    the ``platform`` its kernels are built for (its clock, which a throughput reads).
-    ``attempts`` counts the attempts made through it."""
+    each member, the owner that persists its choices and the owner's key prefix; the
+    ``platform`` its kernels are built for (its clock, which a throughput reads); and
+    the ``completion`` policy that completes a point on a copy (``Baseline()`` unless
+    the build names another). ``attempts`` counts the attempts made through it, and
+    ``reads`` holds the values of each completed copy a strategy read (``complete``),
+    in order."""
 
     def __init__(
         self,
         members: Sequence[str],
         owners: Mapping[str, tuple[str, str]] | None = None,
         platform: Platform | None = None,
+        completion: Completion | None = None,
     ) -> None:
         self.members = tuple(members)
         self.owners = MappingProxyType(dict(owners or {}))
         self.platform = platform
+        self.completion: Completion = Baseline() if completion is None else completion
         self.attempts = 0
+        self.reads: list[dict[str, object]] = []
         self._decisions: dict[str, inspection.DecisionInfo[object]] = {}
 
     def _info(self, point: Space) -> Mapping[str, inspection.DecisionInfo[object]]:
@@ -218,14 +238,30 @@ class Seam:
                 item.cases,
                 infos[item.key].ordered,
                 item.refused,
+                infos[item.key].required,
             )
             for item in inspection.viable(point)
         ]
         found += [
-            Choice(item.key, self.owner(item.key), infos[item.key].space_type, None, item.ordered)
+            Choice(
+                item.key,
+                self.owner(item.key),
+                infos[item.key].space_type,
+                None,
+                item.ordered,
+                required=infos[item.key].required,
+            )
             for item in inspection.open(point)
         ]
         return tuple(found)
+
+    def complete(self, point: S) -> Completed[S]:
+        """``point`` completed by the seam's policy, on a copy (the costing form: an open
+        transport ``direct``), for a strategy to read: what it completed is recorded in
+        ``reads``, so that a commitment made from it is reported as such."""
+        completed = self.completion.complete(self, point)
+        self.reads.append(dict(completed.values))
+        return completed
 
     def attempt(self, point: S, batch: Mapping[str, object]) -> Accepted[S] | Refused:
         """``batch`` committed on ``point``, or why not; see the module docstring."""
@@ -393,68 +429,130 @@ class Ranked:
                 f"{choice.key}: the policy ranked {ranked}, not among the viable "
                 f"{list(choice.cases)}"
             )
-        refusals = []
-        for case in ranked:
-            outcome = seam.attempt(point, {choice.key: case})
-            if isinstance(outcome, Accepted):
-                return outcome.point
-            refusals.append(f"{case!r}: " + "; ".join(f"{k}: {w}" for k, w in outcome.why.items()))
-        raise ExploreError(f"{choice.key}: no ranked case is accepted: " + "; ".join(refusals))
+        return _first_accepted(seam, point, choice, ranked)
 
 
-class PlaceholderPolicy:
-    """A deterministic rank, not a design.
-
-    It folds every PE and SIMD to ``lanes`` where that is viable, otherwise to the
-    largest viable factor, ranks the cases it has a preference for first
-    (``PREFERRED``), and otherwise takes the first viable case in its domain's
-    order (``auto`` memories, nothing pumped, no AXI-Lite, a direct transport),
-    which states no preference and is only deterministic.
-    """
-
-    FOLDING = ("pe", "simd")
-    #: Cases preferred, most first, by a Decision's key within its node, each with its reason.
-    PREFERRED: Mapping[str, tuple[object, ...]] = MappingProxyType(
-        {
-            # The adder tree over the compressor: it meets timing with the larger margin,
-            # and one synthesis of a packed dotp takes about 3 GB of memory rather than
-            # about 37 GB. The compressor saves LUTs and registers at wide SIMD.
-            "compute.packed.reducer": ("tree",),
-        }
-    )
-
-    def __init__(self, lanes: int = 16) -> None:
-        self.lanes = lanes
-
-    def rank(self, choice: Choice) -> Sequence[object]:
-        cases = choice.cases or ()
-        if choice.key.rsplit(".", 1)[-1] in self.FOLDING:
-            factors = sorted((case for case in cases if isinstance(case, int)), reverse=True)
-            return sorted(factors, key=lambda factor: factor != self.lanes)
-        preferred = next(
-            (
-                ranked
-                for key, ranked in self.PREFERRED.items()
-                if choice.key == key or choice.key.endswith(f".{key}")
-            ),
-            (),
-        )
-        first = [case for case in preferred if case in cases]
-        return [*first, *(case for case in cases if case not in first)]
+def _first_accepted(seam: Seam, point: S, choice: Choice, cases: Sequence[object]) -> S:
+    """``point`` with ``choice`` committed to the first of ``cases`` the seam accepts."""
+    if not cases:
+        detail = "; ".join(f"{case}: {why}" for case, why in choice.refused.items())
+        raise ExploreError(f"{choice.key}: no case is viable: {detail}")
+    refusals = []
+    for case in cases:
+        outcome = seam.attempt(point, {choice.key: case})
+        if isinstance(outcome, Accepted):
+            return outcome.point
+        refusals.append(f"{case!r}: " + "; ".join(f"{k}: {w}" for k, w in outcome.why.items()))
+    raise ExploreError(f"{choice.key}: no case is accepted: " + "; ".join(refusals))
 
 
-class Placeholder(Ranked):
-    """The placeholder strategy: every enumerable choice left, by ``PlaceholderPolicy``.
-    It ends a chain until a resource-aware strategy exists; it ranks no cost."""
+# -- completion ----------------------------------------------------------------------------
 
-    strategy = "placeholder"
 
-    def __init__(self, lanes: int = 16) -> None:
-        super().__init__(PlaceholderPolicy(lanes))
-        self.lanes = lanes
+@dataclass
+class Completed(Generic[S]):
+    """A point completed on a copy, never stored: the copy (``point``), each value the
+    completion committed on it by key, in order (``values``), who made each
+    (``made_by``: the policy, or ``size_fifos`` for a transport it sized at hardware
+    generation), the sizing's report when it sized, and the open choices it leaves
+    (``open``: the required ones the policy does not complete, and any known by
+    membership only)."""
 
-    def report(self) -> dict[str, object]:
-        return {**super().report(), "lanes": self.lanes}
+    point: S
+    values: dict[str, object]
+    made_by: dict[str, str]
+    sizing: dict[str, Any] | None
+    open: tuple[Choice, ...]
+
+
+class Completion(Protocol):
+    """A completion policy: what completes the open choices of a point, on a copy,
+    where it is costed (``sizing=False``) or generated (``sizing=True``). ``label``
+    is what the report and the build log say of a value it completed."""
+
+    name: str
+    label: str
+
+    def complete(self, seam: Seam, point: S, *, sizing: bool = False) -> Completed[S]: ...
+
+
+class Baseline:
+    """The default completion: the first viable case, in its domain's order, of every
+    open choice that is not required, in rank order (an enclosing choice before the
+    ones it guards; a case the seam refuses is passed over for the next). Each kernel
+    lists its cases baseline first, so this is every kernel's baseline: on a folding
+    domain the least parallelism compatible.
+
+    At hardware generation (``sizing``) it first completes every other choice, then
+    sizes the open transports on that copy (``SizeFifos``: the FIFOs follow the
+    completed folding; where a required choice leaves a member's cycles unknown,
+    nothing is sized), then completes what is left. Where it is costed, a transport
+    takes its first case, ``direct``. A required choice stays open, for hardware
+    generation to refuse by name."""
+
+    name = "baseline"
+    label = "baseline"
+
+    def complete(self, seam: Seam, point: S, *, sizing: bool = False) -> Completed[S]:
+        before = set(seam.chosen(point))
+        made_by: dict[str, str] = {}
+        report: dict[str, Any] | None = None
+        if sizing:
+            point = self._first_cases(seam, point, skip_transports=True)
+            sizer = SizeFifos()
+            if sizer.transports(seam, point) and seam.cost(point).bottleneck is not None:
+                sized, held = sizer.explore(seam, point), seam.chosen(point)
+                made_by = dict.fromkeys(
+                    (key for key in seam.chosen(sized) if key not in held), sizer.strategy
+                )
+                point, report = sized, sizer.report()
+        point = self._first_cases(seam, point)
+        values = {key: value for key, value in seam.chosen(point).items() if key not in before}
+        made_by = {key: made_by.get(key, self.label) for key in values}
+        return Completed(point, values, made_by, report, seam.choices(point))
+
+    def takes(self, choice: Choice) -> bool:
+        """Whether it completes ``choice``: one with cases to take, not required."""
+        return choice.cases is not None and not choice.required
+
+    def _first_cases(self, seam: Seam, point: S, *, skip_transports: bool = False) -> S:
+        while True:
+            offered = [choice for choice in seam.choices(point) if self.takes(choice)]
+            if skip_transports and offered:
+                declared = seam.declared(point)
+                offered = [
+                    choice
+                    for choice in offered
+                    if _transport(seam, point, choice, declared) is None
+                ]
+            if not offered:
+                return point
+            choice = offered[0]
+            point = _first_accepted(seam, point, choice, choice.cases or ())
+
+
+class Placeholder(Baseline):
+    """The debug completion: ``Baseline``, and also the first viable case of a required
+    choice, so that a design can be generated while the strategy that should make that
+    choice does not exist yet. A required choice known by membership only (a FIFO's
+    depth that no strategy sized) has no first case: it refuses it, by name. Every
+    value it completes is reported ``DEBUG: completed by placeholder``."""
+
+    name = "placeholder"
+    label = "DEBUG: completed by placeholder"
+
+    def complete(self, seam: Seam, point: S, *, sizing: bool = False) -> Completed[S]:
+        completed = super().complete(seam, point, sizing=sizing)
+        if completed.open:
+            raise ExploreError(
+                "the placeholder has no case to take for a choice known by membership "
+                "only, which no strategy chose: "
+                + ", ".join(choice.key for choice in completed.open)
+            )
+        return completed
+
+    def takes(self, choice: Choice) -> bool:
+        return choice.cases is not None
 
 
 # -- fixed choices -------------------------------------------------------------------------
@@ -701,8 +799,10 @@ class SizeFifos:
     """The FIFO-sizing strategy (K12, DSE8, DSE14, FS1, FS4): a depth for every open
     transport, from both ends' beat patterns at the bottleneck period.
 
-    It reads the period from the seam's cost (every member's cycles must be known: it
-    runs after folding), and the open transports from its choices: an open choice on a
+    It reads the period from the seam's cost, every member's cycles: of the point, after
+    folding, or else of the copy the seam completes (``Seam.complete``: the depths then
+    follow the completed folding, and the seam records what was read), and the open
+    transports from the point's choices: an open choice on a
     ``Channel`` one of whose cases nests the Decisions a ``FifoKernel`` declares (its
     ``depth`` and ``ram_style``) and another nothing. For each it reads the channel's
     ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the producer
@@ -741,7 +841,12 @@ class SizeFifos:
         self.proposals: dict[str, _Proposal] = {}
 
     def explore(self, seam: Seam, point: S) -> S:
+        # Before folding is chosen, the ends are read where the seam completes them.
+        read: Space = point
         cost = seam.cost(point)
+        if cost.bottleneck is None and not cost.refused:
+            read = seam.complete(point).point
+            cost = seam.cost(read)
         bottleneck = cost.bottleneck
         if bottleneck is None:
             unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
@@ -750,11 +855,11 @@ class SizeFifos:
                 + "; ".join(f"{name}: {why}" for name, why in unknown.items())
             )
         self.period = bottleneck.cycles
-        transports = self._transports(seam, point)
+        transports = self.transports(seam, point)
         proposals: dict[str, _Proposal] = {}
         for transport in transports:
             sized = size(
-                _member(point, transport.channel),
+                _member(read, transport.channel),
                 bottleneck.cycles,
                 margin=self.margin,
                 ram_style=self.ram_style,
@@ -814,67 +919,63 @@ class SizeFifos:
         the word's and the FIFO's bits, and why."""
         return {name: each.row() for name, each in self.proposals.items()}
 
-    def _transports(self, seam: Seam, point: Space) -> list[_Transport]:
+    def transports(self, seam: Seam, point: Space) -> list[_Transport]:
+        """The open transports it sizes on ``point``."""
         declared = seam.declared(point)
-        found: list[_Transport] = []
-        for choice in seam.choices(point):
-            if choice.cases is None:
-                continue
-            # Every case with Decisions under it, viable or not (a FIFO its channel
-            # refuses is still a FIFO), and every viable case.
-            prefix = f"{choice.key}."
-            under = {
-                key[len(prefix) :].partition(".")[0] for key in declared if key.startswith(prefix)
-            }
-            cases = (*choice.cases, *sorted(case for case in under if case not in choice.cases))
-            nested = {
-                case: {
-                    key: space_type
-                    for key, space_type in declared.items()
-                    if key.startswith(f"{prefix}{case}.")
-                }
-                for case in cases
-            }
-            fifos = [
-                case
-                for case, keys in nested.items()
-                if any(
-                    space_type is not None and issubclass(space_type, FifoKernel)
-                    for space_type in keys.values()
-                )
-            ]
-            directs = [case for case, keys in nested.items() if not keys]
-            channel = choice.key.rpartition(".")[0]
-            if len(fifos) != 1 or len(directs) != 1 or directs[0] not in choice.cases:
-                continue
-            if not isinstance(_member(point, channel), Channel):
-                continue
-            fifo = {
-                key.rpartition(".")[2]: key
-                for key, space_type in nested[fifos[0]].items()
-                if space_type is not None and issubclass(space_type, FifoKernel)
-            }
-            if set(fifo) != {"depth", "ram_style"}:
-                continue
-            refused = None
-            if fifos[0] not in choice.cases:
-                refused = (
-                    choice.refused.get(repr(fifos[0]))
-                    or choice.refused.get(str(fifos[0]))
-                    or "not viable"
-                )
-            found.append(
-                _Transport(
-                    choice,
-                    channel,
-                    directs[0],
-                    fifos[0],
-                    fifo["depth"],
-                    fifo["ram_style"],
-                    refused,
-                )
-            )
-        return found
+        found = (_transport(seam, point, choice, declared) for choice in seam.choices(point))
+        return [transport for transport in found if transport is not None]
+
+
+def _transport(
+    seam: Seam, point: Space, choice: Choice, declared: Mapping[str, type[Space] | None]
+) -> _Transport | None:
+    """``choice`` as a transport ``SizeFifos`` sizes: an open choice on a ``Channel`` one
+    of whose cases nests a ``FifoKernel``'s ``depth`` and ``ram_style`` and another
+    nothing; otherwise None."""
+    if choice.cases is None:
+        return None
+    # Every case with Decisions under it, viable or not (a FIFO its channel
+    # refuses is still a FIFO), and every viable case.
+    prefix = f"{choice.key}."
+    under = {key[len(prefix) :].partition(".")[0] for key in declared if key.startswith(prefix)}
+    cases = (*choice.cases, *sorted(case for case in under if case not in choice.cases))
+    nested = {
+        case: {
+            key: space_type
+            for key, space_type in declared.items()
+            if key.startswith(f"{prefix}{case}.")
+        }
+        for case in cases
+    }
+    fifos = [
+        case
+        for case, keys in nested.items()
+        if any(
+            space_type is not None and issubclass(space_type, FifoKernel)
+            for space_type in keys.values()
+        )
+    ]
+    directs = [case for case, keys in nested.items() if not keys]
+    channel = choice.key.rpartition(".")[0]
+    if len(fifos) != 1 or len(directs) != 1 or directs[0] not in choice.cases:
+        return None
+    if not isinstance(_member(point, channel), Channel):
+        return None
+    fifo = {
+        key.rpartition(".")[2]: key
+        for key, space_type in nested[fifos[0]].items()
+        if space_type is not None and issubclass(space_type, FifoKernel)
+    }
+    if set(fifo) != {"depth", "ram_style"}:
+        return None
+    refused = None
+    if fifos[0] not in choice.cases:
+        refused = (
+            choice.refused.get(repr(fifos[0])) or choice.refused.get(str(fifos[0])) or "not viable"
+        )
+    return _Transport(
+        choice, channel, directs[0], fifos[0], fifo["depth"], fifo["ram_style"], refused
+    )
 
 
 def _member(point: object, path: str) -> Any:
@@ -887,14 +988,16 @@ def _member(point: object, path: str) -> Any:
 
 __all__ = [
     "Accepted",
+    "Baseline",
     "Bottleneck",
     "Choice",
+    "Completed",
+    "Completion",
     "Cost",
     "ExploreError",
     "Explorer",
     "Pinned",
     "Placeholder",
-    "PlaceholderPolicy",
     "RankPolicy",
     "Ranked",
     "Refused",

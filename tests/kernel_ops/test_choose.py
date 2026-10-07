@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
@@ -23,9 +23,15 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
 from finn.custom_op.kernels.partition import partition_root
 from finn.kernels.configure import undecided
-from finn.kernels.explore import Choice, ExploreError, PlaceholderPolicy, Ranked, RankPolicy
+from finn.kernels.explore import Choice, ExploreError, Ranked, RankPolicy
 from finn.kernels.target import Target
-from finn.transformation.kernels import ExploreKernelChoices, InferKernelTensors, ToKernelOps
+from finn.transformation.kernels import (
+    ExploreKernelChoices,
+    InferKernelTensors,
+    ToKernelOps,
+    completion,
+)
+from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, chain_source
 
 URAM = Target("a part with UltraRAM it initializes", FULL_DSP48E2)
@@ -78,43 +84,30 @@ class Last:
         return tuple(reversed(choice.cases or ()))
 
 
-def test_the_placeholder_folds_to_its_lanes_or_the_largest_factor() -> None:
-    policy = PlaceholderPolicy(lanes=4)
-    fold = offer("first.compute.packed.pe", (1, 2, 4, 8), {})
+def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
+    policy = Lanes(4)
+    fold = Choice("first.compute.packed.pe", None, None, (1, 2, 4, 8), True)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
-    assert list(policy.rank(offer("x.simd", (1, 3), {}))) == [3, 1]
+    odd = Choice("x.simd", None, None, (1, 3), True)
+    assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
     memory = offer("w.source.memstream.ram_style", ("auto", "block"), {})
     assert list(policy.rank(memory)) == ["auto", "block"]
 
 
-def test_the_placeholder_states_its_preference_by_key_not_by_domain_order() -> None:
-    policy = PlaceholderPolicy()
-    reducer = offer("first.compute.packed.reducer", ("compressor", "tree"), {})
-    assert list(policy.rank(reducer)) == ["tree", "compressor"]
-    # A preferred case that is not viable is not offered; the rest keep their order.
-    assert list(policy.rank(offer("x.compute.packed.reducer", ("compressor",), {}))) == [
-        "compressor"
-    ]
-    assert list(policy.rank(offer("first.reducer", ("compressor", "tree"), {}))) == [
-        "compressor",
-        "tree",
-    ]
-
-
-def test_the_packed_reducer_is_offered_open_and_the_placeholder_commits_the_tree() -> None:
-    policy = Recording(PlaceholderPolicy())
+def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
+    policy = Recording(Lanes())
     model = kernel_model().transform(ranked(policy))
     offered = {choice.key: choice.cases or () for choice in policy.offered}
     reducers = {
         key: cases for key, cases in offered.items() if key.endswith("compute.packed.reducer")
     }
-    assert reducers and all(set(cases) == {"compressor", "tree"} for cases in reducers.values())
+    assert reducers and all(cases == ("tree", "compressor") for cases in reducers.values())
     saved = choices(model)
     assert saved["first"]["compute.packed.reducer"] == "tree"
 
 
 def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path) -> None:
-    model = kernel_model().transform(ranked(PlaceholderPolicy(lanes=2)))
+    model = kernel_model().transform(ranked(Lanes(2)))
     saved = choices(model)
     assert saved["first"]["compute.packed.pe"] == 2
     assert saved["activate"]["pe"] == 2
@@ -124,11 +117,11 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     assert undecided(root.point, "*") == [] and not root.dropped
     assert inspection.viable(root.point) == ()
     # Nothing is left to choose, so a second pass commits nothing.
-    assert choices(again.transform(ranked(PlaceholderPolicy()))) == saved
+    assert choices(again.transform(ranked(Lanes()))) == saved
 
 
 def test_the_policy_is_offered_viable_cases_only_and_no_forced_decision() -> None:
-    policy = Recording(PlaceholderPolicy())
+    policy = Recording(Lanes())
     model = kernel_model().transform(ranked(policy))
     offered = {choice.key: choice.cases or () for choice in policy.offered}
     assert offered and all(len(cases) > 1 for cases in offered.values())
@@ -149,13 +142,21 @@ def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
     assert choices(uram)["first"]["w.source.memstream.ram_style"] == "ultra"
 
 
-def test_a_choice_the_engine_cannot_enumerate_is_refused_by_name() -> None:
-    # Preferring the FIFO transport opens its depth, a domain known by membership only.
-    with pytest.raises(
-        KernelOpError,
-        match=r"no strategy chose: .*transport.fifo.buffer.depth \(known by membership",
-    ):
-        kernel_model().transform(ranked(Last()))
+def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> None:
+    # Preferring the FIFO transport opens its depth, a domain known by membership only
+    # and required: no completion takes a case of it. The exploration leaves it open
+    # and reports it; hardware generation refuses it, named.
+    explore = ExploreKernelChoices([Ranked(Last())])
+    model = kernel_model().transform(explore)
+    assert explore.explored is not None
+    left = explore.explored.report["completion"]["open"]
+    assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
+    with pytest.raises(KernelOpError, match=r"to choose before packaging: .*depth \(required\)"):
+        configured_root(model, "the chain")
+    # The debug placeholder takes the first case of a required choice, and refuses one
+    # known by membership only, named.
+    with pytest.raises(KernelOpError, match=r"no case to take .*transport.fifo.buffer.depth"):
+        configured_root(model, "the chain", completion("placeholder"))
 
 
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
@@ -170,12 +171,12 @@ def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
 
 
 class PreferUltra:
-    """The placeholder's ranking at two lanes, with ``ultra`` first wherever it is viable.
-    Two lanes leave each MatMul's reduction two beats, which its activation channel's
-    adapter frames (a frame of one beat needs none: its marker is tied high)."""
+    """Two lanes, with ``ultra`` first wherever it is viable. Two lanes leave each
+    MatMul's reduction two beats, which its activation channel's adapter frames (a
+    frame of one beat needs none: its marker is tied high)."""
 
     def rank(self, choice: Choice) -> Sequence[object]:
-        return sorted(PlaceholderPolicy(lanes=2).rank(choice), key=lambda case: case != "ultra")
+        return sorted(Lanes(2).rank(choice), key=lambda case: case != "ultra")
 
 
 def adapter_memories(model: ModelWrapper) -> dict[str, object]:

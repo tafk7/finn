@@ -9,18 +9,22 @@ build reads back (``shell_target``);
 ``InferKernelTensors`` infers every tensor in graph order, the KernelOps
 answering from their kernels; ``ExploreKernelChoices`` explores their open
 choices through the DSE seam (``finn.kernels.explore``) by a list of strategies
-(``strategy``: one from its spec) and saves them;
+(``strategy``: one from its spec) and saves them, and a completion policy
+(``completion``: one by its name) completes what they leave open wherever a
+partition is costed or built, never saved;
 ``partition_bottleneck`` reads a partition's slowest members from its saved
-choices; ``kernel_choices_config`` exports the nodes' choices, sparse, for
+choices, completed; ``kernel_choices_config`` exports the nodes' choices, sparse, for
 ``ApplyConfig``; ``PackagePartition`` packages a partition of KernelOps as the
 IP the shells read (the stitched-IP contract), and ``ElaboratePartition``
 compiles and elaborates its RTL in XSim, a check before a shell builds it.
 """
 
 from finn.transformation.kernels.choose import (
+    KERNEL_COMPLETIONS,
     KERNEL_STRATEGIES,
     Explored,
     ExploreKernelChoices,
+    completion,
     explore_kernel_choices,
     partition_bottleneck,
     strategy,
@@ -31,6 +35,7 @@ from finn.transformation.kernels.infer import InferKernelTensors
 from finn.transformation.kernels.package import ElaboratePartition, PackagePartition
 
 __all__ = [
+    "KERNEL_COMPLETIONS",
     "KERNEL_STRATEGIES",
     "ElaboratePartition",
     "ExploreKernelChoices",
@@ -38,6 +43,7 @@ __all__ = [
     "InferKernelTensors",
     "PackagePartition",
     "ToKernelOps",
+    "completion",
     "explore_kernel_choices",
     "kernel_choices_config",
     "partition_bottleneck",

@@ -24,8 +24,9 @@ from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel
 from finn.kernels.explore import (
+    Completed,
     ExploreError,
-    Placeholder,
+    Ranked,
     Refused,
     Seam,
     SizeFifos,
@@ -45,7 +46,7 @@ from finn.kernels.fifo_sizing import (
 )
 from finn.kernels.input_generator import nest_buffer, nest_geometry
 from kernels import chain
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, Lanes
 from kernels.toolchain import finnlib_root
 from kernels.xsim import requires_xsim
 from kernels.xsim import simulate as simulate_rtl
@@ -167,7 +168,7 @@ def test_idle_time_absorbs_the_throttle() -> None:
 
 
 def test_a_replay_buffer_of_frames_absorbs_a_bottleneck_producer() -> None:
-    # TFC's first MatMul behind its input_gen at the placeholder's folding: 49 words in,
+    # TFC's first MatMul behind its input_gen at 16 lanes (PE and SIMD): 49 words in,
     # 196 beats read; the buffer takes the next frame while it replays this one.
     replay = Replay(nest_buffer(49, (4, 49), (0, 1)), Pattern(tuple(range(196)), 196))
     assert least_depth(Pattern(tuple(range(4, 200, 4)), 196), replay, 196) == 0
@@ -244,9 +245,31 @@ def test_size_fifos_proposes_every_open_transport_in_one_batch_and_says_why() ->
         "w2": "a memory source: paced by its consumer",
         "y": "a boundary: not modelled",
     }
-    # It reads no folding: before one, the period is unknown and it says so.
+
+
+def test_before_folding_it_sizes_at_the_completed_folding() -> None:
+    """Q-B: with no folding chosen, it reads the period and the ends from the copy the
+    seam completes (the baseline folding), commits the transports only, and the seam
+    records what it read."""
+    explorer, point = Seam(MEMBERS, platform=FULL_DSP48E2), design_space(chain.Chain())
+    strategy = SizeFifos()
+    sized = strategy.explore(explorer, point)
+    (read,) = explorer.reads
+    assert read["first.compute.packed.pe"] == 1
+    completed = explorer.cost(explorer.complete(point).point).bottleneck
+    assert completed is not None and strategy.report()["period"] == completed.cycles
+    assert all(key.endswith(".transport") for key in explorer.chosen(sized))
+    assert explorer.chosen(sized)
+
+    # A policy that completes nothing leaves the period unknown, and it says so.
+    class Nothing:
+        name = label = "nothing"
+
+        def complete(self, seam: Seam, point: Any, *, sizing: bool = False) -> Completed[Any]:
+            return Completed(point, {}, {}, None, ())
+
     with pytest.raises(ExploreError, match="needs every member's cycles"):
-        SizeFifos().explore(Seam(MEMBERS, platform=FULL_DSP48E2), design_space(chain.Chain()))
+        SizeFifos().explore(Seam(MEMBERS, platform=FULL_DSP48E2, completion=Nothing()), point)
 
 
 def _hidden_needs_eight(channel: Channel, period: int, **options: Any) -> Sized:
@@ -271,7 +294,7 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     assert strategy.channels()["hidden"]["bits"] == 8 * 24
     assert strategy.report()["fifo_bits"] == 8 * 24
     # The rest of the chain explores to the end around it.
-    done = explore(explorer, found, [Placeholder()])
+    done = explore(explorer, found, [Ranked(Lanes())])
     assert explorer.refusals(done) == {}
 
 

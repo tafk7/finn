@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
@@ -45,7 +46,7 @@ from finn.builder.build_dataflow_steps import (
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import KernelOpError, read_target
-from finn.kernels.explore import Placeholder
+from finn.kernels.explore import Ranked
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.transformation.kernels import (
     explore_kernel_choices,
@@ -131,17 +132,30 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert kernel_ops == ["Thresholding", "MatMul"] * 4
     # Inference states every tensor's datatype; no choice is saved yet.
     assert kernel_choices_config(seen["step_infer_kernel_tensors"]) == {}
-    # The partition's body, its choices committed: the one tfc.py makes by hand.
+    # The partition's body: the one tfc.py makes by hand, with no choice saved (the
+    # default exploration is none: the baseline completion completes every choice
+    # where the partition is built, never saved).
     _, body = partition(source, tmp_path / "by_hand")
     built = seen["step_kernel_partition"]
     assert [node.op_type for node in built.graph.node] == ["Thresholding", "MatMul"] * 4
-    assert built.graph.node == body.graph.node
-    assert kernel_choices_config(built) == kernel_choices_config(body) != {}
+
+    def wiring(model: ModelWrapper) -> list[tuple[str, list[str], list[str]]]:
+        return [(node.name, list(node.input), list(node.output)) for node in model.graph.node]
+
+    assert wiring(built) == wiring(body)
+    assert kernel_choices_config(built) == {} != kernel_choices_config(body)
     assert read_target(built) == ULTRA96
     output = Path(cfg.output_dir)
-    assert json.loads((output / "kernel_choices.json").read_text()) == json.loads(
-        json.dumps(kernel_choices_config(seen["step_kernel_choices"]))
-    )
+    assert json.loads((output / "kernel_choices.json").read_text()) == {}
+    # Every folding at its first viable case, one lane.
+    report = json.loads((output / "report" / "kernel_exploration.json").read_text())
+    folding = {
+        f"{node}.{attribute}": entry["value"]
+        for node, held in report["completed"].items()
+        for attribute, entry in held.items()
+        if attribute.endswith(("pe", "simd"))
+    }
+    assert len(folding) == 12 and set(folding.values()) == {1}
     # The verification the configuration asked for: on each of the three inputs, the
     # partition's own output (the last MatMul's INT8 logits, not the parent's label),
     # the parent graph executed with it, equals the streamlined model's.
@@ -160,17 +174,30 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
 
 @pytest.mark.slow
-def test_an_empty_exploration_refuses_the_choices_it_leaves_open(
-    source: ModelWrapper, tmp_path: Path
+def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
+    source: ModelWrapper, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cfg = config(tmp_path, kernel_exploration=[])
+    cfg = config(tmp_path, kernel_completion="placeholder")
     model = step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg)
-    with pytest.raises(KernelOpError, match="open choices no strategy chose: .*compute.packed.pe"):
-        step_kernel_choices(model, cfg)
-    # The verification refuses a partition with open choices too.
-    body = step_kernel_partition(model, cfg)
-    with pytest.raises(KernelOpError, match="open Decisions, to choose before packaging"):
-        step_verify_kernel_partition(body, cfg)
+    model = step_kernel_choices(model, cfg)
+    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
+    assert report["completion"]["policy"] == "placeholder" and report["completion"]["open"] == []
+    entries = [entry for held in report["completed"].values() for entry in held.values()]
+    # Every value but the transports it sized: TFC has no required choice it completes.
+    assert {entry["by"] for entry in entries} == {"DEBUG: completed by placeholder", "size_fifos"}
+    logged = capsys.readouterr().out
+    debug = [line for line in logged.splitlines() if line.startswith("DEBUG: completed by")]
+    # The 12 foldings and 20 other values (the 13 transports are sized).
+    assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 32
+    assert "DEBUG: completed by placeholder: MatMul_0.compute.packed.pe = 1" in debug
+    # The verification completes it the same way, and it passes.
+    step_verify_kernel_partition(step_kernel_partition(model, cfg), cfg)
+
+
+def test_a_completion_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
+    cfg = config(tmp_path, kernel_completion="minimum")
+    with pytest.raises(ValueError, match="names no kernel completion policy"):
+        step_kernel_choices(matmul_model(), cfg)
 
 
 @pytest.mark.slow
@@ -271,7 +298,7 @@ SET_FOLDING = {
 def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
-    specs = [{"strategy": "target_throughput", "fps": 1_000_000}, {"strategy": "placeholder"}]
+    specs = [{"strategy": "target_throughput", "fps": 1_000_000}]
     cfg = config(tmp_path, kernel_exploration=specs)
     model = step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg)
     model = step_kernel_choices(model, cfg)
@@ -281,20 +308,21 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     }
     assert folding == SET_FOLDING
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
-    target, placeholder = report["strategies"]
+    (target,) = report["strategies"]
     assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
         "target_throughput",
         200,
         None,
     )
-    assert placeholder["strategy"] == "placeholder"
-    # Of TFC's 45 choices, the target throughput commits the folding (12), the
-    # placeholder the rest; the report names each one's strategy, and that no FIFO
-    # was sized.
-    assert (target["committed"], placeholder["committed"]) == (12, 33)
+    # Of TFC's 45 choices, the target throughput commits the folding (12), the only ones
+    # saved; the baseline completion completes the rest where the partition is built,
+    # the 13 transports sized on its copy. The report names who made each.
+    assert target["committed"] == 12
     made_by = [name for held in report["choices"].values() for name in held.values()]
-    assert (made_by.count("target_throughput"), made_by.count("placeholder")) == (12, 33)
-    assert report["fifos"] == "not sized (no size_fifos in the chain)"
+    assert made_by == ["target_throughput"] * 12
+    completed = [entry["by"] for held in report["completed"].values() for entry in held.values()]
+    assert (completed.count("baseline"), completed.count("size_fifos")) == (20, 13)
+    assert report["fifos"] == "sized at completion by baseline: 13 channels"
     # Four members tie at the bottleneck: the first layer's activations, its weights,
     # its thresholds and its MatMul.
     assert report["bottleneck"] == {
@@ -308,29 +336,39 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
     """Criterion 3 (FS5): SizeFifos in the chain after the target throughput proposes
-    ``direct`` for every TFC channel, says why, and leaves every choice as the chain
-    without it makes them."""
+    ``direct`` for every TFC channel, says why, and leaves every value as the chain
+    without it builds them (TFC's configuration: the target throughput and FIFO
+    sizing, completed by the baseline)."""
     target = {"strategy": "target_throughput", "fps": 1_000_000}
     explored: dict[str, Any] = {}
     for name, specs in (
-        ("sized", [target, {"strategy": "size_fifos"}, {"strategy": "placeholder"}]),
-        ("plain", [target, {"strategy": "placeholder"}]),
+        ("sized", [target, {"strategy": "size_fifos"}]),
+        ("plain", [target]),
     ):
         cfg = config(tmp_path / name, kernel_exploration=specs)
-        model = step_kernel_choices(
-            step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg), cfg
-        )
+        step_kernel_choices(step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg), cfg)
         report = json.loads(
             (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
         )
-        explored[name] = (kernel_choices_config(model), report)
-    (sized, report), (plain, _) = explored["sized"], explored["plain"]
-    assert sized == plain
+        completed = {
+            (node, attribute): entry["value"]
+            for node, held in report["completed"].items()
+            for attribute, entry in held.items()
+        }
+        explored[name] = (completed, report)
+    (sized, report), (plain, plain_report) = explored["sized"], explored["plain"]
+    # Without sizing in the chain, the completion sizes the same transports, direct;
+    # every other value is completed alike.
+    assert {key: plain[key] for key in sized} == sized
+    assert {plain[key] for key in plain if key not in sized} == {"direct"}
     sizing = report["strategies"][1]
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 196, 0)
-    # It commits the 13 transports the placeholder commits without it.
-    assert [each["committed"] for each in report["strategies"]] == [12, 13, 20]
+    # It commits the 13 transports the completion sizes without it; the baseline
+    # completes the other 20.
+    assert [each["committed"] for each in report["strategies"]] == [12, 13]
+    assert len(sized) == 20 and len(plain) == 33
     assert report["fifos"] == "sized by size_fifos: 13 channels"
+    assert plain_report["completion"]["sizing"]["channels"] == sizing["channels"]
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
@@ -404,6 +442,9 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     model = kernel_model()
-    explored = explore_kernel_choices(model, [Placeholder(lanes=2)])
+    explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
     assert partition_bottleneck(model) == explored.cost.bottleneck
     assert partition_bottleneck(model) is not None
+    # Saved choices or none, it is the bottleneck of the point as it is built.
+    fresh = kernel_model()
+    assert partition_bottleneck(fresh) == explore_kernel_choices(fresh, []).cost.bottleneck

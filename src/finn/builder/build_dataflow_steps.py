@@ -154,6 +154,7 @@ from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
+    completion,
     explore_kernel_choices,
     kernel_choices_config,
     partition_bottleneck,
@@ -685,24 +686,52 @@ def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Explore the KernelOps' open choices through the DSE seam by the strategies
     ``cfg.kernel_exploration`` lists, in order (finn.transformation.kernels.strategy:
     each a spec, {"strategy": name, **parameters}), and save them on their nodes
-    (explore_kernel_choices). Nothing else of the configuration is read: a strategy
-    carries its own objective (target_fps, folding_config_file and auto_fifo_depths
-    are the standard flow's). Writes report/kernel_exploration.json (the strategies,
-    each with the choices it committed, attempts and time; every committed choice with
-    the strategy that made it; whether FIFOs were sized; the dropped choices with why,
-    per member cycles and buffering, the bottleneck) and kernel_choices.json (the
-    nodes' choices, sparse, ApplyConfig's form, which a "pinned" strategy reads back),
-    and logs what each strategy committed and whether FIFOs were sized."""
+    (explore_kernel_choices): the choices strategies made, never a completed one. What
+    no strategy chose stays open, and ``cfg.kernel_completion`` completes it wherever
+    the partition is costed or built. Nothing else of the configuration is read: a
+    strategy carries its own objective (target_fps, folding_config_file and
+    auto_fifo_depths are the standard flow's). Writes report/kernel_exploration.json
+    (the strategies, each with the choices it committed, attempts and time, and the
+    completed values it read; every committed choice with the strategy that made it;
+    the completion policy, every value it completes and the required choices it
+    leaves open; whether FIFOs were sized; the dropped choices with why, per member
+    cycles and buffering and the bottleneck, of the completed point) and
+    kernel_choices.json (the nodes' choices, sparse, ApplyConfig's form, which a
+    "pinned" strategy reads back), and logs what each strategy committed, what the
+    completion completed (each value, for the debug placeholder), and whether FIFOs
+    were sized."""
     strategies = [strategy(spec) for spec in cfg.kernel_exploration]
-    explored = explore_kernel_choices(model, strategies, fresh=cfg.kernel_exploration_fresh)
+    explored = explore_kernel_choices(
+        model,
+        strategies,
+        fresh=cfg.kernel_exploration_fresh,
+        completion=completion(cfg.kernel_completion),
+    )
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
     with open(cfg.output_dir + "/report/kernel_exploration.json", "w") as f:
         json.dump(explored.report, f, indent=2)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(model), f, indent=2)
-    for each in explored.report["strategies"]:
+    report = explored.report
+    for each in report["strategies"]:
         print(f"Kernel choices: {each['strategy']} committed {each['committed']}")
-    print(f"FIFOs: {explored.report['fifos']}")
+        if "read_completed" in each:
+            print(f"Kernel choices: {each['strategy']} {each['read_completed']}")
+    completed = [
+        (f"{node}.{attribute}", entry)
+        for node, held in report["completed"].items()
+        for attribute, entry in held.items()
+    ]
+    policy = report["completion"]
+    print(f"Kernel choices: {policy['policy']} completes {len(completed)}")
+    for name, entry in completed:
+        if entry["by"].startswith("DEBUG"):
+            print(f"{entry['by']}: {name} = {entry['value']!r}")
+    if "refused" in policy:
+        print(f"Kernel choices: the {policy['policy']} completion refuses: {policy['refused']}")
+    if policy.get("open"):
+        print(f"Kernel choices: open, to choose before packaging: {', '.join(policy['open'])}")
+    print(f"FIFOs: {report['fifos']}")
     return model
 
 
@@ -763,15 +792,16 @@ def verify_kernel_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig
 def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Check the kernel path's partition before a shell builds it.
 
-    Always: its choices replay to a configured root (none stale, none open, its
-    ports its graph's inputs and outputs in order; configured_root), and it states
+    Always: its choices replay to a configured root, completed by
+    ``cfg.kernel_completion`` (none stale, none left open, its ports its graph's
+    inputs and outputs in order; configured_root), and it states
     the configuration's target. As ``verify_steps`` asks:
     KERNEL_PARTITION_PYTHON compares the partition's own outputs, with the parent
     graph executed, against the model the kernel path started from, on each input
     verify_input_npy states (verify_kernel_partition_python);
     KERNEL_PARTITION_ELABORATION compiles and elaborates the partition's emitted RTL
     in XSim, through the build's toolchain."""
-    configured_root(model, "the kernel path's partition")
+    configured_root(model, "the kernel path's partition", completion(cfg.kernel_completion))
     shell_target(model, cfg._resolve_fpga_part(), _kernel_shell(cfg), cfg.synth_clk_period_ns)
     verify_steps = cfg._resolve_verification_steps()
     if VerificationStepType.KERNEL_PARTITION_PYTHON in verify_steps:
@@ -780,7 +810,11 @@ def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
     if VerificationStepType.KERNEL_PARTITION_ELABORATION in verify_steps:
         directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
         model.transform(
-            ElaboratePartition(directory=Path(directory), toolchain=cfg._resolve_toolchain())
+            ElaboratePartition(
+                directory=Path(directory),
+                toolchain=cfg._resolve_toolchain(),
+                completion=completion(cfg.kernel_completion),
+            )
         )
         print("Verification for kernel_partition_elaboration : SUCCESS")
     return model
@@ -1567,7 +1601,12 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
         os.makedirs(report_dir, exist_ok=True)
         partition_model_dir = cfg.output_dir + "/intermediate_models/kernel_partitions"
         if cfg.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:
-            bottleneck = partition_bottleneck(model) if is_kernel_partition(model) else None
+            kernel_completion = completion(cfg.kernel_completion)
+            bottleneck = (
+                partition_bottleneck(model, kernel_completion)
+                if is_kernel_partition(model)
+                else None
+            )
             model = model.transform(
                 ZynqBuild(
                     cfg.board,
@@ -1576,6 +1615,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                     partition_model_dir=partition_model_dir,
                     toolchain=cfg._resolve_toolchain(),
                     vivado_jobs=cfg.vivado_jobs,
+                    completion=kernel_completion,
                 )
             )
             copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")
