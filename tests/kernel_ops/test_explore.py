@@ -142,6 +142,36 @@ def test_saved_choices_are_pinned_and_fresh_explores_again() -> None:
     assert choices(model)["first"]["compute.packed.simd"] == 4
 
 
+def test_every_committed_choice_names_the_strategy_that_made_it() -> None:
+    """The report attributes each choice the model holds after the exploration: to the
+    strategy that committed it, or ``saved`` when the model held it before; each
+    strategy counts its own, and says whether FIFOs were sized."""
+    model = kernel_model()
+    first = explore_kernel_choices(
+        model, [TargetThroughput(1_000_000_000 // (5 * 6)), Placeholder()]
+    ).report
+    made_by = {
+        (node, attribute): strategy_name
+        for node, held in first["choices"].items()
+        for attribute, strategy_name in held.items()
+    }
+    # Every choice the model saved, and only those, is attributed.
+    assert set(made_by) == {
+        (node, attribute) for node, held in choices(model).items() for attribute in held
+    }
+    assert made_by[("first", "compute.packed.pe")] == "target_throughput"
+    assert made_by[("second", "x.transport")] == "placeholder"
+    target, placeholder = first["strategies"]
+    assert target["committed"] == sum(v == "target_throughput" for v in made_by.values()) > 0
+    assert placeholder["committed"] == sum(v == "placeholder" for v in made_by.values()) > 0
+    assert first["fifos"] == "not sized (no size_fifos in the chain)"
+    # Explored again, everything is the model's own: saved, nothing committed.
+    again = explore_kernel_choices(model, [SizeFifos(), Placeholder()]).report
+    assert {v for held in again["choices"].values() for v in held.values()} == {"saved"}
+    assert [each["committed"] for each in again["strategies"]] == [0, 0]
+    assert again["fifos"] == "not sized: size_fifos found no open transport (each was saved before)"
+
+
 def int8_matmul() -> ModelWrapper:
     model = matmul_model(annotate=(), infer=False)
     for tensor in ("x", "w"):

@@ -29,6 +29,21 @@
 import os
 import re
 
+#: The most Vivado runs a build launches at once by default (``launch_runs -jobs``):
+#: a Zynq shell's block design synthesizes about ten IPs out of context, one run
+#: each, and each run takes a few GB of memory.
+VIVADO_JOBS_CAP = 16
+
+
+def vivado_jobs(requested=None):
+    """The number of runs Vivado launches at once (``launch_runs -jobs``): the
+    ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP."""
+    if requested is None:
+        return max(1, min(os.cpu_count() or 1, VIVADO_JOBS_CAP))
+    if not isinstance(requested, int) or requested < 1:
+        raise ValueError(f"Vivado's jobs must be a positive number, not {requested!r}")
+    return requested
+
 
 def _parse_vivado_utilization_report(report_path):
     """Parse a Vivado utilization report file to extract resource counts.
@@ -139,6 +154,30 @@ def _parse_vivado_timing_report(report_path):
                 continue
 
     return ret
+
+
+def parse_clock_summary(report_path):
+    """The clocks a Vivado timing summary report's "Clock Summary" table lists, by
+    name: each one's period (ns) and frequency (MHz), as routed. A generated clock's
+    indented name is read without its indent."""
+    with open(report_path) as f:
+        lines = f.read().splitlines()
+    clocks = {}
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == "| Clock Summary")
+    except StopIteration:
+        return clocks
+    header = next(i for i in range(start, len(lines)) if lines[i].startswith("Clock "))
+    for line in lines[header + 2 :]:
+        if not line.strip():
+            break
+        match = re.match(r"\s*(\S+)\s+\{[^}]*\}\s+(-?[\d.]+)\s+(-?[\d.]+)", line)
+        if match:
+            clocks[match.group(1)] = {
+                "period_ns": float(match.group(2)),
+                "mhz": float(match.group(3)),
+            }
+    return clocks
 
 
 def _parse_vivado_power_report(report_path):

@@ -10,6 +10,8 @@ Identity in front, as TFC's flatten, and one behind, as its label select).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 from kernels import chain
@@ -73,6 +75,18 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: obje
     # The body computes the Chain, through the partition node.
     x = np.array(chain.X, dtype=np.float32)
     assert np.array_equal(execute_onnx(parent, {"x": x})["y"], execute_onnx(source, {"x": x})["y"])
+
+
+def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: object) -> None:
+    """The parent graph states the domain of its StreamingDataflowPartition, so reading
+    the node warns of no fallback version (TFC's one build-log warning, observation 37)."""
+    _, parent = partitioned(tmp_path)
+    imported = {opset.domain: opset.version for opset in parent.model.opset_import}
+    assert imported["finn.custom_op.fpgadataflow"] == 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        (node,) = parent.get_nodes_by_op_type("StreamingDataflowPartition")
+        getCustomOp(node).get_nodeattr("model")
 
 
 def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:

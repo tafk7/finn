@@ -41,7 +41,8 @@ Before Vivado runs, the emitted top is elaborated with slang
 (``finn.kernels.artifacts.rtl.check_abi``, under the module's parameter
 binding): a top that does not elaborate, or whose ports contradict its pins, is
 refused with slang's errors, in a fraction of a second rather than after a
-Vivado start.
+Vivado start. A check that passes says so on the build's output: the top, the
+parameters bound, the ports compared, the files read and the time taken.
 
 ``run_synth`` synthesizes the module out of context and packages the checkpoint
 instead of the sources, as CreateStitchedIP does for Vitis and SLASH.
@@ -56,6 +57,7 @@ It simulates nothing: it says nothing about the values the RTL computes.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -148,9 +150,12 @@ def write_boundary_facts(model: ModelWrapper, label: str = "partition") -> None:
 
 def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
     """Refuse an emitted top that slang cannot elaborate under the ABI's parameter
-    binding, or whose ports contradict the ABI's pins, with slang's errors."""
+    binding, or whose ports contradict the ABI's pins, with slang's errors; print what
+    a passing check checked, and its time."""
     files = [emitted.directory / path for path in emitted.sources]
+    started = time.perf_counter()
     found = check_abi(abi.pins, files, emitted.entry_point, abi.parameters)
+    seconds = time.perf_counter() - started
     if isinstance(found, Declined):
         raise KernelOpError(
             f"{label}: the emitted top {emitted.entry_point} is refused before packaging:"
@@ -161,6 +166,11 @@ def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
             f"{label}: the emitted top {emitted.entry_point} contradicts its pins:\n"
             + "\n".join(found)
         )
+    print(
+        f"{label}: slang elaborated {emitted.entry_point} under {len(abi.parameters)} "
+        f"parameters, its {len(abi.pins)} ports agree with the pins ({len(files)} files, "
+        f"{seconds:.2f} s)"
+    )
 
 
 class PackagePartition(Transformation):

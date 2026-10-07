@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.fold_constants import FoldConstants
@@ -94,6 +95,11 @@ def streamlined(directory: Path) -> ModelWrapper:
     pre_model = ModelWrapper(str(pre)).transform(ConvertQONNXtoFINN())
     pre_model = pre_model.transform(InferShapes()).transform(FoldConstants())
     model = model.transform(MergeONNXModels(pre_model))
+    # MergeONNXModels imports the standard domain only: the custom ops' domains are
+    # stated again, so that reading their nodes warns of no fallback version.
+    imported = {opset.domain for opset in model.model.opset_import}
+    for domain in sorted({node.domain for node in model.graph.node} - imported):
+        model.model.opset_import.append(helper.make_opsetid(domain, 1))
     model.set_tensor_datatype(model.get_first_global_in(), DataType["UINT8"])
     model = _tidy(model.transform(InsertTopK(k=1)))
     model = model.transform(absorb.AbsorbScalarBiasIntoMultiThreshold())

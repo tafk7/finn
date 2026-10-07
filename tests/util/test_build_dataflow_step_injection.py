@@ -11,6 +11,7 @@ streamlining), which run on CPU only, so the test needs no Vivado/synthesis.
 
 import pytest
 
+import json
 import os
 from pathlib import Path
 
@@ -97,6 +98,27 @@ def test_build_dataflow_step_injection():
     im_dir = output_dir + "/intermediate_models"
     for tag in CALL_ORDER:
         assert os.path.isfile(im_dir + f"/{tag}.onnx"), f"no checkpoint for {tag}"
+
+    # time_per_step.json times each top-level step, and each step a phase runs,
+    # injected ones too, under the phase's name
+    with open(output_dir + "/time_per_step.json") as f:
+        times = json.load(f)
+    assert list(times) == [
+        "inj_before_prepare_phase",
+        "phase_prepare_model",
+        "phase_prepare_model/step_qonnx_to_finn",
+        "phase_prepare_model/inj_after_qonnx",
+        "phase_prepare_model/inj_before_tidy",
+        "phase_prepare_model/step_tidy_up",
+        "inj_after_prepare_phase",
+        "phase_optimize_model",
+        "phase_optimize_model/inj_before_streamline",
+        "phase_optimize_model/step_streamline",
+        "inj_after_optimize_phase",
+    ]
+    inner = [times[name] for name in times if name.startswith("phase_prepare_model/")]
+    assert all(seconds >= 0 for seconds in times.values())
+    assert sum(inner) <= times["phase_prepare_model"]
 
 
 @pytest.mark.util

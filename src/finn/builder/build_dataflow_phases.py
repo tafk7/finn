@@ -16,6 +16,10 @@ Users can:
 """
 
 import os
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
@@ -63,12 +67,42 @@ def _save_intermediate_model(model: ModelWrapper, step_name: str, cfg: DataflowB
     model.save(f"{intermediate_model_dir}/{step_name}.onnx")
 
 
+#: The seconds each step a phase runs took, by name, while a build records them
+#: (``recorded_step_times``); None outside one.
+_step_times: ContextVar[dict[str, float] | None] = ContextVar("_step_times", default=None)
+
+
+@contextmanager
+def recorded_step_times() -> Iterator[dict[str, float]]:
+    """The seconds each step run through ``_execute_step`` takes while the context is
+    open, by step name (a step run twice adds up): the steps inside a phase, which the
+    builder times only as the phase."""
+    times: dict[str, float] = {}
+    token = _step_times.set(times)
+    try:
+        yield times
+    finally:
+        _step_times.reset(token)
+
+
+def _timed(step_fn, model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """``step_fn`` run on the model, its time recorded if a build records step times."""
+    started = time.time()
+    model = step_fn(model, cfg)
+    times = _step_times.get()
+    if times is not None:
+        name = step_fn.__name__
+        times[name] = times.get(name, 0.0) + time.time() - started
+    return model
+
+
 def _execute_step(step_fn, model: ModelWrapper, cfg: DataflowBuildConfig):
     """Execute a step with injection support and save intermediate model if configured.
 
     This helper allows phases to:
     - Inject custom steps before/after any internal step using cfg.inject_steps_before/after
     - Save intermediate models after each internal step for inspection
+    - Time each step it runs, injected ones too (``recorded_step_times``)
 
     Step injection works at both phase and internal step level. For example:
     - inject_steps_after={"step_hw_codegen": [my_func]} will run my_func after
@@ -79,12 +113,12 @@ def _execute_step(step_fn, model: ModelWrapper, cfg: DataflowBuildConfig):
     # Inject steps BEFORE this step
     if step_name in cfg.inject_steps_before:
         for injected_step in cfg.inject_steps_before[step_name]:
-            model = injected_step(model, cfg)
+            model = _timed(injected_step, model, cfg)
             if cfg.save_intermediate_models:
                 _save_intermediate_model(model, injected_step.__name__, cfg)
 
     # Execute main step
-    model = step_fn(model, cfg)
+    model = _timed(step_fn, model, cfg)
 
     # Save main step checkpoint
     if cfg.save_intermediate_models:
@@ -93,7 +127,7 @@ def _execute_step(step_fn, model: ModelWrapper, cfg: DataflowBuildConfig):
     # Inject steps AFTER this step
     if step_name in cfg.inject_steps_after:
         for injected_step in cfg.inject_steps_after[step_name]:
-            model = injected_step(model, cfg)
+            model = _timed(injected_step, model, cfg)
             if cfg.save_intermediate_models:
                 _save_intermediate_model(model, injected_step.__name__, cfg)
 

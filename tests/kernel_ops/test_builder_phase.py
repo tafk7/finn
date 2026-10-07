@@ -24,6 +24,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow_checks import (
+    KernelPathConfigError,
+    Severity,
+    run_all_config_checks,
+)
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -32,6 +37,7 @@ from finn.builder.build_dataflow_config import (
     kernel_path_dataflow_steps,
 )
 from finn.builder.build_dataflow_steps import (
+    delivered_clock,
     step_infer_kernel_tensors,
     step_kernel_choices,
     step_kernel_ops,
@@ -39,9 +45,14 @@ from finn.builder.build_dataflow_steps import (
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import KernelOpError, read_target
+from finn.kernels.explore import Placeholder
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
-from finn.transformation.kernels import kernel_choices_config
-from kernel_ops.models import matmul_model
+from finn.transformation.kernels import (
+    explore_kernel_choices,
+    kernel_choices_config,
+    partition_bottleneck,
+)
+from kernel_ops.models import chain_source, kernel_model, matmul_model
 from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -95,10 +106,13 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
     source_file = tmp_path / "streamlined.onnx"
     source.save(str(source_file))
-    image = np.random.default_rng(3).integers(0, 256, size=SHAPE).astype(np.float32)
-    expected = execute_onnx(source, {source.graph.input[0].name: image})
-    np.save(tmp_path / "input.npy", image)
-    np.save(tmp_path / "expected_output.npy", expected[source.graph.output[0].name])
+    images = np.random.default_rng(3).integers(0, 256, size=(3, *SHAPE[1:])).astype(np.float32)
+    labels = [
+        execute_onnx(source, {source.graph.input[0].name: image[None]})[source.graph.output[0].name]
+        for image in images
+    ]
+    np.save(tmp_path / "input.npy", images)
+    np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
         stop_step="phase_kernel_path",
@@ -128,10 +142,21 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert json.loads((output / "kernel_choices.json").read_text()) == json.loads(
         json.dumps(kernel_choices_config(seen["step_kernel_choices"]))
     )
-    # The verification the configuration asked for: the parent graph with the partition,
-    # executed, gives the expected label.
-    verified = list((output / "verification_output").glob("verify_kernel_partition_python_*"))
-    assert [path.name for path in verified] == ["verify_kernel_partition_python_0_SUCCESS.npy"]
+    # The verification the configuration asked for: on each of the three inputs, the
+    # partition's own output (the last MatMul's INT8 logits, not the parent's label),
+    # the parent graph executed with it, equals the streamlined model's.
+    verified = sorted((output / "verification_output").glob("verify_kernel_partition_python_*"))
+    assert [path.name for path in verified] == [
+        f"verify_kernel_partition_python_{index}_SUCCESS.npz" for index in range(3)
+    ]
+    for index, path in enumerate(verified):
+        (name,) = [item.name for item in built.graph.output]
+        saved = np.load(path)
+        assert list(saved) == [name] == ["MatMul_3_out0"]
+        reference = execute_onnx(source, {source.graph.input[0].name: images[index][None]}, True)
+        expected = reference[name]
+        assert expected is not None and np.array_equal(saved[name], expected)
+        assert saved[name].shape == (1, 10)
 
 
 @pytest.mark.slow
@@ -160,6 +185,63 @@ def test_the_verification_refuses_a_partition_for_another_target(
     cfg.synth_clk_period_ns = 4.0
     with pytest.raises(KernelOpError, match="period_ns: the model states 5.0, the build 4.0"):
         step_verify_kernel_partition(body, cfg)
+
+
+def failed_checks(cfg: DataflowBuildConfig, model: ModelWrapper) -> dict[str, list[str]]:
+    """The configuration errors of a build of ``model``, their messages by name."""
+    failed: dict[str, list[str]] = {}
+    for check in run_all_config_checks(cfg, model).checks:
+        if not check.passed and check.severity == Severity.ERROR:
+            failed.setdefault(check.name, []).append(check.message)
+    return failed
+
+
+def test_the_kernel_path_refuses_what_only_the_hw_custom_op_path_makes(tmp_path: Path) -> None:
+    """step_kernel_ops, where a build takes the kernel path, refuses the outputs and
+    verifications only the HWCustomOp path makes, each naming the step that does it on
+    the kernel path, before it converts anything."""
+    cfg = config(
+        tmp_path,
+        generate_outputs=[
+            DataflowOutputType.STITCHED_IP,
+            DataflowOutputType.RTLSIM_PERFORMANCE,
+            DataflowOutputType.PORTABLE_RTL,
+            DataflowOutputType.BITFILE,
+        ],
+        verify_steps=[VerificationStepType.STITCHED_IP_RTLSIM],
+    )
+    with pytest.raises(KernelPathConfigError) as refused:
+        step_kernel_ops(chain_source(), cfg)
+    message = str(refused.value)
+    for output, step in (
+        ("stitched_ip:", "step_synthesize_bitfile packages the partition"),
+        ("rtlsim_performance:", "step_kernel_choices reports each member's cycles"),
+        ("portable_rtl:", "step_synthesize_bitfile emits the partition's RTL"),
+        ("stitched_ip_rtlsim:", "step_verify_kernel_partition checks the partition"),
+    ):
+        assert f"{output} the kernel path does not make it: {step}" in message
+    # The outputs it makes are accepted.
+    cfg = config(tmp_path, generate_outputs=[DataflowOutputType.BITFILE])
+    converted = step_kernel_ops(chain_source(), cfg)
+    assert {node.domain for node in converted.graph.node} >= {KERNEL_OPS_DOMAIN}
+
+
+def test_a_build_from_kernel_ops_is_on_the_kernel_path_whatever_its_steps(
+    tmp_path: Path,
+) -> None:
+    """The build's checks read the path from the model it starts from: one of KernelOps
+    built by its outputs phase alone is checked as the kernel path (its refusals, and
+    none of the HWCustomOp path's folding checks); a model without KernelOps through
+    the HWCustomOp path's phases is not."""
+    stitched = [DataflowOutputType.STITCHED_IP, DataflowOutputType.BITFILE]
+    cfg = config(tmp_path, steps=["phase_generate_outputs"], generate_outputs=stitched)
+    failed = failed_checks(cfg, kernel_model())
+    assert list(failed) == ["kernel_path_output"]
+    assert failed["kernel_path_output"][0].startswith("stitched_ip: the kernel path")
+    cfg = config(tmp_path, steps=None, generate_outputs=stitched)
+    failed = failed_checks(cfg, chain_source())
+    assert "kernel_path_output" not in failed
+    assert "folding_missing" in failed
 
 
 def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
@@ -198,7 +280,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         for node, held in kernel_choices_config(model).items()
     }
     assert folding == SET_FOLDING
-    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_choices.json").read_text())
+    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     target, placeholder = report["strategies"]
     assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
         "target_throughput",
@@ -206,6 +288,13 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         None,
     )
     assert placeholder["strategy"] == "placeholder"
+    # Of TFC's 45 choices, the target throughput commits the folding (12), the
+    # placeholder the rest; the report names each one's strategy, and that no FIFO
+    # was sized.
+    assert (target["committed"], placeholder["committed"]) == (12, 33)
+    made_by = [name for held in report["choices"].values() for name in held.values()]
+    assert (made_by.count("target_throughput"), made_by.count("placeholder")) == (12, 33)
+    assert report["fifos"] == "not sized (no size_fifos in the chain)"
     # Four members tie at the bottleneck: the first layer's activations, its weights,
     # its thresholds and its MatMul.
     assert report["bottleneck"] == {
@@ -231,12 +320,17 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
         model = step_kernel_choices(
             step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg), cfg
         )
-        report = json.loads((Path(cfg.output_dir) / "report" / "kernel_choices.json").read_text())
+        report = json.loads(
+            (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
+        )
         explored[name] = (kernel_choices_config(model), report)
     (sized, report), (plain, _) = explored["sized"], explored["plain"]
     assert sized == plain
     sizing = report["strategies"][1]
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 196, 0)
+    # It commits the 13 transports the placeholder commits without it.
+    assert [each["committed"] for each in report["strategies"]] == [12, 13, 20]
+    assert report["fifos"] == "sized by size_fifos: 13 channels"
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
@@ -253,3 +347,63 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # The partition's buffering: the input_gens' buffers as the RTL allocates them
     # (BUF_SIZE words), 4096 + 3 x 512 bits at SetFolding's folding.
     assert report["buffering"] == 5632
+
+
+#: The clock summary of a routed Zynq UltraScale+ design whose PS gives 187.512 MHz for
+#: 200 asked, as Vivado's timing summary report lays it out (the rest of the report cut).
+TIMING_REPORT = """\
+------------------------------------------------------------------------------------------------
+| Clock Summary
+| -------------
+------------------------------------------------------------------------------------------------
+
+Clock     Waveform(ns)         Period(ns)      Frequency(MHz)
+-----     ------------         ----------      --------------
+clk_pl_0  {0.000 2.667}        5.333           187.512
+
+
+------------------------------------------------------------------------------------------------
+| Intra Clock Table
+"""
+
+
+def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) -> None:
+    """TFC's case: 196 cycles a frame at the 187.512 MHz the shell delivers for 5 ns asked
+    give 956,694 frames a second, against the 1e6 its exploration asked: a warning with
+    both numbers."""
+    report = tmp_path / "timing.rpt"
+    report.write_text(TIMING_REPORT)
+    clock = delivered_clock(str(report), 5.0, 196, 1_000_000)
+    assert {key: value for key, value in clock.items() if key != "warning"} == {
+        "clock": "clk_pl_0",
+        "target_period_ns": 5.0,
+        "delivered_period_ns": 5.333,
+        "delivered_mhz": 187.512,
+        "bottleneck_cycles": 196,
+        "fps_at_target": 1020408.2,
+        "fps_at_delivered": 956693.9,
+        "objective_fps": 1_000_000,
+    }
+    assert clock["warning"] == (
+        "the shell delivers clk_pl_0 at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
+        "196 cycles a frame give 956,694 fps at it, 1,020,408 at the clock asked; "
+        "the objective is 1,000,000 fps"
+    )
+    # The clock asked, delivered: no warning; without a partition, the clock alone.
+    assert "warning" not in delivered_clock(str(report), 5.333, 196)
+    assert set(delivered_clock(str(report), 5.0)) == {
+        "clock",
+        "target_period_ns",
+        "delivered_period_ns",
+        "delivered_mhz",
+        "warning",
+    }
+    report.write_text("no clock summary")
+    assert "no PL clock" in delivered_clock(str(report), 5.0)["warning"]
+
+
+def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
+    model = kernel_model()
+    explored = explore_kernel_choices(model, [Placeholder(lanes=2)])
+    assert partition_bottleneck(model) == explored.cost.bottleneck
+    assert partition_bottleneck(model) is not None

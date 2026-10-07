@@ -24,7 +24,10 @@ over a frame, as the RTL's nest counters select them, and states which word each
 output beat reads and how many words are freed after it. The buffer accepts a
 word while fewer than ``BUF_SIZE - 1`` accepted words are unfreed. FinnLib is the
 ``finnlib`` resource as FINN resolves it (``finn.resources``), the copy every
-emitted module takes this source from.
+emitted module takes this source from. A cost query reads it and never fetches it:
+where no local copy is (an override, a path, a cache), ``nest_geometry`` refuses
+with the resource's error, which names it, rather than doing network I/O. The
+constants are evaluated once per nest and source.
 """
 
 from __future__ import annotations
@@ -194,8 +197,9 @@ def _evaluated(
 def nest_geometry(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestGeometry:
     """The constants FinnLib's ``input_gen`` derives for ``FM_SIZE``, ``DIMS`` and
     ``COEFS``, elaborated with slang (once per nest and source); ``GeometryError`` when
-    slang declines."""
-    source = Path(resources.path(SOURCE.root)) / SOURCE.path
+    slang declines. FinnLib is read where it is, never fetched: without a local copy,
+    ``finn.resources.ResourceError`` names it."""
+    source = Path(resources.path(SOURCE.root, fetch=False)) / SOURCE.path
     return _evaluated(source, frame_words, tuple(dims), tuple(strides))
 
 

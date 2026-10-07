@@ -463,9 +463,10 @@ where none is needed; `"margin"` words added to a FIFO it places, default 0), an
 `placeholder` takes every choice left by a fixed rank (the default list is just
 it). A choice
 left open after the list is refused by name. The chosen choices are written to
-`kernel_choices.json`, and what the exploration found (per-member cycles and
-buffering, the bottleneck, attempts and time per strategy) to
-`report/kernel_choices.json`.
+`kernel_choices.json`, and what the exploration found (the strategies, each with
+the choices it committed, attempts and time; every choice with the strategy that
+made it; whether FIFOs were sized; per-member cycles and buffering, the
+bottleneck) to `report/kernel_exploration.json`.
 
 Choose `FINN_HLS_FRONTEND=vivado_hls`, `vitis_hls`, or `vitis-run` for legacy entry
 points; explicit selections, and a dataflow build's configuration, name the

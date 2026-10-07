@@ -18,7 +18,10 @@ from typing import Any
 import pytest
 
 import finn.kernels.explore as explore_module
+from finn import resources
 from finn.core.space import design_space
+from finn.kernels import input_generator
+from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel
 from finn.kernels.explore import (
     ExploreError,
@@ -62,6 +65,42 @@ def test_input_gen_s_constants_are_the_ones_its_rtl_evaluates() -> None:
     assert geometry.read_steps == (1, -48, 1)
     assert geometry.free_steps == (49, 0, 0)
     assert geometry.capacity == 127
+
+
+def test_input_gen_s_constants_are_evaluated_once_per_nest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    def counted(*args: Any) -> Any:
+        calls.append(args)
+        return evaluate(*args)
+
+    monkeypatch.setattr(input_generator, "evaluate", counted)
+    input_generator._evaluated.cache_clear()
+    nest = (7, (3, 7), (0, 1))
+    first = nest_geometry(*nest)
+    assert nest_geometry(*nest) == first and nest_geometry(7, [3, 7], [0, 1]) == first
+    assert len(calls) == 1
+    nest_geometry(7, (2, 7), (0, 1))
+    assert len(calls) == 2
+
+
+def test_a_cost_query_never_fetches_finnlib(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without a local FinnLib (no override, an empty cache), reading input_gen's
+    constants refuses with the resource's error, naming it, and fetches nothing."""
+    monkeypatch.delenv("FINN_RESOURCES_FINNLIB", raising=False)
+    monkeypatch.setenv("FINN_RESOURCES_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("FINN_RESOURCES_SYSTEM_CACHE", str(tmp_path / "system"))
+
+    def fetched(*args: object) -> None:
+        pytest.fail("a cost query fetched FinnLib")
+
+    monkeypatch.setattr(resources._store, "fetch", fetched)
+    with pytest.raises(resources.ResourceError, match="Resource finnlib is not in any cache"):
+        nest_geometry(11, (2, 11), (0, 1))
 
 
 def test_a_replay_nest_holds_its_frame_until_the_last_pass() -> None:

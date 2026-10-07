@@ -96,8 +96,9 @@ class VerificationStepType(str, Enum):
     NODE_BY_NODE_RTLSIM = "node_by_node_rtlsim"
     #: verify after step_create_stitched_ip, using stitched-ip Verilog
     STITCHED_IP_RTLSIM = "stitched_ip_rtlsim"
-    #: verify the kernel path's partition (step_verify_kernel_partition): the parent
-    #: graph with the partition of KernelOps, using Python execution
+    #: verify the kernel path's partition (step_verify_kernel_partition): its own
+    #: outputs, the parent graph with the partition of KernelOps executed in Python,
+    #: against the model the kernel path started from, on each verify_input_npy input
     KERNEL_PARTITION_PYTHON = "kernel_partition_python"
     #: verify the kernel path's partition (step_verify_kernel_partition): its emitted
     #: RTL compiles and elaborates in XSim (xvlog, xelab); needs Vivado
@@ -364,6 +365,11 @@ class DataflowBuildConfig:
     #: Whether hardware debugging will be enabled (e.g. ILA cores inserted to
     #: debug signals in the generated hardware)
     enable_hw_debug: Optional[bool] = False
+
+    #: How many runs Vivado launches at once (``launch_runs -jobs``) when it
+    #: synthesizes a stitched IP or builds the Zynq shell's bitfile. By default the
+    #: machine's cores, at most 16 (finn.util.vivado.vivado_jobs).
+    vivado_jobs: Optional[int] = None
 
     #: Whether to build a simulation image instead of a full hardware image.
     #: Currently only supported by the SLASH_VRT shell flow.

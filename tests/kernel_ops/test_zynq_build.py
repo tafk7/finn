@@ -12,9 +12,11 @@ test).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
@@ -34,7 +36,9 @@ from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
 from finn.transformation.kernels import resolve_target
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
+from finn.util.vivado import vivado_jobs
 from kernel_ops.models import TARGET, configure_partition, kernel_model
+from kernel_ops.packaging import ReachedVivado
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
 ZYNQ = resolve_target(TARGET.part, 5.0, "vivado_zynq")
@@ -244,3 +248,71 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
         code = Path(dma.get_nodeattr("code_gen_dir_ipgen"))
         assert (code / "synthesized_here").is_file()
         assert dma.get_nodeattr("ipgen_path") == f"{code}/project_{dma.onnx_node.name}"
+
+
+def project_parent(tmp_path: Path, ifnames: str) -> ModelWrapper:
+    """The Chain's parent graph as ZynqBuild prepares it, each partition stated as built
+    (its IP project ``tmp_path``) with the interface names ``ifnames``."""
+    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
+    parent = build.prepare_kernel_partitions(zynq_model())
+    for node in parent.graph.node:
+        body_file = getCustomOp(node).get_nodeattr("model")
+        body = ModelWrapper(body_file)
+        for inner in body.get_nodes_by_op_type("IODMA_hls"):
+            getCustomOp(inner).set_nodeattr("ip_path", str(tmp_path))
+        body.set_metadata_prop("vivado_stitch_proj", str(tmp_path))
+        body.set_metadata_prop("vivado_stitch_vlnv", "xilinx.com:hls:partition:1.0")
+        body.set_metadata_prop("vivado_stitch_ifnames", ifnames)
+        body.save(body_file)
+    return parent
+
+
+def test_the_project_reads_interface_names_as_json_and_never_executes_them(
+    tmp_path: Path,
+) -> None:
+    """MakeZYNQProject reads each partition's ``vivado_stitch_ifnames`` as the JSON its
+    writers write: a value that is Python, not JSON, is refused unexecuted."""
+    executed = tmp_path / "executed"
+    parent = project_parent(tmp_path, f"__import__('pathlib').Path({str(executed)!r}).touch()")
+    with pytest.raises(json.JSONDecodeError):
+        parent.transform(make_zynq_proj.MakeZYNQProject("Ultra96", 5.0, toolchain=object()))
+    assert not executed.exists()
+
+
+class ProjectScript:
+    """A toolchain double for MakeZYNQProject: it keeps the project's Tcl and stops
+    where Vivado would start."""
+
+    def __init__(self) -> None:
+        self.script = ""
+
+    def run(self, tool: str, args: list[str], *, cwd: str, **options: object) -> None:
+        self.script = (Path(cwd) / args[-1]).read_text()
+        raise ReachedVivado(tool)
+
+
+@pytest.mark.parametrize("jobs, expected", [(3, 3), (None, min(os.cpu_count() or 1, 16))])
+def test_vivados_jobs_are_the_builds_not_an_environment_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: int | None, expected: int
+) -> None:
+    """The project launches its runs with the jobs it is given, by default the machine's
+    cores, at most 16; NUM_DEFAULT_WORKERS, unset or set, is not read."""
+    monkeypatch.setenv("NUM_DEFAULT_WORKERS", "1")
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    ifnames = json.dumps(
+        {"axilite": ["s_axi_control"], "aximm": [], "s_axis": [], "m_axis": [], "clk": []}
+    )
+    parent = project_parent(tmp_path, ifnames)
+    toolchain = ProjectScript()
+    with pytest.raises(ReachedVivado):
+        parent.transform(
+            make_zynq_proj.MakeZYNQProject(
+                "Ultra96", 5.0, toolchain=cast(Toolchain, toolchain), jobs=jobs
+            )
+        )
+    assert f"launch_runs -to_step write_bitstream impl_1 -jobs {expected}\n" in toolchain.script
+
+
+def test_a_number_of_jobs_that_is_none_is_refused() -> None:
+    with pytest.raises(ValueError, match="positive number, not 0"):
+        vivado_jobs(0)
