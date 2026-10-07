@@ -6,8 +6,7 @@
 #
 # finn.dataflow sits below finn.kernels and imports no engine, so this gate
 # checks only the value layer; scripts/check-kernels.sh runs it, and checks the
-# kernels built on it too. Parked code under finn.parked
-# is reference only and outside every gate.
+# kernels built on it too.
 
 # shellcheck source=scripts/_gate-common.sh
 source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"

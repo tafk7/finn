@@ -3,10 +3,6 @@ line-length = 100
 exclude = [
     "*.ipynb",
 ]
-# Parked code is reference material, not maintained code.
-extend-exclude = [
-    "src/finn/parked",
-]
 
 [lint]
 select = ["E", "F", "PLC"]

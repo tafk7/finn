@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Cold imports: the kernel stack loads and builds without parked or graph code.
+"""Cold imports: the kernel stack loads and builds without graph code.
 
 The import statements of each layer are checked against the layer table
 (``tests/layering.py``); these tests check what an import loads at runtime.
@@ -15,23 +15,22 @@ import sys
 import pytest
 
 
-def test_cold_import_and_construction_with_parked_code_unavailable() -> None:
+def test_cold_import_and_construction_without_graph_code() -> None:
     script = r"""
 import importlib.abc
 import sys
 
 
-class RejectParked(importlib.abc.MetaPathFinder):
+class RejectGraphCode(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
-            "finn.parked", "qonnx.core.modelwrapper", "finn.core.onnx_exec",
-            "finn.core.rtlsim_exec", "onnx",
+            "qonnx.core.modelwrapper", "finn.core.onnx_exec", "finn.core.rtlsim_exec", "onnx",
         )
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
 
 
-sys.meta_path.insert(0, RejectParked())
+sys.meta_path.insert(0, RejectGraphCode())
 from finn.core.space import Space, design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -163,8 +162,7 @@ package_name = sys.argv[1]
 class RejectOtherLayers(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.startswith((
-            "qonnx", "onnx", "finn.dataflow", "finn.parked", "finn.core.onnx_exec",
-            "finn.core.rtlsim_exec",
+            "qonnx", "onnx", "finn.dataflow", "finn.core.onnx_exec", "finn.core.rtlsim_exec",
         )) or (package_name == "finn.core.space" and fullname.startswith("finn.kernels")):
             raise AssertionError("unexpected dependency: " + fullname)
 

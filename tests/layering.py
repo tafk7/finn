@@ -8,7 +8,6 @@ finn.core.space  <-  finn.kernels  <-  finn.custom_op.kernels
 finn.dataflow    <-                <-  finn.transformation.kernels
                                    <-  the flow (all other finn)
 finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, the flow
-finn.parked: imported by nothing
 ```
 
 ``LAYERS`` is the one statement of that order. A module belongs to the layer
@@ -22,8 +21,7 @@ function-local and under ``TYPE_CHECKING`` alike, and ``import_module`` or
 
 The rows are declared lowest first and name only earlier rows, so the order
 has no cycle. Each row names the test tree whose ``test_layering.py`` checks
-it, so each gate checks the layers it owns. ``finn.parked`` is reference code:
-no tree checks it, and no row may import it.
+it, so each gate checks the layers it owns.
 
 A test helper, imported as ``layering`` (the gates put ``tests`` on
 ``PYTHONPATH``).
@@ -58,7 +56,7 @@ class Layer:
     modules: tuple[str, ...]
     imports: tuple[str, ...]
     packages: tuple[str, ...] | None
-    tree: str | None
+    tree: str
     also: tuple[str, ...] = ()
 
 
@@ -135,8 +133,6 @@ LAYERS: tuple[Layer, ...] = (
         ANY,
         "tests/kernel_ops",
     ),
-    # Retired code, reference only.
-    Layer("parked", ("finn.parked",), (), ANY, None),
     # This table: the standard library only. Every tree's tests import it.
     Layer("tests.layering", ("layering",), (), (), "tests/core/space"),
     # The default snapshot's contract on value classes: the standard library only.
@@ -296,18 +292,6 @@ def violations(layer: Layer) -> list[str]:
 def _owner(name: str) -> str:
     owner = layer_of(name)
     return "third-party" if owner is None else owner.name
-
-
-def importers(target: Layer, root: Path) -> list[str]:
-    """``file:line: name`` for each import of a ``target`` module from outside it under ``root``."""
-
-    return [
-        f"{path.relative_to(ROOT)}:{line}: {name}"
-        for path in sorted(root.rglob("*.py"))
-        if "__pycache__" not in path.parts and layer_of(module_name(path)) is not target
-        for line, name in path_imports(path)
-        if layer_of(name) is target
-    ]
 
 
 def checked_by(tree: Path) -> tuple[Layer, ...]:

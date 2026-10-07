@@ -127,9 +127,6 @@ if __name__ == "__main__":
             "finn.xsi.src.*",
             "finn.deploy.data",
             "finn.deploy.data.*",
-            # Retired dataflow code, kept in the checkout as reference only.
-            "finn.parked",
-            "finn.parked.*",
         ],
     )
     setup(

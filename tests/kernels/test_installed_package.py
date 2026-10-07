@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Build and use the wheel without checkout imports, parked code or graph dependencies."""
+"""Build and use the wheel without checkout imports or graph dependencies."""
 
 from __future__ import annotations
 
@@ -34,9 +34,7 @@ sys.dont_write_bytecode = True
 
 class RejectGraphDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        forbidden = (
-            "finn.parked", "onnx", "finn.core.onnx_exec", "finn.core.rtlsim_exec",
-        )
+        forbidden = ("onnx", "finn.core.onnx_exec", "finn.core.rtlsim_exec")
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
         if fullname.startswith("qonnx") and fullname not in (
@@ -82,7 +80,6 @@ from qonnx.core.datatype import DataType
 assert (installed / "finn/kernels/py.typed").is_file()
 assert (installed / "finn/core/space/py.typed").is_file()
 assert (installed / "finn/dataflow/py.typed").is_file()
-assert not (installed / "finn/parked").exists()
 assert "finn.dataflow.datatypes" in sys.modules
 PLATFORM = Platform(
     period_ns=5.0,
@@ -287,7 +284,6 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
             "finn/dataflow/traversal.py",
             "finn/kernels/artifacts/module.py",
         } <= set(archive.namelist())
-        assert not any(name.startswith("finn/parked/") for name in archive.namelist())
         (metadata_name,) = (
             name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
         )
