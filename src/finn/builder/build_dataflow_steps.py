@@ -119,6 +119,7 @@ from finn.transformation.fpgadataflow.export_portable_rtl import ExportPortableR
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
+from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.loop_rolling import LoopExtraction, LoopRolling
 from finn.transformation.fpgadataflow.make_driver import MakeCPPDriver, MakePYNQDriver
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
@@ -153,6 +154,7 @@ from finn.transformation.kernels import (
     ToKernelOps,
     explore_kernel_choices,
     kernel_choices_config,
+    partition_bottleneck,
     resolve_target,
     shell_target,
     strategy,
@@ -173,7 +175,7 @@ from finn.util.config import (
 )
 from finn.util.fpgadataflow import is_mlo, warn_hls_rtl_dsp_conflict
 from finn.util.rtlsim import annotate_rtlsim_performance
-from finn.util.vivado import parse_ooc_synth_results
+from finn.util.vivado import parse_clock_summary, parse_ooc_synth_results
 
 
 def _maybe_enable_verify_behavioral(cfg):
@@ -1412,9 +1414,73 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model
 
 
+#: The clock the Zynq shell's PS drives the accelerator with: Zynq UltraScale+'s
+#: and Zynq-7000's name for it.
+PL_CLOCKS = ("clk_pl_0", "clk_fpga_0")
+
+
+def delivered_clock(timing_report, period_ns, cycles=None, objective_fps=None):
+    """The clock the routed design delivers (a PL clock of the timing report's clock
+    summary) beside the period asked, and, given the partition's bottleneck
+    ``cycles`` a frame, the frames a second at each; ``objective_fps`` is the
+    throughput asked. A delivered period other than the one asked is a ``warning``
+    with both numbers (the shell's PS gives its nearest clock to the request)."""
+    clocks = parse_clock_summary(timing_report)
+    name = next((clock for clock in PL_CLOCKS if clock in clocks), None)
+    if name is None:
+        return {
+            "target_period_ns": period_ns,
+            "warning": f"no PL clock ({', '.join(PL_CLOCKS)}) in {timing_report}: "
+            f"its clock summary lists {sorted(clocks)}",
+        }
+    delivered, mhz = clocks[name]["period_ns"], clocks[name]["mhz"]
+    report = {
+        "clock": name,
+        "target_period_ns": period_ns,
+        "delivered_period_ns": delivered,
+        "delivered_mhz": mhz,
+    }
+    if cycles is not None:
+        report["bottleneck_cycles"] = cycles
+        report["fps_at_target"] = round(1e9 / (period_ns * cycles), 1)
+        report["fps_at_delivered"] = round(mhz * 1e6 / cycles, 1)
+    if objective_fps is not None:
+        report["objective_fps"] = objective_fps
+    # The report states periods to the picosecond.
+    if abs(delivered - period_ns) >= 0.0005:
+        warning = (
+            f"the shell delivers {name} at {delivered} ns ({mhz} MHz), "
+            f"not the {period_ns} ns asked"
+        )
+        if cycles is not None:
+            warning += (
+                f": {cycles} cycles a frame give {report['fps_at_delivered']:,.0f} fps at it, "
+                f"{report['fps_at_target']:,.0f} at the clock asked"
+            )
+        if objective_fps is not None:
+            warning += f"; the objective is {objective_fps:,.0f} fps"
+        report["warning"] = warning
+    return report
+
+
+def _objective_fps(cfg: DataflowBuildConfig):
+    """The throughput the kernel exploration's target_throughput strategy asks, if any."""
+    asked = [
+        spec["fps"]
+        for spec in cfg.kernel_exploration
+        if spec.get("strategy") == "target_throughput" and "fps" in spec
+    ]
+    return asked[0] if asked else None
+
+
 def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Synthesize a bitfile for the using the specified shell flow, using either
-    Vivado or Vitis, to target the specified board."""
+    Vivado or Vitis, to target the specified board.
+
+    In the Zynq shell it then reads the clock the routed design delivers
+    (report/delivered_clock.json, delivered_clock): beside the period asked, and for
+    a partition of KernelOps its throughput at each, with the objective its
+    exploration asked; a delivered clock other than the one asked is a warning."""
 
     if DataflowOutputType.BITFILE in cfg.generate_outputs:
         bitfile_dir = cfg.output_dir + "/bitfile"
@@ -1423,6 +1489,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
         os.makedirs(report_dir, exist_ok=True)
         partition_model_dir = cfg.output_dir + "/intermediate_models/kernel_partitions"
         if cfg.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:
+            bottleneck = partition_bottleneck(model) if is_kernel_partition(model) else None
             model = model.transform(
                 ZynqBuild(
                     cfg.board,
@@ -1450,6 +1517,16 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                 % vivado_pynq_proj_dir
             )
             copy(timing_rpt, report_dir + "/post_route_timing.rpt")
+            clock = delivered_clock(
+                timing_rpt,
+                cfg.synth_clk_period_ns,
+                None if bottleneck is None else bottleneck.cycles,
+                _objective_fps(cfg) if bottleneck is not None else None,
+            )
+            with open(report_dir + "/delivered_clock.json", "w") as f:
+                json.dump(clock, f, indent=2)
+            if "warning" in clock:
+                print("WARNING: " + clock["warning"])
 
         elif cfg.shell_flow_type == ShellFlowType.VITIS_ALVEO:
             model = model.transform(

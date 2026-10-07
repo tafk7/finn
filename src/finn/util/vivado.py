@@ -156,6 +156,30 @@ def _parse_vivado_timing_report(report_path):
     return ret
 
 
+def parse_clock_summary(report_path):
+    """The clocks a Vivado timing summary report's "Clock Summary" table lists, by
+    name: each one's period (ns) and frequency (MHz), as routed. A generated clock's
+    indented name is read without its indent."""
+    with open(report_path) as f:
+        lines = f.read().splitlines()
+    clocks = {}
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == "| Clock Summary")
+    except StopIteration:
+        return clocks
+    header = next(i for i in range(start, len(lines)) if lines[i].startswith("Clock "))
+    for line in lines[header + 2 :]:
+        if not line.strip():
+            break
+        match = re.match(r"\s*(\S+)\s+\{[^}]*\}\s+(-?[\d.]+)\s+(-?[\d.]+)", line)
+        if match:
+            clocks[match.group(1)] = {
+                "period_ns": float(match.group(2)),
+                "mhz": float(match.group(3)),
+            }
+    return clocks
+
+
 def _parse_vivado_power_report(report_path):
     """Parse a Vivado power report to extract total on-chip power.
 

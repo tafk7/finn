@@ -37,6 +37,7 @@ from finn.builder.build_dataflow_config import (
     kernel_path_dataflow_steps,
 )
 from finn.builder.build_dataflow_steps import (
+    delivered_clock,
     step_infer_kernel_tensors,
     step_kernel_choices,
     step_kernel_ops,
@@ -44,8 +45,13 @@ from finn.builder.build_dataflow_steps import (
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import KernelOpError, read_target
+from finn.kernels.explore import Placeholder
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
-from finn.transformation.kernels import kernel_choices_config
+from finn.transformation.kernels import (
+    explore_kernel_choices,
+    kernel_choices_config,
+    partition_bottleneck,
+)
 from kernel_ops.models import chain_source, kernel_model, matmul_model
 from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
 
@@ -327,3 +333,63 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # The partition's buffering: the input_gens' buffers as the RTL allocates them
     # (BUF_SIZE words), 4096 + 3 x 512 bits at SetFolding's folding.
     assert report["buffering"] == 5632
+
+
+#: The clock summary of a routed Zynq UltraScale+ design whose PS gives 187.512 MHz for
+#: 200 asked, as Vivado's timing summary report lays it out (the rest of the report cut).
+TIMING_REPORT = """\
+------------------------------------------------------------------------------------------------
+| Clock Summary
+| -------------
+------------------------------------------------------------------------------------------------
+
+Clock     Waveform(ns)         Period(ns)      Frequency(MHz)
+-----     ------------         ----------      --------------
+clk_pl_0  {0.000 2.667}        5.333           187.512
+
+
+------------------------------------------------------------------------------------------------
+| Intra Clock Table
+"""
+
+
+def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) -> None:
+    """TFC's case: 196 cycles a frame at the 187.512 MHz the shell delivers for 5 ns asked
+    give 956,694 frames a second, against the 1e6 its exploration asked: a warning with
+    both numbers."""
+    report = tmp_path / "timing.rpt"
+    report.write_text(TIMING_REPORT)
+    clock = delivered_clock(str(report), 5.0, 196, 1_000_000)
+    assert {key: value for key, value in clock.items() if key != "warning"} == {
+        "clock": "clk_pl_0",
+        "target_period_ns": 5.0,
+        "delivered_period_ns": 5.333,
+        "delivered_mhz": 187.512,
+        "bottleneck_cycles": 196,
+        "fps_at_target": 1020408.2,
+        "fps_at_delivered": 956693.9,
+        "objective_fps": 1_000_000,
+    }
+    assert clock["warning"] == (
+        "the shell delivers clk_pl_0 at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
+        "196 cycles a frame give 956,694 fps at it, 1,020,408 at the clock asked; "
+        "the objective is 1,000,000 fps"
+    )
+    # The clock asked, delivered: no warning; without a partition, the clock alone.
+    assert "warning" not in delivered_clock(str(report), 5.333, 196)
+    assert set(delivered_clock(str(report), 5.0)) == {
+        "clock",
+        "target_period_ns",
+        "delivered_period_ns",
+        "delivered_mhz",
+        "warning",
+    }
+    report.write_text("no clock summary")
+    assert "no PL clock" in delivered_clock(str(report), 5.0)["warning"]
+
+
+def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
+    model = kernel_model()
+    explored = explore_kernel_choices(model, [Placeholder(lanes=2)])
+    assert partition_bottleneck(model) == explored.cost.bottleneck
+    assert partition_bottleneck(model) is not None

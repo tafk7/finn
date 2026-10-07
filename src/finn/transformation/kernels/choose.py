@@ -45,6 +45,7 @@ from qonnx.transformation.base import Transformation
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
 from finn.custom_op.kernels.partition import partition_root, persist
 from finn.kernels.explore import (
+    Bottleneck,
     Cost,
     Explorer,
     Pinned,
@@ -192,6 +193,14 @@ def explore_kernel_choices(
     return Explored(point, cost, report)
 
 
+def partition_bottleneck(model: ModelWrapper) -> Bottleneck | None:
+    """The slowest members of a partition model of KernelOps and their cycles a frame,
+    its saved choices replayed (None while a member's cycles wait on an open choice)."""
+    root = partition_root(model, model.graph.node)
+    seam = Seam(root.members, root.owners, read_target(model).platform)
+    return seam.cost(root.point).bottleneck
+
+
 class ExploreKernelChoices(Transformation):
     """Every open choice of the model's KernelOps explored by ``strategies``, in order,
     and saved; ``explored`` holds the result (``explore_kernel_choices``)."""
@@ -212,5 +221,6 @@ __all__ = [
     "ExploreKernelChoices",
     "Explored",
     "explore_kernel_choices",
+    "partition_bottleneck",
     "strategy",
 ]

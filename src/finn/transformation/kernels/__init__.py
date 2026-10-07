@@ -10,7 +10,8 @@ build reads back (``shell_target``);
 answering from their kernels; ``ExploreKernelChoices`` explores their open
 choices through the DSE seam (``finn.kernels.explore``) by a list of strategies
 (``strategy``: one from its spec) and saves them;
-``kernel_choices_config`` exports the nodes' choices, sparse, for
+``partition_bottleneck`` reads a partition's slowest members from its saved
+choices; ``kernel_choices_config`` exports the nodes' choices, sparse, for
 ``ApplyConfig``; ``PackagePartition`` packages a partition of KernelOps as the
 IP the shells read (the stitched-IP contract), and ``ElaboratePartition``
 compiles and elaborates its RTL in XSim, a check before a shell builds it.
@@ -21,6 +22,7 @@ from finn.transformation.kernels.choose import (
     Explored,
     ExploreKernelChoices,
     explore_kernel_choices,
+    partition_bottleneck,
     strategy,
 )
 from finn.transformation.kernels.config import kernel_choices_config
@@ -38,6 +40,7 @@ __all__ = [
     "ToKernelOps",
     "explore_kernel_choices",
     "kernel_choices_config",
+    "partition_bottleneck",
     "resolve_target",
     "shell_target",
     "strategy",
