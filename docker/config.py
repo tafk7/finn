@@ -252,14 +252,6 @@ def add_toolchain(out):
             "the toolchain mount will be present but empty of known tools" % (root, version)
         )
     out["env"].update(layout)
-    aliases = {
-        "XILINX_VIVADO": "VIVADO_PATH",
-        "XILINX_VITIS": "VITIS_PATH",
-        "XILINX_HLS": "HLS_PATH",
-    }
-    for source, alias in aliases.items():
-        if source in layout:
-            out["env"][alias] = layout[source]
     return root
 
 

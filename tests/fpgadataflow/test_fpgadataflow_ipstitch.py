@@ -312,8 +312,8 @@ def test_fpgadataflow_ipstitch_iodma_floorplan():
 @pytest.mark.vivado
 @pytest.mark.vitis
 def test_fpgadataflow_ipstitch_vitis_end2end(board, period_ns, extw):
-    if "VITIS_PATH" not in os.environ:
-        pytest.skip("VITIS_PATH not set")
+    if "XILINX_VITIS" not in os.environ:
+        pytest.skip("XILINX_VITIS not set")
     test_dir = make_build_dir("test_fpgadataflow_ipstitch_vitis_")
     platform = vitis_default_platform[board]
     fpga_part = vitis_part_map[board]

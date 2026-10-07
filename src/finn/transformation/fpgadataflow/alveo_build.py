@@ -61,7 +61,7 @@ from . import templates
 
 def _check_vitis_envvars(environ=None):
     environ = os.environ if environ is None else environ
-    assert "VITIS_PATH" in environ or "XILINX_VITIS" in environ, "Select the Vitis installation"
+    assert "XILINX_VITIS" in environ, "Select the Vitis installation"
     assert "PLATFORM_REPO_PATHS" in environ, "PLATFORM_REPO_PATHS must be set for Vitis"
     assert (
         "XILINX_XRT" in environ

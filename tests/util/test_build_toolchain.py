@@ -288,16 +288,10 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
     assert DataflowBuildConfig.from_json(cfg.to_json()) == restored
 
 
-#: The parent's toolchain variables: none, or another Vivado than the selected
-#: one, with legacy aliases for it and for installations nothing selects.
+#: The parent's toolchain variables: none, or another Vivado than the selected one.
 PARENT_TOOLCHAINS = {
     "clean": {},
-    "stale": {
-        "XILINX_VIVADO": "/parent/Vivado",
-        "VIVADO_PATH": "/parent/Vivado",
-        "VITIS_PATH": "/parent/Vitis",
-        "HLS_PATH": "/parent/Vitis_HLS",
-    },
+    "stale": {"XILINX_VIVADO": "/parent/Vivado"},
 }
 
 
@@ -305,9 +299,7 @@ PARENT_TOOLCHAINS = {
 def test_the_build_process_runs_in_the_configured_selection(monkeypatch, tmp_path, parent):
     """build_dataflow_directory prepares its build process's environment from the
     selection its JSON configuration names: the settings script sourced over the
-    parent's environment, the selected Vivado's simulator libraries on the loader path.
-    The legacy aliases follow the selection only: an inherited alias survives neither
-    beside another root nor without one."""
+    parent's environment, the selected Vivado's simulator libraries on the loader path."""
     vivado = tmp_path / "Vivado"
     (vivado / "lib/lnx64.o").mkdir(parents=True)
     settings = tmp_path / "settings64.sh"
@@ -320,14 +312,7 @@ def test_the_build_process_runs_in_the_configured_selection(monkeypatch, tmp_pat
     (directory / "dataflow_build_config.json").write_text(cfg.to_json())
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "finn_build"))
     monkeypatch.setenv("FINN_RESOURCES_FINNLIB", "/parent/finnlib")
-    for variable in (
-        "XILINX_VIVADO",
-        "XILINX_VITIS",
-        "XILINX_HLS",
-        "VIVADO_PATH",
-        "VITIS_PATH",
-        "HLS_PATH",
-    ):
+    for variable in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS"):
         monkeypatch.delenv(variable, raising=False)
     for variable, value in PARENT_TOOLCHAINS[parent].items():
         monkeypatch.setenv(variable, value)
@@ -343,8 +328,7 @@ def test_the_build_process_runs_in_the_configured_selection(monkeypatch, tmp_pat
     ((cwd, env),) = children
     assert cwd == str(directory)
     assert env["SELECTED_BY_SETTINGS"] == "1"
-    assert env["XILINX_VIVADO"] == env["VIVADO_PATH"] == str(vivado)
-    assert "VITIS_PATH" not in env and "HLS_PATH" not in env
+    assert env["XILINX_VIVADO"] == str(vivado)
     assert env["LD_LIBRARY_PATH"] == str(vivado / "lib/lnx64.o")
     assert env["FINN_BUILD_DIR"] == str(tmp_path / "finn_build")
     assert env["FINN_RESOURCES_FINNLIB"] == "/parent/finnlib"

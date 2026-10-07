@@ -74,9 +74,7 @@ elif [ "${FINN_ENV_APPLIED:-}" != "1" ]; then
     # fails much later and somewhere else.
     # ---------------------------------------------------------------------
     for _finn_base in \
-        "${XILINX_VITIS:-}" "${VITIS_PATH:-}" \
-        "${XILINX_VIVADO:-}" "${VIVADO_PATH:-}" \
-        "${XILINX_HLS:-}" "${HLS_PATH:-}" \
+        "${XILINX_VITIS:-}" "${XILINX_VIVADO:-}" "${XILINX_HLS:-}" \
         "${XILINX_XRT:-}" /opt/xilinx/xrt
     do
         [ -n "$_finn_base" ] || continue
@@ -103,9 +101,9 @@ elif [ "${FINN_ENV_APPLIED:-}" != "1" ]; then
     # `sbx exec` sessions ran without them.
     # ---------------------------------------------------------------------
     for _finn_dir in \
-        "${XILINX_VIVADO:-${VIVADO_PATH:-}}/lib/lnx64.o" \
-        "${XILINX_VITIS:-${VITIS_PATH:-}}/lnx64/tools/fpo_v7_1" \
-        "${XILINX_HLS:-${HLS_PATH:-}}/lnx64/tools/fpo_v7_1"
+        "${XILINX_VIVADO:-}/lib/lnx64.o" \
+        "${XILINX_VITIS:-}/lnx64/tools/fpo_v7_1" \
+        "${XILINX_HLS:-}/lnx64/tools/fpo_v7_1"
     do
         case "$_finn_dir" in /lib/lnx64.o|/lnx64/tools/fpo_v7_1) continue ;; esac
         [ -d "$_finn_dir" ] || continue

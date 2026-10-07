@@ -26,8 +26,8 @@ Don't mutate env variables or global process state. Use pytest's `monkeypatch` f
 
 ```python
 def test_sim_behaviour(monkeypatch):
-    monkeypatch.setenv("VIVADO_PATH", "/custom/path")
-    # original VIVADO_PATH restored automatically after the test
+    monkeypatch.setenv("FINN_BUILD_DIR", "/custom/path")
+    # original FINN_BUILD_DIR restored automatically after the test
 ```
 
 ### 3. Parallel Scheduling (`xdist_group`)
