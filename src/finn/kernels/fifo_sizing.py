@@ -124,7 +124,10 @@ def simulate(
     """``frames`` frames from ``supply``, its frame ``k`` due from ``k * period``,
     through a FIFO of ``depth`` words (0: direct, a handshake) into ``accept``;
     ``None`` when the ends deadlock."""
+    # Each pattern's gaps are read once: a frame at one lane a beat is tens of
+    # thousands of words, and a model of 16 frames reads them for every word.
     words, gaps = len(supply.times), supply.gaps()
+    accept_gaps = accept.gaps() if isinstance(accept, Pattern) else accept.reads.gaps()
     left: list[int] = []  # when each word left the producer
     taken: list[int] = []  # when the input side took it
     late: list[int] = []
@@ -140,7 +143,7 @@ def simulate(
         nonlocal freed_count
         assert replay is not None
         buffer, frame = replay.buffer, len(replay.buffer.reads)
-        frame_words, read_gaps = buffer.freed[-1], replay.reads.gaps()
+        frame_words, read_gaps = buffer.freed[-1], accept_gaps
         while freed_count < count:
             beat = len(shown)
             k, i = divmod(beat, frame)
@@ -170,7 +173,7 @@ def simulate(
             at = max(at, taken[-1] + 1)
         if replay is None:
             assert isinstance(accept, Pattern)
-            reads = accept.gaps()[n % len(accept.times)]
+            reads = accept_gaps[n % len(accept.times)]
             if taken:
                 at = max(at, taken[-1] + reads)
         else:
