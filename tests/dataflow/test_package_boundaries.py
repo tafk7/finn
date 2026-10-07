@@ -16,7 +16,7 @@ import sys
 from importlib import import_module
 
 
-def test_dataflow_loads_no_engine_kernels_or_parked_code_at_runtime() -> None:
+def test_dataflow_loads_no_engine_or_kernels_at_runtime() -> None:
     """Importing every canonical module pulls in neither the engine nor anything
     above the value layer."""
 
@@ -29,7 +29,7 @@ def test_dataflow_loads_no_engine_kernels_or_parked_code_at_runtime() -> None:
             "bad = sorted(",
             "    name for name in sys.modules",
             "    if name.startswith(",
-            "        ('finn.core', 'finn.kernels', 'finn.parked', 'finn.custom_op',",
+            "        ('finn.core', 'finn.kernels', 'finn.custom_op',",
             "         'onnx', 'greenlet')",
             "    )",
             "    or (",

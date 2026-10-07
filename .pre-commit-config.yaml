@@ -26,8 +26,8 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Parked code and recorded evidence are reference material, not maintained code.
-exclude: '^(docs/conf.py|src/finn/parked/|docs/(kernel|space)-[^/]+/)'
+# Recorded evidence is reference material, not maintained code.
+exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/)'
 
 default_language_version:
     python: python3.12

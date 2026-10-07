@@ -42,14 +42,9 @@ def test_rows_name_only_earlier_rows() -> None:
     assert len(BY_NAME) == len(LAYERS)
 
 
-def test_every_row_but_parked_is_checked_by_a_tree() -> None:
+def test_every_row_is_checked_by_a_tree() -> None:
     for layer in LAYERS:
-        if layer.name == "parked":
-            assert layer.tree is None
-            assert not any("parked" in row.imports for row in LAYERS)
-        else:
-            assert layer.tree is not None, layer.name
-            assert (ROOT / layer.tree / "test_layering.py").is_file(), layer.name
+        assert (ROOT / layer.tree / "test_layering.py").is_file(), layer.name
 
 
 @pytest.mark.parametrize(
@@ -64,7 +59,6 @@ def test_every_row_but_parked_is_checked_by_a_tree() -> None:
         ("finn.xsi.setup", "util"),
         ("finn.util.torch_hw_modules", "flow"),
         ("finn.builder.build_dataflow", "flow"),
-        ("finn.parked.custom_op", "parked"),
         ("kernels.helpers", "tests.kernels"),
     ],
 )
@@ -81,13 +75,12 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
 @pytest.mark.parametrize(
     ("layer", "name"),
     [
-        # Kernels importing above their layer: the flow, util, qonnx, KernelOps, parked code.
+        # Kernels importing above their layer: the flow, util, qonnx, KernelOps.
         ("kernels", "finn.transformation.fpgadataflow.insert_iodma.InsertIODMA"),
         ("kernels", "finn.util.basic.make_build_dir"),
         ("kernels", "finn.builder.build_dataflow"),
         ("kernels", "qonnx.core.modelwrapper.ModelWrapper"),
         ("kernels", "finn.custom_op.kernels.base"),
-        ("kernels", "finn.parked.custom_op"),
         ("dataflow", "finn.kernels.base.Kernel"),
         ("dataflow", "qonnx.util.basic"),
         ("dataflow", "onnx"),
@@ -97,8 +90,6 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("util", "finn.transformation.fpgadataflow.make_zynq_proj.ZynqBuild"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
         ("util", "finn.util.torch_hw_modules"),
-        # The flow imports anything live, but no parked code.
-        ("flow", "finn.parked.custom_op"),
         ("tests.kernels", "finn.custom_op.kernels.base"),
         ("tests.kernels", "finn.core.onnx_exec"),
     ],

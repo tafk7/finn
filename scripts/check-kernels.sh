@@ -7,9 +7,7 @@
 # shellcheck source=scripts/_gate-common.sh
 source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"
 
-# The layers below, independent of each other: finn.core.space and finn.dataflow. Parked
-# dataflow/graph tests remain outside this command; their compatibility is not
-# claimed.
+# The layers below, independent of each other: finn.core.space and finn.dataflow.
 bash scripts/check-space.sh "${GATE_ARGS[@]}"
 bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 # XSim and other Vivado tests (markers xsim, vivado) are deselected even when
