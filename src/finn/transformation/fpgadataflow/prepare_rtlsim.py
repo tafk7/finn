@@ -48,11 +48,14 @@ class PrepareRTLSim(NodeLocalTransformation):
 
     * num_workers (int or None) number of parallel workers, see documentation in
       NodeLocalTransformation for more details.
+    * toolchain (finn.util.toolchain.Toolchain or None) the prepared toolchain
+      whose xelab compiles each library; None for the default.
     """
 
-    def __init__(self, behav=False, num_workers=None):
+    def __init__(self, behav=False, num_workers=None, toolchain=None):
         super().__init__(num_workers=num_workers)
         self.behav = behav
+        self.toolchain = toolchain
 
     def apply(self, model):
         model = model.transform(ReplaceVerilogRelPaths())
@@ -64,7 +67,7 @@ class PrepareRTLSim(NodeLocalTransformation):
             try:
                 # lookup op_type in registry of CustomOps
                 inst = registry.getCustomOp(node)
-                inst.prepare_rtlsim(self.behav)
+                inst.prepare_rtlsim(self.behav, toolchain=self.toolchain)
                 # ensure that executable path is now set
                 assert (
                     inst.get_nodeattr("rtlsim_so") != ""

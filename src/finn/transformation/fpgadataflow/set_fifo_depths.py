@@ -183,14 +183,18 @@ class CapConvolutionFIFODepths(Transformation):
         return (model, False)
 
 
-def xsi_fifosim(model, n_inferences, max_iters=None, throttle_cycles=0, behav=True):
+def xsi_fifosim(
+    model, n_inferences, max_iters=None, throttle_cycles=0, behav=True, *, toolchain=None
+):
     """Create a XSI model of stitched IP and use a simple C++
     driver to drive the input stream. Useful for FIFO sizing, latency
     and throughput measurement. If max_iters is None, use the default
     liveness threshold instead. throttle_cycles can be used for throttling
     the input stream every time a frame is finished.
     If behav=True (default), FINN_SIMULATION is defined and fifo_gauge is used.
-    If behav=False, the synthesizable fifo.sv is used instead (no debug logging)."""
+    If behav=False, the synthesizable fifo.sv is used instead (no debug logging).
+    ``toolchain`` (a prepared ``Toolchain``, None for the default) compiles the
+    simulation and its driver."""
 
     iname = model.get_first_global_in()
     first_node = model.find_consumer(iname)
@@ -208,6 +212,7 @@ def xsi_fifosim(model, n_inferences, max_iters=None, throttle_cycles=0, behav=Tr
         timeout_cycles=max_iters,
         throttle_cycles=throttle_cycles,
         behav=behav,
+        toolchain=toolchain,
     )
 
     return ret_dict
@@ -460,7 +465,11 @@ class InsertAndSetFIFODepths(Transformation):
             throttle_cycles = 0
 
         sim = xsi_fifosim(
-            model, self.cfg_n_inferences, max_iters=max_iters, throttle_cycles=throttle_cycles
+            model,
+            self.cfg_n_inferences,
+            max_iters=max_iters,
+            throttle_cycles=throttle_cycles,
+            toolchain=toolchain,
         )
 
         for ind, node in enumerate(fifo_nodes):

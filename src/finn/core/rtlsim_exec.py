@@ -33,9 +33,9 @@ import shlex
 from qonnx.custom_op.registry import getCustomOp
 
 from finn import xsi
+from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import (
     get_rtlsim_timeout_error_message,
-    get_vivado_root,
     get_watchdog_timeout_cycles,
     launch_process_helper,
     make_build_dir,
@@ -138,6 +138,40 @@ def file_to_basename(x):
     return os.path.basename(os.path.realpath(x))
 
 
+def prepare_stitched_rtlsim(model, behav=False, *, toolchain=None):
+    """Compile the stitched IP's simulation library by ``toolchain``'s xelab (a
+    prepared ``Toolchain``, None for the default) and name it in the model's
+    rtlsim_so metadata, where rtlsim_exec and rtlsim_exec_cppxsi find it. A trace
+    file named in rtlsim_trace asks for a debug build; ``behav`` defines
+    FINN_SIMULATION. Returns the library's base directory and relative path."""
+    with open(model.get_metadata_prop("vivado_stitch_proj") + "/all_verilog_srcs.txt") as f:
+        all_verilog_srcs = f.read().split()
+    top_module_name = file_to_basename(model.get_metadata_prop("wrapper_filename")).strip(".v")
+    single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
+    trace_file = model.get_metadata_prop("rtlsim_trace")
+    debug = not (trace_file is None or trace_file == "")
+    sim_base, sim_rel = finnxsi.compile_sim_obj(
+        top_module_name,
+        all_verilog_srcs,
+        single_src_dir,
+        debug=debug,
+        behav=behav,
+        toolchain=toolchain,
+    )
+    model.set_metadata_prop("rtlsim_so", sim_base + "/" + sim_rel)
+    return sim_base, sim_rel
+
+
+def _vivado_root(toolchain):
+    vivado = toolchain.environment.get("XILINX_VIVADO")
+    if not vivado:
+        raise RuntimeError(
+            "The XSI C++ simulation needs the toolchain's XILINX_VIVADO "
+            "(its simulator headers and libraries)"
+        )
+    return vivado
+
+
 def rtlsim_exec_cppxsi(
     model,
     execution_context,
@@ -145,6 +179,8 @@ def rtlsim_exec_cppxsi(
     timeout_cycles=None,
     throttle_cycles=0,
     behav=True,
+    *,
+    toolchain=None,
 ):
     """Use XSI C++ rtl simulation to execute given model with stitched IP.
 
@@ -171,7 +207,10 @@ def rtlsim_exec_cppxsi(
     Otherwise, timeout_cycles is treated as the derived estimate and
     LIVENESS_THRESHOLD can only increase it.
     throttle_cycles will be used to pause the input stream every time an input frame is finished.
+    ``toolchain`` (a prepared ``Toolchain``, None for the default) compiles the
+    simulation library (xelab) and its C++ driver (g++), against its Vivado.
     """
+    toolchain = toolchain or legacy_toolchain()
     # TODO: support running functional rtlsim with real I/O data
     # TODO: support running with multiple inputs/outputs
     timeout_estimate = timeout_cycles
@@ -200,17 +239,7 @@ def rtlsim_exec_cppxsi(
     top_module_file_name = file_to_basename(model.get_metadata_prop("wrapper_filename"))
     top_module_name = top_module_file_name.strip(".v")
     if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
-        vivado_stitch_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
-        with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
-            all_verilog_srcs = f.read().split()
-        single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
-        debug = not (trace_file is None or trace_file == "")
-        rtlsim_so = finnxsi.compile_sim_obj(
-            top_module_name, all_verilog_srcs, single_src_dir, debug=debug, behav=behav
-        )
-        # save generated lib filename in attribute
-        model.set_metadata_prop("rtlsim_so", rtlsim_so[0] + "/" + rtlsim_so[1])
-        sim_base, sim_rel = rtlsim_so
+        sim_base, sim_rel = prepare_stitched_rtlsim(model, behav, toolchain=toolchain)
         # pass in correct tracefile from attribute
         if trace_file == "default":
             trace_file = top_module_file_name + ".wdb"
@@ -294,7 +323,7 @@ def rtlsim_exec_cppxsi(
         # control tracing and trace filename
         "TRACE_FILE": "nullptr" if trace_file is None else f'"{trace_file}"',
         # sim kernel .so to use (depends on Vivado version)
-        "SIMKERNEL_SO": finnxsi.get_simkernel_so(),
+        "SIMKERNEL_SO": finnxsi.get_simkernel_so(toolchain.environment),
         # log file for xsi (not the sim driver)
         "XSIM_LOG_FILE": '"xsi.log"',
     }
@@ -303,10 +332,10 @@ def rtlsim_exec_cppxsi(
     with open(sim_base + "/rtlsim_config.hpp", "w") as f:
         f.write(fifsom_config_template)
 
-    vivado_incl_dir = get_vivado_root() + "/data/xsim/include"
-    # launch g++ to compile the rtlsim executable
-    build_cmd = [
-        "g++",
+    vivado = _vivado_root(toolchain)
+    vivado_incl_dir = vivado + "/data/xsim/include"
+    # compile the rtlsim executable, the command kept in a script for re-running
+    build_args = [
         f"-I{finnxsi_dir}",
         f"-I{vivado_incl_dir}",
         f"-I{sim_base}",
@@ -319,16 +348,13 @@ def rtlsim_exec_cppxsi(
         "-ldl",
         "-lrt",
     ]
-    # write compilation command to a file for easy re-running/debugging
-    with open(sim_base + "/compile_rtlsim.sh", "w") as f:
-        f.write(shlex.join(build_cmd) + "\n")
-    launch_process_helper(build_cmd, cwd=sim_base)
+    toolchain.run("g++", build_args, cwd=sim_base, replay=sim_base + "/compile_rtlsim.sh")
     assert os.path.isfile(sim_base + "/rtlsim_xsi"), "Failed to compile rtlsim executable"
 
     # launch the rtlsim executable
     # important to specify LD_LIBRARY_PATH here for XSI to work correctly
     runsim_env = os.environ.copy()
-    runsim_env["LD_LIBRARY_PATH"] = get_vivado_root() + "/lib/lnx64.o"
+    runsim_env["LD_LIBRARY_PATH"] = vivado + "/lib/lnx64.o"
     runsim_cmd = ["bash", "run_rtlsim.sh"]
     with open(sim_base + "/run_rtlsim.sh", "w") as f:
         ld_path = runsim_env["LD_LIBRARY_PATH"]
@@ -355,12 +381,14 @@ def rtlsim_exec_cppxsi(
     return ret_dict
 
 
-def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None):
+def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None, *, toolchain=None):
     """Use finnxsi to execute given model with stitched IP. The execution
     context contains the input values. Hook functions can be optionally
     specified to observe/alter the state of the circuit
     - pre_hook : hook function to be called before sim start (after reset)
     - post_hook : hook function to be called after sim end
+    Without a compiled library in the rtlsim_so metadata, ``toolchain`` compiles
+    one (prepare_stitched_rtlsim).
     """
     # ensure stitched ip project already exists
     assert os.path.isfile(
@@ -379,29 +407,15 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
     # prepare rtlsim model
     rtlsim_so = model.get_metadata_prop("rtlsim_so")
     if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
-        vivado_stitch_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
-        with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
-            all_verilog_srcs = f.read().split()
-        top_module_file_name = file_to_basename(model.get_metadata_prop("wrapper_filename"))
-        top_module_name = top_module_file_name.strip(".v")
-        single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
-        debug = not (trace_file is None or trace_file == "")
-        rtlsim_behavioral = model.get_metadata_prop("rtlsim_behavioral")
-        behav = rtlsim_behavioral is not None and rtlsim_behavioral == "1"
-        rtlsim_so = finnxsi.compile_sim_obj(
-            top_module_name, all_verilog_srcs, single_src_dir, debug=debug, behav=behav
-        )
-        # save generated lib filename in attribute
-        model.set_metadata_prop("rtlsim_so", rtlsim_so[0] + "/" + rtlsim_so[1])
-        sim_base, sim_rel = rtlsim_so
-        # pass in correct tracefile from attribute
-        if trace_file == "default":
-            trace_file = top_module_file_name + ".wdb"
-        sim = finnxsi.load_sim_obj(sim_base, sim_rel, trace_file)
+        behav = model.get_metadata_prop("rtlsim_behavioral") == "1"
+        sim_base, sim_rel = prepare_stitched_rtlsim(model, behav, toolchain=toolchain)
     else:
         sim_base, sim_rel = rtlsim_so.split("xsim.dir")
         sim_rel = "xsim.dir" + sim_rel
-        sim = finnxsi.load_sim_obj(sim_base, sim_rel, trace_file)
+    # pass in correct tracefile from attribute
+    if trace_file == "default":
+        trace_file = file_to_basename(model.get_metadata_prop("wrapper_filename")) + ".wdb"
+    sim = finnxsi.load_sim_obj(sim_base, sim_rel, trace_file)
 
     # reset and call rtlsim, including any pre/post hooks
     finnxsi.reset_rtlsim(sim)
@@ -462,12 +476,14 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
     model.set_metadata_prop("cycles_rtlsim", str(n_cycles))
 
 
-def rtlsim_exec(model, execution_context, pre_hook=None, post_hook=None):
+def rtlsim_exec(model, execution_context, pre_hook=None, post_hook=None, *, toolchain=None):
     """Use XSI to execute given model with stitched IP. The execution
     context contains the input values. Hook functions can be optionally
     specified to observe/alter the state of the circuit, receiving the
     sim object as their first argument:
     - pre_hook : hook function to be called before sim start (after reset)
     - post_hook : hook function to be called after sim end
+    Without a compiled library in the rtlsim_so metadata, ``toolchain`` (a
+    prepared ``Toolchain``, None for the default) compiles one.
     """
-    rtlsim_exec_finnxsi(model, execution_context, pre_hook, post_hook)
+    rtlsim_exec_finnxsi(model, execution_context, pre_hook, post_hook, toolchain=toolchain)

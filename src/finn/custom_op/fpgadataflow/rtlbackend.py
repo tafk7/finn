@@ -58,16 +58,22 @@ class RTLBackend(ABC):
     def generate_hdl(self, model, fpgapart, clk):
         pass
 
-    def prepare_rtlsim(self, behav=False):
+    def prepare_rtlsim(self, behav=False, toolchain=None):
         """Creates a xsi emulation library for the RTL code generated
-        for this node, sets the rtlsim_so attribute to its path."""
+        for this node, by ``toolchain``'s xelab, and sets the rtlsim_so attribute
+        to its path."""
 
         verilog_files = self.get_rtl_file_list(abspath=True)
         single_src_dir = make_build_dir("rtlsim_" + self.onnx_node.name + "_")
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")
         ret = finnxsi.compile_sim_obj(
-            self.get_verilog_top_module_name(), verilog_files, single_src_dir, debug, behav
+            self.get_verilog_top_module_name(),
+            verilog_files,
+            single_src_dir,
+            debug,
+            behav,
+            toolchain=toolchain,
         )
         # save generated lib filename in attribute
         self.set_nodeattr("rtlsim_so", ret[0] + "/" + ret[1])

@@ -261,9 +261,10 @@ class FINNLoop(HWCustomOp, RTLBackend):
         inst = getCustomOp(node)
         return inst.get_number_output_values()
 
-    def prepare_rtlsim(self, behav=False):
+    def prepare_rtlsim(self, behav=False, toolchain=None):
         """Creates a xsi emulation library for the RTL code generated
-        for this node, sets the rtlsim_so attribute to its path."""
+        for this node, by ``toolchain``'s xelab, and sets the rtlsim_so attribute
+        to its path."""
 
         vivado_stitch_proj_dir = self.get_nodeattr("code_gen_dir_ipgen")
         with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
@@ -274,7 +275,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")
         rtlsim_so = finnxsi.compile_sim_obj(
-            top_module_name, all_verilog_srcs, single_src_dir, debug, behav
+            top_module_name, all_verilog_srcs, single_src_dir, debug, behav, toolchain=toolchain
         )
         # save generated lib filename in attribute
         sim_base, sim_rel = rtlsim_so

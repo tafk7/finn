@@ -434,15 +434,16 @@ class Simulated(Exception):
 
 @pytest.mark.parametrize("given", [True, False], ids=["given", "default"])
 def test_fifo_sizing_synthesizes_and_stitches_in_one_toolchain(monkeypatch, tmp_path, given):
-    """InsertAndSetFIFODepths up to its simulation: its HLS synthesis and its
-    stitched IP receive the toolchain it is given, or the one it prepares. The
-    simulation (finn.xsi, which prepares its own) is not reached."""
+    """InsertAndSetFIFODepths up to its simulation: its HLS synthesis, its
+    stitched IP and its simulation receive the toolchain it is given, or the one
+    it prepares."""
     seen = []
     for name in ("HLSSynthIP", "CreateStitchedIP"):
         monkeypatch.setattr(set_fifo_depths, name, recorder(set_fifo_depths, name, seen, tmp_path))
     monkeypatch.setattr(set_fifo_depths, "PrepareIP", Passed)
 
-    def xsi_fifosim(*args, **kwargs):
+    def xsi_fifosim(*args, toolchain, **kwargs):
+        seen.append(("xsi_fifosim", toolchain))
         raise Simulated
 
     monkeypatch.setattr(set_fifo_depths, "xsi_fifosim", xsi_fifosim)
@@ -462,4 +463,139 @@ def test_fifo_sizing_synthesizes_and_stitches_in_one_toolchain(monkeypatch, tmp_
         )
     expected = toolchain if given else prepared[0]
     assert len(prepared) == (0 if given else 1)
-    assert seen == [("HLSSynthIP", expected), ("CreateStitchedIP", expected)]
+    assert seen == [
+        ("HLSSynthIP", expected),
+        ("CreateStitchedIP", expected),
+        ("xsi_fifosim", expected),
+    ]
+
+
+#: A Vivado, xelab, g++ and Vitis HLS in one script: each notes its name in the
+#: calls.log beside it and leaves what its caller checks for. g++ writes an
+#: executable that reports a finished XSI run; Vitis HLS a node's Verilog.
+FAKE_TOOL = """
+import os, sys
+tool = os.path.basename(sys.argv[0])
+with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "calls.log"), "a") as log:
+    log.write(tool + "\\n")
+args = sys.argv[1:]
+if args[:1] in (["-version"], ["--version"]):
+    print(tool + " v2024.2 (64-bit)")
+elif tool == "xelab":
+    top = args[args.index("-s") + 1]
+    os.makedirs(f"xsim.dir/{top}")
+    open(f"xsim.dir/{top}/xsimk.so", "w").close()
+elif tool == "g++":
+    out = args[args.index("-o") + 1]
+    with open(out, "w") as executable:
+        executable.write(
+            "#!/bin/sh\\nprintf 'cycles\\\\t100\\\\nlatency_cycles\\\\t60\\\\nTIMEOUT\\\\t0\\\\n'"
+            " > results.txt\\n"
+        )
+    os.chmod(out, 0o755)
+elif tool == "vitis_hls":
+    name = os.path.basename(args[1])[len("hls_syn_") : -len(".tcl")]
+    os.makedirs(f"project_{name}/sol1/impl/ip")
+    os.makedirs(f"project_{name}/sol1/impl/verilog")
+    open(f"project_{name}/sol1/impl/verilog/{name}.v", "w").close()
+"""
+
+
+def fake_tools(directory):
+    """A command directory of fake vendor tools; returns the log of their calls."""
+    directory.mkdir()
+    for tool in ("vivado", "xelab", "g++", "vitis_hls"):
+        script = directory / tool
+        script.write_text("#!" + sys.executable + "\n" + FAKE_TOOL)
+        script.chmod(0o755)
+    return directory / "calls.log"
+
+
+def calls(log):
+    return log.read_text().split() if log.exists() else []
+
+
+@pytest.fixture
+def two_routes(monkeypatch, tmp_path):
+    """A build configuration's command directory and the machine's
+    (FINN_TOOL_DIR_OVERRIDE), each of fake tools; returns their call logs."""
+    configured = fake_tools(tmp_path / "configured")
+    machine = fake_tools(tmp_path / "machine")
+    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", str(machine.parent))
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    monkeypatch.setenv("NUM_DEFAULT_WORKERS", "1")
+    (tmp_path / "hls").mkdir()
+    monkeypatch.setenv("XILINX_HLS", str(tmp_path / "hls"))
+    # The C++ simulation driver's headers and libraries, and its kernel's name.
+    (tmp_path / "2024.2/Vivado").mkdir(parents=True)
+    monkeypatch.setenv("XILINX_VIVADO", str(tmp_path / "2024.2/Vivado"))
+    return configured, machine
+
+
+def simulation_config(tmp_path, configured, *verification, **settings):
+    return builder_config(
+        tmp_path,
+        fpga_part=ALVEO_PART,
+        toolchain=Selection(command_dir=str(configured.parent)),
+        verify_steps=list(verification),
+        verify_input_npy="unused.npy",
+        verify_expected_output_npy="unused.npy",
+        **settings,
+    )
+
+
+def stitched(model, tmp_path):
+    """The metadata a stitched IP project leaves, for a project of one wrapper."""
+    project = tmp_path / "stitched"
+    project.mkdir()
+    wrapper = project / "finn_design_wrapper.v"
+    wrapper.write_text("")
+    (project / "all_verilog_srcs.txt").write_text(str(wrapper))
+    model.set_metadata_prop("vivado_stitch_proj", str(project))
+    model.set_metadata_prop("wrapper_filename", str(wrapper))
+    model.set_metadata_prop(
+        "vivado_stitch_ifnames",
+        json.dumps({"s_axis": [["s_axis_0", 4]], "m_axis": [["m_axis_0", 32]], "aximm": []}),
+    )
+    return model
+
+
+def test_the_builder_simulates_in_its_toolchain_not_the_machine_default(
+    monkeypatch, tmp_path, two_routes
+):
+    """Each builder step that compiles a simulation (cppsim, node-by-node and
+    stitched-IP rtlsim, the rtlsim performance run) compiles it by the build
+    configuration's toolchain; the machine's command directory sees no call.
+    Verification itself is not run: the fake tools build nothing that runs."""
+    configured, machine = two_routes
+    verified = []
+    monkeypatch.setattr(
+        build_dataflow_steps, "verify_step", lambda model, cfg, name, **kw: verified.append(name)
+    )
+    steps = build_dataflow_steps
+    cfg = simulation_config(
+        tmp_path,
+        configured,
+        "folded_hls_cppsim",
+        "node_by_node_rtlsim",
+        "stitched_ip_rtlsim",
+        minimize_bit_width=False,
+    )
+    model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
+    model = steps.step_minimize_bit_width(model, cfg)
+    assert calls(configured) == ["g++"]
+    model = steps.step_hw_codegen(model, cfg)
+    model = steps.step_hw_ipgen(model, cfg)
+    assert calls(configured)[1:] == ["vitis_hls", "vitis_hls", "vivado", "xelab"]
+    model = steps.step_create_stitched_ip(stitched(model, tmp_path), cfg)
+    assert calls(configured)[5:] == ["xelab"]
+    cfg.generate_outputs = [DataflowOutputType.STITCHED_IP, DataflowOutputType.RTLSIM_PERFORMANCE]
+    monkeypatch.setattr(steps, "CreateStitchedIP", Passed)
+    monkeypatch.setattr(steps, "copy", lambda *args: None)
+    monkeypatch.setattr(steps.shutil, "copytree", lambda *args, **kwargs: None)
+    steps.step_measure_rtlsim_performance(model, cfg)
+    assert calls(configured)[6:] == ["xelab", "g++"]
+    report = json.loads((Path(cfg.output_dir) / "report/rtlsim_performance.json").read_text())
+    assert report["cycles"] == 100
+    assert verified == ["folded_hls_cppsim", "node_by_node_rtlsim", "stitched_ip_rtlsim"]
+    assert calls(machine) == []
