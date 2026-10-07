@@ -33,7 +33,6 @@ import shlex
 from qonnx.custom_op.registry import getCustomOp
 
 from finn import xsi
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import (
     get_rtlsim_timeout_error_message,
     get_watchdog_timeout_cycles,
@@ -43,6 +42,7 @@ from finn.util.basic import (
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.resources import resource_path
 from finn.util.rtlsim import dat_file_to_numpy_array, mlo_prehook_func_factory
+from finn.util.toolchain import machine_toolchain
 
 finnxsi = xsi  # Native prerequisites are checked when simulation is requested.
 
@@ -210,7 +210,7 @@ def rtlsim_exec_cppxsi(
     ``toolchain`` (a prepared ``Toolchain``, None for the default) compiles the
     simulation library (xelab) and its C++ driver (g++), against its Vivado.
     """
-    toolchain = toolchain or legacy_toolchain()
+    toolchain = toolchain or machine_toolchain()
     # TODO: support running functional rtlsim with real I/O data
     # TODO: support running with multiple inputs/outputs
     timeout_estimate = timeout_cycles

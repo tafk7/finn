@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from finn.transformation.fpgadataflow.alveo_build import VitisOptStrategy
 from finn.util.basic import hbm_boards, part_map, vitis_default_platform
-from finn.util.toolchain import Selection, Toolchain
+from finn.util.toolchain import Selection, Toolchain, machine_selection
 
 
 class AutoFIFOSizingMethod(str, Enum):
@@ -163,10 +163,10 @@ hw_codegen_dataflow_steps = estimate_only_dataflow_steps + ["step_hw_codegen"]
 kernel_path_dataflow_steps = ["phase_kernel_path", "phase_generate_outputs"]
 
 
-def _toolchain_selection(stated: Any) -> Selection:
+def _toolchain_selection(stated: Any) -> Optional[Selection]:
     """The ``toolchain`` a configuration states, refusing keys Selection does not declare
     (dataclasses_json would drop them, as it does a nested dataclass's)."""
-    if isinstance(stated, Selection):
+    if stated is None or isinstance(stated, Selection):
         return stated
     unknown = sorted(set(stated) - {item.name for item in fields(Selection)})
     if unknown:
@@ -468,11 +468,13 @@ class DataflowBuildConfig:
     #: settings scripts to source (none: the environment is already configured, as
     #: by ``scripts/activate.sh``); ``command_dir``, a site command directory;
     #: ``launcher``, a site launcher prefix; ``hls_frontend``, ``vitis_hls`` (up to
-    #: 2024.2) or ``vitis-run`` (2025.1 on). The legacy environment variables
-    #: (``XILINX_*``, ``FINN_HLS_FRONTEND``, ``FINN_TOOL_DIR_OVERRIDE``) select nothing.
+    #: 2024.2) or ``vitis-run`` (2025.1 on). A stated selection is used as stated.
+    #: Unset (None), the build runs by the machine's
+    #: (:py:func:`finn.util.toolchain.machine_selection`): the environment as
+    #: configured, under the site command directory ``FINN_TOOL_DIR_OVERRIDE`` names.
     #: In JSON: {"settings": [...], "command_dir": "", "launcher": [], "hls_frontend": "..."}.
-    toolchain: Selection = field(
-        default_factory=Selection, metadata=config(decoder=_toolchain_selection)
+    toolchain: Optional[Selection] = field(
+        default=None, metadata=config(decoder=_toolchain_selection)
     )
 
     #: The kernel path's exploration (step_kernel_choices): the strategies that choose
@@ -500,14 +502,18 @@ class DataflowBuildConfig:
         else:
             return self.hls_clk_period_ns
 
+    def _resolve_selection(self) -> Selection:
+        """The selection this build runs its tools by: ``toolchain``, or the machine's."""
+        return machine_selection() if self.toolchain is None else self.toolchain
+
     def _resolve_toolchain(self) -> Toolchain:
-        """The prepared toolchain every tool step of this build runs in: the selection
-        ``toolchain`` names, prepared by the first step that asks and then the same
-        object for every later step. Kept on the instance, not a field: it is
-        prepared, not configured, and is not serialized with the build configuration."""
+        """The prepared toolchain every tool step of this build runs in: the resolved
+        selection, prepared by the first step that asks and then the same object for
+        every later step. Kept on the instance, not a field: it is prepared, not
+        configured, and is not serialized with the build configuration."""
         toolchain = getattr(self, "_toolchain", None)
         if toolchain is None:
-            toolchain = self._toolchain = self.toolchain.prepare()
+            toolchain = self._toolchain = self._resolve_selection().prepare()
         return toolchain
 
     def _resolve_driver_platform(self):

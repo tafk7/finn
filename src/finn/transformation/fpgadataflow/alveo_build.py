@@ -54,7 +54,7 @@ from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.resources import tcl_quote
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 
 from . import templates
 
@@ -126,7 +126,7 @@ class CreateVitisXO(Transformation):
         self.toolchain = toolchain
 
     def apply(self, model):
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         _check_vitis_envvars(toolchain.environment)
         vivado_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
         stitched_ip_dir = vivado_proj_dir + "/ip"
@@ -310,7 +310,7 @@ class VitisLink(Transformation):
         self.enable_debug = enable_debug
 
     def apply(self, model):
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         _check_vitis_envvars(toolchain.environment)
         # create a config file and empty list of xo files
         config = ["[connectivity]"]
@@ -491,7 +491,7 @@ def _slash_link_command(tool, config_path, vbin_path, component_xml_paths, build
 
 
 def _slash_link_argv(config_path, vbin_path, component_xml_paths, build_hardware, toolchain=None):
-    toolchain = toolchain or legacy_toolchain()
+    toolchain = toolchain or machine_toolchain()
     args = _slash_link_command(
         "slashkit", config_path, vbin_path, component_xml_paths, build_hardware
     )
@@ -599,7 +599,7 @@ class SlashLink(Transformation):
 
         # Construct the linker invocation
         vbin_path = link_dir / "finn.vbin"
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         command = _slash_link_command(
             "slashkit", config_path, vbin_path, component_xml_paths, self.build_hardware
         )

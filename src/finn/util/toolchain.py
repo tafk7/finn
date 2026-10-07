@@ -13,9 +13,8 @@ the one way a tool process is started and reaped.
   killed whole on timeout or cancellation.
 
 A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
-so that one build runs every tool through one route; ``finn.util._legacy_build_env``
-derives the default one from the legacy environment variables. Nothing is
-discovered or activated on import.
+so that one build runs every tool through one route; without one, it runs by the
+machine's (``machine_toolchain``). Nothing is discovered or activated on import.
 """
 
 from __future__ import annotations
@@ -267,7 +266,7 @@ class Toolchain:
             and shutil.which(executable, path=self.environment.get("PATH", "")) is None
         ):
             raise FileNotFoundError(
-                f"{executable} not found (FINN_TOOL_DIR_OVERRIDE={selection.command_dir!r})"
+                f"{executable} not found (command_dir={selection.command_dir!r})"
             )
         return [*selection.launcher, executable, *(os.fspath(arg) for arg in args)]
 
@@ -385,3 +384,27 @@ class Toolchain:
             _HLS_CAPABLE.add(capability)
         args = ["--mode", "hls", "--tcl", script] if frontend == "vitis-run" else ["-f", script]
         return frontend, args
+
+
+#: The machine setting that names a site command directory: wrappers for
+#: ``vivado``, ``xelab``, ``v++``, ``g++``, ... that may hand a tool to a compute
+#: farm (ci/README.md, "Running tools on LSF"). The name is the Jenkins site
+#: configuration's.
+COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
+
+
+def machine_selection(environ: Mapping[str, str] | None = None) -> Selection:
+    """The selection a tool runs by when its caller names none: this machine's
+    environment as configured (``scripts/activate.sh``, ``docker/run``,
+    ``finn-toolchain.sh``; no settings script is sourced), under the site command
+    directory ``FINN_TOOL_DIR_OVERRIDE`` names, if it names one. A selection a
+    caller states (a build configuration's ``toolchain``) is used as stated
+    instead: its ``command_dir`` wins."""
+    environ = os.environ if environ is None else environ
+    return Selection(command_dir=environ.get(COMMAND_DIR_SETTING, ""))
+
+
+def machine_toolchain() -> Toolchain:
+    """``machine_selection()`` prepared over this process's environment: the
+    toolchain of a transformation called without one."""
+    return machine_selection().prepare()

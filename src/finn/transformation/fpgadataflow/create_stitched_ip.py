@@ -41,10 +41,10 @@ from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partiti
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 from finn.util.resources import resource_path, tcl_quote
+from finn.util.toolchain import machine_toolchain
 from finn.util.vivado import vivado_jobs
 
 
@@ -809,7 +809,7 @@ close $ofile
             f.write(tcl_string)
         # create a shell script and call Vivado
         make_project_sh = vivado_stitch_proj_dir + "/make_project.sh"
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         toolchain.probe("vivado")
         args = ["-mode", "batch", "-source", "make_project.tcl"]
         with open(make_project_sh, "w") as f:

@@ -4,11 +4,12 @@
 """One toolchain per flow: the dataflow builder, PrepareForLinking and FIFO sizing
 hand the toolchain they are given (or the one they prepare) to each
 transformation that runs a vendor tool. The builder's is the selection its
-configuration names, which also prepares build_dataflow_directory's build process.
+configuration names, or the machine's when it names none, which also prepares
+build_dataflow_directory's build process.
 
 The tool steps are replaced by recorders, each checking its call against the
-real constructor; where a real run is needed, the only Vitis HLS on the
-toolchain's PATH is a fake one. No Vivado and no Vitis HLS. ZynqBuild's own
+real constructor; where a real run is needed, the tools in the toolchain's
+command directory are fakes (tests/util/conftest.py). No Vivado and no Vitis HLS. ZynqBuild's own
 threading is tests/kernel_ops/test_zynq_build.py.
 """
 
@@ -41,7 +42,7 @@ from finn.transformation.fpgadataflow import alveo_build, set_fifo_depths
 from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util import hls
-from finn.util.toolchain import Selection
+from finn.util.toolchain import Selection, machine_selection
 
 pytestmark = pytest.mark.util
 
@@ -243,7 +244,7 @@ def test_a_build_prepares_one_toolchain_and_runs_every_tool_step_by_it(monkeypat
     run(steps.step_loop_body_ipgen_and_stitch)
     assert [name for name, _ in seen] == BUILDER_ORDER
     assert all(given is toolchain for _, given in seen)
-    assert prepared == [cfg.toolchain]
+    assert prepared == [machine_selection()]
 
 
 def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeypatch):
@@ -254,8 +255,9 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
         return prepared[-1][1]
 
     monkeypatch.setattr(Selection, "prepare", prepare)
-    # The legacy environment selects nothing.
-    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/legacy/tools")
+    # A stated selection is used as stated: the machine's command directory and
+    # the legacy frontend variable select nothing.
+    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/site/tools")
     monkeypatch.setenv("FINN_HLS_FRONTEND", "vivado_hls")
     selection = Selection(settings=("/opt/xilinx/settings64.sh",), hls_frontend="vitis-run")
     cfg = DataflowBuildConfig(
@@ -264,9 +266,12 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
     assert prepared == []
     assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0][1]
     assert [named for named, _ in prepared] == [selection]
-    # Unset, it is the environment as configured, with Vitis HLS.
+    # Unset, it is the machine's: the environment as configured, under the site
+    # command directory.
     unset = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
-    assert unset.toolchain == Selection(settings=(), command_dir="", launcher=())
+    assert unset.toolchain is None
+    assert unset._resolve_selection() == Selection(command_dir="/site/tools")
+    assert unset._resolve_toolchain() is prepared[1][1]
 
 
 def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch):
@@ -287,6 +292,13 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
     monkeypatch.setattr(Selection, "prepare", lambda selection: object())
     cfg._resolve_toolchain()
     assert DataflowBuildConfig.from_json(cfg.to_json()) == restored
+    # Unset, it stays unset: the machine's selection is never written into the
+    # configuration, which another machine may build from.
+    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/site/tools")
+    unset = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
+    unset._resolve_toolchain()
+    assert json.loads(unset.to_json())["toolchain"] is None
+    assert DataflowBuildConfig.from_json(unset.to_json()) == unset
 
 
 #: The parent's toolchain variables: none, or another Vivado than the selected one.
@@ -471,73 +483,18 @@ def test_fifo_sizing_synthesizes_and_stitches_in_one_toolchain(monkeypatch, tmp_
     ]
 
 
-#: A Vivado, xelab, g++ and Vitis HLS in one script: each notes its name in the
-#: calls.log beside it and leaves what its caller checks for. g++ writes an
-#: executable that reports a finished XSI run; Vitis HLS a node's Verilog.
-FAKE_TOOL = """
-import os, sys
-tool = os.path.basename(sys.argv[0])
-with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "calls.log"), "a") as log:
-    log.write(tool + "\\n")
-args = sys.argv[1:]
-if args[:1] in (["-version"], ["--version"]):
-    print(tool + " v2024.2 (64-bit)")
-elif tool == "xelab":
-    top = args[args.index("-s") + 1]
-    os.makedirs(f"xsim.dir/{top}")
-    open(f"xsim.dir/{top}/xsimk.so", "w").close()
-elif tool == "g++":
-    out = args[args.index("-o") + 1]
-    with open(out, "w") as executable:
-        executable.write(
-            "#!/bin/sh\\nprintf 'cycles\\\\t100\\\\nlatency_cycles\\\\t60\\\\nTIMEOUT\\\\t0\\\\n'"
-            " > results.txt\\n"
-        )
-    os.chmod(out, 0o755)
-elif tool == "vitis_hls":
-    name = os.path.basename(args[1])[len("hls_syn_") : -len(".tcl")]
-    os.makedirs(f"project_{name}/sol1/impl/ip")
-    os.makedirs(f"project_{name}/sol1/impl/verilog")
-    open(f"project_{name}/sol1/impl/verilog/{name}.v", "w").close()
-"""
-
-
-def fake_tools(directory):
-    """A command directory of fake vendor tools; returns the log of their calls."""
-    directory.mkdir()
-    for tool in ("vivado", "xelab", "g++", "vitis_hls"):
-        script = directory / tool
-        script.write_text("#!" + sys.executable + "\n" + FAKE_TOOL)
-        script.chmod(0o755)
-    return directory / "calls.log"
-
-
-def calls(log):
-    return log.read_text().split() if log.exists() else []
-
-
 @pytest.fixture
-def two_routes(monkeypatch, tmp_path):
+def two_routes(fake_tools):
     """A build configuration's command directory and the machine's
-    (FINN_TOOL_DIR_OVERRIDE), each of fake tools; returns their call logs."""
-    configured = fake_tools(tmp_path / "configured")
-    machine = fake_tools(tmp_path / "machine")
-    monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", str(machine.parent))
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
-    monkeypatch.setenv("NUM_DEFAULT_WORKERS", "1")
-    (tmp_path / "hls").mkdir()
-    monkeypatch.setenv("XILINX_HLS", str(tmp_path / "hls"))
-    # The C++ simulation driver's headers and libraries, and its kernel's name.
-    (tmp_path / "2024.2/Vivado").mkdir(parents=True)
-    monkeypatch.setenv("XILINX_VIVADO", str(tmp_path / "2024.2/Vivado"))
-    return configured, machine
+    (FINN_TOOL_DIR_OVERRIDE, set), each of fake tools."""
+    return fake_tools("configured"), fake_tools("machine", machine=True)
 
 
 def simulation_config(tmp_path, configured, *verification, **settings):
     return builder_config(
         tmp_path,
         fpga_part=ALVEO_PART,
-        toolchain=Selection(command_dir=str(configured.parent)),
+        toolchain=Selection(command_dir=str(configured.directory)),
         verify_steps=list(verification),
         verify_input_npy="unused.npy",
         verify_expected_output_npy="unused.npy",
@@ -584,12 +541,12 @@ def test_the_builder_simulates_in_its_toolchain_not_the_machine_default(
     )
     model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
     model = steps.step_minimize_bit_width(model, cfg)
-    assert calls(configured) == ["g++"]
+    assert configured.calls == ["g++"]
     model = steps.step_hw_codegen(model, cfg)
     model = steps.step_hw_ipgen(model, cfg)
-    assert calls(configured)[1:] == ["vitis_hls", "vitis_hls", "vivado", "xelab"]
+    assert configured.calls[1:] == ["vitis_hls", "vitis_hls", "vivado", "xelab"]
     model = steps.step_create_stitched_ip(stitched(model, tmp_path), cfg)
-    assert calls(configured)[5:] == ["xelab"]
+    assert configured.calls[5:] == ["xelab"]
     cfg.generate_outputs = [DataflowOutputType.STITCHED_IP, DataflowOutputType.RTLSIM_PERFORMANCE]
     monkeypatch.setattr(steps, "CreateStitchedIP", Passed)
     monkeypatch.setattr(steps, "copy", lambda *args: None)
@@ -599,8 +556,28 @@ def test_the_builder_simulates_in_its_toolchain_not_the_machine_default(
     environment = dict(os.environ)
     steps.step_measure_rtlsim_performance(model, cfg)
     assert dict(os.environ) == environment
-    assert calls(configured)[6:] == ["xelab", "g++"]
+    assert configured.calls[6:] == ["xelab", "g++"]
     report = json.loads((Path(cfg.output_dir) / "report/rtlsim_performance.json").read_text())
     assert report["cycles"] == 100
     assert verified == ["folded_hls_cppsim", "node_by_node_rtlsim", "stitched_ip_rtlsim"]
-    assert calls(machine) == []
+    assert machine.calls == []
+
+
+def test_a_build_with_no_toolchain_stated_runs_under_the_site_directory(
+    monkeypatch, tmp_path, fake_tools
+):
+    """Unset, the configuration's toolchain is the machine's: its cppsim compile
+    runs under FINN_TOOL_DIR_OVERRIDE's command directory."""
+    site = fake_tools("site", machine=True)
+    monkeypatch.setattr(build_dataflow_steps, "verify_step", lambda *args, **kwargs: None)
+    cfg = builder_config(
+        tmp_path,
+        fpga_part=ALVEO_PART,
+        verify_steps=["folded_hls_cppsim"],
+        verify_input_npy="unused.npy",
+        verify_expected_output_npy="unused.npy",
+        minimize_bit_width=False,
+    )
+    model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
+    build_dataflow_steps.step_minimize_bit_width(model, cfg)
+    assert site.calls == ["g++"]

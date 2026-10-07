@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
+from finn.util.toolchain import machine_toolchain
 from finn.xsi._artifacts import tool_identity, write_record
 from finn_xsi.srcutil import order_pkg_first
 
@@ -36,7 +36,7 @@ def compile_sim_obj(
     timeout=None,
     cancel=None,
 ):
-    toolchain = toolchain or legacy_toolchain()
+    toolchain = toolchain or machine_toolchain()
     identity = tool_identity(toolchain)
     sim_out_dir = os.fspath(sim_out_dir)
     source_list = list(map(os.fspath, source_list))

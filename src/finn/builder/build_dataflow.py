@@ -319,7 +319,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
             "DataflowBuildConfig.from_json(open('dataflow_build_config.json').read())))",
         ],
         cwd=path_to_cfg_dir,
-        env=build_environment(cfg.toolchain),
+        env=build_environment(cfg._resolve_selection()),
     )
     return child.returncode
 

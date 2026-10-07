@@ -40,7 +40,7 @@ from typing import Optional, Tuple
 
 from finn.util._legacy_build_env import build_directory
 from finn.util.resources import resource_path
-from finn.util.toolchain import Selection, run_process
+from finn.util.toolchain import Selection, machine_toolchain, run_process
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
@@ -205,7 +205,8 @@ def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
 
 class CppBuilder:
     """Builds the g++ compiler command to produces the executable of the c++ code
-    in code_gen_dir which is passed to the function build() of this class."""
+    in code_gen_dir which is passed to the function build() of this class, and
+    runs it by ``toolchain`` (by default the machine's)."""
 
     def __init__(self, toolchain=None):
         self.toolchain = toolchain
@@ -231,7 +232,7 @@ class CppBuilder:
         """Compile with argv, explicit cwd/environment, checked status and replay logs."""
         self.code_gen_dir = os.fspath(code_gen_dir)
         self.compile_script = os.path.join(self.code_gen_dir, "compile.sh")
-        toolchain = self.toolchain or Selection().prepare()
+        toolchain = self.toolchain or machine_toolchain()
         args = ["-o", self.executable_path, *self.cpp_files, *self.include_paths]
         self.compile_components = toolchain.command("g++", *args)
         return toolchain.run(

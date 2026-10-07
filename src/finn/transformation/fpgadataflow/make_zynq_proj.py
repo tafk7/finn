@@ -57,6 +57,7 @@ from finn.transformation.kernels.package import PackagePartition, write_boundary
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
 from finn.util.resources import tcl_quote
+from finn.util.toolchain import machine_toolchain
 from finn.util.vivado import vivado_jobs
 
 from . import templates
@@ -248,7 +249,7 @@ class MakeZYNQProject(Transformation):
 
         # create a TCL recipe for the project
         synth_project_sh = vivado_pynq_proj_dir + "/synth_project.sh"
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         toolchain.run(
             "vivado",
             ["-mode", "batch", "-source", ipcfg],
