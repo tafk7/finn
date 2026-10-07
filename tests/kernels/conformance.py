@@ -53,6 +53,10 @@ that element all the same.
 
 ``reference`` maps named input arrays to named output arrays.
 
+A fact given as a ``ControlPort`` is a ``ControlBus`` the root declares on that
+port, given to the kernel's input of the fact's name: the kernel's control bus
+is presented at the top, held idle in simulation (no write reaches it).
+
 ``known`` names the (sample label, mode) simulations a known defect makes fail,
 each with its reason. It is strict: one of them passing fails the check, as
 does any other failure.
@@ -100,6 +104,7 @@ from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe, undecided
+from finn.kernels.control import ControlBus
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import StreamContract
@@ -113,6 +118,13 @@ Factors = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
 Reference = Callable[..., Mapping[str, Any]]
 EMPTY: Mapping[str, object] = MappingProxyType({})
+
+
+@dataclass(frozen=True)
+class ControlPort:
+    """A fact: the root's ``ControlBus`` on ``port``, given to the kernel's input."""
+
+    port: str
 
 
 class RtlDeclined(UserWarning):
@@ -321,6 +333,12 @@ def _design(
 ) -> Any:
     """A root of the kernel on one channel per tensor; ``fed``'s channel from a memory."""
     namespace: dict[str, object] = {}
+    # A node is placed once: each design declares its own control bus.
+    facts = {
+        name: ControlBus(port=value.port) if isinstance(value, ControlPort) else value
+        for name, value in facts.items()
+    }
+    namespace |= {name: value for name, value in facts.items() if isinstance(value, ControlBus)}
     for name, tensor in tensors.items():
         inside = fed is not None and fed[0] == name
         namespace[name] = (
@@ -682,6 +700,7 @@ def _simulate(
 
 __all__ = [
     "ALL",
+    "ControlPort",
     "NonConformance",
     "RtlDeclined",
     "SAMPLED",

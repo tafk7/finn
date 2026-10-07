@@ -9,12 +9,16 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import DefinitionError, Rejected, Unresolved
+from qonnx.core.datatype import DataType
+
+from finn.core.space import Available, DefinitionError, Rejected, Unresolved, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
+from finn.kernels.channels import Channel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import ThresholdTable
-from kernels.helpers import FULL_DSP48E2, THRESHOLD_TABLE, controlled, threshold_base
+from kernels.helpers import FULL_DSP48E2, THRESHOLD_TABLE, Root, controlled, threshold_base
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
 
@@ -30,7 +34,7 @@ def threshold(
     axilite: bool = False,
     deep: bool = False,
 ) -> ThresholdingAxiKernel:
-    """PE is committed as a choice; ``None`` leaves it open (a table without channels has none)."""
+    """PE is committed as a choice; ``None`` leaves it open (a table without rows has none)."""
     base = threshold_base(
         table=table,
         bias=bias,
@@ -126,6 +130,49 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     )
     with pytest.raises(DefinitionError, match="threshold table"):
         threshold(table=cast(ThresholdTable, (([-2, 0, 3],),)))
-    # PE is a divisor of the table's channels: another is refused where it is committed.
-    for pe in (0, 3, 4):
+    # Flat, PE is any the RTL takes with the table's two rows (one a multiple of the
+    # other); another is refused where it is committed.
+    for pe in (0, 3, 5):
         assert not threshold_base().try_with_choices(pe=pe).accepted
+    assert threshold_base().try_with_choices(pe=4).accepted
+
+
+def placed_on(channels: int, table: ThresholdTable) -> ThresholdingAxiKernel:
+    """The kernel between two boundary channels of three rows of ``channels``, PE open."""
+    shape = (3, channels)
+
+    class Placed(Root):
+        x = Channel(
+            tensor=Tensor(shape, ScalarEncoding(DataType["INT8"])), port="x", platform=FULL_DSP48E2
+        )
+        y = Channel(
+            tensor=Tensor(shape, ScalarEncoding(DataType["INT3"])), port="y", platform=FULL_DSP48E2
+        )
+        activate = ThresholdingAxiKernel(
+            input_dtype=DataType["INT8"],
+            threshold_dtype=DataType["INT5"],
+            thresholds=table,
+            bias=-1,
+            input_channel=x,
+            output_channel=y,
+            platform=FULL_DSP48E2,
+        )
+
+    kernel: ThresholdingAxiKernel = design_space(Placed()).activate
+    return kernel
+
+
+def test_a_placed_table_has_one_row_or_a_row_a_channel() -> None:
+    """Placed, PE ranges over the input's channels, whatever the table's rows; a table of
+    another number of rows is refused by name."""
+    row = THRESHOLD_TABLE[0][0]
+    for table in (((row,),), (tuple(row for _ in range(6)),)):
+        point = placed_on(6, table)
+        assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2, 3, 6))
+        chosen = point.try_with_choices(pe=3, use_axilite=False, deep_pipeline=False, **AUTO_MEMORY)
+        assert chosen.accepted
+        assert dict(chosen.instance.module.parameters)["C"] == len(table[0])
+    other = placed_on(6, ((row, row),)).try_with_choices(pe=1).instance
+    found = other.query(ThresholdingAxiKernel.schedule)
+    assert isinstance(found, Rejected)
+    assert {finding.code for finding in found.findings} == {"threshold-rows"}

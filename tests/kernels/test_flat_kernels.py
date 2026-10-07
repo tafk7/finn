@@ -83,9 +83,9 @@ def eltwise(pe=2, **changes):
 
 
 def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
-    """Its PE's domain is the divisors of its table's channels, known flat; ``pe=None``
-    leaves it open with the memories (a table without channels has no PE to commit, and
-    one without thresholds no stages)."""
+    """Flat, its PE is any the RTL takes with its table's rows; ``pe=None`` leaves it open
+    with the memories (a table without rows has no PE to commit, and one without
+    thresholds no stages)."""
     facts = dict(
         input_dtype=DataType["INT8"],
         threshold_dtype=DataType["INT5"],
@@ -158,6 +158,11 @@ def native_ports(requirements, tmp_path):
         threshold,
         lambda: threshold(use_axilite=True, deep_pipeline=True),
         lambda: threshold(pe=2),
+        lambda: threshold(pe=4),  # PE a multiple of C: rows carried in the lanes
+        # One row shared by every channel (C = 1), its configuration address from N alone,
+        # and none at all for one threshold.
+        lambda: threshold(use_axilite=True, pe=4, thresholds=(((-2, 0, 3),),)),
+        lambda: threshold(use_axilite=True, pe=4, thresholds=(((0,),),)),
         lambda: threshold(thresholds=(((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))),
     ],
 )
@@ -220,9 +225,8 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
         lambda: eltwise(pe=0),
         lambda: eltwise(pe=1 << 32),  # beyond the RTL's 32-bit PE
         lambda: threshold(pe=0),
+        # Neither of the table's two rows and PE 3 is a multiple of the other.
         lambda: threshold(pe=3),
-        # PE above C would carry rows in the lanes (the RTL takes it; the model does not).
-        lambda: threshold(pe=4),
     ],
 )
 def test_a_folding_factor_outside_its_domain_is_refused_where_it_is_committed(factory):
