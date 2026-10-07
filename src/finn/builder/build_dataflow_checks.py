@@ -412,8 +412,11 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
 
     # === Environment Variables ===
     if has_bitfile and cfg.shell_flow_type == ShellFlowType.VITIS_ALVEO:
+        # The link runs in the build's prepared toolchain, so that environment,
+        # not this process's, must name the Vitis installation, platforms and XRT.
+        environment = cfg._resolve_toolchain().environment
         missing = [
-            v for v in ["VITIS_PATH", "PLATFORM_REPO_PATHS", "XILINX_XRT"] if v not in os.environ
+            v for v in ["XILINX_VITIS", "PLATFORM_REPO_PATHS", "XILINX_XRT"] if v not in environment
         ]
         if missing:
             checks.append(
@@ -422,8 +425,9 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
                     Severity.ERROR,
                     False,
                     f"VITIS_ALVEO flow requires environment variables: {', '.join(missing)}",
-                    "VITIS_PATH and XILINX_XRT are set by the Docker container (ensure "
-                    "SKIP_XRT is not set). PLATFORM_REPO_PATHS must be set by the user",
+                    "XILINX_VITIS comes from the configuration's toolchain selection (its "
+                    "Vitis settings64.sh), XILINX_XRT from XRT's setup.sh (ensure SKIP_XRT "
+                    "is not set). PLATFORM_REPO_PATHS must be set by the user",
                 )
             )
 

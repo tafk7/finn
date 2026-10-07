@@ -15,7 +15,6 @@ from pathlib import Path
 
 from finn import resources
 from finn.util._legacy_build_env import build_environment
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.hls import CallHLS
 from finn.util.resources import tcl_quote
 from finn.util.toolchain import Selection, Toolchain, run_process
@@ -457,8 +456,6 @@ def test_legacy_precedence_and_worker_inheritance(tmp_path):
     }
     child = build_environment(Selection(), env, root=root, build_dir=tmp_path / "scratch")
     assert env["FINN_ROOT"] == "/wrong"
-    assert child["VIVADO_PATH"] == str(root)
-    assert "VIVADO_PATH" not in env
     result = run_process(
         [
             sys.executable,
@@ -480,20 +477,6 @@ def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
     assert Selection().prepare(named).hls_installation() == vitis
     with pytest.raises(LookupError, match="XILINX_HLS or XILINX_VITIS"):
         Selection().prepare({"PATH": os.defpath}).hls_installation()
-
-
-@pytest.mark.parametrize(
-    "primary, alias", [("XILINX_HLS", "HLS_PATH"), ("XILINX_VITIS", "VITIS_PATH")]
-)
-def test_legacy_path_aliases_name_the_hls_installation(tmp_path, primary, alias):
-    # A *_PATH alias is translated to its XILINX_* root once, by the legacy
-    # translation; the named root (here one without a settings script) wins.
-    root = tmp_path / "root"
-    legacy = {"PATH": os.defpath, alias: str(root)}
-    assert legacy_toolchain(legacy).hls_installation() == root
-    assert legacy_toolchain(legacy).environment[primary] == str(root)
-    named = {**legacy, primary: str(tmp_path / "named")}
-    assert legacy_toolchain(named).hls_installation() == tmp_path / "named"
 
 
 def test_stitched_vivado_operation_uses_selected_route(tmp_path, monkeypatch):

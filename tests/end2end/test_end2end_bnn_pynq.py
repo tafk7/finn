@@ -707,8 +707,8 @@ class TestEnd2End:
     @pytest.mark.vivado
     def test_ipgen(self, topology, wbits, abits, board):
         build_data = get_build_env(board, target_clk_ns)
-        if build_data["toolchain"] == "vitis-xrt" and ("VITIS_PATH" not in os.environ):
-            pytest.skip("VITIS_PATH not set")
+        if build_data["toolchain"] == "vitis-xrt" and ("XILINX_VITIS" not in os.environ):
+            pytest.skip("XILINX_VITIS not set")
         prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "minimize_bit_width")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(GiveUniqueNodeNames())
@@ -811,8 +811,8 @@ class TestEnd2End:
     @pytest.mark.vitis
     def test_linking(self, topology, wbits, abits, board):
         build_data = get_build_env(board, target_clk_ns)
-        if build_data["toolchain"] == "vitis-xrt" and ("VITIS_PATH" not in os.environ):
-            pytest.skip("VITIS_PATH not set")
+        if build_data["toolchain"] == "vitis-xrt" and ("XILINX_VITIS" not in os.environ):
+            pytest.skip("XILINX_VITIS not set")
         prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "prepare_linking")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         model = model.transform(build_data["build_fxn"])
@@ -830,8 +830,8 @@ class TestEnd2End:
     @pytest.mark.vitis
     def test_make_driver(self, topology, wbits, abits, board):
         build_data = get_build_env(board, target_clk_ns)
-        if build_data["toolchain"] == "vitis-xrt" and ("VITIS_PATH" not in os.environ):
-            pytest.skip("VITIS_PATH not set")
+        if build_data["toolchain"] == "vitis-xrt" and ("XILINX_VITIS" not in os.environ):
+            pytest.skip("XILINX_VITIS not set")
         prev_chkpt_name = get_checkpoint_name(board, topology, wbits, abits, "linking")
         model = load_test_checkpoint_or_skip(prev_chkpt_name)
         if build_data["toolchain"] == "vitis-xrt":

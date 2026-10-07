@@ -11,11 +11,7 @@ from finn.util.toolchain import Selection
 
 # Settings scripts are sourced in this order: each prepends to PATH, so a
 # later one shadows an earlier one's tools.
-_ROOT_ALIASES = (
-    ("XILINX_VITIS", "VITIS_PATH"),
-    ("XILINX_VIVADO", "VIVADO_PATH"),
-    ("XILINX_HLS", "HLS_PATH"),
-)
+_ROOTS = ("XILINX_VITIS", "XILINX_VIVADO", "XILINX_HLS")
 
 
 def checkout_root(root=None, environ=None):
@@ -35,12 +31,6 @@ def build_directory(path=None, environ=None):
 def toolchain(environ=None):
     """Translate legacy tool inputs once for unmigrated public operations."""
     env = dict(os.environ if environ is None else environ)
-    # The *_PATH names are legacy aliases of the XILINX_* roots. They are
-    # translated here, once, so that a prepared toolchain names its roots only
-    # as XILINX_* (Toolchain.hls_installation reads nothing else).
-    for primary, alias in _ROOT_ALIASES:
-        if not env.get(primary) and env.get(alias):
-            env[primary] = env[alias]
     frontend = env.get("FINN_HLS_FRONTEND")
     if frontend is None:
         match = re.search(r"\b(20\d{2})\.(\d+)\b", env.get("XILINX_VIVADO", ""))
@@ -51,8 +41,8 @@ def toolchain(environ=None):
     # into local tools or require a local AMD installation before dispatching.
     command_dir = env.get("FINN_TOOL_DIR_OVERRIDE", "")
     if not command_dir:
-        for primary, _ in _ROOT_ALIASES:
-            root = env.get(primary)
+        for variable in _ROOTS:
+            root = env.get(variable)
             if root:
                 script = str(Path(root) / "settings64.sh")
                 if Path(script).is_file() and script not in scripts:
@@ -78,15 +68,6 @@ def build_environment(selection, environ=None, *, root=None, build_dir=None):
     # Prepared over the parent's environment, not a clean base: the child keeps
     # FINN's own variables (resources, build directory) beside the tools'.
     env = dict(selection.prepare(env).environment)
-    # The aliases again, for the child's remaining readers of the legacy names
-    # (build_dataflow_checks requires VITIS_PATH for an Alveo bitfile). They
-    # follow the prepared roots only: an inherited alias would name the parent's
-    # installation beside, or without, the selected one.
-    for primary, alias in _ROOT_ALIASES:
-        if env.get(primary):
-            env[alias] = env[primary]
-        else:
-            env.pop(alias, None)
     libraries = []
     for variable, suffix in (
         ("XILINX_VIVADO", "lib/lnx64.o"),

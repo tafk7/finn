@@ -11,6 +11,7 @@ from onnx import TensorProto, helper
 from unittest.mock import patch
 
 from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow_checks import run_all_config_checks
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -18,6 +19,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.util.basic import make_build_dir
+from finn.util.toolchain import Selection
 
 
 def make_test_model(build_dir):
@@ -40,7 +42,7 @@ def cfg(output_dir, **kw):
         synth_clk_period_ns=5.0,
         stop_step=kw.pop("stop_step", "phase_prepare_model"),
         generate_outputs=kw.pop("generate_outputs", [DataflowOutputType.ESTIMATE_REPORTS]),
-        **kw
+        **kw,
     )
 
 
@@ -152,7 +154,7 @@ class TestConfigCheckIntegration:
 
         env = {
             "XILINX_VIVADO": "/tools/Vivado/2024.2",
-            "VITIS_PATH": "/tools/Vitis/2024.2",
+            "XILINX_VITIS": "/tools/Vitis/2024.2",
             "PLATFORM_REPO_PATHS": "/opt/platforms",
             "XILINX_XRT": "/opt/xilinx/xrt",
         }
@@ -381,3 +383,36 @@ class TestConfigCheckIntegration:
             c["name"] for c in report["checks"] if not c["passed"] and c["severity"] == "ERROR"
         ]
         assert "folding_missing" not in error_names
+
+
+@pytest.mark.util
+@pytest.mark.parametrize("named_by", ["selection", "parent"])
+def test_the_alveo_check_reads_the_selected_toolchain(tmp_path, named_by):
+    """An Alveo bitfile build needs XILINX_VITIS in the environment its tools run in,
+    the configuration's prepared selection, not in the process that checks it: the
+    selection's clean base does not inherit the parent's installation."""
+    exports = ["PLATFORM_REPO_PATHS=/opt/platforms", "XILINX_XRT=/opt/xilinx/xrt"]
+    if named_by == "selection":
+        exports.append("XILINX_VITIS=/selected/Vitis")
+    settings = tmp_path / "settings64.sh"
+    settings.write_text("".join(f"export {item}\n" for item in exports))
+    config = cfg(
+        str(tmp_path / "output"),
+        board="U55C",
+        shell_flow_type=ShellFlowType.VITIS_ALVEO,
+        generate_outputs=[DataflowOutputType.BITFILE],
+        target_fps=1000,
+        toolchain=Selection(settings=(str(settings),)),
+    )
+    with patch.dict("os.environ"):
+        if named_by == "parent":
+            os.environ["XILINX_VITIS"] = "/parent/Vitis"
+        else:
+            os.environ.pop("XILINX_VITIS", None)
+        failed = {c.name: c for c in run_all_config_checks(config).checks if not c.passed}
+    if named_by == "selection":
+        assert "vitis_envvars" not in failed
+    else:
+        assert failed["vitis_envvars"].message.endswith(
+            "requires environment variables: XILINX_VITIS"
+        )
