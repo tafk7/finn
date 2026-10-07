@@ -18,7 +18,7 @@ contains a ``resources.toml``), then the nearest ``pyproject.toml``
 may only add resources; the project may also redefine them.
 
 ``FINN_RESOURCES_<NAME>=/dir`` replaces a resource with a local directory,
-unverified; FINN_HLSLIB_PATH is an alias for the hlslib one.
+unverified.
 
 Fetched resources live in FINN_RESOURCES_DIR (default ``$FINN_HOME/resources``,
 with FINN_HOME defaulting to ``~/.finn``); the read-only system cache
@@ -29,7 +29,6 @@ This package uses only the standard library, so an image build can run it
 before FINN is installed: ``PYTHONPATH=src python -m finn.resources``.
 """
 import os
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,13 +50,6 @@ __all__ = [
     "tree_digest",
 ]
 
-# Replaced variables, still honoured: variable -> resource name.
-_ALIASES = {"FINN_HLSLIB_PATH": "hlslib"}
-# Removed variables, reported when set so they are not silently ignored.
-_REMOVED = {
-    "FINN_BOARD_FILES_PATH": "board files are now separate resources of kind "
-    "'vivado-boards'; override each with its FINN_RESOURCES_<NAME> variable",
-}
 _cache = {}
 
 
@@ -79,9 +71,6 @@ def declarations():
     """
     key = os.environ.get(PREFIX + "FILES", "")
     if key not in _cache:
-        for variable, advice in _REMOVED.items():
-            if os.environ.get(variable):
-                warnings.warn(f"{variable} is no longer used: {advice}", stacklevel=2)
         finn = _declare.load(_declare.FINN_FILE, ("resources",))
         packages = [r for f in _declare.package_files() for r in _declare.load(f, ("resources",))]
         project = [r for f, keys in _declare.project_files() for r in _declare.load(f, keys)]
@@ -97,14 +86,12 @@ def _get(name):
 
 
 def _override(resource):
-    variables = [resource.env] + [v for v, n in _ALIASES.items() if n == resource.name]
-    for variable in variables:
-        value = os.environ.get(variable)
-        if value:
-            if not os.path.isdir(value):
-                raise ResourceError(f"{variable}={value} is not a directory")
-            return variable, os.path.realpath(value)
-    return None
+    value = os.environ.get(resource.env)
+    if not value:
+        return None
+    if not os.path.isdir(value):
+        raise ResourceError(f"{resource.env}={value} is not a directory")
+    return resource.env, os.path.realpath(value)
 
 
 def _package_path(resource):

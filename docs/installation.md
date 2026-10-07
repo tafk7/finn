@@ -283,9 +283,8 @@ in order after the source; every source is verified against the same digest.
 `FINN_RESOURCES_<NAME>=/dir` (the name upper-cased, `-` written as `_`) uses a
 local directory instead, without a digest check, for example
 `FINN_RESOURCES_HLSLIB=../finn-hlslib` or
-`FINN_RESOURCES_AVNET_BOARDS=$HOME/bdf`. `FINN_HLSLIB_PATH` still works as an
-alias for the first. `FINN_BOARD_FILES_PATH` is no longer used: override each
-board resource instead (FINN warns if it is set).
+`FINN_RESOURCES_AVNET_BOARDS=$HOME/bdf`. The retired `FINN_HLSLIB_PATH` and
+`FINN_BOARD_FILES_PATH` select nothing.
 
 ### Moving a pin
 

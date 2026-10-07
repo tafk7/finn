@@ -14,14 +14,6 @@ from finn.util.toolchain import Selection
 _ROOTS = ("XILINX_VITIS", "XILINX_VIVADO", "XILINX_HLS")
 
 
-def checkout_root(root=None, environ=None):
-    env = os.environ if environ is None else environ
-    value = root if root is not None else env.get("FINN_ROOT")
-    if not value:
-        raise RuntimeError("This legacy checkout operation requires an explicit root or FINN_ROOT")
-    return str(Path(value).resolve())
-
-
 def build_directory(path=None, environ=None):
     env = os.environ if environ is None else environ
     value = path if path is not None else env.get("FINN_BUILD_DIR")
@@ -53,14 +45,12 @@ def toolchain(environ=None):
     return selection.prepare(env)
 
 
-def build_environment(selection, environ=None, *, root=None, build_dir=None):
+def build_environment(selection, environ=None, *, build_dir=None):
     """Prepare the child tree of an explicit build entry point: the parent's
-    environment, FINN_ROOT and FINN_BUILD_DIR resolved, with the toolchain
+    environment, FINN_BUILD_DIR resolved, with the toolchain
     ``selection`` (a ``finn.util.toolchain.Selection``, the build configuration's)
     prepared over it, and the loader paths of its simulator libraries."""
     env = dict(os.environ if environ is None else environ)
-    if root is not None:
-        env["FINN_ROOT"] = checkout_root(root)
     env["FINN_BUILD_DIR"] = build_directory(build_dir, env)
     Path(env["FINN_BUILD_DIR"]).mkdir(parents=True, exist_ok=True)
     # Loader paths must exist BEFORE Python starts. Retain the XSI limitation

@@ -286,12 +286,10 @@ def _check(args):
     existing = next((p for p in (root, *root.parents) if p.exists()), None)
     if existing is None or not os.access(existing, os.W_OK):
         problems.append(f"the cache {root} is not writable, so resources cannot be fetched")
-    overrides = {r.env for r in declared.values()} | set(api._ALIASES)
+    overrides = {r.env for r in declared.values()}
     sources = {r.env + "_URL" for r in declared.values() if not r.local}
     for variable, value in sorted(os.environ.items()):
-        if variable in api._REMOVED:
-            problems.append(f"{variable} is set but no longer used: {api._REMOVED[variable]}")
-        elif variable in overrides and value and not Path(value).is_dir():
+        if variable in overrides and value and not Path(value).is_dir():
             problems.append(f"{variable}={value} is not a directory")
         elif variable.startswith(PREFIX) and variable not in overrides | sources | _SETTINGS:
             problems.append(f"{variable} matches no declared resource")

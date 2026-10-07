@@ -96,7 +96,7 @@ Python 3.10 image environment. No implicit dependency provisioning occurred.
 ```bash
 /tmp/finn-runtime-venv/bin/python -m pytest -q \
   tests/util/test_runtime_toolchain.py tests/util/test_runtime_codegen.py \
-  tests/util/test_resolve_xilinx_tool.py tests/util/test_xsi_pkg_ordering.py \
+  tests/util/test_xsi_pkg_ordering.py \
   tests/util/test_container_config.py tests/util/test_container_cli.py \
   tests/util/test_ci_container_transport.py
 ```
@@ -140,7 +140,7 @@ unchanged parent cwd/environment.
 FINN_TEST_QONNX_CHECKOUT=/tmp/finn-implementation-qonnx \
 /tmp/finn-runtime-venv/bin/python -m pytest -q \
   tests/util/test_runtime_installation.py tests/util/test_runtime_toolchain.py \
-  tests/util/test_runtime_codegen.py tests/util/test_resolve_xilinx_tool.py \
+  tests/util/test_runtime_codegen.py \
   tests/util/test_xsi_pkg_ordering.py tests/util/test_xsi_session.py \
   tests/util/test_slash_link.py tests/util/test_wheelhouse_manifest.py \
   tests/util/test_container_config.py tests/util/test_container_cli.py \

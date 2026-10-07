@@ -177,7 +177,7 @@ A new `hwTestType` (today `bnn_build_sanity` or `bnn_build_full`) is a config-on
 
 Each shard runs safely as a parallel branch on whatever `finn-build` executor picks it up, so adding capacity is as simple as adding more machines and agents under that label. For this reason, integration with an LSF cluster is not required to run FINN's CI.
 
-However, the intended long-term operational model for FINN CI is a single FINN build machine running several shards at once, delegating any heavy tasks to a compute farm. A tool interception hook has been provided for this reason at `finn.util.basic.resolve_xilinx_tool()`. The agent still drives the FINN flow and pytest, but each `vivado` / `v++` / `vitis_hls` / `xelab` invocation is wrapped with a deployment-specific shim that can delegate heavy subprocesses. The interception hook is generic and can be adapted for a variety of HPC models.
+However, the intended long-term operational model for FINN CI is a single FINN build machine running several shards at once, delegating any heavy tasks to a compute farm. FINN runs every Xilinx tool through a selected toolchain, whose command directory (`finn.util.toolchain.Selection.command_dir`) is this interception hook. The agent still drives the FINN flow and pytest, but each `vivado` / `v++` / `vitis_hls` / `xelab` invocation is wrapped with a deployment-specific shim that can delegate heavy subprocesses. The interception hook is generic and can be adapted for a variety of HPC models.
 
 If using IBM's LSF, the pipeline cooperates with such a wrapper through one env var, `FINN_LSF_NFS_STAGING`. When it is set:
 
@@ -340,7 +340,7 @@ A site that offloads the heavy Xilinx tools to a compute farm (see "Running tool
 
 | Env var                  | What it sets                                                                                                                                        |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FINN_TOOL_DIR_OVERRIDE` | Shim directory. `finn.util.basic.resolve_xilinx_tool()` resolves `vivado`/`v++`/`vitis_hls`/`vitis-run`/`xelab`/`slashkit` to `<dir>/<tool>` when set.        |
+| `FINN_TOOL_DIR_OVERRIDE` | Shim directory: the default toolchain's command directory. A tool (`vivado`, `v++`, `vitis_hls`, `vitis-run`, `xelab`, `g++`, `slashkit`, ...) then runs as `<dir>/<tool>`, and no local settings are sourced. |
 
 The wrapper's own variables are deployment-specific.
 

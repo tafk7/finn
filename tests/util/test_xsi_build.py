@@ -19,7 +19,6 @@ def toolchain(tmp_path, monkeypatch):
     vivado = tmp_path / "Vivado"
     vivado.mkdir()
     monkeypatch.setenv("XILINX_VIVADO", str(vivado))
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     monkeypatch.setenv("FINN_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("FINN_XSI_BUILD_DIR", raising=False)
     monkeypatch.setattr(xsi_setup, "check_prerequisites", lambda: [])

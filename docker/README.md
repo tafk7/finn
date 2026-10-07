@@ -159,6 +159,7 @@ hooks because those paths bypass normal startup.
 | `--dependencies`, `--venv`, `--deps`, `FINN_DEPS` | The dev image installs the mounted checkout at start |
 | `fetch-repos.sh`, `deps.env` | `pyproject.toml`/`uv.lock`; finn-hlslib and board files as external resources (`finn-resources`) |
 | `FINN_BOARD_FILES_PATH` | `FINN_RESOURCES_<NAME>` per board resource |
+| `FINN_HLSLIB_PATH` | `FINN_RESOURCES_HLSLIB` |
 
 `docker/config` and `docker/finn-env` are removed; use `docker/config.py`.
 The resolver's `sbx` subcommand and `inspect --sbx`, and the launcher's `--sbx`

@@ -446,16 +446,9 @@ def test_frontend_availability_does_not_override_compatibility(tmp_path):
 
 
 def test_legacy_precedence_and_worker_inheritance(tmp_path):
-    root = tmp_path / "selected"
-    root.mkdir()
-    env = {
-        "FINN_ROOT": "/wrong",
-        "FINN_BUILD_DIR": "/wrong/build",
-        "PATH": os.defpath,
-        "XILINX_VIVADO": str(root),
-    }
-    child = build_environment(Selection(), env, root=root, build_dir=tmp_path / "scratch")
-    assert env["FINN_ROOT"] == "/wrong"
+    env = {"FINN_BUILD_DIR": "/wrong/build", "PATH": os.defpath}
+    child = build_environment(Selection(), env, build_dir=tmp_path / "scratch")
+    assert env["FINN_BUILD_DIR"] == "/wrong/build"
     result = run_process(
         [
             sys.executable,

@@ -38,7 +38,7 @@ import time
 from qonnx.util.basic import roundup_to_integer_multiple
 from typing import Optional, Tuple
 
-from finn.util._legacy_build_env import build_directory, checkout_root
+from finn.util._legacy_build_env import build_directory
 from finn.util.resources import resource_path
 from finn.util.toolchain import Selection, run_process
 
@@ -126,11 +126,6 @@ def get_rtlsim_trace_depth():
         return int(os.environ["RTLSIM_TRACE_DEPTH"])
     except KeyError:
         return 1
-
-
-def get_finn_root():
-    """Legacy checkout-only API; package data uses resource_path instead."""
-    return checkout_root()
 
 
 def fifo_rtl_files(abspath=True, gauge=False):
@@ -318,32 +313,6 @@ def which(program):
                 return exe_file
 
     return None
-
-
-_XILINX_TOOL_DIR_ENV = "FINN_TOOL_DIR_OVERRIDE"
-
-
-def resolve_xilinx_tool(tool_name):
-    """Resolve the command used to invoke a Xilinx tool. Update the following
-    list if new tools use this resolver.
-
-    Default names:
-    - vivado
-    - vitis_hls
-    - vitis-run
-    - v++
-    - xelab
-    - slashkit
-
-    With FINN_TOOL_DIR_OVERRIDE set, the command resolves to
-    <override>/<tool_name>, otherwise the bare tool_name is used.
-    The single directory override is all a tool-wrapping site (e.g. an LSF
-    bsub dispatcher) needs: point it at a shim dir whose filenames match the
-    bare tool names. Raises FileNotFoundError when the resolved command is
-    not found, so all the default names must have a corresponding shim filename.
-    """
-    selection = Selection(command_dir=os.environ.get(_XILINX_TOOL_DIR_ENV, ""))
-    return selection.prepare().command(tool_name)[0]
 
 
 mem_primitives_versal = {

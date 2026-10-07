@@ -240,14 +240,14 @@ def test_imports_do_not_create_scratch_or_change_environment(tmp_path):
     assert not Path(env["FINN_BUILD_DIR"]).exists()
 
 
-def test_legacy_interpretation_allowlist():
-    # FINN_LEGACY_COMPAT: resource consumers may not reconstruct checkout paths.
+def test_no_source_reads_the_checkout_root():
+    # FINN locates its own data as packages and resources, never from a checkout.
     sites = {
         str(p.relative_to(ROOT))
         for p in (ROOT / "src").rglob("*.py")
         if "FINN_ROOT" in p.read_text()
     }
-    assert sites == {"src/finn/util/_legacy_build_env.py"}
+    assert sites == set()
 
 
 def test_editable_finn_plus_real_qonnx(tmp_path):

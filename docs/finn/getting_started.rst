@@ -241,7 +241,7 @@ Other variables are per run:
 * (optional) ``FINN_DOCKER_RUN_AS_ROOT`` (default 0) if set to 1 then run Docker container as root, default is the current user.
 * (optional) ``FINN_DOCKER_EXTRA`` (default "") passes extra arguments to ``docker compose run``.
 * (optional) ``FINN_SYNC`` (default 1) set to 0 to skip installing the mounted checkout when a container starts.
-* (optional) ``FINN_RESOURCES_<NAME>`` overrides where an external resource is read from, for example ``FINN_RESOURCES_HLSLIB`` for the finn-hlslib headers (``FINN_HLSLIB_PATH`` is an alias) or ``FINN_RESOURCES_AVNET_BOARDS`` for one set of Vivado board files. ``docker/run`` mounts the directory it names. By default they are fetched from their pinned sources on first use and cached; ``finn-resources list`` shows them. ``FINN_BOARD_FILES_PATH`` is no longer used.
+* (optional) ``FINN_RESOURCES_<NAME>`` overrides where an external resource is read from, for example ``FINN_RESOURCES_HLSLIB`` for the finn-hlslib headers or ``FINN_RESOURCES_AVNET_BOARDS`` for one set of Vivado board files. ``docker/run`` mounts the directory it names. By default they are fetched from their pinned sources on first use and cached; ``finn-resources list`` shows them.
 
 General FINN Docker tips
 ************************
