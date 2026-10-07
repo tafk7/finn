@@ -54,7 +54,6 @@ from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.kernels.convert import shell_target
 from finn.transformation.kernels.package import PackagePartition, write_boundary_facts
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
 from finn.util.resources import tcl_quote
 from finn.util.toolchain import machine_toolchain
@@ -301,8 +300,8 @@ class ZynqBuild(Transformation):
 
     ``toolchain`` is the prepared ``finn.util.toolchain.Toolchain`` that every
     Vivado and Vitis HLS run of the build goes through (PackagePartition,
-    HLSSynthIP, CreateStitchedIP, MakeZYNQProject); by default the legacy
-    environment's, prepared once. ``vivado_jobs`` is how many runs Vivado launches
+    HLSSynthIP, CreateStitchedIP, MakeZYNQProject); by default the machine's,
+    prepared once. ``vivado_jobs`` is how many runs Vivado launches
     at once in the project (MakeZYNQProject's ``jobs``).
     """
 
@@ -354,7 +353,7 @@ class ZynqBuild(Transformation):
         return model.transform(GiveReadableTensorNames())
 
     def apply(self, model):
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         period_ns = self.period_ns
         if is_kernel_partition(model):
             built = shell_target(model, self.fpga_part, "vivado_zynq", period_ns)

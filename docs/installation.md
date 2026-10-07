@@ -416,25 +416,29 @@ names no licence gets the machine file's (`XILINXD_LICENSE_FILE=PORT@HOST`), exc
 on a launcher route, whose site owns it; `launch_process_helper` without an
 environment launches in `Selection().prepare()`'s.
 
-HLS and stitched-IP Vivado commands execute with argv, child env and cwd. Probes
-use the identical route and a bounded timeout. `CallHLS(toolchain=...)` and
-`CreateStitchedIP(..., toolchain=...)` accept prepared internal selections. A
+Vendor commands execute with argv, child env and cwd. Probes use the identical
+route and a bounded timeout. Every transformation that runs a tool takes a
+prepared toolchain (`toolchain=`); called without one, it runs by the machine's,
+`finn.util.toolchain.machine_toolchain()`: the environment as configured (no
+settings script is sourced), under the site command directory
+`FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the machine
+file's `FINN_XILINX_VERSION` (`vitis-run` from 2025.1, else `vitis_hls`). A
 dataflow build prepares one toolchain (the selection its configuration names,
-`DataflowBuildConfig.toolchain`, on the first step that runs a tool; by default
-the environment as configured, with Vitis HLS) and passes it to every HLS
-synthesis, stitching, FIFO-sizing, shell-build, link and driver step;
+`DataflowBuildConfig.toolchain`, or the machine's when it names none, on the
+first step that runs a tool) and passes it to every HLS synthesis, simulation,
+stitching, FIFO-sizing, shell-build, link and driver step;
 `build_dataflow_directory` prepares its build process's environment from the same
-selection; `ZynqBuild`, `PrepareForLinking` and
-`InsertAndSetFIFODepths` likewise pass theirs to the tool steps they run.
-`FINN_TOOL_DIR_OVERRIDE` continues to select site wrappers; launcher prefixes
-preserve those names and do not substitute local absolute vendor executables.
-The site owns remote activation, path visibility and remote cancellation.
+selection; `ZynqBuild`, `PrepareForLinking` and `InsertAndSetFIFODepths` likewise
+pass theirs to the tool steps they run. A stated selection is used as stated:
+its `command_dir` and `hls_frontend` win over the machine's. Launcher prefixes
+preserve tool names and do not substitute local absolute vendor executables. The
+site owns remote activation, path visibility and remote cancellation.
 
-A build configuration names its toolchain, the HLS frontend included. With
-Vivado/Vitis 2025.x that is `vitis-run`: a selection never guesses its frontend,
-and the default, `vitis_hls`, is refused on 2025.x. A kernel-path build of TFC
-for Ultra96 (`dataflow_build_config.json`; the environment as configured, so
-`settings` stays empty):
+A build configuration may name its toolchain, the HLS frontend included; a
+stated selection never guesses its frontend, and `vitis_hls`, its default, is
+refused on 2025.x. A kernel-path build of TFC for Ultra96
+(`dataflow_build_config.json`; the environment as configured, so `settings`
+stays empty):
 
 ```json
 {
@@ -467,13 +471,12 @@ the choices it committed, attempts and time; every choice with the strategy that
 made it; whether FIFOs were sized; per-member cycles and buffering, the
 bottleneck) to `report/kernel_exploration.json`.
 
-Choose `FINN_HLS_FRONTEND=vivado_hls`, `vitis_hls`, or `vitis-run` for legacy entry
-points; explicit selections, and a dataflow build's configuration, name the
-frontend directly. Compatibility checks
-retain the old-HLS (through 2020.1), standalone Vitis HLS (2020.1–2024.2), and
-unified HLS (2025.1+) code-generation boundaries. Unified HLS must also advertise
-HLS in its help. Legacy selection without a frontend retains the existing
-Vivado-path version convention; capability discovery never chooses a newer tool.
+Explicit selections, and a dataflow build's configuration, name the frontend
+(`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the
+machine file's release. Compatibility checks retain the old-HLS (through 2020.1),
+standalone Vitis HLS (2020.1–2024.2), and unified HLS (2025.1+) code-generation
+boundaries. Unified HLS must also advertise HLS in its help; capability discovery
+never chooses a newer tool.
 Fake tests validate dispatch and rejection, not support for synthesizing every
 release. Version/help probes establish neither synthesis nor licence success.
 

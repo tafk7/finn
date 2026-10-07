@@ -22,7 +22,9 @@ from qonnx.util.basic import qonnx_make_model
 from finn.custom_op.fpgadataflow.rtl.streamingfifo_rtl import StreamingFIFO_rtl
 from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
 from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
+from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.prepare_cppsim import PrepareCppSim
+from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
 from finn.transformation.fpgadataflow.set_fifo_depths import xsi_fifosim
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
@@ -34,18 +36,48 @@ pytestmark = pytest.mark.util
 PART = "xcu250-figd2104-2L-e"
 
 
+#: No machine file: the environment alone states the machine's settings.
+NO_FILE = {"FINN_XILINX_ENV": ""}
+
+
 def test_the_machine_selection_is_the_configured_environment_under_the_site_directory(
     monkeypatch, tmp_path
 ):
-    assert machine_selection({}) == Selection()
-    assert machine_selection({"FINN_TOOL_DIR_OVERRIDE": "/site/tools"}) == Selection(
-        command_dir="/site/tools"
-    )
+    assert machine_selection(NO_FILE) == Selection()
+    site = {**NO_FILE, "FINN_TOOL_DIR_OVERRIDE": "/site/tools"}
+    assert machine_selection(site) == Selection(command_dir="/site/tools")
+    monkeypatch.setenv("FINN_XILINX_ENV", "")
+    monkeypatch.delenv("FINN_XILINX_VERSION", raising=False)
     monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", str(tmp_path))
     monkeypatch.setenv("SELECTED_BY_THE_MACHINE", "1")
     toolchain = machine_toolchain()
     assert toolchain.selection == Selection(command_dir=str(tmp_path))
     assert toolchain.environment["SELECTED_BY_THE_MACHINE"] == "1"
+
+
+@pytest.mark.parametrize(
+    "version, frontend",
+    [
+        (None, "vitis_hls"),
+        ("2022.2", "vitis_hls"),
+        ("2024.2", "vitis_hls"),
+        ("2025.1", "vitis-run"),
+    ],
+)
+def test_the_machine_hls_frontend_follows_the_machine_files_release(tmp_path, version, frontend):
+    machine = tmp_path / "xilinx.env"
+    machine.write_text("FINN_XILINX_PATH=/opt/Xilinx\n")
+    if version:
+        machine.write_text(f"FINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION={version}\n")
+    assert machine_selection({"FINN_XILINX_ENV": str(machine)}).hls_frontend == frontend
+    # The environment's release wins over the file's, as for every machine setting.
+    environ = {"FINN_XILINX_ENV": str(machine), "FINN_XILINX_VERSION": "2025.2"}
+    assert machine_selection(environ).hls_frontend == "vitis-run"
+
+
+def test_a_machine_release_that_is_no_release_is_refused():
+    with pytest.raises(ValueError, match="FINN_XILINX_VERSION=latest"):
+        machine_selection({**NO_FILE, "FINN_XILINX_VERSION": "latest"})
 
 
 def fifo_model(tmp_path):
@@ -98,8 +130,8 @@ def test_bare_simulation_and_stitching_run_under_the_site_directory(fake_tools, 
     assert site.calls[4:] == ["xelab", "g++"]
 
 
-def test_bare_cppsim_compiles_under_the_site_directory(fake_tools):
-    site = fake_tools("site", machine=True)
+def mvau_model():
+    """One MVAU, 8 inputs to 4 outputs, INT2 weights and inputs, no activation."""
     inp = oh.make_tensor_value_info("inp", TensorProto.FLOAT, [1, 8])
     outp = oh.make_tensor_value_info("outp", TensorProto.FLOAT, [1, 4])
     node = oh.make_node(
@@ -127,6 +159,30 @@ def test_bare_cppsim_compiles_under_the_site_directory(fake_tools):
     model.set_tensor_datatype("outp", DataType["INT32"])
     model.set_initializer("weights", np.ones((8, 4), dtype=np.float32))
     model.set_tensor_datatype("weights", DataType["INT2"])
-    model = model.transform(SpecializeLayers(PART)).transform(PrepareCppSim())
+    return model
+
+
+def test_bare_cppsim_compiles_under_the_site_directory(fake_tools):
+    site = fake_tools("site", machine=True)
+    model = mvau_model().transform(SpecializeLayers(PART)).transform(PrepareCppSim())
     model.transform(CompileCppSim())
     assert site.calls == ["g++"]
+
+
+#: A machine's release, and the calls its HLS synthesis makes: the version probe,
+#: for vitis-run the capability probe (--help), then the synthesis.
+HLS_CALLS = {"2024.2": ["vitis_hls"] * 2, "2025.2": ["vitis-run"] * 3}
+
+
+@pytest.mark.parametrize("version", sorted(HLS_CALLS))
+def test_bare_hls_synthesis_runs_the_machine_releases_frontend_under_the_site_directory(
+    fake_tools, monkeypatch, version
+):
+    """HLSSynthIP called without a toolchain, as the CI's tests call it: the
+    frontend the machine's release names, from the site directory."""
+    site = fake_tools("site", machine=True)
+    monkeypatch.setenv("FINN_XILINX_ENV", "")
+    monkeypatch.setenv("FINN_XILINX_VERSION", version)
+    model = mvau_model().transform(SpecializeLayers(PART)).transform(PrepareIP(PART, 5.0))
+    model.transform(HLSSynthIP())
+    assert site.calls == HLS_CALLS[version]

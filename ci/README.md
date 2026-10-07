@@ -177,7 +177,9 @@ A new `hwTestType` (today `bnn_build_sanity` or `bnn_build_full`) is a config-on
 
 Each shard runs safely as a parallel branch on whatever `finn-build` executor picks it up, so adding capacity is as simple as adding more machines and agents under that label. For this reason, integration with an LSF cluster is not required to run FINN's CI.
 
-However, the intended long-term operational model for FINN CI is a single FINN build machine running several shards at once, delegating any heavy tasks to a compute farm. FINN runs every Xilinx tool through a selected toolchain, whose command directory (`finn.util.toolchain.Selection.command_dir`) is this interception hook. The agent still drives the FINN flow and pytest, but each `vivado` / `v++` / `vitis_hls` / `xelab` invocation is wrapped with a deployment-specific shim that can delegate heavy subprocesses. The interception hook is generic and can be adapted for a variety of HPC models.
+However, the intended long-term operational model for FINN CI is a single FINN build machine running several shards at once, delegating any heavy tasks to a compute farm. FINN runs every Xilinx tool through a selected toolchain, whose command directory (`finn.util.toolchain.Selection.command_dir`) is this interception hook. The agent still drives the FINN flow and pytest, but each `vivado` / `v++` / `vitis_hls` / `vitis-run` / `xelab` / `g++` invocation is wrapped with a deployment-specific shim that can delegate heavy subprocesses. The interception hook is generic and can be adapted for a variety of HPC models.
+
+The site states the shim directory once, as `FINN_TOOL_DIR_OVERRIDE` (below): the machine's toolchain (`finn.util.toolchain.machine_selection`) takes it as its command directory, and every transformation called without a toolchain, as the CI's tests call them, and every build whose configuration names none, runs by that toolchain. A build configuration that states its own `toolchain` (`{"command_dir": ...}`, the explicit form) is used as stated: its `command_dir` wins over the setting.
 
 If using IBM's LSF, the pipeline cooperates with such a wrapper through one env var, `FINN_LSF_NFS_STAGING`. When it is set:
 
@@ -336,11 +338,11 @@ These are the other env vars a job DSL typically sets for a build-pipeline job, 
 | `FINN_DOCKER_EXTRA`   | Legacy extra `docker compose run` arguments. The pipeline appends a per-agent `--hostname` and cache mounts to whatever the DSL sets. Prefer adding generally useful host facts to `docker/config.py` instead. |
 | `NUM_DEFAULT_WORKERS` | Default xdist worker count for ad-hoc runs. Per-shard worker counts come from `STAGES`, not this.                                                             |
 
-A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA`, and the only variable FINN itself reads is the shim-directory override below:
+A site that offloads the heavy Xilinx tools to a compute farm (see "Running tools on LSF") needs no pipeline changes. The tool wrapper and its configuration ride into the container through `FINN_DOCKER_EXTRA`, and the only variable FINN itself reads for it is the shim-directory setting below. The HLS frontend follows `FINN_XILINX_VERSION`, from the same machine file `docker/run` applies:
 
 | Env var                  | What it sets                                                                                                                                        |
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FINN_TOOL_DIR_OVERRIDE` | Shim directory: the default toolchain's command directory. A tool (`vivado`, `v++`, `vitis_hls`, `vitis-run`, `xelab`, `g++`, `slashkit`, ...) then runs as `<dir>/<tool>`, and no local settings are sourced. |
+| `FINN_TOOL_DIR_OVERRIDE` | Shim directory: the machine toolchain's `command_dir`. A tool (`vivado`, `v++`, `vitis_hls`, `vitis-run`, `xelab`, `g++`, `slashkit`, ...) then runs as `<dir>/<tool>`, in the environment as configured. A build configuration's own `toolchain.command_dir` wins. |
 
 The wrapper's own variables are deployment-specific.
 

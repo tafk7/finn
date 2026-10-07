@@ -51,7 +51,6 @@ from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.resources import tcl_quote
 from finn.util.toolchain import Toolchain, machine_toolchain
@@ -211,8 +210,8 @@ class PrepareForLinking(Transformation):
         Must be parse-able by the ApplyConfig transform.
     :parameter toolchain: the prepared ``finn.util.toolchain.Toolchain`` that every
         Vivado and Vitis HLS run of the preparation goes through (HLSSynthIP,
-        CreateStitchedIP, CreateVitisXO); by default the legacy environment's,
-        prepared once.
+        CreateStitchedIP, CreateVitisXO); by default the machine's, prepared
+        once.
     """
 
     def __init__(
@@ -235,7 +234,7 @@ class PrepareForLinking(Transformation):
     def apply(self, model):
         if self.platform not in ["vitis-xrt", "slash-vrt"]:
             raise Exception(f"Unknown platform {self.platform}")
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
 
         # prepare at global level, then break up into kernels
         prep_transforms = [InsertIODMA(512), InsertDWC(), SpecializeLayers(self.fpga_part)]

@@ -32,13 +32,12 @@ import shlex
 import sys
 from pathlib import Path
 
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 
 
 class CallHLS:
     """Execute a deliberately selected HLS frontend with child-scoped settings:
-    ``toolchain``'s, by default the legacy environment's."""
+    ``toolchain``'s, by default the machine's (``machine_toolchain``)."""
 
     def __init__(self, toolchain: Toolchain | None = None):
         self.toolchain = toolchain
@@ -54,7 +53,7 @@ class CallHLS:
         self.ipgen_path = path
 
     def build(self, code_gen_dir):
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         self.code_gen_dir = os.path.abspath(code_gen_dir)
         frontend, args = toolchain.hls_command(self.tcl_script)
         self.ipgen_script = str(Path(self.code_gen_dir) / "ipgen.sh")

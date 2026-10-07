@@ -3,46 +3,15 @@
 See docs/legacy-build-env-ledger.md. No function mutates the parent environment.
 """
 import os
-import re
 from pathlib import Path
 
 from finn import resources
-from finn.util.toolchain import Selection
-
-# Settings scripts are sourced in this order: each prepends to PATH, so a
-# later one shadows an earlier one's tools.
-_ROOTS = ("XILINX_VITIS", "XILINX_VIVADO", "XILINX_HLS")
 
 
 def build_directory(path=None, environ=None):
     env = os.environ if environ is None else environ
     value = path if path is not None else env.get("FINN_BUILD_DIR")
     return str(Path(value or resources.home(env) / "build").expanduser().resolve())
-
-
-def toolchain(environ=None):
-    """Translate legacy tool inputs once for unmigrated public operations."""
-    env = dict(os.environ if environ is None else environ)
-    frontend = env.get("FINN_HLS_FRONTEND")
-    if frontend is None:
-        match = re.search(r"\b(20\d{2})\.(\d+)\b", env.get("XILINX_VIVADO", ""))
-        version = tuple(map(int, match.groups())) if match else None
-        frontend = "vitis-run" if version and version > (2024, 2) else "vitis_hls"
-    scripts = []
-    # Site command-directory wrappers own their activation. Do not turn them
-    # into local tools or require a local AMD installation before dispatching.
-    command_dir = env.get("FINN_TOOL_DIR_OVERRIDE", "")
-    if not command_dir:
-        for variable in _ROOTS:
-            root = env.get(variable)
-            if root:
-                script = str(Path(root) / "settings64.sh")
-                if Path(script).is_file() and script not in scripts:
-                    scripts.append(script)
-    selection = Selection(settings=tuple(scripts), command_dir=command_dir, hls_frontend=frontend)
-    # Legacy ambient mode accepts its inherited base; explicit Selection.prepare
-    # has a clean default base instead. This does not claim to unsource anything.
-    return selection.prepare(env)
 
 
 def build_environment(selection, environ=None, *, build_dir=None):

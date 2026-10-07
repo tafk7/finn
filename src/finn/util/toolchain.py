@@ -397,11 +397,30 @@ def machine_selection(environ: Mapping[str, str] | None = None) -> Selection:
     """The selection a tool runs by when its caller names none: this machine's
     environment as configured (``scripts/activate.sh``, ``docker/run``,
     ``finn-toolchain.sh``; no settings script is sourced), under the site command
-    directory ``FINN_TOOL_DIR_OVERRIDE`` names, if it names one. A selection a
-    caller states (a build configuration's ``toolchain``) is used as stated
-    instead: its ``command_dir`` wins."""
+    directory ``FINN_TOOL_DIR_OVERRIDE`` names, if it names one, with the HLS
+    frontend of the machine file's ``FINN_XILINX_VERSION``
+    (``machine_hls_frontend``). A selection a caller states (a build
+    configuration's ``toolchain``) is used as stated instead: its
+    ``command_dir`` and ``hls_frontend`` win."""
     environ = os.environ if environ is None else environ
-    return Selection(command_dir=environ.get(COMMAND_DIR_SETTING, ""))
+    return Selection(
+        command_dir=environ.get(COMMAND_DIR_SETTING, ""),
+        hls_frontend=machine_hls_frontend(environ),
+    )
+
+
+def machine_hls_frontend(environ: Mapping[str, str] | None = None) -> str:
+    """The HLS frontend of the release the machine file selects
+    (``FINN_XILINX_VERSION``, which the environment may override): ``vitis-run``
+    from 2025.1, else ``vitis_hls``, which is also the frontend when it names no
+    release. ``ValueError`` when the release is not ``YEAR.MINOR``."""
+    version = machine_file.settings(environ).get("FINN_XILINX_VERSION")
+    if version is None:
+        return "vitis_hls"
+    match = re.fullmatch(r"(20\d{2})\.(\d+)", version)
+    if match is None:
+        raise ValueError(f"FINN_XILINX_VERSION={version} is not a release (YEAR.MINOR)")
+    return "vitis-run" if tuple(map(int, match.groups())) >= (2025, 1) else "vitis_hls"
 
 
 def machine_toolchain() -> Toolchain:

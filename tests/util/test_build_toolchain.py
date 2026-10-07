@@ -256,9 +256,9 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
 
     monkeypatch.setattr(Selection, "prepare", prepare)
     # A stated selection is used as stated: the machine's command directory and
-    # the legacy frontend variable select nothing.
+    # release (whose frontend is Vitis HLS) select nothing.
     monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/site/tools")
-    monkeypatch.setenv("FINN_HLS_FRONTEND", "vivado_hls")
+    monkeypatch.setenv("FINN_XILINX_VERSION", "2024.2")
     selection = Selection(settings=("/opt/xilinx/settings64.sh",), hls_frontend="vitis-run")
     cfg = DataflowBuildConfig(
         output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[], toolchain=selection
@@ -267,10 +267,12 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
     assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0][1]
     assert [named for named, _ in prepared] == [selection]
     # Unset, it is the machine's: the environment as configured, under the site
-    # command directory.
+    # command directory, with the release's frontend.
     unset = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
     assert unset.toolchain is None
-    assert unset._resolve_selection() == Selection(command_dir="/site/tools")
+    assert unset._resolve_selection() == Selection(
+        command_dir="/site/tools", hls_frontend="vitis_hls"
+    )
     assert unset._resolve_toolchain() is prepared[1][1]
 
 
@@ -360,10 +362,10 @@ open("synthesized_here", "w").close()
 """
 
 
-def legacy_refused():
+def machine_refused():
     # An Exception, not pytest.fail: it is raised in a pool worker, which passes
     # an Exception back to the parent and dies on a BaseException.
-    raise AssertionError("the legacy toolchain was prepared")
+    raise AssertionError("the machine toolchain was prepared")
 
 
 def test_the_builder_runs_hls_synthesis_in_its_prepared_toolchain(monkeypatch, tmp_path):
@@ -377,7 +379,7 @@ def test_the_builder_runs_hls_synthesis_in_its_prepared_toolchain(monkeypatch, t
     vitis_hls.chmod(0o755)
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "2")
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
-    monkeypatch.setattr(hls, "legacy_toolchain", legacy_refused)
+    monkeypatch.setattr(hls, "machine_toolchain", machine_refused)
     cfg = builder_config(
         tmp_path, fpga_part=ALVEO_PART, toolchain=Selection(command_dir=str(tools))
     )
@@ -421,7 +423,7 @@ def prepared_for_linking(monkeypatch, tmp_path, platform, toolchain):
 @pytest.mark.parametrize("platform", sorted(LINKING_ORDER))
 def test_linking_runs_its_tools_through_the_toolchain_it_is_given(monkeypatch, tmp_path, platform):
     given = object()
-    monkeypatch.setattr(alveo_build, "legacy_toolchain", lambda: pytest.fail("prepared"))
+    monkeypatch.setattr(alveo_build, "machine_toolchain", lambda: pytest.fail("prepared"))
     seen = prepared_for_linking(monkeypatch, tmp_path, platform, given)
     assert seen == [(name, given) for name in LINKING_ORDER[platform]]
 
@@ -430,11 +432,11 @@ def test_linking_runs_its_tools_through_the_toolchain_it_is_given(monkeypatch, t
 def test_linking_prepares_its_default_toolchain_once(monkeypatch, tmp_path, platform):
     prepared = []
 
-    def legacy_toolchain():
+    def machine_toolchain():
         prepared.append(object())
         return prepared[-1]
 
-    monkeypatch.setattr(alveo_build, "legacy_toolchain", legacy_toolchain)
+    monkeypatch.setattr(alveo_build, "machine_toolchain", machine_toolchain)
     seen = prepared_for_linking(monkeypatch, tmp_path, platform, None)
     assert len(prepared) == 1
     assert [name for name, _ in seen] == LINKING_ORDER[platform]
@@ -462,11 +464,11 @@ def test_fifo_sizing_synthesizes_and_stitches_in_one_toolchain(monkeypatch, tmp_
     monkeypatch.setattr(set_fifo_depths, "xsi_fifosim", xsi_fifosim)
     prepared = []
 
-    def legacy_toolchain():
+    def machine_toolchain():
         prepared.append(object())
         return prepared[-1]
 
-    monkeypatch.setattr(set_fifo_depths, "legacy_toolchain", legacy_toolchain)
+    monkeypatch.setattr(set_fifo_depths, "machine_toolchain", machine_toolchain)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
     toolchain = object() if given else None

@@ -45,9 +45,8 @@ from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 
 
 def check_fifo_gauge_overflow(node_name, observed):
@@ -232,8 +231,8 @@ class InsertAndSetFIFODepths(Transformation):
     :parameter fifosim_input_throttle: use input throttling based on dataflow analysis
         while doing simulation-based FIFO sizing
     :parameter toolchain: the prepared ``finn.util.toolchain.Toolchain`` the sizing's
-        HLS synthesis and stitched IP run in (HLSSynthIP, CreateStitchedIP); by
-        default the legacy environment's, prepared once
+        HLS synthesis, stitched IP and simulation run in (HLSSynthIP,
+        CreateStitchedIP, xsi_fifosim); by default the machine's, prepared once
 
     Assumed input graph properties:
 
@@ -447,7 +446,7 @@ class InsertAndSetFIFODepths(Transformation):
         latency = perf["critical_path_cycles"]
         max_cycles = perf["max_cycles"]
         model = model.transform(PrepareIP(self.fpgapart, self.clk_ns))
-        toolchain = self.toolchain or legacy_toolchain()
+        toolchain = self.toolchain or machine_toolchain()
         model = model.transform(HLSSynthIP(toolchain=toolchain))
         model = model.transform(CreateStitchedIP(self.fpgapart, self.clk_ns, toolchain=toolchain))
         model.set_metadata_prop("exec_mode", "rtlsim")

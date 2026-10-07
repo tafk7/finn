@@ -200,7 +200,7 @@ class HLSBackend(ABC):
 
     def ipgen_singlenode_code(self, fpgapart=None, toolchain: Toolchain | None = None):
         """Builds the bash script for IP generation using the CallHLS utility, and runs
-        it in ``toolchain`` (by default the legacy environment's)."""
+        it in ``toolchain`` (by default the machine's)."""
         node = self.onnx_node
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         builder = CallHLS(toolchain=toolchain)
