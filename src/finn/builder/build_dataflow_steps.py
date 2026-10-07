@@ -1206,6 +1206,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig):
                 run_pnr=run_pnr,
                 signature=cfg.signature,
                 toolchain=cfg._resolve_toolchain(),
+                jobs=cfg.vivado_jobs,
             )
         )
         # If P&R was run, parse the OOC results and store in model metadata + write report
@@ -1308,6 +1309,7 @@ def step_export_portable_rtl(model: ModelWrapper, cfg: DataflowBuildConfig):
                     run_pnr=False,
                     signature=cfg.signature,
                     toolchain=cfg._resolve_toolchain(),
+                    jobs=cfg.vivado_jobs,
                 )
             )
 
@@ -1428,6 +1430,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                     cfg.enable_hw_debug,
                     partition_model_dir=partition_model_dir,
                     toolchain=cfg._resolve_toolchain(),
+                    vivado_jobs=cfg.vivado_jobs,
                 )
             )
             copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")

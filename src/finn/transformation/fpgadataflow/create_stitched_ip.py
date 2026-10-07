@@ -28,14 +28,12 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import json
-import multiprocessing as mp
 import os
 import shlex
 import sys
 import warnings
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
-from qonnx.util.basic import get_num_default_workers
 from shutil import copytree
 
 from finn import deploy
@@ -47,6 +45,7 @@ from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
 from finn.util.resources import resource_path, tcl_quote
+from finn.util.vivado import vivado_jobs
 
 
 def collect_ip_dirs(model, ipstitch_path):
@@ -124,6 +123,10 @@ class CreateStitchedIP(Transformation):
     value. A make_project.tcl script is also placed under the same folder,
     which is called to instantiate the per-layer IPs and stitch them together.
     The packaged block design IP can be found under the ip subdirectory.
+
+    ``jobs`` is how many runs Vivado launches at once when it synthesizes
+    (``launch_runs -jobs``), by default the machine's cores, capped
+    (``finn.util.vivado.vivado_jobs``).
     """
 
     def __init__(
@@ -135,9 +138,11 @@ class CreateStitchedIP(Transformation):
         run_pnr=False,
         signature=[],
         toolchain=None,
+        jobs=None,
     ):
         super().__init__()
         self.toolchain = toolchain
+        self.jobs = vivado_jobs(jobs)
         self.fpgapart = fpgapart
         self.clk_ns = clk_ns
         self.ip_name = ip_name
@@ -580,11 +585,7 @@ class CreateStitchedIP(Transformation):
                 "set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} "
                 "-value {-mode out_of_context} -objects [get_runs synth_1]"
             )
-            num_workers = get_num_default_workers()
-            assert num_workers >= 0, "Number of workers must be nonnegative."
-            if num_workers == 0:
-                num_workers = mp.cpu_count()
-            tcl.append("launch_runs synth_1 -jobs %s" % str(num_workers))
+            tcl.append("launch_runs synth_1 -jobs %d" % self.jobs)
             tcl.append("wait_on_run [get_runs synth_1]")
             tcl.append("open_run synth_1 -name synth_1")
             tcl.append("write_verilog -force -mode synth_stub %s.v" % block_name)

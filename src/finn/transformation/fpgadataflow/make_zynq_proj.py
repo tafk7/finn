@@ -28,14 +28,12 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import json
-import multiprocessing as mp
 import os
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import GiveReadableTensorNames, GiveUniqueNodeNames
 from qonnx.transformation.infer_data_layouts import InferDataLayouts
-from qonnx.util.basic import get_num_default_workers
 from shutil import copy
 
 from finn import resources
@@ -59,6 +57,7 @@ from finn.transformation.kernels.package import PackagePartition, write_boundary
 from finn.util._legacy_build_env import toolchain as legacy_toolchain
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
 from finn.util.resources import tcl_quote
+from finn.util.vivado import vivado_jobs
 
 from . import templates
 
@@ -75,11 +74,15 @@ class MakeZYNQProject(Transformation):
     Outcome if successful: sets the vivado_pynq_proj attribute in the ONNX
     ModelProto's metadata_props field, with the created project dir as the
     value.
+
+    ``jobs`` is how many runs Vivado launches at once (``launch_runs -jobs``), by
+    default the machine's cores, capped (``finn.util.vivado.vivado_jobs``).
     """
 
-    def __init__(self, platform, period_ns, enable_debug=False, toolchain=None):
+    def __init__(self, platform, period_ns, enable_debug=False, toolchain=None, jobs=None):
         super().__init__()
         self.toolchain = toolchain
+        self.jobs = vivado_jobs(jobs)
         self.platform = platform
         self.period_ns = period_ns
         self.enable_debug = 1 if enable_debug else 0
@@ -222,10 +225,6 @@ class MakeZYNQProject(Transformation):
         # create a TCL recipe for the project
         ipcfg = vivado_pynq_proj_dir + "/ip_config.tcl"
         config = "\n".join(config) + "\n"
-        num_workers = get_num_default_workers()
-        assert num_workers >= 0, "Number of workers must be nonnegative."
-        if num_workers == 0:
-            num_workers = mp.cpu_count()
         with open(ipcfg, "w") as f:
             f.write(
                 templates.custom_zynq_shell_template.replace(
@@ -243,7 +242,7 @@ class MakeZYNQProject(Transformation):
                     pynq_part_map[self.platform],
                     config,
                     self.enable_debug,
-                    num_workers,
+                    self.jobs,
                 )
             )
 
@@ -302,7 +301,8 @@ class ZynqBuild(Transformation):
     ``toolchain`` is the prepared ``finn.util.toolchain.Toolchain`` that every
     Vivado and Vitis HLS run of the build goes through (PackagePartition,
     HLSSynthIP, CreateStitchedIP, MakeZYNQProject); by default the legacy
-    environment's, prepared once.
+    environment's, prepared once. ``vivado_jobs`` is how many runs Vivado launches
+    at once in the project (MakeZYNQProject's ``jobs``).
     """
 
     def __init__(
@@ -312,9 +312,11 @@ class ZynqBuild(Transformation):
         enable_debug=False,
         partition_model_dir=None,
         toolchain=None,
+        vivado_jobs=None,
     ):
         super().__init__()
         self.toolchain = toolchain
+        self.vivado_jobs = vivado_jobs
         self.fpga_part = pynq_part_map[platform]
         self.axi_port_width = pynq_native_port_width[platform]
         self.period_ns = period_ns
@@ -402,7 +404,11 @@ class ZynqBuild(Transformation):
         # Assemble design from IPs
         model = model.transform(
             MakeZYNQProject(
-                self.platform, period_ns, enable_debug=self.enable_debug, toolchain=toolchain
+                self.platform,
+                period_ns,
+                enable_debug=self.enable_debug,
+                toolchain=toolchain,
+                jobs=self.vivado_jobs,
             )
         )
 

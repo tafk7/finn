@@ -29,6 +29,21 @@
 import os
 import re
 
+#: The most Vivado runs a build launches at once by default (``launch_runs -jobs``):
+#: a Zynq shell's block design synthesizes about ten IPs out of context, one run
+#: each, and each run takes a few GB of memory.
+VIVADO_JOBS_CAP = 16
+
+
+def vivado_jobs(requested=None):
+    """The number of runs Vivado launches at once (``launch_runs -jobs``): the
+    ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP."""
+    if requested is None:
+        return max(1, min(os.cpu_count() or 1, VIVADO_JOBS_CAP))
+    if not isinstance(requested, int) or requested < 1:
+        raise ValueError(f"Vivado's jobs must be a positive number, not {requested!r}")
+    return requested
+
 
 def _parse_vivado_utilization_report(report_path):
     """Parse a Vivado utilization report file to extract resource counts.

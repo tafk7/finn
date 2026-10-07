@@ -365,6 +365,11 @@ class DataflowBuildConfig:
     #: debug signals in the generated hardware)
     enable_hw_debug: Optional[bool] = False
 
+    #: How many runs Vivado launches at once (``launch_runs -jobs``) when it
+    #: synthesizes a stitched IP or builds the Zynq shell's bitfile. By default the
+    #: machine's cores, at most 16 (finn.util.vivado.vivado_jobs).
+    vivado_jobs: Optional[int] = None
+
     #: Whether to build a simulation image instead of a full hardware image.
     #: Currently only supported by the SLASH_VRT shell flow.
     enable_hw_sim: Optional[bool] = False
