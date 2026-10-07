@@ -109,25 +109,6 @@ part_map["VCK190"] = "xcvc1902-vsva2197-2MP-e-S"
 hbm_boards = {"U50", "U55C", "V80"}
 
 
-def get_rtlsim_trace_depth():
-    """Return the trace depth for rtlsim. Controllable
-    via the RTLSIM_TRACE_DEPTH environment variable. If the env.var. is
-    undefined, the default value of 1 is returned. A trace depth of 1
-    will only show top-level signals and yield smaller .vcd files.
-
-    The following depth values are of interest for whole-network stitched IP
-    rtlsim:
-    - level 1 shows top-level input/output streams
-    - level 2 shows per-layer input/output streams
-    - level 3 shows per full-layer I/O including FIFO count signals
-    """
-
-    try:
-        return int(os.environ["RTLSIM_TRACE_DEPTH"])
-    except KeyError:
-        return 1
-
-
 def fifo_rtl_files(abspath=True, gauge=False):
     """Return the shared FIFO RTL sources, referenced in place so that the flat
     elaboration namespace only ever sees one declaration of module fifo."""

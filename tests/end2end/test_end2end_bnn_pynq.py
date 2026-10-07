@@ -747,7 +747,6 @@ class TestEnd2End:
         monkeypatch.setenv("LIVENESS_THRESHOLD", str(int(latency * 1.1)))
         if rtlsim_trace:
             model.set_metadata_prop("rtlsim_trace", "%s_w%da%d.vcd" % (topology, wbits, abits))
-            monkeypatch.setenv("RTLSIM_TRACE_DEPTH", "3")
         rtlsim_chkpt = get_checkpoint_name(board, topology, wbits, abits, "ipstitch_rtlsim")
         model.save(rtlsim_chkpt)
         parent_chkpt = get_checkpoint_name(board, topology, wbits, abits, "dataflow_parent")

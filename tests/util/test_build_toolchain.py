@@ -19,6 +19,7 @@ import pytest
 import inspect
 import json
 import numpy as np
+import os
 import subprocess
 import sys
 from onnx import TensorProto, helper
@@ -593,7 +594,11 @@ def test_the_builder_simulates_in_its_toolchain_not_the_machine_default(
     monkeypatch.setattr(steps, "CreateStitchedIP", Passed)
     monkeypatch.setattr(steps, "copy", lambda *args: None)
     monkeypatch.setattr(steps.shutil, "copytree", lambda *args, **kwargs: None)
+    # With a waveform, too, the step leaves the process's environment alone.
+    cfg.verify_save_rtlsim_waveforms = True
+    environment = dict(os.environ)
     steps.step_measure_rtlsim_performance(model, cfg)
+    assert dict(os.environ) == environment
     assert calls(configured)[6:] == ["xelab", "g++"]
     report = json.loads((Path(cfg.output_dir) / "report/rtlsim_performance.json").read_text())
     assert report["cycles"] == 100
