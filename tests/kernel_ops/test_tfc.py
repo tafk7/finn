@@ -205,5 +205,3 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
             commit(root.point, {key: "ultra"})
     with pytest.raises(ValueError, match="uram-absent"):
         commit(root.point, {f"{weights[0]}.source.memstream.ram_style": "ultra"})
-    with pytest.raises(ValueError, match="clk2x-absent"):
-        commit(root.point, {f"{weights[0]}.source.memstream.pumped_memory": True})

@@ -105,7 +105,7 @@ def test_a_target_round_trips_with_its_board_and_resources_or_none(target: Targe
         assert stated["finn.platform/board"] == '"Ultra96"'
 
 
-@pytest.mark.parametrize("missing", ["dsp", "period_ns", "clk2x", "shell", "fabric", "resources"])
+@pytest.mark.parametrize("missing", ["dsp", "period_ns", "uram", "shell", "fabric", "resources"])
 def test_a_partial_target_is_refused_naming_what_it_misses(missing: str) -> None:
     model = holder()
     write_target(model, TARGET)
@@ -119,7 +119,8 @@ def test_a_partial_target_is_refused_naming_what_it_misses(missing: str) -> None
 
 
 #: The shape before the registry: capabilities a shell budgets (control_ports,
-#: memory_ports) and an AI Engine flag, no shell, board, fabric or resources.
+#: memory_ports) or supplies (clk2x, the shell row's since SZ11) and an AI Engine flag,
+#: no shell, board, fabric or resources.
 OLD_SHAPE = {
     "@version": "1",
     "part": "xczu3eg-sbva484-1-e",
@@ -140,12 +141,12 @@ def test_the_old_shape_is_refused_naming_the_keys_it_states() -> None:
         model.set_metadata_prop(f"finn.platform/{name}", text)
     with pytest.raises(KernelOpError) as refused:
         read_target(model)
-    assert "stored keys ['aie', 'control_ports', 'memory_ports'] are not declared" in str(
-        refused.value
+    assert "stored keys ['aie', 'clk2x', 'control_ports', 'memory_ports'] are not declared" in (
+        str(refused.value)
     )
     assert "run ToKernelOps to state it again" in str(refused.value)
     # Without those keys, it is a partial one: the new keys are named.
-    for name in ("aie", "control_ports", "memory_ports"):
+    for name in ("aie", "clk2x", "control_ports", "memory_ports"):
         model.graph.metadata_props.remove(
             next(item for item in model.graph.metadata_props if item.key == f"finn.platform/{name}")
         )

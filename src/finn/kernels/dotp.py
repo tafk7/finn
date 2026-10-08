@@ -136,9 +136,11 @@ class DotpAxiKernel(Kernel):
     SEGMENTLEN, the DSP58 chain length between pipeline registers, by FINN's
     timing model: about 0.741 ns through the first DSP and 0.605 ns through each
     further one, against half the period when compute is pumped. Only the INT8
-    core reads SEGMENTLEN. Pumped compute requires a phase-aligned 2x clock: the
-    ``platform``'s ``clk2x``. The DSP block is the ``platform``'s (``dsp``): a
-    platform that states none is refused (``dotp-dsp``).
+    core reads SEGMENTLEN. Pumped compute takes a phase-aligned 2x clock
+    (``ap_clk2x``), which its module states; whether the shell supplies one is the
+    shell root's admission (``clock-unavailable``), not a capability of the platform.
+    The DSP block is the ``platform``'s (``dsp``): a platform that states none is
+    refused (``dotp-dsp``).
     """
 
     id = "finnlib.dotp_axi"
@@ -171,16 +173,11 @@ class DotpAxiKernel(Kernel):
         """Whether pumping has SIMD lanes to split over the doubled clock: SIMD >= 2."""
         return self.simd >= 2
 
-    # Pumping needs the platform's doubled clock and lanes to split (SIMD before it in
-    # rank, so a configuration with SIMD 1 does not offer it).
+    # Pumping needs lanes to split (SIMD before it in rank, so a configuration with
+    # SIMD 1 does not offer it), and a doubled clock, which the shell admits.
     compute_pumping: bool = Decision(
         values=(False, True),
-        requires=(
-            requires(
-                platform.clk2x, "clk2x-absent: the platform has no doubled clock", cases=(True,)
-            ),
-            requires(pumpable, "dotp-pumping: pumping requires SIMD >= 2", cases=(True,)),
-        ),
+        requires=(requires(pumpable, "dotp-pumping: pumping requires SIMD >= 2", cases=(True,)),),
     )
 
     @derived

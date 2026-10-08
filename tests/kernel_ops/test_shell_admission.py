@@ -39,7 +39,7 @@ from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform import IP_ROW, ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.package import configured_root
-from kernel_ops.models import MATMUL, TARGET, kernel_model
+from kernel_ops.models import MATMUL, kernel_model
 from kernel_ops.tfc import ULTRA96
 
 PYNQ_ROW = shell_row("pynq", "Ultra96")
@@ -141,17 +141,24 @@ def test_a_shell_root_of_kernel_ops_counts_its_ends() -> None:
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
-    """The Chain on the ip shell, its first MatMul pumped on the target's doubled clock,
-    in a shell whose row supplies none: ``clock-unavailable``."""
+    """The shell row owns the doubled clock (SZ11 (e)): the Chain, its first MatMul's
+    compute pumped, which its kernel offers on any platform, is admitted by the ip row,
+    which supplies ap_clk2x, and refused by Ultra96's pynq row, which does not:
+    ``clock-unavailable``."""
     model = kernel_model()
     pumped = {**MATMUL, "compute.packed.compute_pumping": True}
     kernel_op(model, model.graph.node[0]).save(pumped)
-    configured_root(model, "chain")
-    assert TARGET.platform.clk2x
-    with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(shell, "shell_row", lambda *_: replace(IP_ROW, clk2x=False))
-        with pytest.raises(KernelOpError, match="clock-unavailable"):
-            configured_root(model, "chain")
+    point, _ = configured_root(model, "chain")
+    assert point.row is IP_ROW and IP_ROW.clk2x
+    assert point.module.abi.clock_alignments
+    write_target(model, ULTRA96)
+    assert not shell_root(model, model.graph.node, name="chain").row.clk2x
+    with pytest.raises(
+        KernelOpError,
+        match="clock-unavailable: the partition takes an aligned doubled clock "
+        r"\(ap_clk2x\), which the 'pynq' shell does not supply",
+    ):
+        configured_root(model, "chain")
 
 
 def test_the_shells_fragment_is_a_kernels_with_its_partition_inlined() -> None:
