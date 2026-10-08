@@ -438,17 +438,17 @@ site owns remote activation, path visibility and remote cancellation.
 
 A build configuration may name its toolchain, the HLS frontend included; a
 stated selection never guesses its frontend, and `vitis_hls`, its default, is
-refused on 2025.x. A kernel-path build of TFC for Ultra96
-(`dataflow_build_config.json`; the environment as configured, so `settings`
-stays empty):
+refused on 2025.x. A kernel-path build has a configuration of its own,
+`finn.builder.kernel_build_config.KernelBuildConfig`, written as
+`kernel_build_config.json` beside `model.onnx` (a build directory states one
+configuration: `dataflow_build_config.json` for the HWCustomOp flow, or this one;
+`build_dataflow` builds either). A kernel-path build of TFC for Ultra96 in the
+Zynq shell (the environment as configured, so `settings` stays empty):
 
 ```json
 {
   "output_dir": "output",
-  "synth_clk_period_ns": 5.0,
-  "board": "Ultra96",
-  "shell_flow_type": "vivado_zynq",
-  "steps": ["phase_kernel_path", "phase_generate_outputs"],
+  "target": {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq"},
   "kernel_exploration": [
     {"strategy": "target_throughput", "fps": 1000000},
     {"strategy": "size_fifos"}
@@ -458,10 +458,34 @@ stays empty):
 }
 ```
 
+`target` states the clock period, a `board` or a `part` (a board gives its part; a
+part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
+packaged IP its user integrates, whose target states the part alone; `pynq`, the
+Zynq block design for a board. `stitched_ip` and `ooc_synth` are the partition's
+own outputs, on any shell: `stitched_ip/` holds the packaged IP, its interface
+description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
+AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
+bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
+of `verify_input_npy` or a generated one, checked against the partition in
+Python); `ooc_synth` synthesizes the IP out of context. Every kernel-path build
+writes `report/resources.json`: each member of the shell (the partition, each end,
+each IP of the static region) and their total, as the model states them, as Vivado
+synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
+packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); with
+`ooc_synth`, also the partition per member, what synthesis flattened
+`unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
+need a shell that integrates the partition, so they are refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
+choices, the partition and its verification) and `phase_kernel_outputs` (what the
+shell makes). None of the HWCustomOp flow's fields (`synth_clk_period_ns`,
+`board`, `shell_flow_type`, `target_fps`, `folding_config_file`, ...) is read:
+stated, it is refused by name.
+
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:
 `target_throughput` folds the least parallelism that meets `fps` at the target's
-clock, `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
+clock, `max_throughput` the fewest cycles a frame whose resources (the shell's: its
+partition, ends and static region) stay within `"within"`, a required
+`{resource: fraction}` of the part's totals (`{"lut": 0.5}`), `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
 each channel's FIFO from both ends' beat patterns at the bottleneck (`direct`
 where none is needed; `"margin"` words added to a FIFO it places, default 0). The
 default list is empty. What no strategy chose stays open, and the completion
@@ -476,7 +500,9 @@ choices the strategies made are written to `kernel_choices.json`, and what the
 exploration found (the strategies, each with the choices it committed, attempts
 and time; every choice with the strategy that made it; every completed value and
 who completed it; whether FIFOs were sized; per-member cycles and buffering, the
-bottleneck, of the point as it is built) to `report/kernel_exploration.json`.
+bottleneck, and the shell's resources against the part's, of the point as it is
+built) to `report/kernel_exploration.json`. A point that uses more of a resource
+than the part has is a warning naming that resource, never a refusal.
 
 Explicit selections, and a dataflow build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the

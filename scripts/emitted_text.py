@@ -7,10 +7,11 @@ Nothing here runs Vivado. Each simulation the sweep would run is materialized
 by the job's own code with the simulator replaced by a capture:
 
 - a conformance job (one pytest id of tests/kernels/test_conformance.py) runs
-  under pytest with ``kernels.xsim.simulate`` capturing the simulation
+  under pytest with ``finn.harness.rtl.simulate`` capturing the simulation
   directory: the staged module sources (FinnLib's included, copied by
-  content), each memory's INIT_FILE, and the testbench ``check.sv``, which
-  carries the stimulus and the expected words;
+  content), each memory's INIT_FILE, the testbench ``check.sv`` and the
+  ``$readmemh`` files beside it that carry the stimulus, the expected words and
+  each control bus's writes;
 - a numeric sweep (``python -m kernels.sweeps.<module> ARGS``) runs its
   ``main`` with ``rtl_transport._run_worker`` capturing the request it would
   hand the simulation process: its sources by content (with every file of a
@@ -37,8 +38,8 @@ with ``#``, in file names and contents, so that two commits' outputs compare
 by ``diff -r`` on what changed beside the hash.
 
 A job's key is a digest of everything its simulation consumes: the captured
-designs, the files of the test tree the job imports (harness, stimulus and
-reference code) except construction modules, a numeric sweep's construction
+designs, the files of the harness (``finn.harness``) and of the test tree the job
+imports (stimulus and reference code) except construction modules, a numeric sweep's construction
 results, the simulator runtime (``finn.xsi``, ``finn_xsi`` and the modules they
 load) when the job drives XSI, the sweep's own scripts, the pytest
 configuration, the Python environment, the selected Vivado and this tool. The
@@ -137,6 +138,10 @@ SWEEP_FILES = (
     ".pytest.ini",
     "uv.lock",
 )
+# The code a captured job is keyed by when it imports it: the harness package and the
+# test tree (less its construction modules), whose effect on a simulation the
+# captured designs do not show.
+HARNESS = ("src/finn/harness/", "tests/")
 # The tracked trees a pytest group's key covers, beside SWEEP_FILES.
 TREES = ("src", "tests", "scripts", "pyproject.toml")
 HASH = re.compile(r"(?<=_)[0-9a-f]{16}(?![0-9A-Za-z])")
@@ -466,6 +471,13 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
     import kernels.xsim as xsim  # noqa: PLC0415
     import pytest  # noqa: PLC0415
 
+    # finn is a namespace package: an older checkout's would also import the installed
+    # checkout's finn.harness, so the checkout's own files say which harness it runs.
+    if (root / "src/finn/harness/rtl.py").is_file():
+        import finn.harness.rtl as rtl  # noqa: PLC0415
+    else:  # a checkout from before finn.harness: kernels.xsim simulated
+        rtl = xsim
+
     designs = dest / "designs"
     state: dict[str, Any] = {"tmp": None, "simulations": 0, "started": 0, "completed": 0}
 
@@ -495,7 +507,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
         return run
 
     xsim.vivado_simulator = lambda: True  # selected or not: nothing here simulates
-    xsim.simulate = simulate
+    rtl.simulate = simulate
     conformance.conformance = counted(conformance.conformance)
     if ipxact is not None:
         streamed = conformance.stream_through
@@ -636,12 +648,33 @@ def simulator_closure(root: Path) -> list[str]:
     return sorted(found)
 
 
+def packaged_ip(model: Any, work: Path) -> dict[str, str]:
+    """What PackagePartition states of the IP, the work prefix removed: its directory,
+    VLNV and interface names (JSON, keys sorted). It is typed (``finn.outputs``) from
+    589656fff on and in the stitched-IP contract's flat keys before; both read the same,
+    so the text compares across the change."""
+    typed = {item.key: item.value for item in model.graph.metadata_props}
+    if "finn.outputs/ip" in typed:
+        ip, vlnv, interfaces = (
+            typed[f"finn.outputs/{key}"] for key in ("ip", "vlnv", "interfaces")
+        )
+    else:
+        ip = f"{model.get_metadata_prop('vivado_stitch_proj')}/ip"
+        vlnv = model.get_metadata_prop("vivado_stitch_vlnv")
+        interfaces = model.get_metadata_prop("vivado_stitch_ifnames")
+    return {
+        "ip": ip.replace(str(work), "WORK"),
+        "vlnv": vlnv,
+        "interfaces": json.dumps(json.loads(interfaces), sort_keys=True),
+    }
+
+
 def emit_package(out: Path, work: Path) -> int:
     """What PackagePartition writes for the Chain and the TFC partition, Vivado stubbed.
 
     PackagePartition runs for real except for the Vivado call: the toolchain is a
     stub that writes ip/component.xml. Per partition (the Chain also with
-    run_synth): package.tcl and the stitch metadata, the work prefix removed.
+    run_synth): package.tcl and what packaging states of the IP (``packaged_ip``).
     """
     # The checkout's code, importable only in its environment (Target.run).
     from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
@@ -662,11 +695,9 @@ def emit_package(out: Path, work: Path) -> int:
             )
         )
         (out / f"{name}.package.tcl").write_text((project / "package.tcl").read_text())
-        props = [
-            f"{prop}={str(model.get_metadata_prop(prop)).replace(str(work), 'WORK')}"
-            for prop in ("vivado_stitch_proj", "vivado_stitch_vlnv", "vivado_stitch_ifnames")
-        ]
-        (out / f"{name}.metadata.txt").write_text("\n".join(props) + "\n")
+        (out / f"{name}.metadata.txt").write_text(
+            "".join(f"{key}={value}\n" for key, value in packaged_ip(model, work).items())
+        )
 
     out.mkdir(parents=True, exist_ok=True)
     work = work.resolve()
@@ -766,7 +797,7 @@ def compute_keys(
         imported = meta["imported"]
         construction = set(meta["construction"])
         for name in imported:
-            if name.startswith("tests/") and name not in construction:
+            if name.startswith(HARNESS) and name not in construction:
                 inputs[f"harness:{name}"] = code_digest(root / name)
         if (dest / "construction.json").is_file():
             inputs["construction"] = file_digest(dest / "construction.json")

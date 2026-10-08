@@ -46,6 +46,10 @@ To use it, first create a folder with the necessary configuration and model file
    You can find an example .json file under ``src/finn/qnn-data/build_dataflow/dataflow_build_config.json``
    With Vivado/Vitis 2025.x, name the HLS frontend: ``"toolchain": {"hls_frontend": "vitis-run"}``.
    The toolchain selection never guesses its frontend, and its default, ``vitis_hls``, is refused on 2025.x.
+   A build through the kernel path (KernelOps) states its configuration instead as
+   ``dataflow_build_dir/kernel_build_config.json``
+   (:py:mod:`finn.builder.kernel_build_config.KernelBuildConfig`); the folder states one of the two,
+   and the file's name gives the configuration's type.
 4. (Optional) create a JSON file with the specialize layers configuration. It must be named ``dataflow_build_dir/specialize_layers_config.json``
    You can find an example .json file under ``src/finn/qnn-data/build_dataflow/specialize_layers_config.json``.
 5. (Optional) create a JSON file with the folding configuration. It must be named ``dataflow_build_dir/folding_config.json``.

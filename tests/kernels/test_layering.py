@@ -58,6 +58,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
         ("finn.util.torch_hw_modules", "flow"),
+        ("finn.harness.rtl", "harness"),
         ("finn.builder.build_dataflow", "flow"),
         ("kernels.helpers", "tests.kernels"),
     ],
@@ -92,6 +93,14 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("util", "finn.util.torch_hw_modules"),
         ("tests.kernels", "finn.custom_op.kernels.base"),
         ("tests.kernels", "finn.core.onnx_exec"),
+        # The harness: above the kernels and their transformations, below the flow,
+        # beside the test tree and pytest, never under them.
+        ("kernels", "finn.harness.rtl.simulate"),
+        ("transformation.kernels", "finn.harness.rtl"),
+        ("util", "finn.harness.toolchain"),
+        ("harness", "finn.builder.build_dataflow"),
+        ("harness", "kernels.xsim.requires_xsim"),
+        ("harness", "pytest"),
     ],
 )
 def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> None:
@@ -111,6 +120,11 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("transformation.kernels", "finn.util.basic.make_build_dir"),
         ("flow", "finn.transformation.kernels.package.PackagePartition"),
         ("util", "finn_xsi.adapter"),
+        ("harness", "finn.kernels.artifacts.build.emit_module"),
+        ("harness", "finn.util.toolchain.machine_toolchain"),
+        ("harness", "finn.transformation.kernels.package.PackagePartition"),
+        ("flow", "finn.harness.rtl.simulate"),
+        ("tests.kernels", "finn.harness.rtl.stream_through"),
     ],
 )
 def test_the_table_accepts_an_import_down_its_order(layer: str, name: str) -> None:

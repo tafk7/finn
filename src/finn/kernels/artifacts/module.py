@@ -8,8 +8,10 @@ and ABI (``Abi``: its pins, parameters as RTL spells them and aligned clocks),
 the files that provide it, the data it reads, and what it holds while part of
 it is idle (``Held``). A ``Composed`` module is a ``Fragment`` with an ABI:
 leaf instances, the ``Link`` of each channel hop between their pins and the
-control buses it presents (``BusExport``). Every instance is a leaf: the
-netlist is flat, and grouping it into modules is a later decision of the flow.
+control buses it presents (``BusExport``), each with the writes its kernel's
+configuration takes (``RegisterMap``: what a host, or a testbench, writes before
+streaming). Every instance is a leaf: the netlist is flat, and grouping it into
+modules is a later decision of the flow.
 
 A fragment names its instances by labels relative to its owner (``compute.packed``);
 its parent places it with ``under(node)`` and joins its children's with
@@ -218,6 +220,11 @@ def _beside(prefix: str, label: str) -> str:
     return f"{prefix}.{label}" if label else prefix
 
 
+def _inlined(node: str, label: str) -> str:
+    """``label`` with ``node``'s level removed: ``node.x`` is ``x``; any other unchanged."""
+    return label[len(node) + 1 :] if label.startswith(f"{node}.") else label
+
+
 @dataclass(frozen=True)
 class LinkEnd:
     """One end of a link: an instance's ready/valid pins, or the root's own when
@@ -240,6 +247,11 @@ class LinkEnd:
             self
             if self.instance is None
             else replace(self, instance=_beside(prefix, self.instance))
+        )
+
+    def inlined(self, node: str) -> LinkEnd:
+        return (
+            self if self.instance is None else replace(self, instance=_inlined(node, self.instance))
         )
 
 
@@ -278,15 +290,41 @@ class Link:
     def under(self, prefix: str) -> Link:
         return replace(self, source=self.source.under(prefix), sink=self.sink.under(prefix))
 
+    def inlined(self, node: str) -> Link:
+        return replace(self, source=self.source.inlined(node), sink=self.sink.inlined(node))
+
+
+@dataclass(frozen=True)
+class RegisterMap:
+    """The writes that put a kernel's configuration into its control bus's registers:
+    (byte address, word), in the order they are made, each word ``word_bits`` wide. Empty
+    for a bus whose configuration needs no write."""
+
+    writes: tuple[tuple[int, int], ...] = ()
+    word_bits: int = 32
+
+    def __post_init__(self) -> None:
+        writes = tuple((address, word) for address, word in self.writes)
+        if self.word_bits not in (32, 64):
+            raise BuildError(f"an AXI-Lite word is 32 or 64 bits, not {self.word_bits}")
+        step = self.word_bits // 8
+        for address, word in writes:
+            if address < 0 or address % step:
+                raise BuildError(f"{address:#x} is not a {self.word_bits}-bit word's address")
+            if not 0 <= word < 1 << self.word_bits:
+                raise BuildError(f"{word:#x} is not a {self.word_bits}-bit word")
+        object.__setattr__(self, "writes", writes)
+
 
 @dataclass(frozen=True)
 class BusExport:
     """An instance's bus, presented as the root's target port ``port`` (its members
-    ``<port>_<MEMBER>``)."""
+    ``<port>_<MEMBER>``), and the writes its configuration takes (``registers``)."""
 
     instance: str
     bus: Bus
     port: str
+    registers: RegisterMap = RegisterMap()
 
     def __post_init__(self) -> None:
         if not _IDENTIFIER.fullmatch(self.port):
@@ -326,6 +364,22 @@ class Fragment:
             tuple(link.under(prefix) for link in self.links),
             tuple(
                 replace(item, instance=_beside(prefix, item.instance), port=f"{port}_{item.port}")
+                for item in self.exports
+            ),
+        )
+
+    def inlined(self, node: str) -> Fragment:
+        """This fragment with node ``node``'s level removed, the inverse of ``under(node)``
+        for what lies below it: labels and link ends ``node.x`` are ``x``, and a bus it
+        presents at ``<node>_<port>`` is presented at ``<port>``."""
+        port = node.replace(".", "_") + "_"
+        return Fragment(
+            tuple((_inlined(node, label), leaf) for label, leaf in self.instances),
+            tuple(link.inlined(node) for link in self.links),
+            tuple(
+                replace(item, instance=_inlined(node, item.instance), port=item.port[len(port) :])
+                if item.instance.startswith(f"{node}.") and item.port.startswith(port)
+                else item
                 for item in self.exports
             ),
         )
@@ -471,6 +525,7 @@ __all__ = [
     "Module",
     "Abi",
     "ProducerIdentity",
+    "RegisterMap",
     "Scalar",
     "ScalarTable",
     "fingerprint",

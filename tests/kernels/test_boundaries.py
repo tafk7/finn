@@ -36,7 +36,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
@@ -47,12 +47,11 @@ from qonnx.core.datatype import DataType
 PLATFORM = Platform(
     period_ns=5.0,
     dsp=DspBlock.DSP48E2,
+    fabric=Fabric.ULTRASCALE,
     uram=True,
     uram_init=True,
     clk2x=True,
-    control_ports=1,
-    memory_ports=0,
-    aie=False,
+    resources=None,
 )
 
 

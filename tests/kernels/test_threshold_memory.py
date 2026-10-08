@@ -154,11 +154,10 @@ def test_the_choices_do_not_move_with_pe() -> None:
         assert styles(point) == ("distributed", "block")
 
 
-def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
+def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> None:
     """An UltraRAM stage needs UltraRAM that takes initial contents, runtime-writable
-    thresholds a control port (and a control bus, which a bare kernel has not): on a
-    platform without them, each case is refused by name and its Decision forced to
-    what remains."""
+    thresholds a control bus (which a bare kernel has not): on a platform without
+    them, each case is refused by name and its Decision forced to what remains."""
 
     def point(platform: Platform) -> ThresholdingAxiKernel:
         return design_space(
@@ -177,14 +176,7 @@ def test_the_platform_narrows_the_memories_and_the_control_port() -> None:
         "True": "use_axilite: threshold-control: True: runtime-writable thresholds need a "
         "control bus"
     }
-    bare = {
-        item.key: item
-        for item in inspection.forced(point(replace(FULL_DSP48E2, uram=False, control_ports=0)))
-    }
-    assert (
-        bare["use_axilite"].value is False
-        and "control-absent" in bare["use_axilite"].refused["True"]
-    )
+    bare = {item.key: item for item in inspection.forced(point(replace(FULL_DSP48E2, uram=False)))}
     assert bare["ultra_stages"].value == 0
     assert {"1", "2"} == set(bare["ultra_stages"].refused)
     assert all("uram-absent" in why for why in bare["ultra_stages"].refused.values())

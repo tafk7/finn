@@ -28,7 +28,7 @@
 
 import argparse
 import numpy as np
-from driver import io_shape_dict
+from driver import fclk_mhz, io_shape_dict
 from driver_base import FINNExampleOverlay
 
 if __name__ == "__main__":
@@ -83,6 +83,7 @@ if __name__ == "__main__":
         platform=platform,
         io_shape_dict=io_shape_dict,
         batch_size=bsize,
+        fclk_mhz=fclk_mhz,
         weight_dir="weights/",
     )
 

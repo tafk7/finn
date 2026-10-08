@@ -175,3 +175,39 @@ def test_a_placed_table_has_one_row_or_a_row_a_channel() -> None:
     found = other.query(ThresholdingAxiKernel.schedule)
     assert isinstance(found, Rejected)
     assert {finding.code for finding in found.findings} == {"threshold-rows"}
+
+
+def test_runtime_writable_thresholds_declare_the_writes_of_their_table() -> None:
+    """Each threshold at (channel fold, lane, threshold) as thresholding_axi decodes it, its
+    word masked to the threshold's bits; presented on the control bus with it."""
+    table = (((-2, 0, 3), (-1, 1, 4), (0, 2, 5)),)  # three rows, N = 3
+    point = threshold(table=table, pe=1, axilite=True)
+    # PE 1: three folds of one lane; two bits of threshold, no lane bit, two of fold.
+    expected = []
+    for channel, row in enumerate(table[0]):
+        for index, value in enumerate(row):
+            expected.append((((channel << 2) | index) << 2, value & 0x1F))
+    assert point.register_map.writes == tuple(expected)
+    assert point.control_bus.registers == point.register_map
+    shared = threshold(table=(((-2, 0, 3),),), pe=2, axilite=True)  # C = 1: one row, lane 0
+    assert shared.register_map.writes == ((0, 0x1E), (4, 0), (8, 3))
+    assert threshold(pe=1).control_bus.bus is None  # held, not presented: nothing to write
+
+
+def test_a_threshold_wider_than_a_word_is_written_in_words_low_first() -> None:
+    point = threshold(
+        table=(((-(1 << 35), 1 << 34),),),
+        pe=1,
+        input_dtype="INT8",
+        threshold_dtype="INT40",
+        axilite=True,
+    )
+    mask = (1 << 40) - 1
+    low, high = (-(1 << 35)) & mask, 1 << 34
+    # Two words a threshold: the word select below the threshold index; the last commits.
+    assert point.register_map.writes == (
+        (0, low & 0xFFFFFFFF),
+        (4, low >> 32),
+        (8, high & 0xFFFFFFFF),
+        (12, high >> 32),
+    )

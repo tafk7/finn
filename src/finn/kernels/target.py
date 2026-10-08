@@ -3,18 +3,20 @@
 
 """The build target as kernels see it: the platform's capabilities and its clock.
 
-Capabilities, never part names, reach kernels. ``Platform`` is the record of
-them and of the clock period the kernels must meet; ``Target`` adds what the
-flow states beside it, the part. Which part and shell have which capabilities
-is the flow's (``finn.transformation.kernels.resolve_target``); the graph
-states the result (``finn.platform``, read by
-``finn.custom_op.kernels.base.read_target``).
+Capabilities, never part, board or shell names, reach kernels. ``Platform`` is the
+record of them and of the clock period the kernels must meet; ``Target`` adds what
+the flow states beside it: the part, the shell and the board when one is stated.
+Which part, board and shell have which capabilities is the flow's
+(``finn.platform.resolve_target``); the graph states the result
+(``finn.platform``, read by ``finn.custom_op.kernels.base.read_target``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+
+from finn.kernels.utilization import Resources
 
 
 class DspBlock(str, Enum):
@@ -23,6 +25,15 @@ class DspBlock(str, Enum):
     DSP48E1 = "DSP48E1"
     DSP48E2 = "DSP48E2"
     DSP58 = "DSP58"
+
+
+class Fabric(str, Enum):
+    """The programmable fabric's architecture generation, independent of its DSP block:
+    7 series, UltraScale (and UltraScale+), Versal."""
+
+    SERIES7 = "series7"
+    ULTRASCALE = "ultrascale"
+    VERSAL = "versal"
 
 
 _DSP_WIDTHS = {
@@ -50,31 +61,38 @@ class Platform:
 
     - ``period_ns``: the clock period the kernels must meet (``ap_clk``);
     - ``dsp``: the DSP block (``None``: none stated, which a DSP core refuses);
+    - ``fabric``: the fabric's architecture generation;
     - ``uram``: the device has UltraRAM;
     - ``uram_init``: an UltraRAM takes initial contents (UltraScale+ ignores its
       INIT and builds block RAM);
     - ``clk2x``: the shell supplies an aligned 2x clock (``ap_clk2x``);
-    - ``control_ports``: the AXI-Lite target ports a compute partition may present;
-    - ``memory_ports``: the AXI memory ports a compute partition may use;
-    - ``aie``: the device has AI Engines.
+    - ``resources``: the part's totals, nothing subtracted: what the platform has,
+      not a budget (``None``: not known for this part). No kernel reads it; a
+      strategy may.
+
+    What a shell lets a partition present (AXI-Lite buses, memory ports) is not a
+    capability here: it is the shell's budget, which the shell root admits.
     """
 
     period_ns: float
     dsp: DspBlock | None
+    fabric: Fabric
     uram: bool
     uram_init: bool
     clk2x: bool
-    control_ports: int
-    memory_ports: int
-    aie: bool
+    resources: Resources | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Target:
-    """The build target: the part, and the platform its kernels are built for."""
+    """The build target: the part, the shell that integrates the partition (``ip``: the
+    packaged IP, integrated by its user), the board when one is stated, and the
+    platform its kernels are built for."""
 
     part: str
     platform: Platform
+    shell: str
+    board: str | None = None
 
 
-__all__ = ["DspBlock", "Platform", "Target", "dsp_widths"]
+__all__ = ["DspBlock", "Fabric", "Platform", "Resources", "Target", "dsp_widths"]

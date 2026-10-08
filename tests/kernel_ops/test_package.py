@@ -3,7 +3,7 @@
 
 """PackagePartition: a partition of KernelOps as the IP the shells read.
 
-The Tcl and ``vivado_stitch_ifnames`` come from the module's ABI
+The Tcl and the interface names come from the module's ABI
 (``finn.kernels.artifacts.ipxact``, checked as text in
 ``tests/kernels/artifacts/test_ipxact.py``). Here: the partition's module from
 its nodes' choices, completed; that the emitted top is elaborated before Vivado runs (a
@@ -15,7 +15,6 @@ the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 
 from __future__ import annotations
 
-import json
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -25,7 +24,12 @@ import pytest
 
 from finn.custom_op.kernels.base import KernelOpError, kernel_op
 from finn.kernels.artifacts import build
-from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    OUTPUT_INTERFACES,
+    OUTPUT_IP,
+    OUTPUT_VLNV,
+    PARTITION_INPUTS,
+)
 from finn.transformation.kernels import PackagePartition
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import configure_partition, kernel_model
@@ -63,7 +67,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     second.save({**second.choices(), "x.transport": "fifo"})
     with pytest.raises(KernelOpError, match=r"open Decisions.*depth \(required\)") as refused:
         PackagePartition("sdp_1").module(model)
-    assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
+    assert refused.value.keys == ("partition.levels.transport.fifo.buffer.depth",)
 
 
 def test_the_graphs_input_order_is_the_port_order() -> None:
@@ -118,9 +122,10 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
     model = model.transform(PackagePartition("sdp_1", directory=project))
-    assert model.get_metadata_prop("vivado_stitch_proj") == str(project.resolve())
-    assert model.get_metadata_prop("vivado_stitch_vlnv") == "xilinx_finn:finn:sdp_1:1.0"
-    assert json.loads(model.get_metadata_prop("vivado_stitch_ifnames")) == {
+    # What packaging states of the IP, typed; no flat key.
+    assert model.get(OUTPUT_IP) == str(project.resolve() / "ip")
+    assert model.get(OUTPUT_VLNV) == "xilinx_finn:finn:sdp_1:1.0"
+    assert model.get(OUTPUT_INTERFACES) == {
         "clk": ["ap_clk"],
         "rst": ["ap_rst_n"],
         "s_axis": [["s_axis_0", 8]],
@@ -129,13 +134,11 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
         "axilite": [],
         "ap_none": [],
     }
-    # The part and period are the model's target; the facts are the boundary's.
+    assert list(model.model.metadata_props) == []
+    # The part and period are the model's target. The boundary facts are the cut's:
+    # packaging writes none.
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
-    inputs, outputs = partition_facts(model)
-    assert [(port["port"], port["tdata"], port["beats"]) for port in inputs + outputs] == [
-        ("s_axis_0", 8, 6),
-        ("m_axis_0", 16, 6),
-    ]
+    assert model.get(PARTITION_INPUTS) is None
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
     assert [root.find(f"{spirit}{tag}").text for tag in ("vendor", "library", "name")] == [

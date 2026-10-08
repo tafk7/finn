@@ -20,6 +20,7 @@ import pyslang
 import pytest
 from pyslang import ast, syntax
 
+from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -44,7 +45,6 @@ from finn.kernels.artifacts.rtl import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.util.resources import resource_path
-from kernels.toolchain import finnlib_root
 
 REPLAY_PARAMETERS = (("LEN", "2"), ("REP", "3"), ("W", "16"))
 DOTP_PARAMETERS = (

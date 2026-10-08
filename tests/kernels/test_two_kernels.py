@@ -26,6 +26,8 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
+from finn.harness.pacing import FREE, STALLED
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
@@ -39,7 +41,7 @@ from kernels.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 
 ROOT = Path(__file__).resolve().parents[2]
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
@@ -214,5 +216,5 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
                 PE2 * y_bits,
             )
         },
-        stalled=stalled,
+        pacing=STALLED if stalled else FREE,
     )

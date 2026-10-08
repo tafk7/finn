@@ -30,6 +30,7 @@ from finn.kernels.artifacts.module import (
     Leaf,
     Link,
     LinkEnd,
+    RegisterMap,
     fingerprint,
     merge,
     module_name,
@@ -137,6 +138,27 @@ def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
     assert stream.under("outer.x").links[1].sink.instance == "outer.compute.packed"
 
 
+def test_a_fragment_inlined_drops_one_node_s_level() -> None:
+    """``inlined(node)`` undoes ``under(node)`` for what lies below ``node``: labels, link
+    ends and presented ports; anything beside it is unchanged."""
+    kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite"),))
+    stream = Fragment(
+        (("adapter.vpc.vpc", stage()),),
+        (link(None, "adapter.vpc.vpc"), link("adapter.vpc.vpc", "^compute.packed")),
+    )
+    flat = merge(kernel.under("compute.packed"), stream.under("x"))
+    # Beside the node, a stage linked to an instance below it.
+    beside = Fragment((("stage", stage()),), (link("stage", "partition.x.adapter.vpc.vpc"),))
+    nested = merge(flat.under("partition"), beside)
+    inlined = nested.inlined("partition")
+    assert inlined.instances == (*flat.instances, *beside.instances)
+    assert inlined.links == (*flat.links, link("stage", "x.adapter.vpc.vpc"))
+    assert inlined.exports == flat.exports
+    assert inlined.exports[0].port == "compute_packed_s_axilite"
+    with pytest.raises(BuildError, match="places \\['stage'\\] twice"):
+        merge(Fragment((("stage", stage()),)).under("partition"), beside).inlined("partition")
+
+
 def test_merged_fragments_place_each_label_and_present_each_port_once() -> None:
     first = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite"),))
     merged = merge(first.under("first"), first.under("second"))
@@ -211,3 +233,17 @@ def test_every_instance_input_and_root_output_has_exactly_one_driver() -> None:
     twice = replace(leaf, held=Held((*leaf.held.inputs, ("ivld", 0)), leaf.held.unused))
     with pytest.raises(BuildError, match="more than one driver drives a.ivld"):
         replace(module, fragment=replace(module.fragment, instances=(("a", twice),)))
+
+
+def test_a_register_map_writes_whole_words_at_word_addresses() -> None:
+    assert RegisterMap(((0, 1), (4, 0xFFFFFFFF))).writes == ((0, 1), (4, 0xFFFFFFFF))
+    with pytest.raises(BuildError, match="not a 32-bit word's address"):
+        RegisterMap(((2, 1),))
+    with pytest.raises(BuildError, match="not a 32-bit word"):
+        RegisterMap(((0, 1 << 32),))
+    with pytest.raises(BuildError, match="32 or 64 bits"):
+        RegisterMap((), word_bits=16)
+    # A presented bus carries the writes of its kernel's configuration below a node too.
+    writes = RegisterMap(((0, 7),))
+    kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite", writes),))
+    assert kernel.under("activate").exports[0].registers == writes

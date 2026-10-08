@@ -35,17 +35,12 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import SortGraph
 from qonnx.util.basic import get_by_name
 
-from finn.transformation.fpgadataflow.kernel_partitions import kernel_partition_ports
 from finn.util.fpgadataflow import is_fpgadataflow_node
 
 
 class InsertIODMA(Transformation):
     """Insert DMA nodes on inputs and outputs, or as specified by filters in
-    the constructor.
-
-    A graph input or output may also be a StreamingDataflowPartition of KernelOps:
-    its IODMA's vectors and stream width are the partition's boundary facts
-    (``finn.partition``, written by PackagePartition), not a HW node's answers."""
+    the constructor."""
 
     def __init__(
         self,
@@ -103,22 +98,13 @@ class InsertIODMA(Transformation):
     def apply(self, model):
         modified = False
         # only makes sense for a pure fpgadataflow graph -- so we check!
-        # A partition of KernelOps is read once here: its ports' facts, by tensor.
         all_nodes = list(model.graph.node)
-        kernel_ports = {}
-        foreign = []
-        for node in all_nodes:
-            if is_fpgadataflow_node(node):
-                continue
-            ports = kernel_partition_ports(node)
-            if ports is None:
-                foreign.append(node.name or node.op_type)
-            else:
-                kernel_ports.update(ports)
+        foreign = [
+            node.name or node.op_type for node in all_nodes if not is_fpgadataflow_node(node)
+        ]
         if foreign:
             raise ValueError(
-                "InsertIODMA needs a graph of fpgadataflow nodes and partitions of KernelOps; "
-                f"not: {', '.join(foreign)}"
+                f"InsertIODMA needs a graph of fpgadataflow nodes; not: {', '.join(foreign)}"
             )
         # insert IODMAs for graph inputs
         if self.insert_input:
@@ -131,17 +117,12 @@ class InsertIODMA(Transformation):
                 else:
                     in_shape = model.get_tensor_shape(graph_in_name)
                     in_dtype = model.get_tensor_datatype(graph_in_name)
-                    port = kernel_ports.get(graph_in_name)
-                    if port is not None:
-                        in_folded_shape = [1, port["beats"], port["lanes"]]
-                        padded_instream_width = port["tdata"]
-                    else:
-                        first_node_inst = getCustomOp(first_node)
-                        in_folded_shape = first_node_inst.get_folded_input_shape()
-                        # take advantage of AXI stream width padding for DMA alignment
-                        # (AXI streams are always padded to 8 bits)
-                        # this is the width of stream output expected from the DMA
-                        padded_instream_width = first_node_inst.get_instream_width_padded()
+                    first_node_inst = getCustomOp(first_node)
+                    in_folded_shape = first_node_inst.get_folded_input_shape()
+                    # take advantage of AXI stream width padding for DMA alignment
+                    # (AXI streams are always padded to 8 bits)
+                    # this is the width of stream output expected from the DMA
+                    padded_instream_width = first_node_inst.get_instream_width_padded()
                     padded_instream_bytes = padded_instream_width // 8
                     # determine the feasible interface width
                     transfer_bits = padded_instream_width * np.prod(in_folded_shape[:-1])
@@ -184,17 +165,12 @@ class InsertIODMA(Transformation):
                 else:
                     out_shape = model.get_tensor_shape(graph_out_name)
                     out_dtype = model.get_tensor_datatype(graph_out_name)
-                    port = kernel_ports.get(graph_out_name)
-                    if port is not None:
-                        out_folded_shape = [1, port["beats"], port["lanes"]]
-                        padded_outstream_width = port["tdata"]
-                    else:
-                        final_node_inst = getCustomOp(final_node)
-                        out_folded_shape = final_node_inst.get_folded_output_shape()
-                        # take advantage of AXI stream width padding for DMA alignment
-                        # (AXI streams are always padded to 8 bits)
-                        # this is the width of stream input to DMA
-                        padded_outstream_width = final_node_inst.get_outstream_width_padded()
+                    final_node_inst = getCustomOp(final_node)
+                    out_folded_shape = final_node_inst.get_folded_output_shape()
+                    # take advantage of AXI stream width padding for DMA alignment
+                    # (AXI streams are always padded to 8 bits)
+                    # this is the width of stream input to DMA
+                    padded_outstream_width = final_node_inst.get_outstream_width_padded()
                     padded_outstream_bytes = padded_outstream_width // 8
                     # determine the feasible interface width
                     transfer_bits = padded_outstream_width * np.prod(out_folded_shape[:-1])

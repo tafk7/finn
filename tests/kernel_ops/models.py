@@ -21,16 +21,17 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
-from finn.custom_op.kernels.partition import PartitionRoot, partition_root, persist
+from finn.custom_op.kernels.shell import ShellRoot, persist, shell_root
 from finn.kernels.configure import commit, undecided
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps, resolve_target
+from finn.platform import resolve_target
+from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]
 ROWS, K, N = 3, 4, 4
 WEIGHTS = np.array([[(3 * n + 2 * k) % 7 - 3 for n in range(N)] for k in range(K)])
 X = np.array([[[(5 * r + 3 * k) % 8 - 4 for k in range(K)] for r in range(ROWS)]])
-TARGET = resolve_target("xczu3eg-sbva484-1-e", 5.0)  # Ultra96: DSP48E2, no shell
+TARGET = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)  # Ultra96's part, ip
 
 
 def matmul_model(
@@ -213,17 +214,17 @@ def kernel_model(**options: bool) -> ModelWrapper:
     return model
 
 
-def open_memories(root: PartitionRoot) -> tuple[Any, list[str]]:
+def open_memories(root: ShellRoot) -> tuple[Any, list[str]]:
     """The root's point and its open adapter memories."""
     return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
 
 
-def configure_partition(model: ModelWrapper) -> tuple[PartitionRoot, Any]:
+def configure_partition(model: ModelWrapper) -> tuple[ShellRoot, Any]:
     """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
-    root = partition_root(model, model.graph.node, name="chain")
+    root = shell_root(model, model.graph.node, name="chain")
     _, styles = open_memories(root)
     persist(model, root, commit(root.point, dict.fromkeys(styles, "auto")))
-    root = partition_root(model, model.graph.node, name="chain")
+    root = shell_root(model, model.graph.node, name="chain")
     point, open_styles = open_memories(root)
     assert open_styles == [] and not root.dropped
     return root, point

@@ -3,19 +3,11 @@
 
 """Conversion: ONNX operators to KernelOps (``finn.custom_op.kernels``).
 
-``resolve_target`` maps a build's part, clock period and shell to its
-``Target`` (the part and the platform, its clock period and capabilities) from
-two tables: a part's device capabilities (``DEVICES``) and a shell's interface
-capabilities (``SHELLS``). Part and shell names stop here: kernels see
-capabilities only (``finn.kernels.target``). ``shell_target`` is how a shell
-build reads the target back from the model, refusing a build for another part,
-period or shell.
-
-``ToKernelOps`` states the build target once, in the one place
-``read_target(model)`` reads it, the model's ``finn.platform`` metadata, imports the
-domain at its ``opset_version`` when the model does not import it yet
-(inserting a node never raises a model's import), and rewrites each node it
-can bind:
+``ToKernelOps`` states the build target it is given (``finn.platform.resolve_target``
+resolves it) once, in the one place ``read_target(model)`` reads it, the model's
+``finn.platform`` metadata, imports the domain at its ``opset_version`` when the
+model does not import it yet (inserting a node never raises a model's import), and
+rewrites each node it can bind:
 
 - ``MatMul`` (the ONNX operator) into a ``MatMul`` KernelOp;
 - ``MultiThreshold`` with ``out_scale`` 1, an integral ``out_bias`` and its
@@ -27,119 +19,18 @@ Other nodes are left alone. The nodes keep their names, inputs and outputs.
 
 from __future__ import annotations
 
-from dataclasses import fields
-from fnmatch import fnmatch
 from typing import TYPE_CHECKING, Any
 
 from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
-from finn.kernels.target import DspBlock, Platform, Target
+from finn.custom_op.kernels.base import write_target
+from finn.kernels.target import Target
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-# Device capabilities by part pattern (fnmatch on the lower-case part), first match
-# wins: (pattern, dsp, uram, uram_init, aie). UltraScale+ ignores an UltraRAM's INIT;
-# Versal is unverified and refused until a synthesis run says
-# otherwise (refusing is the side to reverse). A part matching no row is refused.
-DEVICES: tuple[tuple[str, DspBlock, bool, bool, bool], ...] = (
-    ("xc7*", DspBlock.DSP48E1, False, False, False),  # 7 series: no UltraRAM
-    ("xczu7ev-*", DspBlock.DSP48E2, True, False, False),  # ZCU104
-    ("xczu28dr-*", DspBlock.DSP48E2, True, False, False),  # ZCU111, RFSoC2x2
-    ("xczu48dr-*", DspBlock.DSP48E2, True, False, False),  # RFSoC4x2
-    ("xck26-*", DspBlock.DSP48E2, True, False, False),  # KV260
-    (
-        "xczu*",
-        DspBlock.DSP48E2,
-        False,
-        False,
-        False,
-    ),  # other Zynq UltraScale+ (ZU3EG, ZU9EG): none stated
-    ("xcu*", DspBlock.DSP48E2, True, False, False),  # Alveo (Virtex UltraScale+)
-    ("xcvc*", DspBlock.DSP58, True, False, True),  # Versal AI Core (VCK190)
-    ("xcve*", DspBlock.DSP58, True, False, True),  # Versal AI Edge (VEK280)
-    ("xcv80-*", DspBlock.DSP58, True, False, False),  # V80 (Versal HBM)
-)
-
-# Interface capabilities by shell (the builder's ``ShellFlowType`` values):
-# (clk2x, control_ports, memory_ports). No shell drives ap_clk2x yet; Vitis and SLASH
-# take no AXI-Lite on a compute partition; the shells' memory
-# ports are their IODMAs', none a compute partition's. The Zynq shell's AXI
-# interconnect has at most 64 masters, two of them the IODMAs'. Without a shell (a
-# stitched IP, a harness: ``None``) nothing is stated away: a doubled clock, one
-# AXI-Lite port, no memory port.
-SHELLS: dict[str | None, tuple[bool, int, int]] = {
-    None: (True, 1, 0),
-    "vivado_zynq": (False, 62, 0),
-    "vitis_alveo": (False, 0, 0),
-    "slash_alveo": (False, 0, 0),
-}
-
-
-def resolve_target(part: str, period_ns: float, shell: str | None = None) -> Target:
-    """The target of a build for ``part`` at ``period_ns``, integrated by ``shell``
-    (none: a stitched IP), from the capability tables."""
-    for pattern, dsp, uram, uram_init, aie in DEVICES:
-        if fnmatch(part.lower(), pattern):
-            break
-    else:
-        raise ValueError(
-            f"no capability row for part {part!r} (finn.transformation.kernels.convert.DEVICES)"
-        )
-    if shell not in SHELLS:
-        named = sorted(name for name in SHELLS if name is not None)
-        raise ValueError(f"no capability row for shell {shell!r} (one of {named})")
-    clk2x, control_ports, memory_ports = SHELLS[shell]
-    platform = Platform(
-        period_ns=float(period_ns),
-        dsp=dsp,
-        uram=uram,
-        uram_init=uram_init,
-        clk2x=clk2x,
-        control_ports=control_ports,
-        memory_ports=memory_ports,
-        aie=aie,
-    )
-    return Target(part, platform)
-
-
-def shell_target(
-    model: ModelWrapper, part: str, shell: str | None, period_ns: float | None = None
-) -> Target:
-    """The target a build in ``shell`` for ``part`` reads from a model of KernelOps.
-
-    The model is the single source of the target (``read_target``): its part, its
-    clock period and its capabilities are what the build uses. The build's own part,
-    shell and, when it states one, clock period must agree with it
-    (``resolve_target``); a disagreement is refused, each differing field named.
-    """
-    stated = read_target(model)
-    expected = resolve_target(
-        part, stated.platform.period_ns if period_ns is None else period_ns, shell
-    )
-    if stated != expected:
-        stated_platform, expected_platform = stated.platform, expected.platform
-        pairs = [("part", stated.part, expected.part)] + [
-            (
-                field.name,
-                getattr(stated_platform, field.name),
-                getattr(expected_platform, field.name),
-            )
-            for field in fields(Platform)
-        ]
-        raise KernelOpError(
-            f"the model's target is not the {shell or 'stitched-IP'} build's: "
-            + "; ".join(
-                f"{name}: the model states {model_value!r}, the build {build_value!r}"
-                for name, model_value, build_value in pairs
-                if model_value != build_value
-            )
-        )
-    return stated
 
 
 def _attributes(node: NodeProto) -> dict[str, Any]:
@@ -202,4 +93,4 @@ class ToKernelOps(Transformation):
         return model, False
 
 
-__all__ = ["DEVICES", "SHELLS", "ToKernelOps", "resolve_target"]
+__all__ = ["ToKernelOps"]

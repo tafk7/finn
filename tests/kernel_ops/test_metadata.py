@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """FINN's typed graph metadata (qonnx's ``qonnx.core.metadata``): the build target in
-``finn.platform``, resolved from the capability tables, and a partition's boundary
-facts in ``finn.partition``."""
+``finn.platform``, as ``finn.platform.resolve_target`` resolves it, a partition's
+boundary, the ends' facts, in ``finn.partition``, and what a build made of it in
+``finn.outputs``."""
 
 from __future__ import annotations
 
@@ -24,14 +25,22 @@ from finn.custom_op.kernels.base import (
     read_target,
     write_target,
 )
-from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.target import Target
+from finn.platform import resolve_target
 from finn.transformation.fpgadataflow.kernel_partitions import (
+    OUTPUT_BITFILE,
+    OUTPUT_HOST_RUNTIME,
+    OUTPUT_HWH,
+    OUTPUT_INTERFACES,
+    OUTPUT_IP,
+    OUTPUT_PROJECT,
+    OUTPUT_REPORTS,
+    OUTPUT_VLNV,
     PARTITION,
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
 )
-from finn.transformation.kernels import ToKernelOps, resolve_target
-from finn.util.basic import get_dsp_block, part_map
+from finn.transformation.kernels import ToKernelOps
 from kernel_ops.models import TARGET, chain_source
 
 
@@ -51,18 +60,29 @@ def body_of(model: ModelWrapper) -> ModelWrapper:
     return wrapper
 
 
+#: Ultra96 in the Zynq shell: a target with a board and its part's resources.
+ULTRA96 = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+#: VCK190's part on the ip shell: no board, its resources not known.
+VERSAL = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=4.0)
+
+
 def test_the_target_is_stated_typed_every_key_and_read_back() -> None:
     model = holder()
     write_target(model, TARGET)
     assert read_target(model) == TARGET
-    assert set(PLATFORM_KEYS) == {"part", *PLATFORM_FIELDS}
+    assert set(PLATFORM_KEYS) == {"part", "shell", "board", *PLATFORM_FIELDS}
     stated = entries(model)
     assert stated["finn.platform/@version"] == "1"
     assert stated["finn.platform/part"] == "xczu3eg-sbva484-1-e"
+    assert stated["finn.platform/shell"] == "ip"
+    assert stated["finn.platform/board"] == "null"
     assert stated["finn.platform/period_ns"] == "5.0"
     assert stated["finn.platform/dsp"] == "DSP48E2"
+    assert stated["finn.platform/fabric"] == "ULTRASCALE"
     assert stated["finn.platform/uram"] == "false"
-    assert stated["finn.platform/control_ports"] == "1"
+    assert stated["finn.platform/resources"] == (
+        '{"bram18":432,"dsp":360,"ff":141120,"lut":70560,"uram":0}'
+    )
     # A body opened through its parent reads the parent's; extracted, it carries a copy.
     body = body_of(model)
     assert read_target(body) == TARGET
@@ -70,8 +90,23 @@ def test_the_target_is_stated_typed_every_key_and_read_back() -> None:
     assert read_target(ModelWrapper(body.model)) == TARGET
 
 
-@pytest.mark.parametrize("missing", ["dsp", "period_ns", "clk2x"])
-def test_a_missing_key_is_refused_by_name(missing: str) -> None:
+@pytest.mark.parametrize("target", [ULTRA96, VERSAL], ids=["board", "unknown-resources"])
+def test_a_target_round_trips_with_its_board_and_resources_or_none(target: Target) -> None:
+    model = holder()
+    write_target(model, target)
+    assert read_target(ModelWrapper(model.model)) == target
+    stated = entries(model)
+    if target.board is None:
+        assert (stated["finn.platform/board"], stated["finn.platform/resources"]) == (
+            "null",
+            "null",
+        )
+    else:
+        assert stated["finn.platform/board"] == '"Ultra96"'
+
+
+@pytest.mark.parametrize("missing", ["dsp", "period_ns", "clk2x", "shell", "fabric", "resources"])
+def test_a_partial_target_is_refused_naming_what_it_misses(missing: str) -> None:
     model = holder()
     write_target(model, TARGET)
     model.delete(PLATFORM_KEYS[missing])
@@ -83,63 +118,88 @@ def test_a_missing_key_is_refused_by_name(missing: str) -> None:
         read_target(holder())
 
 
-def test_a_malformed_key_is_refused() -> None:
+#: The shape before the registry: capabilities a shell budgets (control_ports,
+#: memory_ports) and an AI Engine flag, no shell, board, fabric or resources.
+OLD_SHAPE = {
+    "@version": "1",
+    "part": "xczu3eg-sbva484-1-e",
+    "period_ns": "5.0",
+    "dsp": "DSP48E2",
+    "uram": "false",
+    "uram_init": "false",
+    "clk2x": "true",
+    "control_ports": "1",
+    "memory_ports": "0",
+    "aie": "false",
+}
+
+
+def test_the_old_shape_is_refused_naming_the_keys_it_states() -> None:
     model = holder()
-    write_target(model, TARGET)
-    model.set_metadata_prop("finn.platform/period_ns", "fast")
+    for name, text in OLD_SHAPE.items():
+        model.set_metadata_prop(f"finn.platform/{name}", text)
+    with pytest.raises(KernelOpError) as refused:
+        read_target(model)
+    assert "stored keys ['aie', 'control_ports', 'memory_ports'] are not declared" in str(
+        refused.value
+    )
+    assert "run ToKernelOps to state it again" in str(refused.value)
+    # Without those keys, it is a partial one: the new keys are named.
+    for name in ("aie", "control_ports", "memory_ports"):
+        model.graph.metadata_props.remove(
+            next(item for item in model.graph.metadata_props if item.key == f"finn.platform/{name}")
+        )
     with pytest.raises(
-        KernelOpError, match="finn.platform/period_ns: stored 'fast' is not a float"
+        KernelOpError, match="finn.platform: shell, board, fabric, resources missing"
     ):
         read_target(model)
+
+
+@pytest.mark.parametrize(
+    "key, text, expected",
+    [
+        ("period_ns", "fast", "finn.platform/period_ns: stored 'fast' is not a float"),
+        ("resources", '{"lut":1}', "finn.platform/resources: stored '{\"lut\":1}' is not"),
+        ("board", '""', "finn.platform/board: stored '\"\"' is not"),
+        ("shell", "", "finn.platform/shell: stored '' is not"),
+    ],
+)
+def test_a_malformed_key_is_refused(key: str, text: str, expected: str) -> None:
+    model = holder()
+    write_target(model, TARGET)
+    model.set_metadata_prop(f"finn.platform/{key}", text)
+    with pytest.raises(KernelOpError) as refused:
+        read_target(model)
+    assert expected in str(refused.value)
 
 
 def test_a_target_that_is_not_one_writes_nothing() -> None:
     model = holder()
     with pytest.raises(KernelOpError, match="states its DSP block"):
-        write_target(model, Target("xczu3eg-sbva484-1-e", replace(TARGET.platform, dsp=None)))
+        write_target(model, replace(TARGET, platform=replace(TARGET.platform, dsp=None)))
     with pytest.raises(KernelOpError, match="period_ns: cannot store 0.0"):
-        write_target(model, Target("xczu3eg-sbva484-1-e", replace(TARGET.platform, period_ns=0.0)))
+        write_target(model, replace(TARGET, platform=replace(TARGET.platform, period_ns=0.0)))
+    with pytest.raises(KernelOpError, match="shell: cannot store ''"):
+        write_target(model, replace(TARGET, shell=""))
     assert entries(model) == {}
 
 
 def test_conversion_states_the_target_it_is_given() -> None:
-    zcu104 = resolve_target("xczu7ev-ffvc1156-2-e", 4.0, "vivado_zynq")
+    zcu104 = resolve_target(board="ZCU104", period_ns=4.0, shell="pynq")
     assert read_target(chain_source().transform(ToKernelOps(zcu104))) == zcu104
 
 
-def test_the_capability_tables() -> None:
-    ultra96 = resolve_target("xczu3eg-sbva484-1-e", 5.0)
-    assert ultra96.platform == Platform(
-        period_ns=5.0,
-        dsp=DspBlock.DSP48E2,
-        uram=False,
-        uram_init=False,
-        clk2x=True,
-        control_ports=1,
-        memory_ports=0,
-        aie=False,
-    )
-    zcu104 = resolve_target("xczu7ev-ffvc1156-2-e", 5.0, "vivado_zynq").platform
-    # UltraScale+ has UltraRAM here but ignores its INIT; the Zynq shell drives no 2x clock.
-    assert (zcu104.uram, zcu104.uram_init, zcu104.clk2x, zcu104.control_ports) == (
-        True,
-        False,
-        False,
-        62,
-    )
-    vck190 = resolve_target("xcvc1902-vsva2197-2MP-e-S", 5.0).platform
-    assert (vck190.dsp, vck190.aie, vck190.uram_init) == (DspBlock.DSP58, True, False)
-    assert resolve_target("xcu55c-fsvh2892-2L-e", 3.0, "vitis_alveo").platform.control_ports == 0
-    with pytest.raises(ValueError, match="no capability row for part 'xcku040'"):
-        resolve_target("xcku040", 5.0)
-    with pytest.raises(ValueError, match="no capability row for shell 'pynq'"):
-        resolve_target("xczu3eg-sbva484-1-e", 5.0, "pynq")
-
-
-@pytest.mark.parametrize("board", sorted(part_map))
-def test_every_board_has_a_row_and_its_dsp_agrees_with_finns(board: str) -> None:
-    platform = resolve_target(part_map[board], 5.0).platform
-    assert platform.dsp is DspBlock(get_dsp_block(part_map[board]))
+#: The input end of TFC on Ultra96 in the Zynq shell: an IODMA_hls at a 128-bit port.
+END = {
+    "kind": "iodma_hls",
+    "direction": "in",
+    "memory_width": 128,
+    "words": 49,
+    "converter": True,
+    "call_cycles": 4,
+    "frames_per_call": 1,
+    "control_buses": 1,
+}
 
 
 def port(name: str, tensor: str, **facts: Any) -> dict[str, Any]:
@@ -147,29 +207,90 @@ def port(name: str, tensor: str, **facts: Any) -> dict[str, Any]:
         port=name,
         tensor=tensor,
         shape=[1, 784],
-        datatype="UINT8",
-        lanes=16,
-        beats=49,
-        element_bits=8,
-        tdata=128,
+        element="UINT8",
+        range=[0, 255],
+        lanes=4,
+        beats=196,
+        tdata=32,
+        end=END,
         **facts,
     )
 
 
-def test_a_partitions_boundary_facts_are_typed_and_its_own() -> None:
+def test_a_partitions_boundary_facts_are_the_ends_typed_and_its_own() -> None:
     model = holder()
     inputs = [port("s_axis_0", "x")]
-    outputs = [{**port("m_axis_0", "y"), "shape": [1, 10], "lanes": 10, "beats": 1, "tdata": 104}]
+    out_end = {**END, "direction": "out", "memory_width": 16, "words": 5}
+    outputs = [
+        {
+            **port("m_axis_0", "y"),
+            "shape": [1, 10],
+            "element": "INT8",
+            "range": [-128, 127],
+            "lanes": 1,
+            "beats": 10,
+            "tdata": 8,
+            "end": out_end,
+        }
+    ]
     model.set(PARTITION_INPUTS, inputs)
     model.set(PARTITION_OUTPUTS, outputs)
     assert model.namespace(PARTITION) == {"inputs": inputs, "outputs": outputs}
     assert body_of(model).namespace(PARTITION) == {}  # not inherited: the partition's own
+    # A boundary port without an end (the ip shell's) states none.
+    model.set(PARTITION_INPUTS, [{**port("s_axis_0", "x"), "end": None}])
+    assert model.get(PARTITION_INPUTS)[0]["end"] is None
+    # The facts as they were before the ends': refused, not upgraded.
+    previous = {
+        "port": "s_axis_0",
+        "tensor": "x",
+        "shape": [1, 784],
+        "datatype": "UINT8",
+        "lanes": 4,
+        "beats": 196,
+        "element_bits": 8,
+        "tdata": 32,
+    }
     for bad in (
+        [previous],
         [port("s_axis_0", "x", extra=1)],
         [{**port("s_axis_0", "x"), "lanes": 0}],
         [{**port("s_axis_0", "x"), "shape": [1, True]}],
         [{**port("s_axis_0", "x"), "tensor": ""}],
+        [{**port("s_axis_0", "x"), "range": [3, 1]}],
+        [{**port("s_axis_0", "x"), "end": {**END, "direction": "both"}}],
+        [{**port("s_axis_0", "x"), "end": {**END, "converter": 1}}],
+        [{**port("s_axis_0", "x"), "end": {**END, "words": 0}}],
         port("s_axis_0", "x"),
     ):
         with pytest.raises(MetadataError, match="finn.partition/inputs: cannot store"):
             model.set(PARTITION_INPUTS, bad)
+
+
+def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
+    model = holder()
+    made = {
+        OUTPUT_IP: "/build/stitch/ip",
+        OUTPUT_VLNV: "xilinx_finn:finn:partition:1.0",
+        OUTPUT_INTERFACES: {"clk": ["ap_clk"], "s_axis": [["s_axis_0", 32]], "axilite": []},
+        OUTPUT_PROJECT: "/build/vivado_zynq_proj",
+        OUTPUT_BITFILE: "/out/bitfile/finn-accel.bit",
+        OUTPUT_HWH: "/out/bitfile/finn-accel.hwh",
+        OUTPUT_REPORTS: {"timing": "/out/report/post_route_timing.rpt"},
+        OUTPUT_HOST_RUNTIME: "zynq-iodma",
+    }
+    for key, value in made.items():
+        model.set(key, value)
+    written = ModelWrapper(model.model.SerializeToString())
+    assert {key.name: written.get(key) for key in made} == {
+        key.name: value for key, value in made.items()
+    }
+    # Every entry is the namespace's: no flat key.
+    assert all(key.startswith("finn.outputs/") for key in entries(written))
+    for key, bad in (
+        (OUTPUT_IP, ""),
+        (OUTPUT_INTERFACES, ["ap_clk"]),
+        (OUTPUT_REPORTS, {"timing": 3}),
+    ):
+        with pytest.raises(MetadataError, match=f"{key.entry}: cannot store"):
+            model.set(key, bad)

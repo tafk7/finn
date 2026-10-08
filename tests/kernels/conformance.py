@@ -23,7 +23,9 @@ each sample it
    outputs unplaced the kernel still states every output element (a
    producer's element never reads its own output channel);
 4. given an ``xsim`` directory, streams random integers in each input's range
-   through the design, free and stalled, and compares every output with
+   through the design, free and stalled (``finn.harness.pacing``'s ``FREE`` and
+   ``STALLED``; the watchdog counts the root's ``cycles`` too), every pin driven
+   from what the module declares (``finn.harness.rtl``), and compares every output with
    ``reference``: each input packed in the order its boundary presents, each
    output in its port's order. Fed by a cyclic source, the design repeats,
    and each output is compared over its first pass.
@@ -55,7 +57,8 @@ that element all the same.
 
 A fact given as a ``ControlPort`` is a ``ControlBus`` the root declares on that
 port, given to the kernel's input of the fact's name: the kernel's control bus
-is presented at the top, held idle in simulation (no write reaches it).
+is presented at the top, and in simulation written with what the kernel's
+configuration declares (its register map) before any stream starts.
 
 ``known`` names the (sample label, mode) simulations a known defect makes fail,
 each with its reason. It is strict: one of them passing fails the check, as
@@ -98,6 +101,8 @@ from finn.dataflow.traversal import (
     unreplayed,
     vector_major,
 )
+from finn.harness.pacing import FREE, STALLED
+from finn.harness.rtl import materialize, stream_through
 from finn.kernels.artifacts.abi import check_against_rtl
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
@@ -109,10 +114,10 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import StreamContract
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
-from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
 MODES = ("free", "stalled")
+PACING = {"free": FREE, "stalled": STALLED}
 SAMPLED, ALL = "sampled", "all"
 Factors = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
@@ -680,9 +685,9 @@ def _simulate(
     repeating = sample.adapter or any(
         ends[name].repetition is Repetition.CYCLIC for name in produced
     )
+    cycles = point.query(type(point).cycles)
     failures = []
     for mode in MODES:
-        stalled = mode == "stalled"
         (directory / mode).mkdir(parents=True)
         try:
             stream_through(
@@ -690,8 +695,9 @@ def _simulate(
                 directory / mode,
                 inputs=driven,
                 outputs=checked,
-                stalled=stalled,
+                pacing=PACING[mode],
                 repeating=repeating,
+                cycles=cycles.value if isinstance(cycles, Available) else 0,
             )
         except AssertionError as error:
             failures.append((sample, mode, _brief(str(error))))

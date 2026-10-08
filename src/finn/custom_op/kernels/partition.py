@@ -1,9 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The partition root: one Kernel of a set of KernelOp nodes, its channels the graph's tensors.
+"""The Partition: one Kernel of a set of KernelOp nodes, its channels the graph's tensors.
 
-``partition_root(model, nodes)`` builds, and changes no graph:
+``partition(model, nodes)`` builds a set of nodes' Partition, and changes no
+graph; the shell root (``finn.custom_op.kernels.shell``) places it and replays
+its nodes' choices:
 
 - **channels**, one per ONNX tensor, in node order, each declared from the
   graph before any kernel is placed: a node's graph inputs, the parameter
@@ -13,17 +15,12 @@
   of it (``Facts.values``), which its source stores; every channel's platform
   is the model's target's. Only the subgraph's ONNX inputs and outputs are
   boundaries, named by the shell's convention ``s_axis_<i>`` and
-  ``m_axis_<i>``: a channel refuses a boundary no port names
-  (``channel-boundary``);
+  ``m_axis_<j>``. A **boundary channel is not the Partition's**: it is a
+  reference input of the class (``Param()``, named as the channel's member),
+  which the shell root declares and supplies, so that what crosses the boundary
+  is the shell's to place; the channels between its nodes are its own;
 - **kernels**, one per node: its op's placement (``KernelOp.place``, the one its
   node root is generated from) with literal formals, on these channels;
-- **replay**: every node's choices, kernel and edge alike, together; a choice
-  the current facts refuse or make inapplicable (a key nested under a selector
-  a fact change un-forced: ``compute.packed.pe`` once ``compute`` is open) is
-  stale: dropped and reported with why (``dropped``), and what it chose is open
-  again, or forced (an edge's adapter selectors are forced, never persisted).
-  Nothing is written: ``persist`` writes a configured point's choices back,
-  each node's whole, which clears the dropped ones;
 - **owners**: each member's node and attribute prefix, how a choice made in the
   root goes back to the node that persists it: a kernel's on its node, an
   edge's on its consumer, a parameter channel's on its value owner. An output
@@ -32,20 +29,21 @@
   node's, applied in its own partition as an input boundary, so here its
   ``transport`` is pinned ``direct``: one FIFO per edge, on the consumer's side.
   A choice a node holds under an output port whose channel a KernelOp now
-  consumes is stale, dropped and reported;
-- **reuse**: the partition's class, and so its compiled model, is kept by what it
-  is built from, by value (``PartitionKey``): the name; the target's platform;
-  each channel as declared (the tensor it carries, rows and annotation, its port,
-  pinned ``direct`` or not); each node's name, op class, node-root class, facts
-  key (its formals and owned values by value, as the bind cache keys them), owned
-  parameter ports and tensors. A call on the same facts reuses the class, never a
-  point, and reads an owned value only to build the class: the
-  choices are replayed on a fresh design space every call. ``PARTITIONS`` keeps the
-  16 most recently used.
+  consumes is stale (``stale``);
+- the nodes' **choices**, by member key, for the root to replay;
+- **reuse**: the class, and so the compiled model of a root that places it, is kept
+  by what it is built from, by value (``PartitionKey``): the name; the target's
+  platform; each channel as declared (the tensor it carries, rows and annotation,
+  its port, pinned ``direct`` or not); each node's name, op class, node-root class,
+  facts key (its formals and owned values by value, as the bind cache keys them),
+  owned parameter ports and tensors. A call on the same facts reuses the class, and
+  reads an owned value only to build it. ``PARTITIONS`` keeps the 16 most recently
+  used.
 
 Members are named as the graph: channels by tensor and kernels by node
 (``\\W`` as ``_``); two members of one name (a node and a tensor, or two nodes) are
-refused, not renamed.
+refused, not renamed. Owners and choices are keyed by member, as the Partition
+names them; a root that places it names them by its own paths.
 """
 
 from __future__ import annotations
@@ -53,54 +51,38 @@ from __future__ import annotations
 import re
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from onnx import NodeProto
 
-from finn.core.space import Space, composite, design_space
+from finn.core.space import Param, composite
 from finn.custom_op.kernels.base import (
     KernelOp,
     KernelOpError,
-    committed,
     edge_tensor,
     kernel_op,
     read_target,
-    typed_choices,
 )
 from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.configure import chosen
+from finn.kernels.ends import EndOffer
 from finn.kernels.target import Platform
 from finn.kernels.values.semantics import IntegerTensorValue
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-S = TypeVar("S", bound=Space)
-
 KERNEL_OPS = "finn.custom_op.kernels"
 
 
 class Partition(Kernel):
-    """A partition's hardware: one channel per ONNX tensor, one kernel per node."""
+    """A partition's hardware: one kernel per node, one channel per ONNX tensor between
+    them; a boundary channel is a reference input, the root's."""
 
     id = "finn.custom_op.kernels.partition"
     version = 1
-
-
-@dataclass(frozen=True)
-class PartitionRoot:
-    """The configured root; each member's owning node and attribute prefix; the choices
-    replay dropped as stale, each with why; each boundary tensor's port; its members
-    (channels, then kernels), whose cost a design space exploration reads."""
-
-    point: Any
-    owners: Mapping[str, tuple[str, str]]
-    dropped: Mapping[str, str]
-    boundary: tuple[tuple[str, str], ...]
-    members: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -113,12 +95,20 @@ class Declared:
     port: str | None = None
     direct: bool = False
 
-    def channel(self, platform: Platform, contents: IntegerTensorValue | None = None) -> Channel:
+    def channel(
+        self,
+        platform: Platform,
+        contents: IntegerTensorValue | None = None,
+        end_offer: tuple[EndOffer, ...] = (),
+    ) -> Channel:
         """The channel on the target's ``platform``, carrying ``contents`` (an owned
-        parameter's value) when given."""
+        parameter's value) when given, its free side offered the ends ``end_offer``
+        when any."""
         settings: dict[str, Any] = {"tensor": self.tensor}
         if contents is not None:
             settings["contents"] = contents
+        if end_offer:
+            settings["end_offer"] = end_offer
         if self.port is not None:
             settings["port"] = self.port
         if self.direct:
@@ -279,53 +269,51 @@ def _composite(
     declared: Mapping[str, Declared],
     owned: list[dict[str, str]],
 ) -> type[Partition]:
-    """The partition's class: its channels as ``declared``, an owned parameter's with its
-    node's value as contents, and each node's kernel placed on them from its ``facts``."""
+    """The partition's class: each boundary channel a reference input named as its member,
+    the others its own as ``declared`` (an owned parameter's with its node's value as
+    contents), and each node's kernel placed on them from its ``facts``."""
     contents: dict[str, IntegerTensorValue] = {}
     for each, tensors in zip(facts, owned):
         if tensors:
             values = each.values()
             contents |= {tensor: values[port] for port, tensor in tensors.items()}
-    channels = {
-        tensor: each.channel(platform, contents.get(tensor)) for tensor, each in declared.items()
+    # A reference input stands for the channel the root supplies: kernels bind it as
+    # they bind a channel of their own.
+    channels: dict[str, Channel] = {
+        tensor: Param() if each.port is not None else each.channel(platform, contents.get(tensor))
+        for tensor, each in declared.items()
     }
     kernels = {
         member(node.name): op.place(each, channels) for node, op, each in zip(nodes, ops, facts)
     }
     members = {member(tensor): channel for tensor, channel in channels.items()} | kernels
-    return composite(name, members, base=Partition)
+    references = {member(tensor): Channel for tensor, each in declared.items() if each.port}
+    return composite(name, members, base=Partition, annotations=references)
 
 
-def _replay(point: S, choices: Mapping[str, object]) -> tuple[S, dict[str, str]]:
-    """``choices`` replayed on ``point``: together when the facts accept them all;
-    otherwise every refused or inapplicable one is dropped as stale, with why, and the
-    rest replayed again, until they are accepted (what a dropped one chose is open
-    again, or forced). A refusal of the batch that names none of its keys is resolved
-    one choice at a time."""
-    remaining = typed_choices([point], choices)
-    dropped: dict[str, str] = {}
-    while remaining:
-        together = committed(point, remaining)
-        if not isinstance(together, dict):
-            return together, dropped
-        named = {key: why for key, why in together.items() if key in remaining}
-        if not named:
-            for key, value in remaining.items():
-                alone = committed(point, {key: value})
-                if isinstance(alone, dict):
-                    dropped[key] = "; ".join(alone.values())
-                else:
-                    point = alone
-            return point, dropped
-        dropped |= named
-        remaining = {key: value for key, value in remaining.items() if key not in named}
-    return point, dropped
+@dataclass(frozen=True)
+class Partitioned:
+    """A set of nodes' Partition (``partition``): its class (``space``); its channels as
+    declared, in node order; its boundary, each tensor's port, inputs then outputs; its
+    kernels' members, in node order; each member's owner (node, attribute prefix); the
+    nodes' choices by member key, for a root to replay; and the keys stale before replay,
+    each with why. Members are the Partition's: a boundary channel's is the name of its
+    reference input."""
+
+    space: type[Partition]
+    platform: Platform
+    channels: tuple[tuple[str, Declared], ...]
+    boundary: tuple[tuple[str, str], ...]
+    kernels: tuple[str, ...]
+    owners: Mapping[str, tuple[str, str]]
+    choices: Mapping[str, object]
+    stale: Mapping[str, str]
 
 
-def partition_root(
+def partition(
     model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = "partition"
-) -> PartitionRoot:
-    """The root of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
+) -> Partitioned:
+    """The Partition of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
     nodes = list(nodes)
     ops = [kernel_op(model, node) for node in nodes]
     facts = [op.facts() for op in ops]
@@ -354,45 +342,28 @@ def partition_root(
             for node, op, each in zip(nodes, ops, facts)
         ),
     )
-    root: Any = PARTITIONS.get(
+    space = PARTITIONS.get(
         key, lambda: _composite(name, platform, nodes, ops, facts, declared, owned)
     )
-    point, dropped = _replay(design_space(root()), found.kernel_choices | found.edge_choices)
-    stale = dict.fromkeys(found.stale, "held under an output port a KernelOp now consumes")
-    # The members as ``_composite`` declares them: channels, then kernels.
-    members = (*(member(tensor) for tensor in declared), *(member(node.name) for node in nodes))
-    return PartitionRoot(point, found.owners, stale | dropped, tuple(ports.items()), members)
-
-
-def persist(model: ModelWrapper, root: PartitionRoot, point: Any) -> dict[str, dict[str, object]]:
-    """Write ``point``'s choices, a configured point of ``root``'s class, back on the nodes
-    that own them, each node's whole: every Decision ``point`` commits (a forced one is
-    never committed) on its owner, and a choice a node holds that ``point`` does not
-    commit (one replay dropped as stale) cleared. Returns what each node now holds."""
-    per_node: dict[str, dict[str, object]] = {node: {} for node, _ in root.owners.values()}
-    for key, value in chosen(point).items():
-        head, _, rest = key.partition(".")
-        if head not in root.owners:
-            raise KernelOpError(f"{key}: no node of the partition owns {head}")
-        node, prefix = root.owners[head]
-        per_node[node][prefix + rest] = value
-    by_name = {node.name: node for node in model.graph.node}
-    for node, values in per_node.items():
-        op = kernel_op(model, by_name[node])
-        held = op.choices()
-        if values or held:
-            op.save(dict.fromkeys(held) | values)
-    return per_node
+    return Partitioned(
+        space,
+        platform,
+        tuple(declared.items()),
+        tuple(ports.items()),
+        tuple(member(node.name) for node in nodes),
+        found.owners,
+        found.kernel_choices | found.edge_choices,
+        dict.fromkeys(found.stale, "held under an output port a KernelOp now consumes"),
+    )
 
 
 __all__ = [
     "PARTITIONS",
+    "Partitioned",
     "Declared",
     "Partition",
     "PartitionKey",
-    "PartitionRoot",
     "Placement",
     "member",
-    "partition_root",
-    "persist",
+    "partition",
 ]

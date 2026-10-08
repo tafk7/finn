@@ -25,6 +25,19 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources
+
+
+def vpc_resources(*, w: int, pi: int, po: int) -> Resources:
+    """FinnLib ``vpc``: registers for the PI + PO elements of W bits it holds between its
+    two sides, and its lane multiplexers; a ``Fit`` over the bits held."""
+    held = (pi + po) * w
+    return Resources(lut=_VPC_LUT.at(held), ff=_VPC_FF.at(held))
+
+
+# Feature: the bits held, (PI + PO) * W.
+_VPC_LUT = Fit(9.9, (0.022,))
+_VPC_FF = Fit(6.8, (1.0,))
 
 
 class VpcKernel(Kernel):
@@ -51,6 +64,10 @@ class VpcKernel(Kernel):
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        return vpc_resources(w=self.element_bits, pi=self.lanes_in, po=self.lanes_out)
+
     def parameters(self) -> Mapping[str, int | str]:
         return {
             "N": lcm(self.lanes_in, self.lanes_out),
@@ -65,4 +82,4 @@ class VpcKernel(Kernel):
         return (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),)
 
 
-__all__ = ["VpcKernel"]
+__all__ = ["VpcKernel", "vpc_resources"]

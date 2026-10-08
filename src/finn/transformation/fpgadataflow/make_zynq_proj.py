@@ -49,11 +49,8 @@ from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
-from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.transformation.kernels.convert import shell_target
-from finn.transformation.kernels.package import PackagePartition, write_boundary_facts
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
 from finn.util.resources import tcl_quote
 from finn.util.toolchain import machine_toolchain
@@ -287,25 +284,14 @@ class MakeZYNQProject(Transformation):
 
 class ZynqBuild(Transformation):
     """Best-effort attempt at building the accelerator for Zynq.
-    It assumes the model has only fpgadataflow nodes, or only KernelOps.
-
-    A model of KernelOps (the body of their StreamingDataflowPartition) is built
-    through the kernel path (``prepare_kernel_partitions``): its boundary facts
-    are stated, it becomes one partition, IODMAs are inserted from the facts and
-    get partitions of their own; the KernelOps' partition is packaged by
-    PackagePartition (the stitched-IP contract), the IODMAs' as always. Its
-    target is the model's (``shell_target``): the board's part, the Zynq shell
-    and ``period_ns``, unless None, must agree with it, and the build runs at
-    the model's clock period.
+    It assumes the model has only fpgadataflow nodes. The kernel path's partition is
+    built by the pynq shell's runner (``finn.transformation.fpgadataflow.pynq_runner``).
 
     ``toolchain`` is the prepared ``finn.util.toolchain.Toolchain`` that every
-    Vivado and Vitis HLS run of the build goes through (PackagePartition,
-    HLSSynthIP, CreateStitchedIP, MakeZYNQProject); by default the machine's,
-    prepared once. ``vivado_jobs`` is how many runs Vivado launches
-    at once in the project (MakeZYNQProject's ``jobs``). ``completion`` is the
-    ``finn.kernels.explore.Completion`` that completes the KernelOps' open choices
-    where the partition is built (its boundary facts and PackagePartition), the
-    build's; by default ``Baseline()``.
+    Vivado and Vitis HLS run of the build goes through (HLSSynthIP,
+    CreateStitchedIP, MakeZYNQProject); by default the machine's, prepared once.
+    ``vivado_jobs`` is how many runs Vivado launches at once in the project
+    (MakeZYNQProject's ``jobs``).
     """
 
     def __init__(
@@ -316,12 +302,10 @@ class ZynqBuild(Transformation):
         partition_model_dir=None,
         toolchain=None,
         vivado_jobs=None,
-        completion=None,
     ):
         super().__init__()
         self.toolchain = toolchain
         self.vivado_jobs = vivado_jobs
-        self.completion = completion
         self.fpga_part = pynq_part_map[platform]
         self.axi_port_width = pynq_native_port_width[platform]
         self.period_ns = period_ns
@@ -329,56 +313,22 @@ class ZynqBuild(Transformation):
         self.enable_debug = enable_debug
         self.partition_model_dir = partition_model_dir
 
-    def prepare_kernel_partitions(self, model):
-        """A model of KernelOps as the parent graph of its partitions: an IODMA
-        partition per input and output around the KernelOps' partition, whose
-        model states its boundary facts (finn.partition). No IP is built.
-
-        The facts are written on the partition's body after the cut: they describe
-        that partition only, while the model being cut stays the parent graph and
-        partitioning copies its metadata to every body cut from it."""
-        model = model.transform(
-            CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
-        )
-        for node in model.graph.node:
-            body_file = getCustomOp(node).get_nodeattr("model")
-            body = ModelWrapper(body_file)
-            write_boundary_facts(body, "the KernelOps' partition", self.completion)
-            body.save(body_file)
-        # InsertIODMA inserts IODMA_hls nodes, already specialized.
-        model = model.transform(InsertIODMA(self.axi_port_width))
-        # Each IODMA is a partition of its own (Floorplan's default, stated here).
-        dmas = [node for node in model.graph.node if node.op_type.startswith("IODMA")]
-        for index, node in enumerate(dmas):
-            getCustomOp(node).set_nodeattr("partition_id", index)
-        model = model.transform(
-            CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
-        )
-        model = model.transform(GiveUniqueNodeNames())
-        return model.transform(GiveReadableTensorNames())
-
     def apply(self, model):
         toolchain = self.toolchain or machine_toolchain()
-        period_ns = self.period_ns
-        if is_kernel_partition(model):
-            built = shell_target(model, self.fpga_part, "vivado_zynq", period_ns)
-            period_ns = built.platform.period_ns
-            model = self.prepare_kernel_partitions(model)
-        else:
-            # first infer layouts
-            model = model.transform(InferDataLayouts())
-            # prepare at global level, then break up into kernels
-            prep_transforms = [
-                InsertIODMA(self.axi_port_width),
-                InsertDWC(),
-                SpecializeLayers(self.fpga_part),
-                Floorplan(),
-                CreateDataflowPartition(partition_model_dir=self.partition_model_dir),
-            ]
-            for trn in prep_transforms:
-                model = model.transform(trn)
-                model = model.transform(GiveUniqueNodeNames())
-                model = model.transform(GiveReadableTensorNames())
+        # first infer layouts
+        model = model.transform(InferDataLayouts())
+        # prepare at global level, then break up into kernels
+        prep_transforms = [
+            InsertIODMA(self.axi_port_width),
+            InsertDWC(),
+            SpecializeLayers(self.fpga_part),
+            Floorplan(),
+            CreateDataflowPartition(partition_model_dir=self.partition_model_dir),
+        ]
+        for trn in prep_transforms:
+            model = model.transform(trn)
+            model = model.transform(GiveUniqueNodeNames())
+            model = model.transform(GiveReadableTensorNames())
         # Build each kernel individually
         sdp_nodes = model.get_nodes_by_op_type("StreamingDataflowPartition")
         for sdp_node in sdp_nodes:
@@ -386,26 +336,15 @@ class ZynqBuild(Transformation):
             sdp_node = getCustomOp(sdp_node)
             dataflow_model_filename = sdp_node.get_nodeattr("model")
             kernel_model = ModelWrapper(dataflow_model_filename)
-            if is_kernel_partition(kernel_model):
-                kernel_model = kernel_model.transform(
-                    PackagePartition(
-                        sdp_node.onnx_node.name,
-                        toolchain=toolchain,
-                        completion=self.completion,
-                    )
-                )
-                kernel_model.set_metadata_prop("platform", "zynq-iodma")
-                kernel_model.save(dataflow_model_filename)
-                continue
             kernel_model = kernel_model.transform(InsertFIFO())
             kernel_model = kernel_model.transform(SpecializeLayers(self.fpga_part))
             kernel_model = kernel_model.transform(GiveUniqueNodeNames(prefix))
             kernel_model.save(dataflow_model_filename)
-            kernel_model = kernel_model.transform(PrepareIP(self.fpga_part, period_ns))
+            kernel_model = kernel_model.transform(PrepareIP(self.fpga_part, self.period_ns))
             kernel_model = kernel_model.transform(HLSSynthIP(toolchain=toolchain))
             kernel_model = kernel_model.transform(
                 CreateStitchedIP(
-                    self.fpga_part, period_ns, sdp_node.onnx_node.name, toolchain=toolchain
+                    self.fpga_part, self.period_ns, sdp_node.onnx_node.name, toolchain=toolchain
                 )
             )
             kernel_model.set_metadata_prop("platform", "zynq-iodma")
@@ -414,7 +353,7 @@ class ZynqBuild(Transformation):
         model = model.transform(
             MakeZYNQProject(
                 self.platform,
-                period_ns,
+                self.period_ns,
                 enable_debug=self.enable_debug,
                 toolchain=toolchain,
                 jobs=self.vivado_jobs,

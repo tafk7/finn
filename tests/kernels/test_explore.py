@@ -12,10 +12,12 @@ fixed PE, MatMul ``second``; three rows of four), nothing chosen, its platform a
 
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
 
+import finn.kernels.explore as explore_module
 from finn.core.space import design_space
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
@@ -23,15 +25,18 @@ from finn.kernels.explore import (
     Baseline,
     Bottleneck,
     ExploreError,
+    MaxThroughput,
     Placeholder,
     Ranked,
     Refused,
+    ResourceBudgetWarning,
     Seam,
     TargetCycles,
     TargetThroughput,
     explore,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.utilization import Resources
 from kernels import chain
 from kernels.helpers import FULL_DSP48E2, Lanes
 
@@ -229,3 +234,115 @@ def test_a_strategy_reads_a_completed_copy_and_the_seam_records_it() -> None:
     completed = explorer.complete(point)
     assert explorer.reads == [completed.values]
     assert explorer.chosen(point) == {}
+
+
+# -- the most throughput within resources -----------------------------------------------------
+
+#: The Chain's part: its totals, of which a budget is a fraction. At each budget of cycles
+#: the Chain folds to (``TargetCycles``), completed: 6 cycles, 478 LUT and 8 DSP; 12,
+#: 375 and 8; 24, 330 and 4; 48 (the least parallelism), 325 and 2.
+PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, uram=0, dsp=10))
+
+
+def within_part() -> tuple[Seam, Any]:
+    return Seam(MEMBERS, platform=PART), design_space(chain.Chain())
+
+
+def test_the_seam_states_the_root_s_own_resources_once_its_members_do() -> None:
+    explorer, point = within_part()
+    waiting = explorer.resources(point)
+    assert isinstance(waiting, str) and waiting.startswith("waits on ")
+    completed = explorer.complete(point).point
+    assert explorer.resources(completed) == explorer.cost(completed).used
+
+
+def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
+    explorer, point = within_part()
+    strategy = MaxThroughput({"dsp": 0.5})
+    folded = strategy.explore(explorer, point)
+    # Half the part's 10 DSPs: the 6- and 12-cycle points use 8, the 24-cycle one 4.
+    assert explorer.chosen(folded) == {
+        "first.compute.packed.pe": 1,
+        "first.compute.packed.simd": 2,
+        "second.compute.packed.pe": 1,
+        "second.compute.packed.simd": 2,
+    }
+    # The folded point is returned with the rest open, for the explorers after it.
+    assert explorer.choices(folded)
+    report = strategy.report()
+    assert report["budget"] == {"dsp": 5}
+    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
+    assert report["used"] == asdict(Resources(lut=330, ff=380, dsp=4))
+    assert report["ratio"] == {"dsp": 0.8} and report["binding"] == "dsp" and report["fits"]
+    tried = report["tried"]
+    assert isinstance(tried, list)
+    # The fastest (budget 1, relaxed to 6), no budget (48), then bisection from 7 to 48.
+    assert [row["cycles"] for row in tried][:2] == [1, None]
+    assert (tried[0]["relaxed_to"], tried[0]["bottleneck"], tried[0]["fits"]) == (6, 6, False)
+    assert (tried[1]["bottleneck"], tried[1]["used"], tried[1]["fits"]) == (48, {"dsp": 2}, True)
+    assert min(row["cycles"] for row in tried[2:] if row["fits"]) == 24
+    assert report["fastest"] == 6 and report["monotone"] and report["departures"] == []
+
+
+def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> None:
+    explorer, point = within_part()
+    # The fastest point fits both budgets: one fold, LUT the nearer its budget.
+    both = MaxThroughput({"lut": 0.5, "dsp": 1.0})
+    both.explore(explorer, point)
+    report = both.report()
+    assert report["ratio"] == {"lut": 0.956, "dsp": 0.8} and report["binding"] == "lut"
+    assert [tried.cycles for tried in both.tried] == [1]
+
+
+def test_max_throughput_warns_and_keeps_the_least_parallelism_where_nothing_fits() -> None:
+    explorer, point = within_part()
+    strategy = MaxThroughput({"dsp": 0.1, "lut": 1.0})
+    with pytest.warns(ResourceBudgetWarning, match="most of dsp: dsp 2 of 1"):
+        folded = strategy.explore(explorer, point)
+    assert explorer.chosen(folded)["first.compute.packed.simd"] == 1
+    report = strategy.report()
+    assert report["fits"] is False and report["binding"] == "dsp"
+    assert [tried.cycles for tried in strategy.tried] == [1, None]
+
+
+def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bisection assumes a larger budget folds to more cycles and fewer resources. A budget
+    whose fold reaches more cycles than itself (an end's converter, SZ6) departs from
+    that: here every budget from 13 to 23 folds as no budget does, to 48 cycles. The
+    search is not corrected: it keeps the least budget that fits, 13, at 48 cycles where
+    budget 27 reached 24, and states each departure."""
+
+    class Departing(TargetCycles):
+        def _fold_all(self, seam: Seam, point: Any, budget: int) -> Any:
+            return super()._fold_all(seam, point, 48 if 13 <= budget < 24 else budget)
+
+    monkeypatch.setattr(explore_module, "TargetCycles", Departing)
+    explorer, point = within_part()
+    strategy = MaxThroughput({"dsp": 0.5})
+    strategy.explore(explorer, point)
+    report = strategy.report()
+    tried = report["tried"]
+    assert isinstance(tried, list)
+    assert [row["cycles"] for row in tried] == [1, None, 27, 17, 12, 15, 14, 13]
+    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 48}
+    assert not report["monotone"]
+    departures = report["departures"]
+    assert isinstance(departures, list)
+    assert "budget 13 relaxed to 48, reaching 48" in departures
+    assert "budget 27 reached 24, fewer than budget 17's 48" in departures
+
+
+def test_max_throughput_needs_a_budget_of_named_resources_and_the_part_s_totals() -> None:
+    with pytest.raises(ExploreError, match="needs a budget"):
+        MaxThroughput({})
+    with pytest.raises(ExploreError, match=r"no resource is named \['luts'\]"):
+        MaxThroughput({"luts": 0.5})
+    with pytest.raises(ExploreError, match="is no budget"):
+        MaxThroughput({"lut": 0})
+    with pytest.raises(ExploreError, match="is no fraction"):
+        MaxThroughput({"lut": "half"})  # type: ignore[dict-item]
+    explorer, point = seam()
+    with pytest.raises(ExploreError, match="platform's resources"):
+        MaxThroughput({"lut": 0.5}).explore(explorer, point)

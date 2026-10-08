@@ -7,20 +7,22 @@ Each case places ``ThresholdingAxiKernel`` between two boundary channels and
 streams every INT4 value through it, free and stalled. Its table is one row
 shared by every channel (C = 1, PE above it: each lane keeps a copy of the
 row), or a row a channel. With AXI-Lite, the kernel sits on a control bus and
-the run first writes a new table through it, so every output word shows that
-the write reached the lanes reading it: for a shared row, one write reaches
-every lane. With one threshold (N = 1) the wrapper's configuration address is
-the AXI-Lite word select alone (no address bit of its own). The expected words
-come from the table each case leaves in the memories, packed here in the
-boundaries' row-major order, PE lanes a beat. Run with Vivado selected (FinnLib
-is the ``finnlib`` resource); each simulation runs in a fresh process.
+the run first writes a new table through it: the writes the kernel declares for
+that table (its register map, ``ThresholdingAxiKernel.register_map``), into
+hardware built with the initial one. Every output word shows that the write
+reached the lanes reading it: for a shared row, one write reaches every lane.
+With one threshold (N = 1) the wrapper's configuration address is the AXI-Lite
+word select alone (no address bit of its own). The expected words come from the
+table each case leaves in the memories, packed here in the boundaries' row-major
+order, PE lanes a beat. Run with Vivado selected (FinnLib is the ``finnlib``
+resource); each simulation runs in a fresh process.
 """
 
 from __future__ import annotations
 
 import argparse
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -30,14 +32,15 @@ from qonnx.core.datatype import DataType
 from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, vector_major
+from finn.harness.pacing import FREE, STALLED
+from finn.harness.rtl import declared_registers, materialize
+from finn.harness.toolchain import print_identity
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, Root, with_direct_transports
 from kernels.sweeps.rtl_transport import drive_observed
-from kernels.toolchain import print_identity
-from kernels.xsim import materialize
 
 ELEMENT = DataType["INT4"]
 PIXELS, CHANNELS = 4, 8
@@ -110,25 +113,6 @@ def placed(case: Case) -> Any:
     )
 
 
-def writes(case: Case, point: Any) -> list[tuple[int, int]]:
-    """Each written threshold at its byte address: the channel's fold, its lane, then the
-    threshold, as thresholding_axi decodes them (one 32-bit word a threshold)."""
-    assert case.written is not None
-    rows, pe = len(case.written), case.pe
-    count = len(case.written[0])
-    lanes = min(rows, pe)
-    index_bits, lane_bits = (count - 1).bit_length(), (lanes - 1).bit_length()
-    found = []
-    for channel, row in enumerate(case.written):
-        fold, lane = divmod(channel, lanes)
-        for index, value in enumerate(row):
-            word = (fold << (lane_bits + index_bits)) | (lane << index_bits) | index
-            found.append((word << 2, value & 0xFFFFFFFF))
-    parameters = dict(point.activate.module.parameters)
-    assert (parameters["C"], parameters["PE"], parameters["N"]) == (rows, pe, count)
-    return found
-
-
 def run(case: Case, evidence: Path) -> None:
     point = placed(case)
     table = np.array(case.written if case.written is not None else case.initial)
@@ -143,7 +127,11 @@ def run(case: Case, evidence: Path) -> None:
     stimulus = list(pack(form, VALUES.ravel().tolist(), ELEMENT.bitwidth()))
     expected = list(pack(form, levels.ravel().tolist(), result_bits))
     top, sources, data = materialize(point.module, evidence / case.label)
-    configuration = {"s_axilite": writes(case, point)} if case.written is not None else {}
+    # The writes a kernel holding the written table declares, into the hardware built
+    # with the initial one: the same addresses (the same shape and PE), other words.
+    written = placed(replace(case, initial=case.written)) if case.written is not None else None
+    configuration = declared_registers(written.module) if written is not None else {}
+    assert set(configuration) == ({"s_axilite"} if case.written is not None else set())
     mask = (1 << (case.pe * result_bits)) - 1
     for stalled in (False, True):
         measured = drive_observed(
@@ -152,10 +140,10 @@ def run(case: Case, evidence: Path) -> None:
             {"s_axis_0": stimulus},
             {"m_axis_0": len(expected)},
             {},
-            stalls=stalled,
+            pacing=STALLED if stalled else FREE,
             directory=evidence / case.label / ("stalled" if stalled else "free"),
             data_files=data,
-            axilite_writes=configuration,
+            registers=configuration,
         )
         actual = [word & mask for word in measured["outputs"]["m_axis_0"]]
         assert actual == expected, (case.label, stalled, actual, expected)

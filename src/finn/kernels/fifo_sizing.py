@@ -36,9 +36,12 @@ not change the depth.
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
-33, so a DEPTH of two holds up to five). A boundary (the host's pacing, issue
-boundary-fifos-across-shells), a memory source (paced by its consumer) and an end
-no schedule paces are not modelled: direct, with that reason. So is an adapter
+33, so a DEPTH of two holds up to five). A boundary's free side is paced by the
+end the shell places there (``Channel.end``, ``finn.kernels.ends``): its beat
+times over a frame, and its cycles a frame as its span. A boundary without an
+end (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
+consumer) and an end no schedule paces are not modelled: direct, with that
+reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
 The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; the rtlsim
 check is evidence outside it (K12).
@@ -53,6 +56,7 @@ from math import ceil
 
 from finn.kernels.adapters import Convert, Generate
 from finn.kernels.channels import Channel
+from finn.kernels.ends import EndContract
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import NestBuffer, nest_buffer
 from finn.kernels.transport import StreamContract
@@ -228,16 +232,22 @@ def _pattern(contract: StreamContract, side: str) -> Pattern:
     return Pattern(pace.times, pace.span)
 
 
+def _free(channel: Channel) -> Pattern:
+    """A boundary's free side, paced by its end: its beat times and its cycles a frame."""
+    if not channel.ended:
+        raise NotModelled("a boundary: not modelled")
+    contract: EndContract = channel.end_contract
+    return Pattern(contract.times, contract.cycles)
+
+
 def ends(channel: Channel) -> tuple[Pattern, Acceptance]:
     """A channel's supply at its transport and its input side's acceptance, from the
     paces its ends state; ``NotModelled`` naming why the model does not read them."""
     if channel.valued:
         raise NotModelled("a memory source: paced by its consumer")
     found = channel.endpoints
-    if found.source_owner is None or found.sink_owner is None:
-        raise NotModelled("a boundary: not modelled")
-    producer = _pattern(found.source, "producer")
-    consumer = _pattern(found.sink, "consumer")
+    producer = _free(channel) if found.source_owner is None else _pattern(found.source, "producer")
+    consumer = _free(channel) if found.sink_owner is None else _pattern(found.sink, "consumer")
     times = producer.times
     if channel.output_adapting:
         stages = channel.output_adapter.realization

@@ -33,6 +33,13 @@ array, eltwise's real, which is itself the omission checked).
 
 transpose's stalled samples and its adapter sample (behind a ``vpc``) exercise
 ``inner_shuffle``'s page guard (``finn.kernels.transpose``).
+
+The platform's capabilities, a few cases each (KT10): pumped compute (INT8 dotp
+on DSP58, one interior configuration: pumping needs SIMD >= 2) and a pumped
+memory (memstream), each simulated with ``ap_clk2x`` driven aligned with
+``ap_clk``; and AXI-Lite, thresholding's runtime-writable rows, one shared row
+and a row a channel over two channel folds of three lanes, each table written
+through the bus as its kernel declares it before the streams start.
 """
 
 from __future__ import annotations
@@ -100,9 +107,11 @@ def dotp(
     bits: int,
     form: Form = Form.DENSE,
     reducer: str | None = None,
+    pumped: bool = False,
 ) -> dict[str, Any]:
     """Y = X @ W, or per channel (depthwise); the accumulator type is the parent's fact.
-    ``reducer`` is the packed core's, which only it declares."""
+    ``reducer`` is the packed core's, which only it declares. ``pumped`` compute runs at
+    the doubled clock, which needs SIMD >= 2: one interior configuration."""
     a = w = DataType[f"INT{bits}"]
     depthwise = form is Form.DEPTHWISE
     reduction = 3 if depthwise else REDUCTION
@@ -120,7 +129,8 @@ def dotp(
         },
         outputs={"y_channel": (ROWS, OUTPUTS)},
         reference=reference,
-        choices={"compute_pumping": False, **({"reducer": reducer} if reducer else {})},
+        **({"factors": ({"pe": 2, "simd": 3},)} if pumped else {}),
+        choices={"compute_pumping": pumped, **({"reducer": reducer} if reducer else {})},
         facts={
             "platform": full_platform(dsp),
             "form": form,
@@ -176,6 +186,17 @@ def thresholding() -> dict[str, Any]:
 # AXI-Lite, the wrapper's configuration addresses N alone.
 SHARED_CHANNELS = 8
 SHARED_ROW = (-3, 0, 2)
+
+
+def written_rows() -> dict[str, Any]:
+    """A row a channel, runtime-writable: the testbench writes every threshold through
+    AXI-Lite (two channel folds of three lanes), so a write to another lane's or
+    fold's address changes some level."""
+    case = thresholding()
+    case["factors"] = ({"pe": 3},)
+    case["choices"] = {**THRESHOLDING_CHOICES, "use_axilite": True}
+    case["facts"] = {**THRESHOLDING_FACTS, "control": ControlPort("s_axilite")}
+    return case
 
 
 def shared_row(*, axilite: bool = False) -> dict[str, Any]:
@@ -356,6 +377,14 @@ def memstream() -> dict[str, Any]:
         choices={"ram_style": "auto", "pumped_memory": False},
         facts={"dtype": DataType["INT4"], "contents": CONTENTS, "platform": FULL_DSP48E2},
     )
+
+
+def pumped_memstream() -> dict[str, Any]:
+    """The stored operand from a pumped memory: half-width words at the doubled clock."""
+    case = memstream()
+    case["factors"] = ({"form": vector_major(STORED, 3)},)
+    case["choices"] = {**case["choices"], "pumped_memory": True}
+    return case
 
 
 # -- the channel stages: fifo, vpc, input_gen ------------------------------------------------
@@ -581,14 +610,17 @@ CASES = {
     ),
     "dotp-int8": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8),
     "dotp-int8-depthwise": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8, Form.DEPTHWISE),
+    "dotp-int8-pumped": lambda: dotp(Int8Dsp58DotpKernel, DspBlock.DSP58, 8, pumped=True),
     "thresholding": thresholding,
     "thresholding-shared-row": shared_row,
     "thresholding-shared-row-axilite": lambda: shared_row(axilite=True),
+    "thresholding-written-rows": written_rows,
     "thresholding-rows-first": lambda: scheduled(RowsFirst),
     "thresholding-lanes-in-order": lambda: split(LanesInOrder),
     "eltwise": eltwise,
     "transpose": transpose,
     "memstream": memstream,
+    "memstream-pumped": pumped_memstream,
     "fifo": fifo,
     "vpc": vpc,
     "input_gen": input_gen,

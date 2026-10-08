@@ -9,7 +9,7 @@ from the model's ``finn.platform`` metadata. An initializer the node owns is a
 value its channel carries (``Facts.values``), and the channel's tensor states
 its range. It states its placement once, as data (``kernel``, ``formals``,
 ``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
-root is generated from it, and a partition root places the same kernel. It
+root is generated from it, and a Partition places the same kernel. It
 binds its node root through the bind cache, on its inputs for inference and
 whole for its choices, replays the choices its node holds, and answers the
 compiler's queries from the result.
@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Iterable, Mapping
-from dataclasses import fields
+from dataclasses import asdict, fields
 from math import prod
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, TypeVar
 
@@ -49,7 +49,7 @@ from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
 )
-from qonnx.core.metadata import Key, MetadataError, Namespace
+from qonnx.core.metadata import JSON, Key, MetadataError, Namespace
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
 
@@ -67,7 +67,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
-from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.target import DspBlock, Fabric, Platform, Target
+from finn.kernels.utilization import Resources
 from finn.kernels.values.domains import stored_element
 from finn.kernels.values.semantics import IntegerTensorValue, integer_bytes, integer_digest
 
@@ -78,24 +79,50 @@ if TYPE_CHECKING:
 S = TypeVar("S", bound=Space)
 
 PLATFORM = Namespace("finn.platform", version=1, inherit=True)
-"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part
-and the platform (``finn.kernels.target.Platform``: the clock period and the
-capabilities), every key stated. It inherits: a subgraph body reads its parent's."""
+"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part,
+the shell, the board (``null`` when none is stated) and the platform
+(``finn.kernels.target.Platform``: the clock period and the capabilities, its resources
+``null`` when the part's are not known), every key stated. It inherits: a subgraph body
+reads its parent's. A model stating another shape of it (a key it does not declare, or
+one missing) is refused, each key named: it is converted again (``ToKernelOps``)."""
+
+RESOURCE_COUNTS = tuple(field.name for field in fields(Resources))
+
+
+def _resources_or_none(value: object) -> bool:
+    return value is None or (
+        isinstance(value, dict)
+        and set(value) == set(RESOURCE_COUNTS)
+        and all(type(count) is int and count >= 0 for count in value.values())
+    )
+
 
 PLATFORM_KEYS: dict[str, Key[Any]] = dict(
-    part=PLATFORM.key("part", str),
+    part=PLATFORM.key("part", str, check=bool, expect="a part name"),
+    shell=PLATFORM.key("shell", str, check=bool, expect="a shell name"),
+    board=PLATFORM.key(
+        "board",
+        JSON,
+        check=lambda v: v is None or (isinstance(v, str) and bool(v)),
+        expect="a board name, or null when none is stated",
+    ),
     period_ns=PLATFORM.key("period_ns", float, check=lambda v: v > 0, expect="a period > 0"),
     dsp=PLATFORM.key("dsp", DspBlock),
+    fabric=PLATFORM.key("fabric", Fabric),
     uram=PLATFORM.key("uram", bool),
     uram_init=PLATFORM.key("uram_init", bool),
     clk2x=PLATFORM.key("clk2x", bool),
-    control_ports=PLATFORM.key("control_ports", int, check=lambda v: v >= 0, expect="a count"),
-    memory_ports=PLATFORM.key("memory_ports", int, check=lambda v: v >= 0, expect="a count"),
-    aie=PLATFORM.key("aie", bool),
+    resources=PLATFORM.key(
+        "resources",
+        JSON,
+        check=_resources_or_none,
+        expect=f"the counts {', '.join(RESOURCE_COUNTS)}, or null when unknown",
+    ),
 )
 
 PLATFORM_FIELDS = tuple(field.name for field in fields(Platform))
-"""The ``finn.platform`` keys that are ``Platform``'s fields: all but the part."""
+"""The ``finn.platform`` keys that are ``Platform``'s fields: all but the part, the
+shell and the board."""
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
 
@@ -158,21 +185,28 @@ def read_target(model: ModelWrapper) -> Target:
     """The build target, from the model's ``finn.platform`` metadata (a subgraph body
     opened through its parent reads the parent's).
 
-    The one reader of the target; ``write_target`` is the one writer. A key missing
-    or malformed is refused.
+    The one reader of the target; ``write_target`` is the one writer. A key missing,
+    malformed or not declared (another shape's) is refused, by name.
     """
     try:
         stated = model.namespace(PLATFORM)
     except MetadataError as error:
-        raise KernelOpError(f"the model's target is not one: {error}") from error
+        raise KernelOpError(
+            f"the model's target is not one: {error}; run ToKernelOps to state it again"
+        ) from error
     missing = [name for name in PLATFORM_KEYS if name not in stated]
     if missing:
         raise KernelOpError(
             f"the model states no target (finn.platform: {', '.join(missing)} missing; "
             "run ToKernelOps)"
         )
-    platform = Platform(**{name: stated[name] for name in PLATFORM_FIELDS})
-    return Target(stated["part"], platform)
+    values = {name: stated[name] for name in PLATFORM_FIELDS}
+    if values["resources"] is not None:
+        values["resources"] = Resources(**values["resources"])
+    platform = Platform(**values)
+    return Target(
+        part=stated["part"], platform=platform, shell=stated["shell"], board=stated["board"]
+    )
 
 
 def write_target(model: ModelWrapper, target: Target) -> None:
@@ -180,12 +214,15 @@ def write_target(model: ModelWrapper, target: Target) -> None:
     where ``read_target`` reads it."""
     platform = target.platform
     if platform.dsp is None:
-        raise KernelOpError(
-            "a target states its DSP block (finn.transformation.kernels.resolve_target)"
-        )
+        raise KernelOpError("a target states its DSP block (finn.platform.resolve_target)")
     values: dict[str, object] = dict(
-        part=target.part, **{name: getattr(platform, name) for name in PLATFORM_FIELDS}
+        part=target.part,
+        shell=target.shell,
+        board=target.board,
+        **{name: getattr(platform, name) for name in PLATFORM_FIELDS},
     )
+    if platform.resources is not None:
+        values["resources"] = asdict(platform.resources)
     try:
         for name, key in PLATFORM_KEYS.items():
             key.encode(values[name])  # every key checked before any is written
@@ -452,7 +489,7 @@ class KernelOp(CustomOp):
 
     def node_part(self, facts: Facts, choices: Mapping[str, object]) -> dict[str, object]:
         """The choices a node root replays: its kernel's and its owned channels'. An
-        edge's, input or output, belong to the partition root that declares the edge."""
+        edge's, input or output, belong to the root that declares the edge."""
         edges = ({port for port in self.ports if port} - set(facts.owned)) | set(self.outputs)
         return {
             name: value for name, value in choices.items() if name.partition(".")[0] not in edges
@@ -506,7 +543,7 @@ class KernelOp(CustomOp):
         for name, value in sorted(merged.items()):
             self.set_nodeattr(name, int(value) if isinstance(value, bool) else value)
 
-    # -- in a partition root ---------------------------------------------------------------
+    # -- in a Partition -------------------------------------------------------------------
 
     def inputs(self) -> dict[str, str]:
         """The tensor of each of this node's input channels, by port."""

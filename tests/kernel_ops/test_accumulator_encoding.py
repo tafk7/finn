@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 import pytest
 from kernels.helpers import Lanes
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -39,23 +39,24 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.dataflow.tensor import ScalarEncoding
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
+from finn.platform import resolve_target
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
-    resolve_target,
 )
 from finn.transformation.kernels.package import write_boundary_facts
 
-ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0)  # DSP48E2: the packed core
-VCK190 = resolve_target("xcvc1902-vsva2197-2MP-e-S", 5.0)  # DSP58: the INT8 core too
+ULTRA96 = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)  # DSP48E2: the packed core
+VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)  # DSP58: the INT8 core too
 ROWS = 3
 
 
@@ -228,7 +229,7 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
     words = {}
     for facts, values in ((inputs[0], x), (outputs[0], y)):
         flat = [int(value) for value in values.reshape(-1)]
-        lanes, bits = facts["lanes"], facts["element_bits"]
+        lanes, bits = facts["lanes"], DataType[facts["element"]].bitwidth()
         words[facts["port"]] = (
             [pack(flat[i : i + lanes], bits) for i in range(0, len(flat), lanes)],
             lanes * bits,
@@ -238,7 +239,7 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
 
 def _computes(case: Case, directory: Path, **options: Any) -> None:
     model = kernel_ops(case, **options)
-    root = partition_root(model, model.graph.node)
+    root = shell_root(model, model.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)

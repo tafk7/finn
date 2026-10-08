@@ -33,15 +33,17 @@ in UltraRAM none is left, and ``ram_style`` does not apply. Counted in stages,
 not depths, the choices do not move with PE; ``parameters`` maps them to the
 triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage requires the
 ``platform``'s UltraRAM that takes initial contents (the table is the
-memories' initial contents), and runtime-writable thresholds its control port
-and a ``control`` bus to be placed on, each a named refusal of the case.
+memories' initial contents), and runtime-writable thresholds a ``control`` bus
+to be placed on, each a named refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it sits
 on an input, an output and (with several sets) a set-selector channel; its
 AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
 runtime-writable (``controlled``), and otherwise held idle by its module, as
-is the set selector of a single set. Multi-set AXI-Lite access is refused: the
+is the set selector of a single set. Presented, the bus carries the writes that
+put the kernel's table into the memories (``register_map``), at the addresses
+thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
 selection is supported. Floating-point threshold comparison is outside this
 profile.
@@ -51,7 +53,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from finn.core.space import (
@@ -80,12 +82,13 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Held
+from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
 from finn.kernels.values.domains import Integer, set_index_dtype
 from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -147,6 +150,49 @@ def lane_counts(rows: object) -> Domain[int]:
     )
 
 
+def stage_style(depth: int, depth_trigger_bram: int, depth_trigger_uram: int) -> str:
+    """The RAM_STYLE ``thresholding`` gives a stage's memory of ``depth``, as its RTL
+    assigns it from the two depth triggers (0: unset)."""
+    if depth_trigger_uram and depth >= depth_trigger_uram:
+        return "ultra"
+    if depth_trigger_bram and depth >= depth_trigger_bram:
+        return "block"
+    return "distributed" if depth_trigger_bram else "auto"
+
+
+def thresholding_resources(
+    *,
+    pe: int,
+    wi: int,
+    wt: int,
+    stage_depths: Sequence[int],
+    depth_trigger_bram: int,
+    depth_trigger_uram: int,
+    use_axilite: bool,
+    shared_row: bool,
+) -> Resources:
+    """FinnLib ``thresholding`` inside ``thresholding_axi``: per pipeline stage and PE
+    lane, one memory of the stage's depth, WT bits wide, in the style the triggers give
+    it (``stage_style``), and a comparator. Without AXI-Lite the memories are never
+    written, and synthesis folds them as constants: where every row is the same
+    (``shared_row``, read from the table: one row, or C equal ones), to nothing. The
+    comparators and the pipeline are a ``Fit`` over the bits it carries, PE * M * (WI +
+    M) for M stages."""
+    tables = Resources()
+    if use_axilite or not shared_row:
+        for depth in stage_depths:
+            style = stage_style(depth, depth_trigger_bram, depth_trigger_uram)
+            tables = tables + memory(depth, wt, style, rom=not use_axilite).times(pe)
+    stages = len(stage_depths)
+    carried = pe * stages * (wi + stages)
+    return tables + Resources(lut=_THRESHOLD_LUT.at(carried), ff=_THRESHOLD_FF.at(carried))
+
+
+# Feature: the bits the pipeline carries, PE * M * (WI + M).
+_THRESHOLD_LUT = Fit(81.7, (0.271,))
+_THRESHOLD_FF = Fit(31.3, (0.948,))
+
+
 class ThresholdingAxiKernel(Kernel):
     id = "finnlib.thresholding_axi.integer"
     version = 1
@@ -199,16 +245,11 @@ class ThresholdingAxiKernel(Kernel):
         """Whether a parent placed it on a control bus, which runtime writes reach it by."""
         return self.present(ThresholdingAxiKernel.control)
 
-    # Runtime-writable thresholds need the platform's control port and a control bus
-    # to export their AXI-Lite interface through.
+    # Runtime-writable thresholds need a control bus to export their AXI-Lite
+    # interface through; how many buses a shell takes is its admission's, not theirs.
     use_axilite: bool = Decision(
         values=(False, True),
         requires=(
-            requires(
-                platform.control_ports,
-                "control-absent: the platform has no control port for runtime-writable thresholds",
-                cases=(True,),
-            ),
             requires(
                 controllable,
                 "threshold-control: runtime-writable thresholds need a control bus",
@@ -413,6 +454,22 @@ class ThresholdingAxiKernel(Kernel):
         """Its schedule's beats, one a cycle at best."""
         return self.schedule.beat_count
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        table = self.thresholds
+        first = table[0][0]
+        bram, uram = self.depth_triggers
+        return thresholding_resources(
+            pe=self.pe,
+            wi=self.input_dtype.bitwidth(),
+            wt=self.threshold_dtype.bitwidth(),
+            stage_depths=[self.stage_depth(stage) for stage in range(self.stages)],
+            depth_trigger_bram=bram,
+            depth_trigger_uram=uram,
+            use_axilite=self.use_axilite,
+            shared_row=all(row == first for group in table for row in group),
+        )
+
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat."""
@@ -513,11 +570,40 @@ class ThresholdingAxiKernel(Kernel):
         """AXI-Lite, with runtime writes."""
         return (self.config_bus,) if self.use_axilite else ()
 
+    @derived
+    def register_map(self) -> RegisterMap:
+        """The AXI-Lite writes of its table: each threshold of a row at the wrapper's word
+        address (the row's channel fold, its lane, the threshold), its bits in 32-bit words
+        low first, the last of which commits it (FinnLib's ``axilite``). Rows are
+        channels, ``c = fold * lanes + lane``, ``lanes`` the effective PE (min(C, PE)); a
+        shared row (C = 1) is written once and reaches every lane."""
+        (_, rows, count), pe = self.shape, self.pe
+        bits = self.threshold_dtype.bitwidth()
+        lanes, words = min(rows, pe), (bits + 31) // 32
+        index_bits, lane_bits = (count - 1).bit_length(), (lanes - 1).bit_length()
+        word_bits = (words - 1).bit_length()
+        mask = (1 << bits) - 1
+        writes = []
+        for channel, row in enumerate(self.thresholds[0]):
+            fold, lane = divmod(channel, lanes)
+            for index, value in enumerate(row):
+                address = (fold << (lane_bits + index_bits)) | (lane << index_bits) | index
+                for word in range(words):
+                    writes.append(
+                        (
+                            ((address << word_bits) | word) << 2,
+                            ((value & mask) >> (32 * word)) & 0xFFFFFFFF,
+                        )
+                    )
+        return RegisterMap(tuple(writes))
+
     @view
     def control_bus(self) -> Control:
-        return Control(self.config_bus if self.controlled() else None)
+        if not self.controlled():
+            return Control(None)
+        return Control(self.config_bus, self.register_map)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 
 
-__all__ = ["ThresholdingAxiKernel"]
+__all__ = ["ThresholdingAxiKernel", "stage_style", "thresholding_resources"]

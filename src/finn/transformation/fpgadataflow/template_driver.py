@@ -89,6 +89,10 @@ io_shape_dict = {
     "mlo_weight_config" : $MLO_WEIGHT_CONFIG$,
 }
 
+# the clock (MHz) the accelerator was built to run at, which the overlay sets PL0 to
+# on Zynq
+fclk_mhz = $FCLK_MHZ$
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Execute FINN-generated accelerator on numpy inputs, or run throughput test')
     parser.add_argument('--exec_mode', help='Please select functional verification ("execute") or throughput test ("throughput_test")', default="execute")
@@ -115,7 +119,7 @@ if __name__ == "__main__":
     accel = FINNExampleOverlay(
         bitfile_name = bitfile, platform = platform,
         io_shape_dict = io_shape_dict, batch_size = batch_size,
-        weight_dir = weight_dir, device=device
+        fclk_mhz = fclk_mhz, weight_dir = weight_dir, device=device
     )
 
     # for the remote execution the data from the input npy file has to be loaded,

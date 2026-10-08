@@ -57,12 +57,25 @@ def _width(bus: Bus, logical: str) -> int:
     return next(member.width for member in bus.signals if member.logical == logical)
 
 
-def _frequency(pin: Signal, clock_ns: float, pins: Sequence[Pin]) -> int:
+def frequency_hz(pin: Signal, clock_ns: float, pins: Sequence[Pin]) -> int:
+    """A clock's ``FREQ_HZ`` at ``clock_ns``: a free clock's rate, a derived clock's a
+    multiple of its reference's (``ap_clk2x`` at twice ``ap_clk``)."""
     rate = pin.role.rate if isinstance(pin.role, Clock) else None
     if isinstance(rate, Derived):
         reference = next(p for p in pins if isinstance(p, Signal) and p.name == rate.of)
-        return rate.ratio * _frequency(reference, clock_ns, pins)
+        return rate.ratio * frequency_hz(reference, clock_ns, pins)
     return round(1e9 / clock_ns)
+
+
+def address_width(bus: Bus) -> int:
+    """An AXI-Lite bus's address width: its ``awaddr``'s."""
+    return _width(bus, "awaddr")
+
+
+def register_window(bus: Bus) -> int:
+    """The range of an AXI-Lite bus's one register block, ``Reg0``: its address space,
+    at least 4 KiB (the smallest window Vivado's address editor assigns)."""
+    return max(1 << address_width(bus), 4096)
 
 
 def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
@@ -91,7 +104,7 @@ def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
                 "set_property bus_type_vlnv xilinx.com:signal:clock:1.0 $bus",
                 "set_property interface_mode slave $bus",
                 f"set_property physical_name {pin.name} [ipx::add_port_map CLK $bus]",
-                f"set_property value {_frequency(pin, clock_ns, pins)}"
+                f"set_property value {frequency_hz(pin, clock_ns, pins)}"
                 " [ipx::add_bus_parameter FREQ_HZ $bus]",
             ]
             associated = [bus.name for bus in buses if bus.associated_clock == pin.name]
@@ -142,7 +155,7 @@ def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
                     f"set_property value {data_bytes} [ipx::add_bus_parameter TDATA_NUM_BYTES $bus]"
                 )
             else:
-                window = max(2 ** _width(pin, "awaddr"), 4096)
+                window = register_window(pin)
                 tcl += [
                     "set_property value AXI4LITE [ipx::add_bus_parameter PROTOCOL $bus]",
                     f"set map [ipx::add_memory_map {pin.name} $core]",
@@ -294,8 +307,11 @@ def package_tcl(
 
 __all__ = [
     "IpxactError",
+    "address_width",
+    "frequency_hz",
     "interface_names",
     "interface_tcl",
     "package_tcl",
+    "register_window",
     "vlnv",
 ]

@@ -3,8 +3,9 @@
 
 """A partition's class is reused by value: the same facts hit, any fact changed misses.
 
-``partition_root`` keeps the composite class, and so its compiled model, by
-``PartitionKey``; the choices are replayed on a fresh design space every call.
+``partition`` keeps the Partition's composite class by ``PartitionKey``, and
+``shell_root`` its shell root's class with it (``ShellKey``), and so the compiled
+model; the choices are replayed on a fresh design space every call.
 """
 
 from __future__ import annotations
@@ -21,17 +22,12 @@ from finn.custom_op.kernels import MatMul, Thresholding
 from finn.custom_op.kernels import matmul as matmul_op
 from finn.custom_op.kernels.base import integer_tensor, write_target
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
-from finn.custom_op.kernels.partition import (
-    PARTITIONS,
-    Declared,
-    PartitionKey,
-    PartitionRoot,
-    partition_root,
-    persist,
-)
+from finn.custom_op.kernels.partition import PARTITIONS, Declared, PartitionKey
+from finn.custom_op.kernels.shell import SHELLS, ShellRoot, persist, shell_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
-from finn.transformation.kernels import InferKernelTensors, resolve_target
+from finn.platform import resolve_target
+from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import (
     INT3,
     TARGET,
@@ -42,15 +38,16 @@ from kernel_ops.models import (
 )
 
 
-def root(model: ModelWrapper, name: str = "partition") -> tuple[PartitionRoot, bool]:
-    """The partition of all of ``model``'s nodes, and whether its class was reused."""
-    hits = PARTITIONS.hits
-    found = partition_root(model, model.graph.node, name=name)
-    return found, PARTITIONS.hits > hits
+def root(model: ModelWrapper, name: str = "partition") -> tuple[ShellRoot, bool]:
+    """The shell root of all of ``model``'s nodes, and whether its Partition's class and
+    its own were reused."""
+    hits, shells = PARTITIONS.hits, SHELLS.hits
+    found = shell_root(model, model.graph.node, name=name)
+    return found, PARTITIONS.hits > hits and SHELLS.hits > shells
 
 
 def last_key() -> Any:
-    """The key ``partition_root`` used last."""
+    """The Partition's key ``shell_root`` used last."""
     return next(reversed(PARTITIONS.entries))
 
 
@@ -60,6 +57,7 @@ def test_the_same_facts_reuse_the_class_never_a_point() -> None:
     # Another model of the same facts reuses the class: a fresh design space of it.
     again, reused = root(kernel_model(), "chain")
     assert reused and type(again.point) is type(first.point)
+    assert type(again.point.partition) is type(first.point.partition)
     assert again.point is not first.point
 
     # Choices are replayed on the fresh space, never shared: saving the open memories
@@ -104,7 +102,7 @@ def annotated() -> ModelWrapper:
 
 
 def retargeted(model: ModelWrapper) -> ModelWrapper:
-    write_target(model, resolve_target(TARGET.part, 4.0))
+    write_target(model, resolve_target(part=TARGET.part, period_ns=4.0))
     return model
 
 
@@ -157,8 +155,8 @@ def test_an_owned_weight_channel_is_declared_from_the_graph_its_value_read_to_bu
     declared = dict(last_key().channels)["w"]
     assert declared.tensor.element.value_range == (int(WEIGHTS.min()), int(WEIGHTS.max()))
     assert declared.port is None  # owned: never a boundary
-    assert first.point.w.contents == integer_tensor(WEIGHTS)
-    assert first.point.w.valued
+    assert first.point.partition.w.contents == integer_tensor(WEIGHTS)
+    assert first.point.partition.w.valued
     reads: list[int] = []
 
     def counted(values: Any) -> Any:
@@ -201,10 +199,10 @@ def test_an_output_handed_on_changed_alone_misses() -> None:
     is it handed on, pinned ``direct``; nothing else of the key changes."""
     model = kernel_model()
     front = model.graph.node[:2]
-    handed = partition_root(model, front, name="front")
+    handed = shell_root(model, front, name="front")
     before: PartitionKey = last_key()
     model.graph.node[2].domain = ""  # a plain ONNX MatMul: not a KernelOp
-    kept = partition_root(model, front, name="front")
+    kept = shell_root(model, front, name="front")
     after: PartitionKey = last_key()
     assert dict(before.channels)["levels"].direct and not dict(after.channels)["levels"].direct
     assert replace(after, channels=before.channels) == before
@@ -289,7 +287,7 @@ def test_partitions_are_bounded() -> None:
 def test_a_refused_partition_caches_nothing() -> None:
     model = kernel_model()
     model.graph.node[2].name = "first"
-    misses = PARTITIONS.misses
+    misses = PARTITIONS.misses, SHELLS.misses
     with pytest.raises(ValueError, match="both named first"):
-        partition_root(model, model.graph.node)
-    assert PARTITIONS.misses == misses
+        shell_root(model, model.graph.node)
+    assert (PARTITIONS.misses, SHELLS.misses) == misses

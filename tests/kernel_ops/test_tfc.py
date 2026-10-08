@@ -20,33 +20,49 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.custom_op.kernels.partition import member, partition_root
+from finn.custom_op.kernels.partition import member
+from finn.custom_op.kernels.shell import shell_root
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import commit, undecided
-from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    OUTPUT_INTERFACES,
+    OUTPUT_VLNV,
+    partition_facts,
+)
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import write_boundary_facts
-from kernel_ops.packaging import reaches_vivado
+from kernel_ops.packaging import reaches_vivado, read_back
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
 LOGITS = "MatMul_3_out0"
-# The partition's boundary facts:
-# 784 UINT8 pixels in 49 beats of 16 lanes; ten INT8 logits (the last MatMul's columns, K7)
-# in one beat of 80 bits.
+# The partition's boundary, the ends' facts in the Zynq shell:
+# 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
+# with no width converter; ten INT8 logits (the last MatMul's columns, K7) in one beat of
+# 80 bits, which an IODMA_hls writes through a converter to a 16-bit port.
+END = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
 FACTS = (
     [
         {
             "port": "s_axis_0",
             "tensor": "Reshape_0_out0",
             "shape": [1, 784],
-            "datatype": "UINT8",
+            "element": "UINT8",
+            "range": [0, 255],
             "lanes": 16,
             "beats": 49,
-            "element_bits": 8,
             "tdata": 128,
+            "end": {
+                **END,
+                "direction": "in",
+                "memory_width": 128,
+                "words": 49,
+                "converter": False,
+                "call_cycles": 13,
+            },
         }
     ],
     [
@@ -54,11 +70,19 @@ FACTS = (
             "port": "m_axis_0",
             "tensor": LOGITS,
             "shape": [1, 10],
-            "datatype": "INT8",
+            "element": "INT8",
+            "range": [-128, 127],
             "lanes": 10,
             "beats": 1,
-            "element_bits": 8,
             "tdata": 80,
+            "end": {
+                **END,
+                "direction": "out",
+                "memory_width": 16,
+                "words": 5,
+                "converter": True,
+                "call_cycles": 4,
+            },
         }
     ],
 )
@@ -79,7 +103,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     produced = execute_onnx(parent, {parent.graph.input[0].name: image}, True)
     for name in (LOGITS, source.graph.output[0].name):
         assert np.array_equal(produced[name], expected[name])
-    root = partition_root(body, body.graph.node)
+    root = shell_root(body, body.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
     # The input's one threshold row, shared by its 784 pixels, is bound as it is
@@ -106,6 +130,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
             )
         },
         outputs={"m_axis_0": ([pack(logits, bits)], bits * len(logits))},
+        cycles=root.point.cycles,  # its layers' work, beyond its boundary's beats
     )
 
 
@@ -115,9 +140,10 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     _, parent, body = partitioned(tmp_path)
     sdp = parent.graph.node[1]
     project = tmp_path / "vivado_stitch_proj"
+    write_boundary_facts(body)
     body = body.transform(PackagePartition(sdp.name, directory=project))
-    assert body.get_metadata_prop("vivado_stitch_vlnv") == f"xilinx_finn:finn:{sdp.name}:1.0"
-    names = json.loads(body.get_metadata_prop("vivado_stitch_ifnames"))
+    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{sdp.name}:1.0"
+    names = body.get(OUTPUT_INTERFACES)
     assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 80]])
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
@@ -132,6 +158,10 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert getCustomOp(sdp).get_nodeattr("slr") == -1
     assert partition_facts(body) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
+    # The interface description beside the IP: the module's pins, the boundary facts.
+    described = json.loads((project / "interface.json").read_text())
+    read_back(described, PackagePartition(sdp.name).module(body).abi.pins, 5.0)
+    assert [stream["beats"] for stream in described["streams"]] == [49, 1]
 
 
 # Builds and partitions the whole network, about 20 s.
@@ -148,19 +178,23 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
     shell drives no 2x clock)."""
     _, _, body = partitioned(tmp_path)
-    root = partition_root(body, body.graph.node)
+    root = shell_root(body, body.graph.node)
+    paths = {path.rpartition(".")[2]: path for path in root.members}
     weights = [
-        member(node.input[1])
+        paths[member(node.input[1])]
         for node in body.graph.node
         if node.op_type == "MatMul" and body.get_initializer(node.input[1]) is not None
     ]
     assert len(weights) == 4
     streams = {member(tensor) for node in body.graph.node for tensor in node.input}
-    for stream in streams & set(dir(root.point)):
-        assert getattr(root.point, stream).platform == ULTRA96.platform
+    for stream in streams & set(paths):
+        channel = root.point
+        for name in paths[stream].split("."):
+            channel = getattr(channel, name)
+        assert channel.platform == ULTRA96.platform
     # Each adapter memory the flow committed (``auto``), keyed under its edge.
     adapters = [
-        f"{member(node.input[0])}.{attribute.removeprefix('x.')}"
+        f"{paths[member(node.input[0])]}.{attribute.removeprefix('x.')}"
         for node in body.graph.node
         for attribute in body.get_customop_wrapper(node).choices()
         if attribute.startswith("x.adapter.") and attribute.endswith(".ram_style")

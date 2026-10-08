@@ -554,12 +554,11 @@ def kernel_fixtures(api):
     platform = target.Platform(
         period_ns=5.0,
         dsp=target.DspBlock.DSP48E2,
+        fabric=target.Fabric.ULTRASCALE,
         uram=True,
         uram_init=True,
         clk2x=True,
-        control_ports=1,
-        memory_ports=0,
-        aie=False,
+        resources=None,
     )
     int3, int8 = dtype("INT3"), dtype("INT8")
 

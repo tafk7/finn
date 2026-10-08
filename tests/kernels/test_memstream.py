@@ -16,6 +16,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Rejected, design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import tile
+from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
 from finn.kernels.memstream import MemStreamKernel
@@ -27,7 +28,6 @@ from kernels.helpers import (
     pin_names,
     placed,
 )
-from kernels.toolchain import finnlib_root
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.

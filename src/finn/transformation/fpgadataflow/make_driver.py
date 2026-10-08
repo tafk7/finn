@@ -50,10 +50,7 @@ from typing import Dict, Tuple
 
 import finn.util
 from finn import deploy
-from finn.transformation.fpgadataflow.kernel_partitions import (
-    KERNEL_OPS_DOMAIN,
-    kernel_partition_ports,
-)
+from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray, to_external_tensor
 from finn.util.rtlsim import dat_file_to_numpy_array
@@ -62,10 +59,16 @@ from finn.util.toolchain import machine_toolchain, run_process
 from . import template_driver
 
 
+def packed_shape(dtype, folded_shape) -> Tuple[int, ...]:
+    """The shape of a folded tensor of ``dtype`` packed into bytes, as the driver packs
+    it (``finnpy_to_packed_bytearray``)."""
+    dummy = gen_finn_dt_tensor(dtype, folded_shape)
+    return finnpy_to_packed_bytearray(dummy, dtype).shape
+
+
 def get_driver_shapes(model: ModelWrapper) -> Dict:
-    """The driver's shapes per IODMA. A partition of KernelOps next to an IODMA gives
-    its folded shape from its boundary facts (``finn.partition``): ``(1, beats, lanes)``
-    of the port the IODMA feeds or drains."""
+    """The driver's shapes per IODMA of a link graph of the HWCustomOp flow, each
+    folded shape the first or last node's of the partition the IODMA feeds or drains."""
     idt = []
     idma_names = []
     ishape_normal = []
@@ -89,21 +92,13 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         ), "First partition must hold input IODMA"
         successors = model.find_direct_successors(i_consumer)
         successor_input_num = list(successors[0].input).index(i_consumer.output[0])
-        ports = kernel_partition_ports(successors[0])
-        if ports is not None:
-            port = ports[i_consumer.output[0]]
-            i_tensor_shape_folded = (1, port["beats"], port["lanes"])
-        else:
-            successor_sdp = getCustomOp(successors[0])
-            successor_df_model = ModelWrapper(successor_sdp.get_nodeattr("model"))
-            first_node = successor_df_model.find_consumer(
-                successor_df_model.graph.input[successor_input_num].name
-            )
-            i_tensor_shape_folded = tuple(getCustomOp(first_node).get_folded_input_shape())
-        # generate dummy folded i/o tensors and their packed versions
-        i_tensor_dummy_folded = gen_finn_dt_tensor(i_tensor_dt, i_tensor_shape_folded)
-        i_tensor_dummy_packed = finnpy_to_packed_bytearray(i_tensor_dummy_folded, i_tensor_dt)
-        i_tensor_shape_packed = i_tensor_dummy_packed.shape
+        successor_sdp = getCustomOp(successors[0])
+        successor_df_model = ModelWrapper(successor_sdp.get_nodeattr("model"))
+        first_node = successor_df_model.find_consumer(
+            successor_df_model.graph.input[successor_input_num].name
+        )
+        i_tensor_shape_folded = tuple(getCustomOp(first_node).get_folded_input_shape())
+        i_tensor_shape_packed = packed_shape(i_tensor_dt, i_tensor_shape_folded)
         # append all input tensor info to relevant lists
         idt.append("DataType['%s']" % i_tensor_dt.name)
         ishape_normal.append(i_tensor_shape_normal)
@@ -132,20 +127,13 @@ def get_driver_shapes(model: ModelWrapper) -> Dict:
         assert df_model.graph.node[-1].op_type == "IODMA_hls", "Partition must hold output IODMA"
         predecessors = model.find_direct_predecessors(o_producer)
         predecessor_output_num = list(predecessors[0].output).index(o_producer.input[0])
-        ports = kernel_partition_ports(predecessors[0])
-        if ports is not None:
-            port = ports[o_producer.input[0]]
-            o_tensor_shape_folded = (1, port["beats"], port["lanes"])
-        else:
-            predecessor_sdp = getCustomOp(predecessors[0])
-            predecessor_df_model = ModelWrapper(predecessor_sdp.get_nodeattr("model"))
-            last_node = predecessor_df_model.find_producer(
-                predecessor_df_model.graph.output[predecessor_output_num].name
-            )
-            o_tensor_shape_folded = tuple(getCustomOp(last_node).get_folded_output_shape())
-        o_tensor_dummy_folded = gen_finn_dt_tensor(o_tensor_dt, o_tensor_shape_folded)
-        o_tensor_dummy_packed = finnpy_to_packed_bytearray(o_tensor_dummy_folded, o_tensor_dt)
-        o_tensor_shape_packed = o_tensor_dummy_packed.shape
+        predecessor_sdp = getCustomOp(predecessors[0])
+        predecessor_df_model = ModelWrapper(predecessor_sdp.get_nodeattr("model"))
+        last_node = predecessor_df_model.find_producer(
+            predecessor_df_model.graph.output[predecessor_output_num].name
+        )
+        o_tensor_shape_folded = tuple(getCustomOp(last_node).get_folded_output_shape())
+        o_tensor_shape_packed = packed_shape(o_tensor_dt, o_tensor_shape_folded)
         # append all output tensor info to relevant lists
         odt.append("DataType['%s']" % o_tensor_dt.name)
         oshape_normal.append(o_tensor_shape_normal)
@@ -455,6 +443,121 @@ class MakeCPPDriver(Transformation):
         return (model, False)
 
 
+def write_pynq_driver_support(pynq_driver_dir: str) -> None:
+    """What every generated PYNQ driver runs with, into ``pynq_driver_dir``: the base
+    driver (driver_base.py), validate.py, and the parts of qonnx and finn it imports,
+    trimmed to what it uses."""
+    # create the base FINN driver -- same for all accels
+    driver_base_template = deploy.data_path("pynq_driver/driver_base.py")
+    driver_base_py = pynq_driver_dir + "/driver_base.py"
+    shutil.copy(driver_base_template, driver_base_py)
+    # driver depends on qonnx and finn packages
+    # extract individual source files and copy to driver folder
+    qonnx_target_path = pynq_driver_dir + "/qonnx"
+    finn_target_path = pynq_driver_dir + "/finn"
+    os.makedirs(qonnx_target_path + "/core", exist_ok=True)
+    os.makedirs(qonnx_target_path + "/util", exist_ok=True)
+    os.makedirs(finn_target_path + "/util", exist_ok=True)
+    qonnx_path = qonnx.__path__[0]
+    finn_util_path = finn.util.__path__[0]
+    files_to_copy = []
+    files_to_copy.append(
+        (qonnx_path + "/core/datatype.py", qonnx_target_path + "/core/datatype.py")
+    )
+    files_to_copy.append(
+        (qonnx_path + "/core/__init__.py", qonnx_target_path + "/core/__init__.py")
+    )
+    files_to_copy.append(
+        (qonnx_path + "/util/__init__.py", qonnx_target_path + "/util/__init__.py")
+    )
+    files_to_copy.append(
+        (
+            finn_util_path + "/__init__.py",
+            finn_target_path + "/util/__init__.py",
+        )
+    )
+    for src_file, target_file in files_to_copy:
+        shutil.copy(src_file, target_file)
+
+    # qonnx.util.basic and finn.util.data_packing are not copied verbatim:
+    # the driver only needs a handful of pure-numpy helpers from each, while
+    # the full files import onnx (qonnx.util.basic) and bitstring
+    # (finn.util.data_packing). Emitting a trimmed-down module keeps those
+    # heavy dependencies off the deployment board.
+    _generate_minimal_module(
+        qonnx_target_path + "/util/basic.py",
+        qonnx.util.basic,
+        [
+            qonnx.util.basic.roundup_to_integer_multiple,
+            qonnx.util.basic.gen_finn_dt_tensor,
+        ],
+        "import numpy as np\n"
+        "from typing import cast\n\n"
+        "from qonnx.core.datatype import BaseDataType, DataType, FixedPointType",
+    )
+    dp = finn.util.data_packing
+    _generate_minimal_module(
+        finn_target_path + "/util/data_packing.py",
+        dp,
+        [
+            dp.finnpy_to_packed_bytearray,
+            dp._pack_whole_byte_container,
+            dp._pack_bit_double_reverse,
+            dp._pack_general,
+            dp.finnpy_to_int_array,
+            dp.int_array_to_packed_bytearray,
+            dp.packed_bytearray_to_finnpy,
+            dp.prepare_values,
+            dp.unsiged_array_to_signed,
+            dp.packed_bytearray_to_finnpy_fast,
+            dp.data_prepared_to_finnpy_bipolar,
+            dp.data_prepared_to_finnpy_ternary,
+            dp.data_prepared_to_finnpy_fixed,
+            dp.data_prepared_to_finnpy_int,
+            dp.packed_bytearray_to_finnpy_float,
+        ],
+        "import numpy as np\n\n"
+        "from qonnx.core.datatype import DataType\n"
+        "from qonnx.util.basic import roundup_to_integer_multiple",
+    )
+    # add validate.py to run full top-1 test (only for suitable networks)
+    shutil.copy(deploy.data_path("pynq_driver/validate.py"), pynq_driver_dir + "/validate.py")
+
+
+def pynq_driver_text(
+    platform: str,
+    shapes: Dict,
+    fclk_mhz: float,
+    ext_weight_num: int = 0,
+    ext_weight_shapes: Dict | None = None,
+    mlo_config: Dict | None = None,
+) -> str:
+    """The generated PYNQ driver (driver.py) of an accelerator for ``platform``: its I/O
+    (``shapes``, get_driver_shapes' form), the clock in MHz the overlay sets PL0 to on
+    Zynq (``fclk_mhz``), its external weights' count and input shapes, and its MLO
+    weight configuration."""
+    driver = template_driver.pynq_driver_template
+    driver = driver.replace("$PLATFORM$", platform)
+    driver = driver.replace("$INPUT_FINN_DATATYPE$", str(shapes["idt"]).replace('"', ""))
+    driver = driver.replace("$INPUT_SHAPE_NORMAL$", str(shapes["ishape_normal"]))
+    driver = driver.replace("$INPUT_SHAPE_FOLDED$", str(shapes["ishape_folded"]))
+    driver = driver.replace("$INPUT_SHAPE_PACKED$", str(shapes["ishape_packed"]))
+    driver = driver.replace("$OUTPUT_FINN_DATATYPE$", str(shapes["odt"]).replace('"', ""))
+    driver = driver.replace("$OUTPUT_SHAPE_NORMAL$", str(shapes["oshape_normal"]))
+    driver = driver.replace("$OUTPUT_SHAPE_FOLDED$", str(shapes["oshape_folded"]))
+    driver = driver.replace("$OUTPUT_SHAPE_PACKED$", str(shapes["oshape_packed"]))
+    driver = driver.replace("$INPUT_DMA_NAME$", "%s" % str(shapes["idma_names"]))
+    driver = driver.replace("$OUTPUT_DMA_NAME$", "%s" % str(shapes["odma_names"]))
+    driver = driver.replace("$NUM_INPUTS$", str(len(shapes["idma_names"])))
+    driver = driver.replace("$NUM_OUTPUTS$", str(len(shapes["odma_names"])))
+    driver = driver.replace("$EXT_WEIGHT_NUM$", str(ext_weight_num))
+    driver = driver.replace("$EXT_WEIGHT_INPUT_SHAPES$", str(ext_weight_shapes or {}))
+    mlo_config_str = json.dumps(mlo_config or {}, indent=4).replace("\n", "\n    ")
+    driver = driver.replace("$MLO_WEIGHT_CONFIG$", mlo_config_str)
+    driver = driver.replace("$FCLK_MHZ$", repr(float(fclk_mhz)))
+    return driver
+
+
 class MakePYNQDriver(Transformation):
     """Create PYNQ Python code to correctly interface the generated
     accelerator, including data packing/unpacking. Should be called
@@ -462,6 +565,8 @@ class MakePYNQDriver(Transformation):
     dataflow partitions for correct operation.
 
     platform: one of ["zynq-iodma", "vitis-xrt"]
+    fclk_mhz: the clock (MHz) the driver sets PL0 to on Zynq; 100 MHz, the overlay's
+    default, unless the build states its delivered clock
 
     Outcome if successful: sets the pynq_driver_dir attribute in the ONNX
     ModelProto's metadata_props field, with the created driver dir as the
@@ -469,88 +574,17 @@ class MakePYNQDriver(Transformation):
     under the runtime_weights/ subfolder of the pynq_driver_dir.
     """
 
-    def __init__(self, platform):
+    def __init__(self, platform, fclk_mhz=100.0):
         super().__init__()
         self.platform = platform
+        self.fclk_mhz = fclk_mhz
 
     def apply(self, model):
         # create a temporary folder for the generated driver
         pynq_driver_dir = make_build_dir(prefix="pynq_driver_")
         model.set_metadata_prop("pynq_driver_dir", pynq_driver_dir)
 
-        # create the base FINN driver -- same for all accels
-        driver_base_template = deploy.data_path("pynq_driver/driver_base.py")
-        driver_base_py = pynq_driver_dir + "/driver_base.py"
-        shutil.copy(driver_base_template, driver_base_py)
-        # driver depends on qonnx and finn packages
-        # extract individual source files and copy to driver folder
-        qonnx_target_path = pynq_driver_dir + "/qonnx"
-        finn_target_path = pynq_driver_dir + "/finn"
-        os.makedirs(qonnx_target_path + "/core", exist_ok=True)
-        os.makedirs(qonnx_target_path + "/util", exist_ok=True)
-        os.makedirs(finn_target_path + "/util", exist_ok=True)
-        qonnx_path = qonnx.__path__[0]
-        finn_util_path = finn.util.__path__[0]
-        files_to_copy = []
-        files_to_copy.append(
-            (qonnx_path + "/core/datatype.py", qonnx_target_path + "/core/datatype.py")
-        )
-        files_to_copy.append(
-            (qonnx_path + "/core/__init__.py", qonnx_target_path + "/core/__init__.py")
-        )
-        files_to_copy.append(
-            (qonnx_path + "/util/__init__.py", qonnx_target_path + "/util/__init__.py")
-        )
-        files_to_copy.append(
-            (
-                finn_util_path + "/__init__.py",
-                finn_target_path + "/util/__init__.py",
-            )
-        )
-        for src_file, target_file in files_to_copy:
-            shutil.copy(src_file, target_file)
-
-        # qonnx.util.basic and finn.util.data_packing are not copied verbatim:
-        # the driver only needs a handful of pure-numpy helpers from each, while
-        # the full files import onnx (qonnx.util.basic) and bitstring
-        # (finn.util.data_packing). Emitting a trimmed-down module keeps those
-        # heavy dependencies off the deployment board.
-        _generate_minimal_module(
-            qonnx_target_path + "/util/basic.py",
-            qonnx.util.basic,
-            [
-                qonnx.util.basic.roundup_to_integer_multiple,
-                qonnx.util.basic.gen_finn_dt_tensor,
-            ],
-            "import numpy as np\n"
-            "from typing import cast\n\n"
-            "from qonnx.core.datatype import BaseDataType, DataType, FixedPointType",
-        )
-        dp = finn.util.data_packing
-        _generate_minimal_module(
-            finn_target_path + "/util/data_packing.py",
-            dp,
-            [
-                dp.finnpy_to_packed_bytearray,
-                dp._pack_whole_byte_container,
-                dp._pack_bit_double_reverse,
-                dp._pack_general,
-                dp.finnpy_to_int_array,
-                dp.int_array_to_packed_bytearray,
-                dp.packed_bytearray_to_finnpy,
-                dp.prepare_values,
-                dp.unsiged_array_to_signed,
-                dp.packed_bytearray_to_finnpy_fast,
-                dp.data_prepared_to_finnpy_bipolar,
-                dp.data_prepared_to_finnpy_ternary,
-                dp.data_prepared_to_finnpy_fixed,
-                dp.data_prepared_to_finnpy_int,
-                dp.packed_bytearray_to_finnpy_float,
-            ],
-            "import numpy as np\n\n"
-            "from qonnx.core.datatype import DataType\n"
-            "from qonnx.util.basic import roundup_to_integer_multiple",
-        )
+        write_pynq_driver_support(pynq_driver_dir)
 
         driver_shapes: Dict = get_driver_shapes(model)
 
@@ -648,35 +682,17 @@ class MakePYNQDriver(Transformation):
 
         # fill in the driver template
         driver_py = pynq_driver_dir + "/driver.py"
-        driver = template_driver.pynq_driver_template
-
-        driver = driver.replace("$PLATFORM$", self.platform)
-        driver = driver.replace("$INPUT_FINN_DATATYPE$", str(driver_shapes["idt"]).replace('"', ""))
-        driver = driver.replace("$INPUT_SHAPE_NORMAL$", str(driver_shapes["ishape_normal"]))
-        driver = driver.replace("$INPUT_SHAPE_FOLDED$", str(driver_shapes["ishape_folded"]))
-        driver = driver.replace("$INPUT_SHAPE_PACKED$", str(driver_shapes["ishape_packed"]))
-        driver = driver.replace(
-            "$OUTPUT_FINN_DATATYPE$", str(driver_shapes["odt"]).replace('"', "")
+        driver = pynq_driver_text(
+            self.platform,
+            driver_shapes,
+            self.fclk_mhz,
+            ext_weight_num=ext_weight_dma_cnt,
+            ext_weight_shapes=ext_weight_shapes_dict,
+            mlo_config=mlo_config,
         )
-        driver = driver.replace("$OUTPUT_SHAPE_NORMAL$", str(driver_shapes["oshape_normal"]))
-        driver = driver.replace("$OUTPUT_SHAPE_FOLDED$", str(driver_shapes["oshape_folded"]))
-        driver = driver.replace("$OUTPUT_SHAPE_PACKED$", str(driver_shapes["oshape_packed"]))
-        driver = driver.replace("$INPUT_DMA_NAME$", "%s" % str(driver_shapes["idma_names"]))
-        driver = driver.replace("$OUTPUT_DMA_NAME$", "%s" % str(driver_shapes["odma_names"]))
-        driver = driver.replace("$NUM_INPUTS$", str(len(driver_shapes["idma_names"])))
-        driver = driver.replace("$NUM_OUTPUTS$", str(len(driver_shapes["odma_names"])))
-        driver = driver.replace("$EXT_WEIGHT_NUM$", str(ext_weight_dma_cnt))
-        driver = driver.replace("$EXT_WEIGHT_INPUT_SHAPES$", str(ext_weight_shapes_dict))
-        mlo_config_str = json.dumps(mlo_config, indent=4).replace("\n", "\n    ")
-        driver = driver.replace("$MLO_WEIGHT_CONFIG$", mlo_config_str)
 
         with open(driver_py, "w") as f:
             f.write(driver)
-
-        # add validate.py to run full top-1 test (only for suitable networks)
-        validate_py = pynq_driver_dir + "/validate.py"
-        validate_template = deploy.data_path("pynq_driver/validate.py")
-        shutil.copy(validate_template, validate_py)
 
         # generate weight files for runtime-writable layers
 

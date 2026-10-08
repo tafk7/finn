@@ -20,17 +20,17 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import DspBlock, Target
-from finn.transformation.kernels import InferKernelTensors, resolve_target
+from finn.platform import resolve_target
+from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import matmul_model, thresholding_model
 
-ZYNQ = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")  # Ultra96 in its shell
-ALVEO = resolve_target("xcu55c-fsvh2892-2L-e", 5.0, "vitis_alveo")
-URAM = Target("a part with UltraRAM it initializes", FULL_DSP58)
+ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")  # Ultra96 in its shell
+URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")
 
 
 def targeted(model: ModelWrapper, target: Target) -> ModelWrapper:
@@ -72,27 +72,25 @@ def test_a_doubled_clock_is_the_shells_and_forced_off_without_it() -> None:
     assert alone.point().w.source.pumped_memory is True
 
 
-def test_runtime_writable_thresholds_need_a_control_port_and_bus() -> None:
-    with pytest.raises(KernelOpError, match="use_axilite.*control-absent"):
-        op(targeted(thresholding_model(), ALVEO)).save({"use_axilite": True})
-    # Ultra96 has the port, but a KernelOp places no control bus to present it through.
+def test_runtime_writable_thresholds_need_a_control_bus() -> None:
+    # A KernelOp places no control bus to present its AXI-Lite interface through.
     with pytest.raises(KernelOpError, match="use_axilite.*threshold-control"):
         op(thresholding_model()).save({"use_axilite": True})
 
 
 def test_a_partitions_weight_stream_reads_the_platform() -> None:
     model = targeted(matmul_model(), ZYNQ).transform(InferKernelTensors())
-    root = partition_root(model, model.graph.node)
-    stream = root.point.w
+    root = shell_root(model, model.graph.node)
+    stream = root.point.partition.w
     assert stream.platform == ZYNQ.platform
     assert isinstance(stream.source, MemStreamKernel)
     with pytest.raises(ValueError, match="clk2x-absent"):
-        commit(root.point, {"w.source.memstream.pumped_memory": True})
+        commit(root.point, {"partition.w.source.memstream.pumped_memory": True})
     # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
-    fifo = {"w.transport": "fifo", "w.transport.fifo.buffer.depth": 4096}
+    fifo = {"partition.w.transport": "fifo", "partition.w.transport.fifo.buffer.depth": 4096}
     with pytest.raises(ValueError, match="uram-absent"):
-        commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"})
-    assert commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "block"})
+        commit(root.point, {**fifo, "partition.w.transport.fifo.buffer.ram_style": "ultra"})
+    assert commit(root.point, {**fifo, "partition.w.transport.fifo.buffer.ram_style": "block"})
 
 
 def test_a_bare_kernel_states_its_platform() -> None:

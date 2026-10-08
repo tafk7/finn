@@ -20,12 +20,16 @@ import numpy as np
 from qonnx.core.datatype import DataType
 
 from finn.dataflow.gemm import Form
+from finn.harness.pacing import FREE, STALLED, Pacing
+from finn.harness.rtl import materialize
+from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.abi import abi_pins
 from finn.kernels.target import DspBlock
 from kernels.helpers import WeightDelivery, full_platform, matmul_assembly
 from kernels.sweeps.rtl_transport import drive_observed
-from kernels.toolchain import print_identity
-from kernels.xsim import materialize
+
+# Stalled, the outputs alone: the inputs stream continuously.
+OUTPUTS_STALLED = Pacing(outputs=STALLED.outputs)
 
 
 @dataclass(frozen=True)
@@ -328,8 +332,7 @@ def run(
             stimulus,
             {"out0_V": built.result_beats},
             observations,
-            stalls=stalled,
-            input_stalls=False,
+            pacing=OUTPUTS_STALLED if stalled else FREE,
             directory=directory / ("stalled" if stalled else "free"),
             data_files=data_files,
         )

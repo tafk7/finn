@@ -20,6 +20,8 @@ import pytest
 import finn.kernels.explore as explore_module
 from finn import resources
 from finn.core.space import design_space
+from finn.harness.rtl import simulate as simulate_rtl
+from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel
@@ -47,9 +49,7 @@ from finn.kernels.fifo_sizing import (
 from finn.kernels.input_generator import nest_buffer, nest_geometry
 from kernels import chain
 from kernels.helpers import FULL_DSP48E2, Lanes
-from kernels.toolchain import finnlib_root
 from kernels.xsim import requires_xsim
-from kernels.xsim import simulate as simulate_rtl
 
 MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "second")
 

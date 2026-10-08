@@ -23,10 +23,11 @@ from pathlib import Path
 import numpy as np
 
 from finn.dataflow.traversal import Traversal, vector_major
+from finn.harness.pacing import FREE, STALLED
+from finn.harness.rtl import materialize
+from finn.harness.toolchain import print_identity
 from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
 from kernels.sweeps.rtl_transport import drive
-from kernels.toolchain import print_identity
-from kernels.xsim import materialize
 
 BITS = ELEMENT.bits
 
@@ -78,7 +79,14 @@ def run_adapted(label, source, pe, modules, evidence):
     top, sources, data = _build(point, evidence / f"adapted_{label}")
     mask = (1 << (4 * pe)) - 1
     for stalls in (False, True):
-        out = drive(top, sources, {}, len(expected), stalls=stalls, data_files=data)
+        out = drive(
+            top,
+            sources,
+            {},
+            len(expected),
+            pacing=STALLED if stalls else FREE,
+            data_files=data,
+        )
         assert [word & mask for word in out] == expected, (label, stalls)
         print(f"PASS {label} ({' -> '.join(modules)}) stalled={stalls}", flush=True)
 
@@ -109,7 +117,7 @@ def run_transpose(rows, cols, simd, evidence):
             sources,
             {"in0": _padded(stimulus, simd * BITS)},
             len(expected),
-            stalls=stalls,
+            pacing=STALLED if stalls else FREE,
             data_files=data,
         )
         assert [word & mask for word in out] == expected, (rows, cols, simd, stalls)

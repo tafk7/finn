@@ -32,6 +32,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.util.basic import qonnx_make_model
 
 from finn.builder import build_dataflow, build_dataflow_steps
+from finn.builder.build_dataflow_checks import run_all_config_checks
 from finn.builder.build_dataflow_config import (
     AutoFIFOSizingMethod,
     DataflowBuildConfig,
@@ -287,6 +288,7 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
         "command_dir": "/site/bin",
         "launcher": ["ssh", "build"],
         "hls_frontend": "vitis_hls",
+        "vivado_jobs": None,
     }
     restored = DataflowBuildConfig.from_json(cfg.to_json())
     assert restored.toolchain == selection and restored == cfg
@@ -583,3 +585,22 @@ def test_a_build_with_no_toolchain_stated_runs_under_the_site_directory(
     model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
     build_dataflow_steps.step_minimize_bit_width(model, cfg)
     assert site.calls == ["g++"]
+
+
+def test_vivados_jobs_are_the_selections_and_the_kernel_paths_only():
+    """SZ7: how many runs Vivado launches at once is a machine setting of the toolchain's
+    selection, a positive number or None (the machine's cores); the HWCustomOp flow keeps
+    its own field, and refuses the selection's rather than ignore it."""
+    assert Selection(vivado_jobs=3).vivado_jobs == 3 and Selection().vivado_jobs is None
+    for refused in (0, -1, 2.0, True):
+        with pytest.raises(ValueError, match="positive number"):
+            Selection(vivado_jobs=refused)
+    cfg = DataflowBuildConfig(
+        output_dir="out",
+        synth_clk_period_ns=5.0,
+        generate_outputs=[],
+        toolchain=Selection(vivado_jobs=3),
+    )
+    checks = run_all_config_checks(cfg).checks
+    (refused,) = [check for check in checks if check.name == "toolchain_vivado_jobs"]
+    assert not refused.passed and "beside the toolchain" in refused.suggestion

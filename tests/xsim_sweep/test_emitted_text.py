@@ -189,7 +189,9 @@ EDITS = [
     # conformance job consumes it, as well as the adapters sweep.
     ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", BOTH),
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
-    ("toolchain", "tests/kernels/toolchain.py", "\nLIMIT = 1\n", BOTH),
+    # The harness package: both jobs run the testbench writer's or its toolchain's code.
+    ("harness-rtl", "src/finn/harness/rtl.py", "\nLIMIT = 1\n", BOTH),
+    ("harness-toolchain", "src/finn/harness/toolchain.py", "\nLIMIT = 1\n", BOTH),
     ("sweep-script", "scripts/xsim-sweep.sh", "\n# edited\n", BOTH),
     # Not consumed: another kernel's RTL, an unrelated test, a comment in the harness,
     # FINN code no design reaches.
