@@ -183,7 +183,8 @@ a board the shell was not built and timed on, followed by its row's ``caveat``."
 
 def part_report(name: str) -> dict[str, object]:
     """The target's part as the part catalog states it (``finn.platform.catalog``):
-    its device, the device's resources per SLR, the devices that share them, and
+    its device, the device's resources per SLR (``None`` where Vivado states no split),
+    the devices that share them, and
     where its facts come from (``source``); a part the catalog does not have says
     why, with no source."""
     try:
@@ -196,7 +197,7 @@ def part_report(name: str) -> dict[str, object]:
         "device": device.name,
         "architecture": device.architecture,
         "family": device.family,
-        "slrs": [asdict(slr) for slr in device.slrs],
+        "slrs": None if device.slrs is None else [asdict(slr) for slr in device.slrs],
         "shared_with": list(device.shared_with),
         "source": found.source,
     }

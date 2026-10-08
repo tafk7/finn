@@ -98,7 +98,7 @@ def test_a_part_is_found_without_case_and_answered_in_its_spelling(data: Path) -
     found = load(data).part("XCZU3EG-SBVA484-1-I")
     assert found.name == "xczu3eg-sbva484-1-i"
     assert (found.package, found.speed, found.temperature) == ("sbva484", "-1", "E")
-    assert found.device.name == "xczu3eg" and list(found.device.slrs) == ZU3
+    assert found.device.name == "xczu3eg" and found.device.slrs == tuple(ZU3)
     assert found.source.startswith("FINN's part catalog, from Vivado 2025.2 (SW Build 1)")
 
 
@@ -299,12 +299,12 @@ def test_an_overlay_states_a_record_by_its_totals_and_slrs(data: Path, tmp_path:
     """A device of one SLR may state its totals alone; one of several states each
     SLR, or its totals and SLR count where the split is not known."""
     totals = asdict(ZU7[0])
-    devices = [
+    devices: list[dict[str, Any]] = [
         {"name": "xcone", "resources": {"totals": totals}},
         {"name": "xcsplit", "resources": {"slrs": counts(ZU3 * 2)}},
         {"name": "xcwhole", "resources": {"totals": totals, "slr_count": 2}},
     ]
-    stated = {
+    stated: dict[str, Any] = {
         "source": "s",
         "devices": [dict(each, architecture="zynquplus", family="zynquplus") for each in devices],
     }
@@ -434,7 +434,7 @@ def test_a_devices_totals_are_its_slrs_sum_except_a_reduced_dies_split(
         "xcvu5p_CIV",
     ]
     vu5p = committed.device("xcvu5p")
-    assert (vu5p.slr_count, vu5p.resources.lut) == (2, 600_577)  # VU7P's die halves: 394 080
+    assert (vu5p.slr_count, vu5p.resources.lut) == (2, 600_577)
     assert "reduced die" in SLRS_UNSTATED
 
 
@@ -442,7 +442,8 @@ def test_a_multi_slr_device_states_each_slr(committed: Catalog) -> None:
     vu9p = committed.part("xcvu9p-flga2104-2L-e").device
     assert vu9p.slrs == (Resources(lut=394_080, ff=788_160, bram18=1_440, uram=320, dsp=2_280),) * 3
     u250 = committed.part("xcu250-figd2104-2L-e").device
-    assert len(u250.slrs) == 4 and u250.resources.lut == 1_728_000
+    assert u250.slrs is not None and len(u250.slrs) == 4
+    assert u250.resources.lut == 1_728_000
 
 
 def test_every_boards_part_resolves_with_its_totals() -> None:
