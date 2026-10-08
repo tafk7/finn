@@ -17,9 +17,11 @@ Folded by ``TargetCycles`` and completed, the Chain on ip reaches 3 cycles a fra
 the Zynq shell its ends hold it at 16 cycles at the fastest, and its shell's total is
 about 9 500 LUT more: the ends' and the static region's.
 
-TFC at 1e6 fps ([target_throughput 1e6, size_fifos]) reaches 196 cycles a frame at
-5 202 LUT on ip, and 200 (its input end) at 14 946 LUT in the Zynq shell. A LUT budget
-below that, on either shell, searches to 256 cycles, the partition at 4 040 LUT.
+TFC's least parallelism (no budget) reaches 50 176 cycles a frame at 1 034 LUT on ip,
+10 778 in the Zynq shell; at 3 136 cycles it uses 1 143 and 10 887. Each end-to-end
+search budgets between the two: of the budgets measured, the cheapest search that
+still bisects both ways to a point that fits, its folds all at budgets of thousands
+of cycles. R3's budgets (``{lut: 0.5}``, ``0.07`` and ``0.2``) are its record's probe's.
 """
 
 from __future__ import annotations
@@ -47,9 +49,6 @@ from kernel_ops.tfc import ULTRA96
 ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period_ns)
 SHELLS = {"ip": ULTRA96_IP, "pynq": ULTRA96}
 SIZE_FIFOS = {"strategy": "size_fifos"}
-
-#: TFC's bottleneck at 1e6 fps ([target_throughput 1e6, size_fifos]) on ``ip``.
-AT_1E6_CYCLES = 196
 
 
 def within(lut: float) -> list[dict[str, Any]]:
@@ -101,18 +100,17 @@ def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
 
 
 def searched_tfc(
-    tfc: ModelWrapper, shell: str, fraction: float, budget: int, at_1e6: dict[str, Any]
+    tfc: ModelWrapper, shell: str, fraction: float, budget: int, cycles: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """[max_throughput {lut: fraction}, size_fifos] on TFC, a LUT budget below what the
-    1e6-fps point (``at_1e6``: its budget, bottleneck and use) uses: bisection between
-    the fastest fold, which does not fit, and the least parallelism, which does, keeps
-    a point at 256 cycles a frame whose total fits, and the report states it against
-    the budget. The search's entry and the report."""
+    """[max_throughput {lut: fraction}, size_fifos] on TFC: bisection between the fastest
+    fold, which does not fit, and the least parallelism, which does, through budgets
+    that fit and budgets that do not, keeps the least budget that fits, ``cycles``,
+    and the report states its point against the budget. The search's entry and the
+    report."""
     report = explored(tfc, SHELLS[shell], within(fraction))
     searched, sized = report["strategies"]
     assert searched["strategy"] == "max_throughput" and sized["strategy"] == "size_fifos"
     assert searched["within"] == {"lut": fraction} and searched["budget"] == {"lut": budget}
-    assert budget < at_1e6["used"]["lut"]
     used = report["resources"]["used"]
     # The search costs the shell's total; sizing places no FIFO here (FIFOs would join
     # the total after the search, NOTE §4.2), so the report's total is the search's.
@@ -124,34 +122,28 @@ def searched_tfc(
         "lut": round(used["lut"] / budget, 4)
     }
     assert searched["bottleneck"] == report["bottleneck"]
-    assert report["bottleneck"]["cycles"] == 256 > AT_1E6_CYCLES
-    assert report["resources"]["shell"]["partition"]["lut"] == 4040
+    assert report["bottleneck"]["cycles"] == cycles
     tried = searched["tried"]
     assert tried[0]["cycles"] == 1 and searched["fastest"] == tried[0]["bottleneck"]
     assert not tried[0]["fits"]
     assert (tried[1]["cycles"], tried[1]["bottleneck"], tried[1]["fits"]) == (None, 50176, True)
-    assert min(row["cycles"] for row in tried[2:] if row["fits"]) == 256
-    # Bisection tried the budget that folds as the 1e6-fps point does, which does not fit.
-    row = next(row for row in tried if row["cycles"] == at_1e6["cycles"])
-    assert (row["bottleneck"], row["used"], row["fits"]) == (
-        at_1e6["bottleneck"],
-        at_1e6["used"],
-        False,
-    )
+    bisected = tried[2:]
+    assert {row["fits"] for row in bisected} == {True, False}
+    assert min(row["cycles"] for row in bisected if row["fits"]) == cycles
+    assert all(row["cycles"] < cycles for row in bisected if not row["fits"])
+    assert len(tried) == 18
     return searched, report
 
 
 @pytest.mark.slow
-def test_tfc_on_ip_within_fewer_luts_than_its_1e6_fps_point_folds_slower_and_fits(
-    tfc: ModelWrapper,
-) -> None:
-    """7 % of the part's LUTs (4 939), below the 1e6-fps point's partition (5 202)."""
-    at_1e6 = {"cycles": 197, "bottleneck": 196, "used": {"lut": 5202}}
-    searched, report = searched_tfc(tfc, "ip", 0.07, 4939, at_1e6)
-    assert report["resources"]["used"] == report["resources"]["shell"]["partition"]
-    assert len(searched["tried"]) == 17
+def test_tfc_on_ip_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
+    """1.6 % of the part's LUTs (1 128), between the least parallelism's 1 034 and the
+    1 143 of 3 136 cycles: 3 584 cycles at 1 116, the shell's total its partition's."""
+    searched, report = searched_tfc(tfc, "ip", 0.016, 1128, 3584)
+    resources = report["resources"]
+    assert resources["used"]["lut"] == 1116 and resources["used"] == resources["shell"]["partition"]
     # TargetCycles folds by cycles alone: a looser budget can pick a costlier shape.
-    assert "budget 246 uses more than budget 197: lut 5468 > 5202" in searched["departures"]
+    assert "no budget uses more than budget 25089: lut 1034 > 1027" in searched["departures"]
 
 
 # -- in the Zynq shell ----------------------------------------------------------------------
@@ -203,19 +195,16 @@ def test_where_nothing_fits_the_search_warns_and_keeps_the_least_parallelism() -
 
 
 @pytest.mark.slow
-def test_tfc_in_the_zynq_shell_within_fewer_luts_than_its_1e6_fps_point_folds_slower_and_fits(
-    tfc: ModelWrapper,
-) -> None:
-    """20 % of the part's LUTs (14 112), below the 1e6-fps point's shell total (14 946),
-    which its input end holds at 200 cycles."""
-    at_1e6 = {"cycles": 209, "bottleneck": 200, "used": {"lut": 14946}}
-    searched, report = searched_tfc(tfc, "pynq", 0.2, 14112, at_1e6)
+def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
+    """15.5 % of the part's LUTs (10 936), between the least parallelism's shell total,
+    10 778, and the 11 011 of 2 048 cycles: 3 136 cycles at 10 887, the ends and the
+    static region beside the partition."""
+    searched, report = searched_tfc(tfc, "pynq", 0.155, 10936, 3136)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 13784 > resources["shell"]["partition"]["lut"]
-    tried = searched["tried"]
-    assert len(tried) == 18
+    assert resources["used"]["lut"] == 10887 > resources["shell"]["partition"]["lut"] + 9000
     # The input end bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
     # the end (SZ6), a departure stated and not corrected.
+    tried = searched["tried"]
     assert (tried[0]["relaxed_to"], tried[0]["bottleneck"]) == (53, 62)
     assert "budget 1 relaxed to 53, reaching 62" in searched["departures"]
 
