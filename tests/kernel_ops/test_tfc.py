@@ -13,7 +13,6 @@ fast gate runs the platform's.
 
 from __future__ import annotations
 
-import json
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -27,7 +26,11 @@ from qonnx.custom_op.registry import getCustomOp
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.configure import commit, undecided
-from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    OUTPUT_INTERFACES,
+    OUTPUT_VLNV,
+    partition_facts,
+)
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import write_boundary_facts
 from kernel_ops.packaging import reaches_vivado
@@ -134,9 +137,10 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     _, parent, body = partitioned(tmp_path)
     sdp = parent.graph.node[1]
     project = tmp_path / "vivado_stitch_proj"
+    write_boundary_facts(body)
     body = body.transform(PackagePartition(sdp.name, directory=project))
-    assert body.get_metadata_prop("vivado_stitch_vlnv") == f"xilinx_finn:finn:{sdp.name}:1.0"
-    names = json.loads(body.get_metadata_prop("vivado_stitch_ifnames"))
+    assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{sdp.name}:1.0"
+    names = body.get(OUTPUT_INTERFACES)
     assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 80]])
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
