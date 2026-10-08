@@ -27,6 +27,10 @@ generation does (``configured_root``) and reads the ends its boundary channels p
   control map, three scalar registers, fits the least; a partition's bus takes
   ``2**awaddr`` bytes, as its IP's register map states).
 
+It wires one AXI-Lite bus and one memory port an end: an end whose contract states
+other counts is refused, by name (``wire_one_bus_each``), as is a partition bus with
+no ``awaddr`` (no aperture).
+
 The names are the block design's: ends ``idma<i>`` and ``odma<j>`` by direction in port
 order, the static region's instances ``<ip>_0`` (``finn.platform.StaticRegion``), and an
 end's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
@@ -207,9 +211,25 @@ def iodma_configuration(contract: EndContract) -> IodmaConfiguration:
     )
 
 
+def wire_one_bus_each(contract: EndContract, where: str) -> None:
+    """Refuse an end (at ``where``, for the message) the block design cannot wire: it
+    connects one AXI-Lite bus and one memory port an end, while the shell root's
+    admission and costing read the counts the end's contract states."""
+    if (contract.control_buses, contract.memory_ports) != (1, 1):
+        raise IntegrationError(
+            f"{where}: its {contract.kind} end states {contract.control_buses} AXI-Lite "
+            f"buses and {contract.memory_ports} memory ports; the {VIVADO_BLOCK_DESIGN!r} "
+            "integration wires one of each an end"
+        )
+
+
 def _aperture(bus: Bus, least: int) -> int:
-    width: int = next(signal.width for signal in bus.signals if signal.logical == "awaddr")
-    return max(1 << width, least)
+    """The bytes an AXI-Lite ``bus`` takes in the processor's map: ``2**awaddr``, and
+    ``least`` at least. A bus with no ``awaddr`` is refused, naming it."""
+    widths = [signal.width for signal in bus.signals if signal.logical == "awaddr"]
+    if not widths:
+        raise IntegrationError(f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture")
+    return max(1 << widths[0], least)
 
 
 def integration(model: ModelWrapper, completion: Completion | None = None) -> Integration:
@@ -239,6 +259,7 @@ def integration(model: ModelWrapper, completion: Completion | None = None) -> In
         if shape is None:
             raise IntegrationError(f"{tensor} ({port}): the partition states no shape for it")
         contract: EndContract = channel.end_contract
+        wire_one_bus_each(contract, f"{tensor} ({port})")
         prefix = END_INSTANCES[contract.direction]
         instance = f"{prefix}{counts[contract.direction]}"
         counts[contract.direction] += 1
@@ -325,4 +346,5 @@ __all__ = [
     "IodmaConfiguration",
     "integration",
     "iodma_configuration",
+    "wire_one_bus_each",
 ]

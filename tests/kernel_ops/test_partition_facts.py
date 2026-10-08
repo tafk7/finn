@@ -10,10 +10,12 @@ weights streamed, so two inputs cross the boundary. No Vivado.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
+from kernels.artifacts.test_ipxact import AXILITE
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
@@ -40,7 +42,9 @@ from finn.transformation.kernels.integration import (
     Address,
     Connection,
     IntegrationError,
+    _aperture,
     integration,
+    wire_one_bus_each,
 )
 from finn.transformation.kernels.package import write_boundary_facts
 from kernel_ops.models import configure_partition, kernel_model, row_major_w2
@@ -249,6 +253,21 @@ def test_an_iodma_end_refuses_w2_tiled_by_name() -> None:
     with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable: .*end-order: s_axis_1"):
         configure_partition(model)
         write_boundary_facts(model)
+
+
+def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
+    """The block design wires one AXI-Lite bus and one memory port an end, and maps a bus
+    by its ``awaddr``: an end stating other counts, or a bus without one, is refused."""
+    parent = chain("pynq").transform(CutKernelPartition(tmp_path))
+    end = integration(parent).ends[0]
+    wire_one_bus_each(end.contract, "x")
+    for counts in ({"control_buses": 2}, {"memory_ports": 2}, {"memory_ports": 0}):
+        with pytest.raises(IntegrationError, match="x: its iodma_hls end states .* AXI-Lite"):
+            wire_one_bus_each(replace(end.contract, **counts), "x")
+    assert _aperture(AXILITE, 4096) == 4096 and _aperture(AXILITE, 16) == 32
+    bare = replace(AXILITE, signals=tuple(s for s in AXILITE.signals if s.logical != "awaddr"))
+    with pytest.raises(IntegrationError, match="s_axilite: an AXI-Lite bus with no awaddr"):
+        _aperture(bare, 4096)
 
 
 class PackagedHere:
