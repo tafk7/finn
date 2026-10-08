@@ -106,7 +106,7 @@ from finn.custom_op.kernels.partition import (
     partition,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.kernels.artifacts.module import BuildError, BusExport, Fragment, ProducerIdentity, merge
+from finn.kernels.artifacts.module import BuildError, Fragment, ProducerIdentity
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, describe, member_of
 from finn.kernels.ends import END, EndContract, EndOffer
@@ -229,19 +229,14 @@ class Shell(Kernel):
 
     @derived
     def fragment(self) -> Fragment | Rejected:
-        """Each member's netlist under its node, the Partition's in place (``inlined``):
-        the IP's instances and buses are named as the Partition names them."""
-        exports = tuple(
-            BusExport(item.node, item.child, item.port)
-            for located in self.presented
-            for item in located.value
-        )
+        """A kernel's fragment (``Kernel.composed_fragment``), the Partition's in place
+        (``inlined``): the IP's instances and buses are named as the Partition names
+        them, each bus with the writes its configuration takes."""
+        composed = self.composed_fragment()
+        if isinstance(composed, Rejected):
+            return composed
         try:
-            merged = merge(
-                *(item.value.under(str(item.node)) for item in self.netlists),
-                Fragment(exports=exports),
-            )
-            return merged.inlined(PARTITION)
+            return composed.inlined(PARTITION)
         except BuildError as error:
             return reject("kernel-netlist", str(error))
 
