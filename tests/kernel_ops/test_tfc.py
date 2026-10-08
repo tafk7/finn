@@ -20,12 +20,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import shell_root
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import commit, undecided
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition

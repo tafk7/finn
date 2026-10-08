@@ -34,6 +34,8 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
+from finn.harness.rtl import pack as xsim_pack
+from finn.harness.rtl import stream_through
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel, wired
 from finn.kernels.configure import commit
@@ -52,8 +54,7 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
     shuffle_perfect_loopnest_coeffs,
 )
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root, with_direct_transports
-from kernels.xsim import pack as xsim_pack
-from kernels.xsim import requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 
 ROOT = Path(__file__).resolve().parents[2]
 INT3 = ScalarEncoding(DataType["INT3"])

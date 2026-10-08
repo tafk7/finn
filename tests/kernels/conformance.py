@@ -98,6 +98,7 @@ from finn.dataflow.traversal import (
     unreplayed,
     vector_major,
 )
+from finn.harness.rtl import materialize, stream_through
 from finn.kernels.artifacts.abi import check_against_rtl
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
@@ -109,7 +110,6 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import StreamContract
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
-from kernels.xsim import materialize, stream_through
 
 KERNEL, SOURCE = "kernel", "source"
 MODES = ("free", "stalled")

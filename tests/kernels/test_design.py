@@ -20,6 +20,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from kernels.chain import (
@@ -42,7 +43,7 @@ from kernels.chain import (
     weights,
 )
 from kernels.helpers import FULL_DSP48E2, Root, labels
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 
 
 def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():

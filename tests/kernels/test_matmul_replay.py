@@ -21,6 +21,7 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, vector_major
+from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.configure import commit
@@ -35,7 +36,6 @@ from kernels.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
-from kernels.toolchain import finnlib_root
 
 FACTS = dict(
     m=3,
