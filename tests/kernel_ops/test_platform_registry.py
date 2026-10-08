@@ -269,6 +269,16 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
     assert "dsp:" not in message and "fabric:" not in message
 
 
+def test_two_spellings_of_one_part_are_one_target() -> None:
+    """A part outside the table keeps the spelling it was stated in; the build is not
+    refused for stating it in another case (the table's lookup ignores case too)."""
+    stated = resolve_target(part="xczu3eg-sbva484-2-e", period_ns=5.0)
+    shouted = resolve_target(part="XCZU3EG-SBVA484-2-E", period_ns=5.0)
+    assert (stated.part, shouted.part) == ("xczu3eg-sbva484-2-e", "XCZU3EG-SBVA484-2-E")
+    refuse_drift(stated, shouted, "build")
+    with pytest.raises(TargetRefused, match="target-drift: .*part: "):
+        refuse_drift(stated, resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0), "build")
+
 
 # -- resources ---------------------------------------------------------------------------
 
