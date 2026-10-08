@@ -49,11 +49,8 @@ from finn.custom_op.partition.kernel_partitions import (
     partition_body,
 )
 from finn.platform import refuse_drift, shell_row
-from finn.transformation.fpgadataflow.pynq_runner import (
-    build_pynq,
-    driver_description,
-    write_driver,
-)
+from finn.shells.pynq.driver import driver_description, write_driver
+from finn.shells.pynq.runner import build_pynq
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
@@ -496,7 +493,7 @@ def _shipped_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> Path:
 
 def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
-    pynq_runner.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
+    finn.shells.pynq.driver.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
     partition's integration export's ends, PL0 set to the clock the bitfile delivers
     (report/delivered_clock.json), and the bitfile the build ships (finn.outputs) its
     default, relative to driver/. report/driver.json states that bitfile, what the

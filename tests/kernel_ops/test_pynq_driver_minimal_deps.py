@@ -1,8 +1,9 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Smoke test for the minimal qonnx/finn helper modules generated for the PYNQ
-driver. It checks two things quickly, without building or running any hardware:
+"""Smoke test for the minimal qonnx/finn helper modules generated for the pynq shell's
+PYNQ driver (``finn.shells.pynq.driver``). It checks two things quickly, without
+building or running any hardware:
 
 1. The generated ``basic.py`` and ``data_packing.py`` contain no heavy imports
    (``onnx`` / ``bitstring``) and still import + work when those packages are
@@ -11,14 +12,20 @@ driver. It checks two things quickly, without building or running any hardware:
    ``gen_finn_dt_tensor``).
 """
 
+from __future__ import annotations
+
 import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+
 import numpy as np
+import pytest
 import qonnx.core.datatype
 import qonnx.util.basic
-import sys
 
 import finn.util.data_packing
-from finn.transformation.fpgadataflow.make_driver import _generate_minimal_module
+from finn.shells.pynq.driver import _generate_minimal_module
 
 BASIC_FUNCS = [
     "roundup_to_integer_multiple",
@@ -53,7 +60,7 @@ DATA_PACKING_IMPORTS = (
 )
 
 
-def _write_minimal_tree(root):
+def _write_minimal_tree(root: Path) -> tuple[Path, Path]:
     """Emit the trimmed modules the same way the driver generator does, plus a
     verbatim (dependency-free) copy of datatype.py."""
     basic_py = root / "basic.py"
@@ -73,17 +80,18 @@ def _write_minimal_tree(root):
     return basic_py, data_packing_py
 
 
-def _load_module(monkeypatch, name, path):
+def _load_module(monkeypatch: pytest.MonkeyPatch, name: str, path: Path) -> ModuleType:
     """Load a generated file under its real dotted name so downstream absolute
     imports resolve to it, and register it via monkeypatch for auto-cleanup."""
     spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, name, module)
     spec.loader.exec_module(module)
     return module
 
 
-def _imported_top_level_modules(text):
+def _imported_top_level_modules(text: str) -> set[str]:
     """Return the set of top-level module names imported by the given source."""
     modules = set()
     for line in text.splitlines():
@@ -98,7 +106,7 @@ def _imported_top_level_modules(text):
     return modules
 
 
-def test_generated_modules_have_no_heavy_imports(tmp_path):
+def test_generated_modules_have_no_heavy_imports(tmp_path: Path) -> None:
     basic_py, data_packing_py = _write_minimal_tree(tmp_path)
     for path in (basic_py, data_packing_py):
         text = path.read_text()
@@ -110,7 +118,9 @@ def test_generated_modules_have_no_heavy_imports(tmp_path):
         assert "Copyright" in text
 
 
-def test_generated_modules_import_and_roundtrip(tmp_path, monkeypatch):
+def test_generated_modules_import_and_roundtrip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     basic_py, data_packing_py = _write_minimal_tree(tmp_path)
     # make the heavy deps unavailable: importing them now raises ImportError
     monkeypatch.setitem(sys.modules, "onnx", None)

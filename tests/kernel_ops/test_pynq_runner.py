@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The pynq shell's runner (``finn.transformation.fpgadataflow.pynq_runner``) over the
-kernel path's parent graph: the ends' IPs it generates, the block design it writes from
-the integration export, the project, what it collects, its options and its driver.
+"""The pynq shell's build (``finn.shells.pynq``) over the kernel path's parent graph: the
+ends' IPs its runner generates, the block design it writes from the integration export,
+the project, what it collects, its options, and its driver.
 
 The Chain (``kernels.chain``), its second weights streamed (two inputs, ``idma0`` and
 ``idma1``, and ``odma0``), its choices saved, stated for Ultra96 in the Zynq shell and cut
@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -32,23 +32,19 @@ from finn.custom_op.partition.kernel_partitions import (
     partition_body,
 )
 from finn.platform import resolve_target
-from finn.transformation.fpgadataflow import pynq_runner
-from finn.transformation.fpgadataflow.make_driver import (
-    pynq_driver_text,
-    write_pynq_driver_support,
-)
-from finn.transformation.fpgadataflow.pynq_runner import (
+from finn.shells.pynq import driver as pynq_driver
+from finn.shells.pynq import runner as pynq_runner
+from finn.shells.pynq.driver import driver_description, driver_shapes, write_driver
+from finn.shells.pynq.runner import (
     InstanceIP,
     PynqOptions,
     block_design,
     build_pynq,
     collect,
-    driver_description,
-    driver_shapes,
     project_script,
-    write_driver,
 )
-from finn.transformation.fpgadataflow.templates import custom_zynq_shell_template
+from finn.shells.pynq.templates import custom_zynq_shell_template
+from finn.transformation.fpgadataflow import make_driver
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from finn.util import hls
@@ -198,17 +194,17 @@ def test_an_option_the_pynq_build_does_not_take_is_refused(
 
 
 #: The steps of a build that run a tool, each given the build's toolchain.
-TOOL_STEPS = ("HLSSynthIP", "CreateStitchedIP", "PackagePartition")
+TOOL_STEPS = ("hls_synth_ip", "create_stitched_ip", "PackagePartition")
 #: The order they run in, the block design's: each input end's IP (HLS synthesis,
 #: then its stitched IP), the partition's, the output end's.
 TOOL_ORDER = [
-    "HLSSynthIP",
-    "CreateStitchedIP",
-    "HLSSynthIP",
-    "CreateStitchedIP",
+    "hls_synth_ip",
+    "create_stitched_ip",
+    "hls_synth_ip",
+    "create_stitched_ip",
     "PackagePartition",
-    "HLSSynthIP",
-    "CreateStitchedIP",
+    "hls_synth_ip",
+    "create_stitched_ip",
 ]
 
 
@@ -230,7 +226,7 @@ def recorded_build(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     toolchain: object,
-    replaced: tuple[str, ...] = (*TOOL_STEPS, "PrepareIP"),
+    replaced: tuple[str, ...] = (*TOOL_STEPS, "prepare_ip"),
     options: PynqOptions = PynqOptions(),
     packaged: Path | None = None,
 ) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
@@ -240,31 +236,36 @@ def recorded_build(
     body already states that IP, as STITCHED_IP leaves it."""
     seen: list[tuple[str, object, tuple[object, ...]]] = []
 
-    def recorder(name: str) -> type[Transformation]:
-        class Recorded(Transformation):
-            def __init__(self, *args: object, toolchain: object = None, **kwargs: object):
-                super().__init__()
-                self.args = args
-                seen.append((name, toolchain, args))
+    class RecordedPackaging(Transformation):
+        def __init__(self, *args: object, toolchain: object = None, **kwargs: object):
+            super().__init__()
+            self.args = args
+            seen.append(("PackagePartition", toolchain, args))
 
-            def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-                if name == "PackagePartition":
-                    model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-                    model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.args[0]}:1.0")
-                    model.set(OUTPUT_INTERFACES, {"axilite": []})
-                if name == "CreateStitchedIP":
-                    instance = str(self.args[2])
-                    ip = built_ips(tmp_path)[instance]
-                    for node in model.graph.node:
-                        Path(ip.repositories[0]).mkdir(parents=True, exist_ok=True)
-                        getCustomOp(node).set_nodeattr("ip_path", ip.repositories[0])
-                    model.set_metadata_prop(
-                        "vivado_stitch_proj", str(Path(ip.repositories[1]).parent)
-                    )
-                    model.set_metadata_prop("vivado_stitch_vlnv", ip.vlnv)
-                return model, False
+        def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+            model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
+            model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.args[0]}:1.0")
+            model.set(OUTPUT_INTERFACES, {"axilite": []})
+            return model, False
 
-        return Recorded
+    def recorder(name: str) -> object:
+        """The step ``name`` replaced by one that records what it is given: a
+        transformation for PackagePartition, a function for an end's IP steps."""
+        if name == "PackagePartition":
+            return RecordedPackaging
+
+        def recorded(model: ModelWrapper, *args: object, toolchain: object = None) -> ModelWrapper:
+            seen.append((name, toolchain, args))
+            if name == "create_stitched_ip":
+                ip = built_ips(tmp_path)[str(args[2])]
+                Path(ip.repositories[0]).mkdir(parents=True, exist_ok=True)
+                for node in model.graph.node:
+                    getCustomOp(node).set_nodeattr("ip_path", ip.repositories[0])
+                model.set_metadata_prop("vivado_stitch_proj", str(Path(ip.repositories[1]).parent))
+                model.set_metadata_prop("vivado_stitch_vlnv", ip.vlnv)
+            return model
+
+        return recorded
 
     for name in replaced:
         monkeypatch.setattr(pynq_runner, name, recorder(name))
@@ -276,7 +277,13 @@ def recorded_build(
         body.set(OUTPUT_VLNV, "xilinx_finn:finn:partition:1.0")
         body.save(body_file)
     export = integration(parent)
-    built = build_pynq(parent, export, tmp_path / "ends", toolchain=toolchain, options=options)
+    built = build_pynq(
+        parent,
+        export,
+        tmp_path / "ends",
+        toolchain=cast(Toolchain | None, toolchain),
+        options=options,
+    )
     return parent, export, built, seen
 
 
@@ -293,8 +300,8 @@ def test_a_build_generates_each_ends_ip_packages_the_partition_and_runs_vivado(
         (name, vivado) for name in TOOL_ORDER
     ]
     # Each end at the export's part and period, stitched as its instance.
-    assert [args for name, _, args in seen if name == "PrepareIP"] == [(ZYNQ.part, 5.0)] * 3
-    assert [args for name, _, args in seen if name == "CreateStitchedIP"] == [
+    assert [args for name, _, args in seen if name == "prepare_ip"] == [(ZYNQ.part, 5.0)] * 3
+    assert [args for name, _, args in seen if name == "create_stitched_ip"] == [
         (ZYNQ.part, 5.0, instance) for instance in ("idma0", "idma1", "odma0")
     ]
     for end in export.ends:
@@ -397,8 +404,7 @@ open("synthesized_here", "w").close()
 
 
 class HlsToolchain(Toolchain):
-    """A toolchain that runs the tools on its PATH, Vivado faked (``FakeVivado``); it
-    reaches HLSSynthIP's workers pickled."""
+    """A toolchain that runs the tools on its PATH, Vivado faked (``FakeVivado``)."""
 
     def run(self, tool: str, args: Any = (), **options: Any) -> Any:
         if tool == "vivado":
@@ -407,17 +413,15 @@ class HlsToolchain(Toolchain):
 
 
 def machine_refused() -> object:
-    # An Exception, not pytest.fail: it is raised in a pool worker, which passes
-    # an Exception back to the parent and dies on a BaseException.
     raise AssertionError("the machine toolchain was prepared")
 
 
 def test_hls_synthesis_runs_in_the_builds_toolchain(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """PrepareIP and HLSSynthIP run for real on the ends' scratch models, in two workers
-    (the toolchain reaches them pickled), each node's synthesis by the build's
-    toolchain: the only Vitis HLS on its PATH is a fake one."""
+    """Code generation and HLS synthesis run for real on the ends' scratch models, each
+    end's synthesis by the build's toolchain: the only Vitis HLS on its PATH is a fake
+    one."""
     tools = tmp_path / "tools"
     tools.mkdir()
     vitis_hls = tools / "vitis_hls"
@@ -425,13 +429,12 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
     vitis_hls.chmod(0o755)
 
     toolchain = HlsToolchain(Selection(hls_frontend="vitis_hls"), {"PATH": f"{tools}:{os.defpath}"})
-    monkeypatch.setenv("NUM_DEFAULT_WORKERS", "2")
     monkeypatch.setattr(pynq_runner, "machine_toolchain", machine_refused)
     monkeypatch.setattr(hls, "machine_toolchain", machine_refused)
     _, export, _, seen = recorded_build(
-        monkeypatch, tmp_path, toolchain, replaced=("PackagePartition", "CreateStitchedIP")
+        monkeypatch, tmp_path, toolchain, replaced=("PackagePartition", "create_stitched_ip")
     )
-    assert [name for name, _, _ in seen] == [name for name in TOOL_ORDER if name != "HLSSynthIP"]
+    assert [name for name, _, _ in seen] == [name for name in TOOL_ORDER if name != "hls_synth_ip"]
     for end in export.ends:
         (node,) = ModelWrapper(str(tmp_path / "ends" / f"{end.instance}.onnx")).graph.node
         dma = getCustomOp(node)
@@ -497,11 +500,35 @@ def test_the_legacy_driver_runs_resizer_bit_in_the_working_directory(tmp_path: P
     resizer.bit, relative to the directory driver.py and validate.py are run from."""
     driver = tmp_path / "driver"
     driver.mkdir()
-    write_pynq_driver_support(str(driver))
+    make_driver.write_pynq_driver_support(str(driver))
     shapes = driver_shapes(integration(zynq_model(tmp_path)))
-    (driver / "driver.py").write_text(pynq_driver_text("zynq-iodma", shapes, 100.0))
+    (driver / "driver.py").write_text(make_driver.pynq_driver_text("zynq-iodma", shapes, 100.0))
     for script in ("driver.py", "validate.py"):
         assert bitfile_default(driver / script, tmp_path) == "resizer.bit"
+
+
+def test_the_driver_is_the_hwcustomop_flows_copied(tmp_path: Path) -> None:
+    """The shell's driver is a frozen copy of the HWCustomOp flow's (make_driver): its text
+    and every file it runs with, byte for byte, for the same I/O, clock and bitfile. The
+    check goes with the original when the HWCustomOp flow is deleted."""
+    shapes = driver_shapes(integration(zynq_model(tmp_path)))
+    bitfile = "../bitfile/finn-accel.bit"
+    copied = pynq_driver.pynq_driver_text("zynq-iodma", shapes, 187.512, bitfile)
+    original = make_driver.pynq_driver_text("zynq-iodma", shapes, 187.512, bitfile=bitfile)
+    assert copied == original
+
+    def written(directory: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(directory)): path.read_bytes()
+            for path in sorted(directory.rglob("*"))
+            if path.is_file()
+        }
+
+    (tmp_path / "copy").mkdir()
+    (tmp_path / "original").mkdir()
+    pynq_driver.write_pynq_driver_support(str(tmp_path / "copy"))
+    make_driver.write_pynq_driver_support(str(tmp_path / "original"))
+    assert written(tmp_path / "copy") == written(tmp_path / "original")
 
 
 def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path) -> None:

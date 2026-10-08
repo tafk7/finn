@@ -5,11 +5,12 @@
 
 ```text
 finn.core.space  <-  finn.kernels  <-  finn.platform  <-  finn.custom_op.kernels
-finn.dataflow    <-                <-  finn.transformation.kernels
+finn.dataflow    <-                <-  finn.transformation.kernels  <-  finn.shells
                                    <-  finn.harness
                                    <-  the flow (all other finn)
+finn.custom_op.partition  <-  finn.transformation.kernels, finn.shells, the flow
 finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, finn.harness,
-                                               the flow
+                                               finn.shells, the flow
 ```
 
 ``LAYERS`` is the one statement of that order. A module belongs to the layer
@@ -126,6 +127,25 @@ LAYERS: tuple[Layer, ...] = (
         (),
         "tests/kernel_ops",
     ),
+    # The shells' builds: what builds the partition into a shell (the pynq shell's block
+    # design, its ends' IODMAs, its driver), from the integration export. Below the
+    # flow: the builder runs them, and nothing here imports the HWCustomOp flow. The
+    # board's driver files (finn.shells.pynq.data) import pynq, each other and, to
+    # validate, dataset_loading.
+    Layer(
+        "shells",
+        ("finn.shells",),
+        (
+            *_KERNEL_STACK,
+            "platform",
+            "custom_op.kernels",
+            "partition",
+            "util",
+            "transformation.kernels",
+        ),
+        ("numpy", "onnx", "qonnx", "pynq", "driver", "driver_base", "dataset_loading"),
+        "tests/kernel_ops",
+    ),
     # The flow: every FINN module no other layer claims. finn.util.torch_hw_modules
     # is here by its imports: the PyTorch twin of the PWPolyF custom op, it reads
     # that op's constants (finn.custom_op.general). Upstream FINN documents it at
@@ -141,6 +161,7 @@ LAYERS: tuple[Layer, ...] = (
             "util",
             "transformation.kernels",
             "harness",
+            "shells",
         ),
         ANY,
         "tests/kernel_ops",

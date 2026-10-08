@@ -55,7 +55,8 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.kernels.dotp", "kernels"),
         ("finn.custom_op.partition.kernel_partitions.partition_body", "partition"),
         ("finn.custom_op.partition.StreamingDataflowPartition", "partition"),
-        ("finn.transformation.fpgadataflow.insert_iodma", "flow"),
+        ("finn.builder.kernel_build_steps", "flow"),
+        ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
         ("finn.util.torch_hw_modules", "flow"),
@@ -78,7 +79,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
     ("layer", "name"),
     [
         # Kernels importing above their layer: the flow, util, qonnx, KernelOps.
-        ("kernels", "finn.transformation.fpgadataflow.insert_iodma.InsertIODMA"),
+        ("kernels", "finn.shells.pynq.runner.build_pynq"),
         ("kernels", "finn.util.basic.make_build_dir"),
         ("kernels", "finn.builder.build_dataflow"),
         ("kernels", "qonnx.core.modelwrapper.ModelWrapper"),
@@ -89,7 +90,12 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("space", "finn.dataflow.tensor"),
         ("space", "numpy"),
         # util below the flow.
-        ("util", "finn.transformation.fpgadataflow.make_zynq_proj.ZynqBuild"),
+        ("util", "finn.builder.kernel_build_steps.step_kernel_bitfile"),
+        # The shells below the flow: the builder runs them, never the other way.
+        ("shells", "finn.builder.kernel_build_steps"),
+        ("shells", "finn.custom_op.fpgadataflow.hls.iodma_hls.IODMA_hls"),
+        ("shells", "finn.transformation.fpgadataflow.prepare_ip.PrepareIP"),
+        ("transformation.kernels", "finn.shells.pynq.runner"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
         ("util", "finn.util.torch_hw_modules"),
         # The partition node runs its body by qonnx, below the kernel stack and the flow.
@@ -128,6 +134,9 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("harness", "finn.util.toolchain.machine_toolchain"),
         ("harness", "finn.transformation.kernels.package.PackagePartition"),
         ("flow", "finn.harness.rtl.simulate"),
+        ("flow", "finn.shells.pynq.runner.build_pynq"),
+        ("shells", "finn.transformation.kernels.integration.integration"),
+        ("shells", "finn.custom_op.partition.kernel_partitions.partition_body"),
         ("tests.kernels", "finn.harness.rtl.stream_through"),
     ],
 )

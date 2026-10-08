@@ -9,6 +9,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn import deploy
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.rtl.streamingfifo_rtl import StreamingFIFO_rtl
+from finn.shells.pynq.ipgen import data_path as shell_data_path
 from finn.transformation.fpgadataflow.make_driver import MakePYNQDriver
 from finn.util.basic import fifo_rtl_files
 from finn.util.resources import resource_path
@@ -24,6 +25,8 @@ for family, member in [
 ]:
     assert Path(resource_path(family, member)).is_file()
 assert Path(deploy.data_path("mdd/finn_design.mdd")).is_file()
+for member in ("sim_ctrl.v", "mdd/finn_design.mdd", "pynq_driver/driver_base.py"):
+    assert Path(shell_data_path(*member.split("/"))).is_file()
 node = oh.make_node(
     "StreamingFIFO_rtl",
     ["in"],

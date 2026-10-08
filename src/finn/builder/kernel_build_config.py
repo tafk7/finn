@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from finn.kernels.target import Target
 from finn.platform import TargetRequest, shell_row
-from finn.transformation.fpgadataflow.pynq_runner import PynqOptions
+from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN
 from finn.util.toolchain import Selection, Toolchain, machine_selection
 
@@ -205,7 +205,7 @@ class KernelBuildConfig(DataClassJsonMixin):
 
     #: The options of the target's shell's build, as that build states them; a shell
     #: without a build (``ip``) takes none. The ``pynq`` shell's
-    #: (finn.transformation.fpgadataflow.pynq_runner.PynqOptions): ``enable_hw_debug``,
+    #: (finn.shells.pynq.runner.PynqOptions): ``enable_hw_debug``,
     #: integrated logic analyzers on the ends' streams. In JSON:
     #: {"enable_hw_debug": true}. None by default.
     shell_options: Dict[str, Any] = field(default_factory=dict)

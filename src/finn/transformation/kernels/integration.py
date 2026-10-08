@@ -72,7 +72,7 @@ IODMA_PINS = {
     "control": "s_axi_control_0",
 }
 """The pins of an ``IODMA_hls`` end's IP, its one node packaged as a stitched IP (the pynq
-shell's runner, ``finn.transformation.fpgadataflow.pynq_runner``)."""
+shell's runner, ``finn.shells.pynq.runner``)."""
 
 CLOCK, RESET = "ap_clk", "ap_rst_n"
 """Every instance's clock and reset pins."""

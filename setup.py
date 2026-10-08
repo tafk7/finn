@@ -127,6 +127,8 @@ if __name__ == "__main__":
             "finn.xsi.src.*",
             "finn.deploy.data",
             "finn.deploy.data.*",
+            "finn.shells.pynq.data",
+            "finn.shells.pynq.data.*",
         ],
     )
     setup(
@@ -140,6 +142,9 @@ if __name__ == "__main__":
             "finn.custom_hls": resource_files("src/finn/custom_hls"),
             "finn.xsi": resource_files("src/finn/xsi/src", prefix="src/"),
             "finn.deploy": resource_files("src/finn/deploy/data", prefix="data/", extra=(".py",)),
+            "finn.shells.pynq": resource_files(
+                "src/finn/shells/pynq/data", prefix="data/", extra=(".py",)
+            ),
             "finn.core.space": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.kernels": ["py.typed"],
