@@ -12,7 +12,9 @@ A shell row states what the shell gives a partition and what it takes from it:
 - whether it supplies an aligned doubled clock (``ap_clk2x``), the one capability
   of a shell a kernel reads (``finn.kernels.target.Platform.clk2x``);
 - how it is integrated and run on the host;
-- its static region: the logic it instantiates beside the partition and its ends.
+- its static region: the logic it instantiates beside the partition and its ends,
+  and what that uses of the device, by the counts that scale it
+  (``StaticRegion.resources``: out of context, ``SHELL_CHARACTERISED``).
 
 The shells:
 
@@ -24,7 +26,10 @@ The shells:
 - ``pynq``: the Zynq block design the PYNQ driver runs, one row per board
   (``BOARDS``). Its ends are ``IODMA_hls`` movers at the processing system's
   128-bit HP port, a frame a call; its AXI-Lite interconnect takes nine buses; a
-  partition gets no memory port of its own and no doubled clock.
+  partition gets no memory port of its own and no doubled clock. Its static region
+  is the template's: the processing system and its reset, a SmartConnect taking a
+  master a memory port into the HP port, and an AXI interconnect giving a slave an
+  AXI-Lite bus from the processor.
 - ``xrt`` and ``slash`` are named and not built: the kernel path builds Zynq first.
 """
 
@@ -33,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.kernels.ends import ENDS, EndOffer, iodma_hls
+from finn.kernels.utilization import Fit, Resources
 from finn.platform.boards import BOARDS
 from finn.platform.refusal import TargetRefused
 
@@ -45,15 +51,32 @@ NOT_BUILT = {XRT: "the Vitis (XRT) shell", SLASH: "the SLASH shell"}
 
 
 @dataclass(frozen=True, kw_only=True)
+class Scaled:
+    """An IP's resources by the count that scales it: ``fixed``, plus LUTs and FFs by a
+    ``Fit`` over the count (``lut``, ``ff``) from ``scales_from`` on, none below it."""
+
+    fixed: Resources = Resources()
+    lut: Fit = Fit(0, (0,))
+    ff: Fit = Fit(0, (0,))
+    scales_from: int = 1
+
+    def at(self, count: int) -> Resources:
+        if count < self.scales_from:
+            return self.fixed
+        return self.fixed + Resources(lut=self.lut.at(count), ff=self.ff.at(count))
+
+
+@dataclass(frozen=True, kw_only=True)
 class StaticRegion:
     """A shell's own logic beside the partition and its ends, by what scales it: the
     ``processor`` and its ``reset``, fixed; the ``memory_interconnect``, an AXI
-    master a memory port (each end's) into the processor's memory; the
-    ``control_interconnect``, an AXI-Lite slave a bus (the partition's and each
-    end's) from the processor. Each is named by its Vivado IP. The processor
-    addresses the AXI-Lite buses from ``control_base``, in the order they are
-    connected, each at its aperture's alignment and at least ``control_aperture``
-    bytes."""
+    master a memory port (each end's, and each the partition initiates) into the
+    processor's memory; the ``control_interconnect``, an AXI-Lite slave a bus (the
+    partition's and each end's) from the processor. Each is named by its Vivado IP,
+    and its resources stated beside it (``*_use``), out of context
+    (``SHELL_CHARACTERISED``). The processor addresses the AXI-Lite buses from
+    ``control_base``, in the order they are connected, each at its aperture's
+    alignment and at least ``control_aperture`` bytes."""
 
     processor: str
     reset: str
@@ -61,6 +84,26 @@ class StaticRegion:
     control_interconnect: str
     control_base: int
     control_aperture: int
+    processor_use: Resources
+    reset_use: Resources
+    memory_interconnect_use: Scaled
+    control_interconnect_use: Scaled
+
+    def resources(self, *, masters: int, slaves: int) -> tuple[tuple[str, Resources], ...]:
+        """What each of its IPs uses, by its Vivado IP, with ``masters`` memory ports and
+        ``slaves`` AXI-Lite buses connected: at least one of each, as the template
+        builds it."""
+        if masters < 1 or slaves < 1:
+            raise ValueError(
+                f"a static region connects at least one memory port and one AXI-Lite bus, "
+                f"not {masters} and {slaves}"
+            )
+        return (
+            (self.processor, self.processor_use),
+            (self.reset, self.reset_use),
+            (self.memory_interconnect, self.memory_interconnect_use.at(masters)),
+            (self.control_interconnect, self.control_interconnect_use.at(slaves)),
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -119,6 +162,12 @@ on every board it builds for."""
 PYNQ_CONTROL_BUDGET = 9
 """The AXI-Lite buses the Zynq template's interconnect takes."""
 
+# The Zynq template's static region out of context (``SHELL_CHARACTERISED``): xczu3eg and
+# xczu7ev give the same counts. The SmartConnect at 2, 3 and 4 masters of 128 bits
+# (5 346, 7 615 and 9 777 LUTs), within 0.4 %; a narrower master costs less (a 32-bit
+# one about 150 LUTs). The AXI interconnect's converters from the processor's 128-bit
+# port, 1 277 LUTs whatever its slaves, and its crossbar from 2 slaves (131, 184 and
+# 361 LUTs at 2, 4 and 9), within 5 %; one slave needs none.
 ZYNQ_STATIC_REGION = StaticRegion(
     processor="zynq_ultra_ps_e",
     reset="proc_sys_reset",
@@ -127,6 +176,15 @@ ZYNQ_STATIC_REGION = StaticRegion(
     # The template's: its processor's M_AXI_HPM0_FPD window, 4 KiB at least a bus.
     control_base=0xA000_0000,
     control_aperture=4096,
+    processor_use=Resources(lut=264),
+    reset_use=Resources(lut=19, ff=40),
+    memory_interconnect_use=Scaled(lut=Fit(932.8, (2215.5,)), ff=Fit(2171.7, (3179.0,))),
+    control_interconnect_use=Scaled(
+        fixed=Resources(lut=1277, ff=1397),
+        lut=Fit(58.6, (33.35,)),
+        ff=Fit(135.7, (1.27,)),
+        scales_from=2,
+    ),
 )
 
 ROWS: dict[tuple[str, str | None], ShellRow] = {
@@ -189,6 +247,7 @@ __all__ = [
     "ROWS",
     "SHELL_NAMES",
     "SLASH",
+    "Scaled",
     "ShellRow",
     "StaticRegion",
     "XRT",

@@ -32,11 +32,28 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
+from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, memory
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 i, j = Index("i"), Index("j")
+
+
+def inner_shuffle_resources(*, bits: int, i: int, j: int, simd: int, ram_style: str) -> Resources:
+    """FinnLib ``inner_shuffle``, from its RTL's structure (not characterised): SIMD
+    banks of two pages, BANK_DEPTH = 2 I J / SIMD elements each, simple dual port, in
+    RAM_STYLE; the rotators on both sides, a SIMD-way multiplexer a lane bit, and a
+    register a lane bit at each; its two skid FIFOs of depth two (FinnLib ``fifo``), the
+    output's and the read pattern's."""
+    index_bits = max(simd - 1, 0).bit_length()
+    banks = memory(2 * i * j // simd, bits, ram_style).times(simd)
+    rotators = Resources(lut=2 * simd * bits * index_bits, ff=2 * simd * bits)
+    skids = fifo_resources(2, simd * bits, "auto")
+    if index_bits:
+        skids = skids + fifo_resources(2, simd * index_bits, "auto")
+    return banks + rotators + skids
 
 
 class TransposeKernel(Kernel):
@@ -144,6 +161,16 @@ class TransposeKernel(Kernel):
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        return inner_shuffle_resources(
+            bits=self.input_channel.tensor.element.bits,
+            i=self.rows,
+            j=self.cols,
+            simd=self.simd,
+            ram_style=self.ram_style,
+        )
+
     def parameters(self) -> Mapping[str, int | str]:
         return {
             "BITS": self.input_channel.tensor.element.bits,
@@ -171,4 +198,4 @@ class TransposeKernel(Kernel):
         )
 
 
-__all__ = ["TransposeKernel"]
+__all__ = ["TransposeKernel", "inner_shuffle_resources"]

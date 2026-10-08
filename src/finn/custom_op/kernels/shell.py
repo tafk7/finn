@@ -25,13 +25,20 @@ target's board (``finn.platform.shell_row``), which states its ends and budgets.
   module is the same: an end binds no RTL;
 - **admission** (``Shell.interfaces``): what the module presents, within what the
   row takes. The AXI-Lite buses the module presents and its ends present (each
-  end's ``END_CONTROL``) are within the row's ``control_budget``, and the AXI
+  end's contract, ``END``) are within the row's ``control_budget``, and the AXI
   memory ports the module initiates (a bus beside its streams that it initiates)
   within its ``memory_ports``, each refused as ``interface-budget-exceeded``; a
   module that takes an aligned doubled clock needs a row that supplies one
   (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither
   count. The counts are of the configured module, so a point is admitted once it
   is decided (``admission_refusal``);
+- **resources** (``RESOURCES``, ``shell_resources``): the sum of its members' own
+  statements: its partition (the module: the Partition's kernels and channels and
+  the boundary channels' stages), each end (its contract's, ``END``) and its row's
+  static region, at the memory ports and AXI-Lite buses it connects (the module's
+  and its ends'). The ends' and the static region's are out of context
+  (``SHELL_CHARACTERISED``), which overstates the placed shell. The ``ip`` shell has
+  neither, so its resources are its partition's;
 - **paths**: a key of the root is a member path and the key below it
   (``partition.MatMul_0.compute.packed.pe``, ``Reshape_0_out0.transport``): the
   owners, the replayed choices, the dropped ones and the members whose cost a
@@ -67,13 +74,17 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from onnx import NodeProto
 
 from finn.core.space import (
+    Available,
     ConstraintGroup,
     Members,
     Param,
     Rejected,
     Space,
+    Unresolved,
+    View,
     composite,
     constraint,
+    default_semantics,
     derived,
     design_space,
     inspection,
@@ -98,7 +109,8 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import BuildError, BusExport, Fragment, ProducerIdentity, merge
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, describe, member_of
-from finn.kernels.ends import END_CONTROL, EndOffer
+from finn.kernels.ends import END, EndContract, EndOffer
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
 from finn.platform import ShellRow, shell_row
 
 if TYPE_CHECKING:
@@ -110,34 +122,58 @@ PARTITION = "partition"
 """The shell root's member that is its Partition."""
 
 
+@dataclass(frozen=True)
+class ShellResources:
+    """A shell root's resources by member, each its own statement: ``partition``, the
+    module (the Partition's kernels and channels and the boundary channels' stages);
+    ``ends``, each end by its boundary channel's member path; ``static_region``, each
+    of its row's static IPs by its Vivado IP. ``total`` is their sum."""
+
+    partition: Resources
+    ends: tuple[tuple[str, Resources], ...]
+    static_region: tuple[tuple[str, Resources], ...]
+
+    @property
+    def total(self) -> Resources:
+        return total((self.partition, *(used for _, used in self.ends + self.static_region)))
+
+
 class Shell(Kernel):
     """A shell root: its boundary channels and its Partition (``PARTITION``), admitted
-    by its shell's ``row``."""
+    by its shell's ``row``; its resources the sum of its partition's, its ends' and
+    its row's static region's."""
 
     id = "finn.custom_op.kernels.shell"
     version = 1
 
     row: ShellRow = Param()
-    end_control = Members(END_CONTROL)
+    placed_ends = Members(END)
+
+    @derived
+    def module_buses(self) -> tuple[int, int]:
+        """The AXI-Lite buses the module presents and the AXI memory ports it initiates
+        (a bus beside its streams that it initiates)."""
+        buses = [pin for pin in self.composed_abi.pins if isinstance(pin, Bus)]
+        control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
+        memory = sum(
+            bus.protocol is not StandardProtocol.AXIS and bus.endpoint is Endpoint.INITIATOR
+            for bus in buses
+        )
+        return control, memory
 
     @constraint
     def interfaces(self) -> bool | Rejected:
         """The module's AXI-Lite buses and its ends', and the memory ports it initiates,
         within the row's budgets; its doubled clock, if it takes one, the row's."""
         row, abi = self.row, self.composed_abi
-        buses = [pin for pin in abi.pins if isinstance(pin, Bus)]
-        control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
-        ends = sum(item.value for item in self.end_control)
+        control, memory = self.module_buses
+        ends = sum(contract.control_buses for item in self.placed_ends for contract in item.value)
         if row.control_budget is not None and control + ends > row.control_budget:
             return reject(
                 "interface-budget-exceeded",
                 f"the {row.shell!r} shell takes {row.control_budget} AXI-Lite buses; the "
                 f"partition presents {control} and its ends {ends}",
             )
-        memory = sum(
-            bus.protocol is not StandardProtocol.AXIS and bus.endpoint is Endpoint.INITIATOR
-            for bus in buses
-        )
         if row.memory_ports is not None and memory > row.memory_ports:
             return reject(
                 "interface-budget-exceeded",
@@ -153,6 +189,39 @@ class Shell(Kernel):
         return True
 
     admission = ConstraintGroup(interfaces)
+
+    @derived(semantics=default_semantics(ShellResources))
+    def resources_by_member(self) -> ShellResources | Rejected:
+        """Its partition's resources (its members' sum), each end's and its row's static
+        region's, at the memory ports and AXI-Lite buses the module and its ends
+        connect."""
+        partition = total(item.value for item in self.member_resources)
+        contracts: list[tuple[str, EndContract]] = [
+            (str(item.node), contract) for item in self.placed_ends for contract in item.value
+        ]
+        ends = tuple((node, contract.resources) for node, contract in contracts)
+        region = self.row.static_region
+        if region is None:
+            return ShellResources(partition, ends, ())
+        control, memory = self.module_buses
+        masters = memory + sum(contract.memory_ports for _, contract in contracts)
+        slaves = control + sum(contract.control_buses for _, contract in contracts)
+        if masters < 1 or slaves < 1:
+            return reject(
+                "shell-resources",
+                f"the {self.row.shell!r} shell's static region connects at least one "
+                f"memory port and one AXI-Lite bus; the partition and its ends connect "
+                f"{masters} and {slaves}",
+            )
+        return ShellResources(partition, ends, region.resources(masters=masters, slaves=slaves))
+
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        """The sum of its members' statements (``resources_by_member``)."""
+        split: ShellResources = self.resources_by_member
+        return split.total
+
+    by_member = View(resources_by_member)
 
     def producer_identity(self) -> ProducerIdentity:
         """The Partition's: the shell's module is its Partition's IP."""
@@ -309,6 +378,22 @@ def shell_root(
     return ShellRoot(point, owners, stale | dropped, built.boundary, members, ends, row)
 
 
+def shell_resources(point: Any) -> ShellResources | str:
+    """``point``'s resources by member and their total (``Shell.resources_by_member``), a
+    point of a shell root; or why it states none: a member that states none, or the
+    open choices they wait on."""
+    answer = point.query(type(point).by_member)
+    if isinstance(answer, Available):
+        found: ShellResources = answer.value
+        return found
+    if isinstance(answer, Unresolved):
+        awaited = dict.fromkeys(
+            item.owner for item in answer.findings if item.code == "decision-unassigned"
+        )
+        return "waits on " + ", ".join(awaited)
+    return describe([answer])
+
+
 def admission_refusal(point: Any) -> str | None:
     """Why the shell refuses ``point``, a point of a shell root (``Shell.interfaces``),
     or ``None``: admitted, or not decided far enough to say."""
@@ -343,8 +428,10 @@ __all__ = [
     "SHELLS",
     "Shell",
     "ShellKey",
+    "ShellResources",
     "ShellRoot",
     "admission_refusal",
     "persist",
+    "shell_resources",
     "shell_root",
 ]

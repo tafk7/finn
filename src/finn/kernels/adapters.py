@@ -34,7 +34,9 @@ and each becomes a ``Stage``: the child's module and the contracts of its two
 ports, which the channel checks like any other end. Its cost reads the
 realization alone, never a child's choices: ``beats``, the most beats any of its
 ports carries, and ``held_bits``, the buffers its ``input_gen`` stages allocate
-(``BUF_SIZE`` words each, read from the RTL: ``nest_geometry``).
+(``BUF_SIZE`` words each, read from the RTL: ``nest_geometry``). What it uses of
+the device, ``resources``, is its children's own statements summed, which read their
+memory styles.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
@@ -69,6 +71,7 @@ from finn.kernels.artifacts.module import Leaf
 from finn.kernels.input_generator import GeometryError, InputGeneratorKernel, nest_geometry
 from finn.kernels.target import Platform
 from finn.kernels.transport import StreamContract
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.vpc import VpcKernel
 
@@ -314,6 +317,14 @@ class StreamAdapter(Space):
                 return reject("adapter-buffer", str(error))
             held += words * stage.source.form.lanes * bits
         return held
+
+    @view(semantics=RESOURCES_SEMANTICS)
+    def resources(self) -> Resources:
+        """What its stages use of the device, each child's own statement, summed."""
+        kinds = [stage.kind for stage in self.realization]
+        return total(
+            getattr(self, _stage_name(kinds, index)).resources for index in range(len(kinds))
+        )
 
     # The facts of every stage a chain can name; each chain reads its own.
     @derived

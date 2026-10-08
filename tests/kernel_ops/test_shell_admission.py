@@ -97,7 +97,7 @@ def thresholdings(count: int, row: ShellRow) -> Any:
 
 def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
     point = thresholdings(8, PYNQ_ROW)
-    assert point.x.end_control_buses == point.y.end_control_buses == 1
+    assert [end.control_buses for end in point.x.placed_end + point.y.placed_end] == [1, 1]
     assert admission_refusal(point) == (
         "interfaces: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
         "the partition presents 8 and its ends 2"
@@ -115,7 +115,7 @@ def test_seven_and_two_ends_fill_the_budget() -> None:
 def test_the_ip_shell_admits_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
     assert admission_refusal(point) is None
-    assert point.x.end_control_buses == 0
+    assert point.x.placed_end == ()
     ports = [pin.name for pin in point.module.abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
         f"t{index}_s_axilite" for index in range(8)

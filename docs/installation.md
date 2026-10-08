@@ -479,7 +479,9 @@ stated, it is refused by name.
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:
 `target_throughput` folds the least parallelism that meets `fps` at the target's
-clock, `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
+clock, `max_throughput` the fewest cycles a frame whose resources (the shell's: its
+partition, ends and static region) stay within `"within"`, a required
+`{resource: fraction}` of the part's totals (`{"lut": 0.5}`), `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
 each channel's FIFO from both ends' beat patterns at the bottleneck (`direct`
 where none is needed; `"margin"` words added to a FIFO it places, default 0). The
 default list is empty. What no strategy chose stays open, and the completion
@@ -494,7 +496,9 @@ choices the strategies made are written to `kernel_choices.json`, and what the
 exploration found (the strategies, each with the choices it committed, attempts
 and time; every choice with the strategy that made it; every completed value and
 who completed it; whether FIFOs were sized; per-member cycles and buffering, the
-bottleneck, of the point as it is built) to `report/kernel_exploration.json`.
+bottleneck, and the shell's resources against the part's, of the point as it is
+built) to `report/kernel_exploration.json`. A point that uses more of a resource
+than the part has is a warning naming that resource, never a refusal.
 
 Explicit selections, and a dataflow build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the

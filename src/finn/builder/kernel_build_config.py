@@ -105,9 +105,12 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
     #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
     #: ``{"strategy": "target_throughput", "fps": ..., "relax": true}`` (the least
-    #: parallelism meeting fps at the target's clock), ``{"strategy": "size_fifos",
-    #: "margin": 0}`` (each channel's FIFO from both ends' beat patterns). None by
-    #: default: what no strategy chooses stays open, and kernel_completion completes it.
+    #: parallelism meeting fps at the target's clock), ``{"strategy":
+    #: "max_throughput", "within": {"lut": 0.5}}`` (the fewest cycles a frame whose
+    #: shell's resources stay within the fractions named of the part's; ``within`` is
+    #: required), ``{"strategy": "size_fifos", "margin": 0}`` (each channel's FIFO from
+    #: both ends' beat patterns). None by default: what no strategy chooses stays open,
+    #: and kernel_completion completes it.
     kernel_exploration: List[Dict[str, Any]] = field(default_factory=list)
 
     #: Clear the KernelOps' saved choices before exploring: re-explore from scratch.

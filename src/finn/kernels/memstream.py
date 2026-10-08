@@ -65,6 +65,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
@@ -81,6 +82,29 @@ LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""
 
 _MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
+
+
+def memstream_resources(
+    *, sets: int, depth: int, width: int, ram_style: str, pumped_memory: bool
+) -> Resources:
+    """FinnLib ``memstream`` inside ``memstream_axi``: its table, SETS * DEPTH words of
+    WIDTH bits in RAM_STYLE, one port (the configuration port shares the read address);
+    pumped, twice the words of half the bits (``DEPTH_EFF``, ``WIDTH_EFF``). Its output
+    stream (a seven-deep shift register and the output register) is a ``Fit`` over
+    WIDTH, plus the read register a bit where LUTRAM leaves it in the fabric (block RAM
+    and UltraRAM absorb it); characterised unpumped, a pumped memory's gearbox is not
+    in it."""
+    words, bits = (2 * depth, (width + 1) // 2) if pumped_memory else (depth, width)
+    table = memory(sets * words, bits, ram_style, single_port=True)
+    read_register = 0 if table.bram18 or table.uram else bits
+    return table + Resources(
+        lut=_MEMSTREAM_LUT.at(width), ff=_MEMSTREAM_FF.at(width) + read_register
+    )
+
+
+# Feature: WIDTH.
+_MEMSTREAM_LUT = Fit(4.2, (1.026,))
+_MEMSTREAM_FF = Fit(4.4, (2.028,))
 
 
 class MemStreamKernel(Kernel):
@@ -262,6 +286,16 @@ class MemStreamKernel(Kernel):
             return BeatSequence(self.form.repeated(self.set_channel.tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        return memstream_resources(
+            sets=self.sets,
+            depth=self.form.beats,
+            width=self.word_bits,
+            ram_style=self.ram_style,
+            pumped_memory=self.pumped_memory,
+        )
+
     @derived
     def frame_cycles(self) -> int:
         """Its output's beats a pass (a set's, with several), one a cycle at best: a
@@ -337,4 +371,4 @@ class MemStreamKernel(Kernel):
 # Last: channels imports this module (see the annotations above).
 from finn.kernels import channels  # noqa: E402
 
-__all__ = ["MemStreamKernel"]
+__all__ = ["MemStreamKernel", "memstream_resources"]

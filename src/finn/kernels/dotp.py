@@ -67,12 +67,66 @@ from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock, Platform, dsp_widths
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources
 from finn.kernels.values.domains import Integer, range_dtype
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
 # FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).
 _FIRST_DSP_NS, _NEXT_DSP_NS = 0.741, 0.605
+
+
+def core_simd(simd: int, pumped_compute: bool) -> int:
+    """The SIMD ``dotp_axi`` builds its core with (``DSP_SIMD``): pumped, the core takes
+    half the lanes a cycle of the doubled clock, an odd SIMD padded by one."""
+    return (simd + simd % 2) // 2 if pumped_compute else simd
+
+
+def packed_dotp_resources(
+    *,
+    pe: int,
+    simd: int,
+    weight_width: int,
+    activation_width: int,
+    narrow_weights: bool,
+    dsp: DspBlock,
+) -> Resources:
+    """FinnLib ``dotp`` with the ``tree`` reducer, inside ``dotp_axi``; ``simd`` is the
+    core's (``core_simd``).
+
+    DSP slices are exact, the RTL's: ``NUM_LANES`` PE lanes packed into a slice's A
+    input, one slice a SIMD element for each of ``PIPE_COUNT = ceil(PE / NUM_LANES)``
+    pipes. LUTs and FFs are a ``Fit`` over the cross-SIMD adder trees (one a PE lane,
+    ``W + A - 1`` bits wide plus their growth) and the two-bit spill trees of the
+    lanes below a pipe's top one; characterised unpumped, a pumped core's wrapper
+    logic is not in it.
+    """
+    lane = weight_width + activation_width - 1
+    a_bits = dsp_widths(dsp)[0]
+    lanes = (
+        1 if a_bits <= weight_width else 1 + (a_bits - (not narrow_weights) - weight_width) // lane
+    )
+    pipes = ceil(pe / lanes)
+    growth = max(simd - 1, 0).bit_length()
+    trees = pe * (simd - 1) * (lane + growth)
+    spills = (pe - pipes) * (simd - 1) * (2 + growth)
+    return Resources(
+        lut=_DOTP_LUT.at(trees, spills), ff=_DOTP_FF.at(trees, spills), dsp=pipes * simd
+    )
+
+
+def int8_dsp58_dotp_resources(*, pe: int, simd: int) -> Resources:
+    """FinnLib ``dotp_8sx9_dsp58``: a chain of ``CHAINLEN = ceil(SIMD / 3)`` DSP58s a PE
+    lane, three products each; ``simd`` is the core's (``core_simd``). Its DSP slices
+    only: its LUTs and FFs (the operands' skew registers along each chain) are not
+    characterised, no DSP58 part being licensed where it was, and are stated as none,
+    an under-count."""
+    return Resources(dsp=pe * ceil(simd / 3))
+
+
+# Features: the adder trees' bits, the spill trees' bits.
+_DOTP_LUT = Fit(55.4, (1.032, 0.999))
+_DOTP_FF = Fit(80.9, (1.026, 1.625))
 
 
 class DotpAxiKernel(Kernel):
@@ -256,6 +310,14 @@ class DotpAxiKernel(Kernel):
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
         return Clocking(doubled=CLOCK2X, doubling=self.compute_pumping)
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        """Its core's statement, at the core's SIMD (``core_simd``)."""
+        return self._core_resources(core_simd(self.simd, self.compute_pumping))
+
+    def _core_resources(self, simd: int) -> Resources | Rejected:
+        return reject("dotp-core", "dotp_axi is placed through one of its core kernels")
+
     def _narrow_weights(self) -> bool:
         return False
 
@@ -404,6 +466,20 @@ class PackedDotpKernel(DotpAxiKernel):
     def _reducer(self) -> str:
         return self.reducer
 
+    def _core_resources(self, simd: int) -> Resources | Rejected:
+        if self.reducer != "tree":
+            return reject(
+                "dotp-resources", "the compressor reducer's resources are not characterised"
+            )
+        return packed_dotp_resources(
+            pe=self.pe,
+            simd=simd,
+            weight_width=self.w.element.bits,
+            activation_width=self.x.element.bits,
+            narrow_weights=self.narrow_weights,
+            dsp=self.dsp,
+        )
+
     def sources(self) -> tuple[CopiedSource, ...]:
         return (
             *_ADD_MULTI,
@@ -454,6 +530,9 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     def _accumulator(self, least: int, greatest: int) -> QONNXDataType | Rejected:
         return range_dtype(least, greatest)
 
+    def _core_resources(self, simd: int) -> Resources | Rejected:
+        return int8_dsp58_dotp_resources(pe=self.pe, simd=simd)
+
     def sources(self) -> tuple[CopiedSource, ...]:
         return (
             CopiedSource(
@@ -463,4 +542,11 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
         )
 
 
-__all__ = ["DotpAxiKernel", "Int8Dsp58DotpKernel", "PackedDotpKernel"]
+__all__ = [
+    "DotpAxiKernel",
+    "Int8Dsp58DotpKernel",
+    "PackedDotpKernel",
+    "core_simd",
+    "int8_dsp58_dotp_resources",
+    "packed_dotp_resources",
+]

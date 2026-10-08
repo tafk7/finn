@@ -53,7 +53,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from finn.core.space import (
@@ -88,6 +88,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
 from finn.kernels.values.domains import Integer, set_index_dtype
 from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -147,6 +148,49 @@ def lane_counts(rows: object) -> Domain[int]:
         rows=rows,
         extents=Kernel.extents,
     )
+
+
+def stage_style(depth: int, depth_trigger_bram: int, depth_trigger_uram: int) -> str:
+    """The RAM_STYLE ``thresholding`` gives a stage's memory of ``depth``, as its RTL
+    assigns it from the two depth triggers (0: unset)."""
+    if depth_trigger_uram and depth >= depth_trigger_uram:
+        return "ultra"
+    if depth_trigger_bram and depth >= depth_trigger_bram:
+        return "block"
+    return "distributed" if depth_trigger_bram else "auto"
+
+
+def thresholding_resources(
+    *,
+    pe: int,
+    wi: int,
+    wt: int,
+    stage_depths: Sequence[int],
+    depth_trigger_bram: int,
+    depth_trigger_uram: int,
+    use_axilite: bool,
+    shared_row: bool,
+) -> Resources:
+    """FinnLib ``thresholding`` inside ``thresholding_axi``: per pipeline stage and PE
+    lane, one memory of the stage's depth, WT bits wide, in the style the triggers give
+    it (``stage_style``), and a comparator. Without AXI-Lite the memories are never
+    written, and synthesis folds them as constants: where every row is the same
+    (``shared_row``, read from the table: one row, or C equal ones), to nothing. The
+    comparators and the pipeline are a ``Fit`` over the bits it carries, PE * M * (WI +
+    M) for M stages."""
+    tables = Resources()
+    if use_axilite or not shared_row:
+        for depth in stage_depths:
+            style = stage_style(depth, depth_trigger_bram, depth_trigger_uram)
+            tables = tables + memory(depth, wt, style, rom=not use_axilite).times(pe)
+    stages = len(stage_depths)
+    carried = pe * stages * (wi + stages)
+    return tables + Resources(lut=_THRESHOLD_LUT.at(carried), ff=_THRESHOLD_FF.at(carried))
+
+
+# Feature: the bits the pipeline carries, PE * M * (WI + M).
+_THRESHOLD_LUT = Fit(81.7, (0.271,))
+_THRESHOLD_FF = Fit(31.3, (0.948,))
 
 
 class ThresholdingAxiKernel(Kernel):
@@ -410,6 +454,22 @@ class ThresholdingAxiKernel(Kernel):
         """Its schedule's beats, one a cycle at best."""
         return self.schedule.beat_count
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        table = self.thresholds
+        first = table[0][0]
+        bram, uram = self.depth_triggers
+        return thresholding_resources(
+            pe=self.pe,
+            wi=self.input_dtype.bitwidth(),
+            wt=self.threshold_dtype.bitwidth(),
+            stage_depths=[self.stage_depth(stage) for stage in range(self.stages)],
+            depth_trigger_bram=bram,
+            depth_trigger_uram=uram,
+            use_axilite=self.use_axilite,
+            shared_row=all(row == first for group in table for row in group),
+        )
+
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat."""
@@ -546,4 +606,4 @@ class ThresholdingAxiKernel(Kernel):
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 
 
-__all__ = ["ThresholdingAxiKernel"]
+__all__ = ["ThresholdingAxiKernel", "stage_style", "thresholding_resources"]

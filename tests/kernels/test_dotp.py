@@ -67,6 +67,7 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.cycles",
         "compute.module",
         "compute.netlist",
+        "compute.resources",
     ]
     for port in (point.x, point.w, point.y):
         assert isinstance(port, AxiStreamPort)
