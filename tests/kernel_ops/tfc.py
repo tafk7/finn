@@ -35,18 +35,18 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.kernels.explore import Ranked
+from finn.platform import resolve_target
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
-    resolve_target,
 )
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
 """The fixture's chain: every choice ranked by hand, at 16 lanes."""
-ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")
+ULTRA96 = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 """TFC's target: Ultra96 in the Zynq shell (no UltraRAM, no doubled clock)."""
 
 

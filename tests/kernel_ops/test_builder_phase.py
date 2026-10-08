@@ -39,14 +39,16 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_steps import (
     delivered_clock,
+    kernel_target,
     step_infer_kernel_tensors,
     step_kernel_choices,
     step_kernel_ops,
     step_kernel_partition,
     step_verify_kernel_partition,
 )
-from finn.custom_op.kernels.base import KernelOpError, read_target
+from finn.custom_op.kernels.base import read_target
 from finn.kernels.explore import Ranked
+from finn.platform import TargetRefused, resolve_target
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.transformation.kernels import (
     explore_kernel_choices,
@@ -210,8 +212,25 @@ def test_the_verification_refuses_a_partition_for_another_target(
         model = step(model, cfg)
     body = step_kernel_partition(model, cfg)
     cfg.synth_clk_period_ns = 4.0
-    with pytest.raises(KernelOpError, match="period_ns: the model states 5.0, the build 4.0"):
+    with pytest.raises(
+        TargetRefused, match="target-drift: .*period_ns: the model states 5.0, the build 4.0"
+    ):
         step_verify_kernel_partition(body, cfg)
+
+
+def test_the_kernel_paths_target_is_its_shell_flows_shell(tmp_path: Path) -> None:
+    """Until the kernel path has a configuration of its own, the shell flow names its
+    shell: none the ip shell (the part alone), the Zynq flow pynq for the board; the
+    Vitis and SLASH flows name shells the kernel path does not build."""
+    assert kernel_target(config(tmp_path)) == ULTRA96
+    on_ip = kernel_target(config(tmp_path, shell_flow_type=None))
+    assert on_ip == resolve_target(part=ULTRA96.part, period_ns=5.0)
+    assert (on_ip.shell, on_ip.board) == ("ip", None)
+    with pytest.raises(TargetRefused, match="board-part-mismatch"):
+        kernel_target(config(tmp_path, fpga_part="xczu3eg-sbva484-1-i"))
+    vitis = config(tmp_path, board="U250", shell_flow_type=ShellFlowType.VITIS_ALVEO)
+    with pytest.raises(TargetRefused, match="unsupported-shell: 'xrt'"):
+        kernel_target(vitis)
 
 
 def failed_checks(cfg: DataflowBuildConfig, model: ModelWrapper) -> dict[str, list[str]]:

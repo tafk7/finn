@@ -63,7 +63,7 @@ repos:
   - id: ruff-check
     name: ruff check (gate paths)
     args: [--extend-select, I, --fix]
-    files: &gate_ruff '^(src/finn/(core/space|dataflow|kernels|custom_op/kernels|transformation/kernels)/|tests/(core/space|dataflow|kernels|kernel_ops|xsim_sweep)/|tests/(layering|value_classes)\.py$|scripts/(benchmark-space|_gate_precommit|emitted_text)\.py$)'
+    files: &gate_ruff '^(src/finn/(core/space|dataflow|kernels|platform|custom_op/kernels|transformation/kernels)/|tests/(core/space|dataflow|kernels|kernel_ops|xsim_sweep)/|tests/(layering|value_classes)\.py$|scripts/(benchmark-space|_gate_precommit|emitted_text)\.py$)'
   - id: ruff-format
     files: *gate_ruff
   - id: ruff-check

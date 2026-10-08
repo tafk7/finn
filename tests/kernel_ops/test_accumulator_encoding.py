@@ -45,17 +45,17 @@ from finn.kernels.configure import undecided
 from finn.kernels.explore import Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
+from finn.platform import resolve_target
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
-    resolve_target,
 )
 from finn.transformation.kernels.package import write_boundary_facts
 
-ULTRA96 = resolve_target("xczu3eg-sbva484-1-e", 5.0)  # DSP48E2: the packed core
-VCK190 = resolve_target("xcvc1902-vsva2197-2MP-e-S", 5.0)  # DSP58: the INT8 core too
+ULTRA96 = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)  # DSP48E2: the packed core
+VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)  # DSP58: the INT8 core too
 ROWS = 3
 
 

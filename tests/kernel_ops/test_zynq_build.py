@@ -23,7 +23,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.custom_op.kernels.base import KernelOpError, write_target
+from finn.custom_op.kernels.base import write_target
+from finn.platform import TargetRefused, resolve_target
 from finn.transformation.fpgadataflow import make_zynq_proj
 from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
 from finn.transformation.fpgadataflow.kernel_partitions import (
@@ -33,15 +34,14 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
 )
 from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
-from finn.transformation.kernels import resolve_target
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
 from finn.util.vivado import vivado_jobs
-from kernel_ops.models import TARGET, configure_partition, kernel_model
+from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import ReachedVivado
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
-ZYNQ = resolve_target(TARGET.part, 5.0, "vivado_zynq")
+ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 
 
 def zynq_model() -> ModelWrapper:
@@ -123,26 +123,29 @@ def recorded_build(
 @pytest.mark.parametrize(
     "board, period_ns, refused",
     [
-        ("Ultra96", 10.0, "period_ns: the model states 5.0, the build 10.0"),
-        ("ZCU104", 5.0, "part: the model states 'xczu3eg-sbva484-1-e', the build 'xczu7ev-"),
+        ("Ultra96", 10.0, "period_ns: the model states 5.0, the Zynq build 10.0"),
+        ("ZCU104", 5.0, "part: the model states 'xczu3eg-sbva484-1-e', the Zynq build 'xczu7ev-"),
+        ("Ultra96-V2", 5.0, "board: the model states 'Ultra96', the Zynq build 'Ultra96-V2'"),
     ],
 )
 def test_a_build_for_another_target_than_the_models_is_refused(
     tmp_path: Path, board: str, period_ns: float, refused: str
 ) -> None:
     build = ZynqBuild(board, period_ns, partition_model_dir=str(tmp_path))
-    with pytest.raises(KernelOpError, match=refused):
+    with pytest.raises(TargetRefused, match=f"target-drift: .*{refused}"):
         zynq_model().transform(build)
 
 
 def test_a_model_stated_for_another_shell_is_refused(tmp_path: Path) -> None:
-    # The Chain as kernel_model states it: no shell, so a doubled clock and one AXI-Lite
-    # port its kernels may use, neither of which the Zynq shell gives a partition.
+    # The Chain as kernel_model states it: the ip shell, with a doubled clock the Zynq
+    # shell does not give a partition.
     model = kernel_model()
     configure_partition(model)
     build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
-    with pytest.raises(KernelOpError, match="clk2x: the model states True, the build False"):
+    with pytest.raises(TargetRefused) as refused:
         model.transform(build)
+    assert "shell: the model states 'ip', the Zynq build 'pynq'" in str(refused.value)
+    assert "clk2x: the model states True, the Zynq build False" in str(refused.value)
 
 
 def test_a_build_of_kernel_ops_runs_at_the_models_clock_period(

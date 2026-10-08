@@ -26,7 +26,8 @@ from finn.custom_op.kernels.partition import PARTITIONS, Declared, PartitionKey
 from finn.custom_op.kernels.shell import SHELLS, ShellRoot, persist, shell_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
-from finn.transformation.kernels import InferKernelTensors, resolve_target
+from finn.platform import resolve_target
+from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import (
     INT3,
     TARGET,
@@ -101,7 +102,7 @@ def annotated() -> ModelWrapper:
 
 
 def retargeted(model: ModelWrapper) -> ModelWrapper:
-    write_target(model, resolve_target(TARGET.part, 4.0))
+    write_target(model, resolve_target(part=TARGET.part, period_ns=4.0))
     return model
 
 

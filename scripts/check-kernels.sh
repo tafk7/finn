@@ -26,11 +26,11 @@ gate_pytest tests/xsim_sweep
 # builds to IP or bitfile (end2end) are deselected in either mode, so this step
 # stays at a few minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado end2end slow
-gate_ruff src/finn/kernels tests/kernels \
+gate_ruff src/finn/kernels tests/kernels src/finn/platform \
     src/finn/custom_op/kernels src/finn/transformation/kernels tests/kernel_ops \
     scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep
 # finn.util.toolchain: the toolchain packaging takes (PackagePartition's toolchain=).
-gate_mypy -p finn.kernels -p finn.custom_op.kernels -p finn.transformation.kernels \
-    -m finn.util.toolchain
+gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels \
+    -p finn.transformation.kernels -m finn.util.toolchain
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep

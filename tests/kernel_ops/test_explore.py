@@ -34,20 +34,20 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
+from finn.platform import resolve_target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     completion,
     explore_kernel_choices,
     kernel_choices_config,
-    resolve_target,
     strategy,
 )
 from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import matmul_model
 from kernel_ops.test_choose import choices, kernel_model
 
-VCK190 = resolve_target("xcvc1902-vsva2197-2MP-e-S", 5.0)
+VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 
 
 def seam_of(model: ModelWrapper) -> tuple[Seam, Any]:

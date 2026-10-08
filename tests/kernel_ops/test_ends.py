@@ -13,25 +13,32 @@ name it, and FIFO sizing reads both boundaries through it. On the Chain
 
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
 
-from finn.custom_op.kernels.base import KernelOpError
+from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
 from finn.custom_op.kernels.shell import persist, shell_root
 from finn.dataflow.tensor import ScalarEncoding
+from finn.kernels.artifacts.module import module_name
 from finn.kernels.configure import chosen
 from finn.kernels.ends import IODMA_HLS, MEMORY_LATENCY, EndContract, EndOffer, iodma_hls
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, ends
+from finn.platform import resolve_target
+from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
     explore_kernel_choices,
     kernel_choices_config,
 )
+from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96, streamlined
 
@@ -255,3 +262,47 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(tfc: ModelWra
     bottleneck = wide["bottleneck"]
     assert bottleneck["cycles"] == 64 and "partition.MatMul_3" in bottleneck["members"]
     assert "Reshape_0_out0" not in bottleneck["members"]
+
+
+def module_of(model: ModelWrapper, directory: Path) -> str:
+    """The name of the module the explored ``model``'s partition is packaged as."""
+    cut = CreateDataflowPartition(partition_model_dir=str(directory))  # type: ignore[no-untyped-call]
+    parent = model.transform(cut)
+    body = ModelWrapper(str(getCustomOp(parent.graph.node[1]).get_nodeattr("model")))
+    point, _ = configured_root(body, parent.graph.node[1].name)
+    return module_name(point.module)
+
+
+@pytest.mark.slow
+def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell(
+    tfc: ModelWrapper, tmp_path: Path
+) -> None:
+    """With no shell stated, the target is the ip shell's, which offers a doubled clock
+    the Zynq shell does not; TFC explored by [target_throughput 1e6, size_fifos] makes
+    the same choices at the same cycles, and packages as the same module, as it did on
+    Ultra96 in the Zynq shell before the shells had rows (its ends are not wired yet)."""
+    default = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period_ns)
+    assert (default.shell, default.board, default.platform.clk2x) == ("ip", None, True)
+    assert default.platform == replace(ULTRA96.platform, clk2x=True)
+    on_ip = ModelWrapper(tfc.model.__deepcopy__())
+    write_target(on_ip, default)
+    zynq_model, zynq = explored(tfc, 1e6, sizing=True)
+    ip_model, ip = explored(on_ip, 1e6, sizing=True)
+    assert read_target(ip_model) == default
+    assert kernel_choices_config(ip_model) == kernel_choices_config(zynq_model)
+    # The doubled clock opens each MatMul's pumping, which the Zynq shell forces off:
+    # the completion completes it off, so every value the partition is built with is
+    # the Zynq shell's.
+    pumping = {"compute.packed.compute_pumping": False, "w.source.memstream.pumped_memory": False}
+    in_zynq = built(zynq_model, zynq)
+    assert built(ip_model, ip) == {
+        node: {**held, **(pumping if node.startswith("MatMul") else {})}
+        for node, held in in_zynq.items()
+    }
+    cycles = {name: row["cycles"] for name, row in ip["members"].items()}
+    assert cycles == {name: row["cycles"] for name, row in zynq["members"].items()}
+    assert ip["bottleneck"] == zynq["bottleneck"] and ip["bottleneck"]["cycles"] == 196
+    assert ip["fifos"] == zynq["fifos"]
+    # The module TFC in the Zynq shell was packaged as before the shells had rows.
+    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__481b9e45abc00364"
+    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__481b9e45abc00364"

@@ -23,14 +23,15 @@ from qonnx.util.basic import qonnx_make_model
 from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
 from finn.custom_op.kernels.shell import ShellRoot, persist, shell_root
 from finn.kernels.configure import commit, undecided
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps, resolve_target
+from finn.platform import resolve_target
+from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]
 ROWS, K, N = 3, 4, 4
 WEIGHTS = np.array([[(3 * n + 2 * k) % 7 - 3 for n in range(N)] for k in range(K)])
 X = np.array([[[(5 * r + 3 * k) % 8 - 4 for k in range(K)] for r in range(ROWS)]])
-TARGET = resolve_target("xczu3eg-sbva484-1-e", 5.0)  # Ultra96: DSP48E2, no shell
+TARGET = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)  # Ultra96's part, ip
 
 
 def matmul_model(

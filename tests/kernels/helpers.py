@@ -61,7 +61,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, block_diagonal
-from finn.kernels.target import DspBlock, Platform
+from finn.kernels.target import DspBlock, Fabric, Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import set_index_dtype, stored_element
 from finn.kernels.values.semantics import (
@@ -87,17 +87,16 @@ harness (``kernels.toolchain``)."""
 def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:
     """The platform a bare-kernel test means when it is not about the platform: ``dsp``
     its DSP block, a ``period_ns`` clock (5 ns: 200 MHz), and every capability (UltraRAM
-    that takes initial contents, a doubled clock, a control port; no memory port and
-    no AI Engine, which no kernel reads)."""
+    that takes initial contents, a doubled clock) on an UltraScale fabric, its
+    resources not stated (no kernel reads them)."""
     return Platform(
         period_ns=period_ns,
         dsp=dsp,
+        fabric=Fabric.ULTRASCALE,
         uram=True,
         uram_init=True,
         clk2x=True,
-        control_ports=1,
-        memory_ports=0,
-        aie=False,
+        resources=None,
     )
 
 

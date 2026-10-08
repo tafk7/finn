@@ -37,6 +37,8 @@ from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from shutil import copy
 
 from finn import resources
+from finn.custom_op.kernels.base import read_target
+from finn.platform import PYNQ, refuse_drift, resolve_target, shell_row
 from finn.transformation.fpgadataflow.create_dataflow_partition import (
     CreateDataflowPartition,
 )
@@ -52,7 +54,6 @@ from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
-from finn.transformation.kernels.convert import shell_target
 from finn.transformation.kernels.package import PackagePartition, write_boundary_facts
 from finn.util.basic import make_build_dir, pynq_native_port_width, pynq_part_map
 from finn.util.resources import tcl_quote
@@ -294,9 +295,10 @@ class ZynqBuild(Transformation):
     are stated, it becomes one partition, IODMAs are inserted from the facts and
     get partitions of their own; the KernelOps' partition is packaged by
     PackagePartition (the stitched-IP contract), the IODMAs' as always. Its
-    target is the model's (``shell_target``): the board's part, the Zynq shell
-    and ``period_ns``, unless None, must agree with it, and the build runs at
-    the model's clock period.
+    target is the model's (``read_target``): its shell must be ``pynq`` for this
+    board (``finn.platform.refuse_drift``), at ``period_ns`` unless None, the build
+    runs at the model's clock period, and the IODMAs' memory ports are the shell
+    row's ends'.
 
     ``toolchain`` is the prepared ``finn.util.toolchain.Toolchain`` that every
     Vivado and Vitis HLS run of the build goes through (PackagePartition,
@@ -332,11 +334,14 @@ class ZynqBuild(Transformation):
     def prepare_kernel_partitions(self, model):
         """A model of KernelOps as the parent graph of its partitions: an IODMA
         partition per input and output around the KernelOps' partition, whose
-        model states its boundary facts (finn.partition). No IP is built.
+        model states its boundary facts (finn.partition), each IODMA's memory port
+        at most its end's width cap (the model's shell row's). No IP is built.
 
         The facts are written on the partition's body after the cut: they describe
         that partition only, while the model being cut stays the parent graph and
         partitioning copies its metadata to every body cut from it."""
+        target = read_target(model)
+        (end,) = shell_row(target.shell, target.board).ends
         model = model.transform(
             CreateDataflowPartition(partition_model_dir=self.partition_model_dir)
         )
@@ -346,7 +351,7 @@ class ZynqBuild(Transformation):
             write_boundary_facts(body, "the KernelOps' partition", self.completion)
             body.save(body_file)
         # InsertIODMA inserts IODMA_hls nodes, already specialized.
-        model = model.transform(InsertIODMA(self.axi_port_width))
+        model = model.transform(InsertIODMA(end.width_cap))
         # Each IODMA is a partition of its own (Floorplan's default, stated here).
         dmas = [node for node in model.graph.node if node.op_type.startswith("IODMA")]
         for index, node in enumerate(dmas):
@@ -361,8 +366,10 @@ class ZynqBuild(Transformation):
         toolchain = self.toolchain or machine_toolchain()
         period_ns = self.period_ns
         if is_kernel_partition(model):
-            built = shell_target(model, self.fpga_part, "vivado_zynq", period_ns)
-            period_ns = built.platform.period_ns
+            stated = read_target(model)
+            period_ns = stated.platform.period_ns if period_ns is None else period_ns
+            built = resolve_target(board=self.platform, period_ns=period_ns, shell=PYNQ)
+            refuse_drift(stated, built, "Zynq build")
             model = self.prepare_kernel_partitions(model)
         else:
             # first infer layouts

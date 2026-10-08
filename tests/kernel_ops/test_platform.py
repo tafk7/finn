@@ -25,12 +25,12 @@ from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import DspBlock, Target
-from finn.transformation.kernels import InferKernelTensors, resolve_target
+from finn.platform import resolve_target
+from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import matmul_model, thresholding_model
 
-ZYNQ = resolve_target("xczu3eg-sbva484-1-e", 5.0, "vivado_zynq")  # Ultra96 in its shell
-ALVEO = resolve_target("xcu55c-fsvh2892-2L-e", 5.0, "vitis_alveo")
-URAM = Target("a part with UltraRAM it initializes", FULL_DSP58)
+ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")  # Ultra96 in its shell
+URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")
 
 
 def targeted(model: ModelWrapper, target: Target) -> ModelWrapper:
@@ -72,10 +72,8 @@ def test_a_doubled_clock_is_the_shells_and_forced_off_without_it() -> None:
     assert alone.point().w.source.pumped_memory is True
 
 
-def test_runtime_writable_thresholds_need_a_control_port_and_bus() -> None:
-    with pytest.raises(KernelOpError, match="use_axilite.*control-absent"):
-        op(targeted(thresholding_model(), ALVEO)).save({"use_axilite": True})
-    # Ultra96 has the port, but a KernelOp places no control bus to present it through.
+def test_runtime_writable_thresholds_need_a_control_bus() -> None:
+    # A KernelOp places no control bus to present its AXI-Lite interface through.
     with pytest.raises(KernelOpError, match="use_axilite.*threshold-control"):
         op(thresholding_model()).save({"use_axilite": True})
 

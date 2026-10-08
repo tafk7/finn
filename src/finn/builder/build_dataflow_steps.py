@@ -96,6 +96,8 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.core.onnx_exec import execute_onnx, execute_parent
 from finn.core.rtlsim_exec import prepare_stitched_rtlsim
+from finn.custom_op.kernels.base import read_target
+from finn.platform import IP, PYNQ, SLASH, XRT, refuse_drift, resolve_target
 from finn.transformation.fpgadataflow.absorb_into_requant import (
     AbsorbElementwiseOpsIntoRequant,
 )
@@ -158,8 +160,6 @@ from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,
     partition_bottleneck,
-    resolve_target,
-    shell_target,
     strategy,
 )
 from finn.transformation.kernels.package import ElaboratePartition, configured_root
@@ -642,19 +642,29 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     return model
 
 
-def _kernel_shell(cfg: DataflowBuildConfig):
-    """The shell the kernel path's target states: the shell flow's, none without one
-    (a stitched IP)."""
-    return None if cfg.shell_flow_type is None else ShellFlowType(cfg.shell_flow_type).value
+#: The kernel path's shell for each shell flow (finn.platform.shells), until the kernel
+#: path has a build configuration of its own: none is the packaged IP's.
+_KERNEL_SHELLS = {
+    None: IP,
+    ShellFlowType.VIVADO_ZYNQ: PYNQ,
+    ShellFlowType.VITIS_ALVEO: XRT,
+    ShellFlowType.SLASH_ALVEO: SLASH,
+}
 
 
 def kernel_target(cfg: DataflowBuildConfig):
-    """The kernel path's build target, from the build configuration: the part (the
-    board's, unless fpga_part names one), the synthesis clock period, and the shell
-    flow's capabilities. The one place a build states its target: step_kernel_ops
-    writes it into the model, and the shell build reads it from there
-    (finn.transformation.kernels.shell_target), refusing a disagreement."""
-    return resolve_target(cfg._resolve_fpga_part(), cfg.synth_clk_period_ns, _kernel_shell(cfg))
+    """The kernel path's build target, from the build configuration
+    (finn.platform.resolve_target): the shell the shell flow names (_KERNEL_SHELLS),
+    the synthesis clock period, and the board with fpga_part as its assertion, or, on
+    the ip shell, the part alone (the board's, unless fpga_part names one). The one
+    place a build states its target: step_kernel_ops writes it into the model, and
+    the build's later steps refuse a model whose target is not it (refuse_drift)."""
+    flow = None if cfg.shell_flow_type is None else ShellFlowType(cfg.shell_flow_type)
+    shell = _KERNEL_SHELLS[flow]
+    period_ns = cfg.synth_clk_period_ns
+    if shell == IP:
+        return resolve_target(part=cfg._resolve_fpga_part(), period_ns=period_ns)
+    return resolve_target(board=cfg.board, part=cfg.fpga_part, period_ns=period_ns, shell=shell)
 
 
 def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
@@ -802,7 +812,7 @@ def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
     KERNEL_PARTITION_ELABORATION compiles and elaborates the partition's emitted RTL
     in XSim, through the build's toolchain."""
     configured_root(model, "the kernel path's partition", completion(cfg.kernel_completion))
-    shell_target(model, cfg._resolve_fpga_part(), _kernel_shell(cfg), cfg.synth_clk_period_ns)
+    refuse_drift(read_target(model), kernel_target(cfg), "build")
     verify_steps = cfg._resolve_verification_steps()
     if VerificationStepType.KERNEL_PARTITION_PYTHON in verify_steps:
         matched = verify_kernel_partition_python(model, cfg)

@@ -1,0 +1,82 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The one resolution of a build target: a part or a board, a clock period and a shell
+to the ``finn.kernels.target.Target`` its kernels are built for."""
+
+from __future__ import annotations
+
+from dataclasses import fields
+
+from finn.kernels.target import Platform, Target
+from finn.platform.boards import BOARDS
+from finn.platform.parts import part_facts
+from finn.platform.refusal import TargetRefused
+from finn.platform.shells import IP, built_shell, shell_row
+
+
+def resolve_target(
+    *, period_ns: float, part: str | None = None, board: str | None = None, shell: str = IP
+) -> Target:
+    """The target of a build at ``period_ns`` for ``board`` or ``part``, integrated by
+    ``shell`` (``ip`` unless one is stated).
+
+    A board names its part; a part stated beside it is an assertion, refused when it
+    is not the board's (``board-part-mismatch``). The platform is the part's
+    capabilities and totals (``finn.platform.parts``), the shell's doubled clock
+    (``finn.platform.shells``) and the clock period. Every refusal is named
+    (``TargetRefused``)."""
+    built_shell(shell)
+    if not period_ns > 0:
+        raise TargetRefused("period-invalid", f"a clock period is > 0 ns, not {period_ns!r}")
+    if board is not None:
+        if board not in BOARDS:
+            raise TargetRefused(
+                "unknown-board", f"{board!r} is not a board (one of {sorted(BOARDS)})"
+            )
+        if part is not None and part_facts(part).name != BOARDS[board].part:
+            raise TargetRefused(
+                "board-part-mismatch",
+                f"board {board!r} carries {BOARDS[board].part!r}, not {part!r}",
+            )
+        part = BOARDS[board].part
+    if part is None:
+        raise TargetRefused("target-unstated", "a target names a part or a board")
+    facts = part_facts(part)
+    row = shell_row(shell, board)
+    platform = Platform(
+        period_ns=float(period_ns),
+        dsp=facts.dsp,
+        fabric=facts.fabric,
+        uram=facts.uram,
+        uram_init=facts.uram_init,
+        clk2x=row.clk2x,
+        resources=facts.resources,
+    )
+    return Target(part=facts.name, platform=platform, shell=shell, board=board)
+
+
+def refuse_drift(stated: Target, built: Target, build: str) -> None:
+    """Refuse a ``build`` (what it is, for the message) whose target, ``built``, is not
+    the one a model states (``stated``), each differing field named
+    (``target-drift``): a model's target is changed only by converting it again."""
+    pairs = [
+        ("part", stated.part, built.part),
+        ("shell", stated.shell, built.shell),
+        ("board", stated.board, built.board),
+    ] + [
+        (field.name, getattr(stated.platform, field.name), getattr(built.platform, field.name))
+        for field in fields(Platform)
+    ]
+    differing = [
+        f"{name}: the model states {model_value!r}, the {build} {build_value!r}"
+        for name, model_value, build_value in pairs
+        if model_value != build_value
+    ]
+    if differing:
+        raise TargetRefused(
+            "target-drift", f"the model's target is not the {build}'s: " + "; ".join(differing)
+        )
+
+
+__all__ = ["refuse_drift", "resolve_target"]

@@ -12,7 +12,7 @@ outside this repository until the package is final.
 | `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `input_generator.py`, `transpose.py`, `vpc.py` | the kernels |
 | `configure.py` | committing and settling choices by key |
 | `explore.py`, `fifo_sizing.py` | the DSE seam (`Seam`), its strategies (`Pinned`, `TargetThroughput`, `SizeFifos`) and its completion policies (`Baseline`, the debug `Placeholder`); a channel's FIFO depth from both ends' beat patterns |
-| `control.py`, `target.py` | control buses, and the build target kernels see (`Platform`: capabilities and clock; `DspBlock`) |
+| `control.py`, `target.py`, `utilization.py` | control buses, and the build target kernels see (`Platform`: capabilities, clock and the part's `Resources`; `DspBlock`, `Fabric`); `finn.platform` resolves it |
 | `values/` | the values kernels hold and ports admit: the semantics of datatypes, integer vectors and tensors, and threshold tables; the `Integer` port policy |
 | `transport.py` | ready/valid and AXI-Stream transports, and the contract of one channel end (`StreamContract`, with its `pace`) |
 | `artifacts/` | module values (`Leaf`, a flat `Composed` netlist) and their ABI, their emission, the RTL checker (and `evaluate`, the constants a module derives at elaboration) and the IP-XACT packaging Tcl (`ipxact.py`) |
