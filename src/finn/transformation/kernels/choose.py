@@ -3,11 +3,13 @@
 
 """Exploring a model's open kernel choices through the DSE seam, and saving them.
 
-``ExploreKernelChoices(strategies, completion=...)`` builds the shell root of
-the model's KernelOps once (``shell_root``: their Partition, its kernels and the
-channels between them, and the channels on its boundary; the nodes' saved choices
-replayed, a stale one dropped with why; members named by path,
-``partition.MatMul_0``),
+``ExploreKernelChoices(strategies, completion=...)`` explores a partition's body, the
+model of KernelOps the kernel path's cut made (``CutKernelPartition``; the build opens
+it through the parent graph's node, ``partition_body``), so which KernelOps go together
+is the cut's alone: a model holding any other node is refused. It builds the body's
+shell root once (``shell_root``: their Partition, its kernels and the channels between
+them, and the channels on its boundary; the nodes' saved choices replayed, a stale one
+dropped with why; members named by path, ``partition.MatMul_0``),
 runs the strategies in order through one ``Seam`` (``finn.kernels.explore``), each
 from the point the one before returned, and then:
 
@@ -36,9 +38,11 @@ from the point the one before returned, and then:
 The resources are the shell root's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
 and its channels, boundary channels included), each end and its static region, and
-their sum, ``used``. The ends' and the static region's are out of context, which the
-report says with how far that overstates the placed shell; the ``ip`` shell has
-neither, so its sum is its partition's. The platform's are its part's totals
+their sum, ``used``; where members state none, ``used`` is the sum of those that
+do, a lower bound (``lower_bound``), each other named with why (``unstated``), and the
+ends and the static region are not counted. The ends' and the static region's are out
+of context, which the report says with how far that overstates the placed shell; the
+``ip`` shell has neither, so its sum is its partition's. The platform's are its part's totals
 (``Platform.resources``), nothing subtracted: what the platform has, not a budget,
 and ``part`` states the part's facts as the part catalog has them (its device, the
 device's SLRs, the devices that share them) and where they come from (``source``);
@@ -101,7 +105,7 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.target import Platform
-from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over
+from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform import TargetRefused
 from finn.platform import part as catalog_part
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
@@ -171,6 +175,13 @@ RESOURCES_COUNTED = (
 )
 """What the report's resources count, as it states it."""
 
+RESOURCES_LOWER_BOUND = (
+    "a lower bound: the members that state their own resources (the partition's kernels "
+    "and channels, boundary channels included); the members named under unstated state "
+    "none, and the ends and the static region are not counted while they do not"
+)
+"""What the report's resources count where members state none, as it states it."""
+
 RESOURCES_EXACT = (
     "the partition's DSP slices, and block RAM and UltraRAM where a memory's style is "
     "explicit, are the RTL's; its LUTs, FFs and auto memories are models (about 10 % on "
@@ -210,15 +221,18 @@ def _resources_report(
     part: Mapping[str, object],
     caveat: str | None,
 ) -> dict[str, object]:
-    """The shell's resources by member and their sum (``None`` until every member
-    states its own, and then which do not, with why) against the platform's part
-    totals, and the part's facts with their source (``part_report``); ``exact`` names
-    the shell row's ``caveat`` for its board, if any."""
+    """The shell's resources by member and their sum against the platform's part totals;
+    where members state none, the sum of those that do, a lower bound (``lower_bound``),
+    and each that does not, with why (``unstated``); the part's facts with their source
+    (``part_report``); ``exact`` names the shell row's ``caveat`` for its board, if any."""
     unstated = dict(cost.unstated)
     if isinstance(split, str) and not unstated:
         unstated["shell"] = split
     stated = None if isinstance(split, str) or unstated else split
-    used = None if stated is None else stated.total
+    lower_bound = stated is None and bool(cost.unstated)
+    used = stated.total if stated is not None else None
+    if lower_bound:
+        used = total(cost.resources.values())
     totals = None if platform is None else platform.resources
     share = None
     most = None
@@ -244,6 +258,7 @@ def _resources_report(
             "ends": {name: asdict(each) for name, each in stated.ends},
             "static_region": {name: asdict(each) for name, each in stated.static_region},
         },
+        "lower_bound": lower_bound,
         "unstated": unstated,
         "platform": None if totals is None else asdict(totals),
         "part": dict(part),
@@ -251,7 +266,7 @@ def _resources_report(
         "binding": most,
         "over": exceeded,
         "warning": _over_warning(most, exceeded),
-        "counted": RESOURCES_COUNTED,
+        "counted": RESOURCES_LOWER_BOUND if lower_bound else RESOURCES_COUNTED,
         "exact": RESOURCES_EXACT if caveat is None else f"{RESOURCES_EXACT}; {caveat}",
     }
 
@@ -378,12 +393,18 @@ def explore_kernel_choices(
     fresh: bool = False,
     completion: Completion | None = None,
 ) -> Explored:
-    """The model's KernelOps explored by ``strategies`` and their choices persisted, the
-    point completed by ``completion`` (``Baseline()`` by default) for its report, on the
-    shell root of the model's target; see the module docstring."""
-    nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
-    if not nodes:
+    """The KernelOps of a partition's body, ``model``, explored by ``strategies`` and their
+    choices persisted, the point completed by ``completion`` (``Baseline()`` by default)
+    for its report, on the shell root of the model's target; see the module docstring."""
+    if not model.graph.node:
         raise KernelOpError("no KernelOp to explore")
+    others = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
+    if others:
+        raise KernelOpError(
+            f"{', '.join(others)}: not KernelOps; exploration reads a partition's body, the "
+            "KernelOps the cut put together (CutKernelPartition, partition_body)"
+        )
+    nodes = list(model.graph.node)
     if fresh:
         for node in nodes:
             op = kernel_op(model, node)
@@ -481,8 +502,8 @@ def partition_bottleneck(
 
 
 class ExploreKernelChoices(Transformation):
-    """Every open choice of the model's KernelOps explored by ``strategies``, in order,
-    and saved, the point completed by ``completion`` for the report, on the shell root
+    """Every open choice of a partition body's KernelOps explored by ``strategies``, in
+    order, and saved, the point completed by ``completion`` for the report, on the shell root
     of the model's target; ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(

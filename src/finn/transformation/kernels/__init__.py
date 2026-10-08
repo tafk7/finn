@@ -6,8 +6,9 @@
 ``ToKernelOps`` rewrites the nodes a KernelOp binds and states the build
 target it is given (``finn.platform.resolve_target``);
 ``InferKernelTensors`` infers every tensor in graph order, the KernelOps
-answering from their kernels; ``ExploreKernelChoices`` explores their open
-choices through the DSE seam (``finn.kernels.explore``) by a list of strategies
+answering from their kernels; ``ExploreKernelChoices`` explores the open
+choices of a partition's body (the KernelOps the cut put together) through the
+DSE seam (``finn.kernels.explore``) by a list of strategies
 (``strategy``: one from its spec) and saves them, and a completion policy
 (``completion``: one by its name) completes what they leave open wherever a
 partition is costed or built, never saved;

@@ -23,12 +23,10 @@ The Tcl, the VLNV and the interface names are emitted by
 ``finn.kernels.artifacts.ipxact`` from the module's pins; this module supplies
 the partition: its module, part, clock and name, and the toolchain Vivado runs in.
 
-The partition's boundary is typed metadata on the partition model, the
-``finn.partition`` namespace that ``finn.transformation.fpgadataflow.kernel_partitions``
-owns: the ends' facts. They are read from the shell root's boundary channels, each
-the stream at its free side and the end the shell places there
-(``boundary_facts``), and the kernel path's cut states them
-(``write_boundary_facts``).
+The partition's boundary, the ends' facts, is not stored on the model: it is read
+from the configured root's boundary channels, each the stream at its free side and
+the end the shell places there (``boundary_facts``), wherever it is needed (the
+interface description, the testbench).
 
 The part and the clock period are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
@@ -97,8 +95,6 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
-    PARTITION_INPUTS,
-    PARTITION_OUTPUTS,
 )
 from finn.util.basic import make_build_dir
 from finn.util.toolchain import Toolchain, machine_toolchain
@@ -157,8 +153,8 @@ def configured_root(
 
 
 def end_facts(contract: EndContract) -> dict[str, Any]:
-    """An end's facts as ``finn.partition`` states them (``kernel_partitions.END_FACTS``):
-    its memory side and rate; the stream side is its port's."""
+    """An end's facts as a boundary port states them: its kind and direction, its memory
+    side and rate; the stream side is its port's."""
     return {
         "kind": contract.kind,
         "direction": contract.direction,
@@ -197,11 +193,11 @@ def stream_order(form: Traversal) -> dict[str, Any]:
 def boundary_facts(
     model: ModelWrapper, point: Any, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Each boundary port's facts (``kernel_partitions.PORT_FACTS``), inputs then
-    outputs, in port order: the ONNX tensor and its shape; the stream at the channel's
-    free side, the partition's own end (the end no kernel of the partition owns): the
-    channel's element and its range, lanes, beats and TDATA width; and the end the
-    shell places there (``end_facts``), or ``None``."""
+    """Each boundary port's facts, inputs then outputs, in port order: the port, the ONNX
+    tensor and its shape; the stream at the channel's free side, the partition's own end
+    (the end no kernel of the partition owns): the channel's element and its range,
+    lanes, beats and TDATA width; and the end the shell places there (``end_facts``), or
+    ``None``."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
         channel = getattr(point, member(tensor))
@@ -220,17 +216,6 @@ def boundary_facts(
         }
         found[0 if port.startswith("s_axis_") else 1].append(facts)
     return found
-
-
-def write_boundary_facts(
-    model: ModelWrapper, label: str = "partition", completion: Completion | None = None
-) -> None:
-    """State a partition model's boundary, the ends' facts (``finn.partition``), from its
-    root completed by ``completion`` (``configured_root``)."""
-    point, boundary = configured_root(model, label, completion)
-    inputs, outputs = boundary_facts(model, point, boundary, label)
-    model.set(PARTITION_INPUTS, inputs)
-    model.set(PARTITION_OUTPUTS, outputs)
 
 
 def interface_description(
@@ -533,5 +518,4 @@ __all__ = [
     "hierarchical_utilization",
     "interface_description",
     "ooc_member_resources",
-    "write_boundary_facts",
 ]

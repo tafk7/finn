@@ -556,9 +556,13 @@ stated, it is refused by name.
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:
 `target_throughput` folds the least parallelism that meets `fps` at the target's
-clock, `max_throughput` the fewest cycles a frame whose resources (the shell's: its
-partition, ends and static region) stay within `"within"`, a required
-`{resource: fraction}` of the part's totals (`{"lut": 0.5}`), `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
+clock (trying each case of an unordered choice, such as a MatMul's core on a DSP58
+part, and stating the bottleneck reached and whether `fps` is met),
+`max_throughput` the fewest cycles a frame, of every point it tried, whose resources
+(the shell's: its partition, ends and static region) stay within `"within"`, a
+required `{resource: fraction}` of the part's totals (`{"lut": 0.5}`); where a member
+states no resources, it budgets what is stated, a lower bound, and warns, naming
+it. `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
 each channel's FIFO from both ends' beat patterns at the bottleneck (`direct`
 where none is needed; `"margin"` words added to a FIFO it places, default 0). The
 default list is empty. What no strategy chose stays open, and the completion

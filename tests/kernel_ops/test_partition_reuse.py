@@ -194,22 +194,6 @@ def test_a_boundary_port_changed_alone_misses() -> None:
     assert type(again.point) is not type(first.point)
 
 
-def test_an_output_handed_on_changed_alone_misses() -> None:
-    """``levels`` leaves the front partition either way; only when a KernelOp consumes it
-    is it handed on, pinned ``direct``; nothing else of the key changes."""
-    model = kernel_model()
-    front = model.graph.node[:2]
-    handed = shell_root(model, front, name="front")
-    before: PartitionKey = last_key()
-    model.graph.node[2].domain = ""  # a plain ONNX MatMul: not a KernelOp
-    kept = shell_root(model, front, name="front")
-    after: PartitionKey = last_key()
-    assert dict(before.channels)["levels"].direct and not dict(after.channels)["levels"].direct
-    assert replace(after, channels=before.channels) == before
-    assert type(kept.point) is not type(handed.point)
-    assert kept.boundary == handed.boundary
-
-
 def test_every_component_of_the_key_is_compared() -> None:
     """Each field of the key, of a placement and of a declared channel, changed alone, is
     another key: it misses."""
@@ -247,7 +231,6 @@ def test_every_component_of_the_key_is_compared() -> None:
     changed_channel: dict[str, Any] = {
         "tensor": Tensor((1, 1), ScalarEncoding(INT3)),
         "port": "s_axis_9",
-        "direct": not declared.direct,
     }
     variants += [
         replace(

@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """FINN's typed graph metadata (qonnx's ``qonnx.core.metadata``): the build target in
-``finn.platform``, as ``finn.platform.resolve_target`` resolves it, a partition's
-boundary, the ends' facts, in ``finn.partition``, and what a build made of it in
-``finn.outputs``."""
+``finn.platform``, as ``finn.platform.resolve_target`` resolves it, and what a build
+made of a partition in ``finn.outputs``."""
 
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 import pytest
 from onnx import helper
@@ -36,9 +34,6 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_PROJECT,
     OUTPUT_REPORTS,
     OUTPUT_VLNV,
-    PARTITION,
-    PARTITION_INPUTS,
-    PARTITION_OUTPUTS,
 )
 from finn.transformation.kernels import ToKernelOps
 from kernel_ops.models import TARGET, chain_source
@@ -190,84 +185,6 @@ def test_a_target_that_is_not_one_writes_nothing() -> None:
 def test_conversion_states_the_target_it_is_given() -> None:
     zcu104 = resolve_target(board="ZCU104", period_ns=4.0, shell="pynq")
     assert read_target(chain_source().transform(ToKernelOps(zcu104))) == zcu104
-
-
-#: The input end of TFC on Ultra96 in the Zynq shell: an IODMA_hls at a 128-bit port.
-END = {
-    "kind": "iodma_hls",
-    "direction": "in",
-    "memory_width": 128,
-    "words": 49,
-    "converter": True,
-    "call_cycles": 4,
-    "frames_per_call": 1,
-    "control_buses": 1,
-}
-
-
-def port(name: str, tensor: str, **facts: Any) -> dict[str, Any]:
-    return dict(
-        port=name,
-        tensor=tensor,
-        shape=[1, 784],
-        element="UINT8",
-        range=[0, 255],
-        lanes=4,
-        beats=196,
-        tdata=32,
-        end=END,
-        **facts,
-    )
-
-
-def test_a_partitions_boundary_facts_are_the_ends_typed_and_its_own() -> None:
-    model = holder()
-    inputs = [port("s_axis_0", "x")]
-    out_end = {**END, "direction": "out", "memory_width": 16, "words": 5}
-    outputs = [
-        {
-            **port("m_axis_0", "y"),
-            "shape": [1, 10],
-            "element": "INT8",
-            "range": [-128, 127],
-            "lanes": 1,
-            "beats": 10,
-            "tdata": 8,
-            "end": out_end,
-        }
-    ]
-    model.set(PARTITION_INPUTS, inputs)
-    model.set(PARTITION_OUTPUTS, outputs)
-    assert model.namespace(PARTITION) == {"inputs": inputs, "outputs": outputs}
-    assert body_of(model).namespace(PARTITION) == {}  # not inherited: the partition's own
-    # A boundary port without an end (the ip shell's) states none.
-    model.set(PARTITION_INPUTS, [{**port("s_axis_0", "x"), "end": None}])
-    assert model.get(PARTITION_INPUTS)[0]["end"] is None
-    # The facts as they were before the ends': refused, not upgraded.
-    previous = {
-        "port": "s_axis_0",
-        "tensor": "x",
-        "shape": [1, 784],
-        "datatype": "UINT8",
-        "lanes": 4,
-        "beats": 196,
-        "element_bits": 8,
-        "tdata": 32,
-    }
-    for bad in (
-        [previous],
-        [port("s_axis_0", "x", extra=1)],
-        [{**port("s_axis_0", "x"), "lanes": 0}],
-        [{**port("s_axis_0", "x"), "shape": [1, True]}],
-        [{**port("s_axis_0", "x"), "tensor": ""}],
-        [{**port("s_axis_0", "x"), "range": [3, 1]}],
-        [{**port("s_axis_0", "x"), "end": {**END, "direction": "both"}}],
-        [{**port("s_axis_0", "x"), "end": {**END, "converter": 1}}],
-        [{**port("s_axis_0", "x"), "end": {**END, "words": 0}}],
-        port("s_axis_0", "x"),
-    ):
-        with pytest.raises(MetadataError, match="finn.partition/inputs: cannot store"):
-            model.set(PARTITION_INPUTS, bad)
 
 
 def test_what_a_build_made_is_typed_in_finn_outputs() -> None:

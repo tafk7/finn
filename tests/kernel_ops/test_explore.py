@@ -23,7 +23,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import kernel_op, read_target, write_target
+from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.explore import (
     Accepted,
@@ -40,9 +40,12 @@ from finn.kernels.explore import (
 )
 from finn.kernels.utilization import Resources
 from finn.platform import resolve_target
+from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
+from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
+    ToKernelOps,
     completion,
     explore_kernel_choices,
     kernel_choices_config,
@@ -363,3 +366,40 @@ def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() ->
     assert "compute" in held
     again = shell_root(model, model.graph.node)
     assert not again.dropped and inspection.viable(again.point) == ()
+
+
+@pytest.mark.slow
+def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
+    tfc_streamlined: Path, tmp_path: Path
+) -> None:
+    """On xcvc1902 (resolved by its family: DSP58) each MatMul's core is an open,
+    unordered choice its cycles wait on: the target throughput folds each case and
+    keeps one, so TFC at 1e6 frames a second meets its 200 cycles, and the report names
+    the core taken for each MatMul and why."""
+    model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(VCK190))
+    parent = model.transform(InferKernelTensors()).transform(CutKernelPartition(tmp_path))
+    _, body, _ = partition_body(parent)
+    report = explore_kernel_choices(
+        body, [strategy({"strategy": "target_throughput", "fps": 1e6})]
+    ).report
+    (target,) = report["strategies"]
+    assert target["cycles"] == 200 and target["met"] is True and target["unfolded"] == {}
+    assert target["bottleneck"]["cycles"] <= 200 and target["bottleneck_of"] == "folded"
+    assert report["bottleneck"]["cycles"] <= 200
+    cases = target["cases"]
+    assert set(cases) == {f"partition.MatMul_{index}.compute" for index in range(4)}
+    for key, row in cases.items():
+        node = key.split(".")[1]
+        assert row["taken"] in ("packed", "int8_dsp58") and row["why"]
+        assert set(row["folded"]) == {"packed", "int8_dsp58"}
+        assert report["choices"][node]["compute"] == "target_throughput"
+        assert report["choices"][node][f"compute.{row['taken']}.simd"] == "target_throughput"
+
+
+def test_exploration_reads_a_partitions_body_and_refuses_any_other_node() -> None:
+    """Which KernelOps go together is the cut's: a model holding a node that is not a
+    KernelOp (the uncut model's host nodes) is refused, naming it."""
+    model = kernel_model()
+    model.graph.node[2].domain = ""  # a plain ONNX MatMul: not a KernelOp
+    with pytest.raises(KernelOpError, match="second: not KernelOps; exploration reads"):
+        explore_kernel_choices(model, [])

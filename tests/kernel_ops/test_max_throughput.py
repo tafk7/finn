@@ -34,7 +34,7 @@ import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels.base import write_target
-from finn.kernels.explore import ResourceBudgetWarning
+from finn.kernels.explore import ResourceBudgetWarning, UnstatedResourcesWarning
 from finn.kernels.target import Target
 from finn.kernels.utilization import Resources, total
 from finn.platform import resolve_target
@@ -95,7 +95,7 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
 
 @pytest.fixture(scope="module")
 def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
-    """TFC_W2A2 as KernelOps for Ultra96 at 5 ns."""
+    """TFC_W2A2's partition body: its KernelOps for Ultra96 at 5 ns."""
     return ModelWrapper(str(tfc_kernel_ops))
 
 
@@ -228,3 +228,31 @@ def test_a_point_over_the_part_warns_naming_the_binding_resource() -> None:
     assert resources["binding"] == "lut" and list(resources["over"]) == ["lut"]
     assert resources["over"]["lut"] == {"used": 669, "platform": 500}
     assert resources["warning"].startswith("the point uses more than the platform's part has")
+
+
+def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound(tmp_path: Path) -> None:
+    """A compressor reducer pinned on ``first`` states no resources (RC5: rank and warn):
+    the search budgets what is stated and warns, naming it, and the report's total is
+    a lower bound, naming it too."""
+    pinned = tmp_path / "compressor.json"
+    pinned.write_text('{"first": {"compute.packed.reducer": "compressor"}}')
+    model = ModelWrapper(kernel_model().model.__deepcopy__())
+    write_target(model, TARGET)
+    specs = [{"strategy": "pinned", "path": str(pinned)}, *within(0.005)]
+    with pytest.warns(UnstatedResourcesWarning, match=r"partition\.first .*compressor"):
+        report = explore_kernel_choices(
+            model, [strategy(spec) for spec in specs], fresh=True
+        ).report
+    searched = report["strategies"][1]
+    assert searched["lower_bound"] is True and list(searched["unstated"]) == ["partition.first"]
+    resources = report["resources"]
+    assert resources["lower_bound"] is True and resources["shell"] is None
+    assert list(resources["unstated"]) == ["partition.first"]
+    assert resources["counted"].startswith("a lower bound")
+    stated = total(
+        Resources(**row["resources"])
+        for row in report["members"].values()
+        if row["resources"] is not None
+    )
+    assert resources["used"] == {name: getattr(stated, name) for name in resources["used"]}
+    assert report["members"]["partition.first"]["resources"] is None

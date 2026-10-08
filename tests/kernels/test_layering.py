@@ -53,7 +53,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.core.space.declarations", "space"),
         ("finn.kernels.artifacts.module.Leaf", "kernels.artifacts"),
         ("finn.kernels.dotp", "kernels"),
-        ("finn.transformation.fpgadataflow.kernel_partitions.partition_facts", "kernel_partitions"),
+        ("finn.transformation.fpgadataflow.kernel_partitions.partition_body", "kernel_partitions"),
         ("finn.transformation.fpgadataflow.insert_iodma", "flow"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),

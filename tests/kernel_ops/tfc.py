@@ -10,10 +10,10 @@ post-processing, streamline), then ``ToKernelOps``, ``InferKernelTensors`` and
 ``CreateDataflowPartition``: the input flatten (a Reshape) before the partition
 and the label select (TopK) after it, both on the host.
 
-Every open kernel choice (folding, memories, transports) is committed before
-partitioning, ranked by hand (``ExploreKernelChoices([Ranked(Lanes(16))])``,
-``kernels.helpers.Lanes``): 16 lanes where they divide, the whole extent otherwise,
-every other choice its kernel's baseline.
+Every open kernel choice (folding, memories, transports) is committed on the
+partition's body after the cut, as the build explores it, ranked by hand
+(``ExploreKernelChoices([Ranked(Lanes(16))])``, ``kernels.helpers.Lanes``): 16 lanes
+where they divide, the whole extent otherwise, every other choice its kernel's baseline.
 
 Building TFC takes about 17 s (torch, the export, streamlining). A test that only
 reads it loads ``conftest.py``'s files (``built``), built once a run, across the
@@ -25,7 +25,6 @@ from __future__ import annotations
 import fcntl
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from kernels.helpers import Lanes
 from onnx import helper
@@ -122,18 +121,24 @@ def streamlined(directory: Path) -> ModelWrapper:
     return model.transform(RemoveUnusedTensors())
 
 
+def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper, str]:
+    """The streamlined ``source`` as KernelOps for Ultra96 at 5 ns in the Zynq shell
+    (``ULTRA96``), cut once into ``directory``: the parent graph (Reshape, the partition,
+    TopK), the partition's body, every choice open, and the body's file."""
+    model = source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
+    parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
+    body_file = getCustomOp(parent.graph.node[1]).get_nodeattr("model")
+    return parent, ModelWrapper(body_file), body_file
+
+
 def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The streamlined ``source`` by hand through the kernel path, as the builder's
     kernel-path phase runs it: the parent graph (Reshape, the partition, TopK) and the
-    partition's body, every choice committed at 16 lanes (``LANES``)."""
-    model = (
-        source.transform(ToKernelOps(ULTRA96))
-        .transform(InferKernelTensors())
-        .transform(ExploreKernelChoices([Ranked(LANES)]))
-    )
-    parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
-    sdp = getCustomOp(parent.graph.node[1])
-    body: Any = ModelWrapper(sdp.get_nodeattr("model"))
+    partition's body, cut first, then every choice committed at 16 lanes (``LANES``) and
+    the body saved again in its file."""
+    parent, body, body_file = cut(source, directory)
+    body = body.transform(ExploreKernelChoices([Ranked(LANES)]))
+    body.save(body_file)
     return parent, body
 
 
@@ -144,10 +149,11 @@ def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapp
     return (source, *partition(source, directory))
 
 
-def kernel_ops(source: ModelWrapper) -> ModelWrapper:
-    """The streamlined ``source`` as KernelOps for Ultra96 at 5 ns in the Zynq shell
-    (``ULTRA96``), every choice open."""
-    return source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
+def kernel_ops(source: ModelWrapper, directory: Path) -> ModelWrapper:
+    """The streamlined ``source``'s partition of KernelOps for Ultra96 at 5 ns in the Zynq
+    shell (``ULTRA96``), cut once into ``directory``: its body, every choice open, as
+    exploration reads it."""
+    return cut(source, directory)[1]
 
 
 def built(path: Path, build: Callable[[Path], ModelWrapper]) -> Path:
