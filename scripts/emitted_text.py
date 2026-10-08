@@ -636,12 +636,33 @@ def simulator_closure(root: Path) -> list[str]:
     return sorted(found)
 
 
+def packaged_ip(model: Any, work: Path) -> dict[str, str]:
+    """What PackagePartition states of the IP, the work prefix removed: its directory,
+    VLNV and interface names (JSON, keys sorted). It is typed (``finn.outputs``) from
+    589656fff on and in the stitched-IP contract's flat keys before; both read the same,
+    so the text compares across the change."""
+    typed = {item.key: item.value for item in model.graph.metadata_props}
+    if "finn.outputs/ip" in typed:
+        ip, vlnv, interfaces = (
+            typed[f"finn.outputs/{key}"] for key in ("ip", "vlnv", "interfaces")
+        )
+    else:
+        ip = f"{model.get_metadata_prop('vivado_stitch_proj')}/ip"
+        vlnv = model.get_metadata_prop("vivado_stitch_vlnv")
+        interfaces = model.get_metadata_prop("vivado_stitch_ifnames")
+    return {
+        "ip": ip.replace(str(work), "WORK"),
+        "vlnv": vlnv,
+        "interfaces": json.dumps(json.loads(interfaces), sort_keys=True),
+    }
+
+
 def emit_package(out: Path, work: Path) -> int:
     """What PackagePartition writes for the Chain and the TFC partition, Vivado stubbed.
 
     PackagePartition runs for real except for the Vivado call: the toolchain is a
     stub that writes ip/component.xml. Per partition (the Chain also with
-    run_synth): package.tcl and the stitch metadata, the work prefix removed.
+    run_synth): package.tcl and what packaging states of the IP (``packaged_ip``).
     """
     # The checkout's code, importable only in its environment (Target.run).
     from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
@@ -662,11 +683,9 @@ def emit_package(out: Path, work: Path) -> int:
             )
         )
         (out / f"{name}.package.tcl").write_text((project / "package.tcl").read_text())
-        props = [
-            f"{prop}={str(model.get_metadata_prop(prop)).replace(str(work), 'WORK')}"
-            for prop in ("vivado_stitch_proj", "vivado_stitch_vlnv", "vivado_stitch_ifnames")
-        ]
-        (out / f"{name}.metadata.txt").write_text("\n".join(props) + "\n")
+        (out / f"{name}.metadata.txt").write_text(
+            "".join(f"{key}={value}\n" for key, value in packaged_ip(model, work).items())
+        )
 
     out.mkdir(parents=True, exist_ok=True)
     work = work.resolve()
