@@ -3,11 +3,13 @@
 
 """Exploring a model's open kernel choices through the DSE seam, and saving them.
 
-``ExploreKernelChoices(strategies, completion=...)`` builds the shell root of
-the model's KernelOps once (``shell_root``: their Partition, its kernels and the
-channels between them, and the channels on its boundary; the nodes' saved choices
-replayed, a stale one dropped with why; members named by path,
-``partition.MatMul_0``),
+``ExploreKernelChoices(strategies, completion=...)`` explores a partition's body, the
+model of KernelOps the kernel path's cut made (``CutKernelPartition``; the build opens
+it through the parent graph's node, ``partition_body``), so which KernelOps go together
+is the cut's alone: a model holding any other node is refused. It builds the body's
+shell root once (``shell_root``: their Partition, its kernels and the channels between
+them, and the channels on its boundary; the nodes' saved choices replayed, a stale one
+dropped with why; members named by path, ``partition.MatMul_0``),
 runs the strategies in order through one ``Seam`` (``finn.kernels.explore``), each
 from the point the one before returned, and then:
 
@@ -360,12 +362,18 @@ def explore_kernel_choices(
     fresh: bool = False,
     completion: Completion | None = None,
 ) -> Explored:
-    """The model's KernelOps explored by ``strategies`` and their choices persisted, the
-    point completed by ``completion`` (``Baseline()`` by default) for its report, on the
-    shell root of the model's target; see the module docstring."""
-    nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
-    if not nodes:
+    """The KernelOps of a partition's body, ``model``, explored by ``strategies`` and their
+    choices persisted, the point completed by ``completion`` (``Baseline()`` by default)
+    for its report, on the shell root of the model's target; see the module docstring."""
+    if not model.graph.node:
         raise KernelOpError("no KernelOp to explore")
+    others = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
+    if others:
+        raise KernelOpError(
+            f"{', '.join(others)}: not KernelOps; exploration reads a partition's body, the "
+            "KernelOps the cut put together (CutKernelPartition, partition_body)"
+        )
+    nodes = list(model.graph.node)
     if fresh:
         for node in nodes:
             op = kernel_op(model, node)
@@ -457,8 +465,8 @@ def partition_bottleneck(
 
 
 class ExploreKernelChoices(Transformation):
-    """Every open choice of the model's KernelOps explored by ``strategies``, in order,
-    and saved, the point completed by ``completion`` for the report, on the shell root
+    """Every open choice of a partition body's KernelOps explored by ``strategies``, in
+    order, and saved, the point completed by ``completion`` for the report, on the shell root
     of the model's target; ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(

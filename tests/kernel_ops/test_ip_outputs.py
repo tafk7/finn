@@ -47,16 +47,15 @@ from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelParti
 from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_IP,
     partition_body,
-    partition_facts,
 )
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import (
+    boundary_facts,
     configured_root,
     free_side,
     hierarchical_utilization,
     ooc_member_resources,
     stream_order,
-    write_boundary_facts,
 )
 from finn.util.toolchain import Selection, Toolchain, machine_toolchain
 from kernel_ops.models import configure_partition, kernel_model
@@ -68,13 +67,11 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     tmp_path: Path,
 ) -> None:
     configure_partition(model := kernel_model())
-    # The cut states the boundary facts before packaging (write_boundary_facts).
-    write_boundary_facts(model, "sdp_1")
     project = tmp_path / "project"
     stub = cast(Toolchain, PackagedByStub())
     model = model.transform(PackagePartition("sdp_1", directory=project, toolchain=stub))
     described = json.loads((project / "interface.json").read_text())
-    point, _ = configured_root(model, "sdp_1")
+    point, boundary = configured_root(model, "sdp_1")
     read_back(described, point.module.abi.pins, 5.0)
     assert described["ip"] == {
         "name": "sdp_1",
@@ -83,9 +80,10 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     }
     assert described["ip"]["top"].startswith("finn_partition__")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
-    # Each stream states its port's boundary facts, as the partition model does, and the
-    # order its free side presents the tensor in: the Chain's, row-major.
-    inputs, outputs = partition_facts(model)
+    # Each stream states its port's boundary facts, as the configured root's channels
+    # state them, and the order its free side presents the tensor in: the Chain's,
+    # row-major.
+    inputs, outputs = boundary_facts(model, point, boundary, "sdp_1")
     keys = [key for key in (*STREAM_FACTS, "tdata") if key != "order"]
     facts = [{key: port[key] for key in keys} for port in inputs + outputs]
     stated = [{key: stream[key] for key in keys} for stream in described["streams"]]
@@ -106,7 +104,6 @@ def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> N
     description states each stream's passes (``order``), so that its integrator supplies
     w2 three times (SZ11 (f))."""
     configure_partition(model := kernel_model(second_weights=False))
-    write_boundary_facts(model, "sdp_1")
     stub = cast(Toolchain, PackagedByStub())
     model.transform(PackagePartition("sdp_1", directory=tmp_path, toolchain=stub))
     described = json.loads((tmp_path / "interface.json").read_text())

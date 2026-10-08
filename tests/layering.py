@@ -97,7 +97,7 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel-partition facts and outputs. The module sits in the flow's package
+    # The kernel partition's body and outputs. The module sits in the flow's package
     # but below both its writers (the cut, PackagePartition) and its readers (the
     # builder, the integration export): it imports qonnx only, so the flow imports
     # it without loading the kernel stack.

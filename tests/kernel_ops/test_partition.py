@@ -122,9 +122,10 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
 
 def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     model = kernel_model()
-    front = shell_root(model, model.graph.node[:2], name="front")
-    assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
-    point, styles = open_memories(front)
+    root = shell_root(model, model.graph.node, name="chain")
+    # hidden and levels run between its nodes: channels of the Partition, no port.
+    assert root.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
+    point, styles = open_memories(root)
     point = commit(point, dict.fromkeys(styles, "auto"))
     assert sorted(port.name for port in point.module.abi.pins) == [
         "ap_clk",
@@ -134,25 +135,12 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     ]
 
 
-def test_an_edge_between_partitions_has_one_transport_its_consumers() -> None:
-    """``levels`` leaves the front partition for a KernelOp of the back one:
-    the back partition's input boundary, its transport its consumer's; the front pins it
-    ``direct``, owns nothing of it, and drops a producer's transport set while the edge
-    left the graph."""
+def test_a_second_partition_of_kernel_ops_is_refused_by_name() -> None:
+    """The cut decides which KernelOps go together: a root of some of a model's
+    KernelOps would be one of two partitions, refused, naming the KernelOps left out."""
     model = kernel_model()
-    front = shell_root(model, model.graph.node[:2], name="front")
-    back = shell_root(model, model.graph.node[2:], name="back")
-    assert ("levels", "m_axis_0") in front.boundary and ("levels", "s_axis_0") in back.boundary
-    point = front.point
-    assert point.levels.query(type(point.levels).transport).value == "direct"
-    assert "levels" not in front.owners and back.owners["levels"] == ("second", "x.")
-    written = persist(model, back, commit(back.point, {"levels.transport": "fifo"}))
-    assert written["second"]["x.transport"] == "fifo"
-
-    kernel_op(model, model.graph.node[1]).save({"y.transport": "fifo"})
-    assert list(shell_root(model, model.graph.node[:2], name="front").dropped) == [
-        "levels.transport"
-    ]
+    with pytest.raises(KernelOpError, match="second: KernelOps outside the partition 'front'"):
+        shell_root(model, model.graph.node[:2], name="front")
 
 
 def test_streamed_weights_are_a_boundary_of_the_partition() -> None:

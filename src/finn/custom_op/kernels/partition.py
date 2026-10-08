@@ -24,17 +24,14 @@ its nodes' choices:
 - **owners**: each member's node and attribute prefix, how a choice made in the
   root goes back to the node that persists it: a kernel's on its node, an
   edge's on its consumer, a parameter channel's on its value owner. An output
-  boundary consumed by no KernelOp (a graph output) is its producer's, under
-  its output port; one a KernelOp outside the partition consumes is that
-  node's, applied in its own partition as an input boundary, so here its
-  ``transport`` is pinned ``direct``: one FIFO per edge, on the consumer's side.
-  A choice a node holds under an output port whose channel a KernelOp now
-  consumes is stale (``stale``);
+  boundary (a graph output) is its producer's, under its output port. A choice a
+  node holds under an output port whose channel a KernelOp now consumes is stale
+  (``stale``);
 - the nodes' **choices**, by member key, for the root to replay;
 - **reuse**: the class, and so the compiled model of a root that places it, is kept
   by what it is built from, by value (``PartitionKey``): the name; the target's
   platform; each channel as declared (the tensor it carries, rows and annotation,
-  its port, pinned ``direct`` or not); each node's name, op class, node-root class,
+  its port); each node's name, op class, node-root class,
   facts key (its formals and owned values by value, as the bind cache keys them),
   owned parameter ports and tensors. A call on the same facts reuses the class, and
   reads an owned value only to build it. ``PARTITIONS`` keeps the 16 most recently
@@ -44,6 +41,11 @@ Members are named as the graph: channels by tensor and kernels by node
 (``\\W`` as ``_``); two members of one name (a node and a tensor, or two nodes) are
 refused, not renamed. Owners and choices are keyed by member, as the Partition
 names them; a root that places it names them by its own paths.
+
+``nodes`` are every KernelOp of ``model``: the cut decides which KernelOps go
+together (``CutKernelPartition``), so a KernelOp of the model outside them, a second
+partition of KernelOps, is refused by name. Several partitions are to be designed as
+one shell root (when CNV or Alveo needs them), not as neighbouring roots.
 """
 
 from __future__ import annotations
@@ -88,12 +90,10 @@ class Partition(Kernel):
 @dataclass(frozen=True)
 class Declared:
     """A channel as the partition declares it: the tensor it carries, rows and
-    annotation (a parameter channel's over its values' range), its boundary port, and
-    whether it is pinned ``direct`` (an output handed on)."""
+    annotation (a parameter channel's over its values' range), and its boundary port."""
 
     tensor: Tensor
     port: str | None = None
-    direct: bool = False
 
     def channel(
         self,
@@ -111,8 +111,6 @@ class Declared:
             settings["end_offer"] = end_offer
         if self.port is not None:
             settings["port"] = self.port
-        if self.direct:
-            settings["transport"] = "direct"
         return Channel(platform=platform, **settings)
 
 
@@ -170,17 +168,14 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
     return ports | {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
 
 
-def _handed_on(model: ModelWrapper, nodes: list[NodeProto]) -> set[str]:
-    """The outputs of ``nodes`` a KernelOp outside them consumes: their transport is that
-    consumer's, chosen in its own partition."""
+def _second_partition(model: ModelWrapper, nodes: list[NodeProto]) -> list[str]:
+    """The KernelOps of ``model`` outside ``nodes``: a second partition of KernelOps."""
     inside = {id(node) for node in nodes}
-    consumed = {
-        tensor
+    return [
+        node.name
         for node in model.graph.node
         if node.domain == KERNEL_OPS and id(node) not in inside
-        for tensor in node.input
-    }
-    return {tensor for node in nodes for tensor in node.output if tensor in consumed}
+    ]
 
 
 def _channels(
@@ -189,19 +184,17 @@ def _channels(
     ops: list[KernelOp],
     owned: list[dict[str, str]],
     ports: Mapping[str, str],
-    handed_on: set[str],
 ) -> dict[str, Declared]:
     """The partition's channels by tensor, in node order: a node's inputs on an edge or
     the boundary, the parameter channels it owns (the initializer's tensor; its value,
-    the contents, is bound when the class is built), its outputs. An output handed on to
-    a KernelOp outside is pinned ``direct``: its FIFO, if any, is the consumer's."""
+    the contents, is bound when the class is built), its outputs."""
     parameters = {tensor for tensors in owned for tensor in tensors.values()}
     channels: dict[str, Declared] = {}
 
     def declare(tensor: str, label: str) -> None:
         if tensor not in channels:
             carried = edge_tensor(model, tensor, label)
-            channels[tensor] = Declared(carried, ports.get(tensor), tensor in handed_on)
+            channels[tensor] = Declared(carried, ports.get(tensor))
 
     for node, op, tensors in zip(nodes, ops, owned):
         for tensor in node.input:
@@ -232,7 +225,7 @@ def _owners(
     """Each node's kernel member and channels' owners, and its choices as root keys: a
     kernel's under the kernel's member, an input or owned channel's under the channel's,
     and an output's under the channel's where its node is the producer that owns it
-    (``produced``: graph outputs no KernelOp consumes)."""
+    (``produced``: the output boundaries)."""
     found = _Owners({}, {}, {}, [])
     channel_members = {member(tensor) for tensor in channels}
     kernels: set[str] = set()
@@ -315,14 +308,20 @@ def partition(
 ) -> Partitioned:
     """The Partition of ``nodes``, KernelOp nodes of ``model``; see the module docstring."""
     nodes = list(nodes)
+    outside = _second_partition(model, nodes)
+    if outside:
+        raise KernelOpError(
+            f"{', '.join(outside)}: KernelOps outside the partition {name!r}, a second "
+            "partition of KernelOps, refused until several partitions are designed as one "
+            "shell root"
+        )
     ops = [kernel_op(model, node) for node in nodes]
     facts = [op.facts() for op in ops]
     owned = [op.owned(each) for op, each in zip(ops, facts)]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
-    handed_on = _handed_on(model, nodes)
-    declared = _channels(model, nodes, ops, owned, ports, handed_on)
+    declared = _channels(model, nodes, ops, owned, ports)
     outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}
-    found = _owners(nodes, ops, declared, outputs - handed_on)
+    found = _owners(nodes, ops, declared, outputs)
 
     platform = read_target(model).platform
     key = PartitionKey(

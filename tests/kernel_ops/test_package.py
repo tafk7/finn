@@ -28,7 +28,6 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
-    PARTITION_INPUTS,
 )
 from finn.transformation.kernels import PackagePartition
 from finn.util.toolchain import Toolchain
@@ -135,10 +134,13 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
         "ap_none": [],
     }
     assert list(model.model.metadata_props) == []
-    # The part and period are the model's target. The boundary facts are the cut's:
-    # packaging writes none.
+    # The part and period are the model's target. Packaging states what it made, in
+    # finn.outputs, and nothing else: the boundary is the configured root's, not stored.
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
-    assert model.get(PARTITION_INPUTS) is None
+    assert {item.key.split("/")[0] for item in model.graph.metadata_props} == {
+        "finn.platform",
+        "finn.outputs",
+    }
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
     assert [root.find(f"{spirit}{tag}").text for tag in ("vendor", "library", "name")] == [
