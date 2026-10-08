@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.custom_op.registry import getCustomOp
 
 import finn.custom_op.kernels.shell as shell
 from finn.custom_op.kernels.base import read_target, write_target
@@ -34,7 +33,8 @@ from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, ends
 from finn.kernels.target import Target
 from finn.platform import IP_ROW, ShellRow, resolve_target, shell_row
-from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
+from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
+from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
@@ -311,11 +311,11 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
 
 
 def module_of(model: ModelWrapper, directory: Path) -> str:
-    """The name of the module the explored ``model``'s partition is packaged as."""
-    cut = CreateDataflowPartition(partition_model_dir=str(directory))  # type: ignore[no-untyped-call]
-    parent = model.transform(cut)
-    body = ModelWrapper(str(getCustomOp(parent.graph.node[1]).get_nodeattr("model")))
-    point, _ = configured_root(body, parent.graph.node[1].name)
+    """The name of the module the explored ``model``'s partition is packaged as, cut once
+    as the kernel path cuts it."""
+    parent = model.transform(CutKernelPartition(directory))
+    node, body, _ = partition_body(parent)
+    point, _ = configured_root(body, node.name)
     return module_name(point.module)
 
 

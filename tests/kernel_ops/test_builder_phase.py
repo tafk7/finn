@@ -24,7 +24,9 @@ import pytest
 from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
+from qonnx.transformation.base import Transformation
 
+from finn.builder import kernel_build_steps
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
 from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
@@ -38,19 +40,33 @@ from finn.builder.kernel_build_steps import (
     step_infer_kernel_tensors,
     step_kernel_bitfile,
     step_kernel_choices,
+    step_kernel_driver,
     step_kernel_ops,
     step_kernel_partition,
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import read_target
+from finn.kernels.artifacts.module import module_name
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRefused, TargetRequest, resolve_target
-from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.transformation.fpgadataflow import make_zynq_proj
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    KERNEL_OPS_DOMAIN,
+    OUTPUT_INTERFACES,
+    OUTPUT_IP,
+    OUTPUT_VLNV,
+    OUTPUTS,
+    partition_body,
+    partition_facts,
+)
 from finn.transformation.kernels import (
+    completion,
     explore_kernel_choices,
     kernel_choices_config,
     partition_bottleneck,
 )
+from finn.transformation.kernels.integration import Address, Connection, integration
+from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import chain_source, kernel_model, matmul_model
 from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
 
@@ -131,11 +147,21 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert kernel_ops == ["Thresholding", "MatMul"] * 4
     # Inference states every tensor's datatype; no choice is saved yet.
     assert kernel_choices_config(seen["step_infer_kernel_tensors"]) == {}
+    # Cut once: the build's model is the parent graph, the input flatten and the label
+    # select on the host around one partition, named partition, whose body is its file.
+    parent = seen["step_kernel_partition"]
+    assert [(node.op_type, node.name) for node in parent.graph.node] == [
+        ("Reshape", "Reshape_0"),
+        ("StreamingDataflowPartition", "partition"),
+        ("TopK", "TopK_0"),
+    ]
+    _, built, body_file = partition_body(parent)
+    assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
+    assert seen["step_verify_kernel_partition"].graph.node[1].name == "partition"
     # The partition's body: the one tfc.py makes by hand, with no choice saved (the
     # default exploration is none: the baseline completion completes every choice
     # where the partition is built, never saved).
     _, body = partition(source, tmp_path / "by_hand")
-    built = seen["step_kernel_partition"]
     assert [node.op_type for node in built.graph.node] == ["Thresholding", "MatMul"] * 4
 
     def wiring(model: ModelWrapper) -> list[tuple[str, list[str], list[str]]]:
@@ -143,7 +169,13 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
     assert wiring(built) == wiring(body)
     assert kernel_choices_config(built) == {} != kernel_choices_config(body)
-    assert read_target(built) == ULTRA96
+    assert read_target(built) == read_target(parent) == ULTRA96
+    # The body states its boundary, the ends' facts: the pynq shell's IODMA_hls on both.
+    inputs, outputs = partition_facts(built)
+    assert [(port["tensor"], port["end"]["kind"]) for port in inputs + outputs] == [
+        ("Reshape_0_out0", "iodma_hls"),
+        ("MatMul_3_out0", "iodma_hls"),
+    ]
     output = Path(cfg.output_dir)
     assert json.loads((output / "kernel_choices.json").read_text()) == {}
     # Every folding at its first viable case, one lane.
@@ -155,9 +187,10 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
         if attribute.endswith(("pe", "simd"))
     }
     assert len(folding) == 12 and set(folding.values()) == {1}
-    # The verification the configuration asked for: on each of the three inputs, the
-    # partition's own output (the last MatMul's INT8 logits, not the parent's label),
-    # the parent graph executed with it, equals the streamlined model's.
+    # The verification the configuration asked for, through the partition node: on each
+    # of the three inputs, the partition's own output (the last MatMul's INT8 logits, not
+    # the parent's label), the parent graph executed with it, equals the streamlined
+    # model's.
     verified = sorted((output / "verification_output").glob("verify_kernel_partition_python_*"))
     assert [path.name for path in verified] == [
         f"verify_kernel_partition_python_{index}_SUCCESS.npz" for index in range(3)
@@ -207,12 +240,12 @@ def test_the_verification_refuses_a_partition_for_another_target(
     model = source
     for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
         model = step(model, cfg)
-    body = step_kernel_partition(model, cfg)
+    parent = step_kernel_partition(model, cfg)
     cfg.target = replace(ULTRA96_PYNQ, period_ns=4.0)
     with pytest.raises(
         TargetRefused, match="target-drift: .*period_ns: the model states 5.0, the build 4.0"
     ):
-        step_verify_kernel_partition(body, cfg)
+        step_verify_kernel_partition(parent, cfg)
 
 
 def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: Path) -> None:
@@ -537,3 +570,161 @@ def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     # Saved choices or none, it is the bottleneck of the point as it is built.
     fresh = kernel_model()
     assert partition_bottleneck(fresh) == explore_kernel_choices(fresh, []).cost.bottleneck
+
+
+#: Z0's chain: the Zynq landing's baseline build explored TFC so.
+Z0_CHAIN = [{"strategy": "target_throughput", "fps": 1_000_000}, {"strategy": "size_fifos"}]
+
+#: The IODMA_hls nodes ZynqBuild inserted for TFC at Z0's choices before the export
+#: (InsertIODMA from the partition's facts, at ffecf382a), by direction.
+Z0_IODMAS = {
+    "in": {
+        "numInputVectors": [1, 196],
+        "NumChannels": 4,
+        "dataType": "UINT8",
+        "intfWidth": 128,
+        "streamWidth": 32,
+        "direction": "in",
+    },
+    "out": {
+        "numInputVectors": [1, 10],
+        "NumChannels": 1,
+        "dataType": "UINT8",
+        "intfWidth": 16,
+        "streamWidth": 8,
+        "direction": "out",
+    },
+}
+
+
+def cut_tfc(source: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+    """TFC through the kernel path's steps to its parent graph, cut once."""
+    model = source
+    for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
+        model = step(model, cfg)
+    parent: ModelWrapper = step_kernel_partition(model, cfg)
+    return parent
+
+
+@pytest.mark.slow
+def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
+    source: ModelWrapper, tmp_path: Path
+) -> None:
+    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: the export configures each end's
+    IODMA_hls as ZynqBuild inserted it, names the block design's connections as Z0's
+    ip_config.tcl makes them (its partition then named StreamingDataflowPartition_1),
+    and the partition is Z0's module, with Z0's choices."""
+    cfg = config(tmp_path, kernel_exploration=Z0_CHAIN)
+    parent = cut_tfc(source, cfg)
+    export = integration(parent, completion("baseline"))
+    assert [(end.instance, end.tensor, end.port) for end in export.ends] == [
+        ("idma0", "Reshape_0_out0", "s_axis_0"),
+        ("odma0", "MatMul_3_out0", "m_axis_0"),
+    ]
+    assert [end.iodma.attributes for end in export.ends] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    # The bytes' element is the channel's: the pixels and the logits.
+    assert [end.contract.element.dtype.name for end in export.ends] == ["UINT8", "INT8"]
+    clocked = [
+        Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
+        for instance in ("idma0", "partition", "odma0")
+        for kind, source, pin in (("clock", "aclk", "ap_clk"), ("reset", "aresetn", "ap_rst_n"))
+    ]
+    assert export.connections == (
+        Connection("axis", "idma0/m_axis_0", "partition/s_axis_0"),
+        Connection("axis", "partition/m_axis_0", "odma0/s_axis_0"),
+        Connection("aximm", "idma0/m_axi_gmem0", "smartconnect_0/S00_AXI"),
+        Connection("aximm", "odma0/m_axi_gmem0", "smartconnect_0/S01_AXI"),
+        Connection("axilite", "axi_interconnect_0/M00_AXI", "idma0/s_axi_control_0"),
+        Connection("axilite", "axi_interconnect_0/M01_AXI", "odma0/s_axi_control_0"),
+        *clocked,
+    )
+    assert export.addresses == (
+        Address("idma0/s_axi_control_0", 0xA000_0000, 4096),
+        Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
+    )
+    assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:partition:1.0")
+    # Z0's module and choices.
+    node, body, _ = partition_body(parent)
+    point, _ = configured_root(body, node.name, completion("baseline"))
+    assert module_name(point.module) == "finn_partition__481b9e45abc00364"
+    persisted = json.loads((Path(cfg.output_dir) / "kernel_choices.json").read_text())
+    assert persisted == kernel_choices_config(body)
+    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
+    for name, held in report["completed"].items():
+        for attribute, entry in held.items():
+            persisted.setdefault(name, {})[attribute] = entry["value"]
+    assert persisted == TFC_BUILT
+
+
+@pytest.mark.slow
+def test_the_kernel_path_writes_typed_metadata_only(
+    source: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TFC on pynq through the kernel path and its shell's outputs, Vivado and Vitis HLS
+    replaced (ZynqBuild's tool steps record; the bitfile's collection is stubbed): the
+    parent graph stays the build's model, every key it and its body state is typed, the
+    outputs round-trip through the saved model, and the driver is written."""
+    tool_steps = ("PrepareIP", "HLSSynthIP", "CreateStitchedIP", "PackagePartition")
+
+    def recorded(name: str) -> type[Transformation]:
+        class Recorded(Transformation):
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                super().__init__()
+                self.args = args
+
+            def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+                if name == "PackagePartition":
+                    model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
+                    model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.args[0]}:1.0")
+                    model.set(OUTPUT_INTERFACES, {"axilite": []})
+                if name == "MakeZYNQProject":
+                    model.set_metadata_prop("vivado_pynq_proj", str(tmp_path / "project"))
+                return model, False
+
+        return Recorded
+
+    for name in (*tool_steps, "MakeZYNQProject"):
+        monkeypatch.setattr(make_zynq_proj, name, recorded(name))
+    collected: list[ModelWrapper] = []
+    monkeypatch.setattr(
+        kernel_build_steps, "collect_zynq_bitfile", lambda link, *args: collected.append(link)
+    )
+    cfg = config(
+        tmp_path,
+        kernel_exploration=Z0_CHAIN,
+        generate_outputs=[KernelOutputType.BITFILE, KernelOutputType.PYNQ_DRIVER],
+    )
+    parent = cut_tfc(source, cfg)
+    parent = step_kernel_driver(step_kernel_bitfile(parent, cfg), cfg)
+    # The link graph ZynqBuild built is its own, with its flat keys; the build's model is
+    # the parent graph, which states what was made, typed.
+    (link,) = collected
+    assert [node.name for node in link.graph.node] == ["idma0", "partition", "odma0"]
+    assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
+    saved = tmp_path / "parent.onnx"
+    parent.save(str(saved))
+    reread = ModelWrapper(str(saved))
+    output = Path(cfg.output_dir)
+    assert reread.namespace(OUTPUTS) == {
+        "project": str(tmp_path / "project"),
+        "bitfile": str(output / "bitfile" / "finn-accel.bit"),
+        "hwh": str(output / "bitfile" / "finn-accel.hwh"),
+        "reports": {
+            "synthesis": str(output / "report" / "post_synth_resources.xml"),
+            "timing": str(output / "report" / "post_route_timing.rpt"),
+            "delivered_clock": str(output / "report" / "delivered_clock.json"),
+            "integration": str(output / "report" / "integration.json"),
+        },
+        "host_runtime": "zynq-iodma",
+    }
+    _, body, _ = partition_body(reread)
+    assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    # No flat key: a flat key is the model's metadata, a typed one the graph's.
+    for model in (reread, body):
+        assert list(model.model.metadata_props) == []
+        assert all("/" in item.key for item in model.graph.metadata_props)
+    integrated = json.loads((output / "report" / "integration.json").read_text())
+    assert [end["iodma"] for end in integrated["ends"]] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    assert (output / "driver" / "driver.py").is_file()
+    driver = (output / "driver" / "driver.py").read_text()
+    assert "'idma0'" in driver and "'odma0'" in driver

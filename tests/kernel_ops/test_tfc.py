@@ -34,20 +34,30 @@ from kernel_ops.packaging import reaches_vivado
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
 LOGITS = "MatMul_3_out0"
-# The partition's boundary facts:
-# 784 UINT8 pixels in 49 beats of 16 lanes; ten INT8 logits (the last MatMul's columns, K7)
-# in one beat of 80 bits.
+# The partition's boundary, the ends' facts in the Zynq shell:
+# 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
+# with no width converter; ten INT8 logits (the last MatMul's columns, K7) in one beat of
+# 80 bits, which an IODMA_hls writes through a converter to a 16-bit port.
+END = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
 FACTS = (
     [
         {
             "port": "s_axis_0",
             "tensor": "Reshape_0_out0",
             "shape": [1, 784],
-            "datatype": "UINT8",
+            "element": "UINT8",
+            "range": [0, 255],
             "lanes": 16,
             "beats": 49,
-            "element_bits": 8,
             "tdata": 128,
+            "end": {
+                **END,
+                "direction": "in",
+                "memory_width": 128,
+                "words": 49,
+                "converter": False,
+                "call_cycles": 13,
+            },
         }
     ],
     [
@@ -55,11 +65,19 @@ FACTS = (
             "port": "m_axis_0",
             "tensor": LOGITS,
             "shape": [1, 10],
-            "datatype": "INT8",
+            "element": "INT8",
+            "range": [-128, 127],
             "lanes": 10,
             "beats": 1,
-            "element_bits": 8,
             "tdata": 80,
+            "end": {
+                **END,
+                "direction": "out",
+                "memory_width": 16,
+                "words": 5,
+                "converter": True,
+                "call_cycles": 4,
+            },
         }
     ],
 )

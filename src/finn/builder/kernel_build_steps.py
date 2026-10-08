@@ -19,21 +19,26 @@ from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.builder.build_dataflow_phases import _execute_step
-from finn.builder.build_dataflow_steps import (
-    _dataflow_partition,
-    collect_zynq_bitfile,
-    deployment_package,
-)
+from finn.builder.build_dataflow_steps import collect_zynq_bitfile, deployment_package
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     KernelOutputType,
     KernelVerificationStepType,
 )
-from finn.core.onnx_exec import execute_onnx, execute_parent
+from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import read_target
 from finn.platform import refuse_drift, shell_row
+from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
+from finn.transformation.fpgadataflow.kernel_partitions import (
+    OUTPUT_BITFILE,
+    OUTPUT_HOST_RUNTIME,
+    OUTPUT_HWH,
+    OUTPUT_PROJECT,
+    OUTPUT_REPORTS,
+    partition_body,
+)
 from finn.transformation.fpgadataflow.make_driver import MakePYNQDriver
-from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
+from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild, kernel_link_graph
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
@@ -43,10 +48,8 @@ from finn.transformation.kernels import (
     partition_bottleneck,
     strategy,
 )
+from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN, integration
 from finn.transformation.kernels.package import ElaboratePartition, configured_root
-
-#: The integration each shell's bitfile is built by (finn.platform.ShellRow.integration).
-ZYNQ_BLOCK_DESIGN = "vivado-block-design"
 
 
 def _kernel_path_source(cfg: KernelBuildConfig) -> str:
@@ -122,17 +125,30 @@ def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
     return model
 
 
+def _partition_directory(cfg: KernelBuildConfig) -> Path:
+    """Where the kernel path keeps its partition's body (``partition.onnx``) and what its
+    shell's integration links around it."""
+    return Path(cfg.output_dir) / "partition"
+
+
 def step_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig):
-    """The KernelOps as one StreamingDataflowPartition, the nodes before and after it
-    on the host: the partition's body, which carries the target."""
-    return _dataflow_partition(model, cfg)
+    """Cut the KernelOps once into one StreamingDataflowPartition, the nodes before and
+    after it on the host (CutKernelPartition). The parent graph is the build's model
+    from here on; the partition is named ``partition`` (its node, its body
+    partition/partition.onnx, its IP and its block-design instance), and its body
+    carries the target and states its boundary, the ends' facts (finn.partition),
+    completed by ``cfg.kernel_completion``."""
+    return model.transform(
+        CutKernelPartition(_partition_directory(cfg), completion(cfg.kernel_completion))
+    )
 
 
 def verify_kernel_partition_python(model: ModelWrapper, cfg: KernelBuildConfig) -> bool:
     """The partition's own outputs, for each input ``verify_input_npy`` states: the
-    parent graph executed with the partition of KernelOps, against the model the
-    kernel path started from (step_kernel_ops' kernel_path_source.onnx) on the same
-    input, value for value. Each input's partition outputs are saved as
+    parent graph ``model`` executed, its partition node running its body of KernelOps,
+    against the model the kernel path started from (step_kernel_ops'
+    kernel_path_source.onnx) on the same input, value for value. Each input's partition
+    outputs are saved as
     verification_output/verify_kernel_partition_python_<index>_<SUCCESS|FAIL>.npz."""
     source_file = _kernel_path_source(cfg)
     if not os.path.isfile(source_file):
@@ -140,22 +156,18 @@ def verify_kernel_partition_python(model: ModelWrapper, cfg: KernelBuildConfig) 
             f"{source_file}: the kernel path's source, which step_kernel_ops keeps when "
             "PARTITION_PYTHON is asked, is not there (did the build start after it?)"
         )
-    assert cfg.save_intermediate_models, "Enable save_intermediate_models for verification"
-    intermediate = cfg.output_dir + "/intermediate_models"
     verify_out_dir = cfg.output_dir + "/verification_output"
     os.makedirs(verify_out_dir, exist_ok=True)
-    child_file = intermediate + "/verify_kernel_partition_python.onnx"
-    model.save(child_file)
-    parent_file = intermediate + "/dataflow_parent.onnx"
+    node, _, _ = partition_body(model)
     source = ModelWrapper(source_file)
     source_input = source.graph.input[0].name
     ishape = tuple(source.get_tensor_shape(source_input))
-    outputs = [item.name for item in model.graph.output]
+    outputs = list(node.output)
     inputs = np.load(cfg.verify_input_npy)
     all_match = True
     for index in range(inputs.shape[0]):
         frame = inputs[index : index + 1].reshape((1,) + ishape[1:])
-        built = execute_parent(parent_file, child_file, frame, return_full_ctx=True)
+        built = execute_onnx(model, {model.graph.input[0].name: frame}, True)
         expected = execute_onnx(source, {source_input: frame}, True)
         mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
         for name in mismatched:
@@ -177,7 +189,8 @@ def verify_kernel_partition_python(model: ModelWrapper, cfg: KernelBuildConfig) 
 
 
 def step_verify_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Check the kernel path's partition before a shell builds it.
+    """Check the kernel path's partition before a shell builds it, its body opened
+    through the parent graph's partition node.
 
     Always: its choices replay to a configured root, completed by
     ``cfg.kernel_completion`` (none stale, none left open, its ports its graph's
@@ -187,14 +200,15 @@ def step_verify_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig):
     kernel path started from, on each input verify_input_npy states
     (verify_kernel_partition_python); PARTITION_ELABORATION compiles and elaborates
     the partition's emitted RTL in XSim, through the build's toolchain."""
-    configured_root(model, "the kernel path's partition", completion(cfg.kernel_completion))
-    refuse_drift(read_target(model), cfg._resolve_target(), "build")
+    node, body, _ = partition_body(model)
+    configured_root(body, node.name, completion(cfg.kernel_completion))
+    refuse_drift(read_target(body), cfg._resolve_target(), "build")
     if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         matched = verify_kernel_partition_python(model, cfg)
         print("Verification for kernel_partition_python : " + ("SUCCESS" if matched else "FAIL"))
     if KernelVerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
         directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
-        model.transform(
+        body.transform(
             ElaboratePartition(
                 directory=Path(directory),
                 toolchain=cfg._resolve_toolchain(),
@@ -229,50 +243,79 @@ def _integrating_row(cfg: KernelBuildConfig, output: KernelOutputType):
 
 def step_kernel_bitfile(model: ModelWrapper, cfg: KernelBuildConfig):
     """Build the target's shell around the partition to a bitfile, by the shell's
-    integration (the Zynq block design: ZynqBuild, the partition completed by
-    ``cfg.kernel_completion``), if BITFILE is asked. The bitfile, its hardware handoff
-    and reports go to the output directory (collect_zynq_bitfile); the delivered
-    clock's report states the partition's bottleneck and the throughput the
-    exploration asked."""
+    integration, if BITFILE is asked: the Zynq block design (ZynqBuild) from the
+    partition's integration export (finn.transformation.kernels.integration, written as
+    report/integration.json), the partition completed by ``cfg.kernel_completion``. The
+    bitfile, its hardware handoff and reports go to the output directory
+    (collect_zynq_bitfile); the delivered clock's report states the partition's
+    bottleneck, ends included, and the throughput the exploration asked. The parent
+    graph stays the build's model and states what was made (finn.outputs: the
+    project, bitfile, hwh, reports and host runtime). Vivado launches as many runs at
+    once as the toolchain's selection says (``Selection.vivado_jobs``)."""
     if KernelOutputType.BITFILE not in cfg.generate_outputs:
         print("BITFILE not in requested outputs, skipping step_kernel_bitfile.")
         return model
     target, row = _integrating_row(cfg, KernelOutputType.BITFILE)
-    if row.integration != ZYNQ_BLOCK_DESIGN:
+    if row.integration != VIVADO_BLOCK_DESIGN:
         raise ValueError(f"bitfile: no build for the {row.integration!r} integration")
     kernel_completion = completion(cfg.kernel_completion)
-    bottleneck = partition_bottleneck(model, kernel_completion)
-    model = model.transform(
+    _, body, _ = partition_body(model)
+    bottleneck = partition_bottleneck(body, kernel_completion)
+    export = integration(model, kernel_completion)
+    report_dir = cfg.output_dir + "/report"
+    os.makedirs(report_dir, exist_ok=True)
+    with open(report_dir + "/integration.json", "w") as f:
+        json.dump(export.report(), f, indent=2)
+    toolchain = cfg._resolve_toolchain()
+    link = model.transform(
         ZynqBuild(
             target.board,
             target.platform.period_ns,
             cfg.enable_hw_debug,
-            partition_model_dir=cfg.output_dir + "/intermediate_models/kernel_partitions",
-            toolchain=cfg._resolve_toolchain(),
-            vivado_jobs=cfg.vivado_jobs,
+            partition_model_dir=str(_partition_directory(cfg) / "zynq_link"),
+            toolchain=toolchain,
+            vivado_jobs=toolchain.selection.vivado_jobs,
             completion=kernel_completion,
+            integration=export,
         )
     )
     collect_zynq_bitfile(
-        model,
+        link,
         cfg.output_dir,
         target.platform.period_ns,
         None if bottleneck is None else bottleneck.cycles,
         _objective_fps(cfg) if bottleneck is not None else None,
     )
+    model.set(OUTPUT_PROJECT, link.get_metadata_prop("vivado_pynq_proj"))
+    model.set(OUTPUT_BITFILE, cfg.output_dir + "/bitfile/finn-accel.bit")
+    model.set(OUTPUT_HWH, cfg.output_dir + "/bitfile/finn-accel.hwh")
+    model.set(
+        OUTPUT_REPORTS,
+        {
+            "synthesis": report_dir + "/post_synth_resources.xml",
+            "timing": report_dir + "/post_route_timing.rpt",
+            "delivered_clock": report_dir + "/delivered_clock.json",
+            "integration": report_dir + "/integration.json",
+        },
+    )
+    if row.host_runtime is not None:
+        model.set(OUTPUT_HOST_RUNTIME, row.host_runtime)
     return model
 
 
 def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     """Write the driver the target's shell's host runtime runs (the PYNQ driver), if
-    PYNQ_DRIVER is asked."""
+    PYNQ_DRIVER is asked, from the Zynq block design's link graph of the partition's
+    integration export (kernel_link_graph); the parent graph stays the build's model."""
     if KernelOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_kernel_driver.")
         return model
     _, row = _integrating_row(cfg, KernelOutputType.PYNQ_DRIVER)
     driver_dir = os.path.join(cfg.output_dir, "driver")
-    model = model.transform(MakePYNQDriver(row.host_runtime))
-    shutil.copytree(model.get_metadata_prop("pynq_driver_dir"), driver_dir, dirs_exist_ok=True)
+    export = integration(model, completion(cfg.kernel_completion))
+    link = kernel_link_graph(model, export, _partition_directory(cfg) / "driver_link")
+    link = link.transform(MakePYNQDriver(row.host_runtime))
+    shutil.copytree(link.get_metadata_prop("pynq_driver_dir"), driver_dir, dirs_exist_ok=True)
     print("PYNQ Python driver written into " + driver_dir)
     return model
 
@@ -294,10 +337,11 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
     - step_kernel_ops: State the build target in the model, rewrite to KernelOps
     - step_infer_kernel_tensors: Infer every tensor from the kernels
     - step_kernel_choices: Commit the open choices by the configured strategies
-    - step_kernel_partition: The KernelOps as one partition, the rest on the host
+    - step_kernel_partition: The KernelOps cut once into one partition, the rest on the host
     - step_verify_kernel_partition: Check the partition (and what verify_steps asks)
 
-    Returns the partition's model of KernelOps, its choices committed."""
+    Returns the parent graph: the host's nodes and the partition node, whose body
+    holds the KernelOps, their choices committed."""
     model = _execute_step(step_kernel_ops, model, cfg)
     model = _execute_step(step_infer_kernel_tensors, model, cfg)
     model = _execute_step(step_kernel_choices, model, cfg)

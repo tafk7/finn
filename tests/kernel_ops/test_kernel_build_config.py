@@ -26,6 +26,7 @@ from finn.builder.kernel_build_config import (
 )
 from finn.custom_op.kernels.base import read_target
 from finn.platform import TargetRequest, resolve_target
+from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels import kernel_choices_config
 from finn.util.toolchain import Selection
 from kernel_ops.tfc import ULTRA96, streamlined
@@ -54,8 +55,9 @@ def test_a_configuration_holds_through_json() -> None:
         kernel_completion="placeholder",
         verify_steps=list(KernelVerificationStepType),
         verify_input_npy="frames.npy",
-        toolchain=Selection(settings=("/tools/settings64.sh",), hls_frontend="vitis-run"),
-        vivado_jobs=4,
+        toolchain=Selection(
+            settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
+        ),
         enable_hw_debug=True,
         steps=["phase_kernel_path"],
         start_step="phase_kernel_path",
@@ -63,7 +65,6 @@ def test_a_configuration_holds_through_json() -> None:
         save_intermediate_models=False,
         enable_build_pdb_debug=False,
         verbose=True,
-        mute_config_assertions=True,
     )
     written = cfg.to_json()
     assert KernelBuildConfig.from_json(written) == cfg
@@ -76,10 +77,22 @@ def test_a_configuration_holds_through_json() -> None:
     }
     assert stated["generate_outputs"] == ["bitfile", "pynq_driver", "deployment_package"]
     assert stated["verify_steps"] == ["kernel_partition_python", "kernel_partition_elaboration"]
+    # How many runs Vivado launches at once is the toolchain's, a machine setting.
+    assert stated["toolchain"]["vivado_jobs"] == 4
 
 
 @pytest.mark.parametrize(
-    "key", ["synth_clk_period_ns", "board", "shell_flow_type", "target_fps", "fpga_part"]
+    "key",
+    [
+        "synth_clk_period_ns",
+        "board",
+        "shell_flow_type",
+        "target_fps",
+        "fpga_part",
+        # SZ7: the toolchain's selection states Vivado's jobs; nothing mutes the checks.
+        "vivado_jobs",
+        "mute_config_assertions",
+    ],
 )
 def test_a_dataflow_build_config_field_is_refused_naming_it(key: str) -> None:
     with pytest.raises(UndefinedParameterError, match=key):
@@ -135,7 +148,8 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path) -> None:
     assert build_dataflow_directory(str(directory)) == 0
     output = tmp_path / "output"
     built = ModelWrapper(str(output / "intermediate_models" / "step_verify_kernel_partition.onnx"))
-    assert read_target(built) == resolve_target(part=ULTRA96.part, period_ns=5.0)
-    assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(built)
+    _, body, _ = partition_body(built)
+    assert read_target(body) == resolve_target(part=ULTRA96.part, period_ns=5.0)
+    assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(body)
     report = json.loads((output / "report" / "kernel_exploration.json").read_text())
     assert report["bottleneck"]["cycles"] == 196

@@ -135,7 +135,7 @@ def boundary_words(
         for each in facts:
             ends = getattr(root.point, member(each["tensor"])).endpoints
             end = ends.source if ends.source_owner is None else ends.sink
-            bits = each["element_bits"]
+            bits = int(end.element.bits)
             side[each["port"]] = (
                 words(end.form, context[each["tensor"]], bits),
                 bits * each["lanes"],

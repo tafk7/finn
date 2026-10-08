@@ -212,6 +212,18 @@ def run_all_config_checks(cfg: Any, model: Any = None) -> Report:
             )
         )
 
+    if cfg.toolchain is not None and cfg.toolchain.vivado_jobs is not None:
+        checks.append(
+            _check(
+                "toolchain_vivado_jobs",
+                Severity.ERROR,
+                False,
+                "toolchain.vivado_jobs is the kernel path's (KernelBuildConfig); "
+                "this flow reads its own vivado_jobs",
+                "State vivado_jobs beside the toolchain, not in it",
+            )
+        )
+
     has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
     try:
         # imported lazily via importlib (rather than a top-level import) since

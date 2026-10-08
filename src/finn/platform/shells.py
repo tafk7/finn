@@ -50,12 +50,17 @@ class StaticRegion:
     ``processor`` and its ``reset``, fixed; the ``memory_interconnect``, an AXI
     master a memory port (each end's) into the processor's memory; the
     ``control_interconnect``, an AXI-Lite slave a bus (the partition's and each
-    end's) from the processor. Each is named by its Vivado IP."""
+    end's) from the processor. Each is named by its Vivado IP. The processor
+    addresses the AXI-Lite buses from ``control_base``, in the order they are
+    connected, each at its aperture's alignment and at least ``control_aperture``
+    bytes."""
 
     processor: str
     reset: str
     memory_interconnect: str
     control_interconnect: str
+    control_base: int
+    control_aperture: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -119,6 +124,9 @@ ZYNQ_STATIC_REGION = StaticRegion(
     reset="proc_sys_reset",
     memory_interconnect="smartconnect",
     control_interconnect="axi_interconnect",
+    # The template's: its processor's M_AXI_HPM0_FPD window, 4 KiB at least a bus.
+    control_base=0xA000_0000,
+    control_aperture=4096,
 )
 
 ROWS: dict[tuple[str, str | None], ShellRow] = {

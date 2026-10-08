@@ -112,14 +112,11 @@ class KernelBuildConfig(DataClassJsonMixin):
 
     #: The AMD tool installation every tool step of the build runs in, and the
     #: environment of build_dataflow_directory's build process; unset (None), the
-    #: machine's. As DataflowBuildConfig.toolchain.
+    #: machine's. As DataflowBuildConfig.toolchain. It also says how many runs Vivado
+    #: launches at once when it builds the shell's bitfile (``vivado_jobs``).
     toolchain: Optional[Selection] = field(
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
-
-    #: How many runs Vivado launches at once when it builds the shell's bitfile
-    #: (``launch_runs -jobs``). By default the machine's cores, at most 16.
-    vivado_jobs: Optional[int] = None
 
     #: Insert debug cores (ILA) in the shell's bitfile build (ZynqBuild's enable_debug).
     enable_hw_debug: bool = False
@@ -144,9 +141,6 @@ class KernelBuildConfig(DataClassJsonMixin):
 
     #: Whether every step's output is printed to stdout, not only to the build log.
     verbose: bool = False
-
-    #: If True, configuration errors are printed and the build runs anyway.
-    mute_config_assertions: bool = False
 
     #: Functions to run after named steps or phases, as DataflowBuildConfig's.
     inject_steps_after: Dict[str, List[Callable]] = field(default_factory=dict)

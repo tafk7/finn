@@ -14,8 +14,9 @@ partition is costed or built, never saved;
 ``partition_bottleneck`` reads a partition's slowest members from its saved
 choices, completed; ``kernel_choices_config`` exports the nodes' choices, sparse, for
 ``ApplyConfig``; ``PackagePartition`` packages a partition of KernelOps as the
-IP the shells read (the stitched-IP contract), and ``ElaboratePartition``
-compiles and elaborates its RTL in XSim, a check before a shell builds it.
+IP the shells read, and ``ElaboratePartition`` compiles and elaborates its RTL
+in XSim, a check before a shell builds it; ``integration.integration`` exports
+what a shell's integration builds around the partition, from its ends.
 """
 
 from finn.transformation.kernels.choose import (

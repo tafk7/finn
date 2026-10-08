@@ -15,18 +15,20 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   each boundary channel's AXI-Stream ``s_axis_<i>``/``m_axis_<j>``, each presented AXI-Lite
   bus with a ``Reg0`` register map (the Zynq shell assigns ``Reg*``, SLASH maps
   a ``register`` block);
-- on the partition model, ``vivado_stitch_proj``, ``vivado_stitch_vlnv`` and
-  ``vivado_stitch_ifnames``, raw, as the shells read them by name.
+- on the partition model, its directory, VLNV and interface names, typed
+  (``finn.outputs``: ``OUTPUT_IP``, ``OUTPUT_VLNV``, ``OUTPUT_INTERFACES``), as the
+  shells read them.
 
 The Tcl, the VLNV and the interface names are emitted by
 ``finn.kernels.artifacts.ipxact`` from the module's pins; this module supplies
 the partition: its module, part, clock and name, and the toolchain Vivado runs in.
 
-The partition's boundary facts are typed metadata on the partition model, the
+The partition's boundary is typed metadata on the partition model, the
 ``finn.partition`` namespace that ``finn.transformation.fpgadataflow.kernel_partitions``
-owns and the flow reads (InsertIODMA, ``get_driver_shapes``). They are read from
-the shell root's boundary channels where the boundary presents them
-(``boundary_facts``), and PackagePartition writes them (``write_boundary_facts``).
+owns: the ends' facts. They are read from the shell root's boundary channels, each
+the stream at its free side and the end the shell places there
+(``boundary_facts``), and the kernel path's cut states them
+(``write_boundary_facts``).
 
 The part and the clock period are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
@@ -60,7 +62,6 @@ It simulates nothing: it says nothing about the values the RTL computes.
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -69,7 +70,7 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn import resources
-from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, shape
+from finn.custom_op.kernels.base import KernelOpError, read_target, shape
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import admission_refusal, shell_root
 from finn.kernels.artifacts.build import EmittedModule, emit_module
@@ -78,8 +79,12 @@ from finn.kernels.artifacts.module import Abi
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import undecided
+from finn.kernels.ends import EndContract
 from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
 from finn.transformation.fpgadataflow.kernel_partitions import (
+    OUTPUT_INTERFACES,
+    OUTPUT_IP,
+    OUTPUT_VLNV,
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
 )
@@ -139,25 +144,45 @@ def configured_root(
     return point, root.boundary
 
 
+def end_facts(contract: EndContract) -> dict[str, Any]:
+    """An end's facts as ``finn.partition`` states them (``kernel_partitions.END_FACTS``):
+    its memory side and rate; the stream side is its port's."""
+    return {
+        "kind": contract.kind,
+        "direction": contract.direction,
+        "memory_width": contract.memory_width,
+        "words": contract.words,
+        "converter": contract.converter,
+        "call_cycles": contract.call_cycles,
+        "frames_per_call": contract.frames_per_call,
+        "control_buses": contract.control_buses,
+    }
+
+
 def boundary_facts(
     model: ModelWrapper, point: Any, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Each boundary port's facts (``kernel_partitions.PORT_FACTS``), inputs then
-    outputs, in port order: the ONNX tensor's shape and annotation, and the channel's
-    form and width at the partition's own end (the end no kernel of the partition owns)."""
+    outputs, in port order: the ONNX tensor and its shape; the stream at the channel's
+    free side, the partition's own end (the end no kernel of the partition owns): the
+    channel's element and its range, lanes, beats and TDATA width; and the end the
+    shell places there (``end_facts``), or ``None``."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
-        ends = getattr(point, member(tensor)).endpoints
-        end = ends.source if ends.source_owner is None else ends.sink
+        channel = getattr(point, member(tensor))
+        ends = channel.endpoints
+        side = ends.source if ends.source_owner is None else ends.sink
+        element = side.element
         facts = {
             "port": port,
             "tensor": tensor,
             "shape": list(shape(model, tensor, label)),
-            "datatype": datatype(model, tensor, label).name,
-            "lanes": int(end.form.lanes),
-            "beats": int(end.form.beats),
-            "element_bits": int(end.element.bits),
-            "tdata": int(end.transport.data_width),
+            "element": element.dtype.name,
+            "range": None if element.value_range is None else list(element.value_range),
+            "lanes": int(side.form.lanes),
+            "beats": int(side.form.beats),
+            "tdata": int(side.transport.data_width),
+            "end": end_facts(channel.end_contract) if channel.ended else None,
         }
         found[0 if port.startswith("s_axis_") else 1].append(facts)
     return found
@@ -166,8 +191,8 @@ def boundary_facts(
 def write_boundary_facts(
     model: ModelWrapper, label: str = "partition", completion: Completion | None = None
 ) -> None:
-    """State a partition model's boundary facts (``finn.partition``), from its root
-    completed by ``completion`` (``configured_root``)."""
+    """State a partition model's boundary, the ends' facts (``finn.partition``), from its
+    root completed by ``completion`` (``configured_root``)."""
     point, boundary = configured_root(model, label, completion)
     inputs, outputs = boundary_facts(model, point, boundary, label)
     model.set(PARTITION_INPUTS, inputs)
@@ -203,7 +228,7 @@ class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP; see the module docstring.
 
     ``ip_name`` is the partition node's name; the part and the clock period are the
-    model's target. ``directory`` is the project (``vivado_stitch_proj``), a new
+    model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
     build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
     (a flow passes its own, so that one build runs Vivado by one route), by default
     the machine's (``finn.util.toolchain.machine_toolchain``); ``completion`` the
@@ -235,7 +260,7 @@ class PackagePartition(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         built = read_target(model)
-        point, boundary = configured_root(model, self.ip_name, self.completion)
+        point, _ = configured_root(model, self.ip_name, self.completion)
         module = point.module
         project = Path(
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
@@ -266,12 +291,9 @@ class PackagePartition(Transformation):
         )
         if not (project / "ip" / "component.xml").is_file():
             raise KernelOpError(f"{self.ip_name}: no IP packaged; see {project}/package.log")
-        model.set_metadata_prop("vivado_stitch_proj", str(project))
-        model.set_metadata_prop("vivado_stitch_vlnv", vlnv(self.ip_name))
-        model.set_metadata_prop("vivado_stitch_ifnames", json.dumps(interface_names(pins)))
-        inputs, outputs = boundary_facts(model, point, boundary, self.ip_name)
-        model.set(PARTITION_INPUTS, inputs)
-        model.set(PARTITION_OUTPUTS, outputs)
+        model.set(OUTPUT_IP, str(project / "ip"))
+        model.set(OUTPUT_VLNV, vlnv(self.ip_name))
+        model.set(OUTPUT_INTERFACES, interface_names(pins))
         return model, False
 
 
@@ -348,6 +370,7 @@ __all__ = [
     "ElaboratePartition",
     "PackagePartition",
     "boundary_facts",
+    "end_facts",
     "check_elaborates",
     "configured_root",
     "write_boundary_facts",

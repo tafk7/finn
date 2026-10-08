@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""ZynqBuild over a model of KernelOps, up to its IP builds: the partitions it prepares,
-the target it reads from the model, and the toolchain it hands to each transformation
-that runs Vivado or Vitis HLS.
+"""ZynqBuild over the kernel path's parent graph, up to its IP builds: the link graph it
+makes from the integration export, the target it reads from the model, and the toolchain
+it hands to each transformation that runs Vivado or Vitis HLS.
 
-The Chain (``kernels.chain``), its choices saved, stated for Ultra96 in the Zynq shell, as
-the KernelOps' model; no Vivado and no Vitis HLS runs (the bitstream build itself is not a
-test).
+The Chain (``kernels.chain``), its choices saved, stated for Ultra96 in the Zynq shell and
+cut once, as the parent graph; no Vivado and no Vitis HLS runs (the bitstream build itself
+is not a test).
 """
 
 from __future__ import annotations
@@ -27,13 +27,14 @@ from finn.custom_op.kernels.base import write_target
 from finn.platform import TargetRefused, resolve_target
 from finn.transformation.fpgadataflow import make_zynq_proj
 from finn.transformation.fpgadataflow.create_stitched_ip import collect_ip_dirs
+from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
 from finn.transformation.fpgadataflow.kernel_partitions import (
-    PARTITION_INPUTS,
-    PARTITION_OUTPUTS,
-    partition_facts,
+    OUTPUT_INTERFACES,
+    OUTPUT_IP,
+    OUTPUT_VLNV,
 )
-from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
-from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
+from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild, kernel_link_graph
+from finn.transformation.kernels.integration import integration
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
 from finn.util.vivado import vivado_jobs
@@ -44,37 +45,52 @@ from kernel_ops.packaging import ReachedVivado
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 
 
-def zynq_model() -> ModelWrapper:
-    """The Chain as KernelOps, stated for Ultra96 in the Zynq shell, its choices saved."""
+def zynq_model(directory: Path) -> ModelWrapper:
+    """The Chain as KernelOps, stated for Ultra96 in the Zynq shell, its choices saved,
+    cut once (``CutKernelPartition``, its body in ``directory``): the kernel path's parent
+    graph."""
     model = kernel_model()
     write_target(model, ZYNQ)
     configure_partition(model)
-    return model
+    return model.transform(CutKernelPartition(directory / "cut"))
 
 
-def test_a_model_of_kernel_ops_becomes_iodma_and_kernel_partitions(tmp_path: Path) -> None:
-    model = zynq_model()
-    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
-    parent = build.prepare_kernel_partitions(model)
-    bodies = [ModelWrapper(getCustomOp(node).get_nodeattr("model")) for node in parent.graph.node]
-    assert [node.op_type for node in parent.graph.node] == ["StreamingDataflowPartition"] * 3
-    assert [[node.op_type for node in body.graph.node] for body in bodies] == [
+def bodies(link: ModelWrapper) -> list[ModelWrapper]:
+    return [ModelWrapper(getCustomOp(node).get_nodeattr("model")) for node in link.graph.node]
+
+
+def test_the_parent_graph_is_linked_from_its_export_and_its_partition_keeps_its_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ZynqBuild links the kernel path's parent graph from its integration export: an
+    IODMA partition per end, named as the end's instance, around the partition node,
+    which keeps its one name; the partition is packaged typed, and MakeZYNQProject reads
+    its IP from a copy of the body in the build's own directory."""
+    link, _ = recorded_build(monkeypatch, tmp_path, object())
+    assert [(node.name, node.op_type) for node in link.graph.node] == [
+        ("idma0", "StreamingDataflowPartition"),
+        ("partition", "StreamingDataflowPartition"),
+        ("odma0", "StreamingDataflowPartition"),
+    ]
+    dma_in, stitched, dma_out = bodies(link)
+    assert [[node.op_type for node in body.graph.node] for body in (dma_in, dma_out)] == [
         ["IODMA_hls"],
-        ["MatMul", "Thresholding", "MatMul"],
         ["IODMA_hls"],
     ]
-    # The KernelOps' partition states its facts; the IODMAs' widths came from them.
-    inputs, outputs = partition_facts(bodies[1])
-    # They describe that partition only: neither the model it was cut from, nor the
-    # parent graph, nor an IODMA's body carries them.
-    for other in (model, parent, bodies[0], bodies[2]):
-        assert (other.get(PARTITION_INPUTS), other.get(PARTITION_OUTPUTS)) == (None, None)
-    assert (inputs[0]["tdata"], outputs[0]["tdata"]) == (8, 16)
-    assert getCustomOp(bodies[0].graph.node[0]).get_nodeattr("streamWidth") == 8
-    assert getCustomOp(bodies[2].graph.node[0]).get_nodeattr("streamWidth") == 16
-    assert get_driver_shapes(parent)["ishape_folded"] == [(1, 6, 2)]
+    # The IODMAs' widths are the ends' facts: x 6 beats of 8 bits on a 16-bit port, y 6
+    # beats of 16 bits on a 32-bit port.
+    assert getCustomOp(dma_in.graph.node[0]).get_nodeattr("intfWidth") == 16
+    assert getCustomOp(dma_out.graph.node[0]).get_nodeattr("streamWidth") == 16
+    # The body the build keeps states its IP typed, and no flat key; the copy
+    # MakeZYNQProject reads states it in the stitched-IP contract's keys.
+    built = ModelWrapper(str(tmp_path / "cut" / "partition.onnx"))
+    assert built.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert list(built.model.metadata_props) == []
+    assert stitched.get_metadata_prop("vivado_stitch_vlnv") == "xilinx_finn:finn:partition:1.0"
+    assert stitched.get_metadata_prop("vivado_stitch_proj") == "/packaged"
+    assert json.loads(stitched.get_metadata_prop("vivado_stitch_ifnames")) == {"axilite": []}
     # The packaged IP is self-contained: the shell adds only its directory.
-    assert collect_ip_dirs(bodies[1], "/stitch") == ["/stitch/ip"]
+    assert collect_ip_dirs(stitched, "/packaged") == ["/packaged/ip"]
 
 
 #: The steps of a build that run a tool, each given the build's toolchain.
@@ -89,6 +105,13 @@ TOOL_ORDER = [
     "CreateStitchedIP",
     "MakeZYNQProject",
 ]
+
+
+def state_packaged(model: ModelWrapper, ip_name: str) -> None:
+    """What PackagePartition states of the IP it packages ``model`` as, typed."""
+    model.set(OUTPUT_IP, "/packaged/ip")
+    model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{ip_name}:1.0")
+    model.set(OUTPUT_INTERFACES, {"axilite": []})
 
 
 def recorded_build(
@@ -106,18 +129,23 @@ def recorded_build(
         class Recorded(Transformation):
             def __init__(self, *args: object, toolchain: object = None, **kwargs: object):
                 super().__init__()
+                self.args = args
                 if name in TOOL_STEPS:
                     seen.append((name, toolchain))
 
             def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+                if name == "PackagePartition":
+                    state_packaged(model, str(self.args[0]))
                 return model, False
 
         return Recorded
 
     for name in replaced:
         monkeypatch.setattr(make_zynq_proj, name, recorder(name))
-    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path), toolchain=toolchain)
-    return zynq_model().transform(build), seen
+    build = ZynqBuild(
+        "Ultra96", 5.0, partition_model_dir=str(tmp_path / "link"), toolchain=toolchain
+    )
+    return zynq_model(tmp_path).transform(build), seen
 
 
 @pytest.mark.parametrize(
@@ -131,9 +159,9 @@ def recorded_build(
 def test_a_build_for_another_target_than_the_models_is_refused(
     tmp_path: Path, board: str, period_ns: float, refused: str
 ) -> None:
-    build = ZynqBuild(board, period_ns, partition_model_dir=str(tmp_path))
+    build = ZynqBuild(board, period_ns, partition_model_dir=str(tmp_path / "link"))
     with pytest.raises(TargetRefused, match=f"target-drift: .*{refused}"):
-        zynq_model().transform(build)
+        zynq_model(tmp_path).transform(build)
 
 
 def test_a_model_stated_for_another_shell_is_refused(tmp_path: Path) -> None:
@@ -141,9 +169,10 @@ def test_a_model_stated_for_another_shell_is_refused(tmp_path: Path) -> None:
     # shell does not give a partition.
     model = kernel_model()
     configure_partition(model)
-    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path / "link"))
     with pytest.raises(TargetRefused) as refused:
-        model.transform(build)
+        parent.transform(build)
     assert "shell: the model states 'ip', the Zynq build 'pynq'" in str(refused.value)
     assert "clk2x: the model states True, the Zynq build False" in str(refused.value)
 
@@ -157,18 +186,23 @@ def test_a_build_of_kernel_ops_runs_at_the_models_clock_period(
         class Recorded(Transformation):
             def __init__(self, *args: object, **kwargs: object):
                 super().__init__()
+                self.args = args
                 if name in ("PrepareIP", "MakeZYNQProject"):
                     periods.append((name, args[1]))
 
             def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+                if name == "PackagePartition":
+                    state_packaged(model, str(self.args[0]))
                 return model, False
 
         return Recorded
 
     for name in (*TOOL_STEPS, "PrepareIP"):
         monkeypatch.setattr(make_zynq_proj, name, recorder(name))
-    build = ZynqBuild("Ultra96", None, partition_model_dir=str(tmp_path), toolchain=object())
-    zynq_model().transform(build)
+    build = ZynqBuild(
+        "Ultra96", None, partition_model_dir=str(tmp_path / "link"), toolchain=object()
+    )
+    zynq_model(tmp_path).transform(build)
     assert periods == [("PrepareIP", 5.0), ("PrepareIP", 5.0), ("MakeZYNQProject", 5.0)]
 
 
@@ -232,7 +266,7 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     monkeypatch.setattr(make_zynq_proj, "machine_toolchain", machine_refused)
     monkeypatch.setattr(hls, "machine_toolchain", machine_refused)
-    parent, seen = recorded_build(
+    link, seen = recorded_build(
         monkeypatch,
         tmp_path / "partitions",
         toolchain,
@@ -241,9 +275,7 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
     assert [name for name, _ in seen] == [name for name in TOOL_ORDER if name != "HLSSynthIP"]
     dmas = [
         getCustomOp(body.graph.node[0])
-        for body in (
-            ModelWrapper(getCustomOp(node).get_nodeattr("model")) for node in parent.graph.node
-        )
+        for body in bodies(link)
         if body.graph.node[0].op_type == "IODMA_hls"
     ]
     assert len(dmas) == 2
@@ -254,11 +286,11 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
 
 
 def project_parent(tmp_path: Path, ifnames: str) -> ModelWrapper:
-    """The Chain's parent graph as ZynqBuild prepares it, each partition stated as built
-    (its IP project ``tmp_path``) with the interface names ``ifnames``."""
-    build = ZynqBuild("Ultra96", 5.0, partition_model_dir=str(tmp_path))
-    parent = build.prepare_kernel_partitions(zynq_model())
-    for node in parent.graph.node:
+    """The Chain's link graph as ZynqBuild links it, each partition stated as built (its
+    IP project ``tmp_path``) with the interface names ``ifnames``."""
+    parent = zynq_model(tmp_path)
+    link = kernel_link_graph(parent, integration(parent), tmp_path / "link")
+    for node in link.graph.node:
         body_file = getCustomOp(node).get_nodeattr("model")
         body = ModelWrapper(body_file)
         for inner in body.get_nodes_by_op_type("IODMA_hls"):
@@ -267,7 +299,7 @@ def project_parent(tmp_path: Path, ifnames: str) -> ModelWrapper:
         body.set_metadata_prop("vivado_stitch_vlnv", "xilinx.com:hls:partition:1.0")
         body.set_metadata_prop("vivado_stitch_ifnames", ifnames)
         body.save(body_file)
-    return parent
+    return link
 
 
 def test_the_project_reads_interface_names_as_json_and_never_executes_them(

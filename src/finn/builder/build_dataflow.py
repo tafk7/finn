@@ -274,13 +274,18 @@ def build_dataflow_cfg(model_filename, cfg: BuildConfig):
     print(f"Configuration check report saved to: {report_path}")
 
     if config_report.has_errors():
-        if cfg.mute_config_assertions is True:
+        # The kernel path's configuration mutes nothing: its errors stop the build.
+        if isinstance(cfg, DataflowBuildConfig) and cfg.mute_config_assertions is True:
             print("WARNING: Configuration errors detected but muted by mute_config_assertions=True")
             print("Build may fail or produce unexpected results.")
         else:
+            muting = (
+                " or set mute_config_assertions=True"
+                if isinstance(cfg, DataflowBuildConfig)
+                else ""
+            )
             raise AssertionError(
-                "Configuration check failed with errors. "
-                "Fix the issues above or set mute_config_assertions=True to proceed."
+                f"Configuration check failed with errors. Fix the issues above{muting} to proceed."
             )
 
     build_dataflow_steps = resolve_build_steps(cfg)

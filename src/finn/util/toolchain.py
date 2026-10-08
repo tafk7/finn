@@ -153,6 +153,9 @@ class Selection:
     command_dir: str = ""
     launcher: tuple[str, ...] = ()
     hls_frontend: str = "vitis_hls"
+    #: How many runs Vivado launches at once (``launch_runs -jobs``); None: the
+    #: machine's cores, at most 16 (``finn.util.vivado.vivado_jobs``).
+    vivado_jobs: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "settings", tuple(map(os.fspath, self.settings)))
@@ -164,6 +167,10 @@ class Selection:
             )
         if self.hls_frontend not in {"vivado_hls", "vitis_hls", "vitis-run"}:
             raise ValueError("Unknown HLS frontend: " + self.hls_frontend)
+        if self.vivado_jobs is not None and (
+            type(self.vivado_jobs) is not int or self.vivado_jobs < 1
+        ):
+            raise ValueError(f"Vivado's jobs must be a positive number, not {self.vivado_jobs!r}")
 
     def prepare(self, base_env: Mapping[str, str] | None = None, timeout: float = 30) -> Toolchain:
         """The selected installation's environment, captured once.

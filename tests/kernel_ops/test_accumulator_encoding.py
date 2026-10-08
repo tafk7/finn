@@ -228,7 +228,7 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
     words = {}
     for facts, values in ((inputs[0], x), (outputs[0], y)):
         flat = [int(value) for value in values.reshape(-1)]
-        lanes, bits = facts["lanes"], facts["element_bits"]
+        lanes, bits = facts["lanes"], DataType[facts["element"]].bitwidth()
         words[facts["port"]] = (
             [pack(flat[i : i + lanes], bits) for i in range(0, len(flat), lanes)],
             lanes * bits,
