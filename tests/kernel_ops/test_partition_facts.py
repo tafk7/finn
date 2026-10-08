@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import qonnx_make_model
 
 import finn.custom_op.kernels as kernel_ops_package
@@ -33,12 +32,9 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_IP,
     OUTPUT_VLNV,
     PARTITION_INPUTS,
-    kernel_partition_ports,
     partition_body,
     partition_facts,
 )
-from finn.transformation.fpgadataflow.make_driver import get_driver_shapes
-from finn.transformation.fpgadataflow.make_zynq_proj import kernel_link_graph
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.integration import (
     Address,
@@ -237,65 +233,6 @@ def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
     parent = chain().transform(CutKernelPartition(tmp_path))
     with pytest.raises(IntegrationError, match="the 'ip' shell's integration is None: no export"):
         integration(parent)
-
-
-def test_the_link_graph_holds_an_iodma_partition_per_end_around_the_partition(
-    tmp_path: Path,
-) -> None:
-    parent = chain("pynq").transform(CutKernelPartition(tmp_path))
-    link = kernel_link_graph(parent, integration(parent), tmp_path / "link")
-    assert [
-        (node.name, getCustomOp(node).get_nodeattr("instance_name")) for node in link.graph.node
-    ] == [("idma0", "idma0"), ("idma1", "idma1"), ("partition", "partition"), ("odma0", "odma0")]
-    partition_node = link.graph.node[2]
-    assert (list(partition_node.input), list(partition_node.output)) == (["x", "w2"], ["y"])
-    # The partition keeps its body; each end's partition holds its one IODMA_hls.
-    assert getCustomOp(partition_node).get_nodeattr("model") == str(tmp_path / "partition.onnx")
-    dma = ModelWrapper(getCustomOp(link.graph.node[1]).get_nodeattr("model"))
-    (node,) = dma.graph.node
-    names = ("direction", "numInputVectors", "NumChannels", "dataType", "intfWidth", "streamWidth")
-    assert tuple(getCustomOp(node).get_nodeattr(name) for name in names) == (
-        "in",
-        [1, 12],
-        2,
-        "UINT8",
-        64,
-        16,
-    )
-    # The memory sides are the graph's inputs and outputs, typed as their tensors.
-    assert [item.name for item in link.graph.input] == ["idma0_memory", "idma1_memory"]
-    assert [item.name for item in link.graph.output] == ["odma0_memory"]
-    assert link.get_tensor_datatype("odma0_memory").name == "INT7"
-
-
-def test_only_a_partition_of_kernel_ops_has_kernel_partition_ports(tmp_path: Path) -> None:
-    parent = chain("pynq").transform(CutKernelPartition(tmp_path))
-    link = kernel_link_graph(parent, integration(parent), tmp_path / "link")
-    dma_x, dma_w2, partition, dma_y = link.graph.node
-    assert [kernel_partition_ports(node) for node in (dma_x, dma_w2, dma_y)] == [None] * 3
-    ports = kernel_partition_ports(partition)
-    assert ports is not None
-    # By the partition node's tensors, in port order: x and w2 in, y out.
-    assert {tensor: (port["port"], port["tensor"]) for tensor, port in ports.items()} == {
-        "x": ("s_axis_0", "x"),
-        "w2": ("s_axis_1", "w2"),
-        "y": ("m_axis_0", "y"),
-    }
-
-
-def test_the_driver_shapes_come_from_the_facts(tmp_path: Path) -> None:
-    model = kernel_model()
-    write_target(model, ZYNQ)
-    configure_partition(model)
-    parent = model.transform(CutKernelPartition(tmp_path))
-    shapes = get_driver_shapes(kernel_link_graph(parent, integration(parent), tmp_path / "link"))
-    # The output is the second MatMul's, from its weights' columns (K7): INT5.
-    assert (shapes["idt"], shapes["odt"]) == (["DataType['INT3']"], ["DataType['INT5']"])
-    assert (shapes["idma_names"], shapes["odma_names"]) == (["idma0"], ["odma0"])
-    assert (shapes["ishape_normal"], shapes["oshape_normal"]) == ([(3, 4)], [(3, 4)])
-    assert (shapes["ishape_folded"], shapes["oshape_folded"]) == ([(1, 6, 2)], [(1, 6, 2)])
-    # Packed: two INT3 lanes in one byte a beat; two INT5 lanes in two.
-    assert (shapes["ishape_packed"], shapes["oshape_packed"]) == ([(1, 6, 1)], [(1, 6, 2)])
 
 
 class PackagedHere:

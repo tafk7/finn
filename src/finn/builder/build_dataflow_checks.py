@@ -124,8 +124,9 @@ def _resolved_step_names(cfg: Any) -> Optional[set]:
 def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
     """The checks of a kernel-path build that its configuration's type does not make
     impossible: its target resolves (finn.platform.resolve_target); the outputs it
-    asks for need a shell that integrates the partition (not ``ip``); the
-    verification input exists, and the step that verifies runs."""
+    asks for need a shell that integrates the partition (not ``ip``); the shell's
+    build takes its shell_options; the verification input exists, and the step that
+    verifies runs."""
     checks = []
     try:
         target = cfg._resolve_target()
@@ -151,6 +152,19 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
                 "its outputs are the packaged IP's",
                 "State a shell that integrates it (pynq, for a board), or remove them "
                 "from generate_outputs",
+            )
+        )
+    try:
+        cfg._resolve_shell_options()
+    except ValueError as refused:
+        checks.append(
+            _check(
+                "kernel_shell_options",
+                Severity.ERROR,
+                False,
+                str(refused),
+                "State only the options the target's shell's build takes (pynq: "
+                "enable_hw_debug), or none",
             )
         )
     if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(

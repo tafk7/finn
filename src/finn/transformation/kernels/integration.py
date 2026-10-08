@@ -29,7 +29,8 @@ generation does (``configured_root``) and reads the ends its boundary channels p
 
 The names are the block design's: ends ``idma<i>`` and ``odma<j>`` by direction in port
 order, the static region's instances ``<ip>_0`` (``finn.platform.StaticRegion``), and an
-end's pins those of its ``IODMA_hls`` partition IP (``IODMA_PINS``).
+end's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
+(``IODMA_PINS``).
 
 It is a function of the shell root, not a view on it: the export is the integration's
 (a block design's names, addresses and Vivado IPs), needed once a build and not at
@@ -66,7 +67,8 @@ IODMA_PINS = {
     "memory": "m_axi_gmem0",
     "control": "s_axi_control_0",
 }
-"""The pins of an ``IODMA_hls`` end's IP (its partition's packaged IP)."""
+"""The pins of an ``IODMA_hls`` end's IP, its one node packaged as a stitched IP (the pynq
+shell's runner, ``finn.transformation.fpgadataflow.pynq_runner``)."""
 
 CLOCK, RESET = "ap_clk", "ap_rst_n"
 """Every instance's clock and reset pins."""
@@ -102,12 +104,13 @@ class IodmaConfiguration:
 @dataclass(frozen=True, kw_only=True)
 class IntegratedEnd:
     """An end in the integration: its ``instance``, the boundary ``tensor`` and partition
-    ``port`` it meets, its facts (``contract``) and its ``IODMA_hls`` node
-    (``iodma``)."""
+    ``port`` it meets, the tensor's ``shape`` (one inference, as the graph states it),
+    its facts (``contract``) and its ``IODMA_hls`` node (``iodma``)."""
 
     instance: str
     tensor: str
     port: str
+    shape: tuple[int, ...]
     contract: EndContract
     iodma: IodmaConfiguration
 
@@ -168,6 +171,7 @@ class Integration:
                     "instance": end.instance,
                     "tensor": end.tensor,
                     "port": end.port,
+                    "shape": list(end.shape),
                     "kind": end.contract.kind,
                     "element": end.contract.element.dtype.name,
                     "iodma": end.iodma.attributes,
@@ -231,6 +235,9 @@ def integration(model: ModelWrapper, completion: Completion | None = None) -> In
                 f"{tensor} ({port}): the {row.shell!r} shell places no end on it; its "
                 "integration connects every boundary port to an end"
             )
+        shape = body.get_tensor_shape(tensor)
+        if shape is None:
+            raise IntegrationError(f"{tensor} ({port}): the partition states no shape for it")
         contract: EndContract = channel.end_contract
         prefix = END_INSTANCES[contract.direction]
         instance = f"{prefix}{counts[contract.direction]}"
@@ -240,6 +247,7 @@ def integration(model: ModelWrapper, completion: Completion | None = None) -> In
                 instance=instance,
                 tensor=tensor,
                 port=port,
+                shape=tuple(shape),
                 contract=contract,
                 iodma=iodma_configuration(contract),
             )

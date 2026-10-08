@@ -212,20 +212,6 @@ def partition_facts(model: Any) -> tuple[list[dict[str, Any]], list[dict[str, An
     return inputs, outputs
 
 
-def kernel_partition_ports(node: Any) -> dict[str, dict[str, Any]] | None:
-    """For a StreamingDataflowPartition of KernelOps, each boundary port's facts by the
-    partition node's tensor that the port carries; None for any other node, so it also
-    tells a partition of KernelOps apart. The body is loaded once; its ports are in its
-    graph's order, which is the partition node's."""
-    if node.op_type != PARTITION_OP:
-        return None
-    body = ModelWrapper(_body_file(node))
-    if not is_kernel_partition(body):
-        return None
-    inputs, outputs = partition_facts(body)
-    return dict(zip(node.input, inputs, strict=True)) | dict(zip(node.output, outputs, strict=True))
-
-
 __all__ = [
     "END_FACTS",
     "KERNEL_OPS_DOMAIN",
@@ -245,7 +231,6 @@ __all__ = [
     "PORT_FACTS",
     "is_kernel_partition",
     "kernel_partition_nodes",
-    "kernel_partition_ports",
     "partition_body",
     "partition_facts",
 ]

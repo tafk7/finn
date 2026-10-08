@@ -19,7 +19,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from finn.builder.build_dataflow_config import declared
 from finn.kernels.target import Target
-from finn.platform import TargetRequest
+from finn.platform import TargetRequest, shell_row
+from finn.transformation.fpgadataflow.pynq_runner import PynqOptions
+from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN
 from finn.util.toolchain import Selection, Toolchain, machine_selection
 
 
@@ -118,8 +120,12 @@ class KernelBuildConfig(DataClassJsonMixin):
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
 
-    #: Insert debug cores (ILA) in the shell's bitfile build (ZynqBuild's enable_debug).
-    enable_hw_debug: bool = False
+    #: The options of the target's shell's build, as that build states them; a shell
+    #: without a build (``ip``) takes none. The ``pynq`` shell's
+    #: (finn.transformation.fpgadataflow.pynq_runner.PynqOptions): ``enable_hw_debug``,
+    #: integrated logic analyzers on the ends' streams. In JSON:
+    #: {"enable_hw_debug": true}. None by default.
+    shell_options: Dict[str, Any] = field(default_factory=dict)
 
     #: If given, only run the steps in the list, each a step or phase name of the
     #: kernel path (finn.builder.kernel_build_steps) or a function called with
@@ -151,6 +157,20 @@ class KernelBuildConfig(DataClassJsonMixin):
     def _resolve_target(self) -> Target:
         """The build's target (finn.platform.resolve_target), every refusal named."""
         return self.target.resolve()
+
+    def _resolve_shell_options(self) -> Optional[PynqOptions]:
+        """The target's shell's build options (``shell_options``), as its build reads
+        them; None for a shell without a build, which refuses any. Each refusal is a
+        ValueError, named."""
+        target = self._resolve_target()
+        if shell_row(target.shell, target.board).integration == VIVADO_BLOCK_DESIGN:
+            return PynqOptions.from_dict(self.shell_options)
+        if self.shell_options:
+            raise ValueError(
+                f"shell_options: the {target.shell!r} shell has no build to take "
+                f"{', '.join(sorted(self.shell_options))}"
+            )
+        return None
 
     def _resolve_selection(self) -> Selection:
         """The selection this build runs its tools by: ``toolchain``, or the machine's."""

@@ -11,15 +11,17 @@ the build's target, so there is no specialization, folding config or per-node IP
 generation. ``phase_kernel_outputs`` then makes what the configuration asks of the
 target's shell (its bitfile, driver and deployment package)."""
 
+import copy
 import json
 import numpy as np
 import os
 import shutil
 from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.build_dataflow_phases import _execute_step
-from finn.builder.build_dataflow_steps import collect_zynq_bitfile, deployment_package
+from finn.builder.build_dataflow_steps import delivered_clock, deployment_package
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     KernelOutputType,
@@ -33,12 +35,16 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
+    OUTPUT_IP,
     OUTPUT_PROJECT,
     OUTPUT_REPORTS,
     partition_body,
 )
-from finn.transformation.fpgadataflow.make_driver import MakePYNQDriver
-from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild, kernel_link_graph
+from finn.transformation.fpgadataflow.pynq_runner import (
+    build_pynq,
+    driver_description,
+    write_driver,
+)
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
@@ -126,8 +132,8 @@ def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
 
 
 def _partition_directory(cfg: KernelBuildConfig) -> Path:
-    """Where the kernel path keeps its partition's body (``partition.onnx``) and what its
-    shell's integration links around it."""
+    """Where the kernel path keeps its partition's body (``partition.onnx``) and the
+    scratch models its shell's integration generates its ends' IPs from (``ends/``)."""
     return Path(cfg.output_dir) / "partition"
 
 
@@ -229,104 +235,185 @@ def _objective_fps(cfg: KernelBuildConfig):
     return asked[0] if asked else None
 
 
-def _integrating_row(cfg: KernelBuildConfig, output: KernelOutputType):
-    """The target's shell row, which must integrate the partition to make ``output``."""
-    target = cfg._resolve_target()
+def _integrating_row(model: ModelWrapper, cfg: KernelBuildConfig, output: KernelOutputType):
+    """The shell row the parent graph ``model`` states (its partition body's target),
+    which must be the configuration's and integrate the partition to make
+    ``output``."""
+    _, body, _ = partition_body(model)
+    target = read_target(body)
+    refuse_drift(target, cfg._resolve_target(), f"{output.value} build")
     row = shell_row(target.shell, target.board)
     if row.integration is None:
         raise ValueError(
             f"{output.value}: the {target.shell!r} shell does not integrate the partition; "
             "state a shell that does (pynq, for a board)"
         )
-    return target, row
+    return row
 
 
-def step_kernel_bitfile(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Build the target's shell around the partition to a bitfile, by the shell's
-    integration, if BITFILE is asked: the Zynq block design (ZynqBuild) from the
-    partition's integration export (finn.transformation.kernels.integration, written as
-    report/integration.json), the partition completed by ``cfg.kernel_completion``. The
-    bitfile, its hardware handoff and reports go to the output directory
-    (collect_zynq_bitfile); the delivered clock's report states the partition's
-    bottleneck, ends included, and the throughput the exploration asked. The parent
-    graph stays the build's model and states what was made (finn.outputs: the
-    project, bitfile, hwh, reports and host runtime). Vivado launches as many runs at
-    once as the toolchain's selection says (``Selection.vivado_jobs``)."""
-    if KernelOutputType.BITFILE not in cfg.generate_outputs:
-        print("BITFILE not in requested outputs, skipping step_kernel_bitfile.")
-        return model
-    target, row = _integrating_row(cfg, KernelOutputType.BITFILE)
-    if row.integration != VIVADO_BLOCK_DESIGN:
-        raise ValueError(f"bitfile: no build for the {row.integration!r} integration")
+def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+    """The Zynq block design's bitfile (the pynq shell's runner, build_pynq) from the
+    partition's integration export, written as report/integration.json. Into the output
+    directory: the bitfile and its hardware handoff (bitfile/), the routed timing report
+    (report/post_route_timing.rpt), the template's impl_1 hierarchical utilization
+    (report/placed_utilization.xml), each IP's out-of-context synthesis utilization
+    (report/out_of_context/), and the delivered clock beside the one asked, with the
+    shell root's bottleneck, ends included (report/delivered_clock.json)."""
     kernel_completion = completion(cfg.kernel_completion)
     _, body, _ = partition_body(model)
     bottleneck = partition_bottleneck(body, kernel_completion)
     export = integration(model, kernel_completion)
-    report_dir = cfg.output_dir + "/report"
-    os.makedirs(report_dir, exist_ok=True)
-    with open(report_dir + "/integration.json", "w") as f:
-        json.dump(export.report(), f, indent=2)
+    output = Path(cfg.output_dir)
+    report_dir, bitfile_dir = output / "report", output / "bitfile"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    bitfile_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "integration.json").write_text(json.dumps(export.report(), indent=2))
     toolchain = cfg._resolve_toolchain()
-    link = model.transform(
-        ZynqBuild(
-            target.board,
-            target.platform.period_ns,
-            cfg.enable_hw_debug,
-            partition_model_dir=str(_partition_directory(cfg) / "zynq_link"),
-            toolchain=toolchain,
-            vivado_jobs=toolchain.selection.vivado_jobs,
-            completion=kernel_completion,
-            integration=export,
-        )
+    built = build_pynq(
+        model,
+        export,
+        _partition_directory(cfg) / "ends",
+        toolchain=toolchain,
+        jobs=toolchain.selection.vivado_jobs,
+        options=cfg._resolve_shell_options(),
+        completion=kernel_completion,
     )
-    collect_zynq_bitfile(
-        link,
-        cfg.output_dir,
-        target.platform.period_ns,
+    reports = {
+        "integration": report_dir / "integration.json",
+        "timing": report_dir / "post_route_timing.rpt",
+        "placed": report_dir / "placed_utilization.xml",
+        "out_of_context": report_dir / "out_of_context",
+        "delivered_clock": report_dir / "delivered_clock.json",
+    }
+    shutil.copy(built.bitfile, bitfile_dir / "finn-accel.bit")
+    shutil.copy(built.hwh, bitfile_dir / "finn-accel.hwh")
+    shutil.copy(built.timing, reports["timing"])
+    shutil.copy(built.placed, reports["placed"])
+    reports["out_of_context"].mkdir(exist_ok=True)
+    for path in built.out_of_context.values():
+        shutil.copy(path, reports["out_of_context"])
+    clock = delivered_clock(
+        built.timing,
+        export.period_ns,
         None if bottleneck is None else bottleneck.cycles,
         _objective_fps(cfg) if bottleneck is not None else None,
     )
-    model.set(OUTPUT_PROJECT, link.get_metadata_prop("vivado_pynq_proj"))
-    model.set(OUTPUT_BITFILE, cfg.output_dir + "/bitfile/finn-accel.bit")
-    model.set(OUTPUT_HWH, cfg.output_dir + "/bitfile/finn-accel.hwh")
-    model.set(
-        OUTPUT_REPORTS,
-        {
-            "synthesis": report_dir + "/post_synth_resources.xml",
-            "timing": report_dir + "/post_route_timing.rpt",
-            "delivered_clock": report_dir + "/delivered_clock.json",
-            "integration": report_dir + "/integration.json",
-        },
-    )
-    if row.host_runtime is not None:
-        model.set(OUTPUT_HOST_RUNTIME, row.host_runtime)
+    reports["delivered_clock"].write_text(json.dumps(clock, indent=2))
+    if "warning" in clock:
+        print("WARNING: " + clock["warning"])
+    print(f"Bitfile written into {bitfile_dir}")
+    model.set(OUTPUT_PROJECT, built.project)
+    model.set(OUTPUT_BITFILE, str(bitfile_dir / "finn-accel.bit"))
+    model.set(OUTPUT_HWH, str(bitfile_dir / "finn-accel.hwh"))
+    model.set(OUTPUT_REPORTS, {name: str(path) for name, path in reports.items()})
+    if export.host_runtime is not None:
+        model.set(OUTPUT_HOST_RUNTIME, export.host_runtime)
     return model
+
+
+#: Each integration's bitfile build, by the shell row's integration.
+BITFILE_BUILDS = {VIVADO_BLOCK_DESIGN: _pynq_bitfile}
+
+
+def step_kernel_bitfile(model: ModelWrapper, cfg: KernelBuildConfig):
+    """Build the shell the parent graph states (its partition's target) around the
+    partition to a bitfile, if BITFILE is asked, by its integration (BITFILE_BUILDS;
+    the pynq shell's: _pynq_bitfile), the partition completed by
+    ``cfg.kernel_completion``. The parent graph stays the build's model and states what
+    was made (finn.outputs: the project, bitfile, hwh, reports and host runtime). Vivado
+    launches as many runs at once as the toolchain's selection says
+    (``Selection.vivado_jobs``), and the shell's build takes ``cfg.shell_options``."""
+    if KernelOutputType.BITFILE not in cfg.generate_outputs:
+        print("BITFILE not in requested outputs, skipping step_kernel_bitfile.")
+        return model
+    row = _integrating_row(model, cfg, KernelOutputType.BITFILE)
+    if row.integration not in BITFILE_BUILDS:
+        raise ValueError(f"bitfile: no build for the {row.integration!r} integration")
+    return BITFILE_BUILDS[row.integration](model, cfg)
+
+
+def _delivered_mhz(model: ModelWrapper) -> float:
+    """The clock the parent graph's bitfile delivers, in MHz, from its delivered-clock
+    report; a model without one, or a report that found no PL clock, is refused."""
+    reports = model.get(OUTPUT_REPORTS) or {}
+    if "delivered_clock" not in reports:
+        raise ValueError(
+            "pynq_driver: the model states no delivered clock (finn.outputs reports): the "
+            "driver sets the clock its bitfile delivers; build the bitfile first (bitfile)"
+        )
+    clock = json.loads(Path(reports["delivered_clock"]).read_text())
+    if "delivered_mhz" not in clock:
+        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {clock['warning']}")
+    return float(clock["delivered_mhz"])
 
 
 def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Write the driver the target's shell's host runtime runs (the PYNQ driver), if
-    PYNQ_DRIVER is asked, from the Zynq block design's link graph of the partition's
-    integration export (kernel_link_graph); the parent graph stays the build's model."""
+    """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
+    pynq_runner.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
+    partition's integration export's ends, PL0 set to the clock the bitfile delivers
+    (report/delivered_clock.json). report/driver.json states what it takes and returns,
+    by name, element and shape, and the host's nodes before and after it
+    (driver_description); the parent graph states it among its reports."""
     if KernelOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_kernel_driver.")
         return model
-    _, row = _integrating_row(cfg, KernelOutputType.PYNQ_DRIVER)
-    driver_dir = os.path.join(cfg.output_dir, "driver")
+    row = _integrating_row(model, cfg, KernelOutputType.PYNQ_DRIVER)
+    if row.integration != VIVADO_BLOCK_DESIGN:
+        raise ValueError(f"pynq_driver: no driver for the {row.integration!r} integration")
+    fclk_mhz = _delivered_mhz(model)
     export = integration(model, completion(cfg.kernel_completion))
-    link = kernel_link_graph(model, export, _partition_directory(cfg) / "driver_link")
-    link = link.transform(MakePYNQDriver(row.host_runtime))
-    shutil.copytree(link.get_metadata_prop("pynq_driver_dir"), driver_dir, dirs_exist_ok=True)
-    print("PYNQ Python driver written into " + driver_dir)
+    driver_dir = os.path.join(cfg.output_dir, "driver")
+    write_driver(export, driver_dir, fclk_mhz)
+    node, _, _ = partition_body(model)
+    names = [each.name for each in model.graph.node]
+    index = names.index(node.name)
+    description = driver_description(export, fclk_mhz, names[:index], names[index + 1 :])
+    report = Path(cfg.output_dir) / "report" / "driver.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps(description, indent=2))
+    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "driver": str(report)})
+    returned = ", ".join(
+        f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
+    )
+    print(f"PYNQ Python driver written into {driver_dir}, at {fclk_mhz} MHz; it returns {returned}")
     return model
 
 
+#: The finn.outputs keys a deployed model does not carry: paths on the build's machine.
+MACHINE_PATHS = (OUTPUT_IP, OUTPUT_PROJECT, OUTPUT_BITFILE, OUTPUT_HWH, OUTPUT_REPORTS)
+
+
+def host_model(model: ModelWrapper, directory: Path) -> Path:
+    """The parent graph ``model`` as the deployment ships it, into ``directory``: the
+    host's nodes and the partition node (parent.onnx), the partition's body beside it
+    (partition.onnx), the node's body path relative to the directory, and neither
+    stating a path of the build's machine (MACHINE_PATHS)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    node, body, _ = partition_body(model)
+    shipped = ModelWrapper(copy.deepcopy(model.model))
+    shipped_body = ModelWrapper(copy.deepcopy(body.model))
+    for each in (shipped, shipped_body):
+        for key in MACHINE_PATHS:
+            each.delete(key)
+    (shipped_node,) = [each for each in shipped.graph.node if each.name == node.name]
+    getCustomOp(shipped_node).set_nodeattr("model", "partition.onnx")
+    shipped_body.save(str(directory / "partition.onnx"))
+    shipped.save(str(directory / "parent.onnx"))
+    return directory / "parent.onnx"
+
+
 def step_kernel_deployment_package(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Package the bitfile and the driver for deployment, if DEPLOYMENT_PACKAGE is asked."""
+    """Package the bitfile and the driver for deployment, if DEPLOYMENT_PACKAGE is asked,
+    with the host's part of the parent graph as a model (deploy/model/, host_model) and
+    the driver's description (deploy/driver.json, report/driver.json)."""
     if KernelOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         print("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
-    _integrating_row(cfg, KernelOutputType.DEPLOYMENT_PACKAGE)
+    _integrating_row(model, cfg, KernelOutputType.DEPLOYMENT_PACKAGE)
     deployment_package(cfg.output_dir)
+    deploy = Path(cfg.output_dir) / "deploy"
+    host_model(model, deploy / "model")
+    shutil.copy(Path(cfg.output_dir) / "report" / "driver.json", deploy / "driver.json")
     return model
 
 

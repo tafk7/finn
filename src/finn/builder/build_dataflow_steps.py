@@ -1382,19 +1382,12 @@ def delivered_clock(
     return report
 
 
-def collect_zynq_bitfile(
-    model: ModelWrapper,
-    output_dir: str,
-    period_ns: float,
-    cycles: int | None = None,
-    objective_fps: float | None = None,
-) -> None:
+def collect_zynq_bitfile(model: ModelWrapper, output_dir: str, period_ns: float) -> None:
     """What ZynqBuild made of ``model`` (its metadata), into a build's ``output_dir``:
     the bitfile and hardware handoff (bitfile/), the synthesis and routed timing
     reports (report/), and the clock the routed design delivers beside the
-    ``period_ns`` asked (report/delivered_clock.json, delivered_clock, with the
-    partition's bottleneck ``cycles`` and the ``objective_fps`` asked, if given); a
-    delivered clock other than the one asked is a warning."""
+    ``period_ns`` asked (report/delivered_clock.json, delivered_clock); a delivered
+    clock other than the one asked is a warning."""
     bitfile_dir = output_dir + "/bitfile"
     os.makedirs(bitfile_dir, exist_ok=True)
     report_dir = output_dir + "/report"
@@ -1415,7 +1408,7 @@ def collect_zynq_bitfile(
         "%s/finn_zynq_link.runs/impl_1/top_wrapper_timing_summary_routed.rpt" % vivado_pynq_proj_dir
     )
     copy(timing_rpt, report_dir + "/post_route_timing.rpt")
-    clock = delivered_clock(timing_rpt, period_ns, cycles, objective_fps)
+    clock = delivered_clock(timing_rpt, period_ns)
     with open(report_dir + "/delivered_clock.json", "w") as f:
         json.dump(clock, f, indent=2)
     if "warning" in clock:

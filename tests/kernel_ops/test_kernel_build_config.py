@@ -18,6 +18,7 @@ from finn.builder.build_dataflow import (
     build_dataflow_directory,
     read_build_config,
 )
+from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
@@ -27,6 +28,7 @@ from finn.builder.kernel_build_config import (
 from finn.custom_op.kernels.base import read_target
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.fpgadataflow.kernel_partitions import partition_body
+from finn.transformation.fpgadataflow.pynq_runner import PynqOptions
 from finn.transformation.kernels import kernel_choices_config
 from finn.util.toolchain import Selection
 from kernel_ops.tfc import ULTRA96, streamlined
@@ -58,7 +60,7 @@ def test_a_configuration_holds_through_json() -> None:
         toolchain=Selection(
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
-        enable_hw_debug=True,
+        shell_options={"enable_hw_debug": True},
         steps=["phase_kernel_path"],
         start_step="phase_kernel_path",
         stop_step="phase_kernel_path",
@@ -79,6 +81,9 @@ def test_a_configuration_holds_through_json() -> None:
     assert stated["verify_steps"] == ["kernel_partition_python", "kernel_partition_elaboration"]
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
     assert stated["toolchain"]["vivado_jobs"] == 4
+    # Debug cores are an option of the pynq shell's build (SZ7).
+    assert stated["shell_options"] == {"enable_hw_debug": True}
+    assert cfg._resolve_shell_options() == PynqOptions(enable_hw_debug=True)
 
 
 @pytest.mark.parametrize(
@@ -89,9 +94,11 @@ def test_a_configuration_holds_through_json() -> None:
         "shell_flow_type",
         "target_fps",
         "fpga_part",
-        # SZ7: the toolchain's selection states Vivado's jobs; nothing mutes the checks.
+        # SZ7: the toolchain's selection states Vivado's jobs; nothing mutes the checks;
+        # debug cores are the pynq shell's build's option (shell_options).
         "vivado_jobs",
         "mute_config_assertions",
+        "enable_hw_debug",
     ],
 )
 def test_a_dataflow_build_config_field_is_refused_naming_it(key: str) -> None:
@@ -106,6 +113,31 @@ def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
     toolchain = {"hls_frontned": "vitis-run"}
     with pytest.raises(UndefinedParameterError, match="toolchain: .*hls_frontned"):
         KernelBuildConfig.from_json(json.dumps({**STATED, "toolchain": toolchain}))
+
+
+@pytest.mark.parametrize(
+    "shell, options, refused",
+    [
+        ("ip", {"enable_hw_debug": True}, "the 'ip' shell has no build to take enable_hw_debug"),
+        ("pynq", {"enable_debug": True}, "the pynq shell's build has no option enable_debug"),
+        ("pynq", {"enable_hw_debug": "yes"}, "the pynq shell's enable_hw_debug is a bool"),
+    ],
+)
+def test_shell_options_the_shells_build_does_not_take_are_refused(
+    shell: str, options: dict[str, object], refused: str
+) -> None:
+    """Before the build: the configuration's check names the option its shell refuses."""
+    target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
+    cfg = KernelBuildConfig.from_json(
+        json.dumps({**STATED, "target": target, "shell_options": options})
+    )
+    with pytest.raises(ValueError, match=refused):
+        cfg._resolve_shell_options()
+    (check,) = [
+        check for check in run_all_config_checks(cfg).checks if check.name == "kernel_shell_options"
+    ]
+    assert (check.severity, check.passed) == (Severity.ERROR, False)
+    assert refused in check.message
 
 
 def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
