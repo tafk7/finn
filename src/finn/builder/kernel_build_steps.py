@@ -8,8 +8,10 @@ function, registered by name in ``kernel_build_step_lookup`` for a KernelBuildCo
 ``phase_kernel_path`` takes a streamlined model to a partition of KernelOps
 (finn.custom_op.kernels): the KernelOps bind kernels to RTL from the model's facts and
 the build's target, so there is no specialization, folding config or per-node IP
-generation. ``phase_kernel_outputs`` then makes what the configuration asks of the
-target's shell (its bitfile, driver and deployment package)."""
+generation. ``phase_kernel_outputs`` then makes the outputs the configuration asks:
+the partition's own on any shell (its packaged IP, interface description and testbench;
+its out-of-context resources), then the target's shell's (its bitfile, driver and
+deployment package)."""
 
 import json
 import numpy as np
@@ -29,6 +31,12 @@ from finn.builder.kernel_build_config import (
     KernelOutputType,
     KernelVerificationStepType,
 )
+from finn.builder.kernel_testbench import (
+    TESTBENCH_DIR,
+    generated_frame,
+    partition_frame,
+    write_testbench,
+)
 from finn.core.onnx_exec import execute_onnx, execute_parent
 from finn.custom_op.kernels.base import read_target
 from finn.platform import refuse_drift, shell_row
@@ -43,7 +51,16 @@ from finn.transformation.kernels import (
     partition_bottleneck,
     strategy,
 )
-from finn.transformation.kernels.package import ElaboratePartition, configured_root
+from finn.transformation.kernels.package import (
+    ElaboratePartition,
+    PackagePartition,
+    configured_root,
+    ooc_member_resources,
+)
+
+#: The name of the partition's packaged IP (STITCHED_IP, OOC_SYNTH), as the HWCustomOp
+#: flow's stitched IP is named.
+KERNEL_IP_NAME = "finn_design"
 
 #: The integration each shell's bitfile is built by (finn.platform.ShellRow.integration).
 ZYNQ_BLOCK_DESIGN = "vivado-block-design"
@@ -227,6 +244,56 @@ def _integrating_row(cfg: KernelBuildConfig, output: KernelOutputType):
     return target, row
 
 
+def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
+    """Package the partition as an IP into ``stitched_ip/``, if STITCHED_IP or OOC_SYNTH
+    is asked: PackagePartition (``KERNEL_IP_NAME``), its choices completed by
+    ``cfg.kernel_completion``, with the interface description beside it
+    (``interface.json``). With OOC_SYNTH the module is synthesized out of context and the
+    IP packages the checkpoint; its resources per member of the shell root are written to
+    report/ooc_resources.json (ooc_member_resources). With STITCHED_IP, the XSim
+    testbench is written into ``stitched_ip/testbench`` (finn.builder.kernel_testbench),
+    on the first frame of ``verify_input_npy`` when it exists (through the parent graph,
+    intermediate_models/dataflow_parent.onnx), a generated frame otherwise; it is run
+    once as it is written, so the step fails if the module's outputs differ from the
+    partition's in Python."""
+    stitched = KernelOutputType.STITCHED_IP in cfg.generate_outputs
+    ooc = KernelOutputType.OOC_SYNTH in cfg.generate_outputs
+    if not (stitched or ooc):
+        print("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
+        return model
+    kernel_completion = completion(cfg.kernel_completion)
+    directory = Path(cfg.output_dir) / "stitched_ip"
+    model = model.transform(
+        PackagePartition(
+            KERNEL_IP_NAME,
+            run_synth=ooc,
+            directory=directory,
+            toolchain=cfg._resolve_toolchain(),
+            completion=kernel_completion,
+        )
+    )
+    print(f"Packaged IP {KERNEL_IP_NAME} and its interface description in {directory}")
+    if ooc:
+        os.makedirs(cfg.output_dir + "/report", exist_ok=True)
+        with open(cfg.output_dir + "/report/ooc_resources.json", "w") as f:
+            json.dump(ooc_member_resources(model, directory, kernel_completion), f, indent=2)
+    if stitched:
+        if os.path.isfile(cfg.verify_input_npy):
+            intermediate = cfg.output_dir + "/intermediate_models"
+            body_file = intermediate + "/kernel_testbench_partition.onnx"
+            model.save(body_file)
+            source = np.load(cfg.verify_input_npy)[0]
+            frame = partition_frame(
+                intermediate + "/dataflow_parent.onnx", body_file, source, model
+            )
+            stimulus = f"the first input of {cfg.verify_input_npy}"
+        else:
+            frame, stimulus = generated_frame(model), "a generated frame"
+        write_testbench(model, directory / TESTBENCH_DIR, frame, completion=kernel_completion)
+        print(f"XSim testbench on {stimulus} in {directory / TESTBENCH_DIR}: PASS")
+    return model
+
+
 def step_kernel_bitfile(model: ModelWrapper, cfg: KernelBuildConfig):
     """Build the target's shell around the partition to a bitfile, by the shell's
     integration (the Zynq block design: ZynqBuild, the partition completed by
@@ -307,12 +374,14 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
 
 
 def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Phase: what the configuration asks of the target's shell (generate_outputs).
+    """Phase: the outputs the configuration asks (generate_outputs).
 
     Internal steps (each checks generate_outputs):
+    - step_kernel_stitched_ip: The partition's IP, its description, resources, testbench
     - step_kernel_bitfile: The shell built around the partition, to a bitfile
     - step_kernel_driver: The driver of the shell's host runtime
     - step_kernel_deployment_package: The bitfile and driver, packaged"""
+    model = _execute_step(step_kernel_stitched_ip, model, cfg)
     model = _execute_step(step_kernel_bitfile, model, cfg)
     model = _execute_step(step_kernel_driver, model, cfg)
     model = _execute_step(step_kernel_deployment_package, model, cfg)
@@ -328,6 +397,7 @@ kernel_build_step_lookup = {
         step_kernel_choices,
         step_kernel_partition,
         step_verify_kernel_partition,
+        step_kernel_stitched_ip,
         step_kernel_bitfile,
         step_kernel_driver,
         step_kernel_deployment_package,

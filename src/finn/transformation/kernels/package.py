@@ -48,8 +48,16 @@ refused with slang's errors, in a fraction of a second rather than after a
 Vivado start. A check that passes says so on the build's output: the top, the
 parameters bound, the ports compared, the files read and the time taken.
 
+Beside the IP, PackagePartition writes the **interface description**,
+``interface.json`` (``finn.kernels.artifacts.interface``, ``interface_description``):
+the IP's name, VLNV and top, the part and period, and the module's pins with what
+they carry (each stream's boundary facts, each clock's ``FREQ_HZ``, each AXI-Lite
+bus's register map), for a user who integrates the IP in their own design.
+
 ``run_synth`` synthesizes the module out of context and packages the checkpoint
-instead of the sources, as CreateStitchedIP does for Vitis and SLASH.
+instead of the sources, as CreateStitchedIP does for Vitis and SLASH. Its
+hierarchical utilization report is read per member of the shell root by
+``ooc_member_resources``.
 
 ``ElaboratePartition`` is a check, not a build step: it emits the same module and
 compiles and elaborates it in XSim (``xvlog``, ``xelab``), so that RTL which does
@@ -71,14 +79,16 @@ from qonnx.transformation.base import Transformation
 from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, shape
 from finn.custom_op.kernels.partition import member
-from finn.custom_op.kernels.shell import shell_root
-from finn.kernels.artifacts.build import EmittedModule, emit_module
+from finn.custom_op.kernels.shell import PARTITION, shell_root
+from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
+from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
-from finn.kernels.artifacts.module import Abi
+from finn.kernels.artifacts.module import Abi, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.kernels.configure import undecided
+from finn.kernels.configure import member_of, undecided
 from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
+from finn.kernels.utilization import Resources
 from finn.transformation.fpgadataflow.kernel_partitions import (
     PARTITION_INPUTS,
     PARTITION_OUTPUTS,
@@ -166,6 +176,119 @@ def write_boundary_facts(
     inputs, outputs = boundary_facts(model, point, boundary, label)
     model.set(PARTITION_INPUTS, inputs)
     model.set(PARTITION_OUTPUTS, outputs)
+
+
+def interface_description(
+    model: ModelWrapper,
+    point: Any,
+    boundary: Sequence[tuple[str, str]],
+    ip_name: str,
+) -> dict[str, Any]:
+    """The interface description of a partition model's IP (``describe_interface``): its
+    name, VLNV and top, then the module's pins with the boundary facts of its streams, at
+    the model's target (part and period)."""
+    built = read_target(model)
+    inputs, outputs = boundary_facts(model, point, boundary, ip_name)
+    return {
+        "ip": {"name": ip_name, "vlnv": vlnv(ip_name), "top": module_name(point.module)},
+        **describe_interface(
+            point.module.abi.pins,
+            {facts["port"]: facts for facts in (*inputs, *outputs)},
+            part=built.part,
+            period_ns=built.platform.period_ns,
+        ),
+    }
+
+
+#: A hierarchical utilization report's column, by the resource it counts
+#: (``Resources``); RAMB36 counts two RAMB18 halves.
+_REPORT_COLUMNS = {
+    "Total LUTs": "lut",
+    "FFs": "ff",
+    "RAMB36": "bram36",
+    "RAMB18": "bram18",
+    "URAM": "uram",
+}
+
+
+def hierarchical_utilization(text: str) -> list[tuple[int, str, Resources]]:
+    """The rows of Vivado's text ``report_utilization -hierarchical``, in order: each
+    instance's depth (the top 0), its name and its resources. The DSP column is the one
+    whose header starts with ``DSP`` (``DSP Blocks``, ``DSP48 Blocks``)."""
+    rows: list[tuple[int, str, Resources]] = []
+    header: list[str] | None = None
+    indent = 0
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = line.split("|")[1:-1]
+        names = [cell.strip() for cell in cells]
+        if header is None:
+            if names[:2] == ["Instance", "Module"]:
+                header = names
+            continue
+        counts: dict[str, int] = {}
+        for column, cell in zip(header, names, strict=True):
+            key = "dsp" if column.startswith("DSP") else _REPORT_COLUMNS.get(column)
+            if key is not None:
+                counts[key] = counts.get(key, 0) + int(cell)
+        bram18 = 2 * counts.pop("bram36", 0) + counts.pop("bram18", 0)
+        name = cells[0]
+        depth = len(name) - len(name.lstrip())
+        if not rows:
+            indent = depth
+        rows.append(((depth - indent) // 2, names[0], Resources(**counts, bram18=bram18)))
+    if not rows:
+        raise KernelOpError("no hierarchical utilization table in the report")
+    return rows
+
+
+def ooc_member_resources(
+    model: ModelWrapper, project: Path, completion: Completion | None = None
+) -> dict[str, Any]:
+    """The out-of-context resources of a partition packaged with ``run_synth`` in
+    ``project``, per member of its shell root: the top's ``total``, and each member's
+    instances summed (``members``, by member path). The instances are the module's that
+    PackagePartition packaged (``configured_root`` under ``completion``). An instance is
+    its member's by its label (``instance_name``), as the shell root names the
+    Partition's keys; an instance no member claims is stated under its netlist name.
+    Synthesis flattens small instances into the top: what no reported instance holds is
+    ``unattributed`` (the total less the members'), and the module's instances with no
+    row are ``unreported_instances``. Every count is Vivado's synthesis estimate out of
+    context, not placed."""
+    reports = sorted(project.glob("*_partition_util.rpt"))
+    if len(reports) != 1:
+        raise KernelOpError(
+            f"{project}: one hierarchical utilization report (run_synth), not {len(reports)}"
+        )
+    paths = shell_root(model, model.graph.node).members
+    point, _ = configured_root(model, "the packaged partition", completion)
+    labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
+    rows = hierarchical_utilization(reports[0].read_text())
+    members: dict[str, Resources] = {}
+    reported = set()
+    for depth, instance, counted in rows[1:]:
+        if depth != 1:
+            continue
+        reported.add(instance)
+        label = labels.get(instance)
+        path = None
+        if label is not None:
+            path = member_of(paths, label) or member_of(paths, f"{PARTITION}.{label}")
+        key = path or instance
+        members[key] = members[key] + counted if key in members else counted
+    total = vars(rows[0][2])
+    claimed = sum(members.values(), Resources())
+    return {
+        "report": reports[0].name,
+        "estimate": "out-of-context synthesis",
+        "total": total,
+        "members": {path: vars(counted) for path, counted in members.items()},
+        "unattributed": {key: count - vars(claimed)[key] for key, count in total.items()},
+        "unreported_instances": sorted(
+            label for instance, label in labels.items() if instance not in reported
+        ),
+    }
 
 
 def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
@@ -263,6 +386,8 @@ class PackagePartition(Transformation):
         model.set_metadata_prop("vivado_stitch_proj", str(project))
         model.set_metadata_prop("vivado_stitch_vlnv", vlnv(self.ip_name))
         model.set_metadata_prop("vivado_stitch_ifnames", json.dumps(interface_names(pins)))
+        described = interface_description(model, point, boundary, self.ip_name)
+        (project / INTERFACE_FILE).write_text(json.dumps(described, indent=2) + "\n")
         inputs, outputs = boundary_facts(model, point, boundary, self.ip_name)
         model.set(PARTITION_INPUTS, inputs)
         model.set(PARTITION_OUTPUTS, outputs)
@@ -344,5 +469,8 @@ __all__ = [
     "boundary_facts",
     "check_elaborates",
     "configured_root",
+    "hierarchical_utilization",
+    "interface_description",
+    "ooc_member_resources",
     "write_boundary_facts",
 ]

@@ -24,14 +24,31 @@ from finn.util.toolchain import Selection, Toolchain, machine_selection
 
 
 class KernelOutputType(str, Enum):
-    """What a kernel-path build makes beside its partition and reports. Each needs a
-    shell that integrates the partition (``finn.platform.ShellRow.integration``; not
-    the ``ip`` shell's): the shell's bitfile, the driver its host runtime runs, and
-    the deployment package of both. The names are DataflowOutputType's."""
+    """What a kernel-path build makes beside its partition and reports. The names are
+    DataflowOutputType's.
 
+    The partition's own, on every shell: ``stitched_ip``, the shell root's packaged IP
+    with its interface description and its XSim testbench; ``ooc_synth``, the IP
+    synthesized out of context, with its resources per member of the shell root.
+
+    The shell's, each needing a shell that integrates the partition
+    (``finn.platform.ShellRow.integration``; not the ``ip`` shell's): its bitfile, the
+    driver its host runtime runs, and the deployment package of both
+    (``SHELL_OUTPUTS``)."""
+
+    STITCHED_IP = "stitched_ip"
+    OOC_SYNTH = "ooc_synth"
     BITFILE = "bitfile"
     PYNQ_DRIVER = "pynq_driver"
     DEPLOYMENT_PACKAGE = "deployment_package"
+
+
+#: The outputs only a shell that integrates the partition makes.
+SHELL_OUTPUTS = (
+    KernelOutputType.BITFILE,
+    KernelOutputType.PYNQ_DRIVER,
+    KernelOutputType.DEPLOYMENT_PACKAGE,
+)
 
 
 class KernelVerificationStepType(str, Enum):
@@ -75,8 +92,10 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest = field(metadata=config(decoder=declared(TargetRequest, "target")))
 
-    #: What the build makes beside the partition and its reports (KernelOutputType);
-    #: each needs a shell that integrates the partition. None by default.
+    #: What the build makes beside the partition and its reports (KernelOutputType):
+    #: the partition's IP and its out-of-context resources on any shell; the bitfile,
+    #: driver and deployment package on a shell that integrates the partition. None by
+    #: default.
     generate_outputs: List[KernelOutputType] = field(default_factory=list)
 
     #: The exploration (step_kernel_choices): the strategies that choose the KernelOps'
@@ -107,7 +126,8 @@ class KernelBuildConfig(DataClassJsonMixin):
     verify_steps: List[KernelVerificationStepType] = field(default_factory=list)
 
     #: The .npy file of inputs PARTITION_PYTHON runs the partition and the source on,
-    #: one frame per index of its first axis.
+    #: one frame per index of its first axis. STITCHED_IP's testbench streams its first
+    #: frame when the file exists, a generated frame otherwise.
     verify_input_npy: str = "input.npy"
 
     #: The AMD tool installation every tool step of the build runs in, and the

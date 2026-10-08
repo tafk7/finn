@@ -146,7 +146,9 @@ def _constant(width: int, value: int) -> str:
     return f"{width}'h{value:x}"
 
 
-def _instance(label: str) -> str:
+def instance_name(label: str) -> str:
+    """The netlist's instance of the module's instance ``label``: what a synthesis
+    report names it by."""
     return "u_" + label.replace(".", "_")
 
 
@@ -154,7 +156,7 @@ def instance_net(label: str, pin: str) -> str:
     """The net of instance ``label``'s ``pin`` in the netlist: what a testbench reads, by
     hierarchical name, to observe a link at that end. Present for every input pin and for
     every output pin something reads."""
-    return f"n__{_instance(label)}__{pin}"
+    return f"n__{instance_name(label)}__{pin}"
 
 
 class _Netlist:
@@ -308,7 +310,7 @@ class _Netlist:
                     + "\n    )"
                 )
             blocks.append(
-                f"    {leaf.name}{parameters} {_instance(label)} (\n"
+                f"    {leaf.name}{parameters} {instance_name(label)} (\n"
                 + ",\n".join(connections)
                 + "\n    );"
             )
@@ -326,4 +328,4 @@ def netlist(module: Composed, name: str) -> str:
     return _Netlist(module).text(name)
 
 
-__all__ = ["EmittedModule", "emit_module", "instance_net", "netlist"]
+__all__ = ["EmittedModule", "emit_module", "instance_name", "instance_net", "netlist"]

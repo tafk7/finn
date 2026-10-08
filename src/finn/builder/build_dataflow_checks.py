@@ -17,6 +17,7 @@ from finn.builder.build_dataflow_config import (
     verify_step_prereqs,
 )
 from finn.builder.kernel_build_config import (
+    SHELL_OUTPUTS,
     KernelBuildConfig,
     KernelVerificationStepType,
 )
@@ -123,8 +124,9 @@ def _resolved_step_names(cfg: Any) -> Optional[set]:
 
 def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
     """The checks of a kernel-path build that its configuration's type does not make
-    impossible: its target resolves (finn.platform.resolve_target); the outputs it
-    asks for need a shell that integrates the partition (not ``ip``); the
+    impossible: its target resolves (finn.platform.resolve_target); the shell outputs
+    it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
+    ``ip``); the
     verification input exists, and the step that verifies runs."""
     checks = []
     try:
@@ -140,17 +142,18 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
             )
         ]
     row = shell_row(target.shell, target.board)
-    if cfg.generate_outputs and row.integration is None:
-        asked = ", ".join(output.value for output in cfg.generate_outputs)
+    shell_outputs = [output for output in cfg.generate_outputs if output in SHELL_OUTPUTS]
+    if shell_outputs and row.integration is None:
+        asked = ", ".join(output.value for output in shell_outputs)
         checks.append(
             _check(
                 "kernel_path_shell",
                 Severity.ERROR,
                 False,
                 f"{asked}: the {target.shell!r} shell does not integrate the partition; "
-                "its outputs are the packaged IP's",
-                "State a shell that integrates it (pynq, for a board), or remove them "
-                "from generate_outputs",
+                "its outputs are the packaged IP's (stitched_ip, ooc_synth)",
+                "State a shell with ends that integrates it (pynq, for a board), or "
+                "remove them from generate_outputs",
             )
         )
     if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(

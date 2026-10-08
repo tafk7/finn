@@ -74,7 +74,13 @@ def test_a_configuration_holds_through_json() -> None:
         "part": None,
         "shell": "pynq",
     }
-    assert stated["generate_outputs"] == ["bitfile", "pynq_driver", "deployment_package"]
+    assert stated["generate_outputs"] == [
+        "stitched_ip",
+        "ooc_synth",
+        "bitfile",
+        "pynq_driver",
+        "deployment_package",
+    ]
     assert stated["verify_steps"] == ["kernel_partition_python", "kernel_partition_elaboration"]
 
 
@@ -96,8 +102,14 @@ def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
 
 
 def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
-    with pytest.raises(ValueError, match="stitched_ip"):
-        KernelBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": ["stitched_ip"]}))
+    for output in ("rtlsim_performance", "estimate_reports", "cpp_driver"):
+        with pytest.raises(ValueError, match=output):
+            KernelBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": [output]}))
+    stated = {**STATED, "generate_outputs": ["stitched_ip", "ooc_synth"]}
+    assert KernelBuildConfig.from_json(json.dumps(stated)).generate_outputs == [
+        KernelOutputType.STITCHED_IP,
+        KernelOutputType.OOC_SYNTH,
+    ]
 
 
 def test_a_build_directory_states_one_configuration_its_file_naming_its_type(

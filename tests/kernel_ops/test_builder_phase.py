@@ -242,20 +242,23 @@ def failed_checks(cfg: Any, model: ModelWrapper | None = None) -> dict[str, list
 
 
 def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: Path) -> None:
-    """On the ``ip`` shell the build makes the packaged IP's outputs, none of a shell's:
-    a bitfile, driver or deployment asked is refused before the build, naming the
-    shell; on pynq they are accepted. The bitfile's step refuses it too."""
+    """On the ``ip`` shell the build makes the packaged IP's outputs (stitched_ip,
+    ooc_synth), none of a shell's: a bitfile, driver or deployment asked is refused
+    before the build, naming only them and the shell; on pynq every output is
+    accepted. The bitfile's step refuses it too."""
     on_ip = TargetRequest(board="Ultra96", period_ns=5.0)
-    shells = list(KernelOutputType)
-    cfg = config(tmp_path, target=on_ip, generate_outputs=shells)
+    every = list(KernelOutputType)
+    cfg = config(tmp_path, target=on_ip, generate_outputs=every)
     assert failed_checks(cfg) == {
         "kernel_path_shell": [
             "bitfile, pynq_driver, deployment_package: the 'ip' shell does not integrate "
-            "the partition; its outputs are the packaged IP's"
+            "the partition; its outputs are the packaged IP's (stitched_ip, ooc_synth)"
         ]
     }
+    ip_outputs = [KernelOutputType.STITCHED_IP, KernelOutputType.OOC_SYNTH]
+    assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=ip_outputs)) == {}
     assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=[])) == {}
-    assert failed_checks(config(tmp_path, generate_outputs=shells)) == {}
+    assert failed_checks(config(tmp_path, generate_outputs=every)) == {}
     with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
         step_kernel_bitfile(kernel_model(), cfg)
 

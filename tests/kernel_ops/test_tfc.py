@@ -31,7 +31,7 @@ from finn.kernels.configure import commit, undecided
 from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import write_boundary_facts
-from kernel_ops.packaging import reaches_vivado
+from kernel_ops.packaging import reaches_vivado, read_back
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
 LOGITS = "MatMul_3_out0"
@@ -134,6 +134,10 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert getCustomOp(sdp).get_nodeattr("slr") == -1
     assert partition_facts(body) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
+    # The interface description beside the IP: the module's pins, the boundary facts.
+    described = json.loads((project / "interface.json").read_text())
+    read_back(described, PackagePartition(sdp.name).module(body).abi.pins, 5.0)
+    assert [stream["beats"] for stream in described["streams"]] == [49, 1]
 
 
 # Builds and partitions the whole network, about 20 s.
