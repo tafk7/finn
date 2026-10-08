@@ -112,12 +112,21 @@ LAYERS: tuple[Layer, ...] = (
     # the XSI binding (finn.util and finn.xsi import each other). Below the flow:
     # no module here imports a flow module.
     Layer("util", ("finn.util", "finn.xsi", "finn.resources"), (), ANY, "tests/kernel_ops"),
+    # The part catalog's generator: a tool above the registry, which runs Vivado
+    # through util's toolchain. Nothing imports it but its tests.
+    Layer(
+        "platform.generate",
+        ("finn.platform.generate",),
+        ("kernels", "platform", "util"),
+        (),
+        "tests/kernel_ops",
+    ),
     # The KernelOps' graph transformations. PackagePartition runs the toolchain
     # through util.
     Layer(
         "transformation.kernels",
         ("finn.transformation.kernels",),
-        (*_KERNEL_STACK, "custom_op.kernels", "kernel_partitions", "util"),
+        (*_KERNEL_STACK, "platform", "custom_op.kernels", "kernel_partitions", "util"),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -144,6 +153,7 @@ LAYERS: tuple[Layer, ...] = (
             "custom_op.kernels",
             "kernel_partitions",
             "util",
+            "platform.generate",
             "transformation.kernels",
             "harness",
         ),

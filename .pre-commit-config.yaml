@@ -39,6 +39,8 @@ repos:
   - id: trailing-whitespace
     exclude: '\.dat$'
   - id: check-added-large-files
+    # The part catalog, generated (finn.platform.generate): one part a line.
+    exclude: '^src/finn/platform/data/parts\.jsonl$'
   - id: check-ast
   - id: check-json
   - id: check-merge-conflict
