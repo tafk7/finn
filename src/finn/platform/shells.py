@@ -23,13 +23,14 @@ The shells:
   supply) and bounds neither budget: it integrates nothing, so it lists every
   AXI-Lite bus and memory port however many there are. One row for every part and
   board.
-- ``pynq``: the Zynq block design the PYNQ driver runs, one row per board
-  (``BOARDS``). Its ends are ``IODMA_hls`` movers at the processing system's
-  128-bit HP port, a frame a call; its AXI-Lite interconnect takes nine buses; a
-  partition gets no memory port of its own and no doubled clock. Its static region
-  is the template's: the processing system and its reset, a SmartConnect taking a
-  master a memory port into the HP port, and an AXI interconnect giving a slave an
-  AXI-Lite bus from the processor.
+- ``pynq``: the Zynq block design the PYNQ driver runs, one row per board the Zynq
+  template has a branch for (a ``BOARDS`` row with a preset; not ZCU111). Its ends
+  are ``IODMA_hls`` movers at the processing system's 128-bit HP port, a frame a
+  call; its AXI-Lite interconnect takes nine buses; a partition gets no memory port
+  of its own and no doubled clock. Its static region is the template's: the
+  processing system and its reset, a SmartConnect taking a master a memory port into
+  the HP port, and an AXI interconnect giving a slave an AXI-Lite bus from the
+  processor.
 - ``xrt`` and ``slash`` are named and not built: the kernel path builds Zynq first.
 """
 
@@ -201,7 +202,8 @@ ROWS: dict[tuple[str, str | None], ShellRow] = {
             host_runtime="zynq-iodma",
             static_region=ZYNQ_STATIC_REGION,
         )
-        for board in BOARDS
+        for board, facts in BOARDS.items()
+        if facts.preset is not None
     },
 }
 """The shell rows, by (shell, board); the ``ip`` row's board is ``None``, any board."""
@@ -223,8 +225,8 @@ def built_shell(shell: str) -> str:
 
 def shell_row(shell: str, board: str | None) -> ShellRow:
     """The row of ``shell`` for ``board``. A shell not built (``built_shell``), or with
-    no row for the board (none stated, or one it does not build for), is refused by
-    name."""
+    no row for the board (none stated, or one it does not build for: on ``pynq``, a
+    board the Zynq template has no branch for), is refused by name."""
     if built_shell(shell) == IP:
         return IP_ROW
     if board is None:
@@ -233,7 +235,14 @@ def shell_row(shell: str, board: str | None) -> ShellRow:
             f"the {shell!r} shell is built for a board: name one of {sorted(BOARDS)}",
         )
     if (shell, board) not in ROWS:
-        raise TargetRefused("no-shell-row", f"the {shell!r} shell has no row for board {board!r}")
+        why = (
+            ": the Zynq template has no branch for it (no board preset)"
+            if shell == PYNQ and board in BOARDS and BOARDS[board].preset is None
+            else ""
+        )
+        raise TargetRefused(
+            "no-shell-row", f"the {shell!r} shell has no row for board {board!r}{why}"
+        )
     return ROWS[shell, board]
 
 

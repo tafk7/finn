@@ -322,6 +322,14 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
             "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'ZCU102', 'ZCU104', 'ZCU111'])"
         ]
     }
+    # A board the Zynq template cannot build: refused before any step runs.
+    zcu111 = TargetRequest(board="ZCU111", period_ns=5.0, shell="pynq")
+    assert failed_checks(config(tmp_path, target=zcu111, generate_outputs=[])) == {
+        "kernel_target": [
+            "no-shell-row: the 'pynq' shell has no row for board 'ZCU111': the Zynq "
+            "template has no branch for it (no board preset)"
+        ]
+    }
     # The ip shell takes the part.
     on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
     assert failed_checks(config(tmp_path, target=on_part, generate_outputs=[])) == {}
