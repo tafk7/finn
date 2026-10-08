@@ -28,12 +28,13 @@ import signal
 import subprocess
 import time
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
 from finn.util import machine_file
+from finn.util.vivado import vivado_jobs
 
 StrPath = str | os.PathLike[str]
 
@@ -45,6 +46,9 @@ _LOG = logging.getLogger(__name__)
 PROBE_TIMEOUT = 120
 _VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
 _HLS_CAPABLE: set[tuple[Hashable, ...]] = set()
+
+#: The HLS frontends a selection may name.
+HLS_FRONTENDS = ("vivado_hls", "vitis_hls", "vitis-run")
 
 
 class Cancel(Protocol):
@@ -147,12 +151,17 @@ class Selection:
     Empty settings explicitly accepts an already-configured environment. A site
     route owns remote activation and remote paths; it must not use local settings.
     Frontend is requested deliberately, never chosen from executable discovery.
+
+    A field that is ``None`` is not stated: the selection a build runs by is the one it
+    states laid over the machine's (``over``, ``machine_selection``), so a field it
+    does not state is the machine's, never a default. The machine states the command
+    directory, the HLS frontend and Vivado's jobs, and never settings or a launcher.
     """
 
     settings: tuple[str, ...] = ()
-    command_dir: str = ""
+    command_dir: str | None = None
     launcher: tuple[str, ...] = ()
-    hls_frontend: str = "vitis_hls"
+    hls_frontend: str | None = None
     #: How many runs Vivado launches at once (``launch_runs -jobs``); None: the
     #: machine's cores, at most 16 (``finn.util.vivado.vivado_jobs``).
     vivado_jobs: int | None = None
@@ -160,17 +169,28 @@ class Selection:
     def __post_init__(self) -> None:
         object.__setattr__(self, "settings", tuple(map(os.fspath, self.settings)))
         object.__setattr__(self, "launcher", tuple(map(os.fspath, self.launcher)))
-        object.__setattr__(self, "command_dir", os.fspath(self.command_dir))
+        if self.command_dir is not None:
+            object.__setattr__(self, "command_dir", os.fspath(self.command_dir))
         if self.launcher and self.settings:
             raise ValueError(
                 "Site routes own activation; do not combine launcher and local settings"
             )
-        if self.hls_frontend not in {"vivado_hls", "vitis_hls", "vitis-run"}:
+        if self.hls_frontend is not None and self.hls_frontend not in HLS_FRONTENDS:
             raise ValueError("Unknown HLS frontend: " + self.hls_frontend)
-        if self.vivado_jobs is not None and (
-            type(self.vivado_jobs) is not int or self.vivado_jobs < 1
-        ):
-            raise ValueError(f"Vivado's jobs must be a positive number, not {self.vivado_jobs!r}")
+        if self.vivado_jobs is not None:
+            vivado_jobs(self.vivado_jobs)
+
+    def over(self, base: Selection) -> Selection:
+        """This selection laid over ``base`` (the machine's): each field it states
+        (not ``None``) replaces ``base``'s, and ``base`` keeps the rest, so stating one
+        field drops none of the others, not the command directory, the HLS frontend
+        or Vivado's jobs."""
+        stated = {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if getattr(self, item.name) is not None
+        }
+        return replace(base, **stated)
 
     def prepare(self, base_env: Mapping[str, str] | None = None, timeout: float = 30) -> Toolchain:
         """The selected installation's environment, captured once.
@@ -398,6 +418,11 @@ class Toolchain:
         """The selected HLS frontend and its arguments to run ``script``; refused
         (``ValueError``) when the probed release does not match the frontend."""
         frontend = self.selection.hls_frontend
+        if frontend is None:
+            raise ValueError(
+                "This selection names no HLS frontend; state one, or lay it over the "
+                "machine's (machine_selection)"
+            )
         version = self.probe(frontend, timeout)
         # These are FINN code-generation constraints, separate from whether a
         # command exists. Preserve the standalone/unified transition deliberately.
@@ -429,21 +454,36 @@ class Toolchain:
 #: configuration's.
 COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
 
+#: The machine setting that says how many runs Vivado launches at once
+#: (``Selection.vivado_jobs``), a positive number; unset, the machine's cores, capped.
+VIVADO_JOBS_SETTING = "FINN_VIVADO_JOBS"
 
-def machine_selection(environ: Mapping[str, str] | None = None) -> Selection:
-    """The selection a tool runs by when its caller names none: this machine's
-    environment as configured (``scripts/activate.sh``, ``docker/run``,
-    ``finn-toolchain.sh``; no settings script is sourced), under the site command
-    directory ``FINN_TOOL_DIR_OVERRIDE`` names, if it names one, with the HLS
-    frontend of the machine file's ``FINN_XILINX_VERSION``
-    (``machine_hls_frontend``). A selection a caller states (a build
-    configuration's ``toolchain``) is used as stated instead: its
-    ``command_dir`` and ``hls_frontend`` win."""
+
+def machine_selection(
+    environ: Mapping[str, str] | None = None, *, stated: Selection | None = None
+) -> Selection:
+    """The selection a tool runs by: this machine's environment as configured
+    (``scripts/activate.sh``, ``docker/run``, ``finn-toolchain.sh``; no settings
+    script is sourced), under the site command directory ``FINN_TOOL_DIR_OVERRIDE``
+    names, if it names one, with the HLS frontend of the machine file's
+    ``FINN_XILINX_VERSION`` (``machine_hls_frontend``) and the Vivado jobs
+    ``FINN_VIVADO_JOBS`` says, if it says. Each is read here, once a call. A selection
+    a caller states (a build configuration's ``toolchain``) is laid over it
+    (``Selection.over``): each field it states wins, and the machine's keep the rest."""
     environ = os.environ if environ is None else environ
-    return Selection(
-        command_dir=environ.get(COMMAND_DIR_SETTING, ""),
-        hls_frontend=machine_hls_frontend(environ),
-    )
+    jobs = environ.get(VIVADO_JOBS_SETTING)
+    if jobs is not None and not re.fullmatch(r"[0-9]+", jobs):
+        raise ValueError(f"{VIVADO_JOBS_SETTING}={jobs} is not a number of runs")
+    frontend = machine_hls_frontend(environ)
+    try:
+        machine = Selection(
+            command_dir=environ.get(COMMAND_DIR_SETTING) or None,
+            hls_frontend=frontend,
+            vivado_jobs=None if jobs is None else int(jobs),
+        )
+    except ValueError as error:
+        raise ValueError(f"{VIVADO_JOBS_SETTING}: {error}") from error
+    return machine if stated is None else stated.over(machine)
 
 
 def machine_hls_frontend(environ: Mapping[str, str] | None = None) -> str:

@@ -424,7 +424,7 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
     vitis_hls.write_text("#!" + sys.executable + "\n" + FAKE_VITIS_HLS)
     vitis_hls.chmod(0o755)
 
-    toolchain = HlsToolchain(Selection(), {"PATH": f"{tools}:{os.defpath}"})
+    toolchain = HlsToolchain(Selection(hls_frontend="vitis_hls"), {"PATH": f"{tools}:{os.defpath}"})
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "2")
     monkeypatch.setattr(pynq_runner, "machine_toolchain", machine_refused)
     monkeypatch.setattr(hls, "machine_toolchain", machine_refused)

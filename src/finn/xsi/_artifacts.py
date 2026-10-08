@@ -19,7 +19,7 @@ def tool_identity(toolchain):
         {
             "version": toolchain.probe("vivado"),
             "installation": toolchain.environment.get("XILINX_VIVADO", ""),
-            "command_dir": toolchain.selection.command_dir,
+            "command_dir": toolchain.selection.command_dir or "",
         },
         sort_keys=True,
     )

@@ -146,9 +146,12 @@ class KernelBuildConfig(DataClassJsonMixin):
     verify_input_npy: str = "input.npy"
 
     #: The AMD tool installation every tool step of the build runs in, and the
-    #: environment of build_dataflow_directory's build process; unset (None), the
-    #: machine's. As DataflowBuildConfig.toolchain. It also says how many runs Vivado
-    #: launches at once when it builds the shell's bitfile (``vivado_jobs``).
+    #: environment of build_dataflow_directory's build process: the machine's
+    #: (finn.util.toolchain.machine_selection), with what this selection states laid
+    #: over it, each field it states winning. As DataflowBuildConfig.toolchain. How
+    #: many runs Vivado launches at once when it builds the shell's bitfile is the
+    #: selection's ``vivado_jobs``, a machine setting (``FINN_VIVADO_JOBS``) a build
+    #: may state over.
     toolchain: Optional[Selection] = field(
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
@@ -206,8 +209,10 @@ class KernelBuildConfig(DataClassJsonMixin):
         return None
 
     def _resolve_selection(self) -> Selection:
-        """The selection this build runs its tools by: ``toolchain``, or the machine's."""
-        return machine_selection() if self.toolchain is None else self.toolchain
+        """The selection this build runs its tools by: ``toolchain`` laid over the
+        machine's (``machine_selection``), each field it states winning; unset, the
+        machine's."""
+        return machine_selection(stated=self.toolchain)
 
     def _resolve_toolchain(self) -> Toolchain:
         """The prepared toolchain every tool step of this build runs in, prepared once
