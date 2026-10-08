@@ -202,7 +202,7 @@ def test_the_testbench_is_an_output_run_only_by_its_verification_step(
             verify_steps=verify_steps,
             verify_input_npy=str(tmp_path / "absent.npy"),
         )
-        cfg._toolchain = stub  # type: ignore[attr-defined]
+        cfg._toolchain = cast(Toolchain, stub)
         step_kernel_stitched_ip(parent, cfg)
         testbench = output / "stitched_ip" / TESTBENCH_DIR
         assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
