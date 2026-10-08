@@ -13,7 +13,8 @@ import pytest
 from finn.core.space import Available, QueryResult, Rejected, Unresolved, design_space
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
-from finn.kernels.fifo import FifoKernel, FifoStorage
+from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
+from finn.util.resource_models import _fifo_cost, _resolve
 from kernels.helpers import FULL_DSP48E2
 
 T = TypeVar("T")
@@ -96,3 +97,26 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
     )
     assert point.storage == storage
     assert dict(point.module.parameters)["RAM_STYLE"] == rtl_style
+
+
+def legacy_luts(depth: int, width: int) -> int:
+    """The HWCustomOp flow's FIFO model's LUTs, in the style it resolves (UltraScale+)."""
+    style = _resolve(depth, width, "auto")  # type: ignore[no-untyped-call]
+    cost = _fifo_cost(depth, width, style)  # type: ignore[no-untyped-call]
+    return int(cost.lut)
+
+
+def test_the_fifo_model_duplicates_the_legacy_one_less_the_terms_it_names() -> None:
+    """``fifo_resources`` takes its control from ``finn.util.resource_models`` and names the
+    terms it does not carry over; neither model's numbers move. A shift FIFO's are the
+    same; the others part by the named terms, at the comment's examples."""
+    for depth in (2, 5, 17, 33):
+        for width in (1, 8, 32, 100):
+            assert fifo_resources(depth, width, "auto").lut == legacy_luts(depth, width)
+    # LUTRAM: RAM64M8 banks against RAM32X2 with a mux from 128 rows.
+    assert (fifo_resources(257, 32, "auto").lut, legacy_luts(257, 32)) == (213, 257)
+    # Block RAM: no cascade decode here (one space), nor the lo/hi select (two).
+    assert (fifo_resources(2028, 32, "auto").lut, legacy_luts(2028, 32)) == (54, 67)
+    assert (fifo_resources(1500, 32, "auto").lut, legacy_luts(1500, 32)) == (54, 92)
+    # UltraRAM: the output queue W at any depth, not the read pipeline's growth.
+    assert (fifo_resources(100_000, 72, "auto").lut, legacy_luts(100_000, 72)) == (180, 540)
