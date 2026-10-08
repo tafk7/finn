@@ -14,7 +14,10 @@ A shell row states what the shell gives a partition and what it takes from it:
 - how it is integrated and run on the host;
 - its static region: the logic it instantiates beside the partition and its ends,
   and what that uses of the device, by the counts that scale it
-  (``StaticRegion.resources``: out of context, ``SHELL_CHARACTERISED``).
+  (``StaticRegion.resources``: out of context, ``SHELL_CHARACTERISED``);
+- where its ends' and static region's statements were characterised and the shell
+  built and timed (``characterised``), and what that does not cover on its board
+  (``caveat``), which the exploration and resources reports state.
 
 The shells:
 
@@ -30,7 +33,9 @@ The shells:
   of its own and no doubled clock. Its static region is the template's: the
   processing system and its reset, a SmartConnect taking a master a memory port into
   the HP port, and an AXI interconnect giving a slave an AXI-Lite bus from the
-  processor.
+  processor. Its ends and static region were characterised on xczu3eg and xczu7ev,
+  and the shell built and timed on Ultra96 only (SZ2): on every other board its
+  statements of the shell's cost are carried over, and its rows say so.
 - ``xrt`` and ``slash`` are named and not built: the kernel path builds Zynq first.
 """
 
@@ -38,8 +43,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.kernels.ends import ENDS, EndOffer, iodma_hls
-from finn.kernels.utilization import Fit, Resources
+from finn.kernels.ends import ENDS, IODMA_HLS, EndOffer, iodma_hls
+from finn.kernels.utilization import SHELL_CHARACTERISED, Fit, Resources
 from finn.platform.boards import BOARDS
 from finn.platform.refusal import TargetRefused
 
@@ -122,7 +127,12 @@ class ShellRow:
     - ``integration``: how the shell is put together around the partition (``None``:
       by its user);
     - ``host_runtime``: what runs it on the host (``None``: the user's);
-    - ``static_region``: its own logic (``None``: none of its own).
+    - ``static_region``: its own logic (``None``: none of its own);
+    - ``characterised``: where its ends' and static region's statements were
+      characterised and the shell built and timed (``None``: it states neither);
+    - ``caveat``: what that does not cover on its board, as a report states it
+      (``None``: nothing: its board is one it was built and timed on, or it states
+      no cost of its own).
     """
 
     shell: str
@@ -134,6 +144,8 @@ class ShellRow:
     integration: str | None
     host_runtime: str | None
     static_region: StaticRegion | None
+    characterised: str | None
+    caveat: str | None
 
     def __post_init__(self) -> None:
         kinds = [offer.kind for offer in self.ends]
@@ -154,6 +166,8 @@ IP_ROW = ShellRow(
     integration=None,
     host_runtime=None,
     static_region=None,
+    characterised=None,
+    caveat=None,
 )
 
 PYNQ_MEMORY_PORT = 128
@@ -163,12 +177,38 @@ on every board it builds for."""
 PYNQ_CONTROL_BUDGET = 9
 """The AXI-Lite buses the Zynq template's interconnect takes."""
 
+PYNQ_TIMED = ("Ultra96",)
+"""The boards the ``pynq`` shell was built and timed on (SZ2)."""
+
+PYNQ_CHARACTERISED = (
+    f"ends ({IODMA_HLS}) and static region {SHELL_CHARACTERISED} (ends on xczu3eg, the "
+    f"static region on xczu3eg and xczu7ev); the shell built and timed on "
+    f"{', '.join(PYNQ_TIMED)} only"
+)
+"""Where the ``pynq`` rows' ends and static region were characterised, and the shell
+built and timed."""
+
+
+def pynq_caveat(board: str) -> str | None:
+    """What ``PYNQ_CHARACTERISED`` does not cover on ``board``: ``None`` on a board the
+    shell was built and timed on."""
+    if board in PYNQ_TIMED:
+        return None
+    return (
+        f"the {PYNQ!r} shell was built and timed on {', '.join(PYNQ_TIMED)} only, and its "
+        f"ends and static region characterised {SHELL_CHARACTERISED}: on {board} "
+        f"({BOARDS[board].part}) its cost is carried over, not measured"
+    )
+
+
 # The Zynq template's static region out of context (``SHELL_CHARACTERISED``): xczu3eg and
-# xczu7ev give the same counts. The SmartConnect at 2, 3 and 4 masters of 128 bits
-# (5 346, 7 615 and 9 777 LUTs), within 0.4 %; a narrower master costs less (a 32-bit
-# one about 150 LUTs). The AXI interconnect's converters from the processor's 128-bit
-# port, 1 277 LUTs whatever its slaves, and its crossbar from 2 slaves (131, 184 and
-# 361 LUTs at 2, 4 and 9), within 5 %; one slave needs none.
+# xczu7ev give the same counts; the other boards' parts were not synthesized, and the
+# shell was built and timed on Ultra96 only (``PYNQ_CHARACTERISED``, ``pynq_caveat``).
+# The SmartConnect at 2, 3 and 4 masters of 128 bits (5 346, 7 615 and 9 777 LUTs),
+# within 0.4 %; a narrower master costs less (a 32-bit one about 150 LUTs). The AXI
+# interconnect's converters from the processor's 128-bit port, 1 277 LUTs whatever its
+# slaves, and its crossbar from 2 slaves (131, 184 and 361 LUTs at 2, 4 and 9), within
+# 5 %; one slave needs none.
 ZYNQ_STATIC_REGION = StaticRegion(
     processor="zynq_ultra_ps_e",
     reset="proc_sys_reset",
@@ -201,6 +241,8 @@ ROWS: dict[tuple[str, str | None], ShellRow] = {
             integration="vivado-block-design",
             host_runtime="zynq-iodma",
             static_region=ZYNQ_STATIC_REGION,
+            characterised=PYNQ_CHARACTERISED,
+            caveat=pynq_caveat(board),
         )
         for board, facts in BOARDS.items()
         if facts.preset is not None
@@ -251,8 +293,10 @@ __all__ = [
     "IP_ROW",
     "NOT_BUILT",
     "PYNQ",
+    "PYNQ_CHARACTERISED",
     "PYNQ_CONTROL_BUDGET",
     "PYNQ_MEMORY_PORT",
+    "PYNQ_TIMED",
     "ROWS",
     "SHELL_NAMES",
     "SLASH",
@@ -262,5 +306,6 @@ __all__ = [
     "XRT",
     "ZYNQ_STATIC_REGION",
     "built_shell",
+    "pynq_caveat",
     "shell_row",
 ]
