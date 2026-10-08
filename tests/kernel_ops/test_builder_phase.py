@@ -31,7 +31,6 @@ from qonnx.transformation.base import Transformation
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
 from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
-from finn.builder.build_dataflow_steps import delivered_clock
 from finn.builder.kernel_build_config import (
     SHELL_OUTPUTS,
     KernelBuildConfig,
@@ -39,6 +38,7 @@ from finn.builder.kernel_build_config import (
     KernelVerificationStepType,
 )
 from finn.builder.kernel_build_steps import (
+    delivered_clock,
     step_infer_kernel_tensors,
     step_kernel_bitfile,
     step_kernel_choices,
