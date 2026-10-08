@@ -242,11 +242,12 @@ def shell_resources_report(
             name = path.name[: -len("_utilization_synth.rpt")]
             name = name[len("top_") :] if name.startswith("top_") else name
             counted = utilization_synth(path.read_text())
-            key = _instance_of(name.removesuffix("_0"), instances)
-            if key is None:
+            owner = _instance_of(name.removesuffix("_0"), instances)
+            if owner is None:
                 unclaimed = unclaimed + counted
             else:
-                per_member[key] = per_member[key] + counted if key in per_member else counted
+                held = per_member.get(owner)
+                per_member[owner] = counted if held is None else held + counted
         for key in instances:
             columns[key]["out_of_context"] = per_member.get(key)
         totals["out_of_context"] = sum(per_member.values(), unclaimed)
@@ -265,9 +266,9 @@ def shell_resources_report(
     if placed is not None:
         rows = placed_hierarchy(Path(placed).read_text())
         for _, name, counted in [row for row in rows if row[0] == 2]:
-            key = _instance_of(name, instances)
-            if key is not None:
-                columns[key]["placed"] = counted
+            owner = _instance_of(name, instances)
+            if owner is not None:
+                columns[owner]["placed"] = counted
         totals["placed"] = rows[0][2]
     else:
         totals["placed"] = None
