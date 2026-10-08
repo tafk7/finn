@@ -4,7 +4,9 @@
 """The shell root: a set of KernelOp nodes' Partition and the channels on its boundary.
 
 Every exploration and packaging of KernelOps reads one root, built by
-``shell_root(model, nodes)``, which changes no graph:
+``shell_root(model, nodes)`` for the model's target, which changes no graph. Its
+shell is the target's (``read_target``): the root reads that shell's row for the
+target's board (``finn.platform.shell_row``), which states its ends and budgets.
 
 - **members**: each boundary channel, at its tensor's member (``Reshape_0_out0``),
   declared here as the Partition declares it (``finn.custom_op.kernels.partition``:
@@ -13,14 +15,23 @@ Every exploration and packaging of KernelOps reads one root, built by
   inputs supplied with them: input channels, the Partition, output channels. So
   what crosses the boundary is the shell's, and the Partition's own channels and
   kernels are below it (``partition.MatMul_0``, ``partition.MatMul_0_out0``);
-- **ends**: the ends the shell offers (``offers``, ``finn.kernels.ends.EndOffer``),
+- **ends**: the ends the row offers (``ShellRow.ends``, ``finn.kernels.ends.EndOffer``),
   supplied to each boundary channel whose free side meets the host (not one a
   KernelOp outside the nodes produces or consumes); each such channel places its
   ``end`` from them (``Channel.end``: one offered is forced, so nothing is
-  persisted), and its cycles are the channel's. With no offers, the root is the
-  **``ip`` shell**: no end on any boundary channel; its IP is the module the shells
-  read (``PackagePartition``), and a testbench drives the same pins. Either way
-  the module is the same: an end binds no RTL;
+  persisted), and its cycles are the channel's. The **``ip`` shell** offers none:
+  no end on any boundary channel; its IP is the module the shells read
+  (``PackagePartition``), and a testbench drives the same pins. Either way the
+  module is the same: an end binds no RTL;
+- **admission** (``Shell.interfaces``): what the module presents, within what the
+  row takes. The AXI-Lite buses the module presents and its ends present (each
+  end's ``END_CONTROL``) are within the row's ``control_budget``, and the AXI
+  memory ports the module initiates (a bus beside its streams that it initiates)
+  within its ``memory_ports``, each refused as ``interface-budget-exceeded``; a
+  module that takes an aligned doubled clock needs a row that supplies one
+  (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither
+  count. The counts are of the configured module, so a point is admitted once it
+  is decided (``admission_refusal``);
 - **paths**: a key of the root is a member path and the key below it
   (``partition.MatMul_0.compute.packed.pe``, ``Reshape_0_out0.transport``): the
   owners, the replayed choices, the dropped ones and the members whose cost a
@@ -42,24 +53,37 @@ Every exploration and packaging of KernelOps reads one root, built by
   named and identified as the Partition (its stem ``finn_<name>``; the Partition's
   producer), since an end is integrated beside the IP, not in it.
 
-The class is kept with its Partition's and its offers (``SHELLS``, by ``ShellKey``),
-so a call on the same facts compiles nothing again; the choices are replayed on a fresh design
-space every call.
+The class is kept with its Partition's and its row's offers (``SHELLS``, by
+``ShellKey``), so a call on the same facts compiles nothing again; the row is
+supplied, and the choices replayed, on a fresh design space every call.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from onnx import NodeProto
 
-from finn.core.space import Rejected, Space, composite, derived, design_space, reject
+from finn.core.space import (
+    ConstraintGroup,
+    Members,
+    Param,
+    Rejected,
+    Space,
+    composite,
+    constraint,
+    derived,
+    design_space,
+    inspection,
+    reject,
+)
 from finn.custom_op.kernels.base import (
     KernelOpError,
     committed,
     kernel_op,
+    read_target,
     typed_choices,
 )
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
@@ -70,10 +94,12 @@ from finn.custom_op.kernels.partition import (
     member,
     partition,
 )
+from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import BuildError, BusExport, Fragment, ProducerIdentity, merge
 from finn.kernels.base import Kernel
-from finn.kernels.configure import chosen, member_of
-from finn.kernels.ends import ENDS, EndOffer
+from finn.kernels.configure import chosen, describe, member_of
+from finn.kernels.ends import END_CONTROL, EndOffer
+from finn.platform import ShellRow, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -85,10 +111,48 @@ PARTITION = "partition"
 
 
 class Shell(Kernel):
-    """A shell root: its boundary channels and its Partition (``PARTITION``)."""
+    """A shell root: its boundary channels and its Partition (``PARTITION``), admitted
+    by its shell's ``row``."""
 
     id = "finn.custom_op.kernels.shell"
     version = 1
+
+    row: ShellRow = Param()
+    end_control = Members(END_CONTROL)
+
+    @constraint
+    def interfaces(self) -> bool | Rejected:
+        """The module's AXI-Lite buses and its ends', and the memory ports it initiates,
+        within the row's budgets; its doubled clock, if it takes one, the row's."""
+        row, abi = self.row, self.composed_abi
+        buses = [pin for pin in abi.pins if isinstance(pin, Bus)]
+        control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
+        ends = sum(item.value for item in self.end_control)
+        if row.control_budget is not None and control + ends > row.control_budget:
+            return reject(
+                "interface-budget-exceeded",
+                f"the {row.shell!r} shell takes {row.control_budget} AXI-Lite buses; the "
+                f"partition presents {control} and its ends {ends}",
+            )
+        memory = sum(
+            bus.protocol is not StandardProtocol.AXIS and bus.endpoint is Endpoint.INITIATOR
+            for bus in buses
+        )
+        if row.memory_ports is not None and memory > row.memory_ports:
+            return reject(
+                "interface-budget-exceeded",
+                f"the {row.shell!r} shell gives a partition {row.memory_ports} memory "
+                f"ports; it initiates {memory}",
+            )
+        if abi.clock_alignments and not row.clk2x:
+            return reject(
+                "clock-unavailable",
+                f"the partition takes an aligned doubled clock (ap_clk2x), which the "
+                f"{row.shell!r} shell does not supply",
+            )
+        return True
+
+    admission = ConstraintGroup(interfaces)
 
     def producer_identity(self) -> ProducerIdentity:
         """The Partition's: the shell's module is its Partition's IP."""
@@ -116,7 +180,7 @@ class Shell(Kernel):
 @dataclass(frozen=True)
 class ShellKey:
     """What a shell root's class is built from, by value: its Partition's class, the
-    ends it offers (none: the ``ip`` shell) and the boundary tensors offered them."""
+    ends its row offers (none: the ``ip`` shell) and the boundary tensors offered them."""
 
     partition: type[Partition]
     offers: tuple[EndOffer, ...]
@@ -132,7 +196,8 @@ class ShellRoot:
     """The configured root; each member's owning node and attribute prefix, by member
     path; the choices replay dropped as stale, each with why; each boundary tensor's
     port; its members by path (channels, then kernels), whose cost a design space
-    exploration reads; the boundary channels offered ends, by member path."""
+    exploration reads; the boundary channels offered ends, by member path; and the
+    shell's row, which supplies the ends and admits the point."""
 
     point: Any
     owners: Mapping[str, tuple[str, str]]
@@ -140,6 +205,7 @@ class ShellRoot:
     boundary: tuple[tuple[str, str], ...]
     members: tuple[str, ...]
     ends: tuple[str, ...]
+    row: ShellRow
 
     def owner(self, key: str) -> tuple[str, str] | None:
         """The node that persists ``key`` and the key there (its attribute): its longest
@@ -215,25 +281,17 @@ def _ended(model: ModelWrapper, built: Partitioned) -> tuple[str, ...]:
 
 
 def shell_root(
-    model: ModelWrapper,
-    nodes: Iterable[NodeProto],
-    *,
-    name: str = "partition",
-    offers: Sequence[EndOffer] = (),
+    model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = "partition"
 ) -> ShellRoot:
     """The shell root of ``nodes``, KernelOp nodes of ``model``, their Partition named
-    ``name``, offering ``offers`` on the boundary channels that meet the host (none:
-    the ``ip`` shell); see the module docstring."""
-    offers = tuple(offers)
-    kinds = [offer.kind for offer in offers]
-    unknown = sorted(set(kinds) - set(ENDS))
-    if unknown:
-        raise KernelOpError(f"no end of kind {', '.join(unknown)} (one of {sorted(ENDS)})")
-    if len(set(kinds)) != len(kinds):
-        raise KernelOpError(f"a shell offers each kind of end once, not {kinds}")
+    ``name``, in the shell of the model's target: its row's ends offered on the
+    boundary channels that meet the host, its budgets admitting the point; see the
+    module docstring."""
     built = partition(model, nodes, name=name)
+    target = read_target(model)
+    row = shell_row(target.shell, target.board)
     boundary = {member(tensor) for tensor, _ in built.boundary}
-    key = ShellKey(built.space, offers, _ended(model, built) if offers else ())
+    key = ShellKey(built.space, row.ends, _ended(model, built) if row.ends else ())
 
     def path(key: str) -> str:
         """A key of the Partition as the shell root names it."""
@@ -242,13 +300,20 @@ def shell_root(
 
     root: Any = SHELLS.get(key, lambda: _class(built, key))
     point, dropped = _replay(
-        design_space(root()), {path(key): value for key, value in built.choices.items()}
+        design_space(root(row=row)), {path(key): value for key, value in built.choices.items()}
     )
     stale = {path(key): why for key, why in built.stale.items()}
     members = (*(path(member(tensor)) for tensor, _ in built.channels), *map(path, built.kernels))
     owners = {path(name): owner for name, owner in built.owners.items()}
     ends = tuple(member(tensor) for tensor in key.ended)
-    return ShellRoot(point, owners, stale | dropped, built.boundary, members, ends)
+    return ShellRoot(point, owners, stale | dropped, built.boundary, members, ends, row)
+
+
+def admission_refusal(point: Any) -> str | None:
+    """Why the shell refuses ``point``, a point of a shell root (``Shell.interfaces``),
+    or ``None``: admitted, or not decided far enough to say."""
+    admitted = inspection.admission(point)
+    return describe([admitted]) if isinstance(admitted, Rejected) else None
 
 
 def persist(model: ModelWrapper, root: ShellRoot, point: Any) -> dict[str, dict[str, object]]:
@@ -279,6 +344,7 @@ __all__ = [
     "Shell",
     "ShellKey",
     "ShellRoot",
+    "admission_refusal",
     "persist",
     "shell_root",
 ]

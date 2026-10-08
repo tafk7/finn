@@ -14,10 +14,12 @@ a build's target from them.
 - ``finn.platform.request``: ``TargetRequest``, what a build configuration states of
   its target, resolved by ``resolve_target``.
 
-Kernels never import it: they read the capabilities it resolves
-(``finn.kernels.target.Platform``), which the model states (the ``finn.platform``
-graph metadata, ``finn.custom_op.kernels.base.read_target``). Every refusal is named
-(``TargetRefused``).
+It sits above the kernels and below the KernelOps. Kernels never import it: they
+read the capabilities it resolves (``finn.kernels.target.Platform``), which the model
+states (the ``finn.platform`` graph metadata,
+``finn.custom_op.kernels.base.read_target``). The shell root reads its target's
+shell row (``finn.custom_op.kernels.shell``): the ends it offers and the budgets it
+admits. Every refusal is named (``TargetRefused``).
 """
 
 from finn.platform.boards import BOARDS, Board
@@ -27,6 +29,7 @@ from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
 from finn.platform.shells import (
     IP,
+    IP_ROW,
     PYNQ,
     ROWS,
     SHELL_NAMES,
@@ -41,6 +44,7 @@ __all__ = [
     "BOARDS",
     "FAMILIES",
     "IP",
+    "IP_ROW",
     "PARTS",
     "PYNQ",
     "ROWS",

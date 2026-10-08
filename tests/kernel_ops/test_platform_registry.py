@@ -142,7 +142,7 @@ def test_the_ip_shell_is_the_default_with_a_doubled_clock_and_no_bound() -> None
     assert (target.shell, target.board, target.platform.clk2x) == ("ip", None, True)
     row = shell_row("ip", None)
     assert row == shell_row("ip", "Ultra96") == ROWS["ip", None]
-    assert (row.ends, row.control_budget, row.memory_ports) == ((), None, 0)
+    assert (row.ends, row.control_budget, row.memory_ports) == ((), None, None)
     assert (row.integration, row.host_runtime, row.static_region) == (None, None, None)
 
 

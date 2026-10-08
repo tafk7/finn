@@ -4,7 +4,7 @@
 """FINN's layers, what each may import, and the one import walker that checks them.
 
 ```text
-finn.core.space  <-  finn.kernels  <-  finn.custom_op.kernels
+finn.core.space  <-  finn.kernels  <-  finn.platform  <-  finn.custom_op.kernels
 finn.dataflow    <-                <-  finn.transformation.kernels
                                    <-  the flow (all other finn)
 finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, the flow
@@ -84,11 +84,14 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernels",
         also=("finn.resources",),
     ),
+    # The platform registry: parts, boards and shell rows, resolved to the capabilities
+    # kernels read. The shell root reads its shell's row.
+    Layer("platform", ("finn.platform",), ("kernels",), (), "tests/kernel_ops"),
     # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
     Layer(
         "custom_op.kernels",
         ("finn.custom_op.kernels",),
-        _KERNEL_STACK,
+        (*_KERNEL_STACK, "platform"),
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -125,6 +128,7 @@ LAYERS: tuple[Layer, ...] = (
         ("finn", "finn.util.torch_hw_modules"),
         (
             *_KERNEL_STACK,
+            "platform",
             "custom_op.kernels",
             "kernel_partitions",
             "util",

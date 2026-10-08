@@ -71,7 +71,7 @@ from qonnx.transformation.base import Transformation
 from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, shape
 from finn.custom_op.kernels.partition import member
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import admission_refusal, shell_root
 from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
 from finn.kernels.artifacts.module import Abi
@@ -93,11 +93,14 @@ if TYPE_CHECKING:
 def configured_root(
     model: ModelWrapper, label: str, completion: Completion | None = None
 ) -> tuple[Any, tuple[tuple[str, str], ...]]:
-    """A partition model's shell root point (``shell_root``), replayed from its nodes
-    (a Decision with one viable case is forced, nothing to commit) and completed by
-    ``completion`` (``Baseline()`` by default) on a copy, as hardware generation builds
-    it, and its boundary (tensor, port). A stale choice, a choice the completion leaves open (a
-    required one), or graph inputs and outputs out of port order refuse, named."""
+    """A partition model's shell root point (``shell_root``, in the shell of its
+    target), replayed from its nodes (a Decision with one viable case is forced,
+    nothing to commit) and completed by ``completion`` (``Baseline()`` by default) on a
+    copy, as hardware generation builds it (the shell's ends, if it offers any, sizing
+    the boundary transports as the exploration did), and its boundary (tensor, port).
+    A stale choice, a choice the completion leaves open (a required one), a point the
+    shell does not admit (``admission_refusal``), or graph inputs and outputs out of
+    port order refuse, named."""
     root = shell_root(model, model.graph.node)
     if root.dropped:
         raise KernelOpError(
@@ -120,6 +123,9 @@ def configured_root(
             f"{label}: open Decisions, to choose before packaging: " + ", ".join(named),
             tuple(open_keys),
         )
+    unadmitted = admission_refusal(point)
+    if unadmitted is not None:
+        raise KernelOpError(f"{label}: refused by the {root.row.shell!r} shell: {unadmitted}")
     ports = dict(root.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}
     inputs = [item.name for item in model.graph.input if item.name not in initializers]

@@ -14,25 +14,28 @@ from the point the one before returned, and then:
 - refuses a point a member refuses (``Seam.refusals``); what no strategy chose
   stays open, for the completion policy to complete wherever the point is costed
   or generated;
+- completes the point as hardware generation will (``Completion.complete`` with
+  sizing, on a copy that is not stored) and refuses a completed point its shell
+  does not admit (``admission_refusal``: its AXI-Lite buses, memory ports and
+  doubled clock against the shell's row), by name;
 - persists the point's commitments on the nodes that own them, each node's whole
   (``persist``): the choices made on purpose, never a completed one; a saved choice
   is never changed (an explorer fills open choices only), and a stale one is
   cleared;
-- completes the point as hardware generation will (``Completion.complete`` with
-  sizing, on a copy that is not stored) and keeps what it found (``explored``):
-  the committed point, the cost of the completed one and the report (the
-  strategies, each with the choices it committed, attempts and time, and the
-  completed values it read, if any; every committed choice by its owner, with the
-  strategy that made it, ``saved`` for one the model held before; the completion
-  policy and every value it completed, by owner, with who completed it; the
-  required choices it leaves open, which hardware generation refuses; whether
-  FIFOs were sized; the dropped choices with why, per member cycles and
-  buffering, the bottleneck), so an outer search can compare.
+- keeps what it found (``explored``): the committed point, the cost of the
+  completed one and the report (the strategies, each with the choices it
+  committed, attempts and time, and the completed values it read, if any; every
+  committed choice by its owner, with the strategy that made it, ``saved`` for
+  one the model held before; the completion policy and every value it completed,
+  by owner, with who completed it; the required choices it leaves open, which
+  hardware generation refuses; whether FIFOs were sized; the dropped choices with
+  why, per member cycles and buffering, the bottleneck), so an outer search can
+  compare.
 
-``offers`` are the ends the shell offers its boundary channels (``shell_root``;
-none: the ``ip`` shell). Where a channel has an end, the report has its row
-(``ends``: its facts and its cycles a frame, a frame a call and 16) and says what
-the cycles leave out (``memory_latency``: unmeasured, each call adds it).
+The shell is the model's target's (``shell_root``): its row offers the boundary
+channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
+has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
+says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
 
 ``fresh`` clears the nodes' choices before the root is built, so the strategies
 explore from scratch; otherwise a saved choice is pinned and an exploration
@@ -56,8 +59,8 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
-from finn.custom_op.kernels.shell import persist, shell_root
-from finn.kernels.ends import MEMORY_LATENCY, EndContract, EndOffer
+from finn.custom_op.kernels.shell import admission_refusal, persist, shell_root
+from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     Baseline,
     Bottleneck,
@@ -221,6 +224,7 @@ def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
             "converter": contract.converter,
             "call_cycles": contract.call_cycles,
             "frames_per_call": contract.frames_per_call,
+            "control_buses": contract.control_buses,
             "cycles": contract.cycles,
             "cycles_16_frames_a_call": contract.cycles_at(16),
         }
@@ -233,11 +237,10 @@ def explore_kernel_choices(
     *,
     fresh: bool = False,
     completion: Completion | None = None,
-    offers: Sequence[EndOffer] = (),
 ) -> Explored:
     """The model's KernelOps explored by ``strategies`` and their choices persisted, the
     point completed by ``completion`` (``Baseline()`` by default) for its report, on the
-    shell root offering ``offers``; see the module docstring."""
+    shell root of the model's target; see the module docstring."""
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     if not nodes:
         raise KernelOpError("no KernelOp to explore")
@@ -246,7 +249,7 @@ def explore_kernel_choices(
             op = kernel_op(model, node)
             op.save(dict.fromkeys(op.choices()))
     started = time.perf_counter()
-    root = shell_root(model, nodes, offers=offers)
+    root = shell_root(model, nodes)
     seam = Seam(root.members, root.owners, read_target(model).platform, completion)
     point = root.point
     # Who made each choice: the model before the strategies, or the strategy that
@@ -275,13 +278,19 @@ def explore_kernel_choices(
             "the explored point is refused: "
             + "; ".join(f"{name}: {why}" for name, why in refused.items())
         )
-    persist(model, root, point)
     completed: Completed[Any] | None = None
     completion_report: dict[str, object] = {"policy": seam.completion.name}
     try:
         completed = seam.completion.complete(seam, point, sizing=True)
     except ExploreError as error:
         completion_report["refused"] = str(error)
+    if completed is not None:
+        unadmitted = admission_refusal(completed.point)
+        if unadmitted is not None:
+            raise KernelOpError(
+                f"the explored point is refused by the {root.row.shell!r} shell: {unadmitted}"
+            )
+    persist(model, root, point)
     if completed is not None:
         completion_report["open"] = [
             _owned(seam, choice.key) + (" (required)" if choice.required else "")
@@ -324,7 +333,7 @@ def partition_bottleneck(
 class ExploreKernelChoices(Transformation):
     """Every open choice of the model's KernelOps explored by ``strategies``, in order,
     and saved, the point completed by ``completion`` for the report, on the shell root
-    offering ``offers``; ``explored`` holds the result (``explore_kernel_choices``)."""
+    of the model's target; ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(
         self,
@@ -332,13 +341,11 @@ class ExploreKernelChoices(Transformation):
         *,
         fresh: bool = False,
         completion: Completion | None = None,
-        offers: Sequence[EndOffer] = (),
     ) -> None:
         super().__init__()
         self.strategies = tuple(strategies)
         self.fresh = fresh
         self.completion = completion
-        self.offers = tuple(offers)
         self.explored: Explored | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
@@ -347,7 +354,6 @@ class ExploreKernelChoices(Transformation):
             self.strategies,
             fresh=self.fresh,
             completion=self.completion,
-            offers=self.offers,
         )
         return model, False
 

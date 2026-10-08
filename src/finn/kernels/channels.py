@@ -92,7 +92,9 @@ are supplied, its candidates are the kinds ``ENDS`` knows, each refusing a kind
 not offered, so one offered is forced and nothing is persisted. The end is not a
 user: it reads the free side the channel's one user determines, binds no RTL
 (the root's pins stay its pins), and exports its facts (``end_contract``). Its
-cycles a frame (``end_cycles``) are the channel's, beside its stages'.
+cycles a frame (``end_cycles``) are the channel's, beside its stages', and under
+``END_CONTROL`` it exports the AXI-Lite buses its end presents to the shell (none
+without an end), which the shell root's admission counts.
 
 The Space class refers to itself (``index``) and, through its source's port, is
 referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
@@ -130,7 +132,7 @@ from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapte
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd, Marker
 from finn.kernels.base import BOUNDARY, BUFFERING, CLOCK, CYCLES, NETLIST, PORT, RESET
-from finn.kernels.ends import ENDS, EndContract, EndOffer, IodmaEnd
+from finn.kernels.ends import END_CONTROL, ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
@@ -416,6 +418,15 @@ class Channel(Space):
         return contract.cycles
 
     @derived
+    def end_control_buses(self) -> int:
+        """The AXI-Lite buses its end presents to the shell (``EndContract.control_buses``;
+        none without an end)."""
+        if not self.ended:
+            return 0
+        contract: EndContract = self.end_contract
+        return contract.control_buses
+
+    @derived
     def ends(self) -> Ends:
         """The logical part of the two contracts: element and beat sequence."""
         found = self.endpoints
@@ -646,7 +657,15 @@ class Channel(Space):
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
-    exports = {NETLIST: netlist, BOUNDARY: boundary_bus, CYCLES: cycles, BUFFERING: buffering}
+    end_control = View(end_control_buses)
+
+    exports = {
+        NETLIST: netlist,
+        BOUNDARY: boundary_bus,
+        CYCLES: cycles,
+        BUFFERING: buffering,
+        END_CONTROL: end_control,
+    }
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:

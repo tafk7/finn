@@ -18,8 +18,9 @@ The shells:
 
 - ``ip``, the default: the partition's packaged IP, which its user integrates. It
   has no ends, offers ``ap_clk2x`` (stated beside the IP for its integrator to
-  supply) and lists every AXI-Lite bus however many there are. One row for every
-  part and board.
+  supply) and bounds neither budget: it integrates nothing, so it lists every
+  AXI-Lite bus and memory port however many there are. One row for every part and
+  board.
 - ``pynq``: the Zynq block design the PYNQ driver runs, one row per board
   (``BOARDS``). Its ends are ``IODMA_hls`` movers at the processing system's
   128-bit HP port, a frame a call; its AXI-Lite interconnect takes nine buses; a
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.kernels.ends import EndOffer, iodma_hls
+from finn.kernels.ends import ENDS, EndOffer, iodma_hls
 from finn.platform.boards import BOARDS
 from finn.platform.refusal import TargetRefused
 
@@ -62,10 +63,12 @@ class ShellRow:
     """What a shell gives and takes for one board (``board``: ``None`` for the row of
     any board):
 
-    - ``ends``: the ends it offers each boundary channel's free side;
+    - ``ends``: the ends it offers each boundary channel's free side, each kind
+      ``ENDS`` knows, once;
     - ``control_budget``: the AXI-Lite buses the partition and its ends may present
       together (``None``: no bound);
-    - ``memory_ports``: the AXI memory ports the partition itself may use;
+    - ``memory_ports``: the AXI memory ports the partition itself may use, beside its
+      ends' (``None``: no bound);
     - ``clk2x``: it supplies an aligned doubled clock;
     - ``integration``: how the shell is put together around the partition (``None``:
       by its user);
@@ -77,11 +80,19 @@ class ShellRow:
     board: str | None
     ends: tuple[EndOffer, ...]
     control_budget: int | None
-    memory_ports: int
+    memory_ports: int | None
     clk2x: bool
     integration: str | None
     host_runtime: str | None
     static_region: StaticRegion | None
+
+    def __post_init__(self) -> None:
+        kinds = [offer.kind for offer in self.ends]
+        unknown = sorted(set(kinds) - set(ENDS))
+        if unknown:
+            raise ValueError(f"no end of kind {', '.join(unknown)} (one of {sorted(ENDS)})")
+        if len(set(kinds)) != len(kinds):
+            raise ValueError(f"a shell offers each kind of end once, not {kinds}")
 
 
 IP_ROW = ShellRow(
@@ -89,7 +100,7 @@ IP_ROW = ShellRow(
     board=None,
     ends=(),
     control_budget=None,
-    memory_ports=0,
+    memory_ports=None,
     clk2x=True,
     integration=None,
     host_runtime=None,

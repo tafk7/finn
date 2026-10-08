@@ -23,6 +23,9 @@ stream side, the free side's contract:
   without a converter (``iodma_hls``: measured in XSim against a memory model, 4
   cycles a call with a converter, 13 without; the call ends two converter words
   before the stream runs dry, or once its last word left);
+- it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
+  which the shell root's admission counts against the shell's budget beside the
+  partition's (``END_CONTROL``, ``EndContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
   the bound that holds for any batch, since the batch is the driver's runtime argument;
@@ -37,7 +40,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil, gcd
 
-from finn.core.space import ConstraintGroup, Param, Rejected, Space, constraint, derived, reject
+from finn.core.space import (
+    ConstraintGroup,
+    Param,
+    Rejected,
+    Space,
+    ViewKey,
+    constraint,
+    default_semantics,
+    derived,
+    reject,
+)
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.transport import StreamContract
@@ -47,6 +60,10 @@ IODMA_HLS = "iodma_hls"
 
 MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 """What an end's cycles leave out, as the exploration report states it."""
+
+END_CONTROL = ViewKey("end_control", default_semantics(int))
+"""The AXI-Lite buses a boundary channel's end presents to the shell (none without an
+end), which the shell root's admission counts."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -94,7 +111,8 @@ class EndContract:
     - the memory side: ``memory_width`` (bits), ``words`` a frame, and whether a width
       ``converter`` sits between the two;
     - the rate: ``call_cycles`` (the constant each call adds), ``frames_per_call`` and
-      ``cycles`` a frame, the memory latency excluded (``MEMORY_LATENCY``)."""
+      ``cycles`` a frame, the memory latency excluded (``MEMORY_LATENCY``);
+    - ``control_buses``: the AXI-Lite buses it presents to the shell's processor."""
 
     kind: str
     direction: str
@@ -108,6 +126,7 @@ class EndContract:
     converter: bool
     call_cycles: int
     frames_per_call: int
+    control_buses: int
 
     def cycles_at(self, frames_per_call: int) -> int:
         """Its cycles a frame were each call to move ``frames_per_call`` frames."""
@@ -164,6 +183,7 @@ class IodmaEnd(Space):
             converter=converter,
             call_cycles=offer.call_converted if converter else offer.call_direct,
             frames_per_call=offer.frames_per_call,
+            control_buses=1,
         )
 
 
@@ -173,6 +193,7 @@ ENDS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaEnd}
 
 __all__ = [
     "ENDS",
+    "END_CONTROL",
     "IODMA_HLS",
     "MEMORY_LATENCY",
     "EndContract",

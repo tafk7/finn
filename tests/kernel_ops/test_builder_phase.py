@@ -346,6 +346,29 @@ SET_FOLDING = {
 }
 
 
+#: Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
+#: completed, 45 on 8 nodes: the Zynq landing's baseline build's (Ultra96, 5 ns,
+#: [target_throughput, size_fifos]), whose choices were all persisted then.
+TFC_BUILT = {
+    node: {
+        **folding,
+        **(
+            {
+                "compute.packed.reducer": "tree",
+                "w.source.memstream.ram_style": "auto",
+                "w.transport": "direct",
+                "x.adapter.input_gen.input_gen.ram_style": "auto",
+                "x.transport": "direct",
+            }
+            if node.startswith("MatMul")
+            else {"deep_pipeline": False, "ram_style": "auto", "x.transport": "direct"}
+        ),
+        **({"y.transport": "direct"} if node == "MatMul_3" else {}),
+    }
+    for node, folding in SET_FOLDING.items()
+}
+
+
 @pytest.mark.slow
 def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
@@ -375,17 +398,18 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     completed = [entry["by"] for held in report["completed"].values() for entry in held.values()]
     assert (completed.count("baseline"), completed.count("size_fifos")) == (20, 13)
     assert report["fifos"] == "sized at completion by baseline: 13 channels"
-    # Four members tie at the bottleneck: the first layer's activations, its weights,
-    # its thresholds and its MatMul, all the shell root's Partition's.
-    assert report["bottleneck"] == {
-        "members": [
-            "partition.MultiThreshold_0_out0",
-            "partition.MatMul_0_param0",
-            "partition.MultiThreshold_0",
-            "partition.MatMul_0",
-        ],
-        "cycles": 196,
-    }
+    # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
+    # frame a call), within the budget of 200; the Partition's slowest members, the
+    # first layer's activations, weights, thresholds and MatMul, tie at 196.
+    assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
+    partition = {name: row["cycles"] for name, row in report["members"].items()}
+    assert [name for name, cycles in partition.items() if cycles == 196] == [
+        "partition.MultiThreshold_0_out0",
+        "partition.MatMul_0_param0",
+        "partition.MultiThreshold_0",
+        "partition.MatMul_0",
+    ]
+    assert set(report["ends"]) == {"Reshape_0_out0", "MatMul_3_out0"}
 
 
 @pytest.mark.slow
@@ -419,17 +443,25 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     assert {key: plain[key] for key in sized} == sized
     assert {plain[key] for key in plain if key not in sized} == {"direct"}
     sizing = report["strategies"][1]
-    assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 196, 0)
+    # At the period the input end sets.
+    assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It commits the 13 transports the completion sizes without it; the baseline
     # completes the other 20.
     assert [each["committed"] for each in report["strategies"]] == [12, 13]
     assert len(sized) == 20 and len(plain) == 33
     assert report["fifos"] == "sized by size_fifos: 13 channels"
     assert plain_report["completion"]["sizing"]["channels"] == sizing["channels"]
+    # The ends change no choice: TFC is built with the baseline build's 45 values.
+    persisted = json.loads((tmp_path / "sized" / "output" / "kernel_choices.json").read_text())
+    for (node, attribute), value in sized.items():
+        persisted.setdefault(node, {})[attribute] = value
+    assert persisted == TFC_BUILT
+    assert sum(map(len, TFC_BUILT.values())) == 45
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
-    assert whys["Reshape_0_out0"] == whys["MatMul_3_out0"] == "a boundary: not modelled"
+    # Each boundary is read through its end.
+    assert whys["Reshape_0_out0"] == whys["MatMul_3_out0"] == "direct absorbs it"
     assert {whys[f"partition.MatMul_{index}_param0"] for index in range(4)} == {
         "a memory source: paced by its consumer"
     }
