@@ -31,8 +31,11 @@ def tfc_streamlined(tfc_cache: Path) -> Path:
 
 @pytest.fixture(scope="session")
 def tfc_kernel_ops(tfc_cache: Path, tfc_streamlined: Path) -> Path:
-    """TFC_W2A2 as KernelOps for Ultra96 at 5 ns in the Zynq shell, every choice open
-    (``kernel_ops``)."""
+    """TFC_W2A2's partition of KernelOps for Ultra96 at 5 ns in the Zynq shell, cut
+    once: its body, every choice open (``kernel_ops``)."""
     return built(
-        tfc_cache / "kernel_ops.onnx", lambda _: kernel_ops(ModelWrapper(str(tfc_streamlined)))
+        tfc_cache / "kernel_ops.onnx",
+        lambda directory: kernel_ops(
+            ModelWrapper(str(tfc_streamlined)), directory / "kernel_ops_cut"
+        ),
     )

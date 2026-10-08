@@ -47,13 +47,12 @@ from finn.kernels.explore import Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.platform import resolve_target
-from finn.transformation.fpgadataflow.kernel_partitions import partition_facts
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
 )
-from finn.transformation.kernels.package import write_boundary_facts
+from finn.transformation.kernels.package import boundary_facts, configured_root
 
 ULTRA96 = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)  # DSP48E2: the packed core
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)  # DSP58: the INT8 core too
@@ -223,9 +222,9 @@ def test_narrowed_weights_shrink_the_memory_image() -> None:
 
 def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
     """The input and the expected output as each boundary port's words, row-major in its
-    lanes, from the partition's boundary facts."""
-    write_boundary_facts(model)
-    inputs, outputs = partition_facts(model)
+    lanes, from the partition's boundary facts (its configured root's)."""
+    point, boundary = configured_root(model, "partition")
+    inputs, outputs = boundary_facts(model, point, boundary, "partition")
     words = {}
     for facts, values in ((inputs[0], x), (outputs[0], y)):
         flat = [int(value) for value in values.reshape(-1)]

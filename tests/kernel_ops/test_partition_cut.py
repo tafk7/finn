@@ -1,8 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's one cut, its partition's boundary (the ends' facts, ``finn.partition``),
-what is built of it (``finn.outputs``) and the integration export read from its ends.
+"""The kernel path's one cut, its partition's boundary (the ends' facts, read from the
+configured root: ``boundary_facts``), what is built of it (``finn.outputs``) and the
+integration export read from its ends.
 
 The Chain (``kernels.chain``), its choices saved, as the partition; with its second
 weights streamed, so two inputs cross the boundary. No Vivado.
@@ -33,9 +34,7 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
-    PARTITION_INPUTS,
     partition_body,
-    partition_facts,
 )
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.integration import (
@@ -46,7 +45,7 @@ from finn.transformation.kernels.integration import (
     integration,
     wire_one_bus_each,
 )
-from finn.transformation.kernels.package import write_boundary_facts
+from finn.transformation.kernels.package import boundary_facts, configured_root
 from kernel_ops.models import configure_partition, kernel_model, row_major_w2
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls end at a 128-bit port.
@@ -63,6 +62,13 @@ def chain(shell: str = "ip") -> ModelWrapper:
         row_major_w2(model)
     configure_partition(model)
     return model
+
+
+def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The boundary facts of ``model``'s configured root, as the interface description
+    and the testbench read them."""
+    point, boundary = configured_root(model, "partition")
+    return boundary_facts(model, point, boundary, "partition")
 
 
 def port(name: str, tensor: str, dims: list[int], element: str, *counts: int) -> dict[str, Any]:
@@ -107,24 +113,14 @@ PYNQ_Y_END = {**iodma("out", 32), "converter": False, "call_cycles": 13}
 
 
 def test_on_ip_the_facts_are_the_boundary_streams_with_no_end() -> None:
-    model = chain()
-    assert model.get(PARTITION_INPUTS) is None
-    write_boundary_facts(model)
-    assert partition_facts(model) == ([X, W2], [Y])
+    assert facts(chain()) == ([X, W2], [Y])
 
 
 def test_on_pynq_each_boundary_port_states_its_end_and_the_channels_element() -> None:
-    model = chain("pynq")
-    write_boundary_facts(model)
-    assert partition_facts(model) == (
+    assert facts(chain("pynq")) == (
         [{**X, "end": iodma("in", 16)}, {**W2, "end": iodma("in", 64)}],
         [{**PYNQ_Y, "end": PYNQ_Y_END}],
     )
-
-
-def test_a_model_without_facts_is_refused() -> None:
-    with pytest.raises(ValueError, match="no boundary facts.*the kernel path's cut writes them"):
-        partition_facts(kernel_model())
 
 
 def test_packaging_reads_the_part_and_period_from_the_target() -> None:
@@ -146,12 +142,14 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
     assert found is node and body_file == str(tmp_path / "partition.onnx")
     # Only the body is left in the directory: the cut's own file is gone.
     assert sorted(path.name for path in tmp_path.iterdir()) == ["partition.onnx"]
-    # The body carries the target and states its boundary, the ends' facts; the parent
-    # graph keeps the target and states no facts of its own.
+    # The body carries the target, and its nodes as they were: the cut reads and stores
+    # nothing of the space (no boundary facts; its configured root states them).
     assert read_target(body) == read_target(parent) == ZYNQ
-    assert partition_facts(body)[0][0]["end"] == iodma("in", 16)
-    assert parent.get(PARTITION_INPUTS) is None
+    assert {item.key for item in body.graph.metadata_props} == {
+        item.key for item in model.graph.metadata_props
+    }
     assert [item.domain for item in body.graph.node] == [KERNEL_OPS_DOMAIN] * 3
+    assert facts(body)[0][0]["end"] == iodma("in", 16)
 
 
 def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
@@ -252,7 +250,7 @@ def test_an_iodma_end_refuses_w2_tiled_by_name() -> None:
     write_target(model, ZYNQ)
     with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable: .*end-order: s_axis_1"):
         configure_partition(model)
-        write_boundary_facts(model)
+        configured_root(model, "partition")
 
 
 def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:

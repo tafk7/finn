@@ -95,7 +95,7 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
 
 @pytest.fixture(scope="module")
 def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
-    """TFC_W2A2 as KernelOps for Ultra96 at 5 ns."""
+    """TFC_W2A2's partition body: its KernelOps for Ultra96 at 5 ns."""
     return ModelWrapper(str(tfc_kernel_ops))
 
 

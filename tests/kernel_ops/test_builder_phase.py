@@ -64,7 +64,6 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_VLNV,
     OUTPUTS,
     partition_body,
-    partition_facts,
 )
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.pynq_runner import (
@@ -80,7 +79,7 @@ from finn.transformation.kernels import (
     partition_bottleneck,
 )
 from finn.transformation.kernels.integration import Address, Connection, integration
-from finn.transformation.kernels.package import configured_root
+from finn.transformation.kernels.package import boundary_facts, configured_root
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import chain_source, configure_partition, kernel_model, matmul_model
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
@@ -93,10 +92,24 @@ from kernel_ops.tfc import SHAPE, ULTRA96, built, partition
 STEPS = (
     "step_kernel_ops",
     "step_infer_kernel_tensors",
-    "step_kernel_choices",
     "step_kernel_partition",
+    "step_kernel_choices",
     "step_verify_kernel_partition",
 )
+
+
+def explore(source: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+    """``source`` through the kernel path's steps to its exploration: the parent graph,
+    cut once, its body's choices explored and saved."""
+    model = source
+    for step in (
+        step_kernel_ops,
+        step_infer_kernel_tensors,
+        step_kernel_partition,
+        step_kernel_choices,
+    ):
+        model = step(model, cfg)
+    return model
 
 
 @pytest.fixture(scope="module")
@@ -163,8 +176,9 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert kernel_ops == ["Thresholding", "MatMul"] * 4
     # Inference states every tensor's datatype; no choice is saved yet.
     assert kernel_choices_config(seen["step_infer_kernel_tensors"]) == {}
-    # Cut once: the build's model is the parent graph, the input flatten and the label
-    # select on the host around one partition, named partition, whose body is its file.
+    # Cut once, before the exploration: the build's model is the parent graph, the input
+    # flatten and the label select on the host around one partition, named partition,
+    # whose body is its file; the exploration reads and saves the body.
     parent = seen["step_kernel_partition"]
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Reshape", "Reshape_0"),
@@ -186,8 +200,10 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert wiring(built) == wiring(body)
     assert kernel_choices_config(built) == {} != kernel_choices_config(body)
     assert read_target(built) == read_target(parent) == ULTRA96
-    # The body states its boundary, the ends' facts: the pynq shell's IODMA_hls on both.
-    inputs, outputs = partition_facts(built)
+    # The body's boundary, read from its configured root: the pynq shell's IODMA_hls on
+    # both.
+    point, boundary = configured_root(built, "partition")
+    inputs, outputs = boundary_facts(built, point, boundary, "partition")
     assert [(port["tensor"], port["end"]["kind"]) for port in inputs + outputs] == [
         ("Reshape_0_out0", "iodma_hls"),
         ("MatMul_3_out0", "iodma_hls"),
@@ -226,8 +242,7 @@ def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
     source: ModelWrapper, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     cfg = config(tmp_path, kernel_completion="placeholder")
-    model = step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg)
-    model = step_kernel_choices(model, cfg)
+    model = explore(source, cfg)
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     assert report["completion"]["policy"] == "placeholder" and report["completion"]["open"] == []
     entries = [entry for held in report["completed"].values() for entry in held.values()]
@@ -239,7 +254,7 @@ def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
     assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 32
     assert "DEBUG: completed by placeholder: MatMul_0.compute.packed.pe = 1" in debug
     # The verification completes it the same way, and it passes.
-    step_verify_kernel_partition(step_kernel_partition(model, cfg), cfg)
+    step_verify_kernel_partition(model, cfg)
 
 
 def test_a_completion_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
@@ -253,10 +268,7 @@ def test_the_verification_refuses_a_partition_for_another_target(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
     cfg = config(tmp_path)
-    model = source
-    for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
-        model = step(model, cfg)
-    parent = step_kernel_partition(model, cfg)
+    parent = explore(source, cfg)
     cfg.target = replace(ULTRA96_PYNQ, period_ns=4.0)
     with pytest.raises(
         TargetRefused, match="target-drift: .*period_ns: the model states 5.0, the build 4.0"
@@ -483,11 +495,10 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
 ) -> None:
     specs = [{"strategy": "target_throughput", "fps": 1_000_000}]
     cfg = config(tmp_path, kernel_exploration=specs)
-    model = step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg)
-    model = step_kernel_choices(model, cfg)
+    _, body, _ = partition_body(explore(source, cfg))
     folding = {
         node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
-        for node, held in kernel_choices_config(model).items()
+        for node, held in kernel_choices_config(body).items()
     }
     assert folding == SET_FOLDING
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
@@ -538,7 +549,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
         ("plain", [target]),
     ):
         cfg = config(tmp_path / name, kernel_exploration=specs)
-        step_kernel_choices(step_infer_kernel_tensors(step_kernel_ops(source, cfg), cfg), cfg)
+        explore(source, cfg)
         report = json.loads(
             (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
         )
@@ -675,15 +686,6 @@ Z0_IODMAS = {
 }
 
 
-def cut_tfc(source: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
-    """TFC through the kernel path's steps to its parent graph, cut once."""
-    model = source
-    for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
-        model = step(model, cfg)
-    parent: ModelWrapper = step_kernel_partition(model, cfg)
-    return parent
-
-
 @pytest.fixture(scope="session")
 def z0_cut(tfc_cache: Path, tfc_streamlined: Path) -> Path:
     """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq, cut once a run: the parent graph's
@@ -691,7 +693,7 @@ def z0_cut(tfc_cache: Path, tfc_streamlined: Path) -> Path:
 
     def cut(directory: Path) -> ModelWrapper:
         source = ModelWrapper(str(tfc_streamlined))
-        return cut_tfc(source, config(directory, kernel_exploration=Z0_CHAIN))
+        return explore(source, config(directory, kernel_exploration=Z0_CHAIN))
 
     return built(tfc_cache / "z0" / "parent.onnx", cut)
 
@@ -978,7 +980,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     for stale in ("driver/stale.py", "deploy/driver/stale.py", "deploy/stale.bit"):
         (Path(cfg.output_dir) / stale).parent.mkdir(parents=True, exist_ok=True)
         (Path(cfg.output_dir) / stale).write_text("an earlier build's")
-    parent = cut_tfc(source, cfg)
+    parent = explore(source, cfg)
     for step in (
         step_kernel_bitfile,
         step_kernel_driver,

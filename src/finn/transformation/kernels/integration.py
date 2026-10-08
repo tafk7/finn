@@ -15,7 +15,7 @@ generation does (``configured_root``) and reads the ends its boundary channels p
   end's facts: vectors ``(1, beats)``, the stream's bytes a beat, memory and stream
   widths, as ``InsertIODMA`` sized them. ``IODMA_hls`` moves bytes: its ``dataType``
   stays the ``UINT8`` container and its generated code is the one it always was; the
-  stream's element is the end's (``EndContract.element``, ``finn.partition``);
+  stream's element is the end's (``EndContract.element``);
 - the connections, each from its source pin to its sink pin: each end to its
   partition port over AXI-Stream, each end's memory port to the memory interconnect's
   next slave port over AXI-MM, each AXI-Lite bus (in the order: input ends, the

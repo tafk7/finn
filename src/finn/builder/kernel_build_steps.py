@@ -94,10 +94,12 @@ def step_infer_kernel_tensors(model: ModelWrapper, cfg: KernelBuildConfig):
 
 
 def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Explore the KernelOps' open choices through the DSE seam by the strategies
+    """Explore the partition's KernelOps, its body opened through the parent graph's
+    partition node (partition_body), through the DSE seam by the strategies
     ``cfg.kernel_exploration`` lists, in order (finn.transformation.kernels.strategy:
-    each a spec, {"strategy": name, **parameters}), and save them on their nodes
-    (explore_kernel_choices): the choices strategies made, never a completed one. What
+    each a spec, {"strategy": name, **parameters}), and save them on their nodes, the
+    body saved again in its file (explore_kernel_choices): the choices strategies
+    made, never a completed one. What
     no strategy chose stays open, and ``cfg.kernel_completion`` completes it wherever
     the partition is costed or built. A strategy carries its own objective. Writes
     report/kernel_exploration.json (the strategies, each with the choices it
@@ -112,17 +114,17 @@ def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
     debug placeholder), whether FIFOs were sized, and a warning naming the binding
     resource where the shell's resources exceed the part's (RC5: never a refusal)."""
     strategies = [strategy(spec) for spec in cfg.kernel_exploration]
+    completing = completion(cfg.kernel_completion)
+    _, body, body_file = partition_body(model)
     explored = explore_kernel_choices(
-        model,
-        strategies,
-        fresh=cfg.kernel_exploration_fresh,
-        completion=completion(cfg.kernel_completion),
+        body, strategies, fresh=cfg.kernel_exploration_fresh, completion=completing
     )
+    body.save(body_file)
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
     with open(cfg.output_dir + "/report/kernel_exploration.json", "w") as f:
         json.dump(explored.report, f, indent=2)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
-        json.dump(kernel_choices_config(model), f, indent=2)
+        json.dump(kernel_choices_config(body), f, indent=2)
     report = explored.report
     for each in report["strategies"]:
         print(f"Kernel choices: {each['strategy']} committed {each['committed']}")
@@ -163,14 +165,11 @@ def _partition_directory(cfg: KernelBuildConfig) -> Path:
 
 def step_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig):
     """Cut the KernelOps once into one StreamingDataflowPartition, the nodes before and
-    after it on the host (CutKernelPartition). The parent graph is the build's model
-    from here on; the partition is named ``partition`` (its node, its body
-    partition/partition.onnx, its IP and its block-design instance), and its body
-    carries the target and states its boundary, the ends' facts (finn.partition),
-    completed by ``cfg.kernel_completion``."""
-    return model.transform(
-        CutKernelPartition(_partition_directory(cfg), completion(cfg.kernel_completion))
-    )
+    after it on the host (CutKernelPartition), before anything explores them. The parent
+    graph is the build's model from here on; the partition is named ``partition`` (its
+    node, its body partition/partition.onnx, its IP and its block-design instance), and
+    its body carries the target."""
+    return model.transform(CutKernelPartition(_partition_directory(cfg)))
 
 
 def verify_kernel_partition_python(model: ModelWrapper, cfg: KernelBuildConfig) -> bool:
@@ -563,16 +562,16 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
     Internal steps:
     - step_kernel_ops: State the build target in the model, rewrite to KernelOps
     - step_infer_kernel_tensors: Infer every tensor from the kernels
-    - step_kernel_choices: Commit the open choices by the configured strategies
     - step_kernel_partition: The KernelOps cut once into one partition, the rest on the host
+    - step_kernel_choices: Commit the partition's open choices by the configured strategies
     - step_verify_kernel_partition: Check the partition (and what verify_steps asks)
 
     Returns the parent graph: the host's nodes and the partition node, whose body
     holds the KernelOps, their choices committed."""
     model = _execute_step(step_kernel_ops, model, cfg)
     model = _execute_step(step_infer_kernel_tensors, model, cfg)
-    model = _execute_step(step_kernel_choices, model, cfg)
     model = _execute_step(step_kernel_partition, model, cfg)
+    model = _execute_step(step_kernel_choices, model, cfg)
     model = _execute_step(step_verify_kernel_partition, model, cfg)
     return model
 
@@ -600,8 +599,8 @@ kernel_build_step_lookup = {
     for step in (
         step_kernel_ops,
         step_infer_kernel_tensors,
-        step_kernel_choices,
         step_kernel_partition,
+        step_kernel_choices,
         step_verify_kernel_partition,
         step_kernel_stitched_ip,
         step_kernel_bitfile,

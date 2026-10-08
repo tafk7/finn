@@ -31,10 +31,9 @@ from finn.kernels.configure import commit, undecided
 from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_VLNV,
-    partition_facts,
 )
 from finn.transformation.kernels import PackagePartition
-from finn.transformation.kernels.package import write_boundary_facts
+from finn.transformation.kernels.package import boundary_facts, configured_root
 from kernel_ops.packaging import reaches_vivado, read_back
 from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
 
@@ -113,8 +112,8 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     leaves = dict(root.point.module.fragment.instances)
     parameters = dict(leaves[first.name].parameters)
     assert parameters["C"] == 1 and len(parameters["THRESHOLDS"]) < 32
-    write_boundary_facts(body)
-    assert partition_facts(body) == FACTS
+    point, boundary = configured_root(body, "partition")
+    assert boundary_facts(body, point, boundary, "partition") == FACTS
     # Python ints: the packed words are wider than numpy's integers.
     pixels = [int(value) for value in image.reshape(-1)]  # the host's flatten
     logits = [int(value) for value in expected[LOGITS].reshape(-1)]
@@ -140,7 +139,6 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     _, parent, body = partitioned(tmp_path)
     sdp = parent.graph.node[1]
     project = tmp_path / "vivado_stitch_proj"
-    write_boundary_facts(body)
     body = body.transform(PackagePartition(sdp.name, directory=project))
     assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{sdp.name}:1.0"
     names = body.get(OUTPUT_INTERFACES)
@@ -156,7 +154,8 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     }
     assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "10")
     assert getCustomOp(sdp).get_nodeattr("slr") == -1
-    assert partition_facts(body) == FACTS
+    point, boundary = configured_root(body, sdp.name)
+    assert boundary_facts(body, point, boundary, sdp.name) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
     # The interface description beside the IP: the module's pins, the boundary facts.
     described = json.loads((project / "interface.json").read_text())

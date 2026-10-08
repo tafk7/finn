@@ -251,17 +251,6 @@ def test_an_ended_point_persists_and_replays_as_itself() -> None:
     assert chosen(again.point) == chosen(root.point) and not again.dropped
 
 
-def test_a_boundary_handed_on_to_a_kernel_op_gets_no_end() -> None:
-    model = kernel_model()
-    write_target(model, ULTRA96)
-    first = model.graph.node[0]
-    root = shell_root(model, [first], name="first")
-    # x meets the host; hidden is handed on to activate, a KernelOp outside.
-    assert root.ends == ("x",)
-    activate = model.graph.node[1:2]
-    assert shell_root(model, activate, name="activate").ends == ()
-
-
 def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
     other = EndOffer(kind="dma", width_cap=64, frames_per_call=1, call_converted=0, call_direct=0)
     with pytest.raises(ValueError, match="no end of kind dma"):
@@ -290,7 +279,7 @@ ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period
 
 @pytest.fixture(scope="module")
 def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
-    """TFC_W2A2 as KernelOps for Ultra96 at 5 ns in the Zynq shell."""
+    """TFC_W2A2's partition body: its KernelOps for Ultra96 at 5 ns in the Zynq shell."""
     return ModelWrapper(str(tfc_kernel_ops))
 
 

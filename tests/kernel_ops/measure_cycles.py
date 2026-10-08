@@ -12,8 +12,9 @@ Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
 
 - the **stitched** partition, its root's latency, interval and total, and each
   layer between the hop into it and the hop out of it;
-- each layer **alone**, the node as a one-node partition (its own adapter and
-  memories), so that its interval is its own and not its slowest neighbour's.
+- each layer **alone**, the node as a one-node partition's body (``alone_body``: its own
+  adapter and memories, its output ``direct`` unless the node holds its transport),
+  so that its interval is its own and not its slowest neighbour's.
 
 Each layer's prediction is its schedule's ``beat_count`` (decision K10), beside
 FINN's ``get_exp_cycles`` for the same folding (``MVAU``, ``Thresholding``). The
@@ -25,6 +26,7 @@ nodes, as the XSim tests check them.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -39,6 +41,7 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.kernel_testbench import boundary_words
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import ShellRoot, shell_root
 from finn.harness.rtl import link_stream, measure
@@ -72,6 +75,31 @@ class Layer:
 def schedule_of(root: ShellRoot, node: NodeProto) -> Any:
     kernel = getattr(root.point.partition, member(node.name))
     return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
+
+
+def alone_body(model: ModelWrapper, node: NodeProto) -> ModelWrapper:
+    """``node`` as the body of a partition of its own: a copy of ``model`` (its target,
+    initializers and annotations) holding the node alone, its inputs other than
+    initializers the graph's inputs and its outputs the graph's outputs. An output whose
+    transport the node does not hold is pinned ``direct``: in ``model`` its FIFO, if any,
+    is its consumer's."""
+    single = ModelWrapper(copy.deepcopy(model.model))
+    graph = single.graph
+    infos = {info.name: info for info in (*graph.input, *graph.value_info, *graph.output)}
+    initializers = {tensor.name for tensor in graph.initializer}
+    kept = [each for each in graph.node if each.name == node.name]
+    del graph.node[:]
+    graph.node.extend(kept)
+    tensors = [tensor for tensor in node.input if tensor not in initializers]
+    for field, names in ((graph.input, tensors), (graph.output, list(node.output))):
+        del field[:]
+        field.extend(copy.deepcopy(infos[name]) for name in names)
+    del graph.value_info[:]
+    op = kernel_op(single, graph.node[0])
+    held = op.choices()
+    pinned = {f"{port}.transport": "direct" for port in op.outputs}
+    op.save({key: value for key, value in pinned.items() if key not in held})
+    return single
 
 
 def finn_cycles(node: NodeProto, schedule: Any) -> int:
@@ -156,9 +184,10 @@ def measure_partition(
     recorded = {"stitched": dict(stitched.beats)}
     for index, node in enumerate(nodes):
         schedule = schedule_of(root, node)
-        alone_root = shell_root(model, [node], name=node.name)
+        body = alone_body(model, node)
+        alone_root = shell_root(body, body.graph.node, name=node.name)
         alone_in, alone_out = boundary_words(
-            model, alone_root.point, alone_root.boundary, context, node.name
+            body, alone_root.point, alone_root.boundary, context, node.name
         )
         print(f"== {label}: {node.name} alone", flush=True)
         alone = measure(

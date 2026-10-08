@@ -10,14 +10,15 @@ target's board (``finn.platform.shell_row``), which states its ends and budgets.
 
 - **members**: each boundary channel, at its tensor's member (``Reshape_0_out0``),
   declared here as the Partition declares it (``finn.custom_op.kernels.partition``:
-  its tensor, its port ``s_axis_<i>`` or ``m_axis_<j>``, pinned ``direct`` when a
-  KernelOp outside consumes it), and the Partition at ``partition``, its reference
-  inputs supplied with them: input channels, the Partition, output channels. So
+  its tensor, its port ``s_axis_<i>`` or ``m_axis_<j>``), and the Partition at
+  ``partition``, its reference inputs supplied with them: input channels, the
+  Partition, output channels. So
   what crosses the boundary is the shell's, and the Partition's own channels and
   kernels are below it (``partition.MatMul_0``, ``partition.MatMul_0_out0``);
 - **ends**: the ends the row offers (``ShellRow.ends``, ``finn.kernels.ends.EndOffer``),
-  supplied to each boundary channel whose free side meets the host (not one a
-  KernelOp outside the nodes produces or consumes); each such channel places its
+  supplied to each boundary channel: its free side meets the host, since the nodes are
+  every KernelOp of the model (a second partition of KernelOps is refused,
+  ``finn.custom_op.kernels.partition``); each channel places its
   ``end`` from them (``Channel.end``: one offered is forced, so nothing is
   persisted), and its cycles are the channel's. The **``ip`` shell** offers none:
   no end on any boundary channel; its IP is the module the shells read
@@ -99,7 +100,6 @@ from finn.custom_op.kernels.base import (
 )
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
 from finn.custom_op.kernels.partition import (
-    KERNEL_OPS,
     Partition,
     Partitioned,
     member,
@@ -243,12 +243,11 @@ class Shell(Kernel):
 
 @dataclass(frozen=True)
 class ShellKey:
-    """What a shell root's class is built from, by value: its Partition's class, the
-    ends its row offers (none: the ``ip`` shell) and the boundary tensors offered them."""
+    """What a shell root's class is built from, by value: its Partition's class and the
+    ends its row offers its boundary channels (none: the ``ip`` shell)."""
 
     partition: type[Partition]
     offers: tuple[EndOffer, ...]
-    ended: tuple[str, ...]
 
 
 SHELLS: LeastRecentlyUsed[type[Shell]] = LeastRecentlyUsed(16)
@@ -282,13 +281,11 @@ class ShellRoot:
 
 
 def _class(built: Partitioned, key: ShellKey) -> type[Shell]:
-    """The shell root's class: input channels, the Partition, output channels; the
-    channels ``key.ended`` names offered ``key.offers``."""
+    """The shell root's class: input channels, the Partition, output channels, each
+    offered ``key.offers``."""
     declared = dict(built.channels)
     channels = {
-        member(tensor): declared[tensor].channel(
-            built.platform, end_offer=key.offers if tensor in key.ended else ()
-        )
+        member(tensor): declared[tensor].channel(built.platform, end_offer=key.offers)
         for tensor, _ in built.boundary
     }
     if PARTITION in channels:
@@ -328,34 +325,17 @@ def _replay(point: S, choices: Mapping[str, object]) -> tuple[S, dict[str, str]]
     return point, dropped
 
 
-def _ended(model: ModelWrapper, built: Partitioned) -> tuple[str, ...]:
-    """The boundary tensors whose free side meets the host: neither an output handed on
-    to a KernelOp outside nor an input a KernelOp produces."""
-    declared = dict(built.channels)
-    found = []
-    for tensor, port in built.boundary:
-        if port.startswith("s_axis_"):
-            producer = model.find_producer(tensor)
-            if producer is not None and producer.domain == KERNEL_OPS:
-                continue
-        elif declared[tensor].direct:
-            continue
-        found.append(tensor)
-    return tuple(found)
-
-
 def shell_root(
     model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = "partition"
 ) -> ShellRoot:
-    """The shell root of ``nodes``, KernelOp nodes of ``model``, their Partition named
+    """The shell root of ``nodes``, every KernelOp node of ``model``, their Partition named
     ``name``, in the shell of the model's target: its row's ends offered on the
-    boundary channels that meet the host, its budgets admitting the point; see the
-    module docstring."""
+    boundary channels, its budgets admitting the point; see the module docstring."""
     built = partition(model, nodes, name=name)
     target = read_target(model)
     row = shell_row(target.shell, target.board)
     boundary = {member(tensor) for tensor, _ in built.boundary}
-    key = ShellKey(built.space, row.ends, _ended(model, built) if row.ends else ())
+    key = ShellKey(built.space, row.ends)
 
     def path(key: str) -> str:
         """A key of the Partition as the shell root names it."""
@@ -369,7 +349,7 @@ def shell_root(
     stale = {path(key): why for key, why in built.stale.items()}
     members = (*(path(member(tensor)) for tensor, _ in built.channels), *map(path, built.kernels))
     owners = {path(name): owner for name, owner in built.owners.items()}
-    ends = tuple(member(tensor) for tensor in key.ended)
+    ends = tuple(member(tensor) for tensor, _ in built.boundary) if row.ends else ()
     return ShellRoot(point, owners, stale | dropped, built.boundary, members, ends, row)
 
 
