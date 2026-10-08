@@ -30,6 +30,10 @@ prefixes it, ``member_of``):
   cycles wait on open choices names them, and a member that states no resources
   says why (its memory style open, or no model of its leaf).
 
+Beside them, ``resources(point)`` is what the root itself states it uses (its own
+``RESOURCES``): on a shell root, its partition's, its ends' and its static region's
+sum, where ``Cost.used`` is its members', the partition's.
+
 The engine decides validity; an explorer only proposes and prefers. An
 ``Explorer`` (``explore(seam, point) -> point``) proposes batches, and may keep,
 compare and backtrack over points, which are immutable: nothing persists until the
@@ -44,6 +48,9 @@ The strategies, each an objective and its constraints searched through the seam:
   takes), committed as one batch;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame);
+- ``MaxThroughput(within)``: the fewest cycles a frame at the bottleneck whose
+  root's resources stay within a fraction of the platform's part, for each resource
+  named (bisection on ``TargetCycles``' budget);
 - ``SizeFifos()``: every open transport sized at the bottleneck period from
   both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
@@ -67,6 +74,7 @@ stored, and reported as such.
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
@@ -91,7 +99,7 @@ from finn.kernels.configure import chosen, describe, member_of
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import Sized, size
 from finn.kernels.target import Platform
-from finn.kernels.utilization import Resources, total
+from finn.kernels.utilization import RESOURCE_NAMES, Resources, binding, over, ratio, total
 
 S = TypeVar("S", bound=Space)
 
@@ -373,6 +381,20 @@ class Seam:
             else:
                 refused[name] = describe([answer])
         return Cost(cycles, buffering, waiting, refused, resources, unstated)
+
+    def resources(self, point: Space) -> Resources | str:
+        """What the root itself uses of the device (its own ``RESOURCES``), or why it
+        states none: a shell root's is its partition's, its ends' and its static
+        region's sum (``finn.custom_op.kernels.shell``), where ``Cost.used`` is its
+        members' alone, the partition's; on the ``ip`` shell they are equal."""
+        root: Any = point
+        answer = root.query(type(root).exports[RESOURCES])
+        if isinstance(answer, Available):
+            used: Resources = answer.value
+            return used
+        if isinstance(answer, Unresolved):
+            return "waits on " + ", ".join(_awaited(answer))
+        return describe([answer])
 
     def chosen(self, point: Space) -> dict[str, object]:
         """Every Decision ``point`` commits, by key: the choices made on purpose."""
@@ -782,6 +804,209 @@ class TargetThroughput(TargetCycles):
         return {**super().report(), "fps": self.fps}
 
 
+# -- throughput within resources -----------------------------------------------------------
+
+
+@dataclass
+class _Tried:
+    """One budget ``MaxThroughput`` tried (``None``: no budget, the least parallelism),
+    what ``TargetCycles`` relaxed it to, the bottleneck its completed point reached,
+    the root's resources there, and whether they fit."""
+
+    cycles: int | None
+    relaxed_to: int | None
+    folded: Any
+    reached: Bottleneck
+    used: Resources
+    fits: bool
+
+    def row(self, budget: Mapping[str, int]) -> dict[str, object]:
+        return {
+            "cycles": self.cycles,
+            "relaxed_to": self.relaxed_to,
+            "bottleneck": self.reached.cycles,
+            "used": {name: getattr(self.used, name) for name in budget},
+            "fits": self.fits,
+        }
+
+
+class MaxThroughput:
+    """The most throughput, the fewest cycles a frame at the bottleneck, whose resources
+    stay within ``within``: for each resource named (``RESOURCE_NAMES``), a fraction of
+    what the seam's platform's part has (``Platform.resources``, RC1), its budget.
+
+    The search is bisection on ``TargetCycles``' budget: ``TargetCycles(1)`` (relaxed to
+    the fastest bottleneck the folding reaches) and, if that does not fit, no budget
+    (the least parallelism); then the least budget between their bottlenecks whose
+    point fits. Each point is costed completed on a copy (``Seam.complete``: the
+    seam's policy, memories ``auto`` at the model's estimate, transports ``direct``),
+    by the root's own resources (``Seam.resources``: on a shell root its partition's,
+    its ends' and its static region's), and returned folded, the rest open for the
+    explorers after it. Fewer cycles, more resources is the assumption, as
+    ``TargetCycles``' is; where a budget's point departs from it (a larger budget
+    reaching fewer cycles or using more, or a budget relaxed above itself: an end's
+    converter, SZ6), the report states it, and the search goes on as bisection.
+
+    It refuses nothing (RC5): where even the least parallelism does not fit, it returns
+    that point and warns, naming the binding resource. ``report`` states the budget,
+    the bottleneck reached, the resources against the budget, the binding resource (the
+    highest use-to-budget ratio), whether they fit, and every budget tried.
+    """
+
+    strategy = "max_throughput"
+
+    def __init__(self, within: Mapping[str, float]) -> None:
+        if not within:
+            raise ExploreError("max_throughput needs a budget: within={resource: fraction}")
+        unknown = sorted(set(within) - set(RESOURCE_NAMES))
+        if unknown:
+            raise ExploreError(f"no resource is named {unknown} (one of {list(RESOURCE_NAMES)})")
+        for name, fraction in within.items():
+            if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
+                raise ExploreError(f"within {name}: {fraction!r} is no fraction")
+            if fraction <= 0:
+                raise ExploreError(f"within {name}: a fraction of {fraction} is no budget")
+        self.within = dict(within)
+        self.budget: dict[str, int] = {}
+        self.tried: list[_Tried] = []
+        self.kept: _Tried | None = None
+        self.fastest: int | None = None
+        self.departures: list[str] = []
+
+    def explore(self, seam: Seam, point: S) -> S:
+        platform = seam.platform
+        if platform is None or platform.resources is None:
+            raise ExploreError(
+                "max_throughput needs the seam's platform's resources (its part's totals)"
+            )
+        self.budget = {
+            name: floor(fraction * getattr(platform.resources, name))
+            for name, fraction in self.within.items()
+        }
+        self.tried, self.departures = [], []
+        fastest = self._try(seam, point, 1)
+        self.fastest = fastest.reached.cycles
+        kept = fastest
+        if not fastest.fits:
+            kept = slowest = self._try(seam, point, None)
+            if slowest.fits:
+                low, high = fastest.reached.cycles + 1, slowest.reached.cycles
+                while low < high:
+                    middle = (low + high) // 2
+                    tried = self._try(seam, point, middle)
+                    if tried.fits:
+                        kept, high = tried, middle
+                    else:
+                        low = middle + 1
+        self.kept = kept
+        self.departures = self._departures()
+        if not kept.fits:
+            warnings.warn(self.warning(), ResourceBudgetWarning, stacklevel=2)
+        folded: S = kept.folded
+        return folded
+
+    def binding(self) -> str | None:
+        """The resource the kept point uses most of against its budget."""
+        return None if self.kept is None else binding(self.kept.used, self.budget)
+
+    def warning(self) -> str:
+        """What it warns of where even the least parallelism does not fit."""
+        assert self.kept is not None
+        exceeded = over(self.kept.used, self.budget)
+        return (
+            "max_throughput: even the least parallelism uses more than the budget, most "
+            f"of {self.binding()}: "
+            + ", ".join(f"{name} {count} of {limit}" for name, (count, limit) in exceeded.items())
+        )
+
+    def report(self) -> dict[str, object]:
+        kept = self.kept
+        return {
+            "strategy": self.strategy,
+            "within": self.within,
+            "budget": self.budget,
+            "bottleneck": None
+            if kept is None
+            else {"members": list(kept.reached.members), "cycles": kept.reached.cycles},
+            "used": None
+            if kept is None
+            else {name: getattr(kept.used, name) for name in RESOURCE_NAMES},
+            "ratio": None
+            if kept is None
+            else {
+                name: round(ratio(kept.used, self.budget, name), 4) if limit else None
+                for name, limit in self.budget.items()
+            },
+            "binding": self.binding(),
+            "fits": None if kept is None else kept.fits,
+            "fastest": self.fastest,
+            "tried": [tried.row(self.budget) for tried in self.tried],
+            "monotone": not self.departures,
+            "departures": self.departures,
+        }
+
+    def _try(self, seam: Seam, point: S, cycles: int | None) -> _Tried:
+        """``point`` folded by ``TargetCycles`` at ``cycles`` (None: no budget), and its
+        completed copy's bottleneck and resources."""
+        folder = TargetCycles(_UNBOUNDED if cycles is None else cycles)
+        folded = folder.explore(seam, point)
+        completed = seam.complete(folded).point
+        cost = seam.cost(completed)
+        reached, used = cost.bottleneck, seam.resources(completed)
+        if reached is None:
+            unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
+            raise ExploreError(
+                "max_throughput needs every member's cycles: "
+                + "; ".join(f"{name}: {why}" for name, why in unknown.items())
+            )
+        if isinstance(used, str):
+            raise ExploreError(f"max_throughput needs the root's resources: {used}")
+        fits = not over(used, self.budget)
+        tried = _Tried(cycles, folder.relaxed_to, folded, reached, used, fits)
+        self.tried.append(tried)
+        return tried
+
+    def _departures(self) -> list[str]:
+        """Where the budgets tried depart from the search's assumption (fewer cycles,
+        more resources): a budget relaxed above itself past the fastest bottleneck, or
+        relaxed and still not met (SZ6: the refold changes an end's converter); and a
+        larger budget that reached fewer cycles or used more of a budgeted resource."""
+        found = [
+            f"budget {tried.cycles} relaxed to {tried.relaxed_to}, reaching {tried.reached.cycles}"
+            for tried in self.tried
+            if tried.cycles is not None
+            and tried.relaxed_to is not None
+            and (tried.cycles > (self.fastest or 0) or tried.reached.cycles > tried.relaxed_to)
+        ]
+        ordered = sorted(
+            self.tried, key=lambda tried: _UNBOUNDED if tried.cycles is None else tried.cycles
+        )
+        for tighter, looser in zip(ordered, ordered[1:]):
+            label = "no budget" if looser.cycles is None else f"budget {looser.cycles}"
+            if looser.reached.cycles < tighter.reached.cycles:
+                found.append(
+                    f"{label} reached {looser.reached.cycles}, fewer than budget "
+                    f"{tighter.cycles}'s {tighter.reached.cycles}"
+                )
+            more = [
+                f"{name} {getattr(looser.used, name)} > {getattr(tighter.used, name)}"
+                for name in self.budget
+                if getattr(looser.used, name) > getattr(tighter.used, name)
+            ]
+            if more:
+                found.append(f"{label} uses more than budget {tighter.cycles}: " + ", ".join(more))
+        return found
+
+
+class ResourceBudgetWarning(UserWarning):
+    """A point whose resources exceed a budget or the platform's part: a warning, never a
+    refusal (RC5), naming the binding resource."""
+
+
+#: ``TargetCycles``' budget for no budget at all: every member at its least parallelism.
+_UNBOUNDED = 1 << 62
+
+
 # -- FIFO sizing ---------------------------------------------------------------------------
 
 
@@ -1032,11 +1257,13 @@ __all__ = [
     "Cost",
     "ExploreError",
     "Explorer",
+    "MaxThroughput",
     "Pinned",
     "Placeholder",
     "RankPolicy",
     "Ranked",
     "Refused",
+    "ResourceBudgetWarning",
     "Seam",
     "SizeFifos",
     "TargetCycles",

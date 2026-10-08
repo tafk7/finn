@@ -24,10 +24,10 @@ varies; there it is an estimate, which counts block RAM rather than none.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, fields
 from functools import lru_cache
-from math import ceil
+from math import ceil, inf
 
 from finn.core.space import ValueSemantics, default_semantics
 
@@ -107,6 +107,38 @@ def total(items: Iterable[Resources]) -> Resources:
     for item in items:
         found = found + item
     return found
+
+
+RESOURCE_NAMES = tuple(field.name for field in fields(Resources))
+"""The resources by name, as ``Resources`` counts them: ``lut``, ``ff``, ``bram18``,
+``uram``, ``dsp``."""
+
+
+def ratio(used: Resources, limits: Mapping[str, int], name: str) -> float:
+    """``used``'s count of ``name`` against its limit: more than any count against a
+    limit of none that it uses (``inf``), nothing where it uses none."""
+    count: int = getattr(used, name)
+    limit = limits[name]
+    if limit:
+        return count / limit
+    return inf if count else 0.0
+
+
+def binding(used: Resources, limits: Mapping[str, int]) -> str | None:
+    """The resource of ``limits`` (counts, by name) that ``used`` uses most of, its
+    highest use-to-limit ratio (the first named of a tie); None for no limit."""
+    if not limits:
+        return None
+    return max(limits, key=lambda name: ratio(used, limits, name))
+
+
+def over(used: Resources, limits: Mapping[str, int]) -> dict[str, tuple[int, int]]:
+    """Each resource of ``limits`` that ``used`` exceeds: its count and its limit."""
+    return {
+        name: (getattr(used, name), limit)
+        for name, limit in limits.items()
+        if getattr(used, name) > limit
+    }
 
 
 @dataclass(frozen=True)
@@ -192,12 +224,16 @@ __all__ = [
     "Fit",
     "RAMB18_SDP",
     "RESOURCES_SEMANTICS",
+    "RESOURCE_NAMES",
     "Resources",
     "SHELL_CHARACTERISED",
     "URAM_SDP",
+    "binding",
     "bram18",
     "lutram",
     "memory",
+    "over",
+    "ratio",
     "total",
     "uram",
 ]

@@ -12,7 +12,8 @@ retargeted from Ultra96 to a VCK190.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+import warnings
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -28,9 +29,11 @@ from finn.kernels.explore import (
     Accepted,
     Baseline,
     ExploreError,
+    MaxThroughput,
     Pinned,
     Placeholder,
     Ranked,
+    ResourceBudgetWarning,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -46,7 +49,7 @@ from finn.transformation.kernels import (
     strategy,
 )
 from finn.transformation.kernels.package import configured_root
-from kernel_ops.models import matmul_model
+from kernel_ops.models import TARGET, matmul_model
 from kernel_ops.test_choose import choices, kernel_model
 
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
@@ -94,8 +97,13 @@ def test_a_spec_names_its_strategy_and_its_parameters() -> None:
     made = strategy({"strategy": "target_throughput", "fps": 1000, "relax": False})
     assert isinstance(made, TargetThroughput) and made.fps == 1000 and not made.relax
     assert isinstance(strategy({"strategy": "size_fifos", "margin": 2}), SizeFifos)
-    with pytest.raises(ValueError, match="names no kernel strategy"):
+    made = strategy({"strategy": "max_throughput", "within": {"lut": 0.5, "dsp": 0.8}})
+    assert isinstance(made, MaxThroughput) and made.within == {"lut": 0.5, "dsp": 0.8}
+    # Its budget is required: no default fraction of the part.
+    with pytest.raises(ValueError, match="missing 1 required positional argument: 'within'"):
         strategy({"strategy": "max_throughput"})
+    with pytest.raises(ValueError, match=r"no resource is named \['luts'\]"):
+        strategy({"strategy": "max_throughput", "within": {"luts": 0.5}})
     with pytest.raises(ValueError, match="unexpected keyword argument 'cycles'"):
         strategy({"strategy": "size_fifos", "cycles": 3})
     # The placeholder is a completion policy, no strategy.
@@ -149,6 +157,26 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     # The model replays to the explored point: nothing open, nothing stale.
     root = shell_root(model, model.graph.node)
     assert inspection.viable(root.point) == () and not root.dropped
+
+
+def test_a_point_over_the_part_s_resources_warns_naming_the_binding_resource() -> None:
+    """Whichever strategy chose it, a point whose shell uses more than the part has is a
+    warning naming the binding resource (its highest share), never a refusal (RC5):
+    the choices are saved and the report states each resource over."""
+    small = replace(TARGET.platform, resources=Resources(lut=100_000, ff=100_000, dsp=3))
+    model = kernel_model(replace(TARGET, platform=small))
+    with pytest.warns(ResourceBudgetWarning, match="most of dsp: dsp 4 of 3"):
+        explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
+    resources = explored.report["resources"]
+    assert resources["binding"] == "dsp"
+    assert resources["over"] == {"dsp": {"used": 4, "platform": 3}}
+    assert resources["warning"].startswith("the point uses more than the platform's part has")
+    assert choices(model)["first"]["compute.packed.pe"] == 2
+    # Within the part: the binding resource is named, and nothing is over.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ResourceBudgetWarning)
+        within = explore_kernel_choices(kernel_model(), [Ranked(Lanes(2))]).report["resources"]
+    assert (within["binding"], within["over"], within["warning"]) == ("dsp", {}, None)
 
 
 def test_resources_are_a_total_only_once_every_member_states_them() -> None:

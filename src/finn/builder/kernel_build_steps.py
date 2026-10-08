@@ -83,10 +83,12 @@ def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
     choice with the strategy that made it; the completion policy, every value it
     completes and the required choices it leaves open; whether FIFOs were sized; the
     dropped choices with why, per member cycles and buffering and the bottleneck, of
-    the completed point) and kernel_choices.json (the nodes' choices, sparse,
-    ApplyConfig's form, which a "pinned" strategy reads back), and logs what each
-    strategy committed, what the completion completed (each value, for the debug
-    placeholder), and whether FIFOs were sized."""
+    the completed point, and the shell's resources against the part's) and
+    kernel_choices.json (the nodes' choices, sparse, ApplyConfig's form, which a
+    "pinned" strategy reads back), and logs what each strategy committed (and where
+    max_throughput's search ended), what the completion completed (each value, for the
+    debug placeholder), whether FIFOs were sized, and a warning naming the binding
+    resource where the shell's resources exceed the part's (RC5: never a refusal)."""
     strategies = [strategy(spec) for spec in cfg.kernel_exploration]
     explored = explore_kernel_choices(
         model,
@@ -102,8 +104,17 @@ def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
     report = explored.report
     for each in report["strategies"]:
         print(f"Kernel choices: {each['strategy']} committed {each['committed']}")
+        if each["strategy"] == "max_throughput":
+            reached = each["bottleneck"]["cycles"]
+            print(
+                f"Kernel choices: max_throughput reached {reached} cycles a frame within "
+                f"{each['budget']} ({'fits' if each['fits'] else 'does not fit'}; binding: "
+                f"{each['binding']}; {len(each['tried'])} budgets tried)"
+            )
         if "read_completed" in each:
             print(f"Kernel choices: {each['strategy']} {each['read_completed']}")
+    if report["resources"]["warning"] is not None:
+        print(f"Kernel choices: WARNING: {report['resources']['warning']}")
     completed = [
         (f"{node}.{attribute}", entry)
         for node, held in report["completed"].items()

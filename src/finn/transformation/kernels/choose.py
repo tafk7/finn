@@ -40,8 +40,10 @@ their sum, ``used``. The ends' and the static region's are out of context, which
 report says with how far that overstates the placed shell; the ``ip`` shell has
 neither, so its sum is its partition's. The platform's are its part's totals
 (``Platform.resources``), nothing subtracted: what the platform has, not a budget;
-``share`` is the fraction of each the shell uses. The report ranks and refuses
-nothing.
+``share`` is the fraction of each the shell uses, ``binding`` the one it uses most of,
+and ``over`` each it uses more of than the part has. A point over the part is a warning
+(``ResourceBudgetWarning``, and the report's ``warning``) naming the binding resource,
+whichever strategy chose it: the report ranks and warns, and refuses nothing (RC5).
 
 The shell is the model's target's (``shell_root``): its row offers the boundary
 channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
@@ -55,7 +57,8 @@ resumes from what was saved.
 A strategy is written as a spec, ``{"strategy": name, **parameters}``
 (``strategy(spec)``, the names ``KERNEL_STRATEGIES``), as a build configuration
 lists them: ``[{"strategy": "target_throughput", "fps": 1000000}, {"strategy":
-"size_fifos"}]``. A list runs as written: nothing is appended, and nothing is
+"size_fifos"}]``, or ``[{"strategy": "max_throughput", "within": {"lut": 0.5}},
+{"strategy": "size_fifos"}]``. A list runs as written: nothing is appended, and nothing is
 read from anywhere else. A completion policy is named (``completion(name)``, the
 names ``KERNEL_COMPLETIONS``): ``baseline`` unless the build names another.
 """
@@ -63,6 +66,7 @@ names ``KERNEL_COMPLETIONS``): ``baseline`` unless the build names another.
 from __future__ import annotations
 
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
@@ -86,14 +90,16 @@ from finn.kernels.explore import (
     Cost,
     ExploreError,
     Explorer,
+    MaxThroughput,
     Pinned,
     Placeholder,
+    ResourceBudgetWarning,
     Seam,
     SizeFifos,
     TargetThroughput,
 )
 from finn.kernels.target import Platform
-from finn.kernels.utilization import SHELL_CHARACTERISED
+from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
@@ -102,11 +108,13 @@ if TYPE_CHECKING:
 KERNEL_STRATEGIES: Mapping[str, Callable[..., Explorer]] = {
     "pinned": Pinned,
     "target_throughput": TargetThroughput,
+    "max_throughput": MaxThroughput,
     "size_fifos": SizeFifos,
 }
 """The strategies a spec names, each made from the spec's other keys: ``pinned``
-(``path``), ``target_throughput`` (``fps``, ``relax``), ``size_fifos`` (``method``,
-``margin``, ``ram_style``, ``frames``)."""
+(``path``), ``target_throughput`` (``fps``, ``relax``), ``max_throughput``
+(``within``, required: ``{resource: fraction}`` of the part's), ``size_fifos``
+(``method``, ``margin``, ``ram_style``, ``frames``)."""
 
 KERNEL_COMPLETIONS: Mapping[str, Callable[[], Completion]] = {
     "baseline": Baseline,
@@ -181,12 +189,19 @@ def _resources_report(
     used = None if stated is None else stated.total
     totals = None if platform is None else platform.resources
     share = None
+    most = None
+    exceeded: dict[str, dict[str, int]] = {}
     if used is not None and totals is not None:
         available = asdict(totals)
         share = {
             key: round(count / available[key], 4)
             for key, count in asdict(used).items()
             if available[key]
+        }
+        most = binding(used, available)
+        exceeded = {
+            key: {"used": count, "platform": limit}
+            for key, (count, limit) in over(used, available).items()
         }
     return {
         "used": None if used is None else asdict(used),
@@ -200,12 +215,26 @@ def _resources_report(
         "unstated": unstated,
         "platform": None if totals is None else asdict(totals),
         "share": share,
+        "binding": most,
+        "over": exceeded,
+        "warning": _over_warning(most, exceeded),
         "counted": RESOURCES_COUNTED,
         "exact": RESOURCES_EXACT,
     }
 
 
-def _cost_report(seam: Seam, cost: Cost, split: ShellResources | str) -> dict[str, object]:
+def _over_warning(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> str | None:
+    """What the report warns of where the shell uses more than the part has (RC5): the
+    binding resource, and each resource over with its count and the part's."""
+    if not exceeded:
+        return None
+    counts = ", ".join(
+        f"{key} {each['used']} of {each['platform']}" for key, each in exceeded.items()
+    )
+    return f"the point uses more than the platform's part has, most of {most}: {counts}"
+
+
+def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
     bottleneck = cost.bottleneck
     return {
         "members": {
@@ -220,7 +249,7 @@ def _cost_report(seam: Seam, cost: Cost, split: ShellResources | str) -> dict[st
         if bottleneck is None
         else {"members": list(bottleneck.members), "cycles": bottleneck.cycles},
         "buffering": sum(cost.buffering.values()),
-        "resources": _resources_report(cost, split, seam.platform),
+        "resources": resources,
     }
 
 
@@ -378,6 +407,7 @@ def explore_kernel_choices(
             completion_report["sizing"] = completed.sizing
     costed = point if completed is None else completed.point
     cost = seam.cost(costed)
+    resources = _resources_report(cost, shell_resources(costed), seam.platform)
     ends: dict[str, object] = {}
     if root.ends and not cost.waiting and not cost.refused:
         ends = {"ends": _end_rows(costed, root.ends), "memory_latency": MEMORY_LATENCY}
@@ -389,10 +419,13 @@ def explore_kernel_choices(
         "fifos": _fifos(strategies, explorers, completed, seam.completion),
         "fresh": fresh,
         "dropped": dict(root.dropped),
-        **_cost_report(seam, cost, shell_resources(costed)),
+        **_cost_report(seam, cost, resources),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
+    warning = resources["warning"]
+    if isinstance(warning, str):
+        warnings.warn(warning, ResourceBudgetWarning, stacklevel=2)
     return Explored(point, completed, cost, report)
 
 
