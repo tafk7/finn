@@ -30,9 +30,10 @@ prefixes it, ``member_of``):
   cycles wait on open choices names them, and a member that states no resources
   says why (its memory style open, or no model of its leaf).
 
-Beside them, ``resources(point)`` is what the root itself states it uses (its own
-``RESOURCES``): on a shell root, its partition's, its ends' and its static region's
-sum, where ``Cost.used`` is its members', the partition's.
+Beside them, ``resources(point)`` is what the root uses as far as it is stated: its
+own ``RESOURCES`` (on a shell root, its partition's, its ends' and its static region's
+sum, where ``Cost.used`` is its members', the partition's), or, where a member states
+none, the sum of those that do, a lower bound naming the others (``Stated``).
 
 The engine decides validity; an explorer only proposes and prefers. An
 ``Explorer`` (``explore(seam, point) -> point``) proposes batches, and may keep,
@@ -47,10 +48,14 @@ The strategies, each an objective and its constraints searched through the seam:
   kernels' attribute names, the form the kernel path's ``kernel_choices.json``
   takes), committed as one batch;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
-  second at the target's clock (``TargetCycles``, a budget of cycles a frame);
+  second at the target's clock (``TargetCycles``, a budget of cycles a frame),
+  folding through an unordered choice its cycles wait on by trying each case (a
+  MatMul's ``compute`` on a DSP58 part), and stating the bottleneck reached and
+  whether it meets the budget;
 - ``MaxThroughput(within)``: the fewest cycles a frame at the bottleneck whose
-  root's resources stay within a fraction of the platform's part, for each resource
-  named (bisection on ``TargetCycles``' budget);
+  root's resources, as far as they are stated, stay within a fraction of the
+  platform's part, for each resource named (bisection on ``TargetCycles``' budget;
+  the best point tried is kept);
 - ``SizeFifos()``: every open transport sized at the bottleneck period from
   both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
@@ -75,7 +80,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
 from math import floor
@@ -193,6 +198,22 @@ class Cost:
         )
 
 
+@dataclass
+class Stated:
+    """What a root uses of the device as far as it is stated (``Seam.resources``):
+    ``used``, the root's own statement where ``unstated`` is empty; otherwise the sum of
+    the members that state theirs, a lower bound, and each member that does not, with
+    why. A lower bound counts members only: what the root adds of its own (a shell's
+    ends and static region) is not counted while a member states none."""
+
+    used: Resources
+    unstated: Mapping[str, str]
+
+    @property
+    def lower_bound(self) -> bool:
+        return bool(self.unstated)
+
+
 class Seam:
     """The seam over the points of one root: its ``members`` by path (whose cost it
     reads); for each member, by path, the owner that persists its choices and the
@@ -288,11 +309,12 @@ class Seam:
         ]
         return tuple(found)
 
-    def complete(self, point: S) -> Completed[S]:
+    def complete(self, point: S, members: Collection[str] | None = None) -> Completed[S]:
         """``point`` completed by the seam's policy, on a copy (the costing form: an open
-        transport ``direct``), for a strategy to read: what it completed is recorded in
-        ``reads``, so that a commitment made from it is reported as such."""
-        completed = self.completion.complete(self, point)
+        transport ``direct``), only the choices of ``members`` where named, for a strategy
+        to read: what it completed is recorded in ``reads``, so that a commitment made
+        from it is reported as such."""
+        completed = self.completion.complete(self, point, members=members)
         self.reads.append(dict(completed.values))
         return completed
 
@@ -383,18 +405,23 @@ class Seam:
                 refused[name] = describe([answer])
         return Cost(cycles, buffering, waiting, refused, resources, unstated)
 
-    def resources(self, point: Space) -> Resources | str:
-        """What the root itself uses of the device (its own ``RESOURCES``), or why it
-        states none: a shell root's is its partition's, its ends' and its static
-        region's sum (``finn.custom_op.kernels.shell``), where ``Cost.used`` is its
-        members' alone, the partition's; on the ``ip`` shell they are equal."""
+    def resources(self, point: Space) -> Stated | str:
+        """What the root uses of the device as far as it is stated (``Stated``): its own
+        ``RESOURCES``, exact (a shell root's is its partition's, its ends' and its static
+        region's sum, ``finn.custom_op.kernels.shell``, where ``Cost.used`` is its
+        members' alone, the partition's; on the ``ip`` shell they are equal); or, where
+        members state none, the sum of those that do, a lower bound, naming the others
+        (``Stated.unstated``); or why it states nothing: the open choices it waits on,
+        or a refusal of the root's own."""
         root: Any = point
         answer = root.query(type(root).exports[RESOURCES])
         if isinstance(answer, Available):
-            used: Resources = answer.value
-            return used
+            return Stated(answer.value, {})
         if isinstance(answer, Unresolved):
             return "waits on " + ", ".join(_awaited(answer))
+        cost = self.cost(point)
+        if cost.unstated:
+            return Stated(total(cost.resources.values()), dict(cost.unstated))
         return describe([answer])
 
     def chosen(self, point: Space) -> dict[str, object]:
@@ -519,13 +546,22 @@ class Completed(Generic[S]):
 
 class Completion(Protocol):
     """A completion policy: what completes the open choices of a point, on a copy,
-    where it is costed (``sizing=False``) or generated (``sizing=True``). ``label``
-    is what the report and the build log say of a value it completed."""
+    where it is costed (``sizing=False``) or generated (``sizing=True``), the choices of
+    ``members`` alone where named (where a strategy reads one member's cost, never with
+    ``sizing``). ``label`` is what the report and the build log say of a value it
+    completed."""
 
     name: str
     label: str
 
-    def complete(self, seam: Seam, point: S, *, sizing: bool = False) -> Completed[S]: ...
+    def complete(
+        self,
+        seam: Seam,
+        point: S,
+        *,
+        sizing: bool = False,
+        members: Collection[str] | None = None,
+    ) -> Completed[S]: ...
 
 
 class Baseline:
@@ -540,12 +576,22 @@ class Baseline:
     completed folding; where a required choice leaves a member's cycles unknown,
     nothing is sized), then completes what is left. Where it is costed, a transport
     takes its first case, ``direct``. A required choice stays open, for hardware
-    generation to refuse by name."""
+    generation to refuse by name. With ``members``, only their choices are completed,
+    and ``open`` names only theirs."""
 
     name = "baseline"
     label = "baseline"
 
-    def complete(self, seam: Seam, point: S, *, sizing: bool = False) -> Completed[S]:
+    def complete(
+        self,
+        seam: Seam,
+        point: S,
+        *,
+        sizing: bool = False,
+        members: Collection[str] | None = None,
+    ) -> Completed[S]:
+        if sizing and members is not None:
+            raise ExploreError("a completion that sizes FIFOs completes every member")
         before = set(seam.chosen(point))
         made_by: dict[str, str] = {}
         report: dict[str, Any] | None = None
@@ -558,18 +604,32 @@ class Baseline:
                     (key for key in seam.chosen(sized) if key not in held), sizer.strategy
                 )
                 point, report = sized, sizer.report()
-        point = self._first_cases(seam, point)
+        point = self._first_cases(seam, point, members=members)
         values = {key: value for key, value in seam.chosen(point).items() if key not in before}
         made_by = {key: made_by.get(key, self.label) for key in values}
-        return Completed(point, values, made_by, report, seam.choices(point))
+        left = seam.choices(point)
+        if members is not None:
+            left = tuple(choice for choice in left if seam.member_of(choice.key) in members)
+        return Completed(point, values, made_by, report, left)
 
     def takes(self, choice: Choice) -> bool:
         """Whether it completes ``choice``: one with cases to take, not required."""
         return choice.cases is not None and not choice.required
 
-    def _first_cases(self, seam: Seam, point: S, *, skip_transports: bool = False) -> S:
+    def _first_cases(
+        self,
+        seam: Seam,
+        point: S,
+        *,
+        skip_transports: bool = False,
+        members: Collection[str] | None = None,
+    ) -> S:
         while True:
-            offered = [choice for choice in seam.choices(point) if self.takes(choice)]
+            offered = [
+                choice
+                for choice in seam.choices(point)
+                if self.takes(choice) and (members is None or seam.member_of(choice.key) in members)
+            ]
             if skip_transports and offered:
                 declared = seam.declared(point)
                 offered = [
@@ -593,8 +653,15 @@ class Placeholder(Baseline):
     name = "placeholder"
     label = "DEBUG: completed by placeholder"
 
-    def complete(self, seam: Seam, point: S, *, sizing: bool = False) -> Completed[S]:
-        completed = super().complete(seam, point, sizing=sizing)
+    def complete(
+        self,
+        seam: Seam,
+        point: S,
+        *,
+        sizing: bool = False,
+        members: Collection[str] | None = None,
+    ) -> Completed[S]:
+        completed = super().complete(seam, point, sizing=sizing, members=members)
         if completed.open:
             raise ExploreError(
                 "the placeholder has no case to take for a choice known by membership "
@@ -660,6 +727,16 @@ class Pinned:
 # -- throughput ----------------------------------------------------------------------------
 
 
+@dataclass
+class _Folded:
+    """A member folded: its cycles a frame (``None``: not known, the member left to the
+    next explorer, ``why``) and the point it is folded on."""
+
+    cycles: int | None
+    point: Any
+    why: str = ""
+
+
 class TargetCycles:
     """The least parallelism that meets a budget of ``cycles`` a frame, on cycles alone:
     for each member in turn, its scaling axes (the ordered open Decisions of its own
@@ -671,8 +748,25 @@ class TargetCycles:
     a budget the bottleneck exceeds is relaxed to the bottleneck reached, and the
     members are folded again to it, from what the first fold already asked (``_Asked``).
 
-    A member whose cycles wait on a Decision that is not an ordered open choice of its
-    own is left to the next explorer; so is every Decision its cycles do not read.
+    A member whose cycles wait first on an unordered open choice of its own (a
+    MatMul's ``compute`` on a DSP58 part: ``packed`` or ``int8_dsp58``) is folded in
+    each of its viable cases, and the case kept is the one that meets the budget with
+    the least parallelism: the most cycles within the budget (the fewest where no case
+    meets it), then, between cases tied on cycles, the least resources the seam states
+    for the member (where they wait on open choices, of the point completed by the
+    seam's policy, ``Seam.complete``): against the platform's part totals where it
+    states them, the highest share first; otherwise only a case that uses no more of
+    any resource is lighter, and cases no count orders are kept in their listing
+    order, which the report says. No order is imposed on the cases: each is tried.
+    ``report`` names each such choice, the case taken and why (``cases``).
+
+    A member whose cycles wait on any other Decision that is not an ordered open
+    choice of its own is left to the next explorer (``unfolded``, with why); so is
+    every Decision its cycles do not read. ``report`` always states the bottleneck
+    reached, of the folded point or, where a member's cycles are left open there, of
+    the point completed by the seam's policy (``bottleneck_of``), and whether it meets
+    the budget asked (``met``); where even the completed point's cycles are not known,
+    ``met`` is ``None`` and ``unknown`` says why.
     """
 
     strategy = "target_cycles"
@@ -684,7 +778,16 @@ class TargetCycles:
         self.relax = relax
         self.relaxed_to: int | None = None
         self.reached: Bottleneck | None = None
+        self.of: str | None = None
+        self.unknown: str | None = None
+        self.unfolded: dict[str, str] = {}
+        self.cases: dict[str, dict[str, object]] = {}
         self._asked = _Asked()
+
+    @property
+    def met(self) -> bool | None:
+        """Whether the bottleneck reached meets the budget asked (``None``: not known)."""
+        return None if self.reached is None else self.reached.cycles <= self.cycles
 
     def explore(self, seam: Seam, point: S) -> S:
         return self._explore(seam, point, _Asked())
@@ -699,12 +802,18 @@ class TargetCycles:
             self.relaxed_to = reached.cycles
             folded = self._fold_all(seam, point, reached.cycles)
             reached = seam.cost(folded).bottleneck
+        self.of, self.unknown = "folded", None
+        if reached is None:
+            self.of = "completed"
+            reached, self.unknown = asked.ask(
+                folded, "completed bottleneck", lambda: _completed_bottleneck(seam, folded)
+            )
         self.reached, self._asked = reached, _Asked()
         return folded
 
     def report(self) -> dict[str, object]:
         reached = self.reached
-        return {
+        found: dict[str, object] = {
             "strategy": self.strategy,
             "cycles": self.cycles,
             "relax": self.relax,
@@ -712,19 +821,48 @@ class TargetCycles:
             "bottleneck": None
             if reached is None
             else {"members": list(reached.members), "cycles": reached.cycles},
+            "bottleneck_of": self.of,
+            "met": self.met,
+            "cases": self.cases,
+            "unfolded": self.unfolded,
         }
+        if self.unknown is not None:
+            found["unknown"] = self.unknown
+        return found
 
     def _fold_all(self, seam: Seam, point: S, budget: int) -> S:
+        """Every member folded in turn; ``unfolded`` names those whose cycles are still
+        not known once all are (a channel's wait on its kernels' folding is over then)."""
+        self.cases = {}
+        why: dict[str, str] = {}
         for name in seam.members:
-            point = self._fold(seam, point, name, budget)
+            folded = self._fold(seam, point, name, budget)
+            if folded.cycles is None:
+                why[name] = folded.why
+            point = folded.point
+        cost = seam.cost(point, list(why))
+        self.unfolded = {name: reason for name, reason in why.items() if name not in cost.cycles}
         return point
 
-    def _axes(self, seam: Seam, point: S, name: str) -> list[Choice] | None:
+    def _fold(self, seam: Seam, point: S, name: str, budget: int) -> _Folded:
+        """``point`` with member ``name`` folded to ``budget``, and its cycles there."""
+        axes = self._axes(seam, point, name)
+        if isinstance(axes, str):
+            return _Folded(None, point, axes)
+        if isinstance(axes, Choice):
+            return self._fold_cases(seam, point, name, axes, budget)
+        if not axes:
+            cycles = seam.cost(point, (name,)).cycles.get(name)
+            return _Folded(cycles, point, "" if cycles is not None else "its cycles are refused")
+        return self._fold_axes(seam, point, name, axes, budget)
+
+    def _axes(self, seam: Seam, point: S, name: str) -> list[Choice] | Choice | str:
         """The member's scaling axes, found by committing each Decision its cycles wait
-        on to its first case, in turn; None if one is no ordered open choice of its own."""
+        on to its first case, in turn; the unordered open choice of its own its cycles
+        wait on first, whose cases are each folded; or why it is left unfolded."""
         return self._asked.ask(point, ("axes", name), lambda: self._find_axes(seam, point, name))
 
-    def _find_axes(self, seam: Seam, point: S, name: str) -> list[Choice] | None:
+    def _find_axes(self, seam: Seam, point: S, name: str) -> list[Choice] | Choice | str:
         axes: list[Choice] = []
         probe = point
         while True:
@@ -732,29 +870,33 @@ class TargetCycles:
             if name not in cost.waiting:
                 return axes
             offered = {choice.key: choice for choice in seam.choices(probe)}
-            waits = [offered.get(key) for key in cost.waiting[name]]
-            usable = [
-                choice
-                for choice in waits
-                if choice is not None
-                and choice.ordered
-                and choice.cases
-                and seam.member_of(choice.key) == name
-            ]
-            if not usable or len(usable) != len(waits):
-                return None
+            waits = {key: offered.get(key) for key in cost.waiting[name]}
+            own = {
+                key: choice
+                for key, choice in waits.items()
+                if choice is not None and choice.cases and seam.member_of(key) == name
+            }
+            if not axes:
+                selector = next((c for c in own.values() if not c.ordered), None)
+                if selector is not None:
+                    return selector
+            usable = [choice for choice in own.values() if choice.ordered]
+            if len(usable) != len(waits):
+                other = ", ".join(key for key in waits if key not in {c.key for c in usable})
+                return f"its cycles wait on {other}: no ordered open choice of its own"
             outcome = seam.attempt(
                 probe, {choice.key: (choice.cases or ())[0] for choice in usable}
             )
             if isinstance(outcome, Refused):
-                return None
+                return "its scaling axes' first cases are refused: " + "; ".join(
+                    f"{k}: {w}" for k, w in outcome.why.items()
+                )
             axes += usable
             probe = outcome.point
 
-    def _fold(self, seam: Seam, point: S, name: str, budget: int) -> S:
-        axes = self._axes(seam, point, name)
-        if not axes:
-            return point
+    def _fold_axes(
+        self, seam: Seam, point: S, name: str, axes: list[Choice], budget: int
+    ) -> _Folded:
         lists = [tuple(axis.cases or ()) for axis in axes]
 
         def configure(batch: dict[str, object]) -> tuple[int, S] | None:
@@ -789,7 +931,140 @@ class TargetCycles:
                 if answer is not None and (fastest is None or answer[0] < fastest[0]):
                     fastest = answer
         found = best or fastest
-        return point if found is None else found[1]
+        if found is None:
+            return _Folded(None, point, "every configuration of its scaling axes is refused")
+        return _Folded(found[0], found[1])
+
+    def _fold_cases(self, seam: Seam, point: S, name: str, choice: Choice, budget: int) -> _Folded:
+        """The member folded in each viable case of ``choice``, an unordered open choice
+        of its own its cycles wait on, and the case that meets ``budget`` with the least
+        parallelism kept (the class docstring)."""
+        folds: dict[object, _Folded] = {}
+        refused: dict[str, str] = {}
+        for case in choice.cases or ():
+            outcome = self._asked.ask(
+                point, ("case", choice.key, case), lambda: seam.attempt(point, {choice.key: case})
+            )
+            if isinstance(outcome, Refused):
+                refused[str(case)] = "; ".join(f"{k}: {w}" for k, w in outcome.why.items())
+                continue
+            folded = self._fold(seam, outcome.point, name, budget)
+            if folded.cycles is None:
+                refused[str(case)] = folded.why
+            else:
+                folds[case] = folded
+        if not folds:
+            return _Folded(
+                None,
+                point,
+                f"no case of {choice.key} folds: "
+                + "; ".join(f"{case}: {why}" for case, why in refused.items()),
+            )
+        meeting = [case for case, folded in folds.items() if (folded.cycles or 0) <= budget]
+        if meeting:
+            cycles = max(folds[case].cycles or 0 for case in meeting)
+            why = f"meets the budget of {budget} with the least parallelism, {cycles} cycles"
+        else:
+            cycles = min(folded.cycles or 0 for folded in folds.values())
+            why = f"no case meets the budget of {budget}; the fewest cycles, {cycles}"
+        tied = [case for case, folded in folds.items() if folded.cycles == cycles]
+        used: dict[object, Resources | str] = {}
+        if len(tied) > 1:
+            used = {case: self._member_resources(seam, folds[case].point, name) for case in tied}
+            tied, how = _lightest(tied, used, seam.platform)
+            why += f"; tied on cycles with {how}"
+        taken = tied[0]
+        self.cases[choice.key] = {
+            "taken": taken,
+            "why": why,
+            "folded": {
+                str(case): {
+                    "cycles": folded.cycles,
+                    **({"resources": _resources_row(used[case])} if case in used else {}),
+                }
+                for case, folded in folds.items()
+            },
+            "refused": refused,
+        }
+        return folds[taken]
+
+    def _member_resources(self, seam: Seam, point: S, name: str) -> Resources | str:
+        """What member ``name`` uses at ``point``, or else with its own open choices
+        completed by the seam's policy (where its resources wait on them), or why it
+        states none."""
+
+        def find() -> Resources | str:
+            cost = seam.cost(point, (name,))
+            if name in cost.resources:
+                return cost.resources[name]
+            completed = seam.cost(seam.complete(point, (name,)).point, (name,))
+            return completed.resources.get(name) or completed.unstated[name]
+
+        return self._asked.ask(point, ("resources", name), find)
+
+
+def _completed_bottleneck(seam: Seam, point: Space) -> tuple[Bottleneck | None, str | None]:
+    """The bottleneck of ``point`` completed by the seam's policy on a copy (for a
+    report: nothing is committed from it, so the seam does not record it), or why it
+    is not known."""
+    try:
+        completed = seam.completion.complete(seam, point).point
+    except ExploreError as error:
+        return None, f"the completion refuses: {error}"
+    cost = seam.cost(completed)
+    if cost.bottleneck is not None:
+        return cost.bottleneck, None
+    unknown = {**{k: "waits on " + ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
+    return None, "; ".join(f"{name}: {why}" for name, why in unknown.items())
+
+
+def _lightest(
+    cases: Sequence[object], used: Mapping[object, Resources | str], platform: Platform | None
+) -> tuple[list[object], str]:
+    """``cases`` lightest first, and how they were ordered: against the part's totals
+    where the platform states them (the highest share first, then the next), otherwise
+    by dominance alone (a case using no more of any resource and less of one is
+    lighter); a case that states no resources is never lighter, and cases no count
+    orders keep their listing order."""
+    counts = {case: each for case in cases if isinstance(each := used[case], Resources)}
+    unstated = [case for case in cases if case not in counts]
+    if not counts:
+        return list(cases), "no case states its resources: kept in listing order"
+    stated = list(counts)
+    totals = None if platform is None else platform.resources
+    if totals is not None:
+        limits = {name: getattr(totals, name) for name in RESOURCE_NAMES}
+
+        def shares(case: object) -> tuple[float, ...]:
+            found = (ratio(counts[case], limits, name) for name in RESOURCE_NAMES)
+            return tuple(sorted(found, reverse=True))
+
+        ordered = sorted(stated, key=shares)
+        how = "the least share of the part's totals"
+        if len(ordered) > 1 and shares(ordered[0]) == shares(ordered[1]):
+            how += "; equal shares kept in listing order"
+        return [*ordered, *unstated], how
+
+    def lighter(a: Resources, b: Resources) -> bool:
+        pairs = [(getattr(a, name), getattr(b, name)) for name in RESOURCE_NAMES]
+        return all(x <= y for x, y in pairs) and any(x < y for x, y in pairs)
+
+    least = [
+        case for case in stated if not any(lighter(counts[other], counts[case]) for other in stated)
+    ]
+    rest = [case for case in stated if case not in least]
+    how = "the fewest resources by dominance (the part's totals are not stated)"
+    if len(least) > 1:
+        if all(counts[case] == counts[least[0]] for case in least):
+            how += "; equal resources kept in listing order"
+        else:
+            how += "; " + " and ".join(map(str, least)) + " not ordered by any count: kept in "
+            how += "listing order"
+    return [*least, *rest, *unstated], how
+
+
+def _resources_row(used: Resources | str) -> dict[str, int] | str:
+    return used if isinstance(used, str) else {name: getattr(used, name) for name in RESOURCE_NAMES}
 
 
 class TargetThroughput(TargetCycles):
@@ -849,14 +1124,19 @@ class _Asked:
 class _Tried:
     """One budget ``MaxThroughput`` tried (``None``: no budget, the least parallelism),
     what ``TargetCycles`` relaxed it to, the bottleneck its completed point reached,
-    the root's resources there, and whether they fit."""
+    the root's resources there as far as they are stated (``Seam.resources``), and
+    whether they fit."""
 
     cycles: int | None
     relaxed_to: int | None
     folded: Any
     reached: Bottleneck
-    used: Resources
+    stated: Stated
     fits: bool
+
+    @property
+    def used(self) -> Resources:
+        return self.stated.used
 
     def row(self, budget: Mapping[str, int]) -> dict[str, object]:
         return {
@@ -878,12 +1158,19 @@ class MaxThroughput:
     (the least parallelism); then the least budget between their bottlenecks whose
     point fits. Each point is costed completed on a copy (``Seam.complete``: the
     seam's policy, memories ``auto`` at the model's estimate, transports ``direct``),
-    by the root's own resources (``Seam.resources``: on a shell root its partition's,
-    its ends' and its static region's), and returned folded, the rest open for the
-    explorers after it. Fewer cycles, more resources is the assumption, as
-    ``TargetCycles``' is; where a budget's point departs from it (a larger budget
-    reaching fewer cycles or using more, or a budget relaxed above itself: an end's
-    converter, SZ6), the report states it, and the search goes on as bisection.
+    by the root's resources as far as they are stated (``Seam.resources``: on a shell
+    root its partition's, its ends' and its static region's). Of every point tried, it
+    keeps the one that fits with the fewest cycles, ties to the least resources (the
+    highest use-to-budget ratio first, then the next; then the first tried), and
+    returns it folded, the rest open for the explorers after it. Fewer cycles, more
+    resources is the assumption, as ``TargetCycles``' is; where a budget's point
+    departs from it (a larger budget reaching fewer cycles or using more, or a budget
+    relaxed above itself: an end's converter, SZ6), the report states it, and the
+    search goes on as bisection: a better point it reached on the way is still kept.
+
+    A member that states no resources (a compressor reducer, a kernel with no model) is
+    allowed: the budget is checked against what is stated, a lower bound, and it warns
+    once (``UnstatedResourcesWarning``), naming each such member and why.
 
     Its folds share what they ask of the seam (``_Asked``): a budget whose fold agrees
     with an earlier budget's on its first members reaches the same points there without
@@ -892,8 +1179,10 @@ class MaxThroughput:
 
     It refuses nothing (RC5): where even the least parallelism does not fit, it returns
     that point and warns, naming the binding resource. ``report`` states the budget,
-    the bottleneck reached, the resources against the budget, the binding resource (the
-    highest use-to-budget ratio), whether they fit, and every budget tried.
+    the budget whose point it kept (``kept_budget``, ``None`` for no budget), the
+    bottleneck reached, the resources against the budget (``lower_bound`` where members
+    state none, ``unstated`` naming them), the binding resource (the highest
+    use-to-budget ratio), whether they fit, and every budget tried.
     """
 
     strategy = "max_throughput"
@@ -937,17 +1226,44 @@ class MaxThroughput:
                 low, high = fastest.reached.cycles + 1, slowest.reached.cycles
                 while low < high:
                     middle = (low + high) // 2
-                    tried = self._try(seam, point, middle, asked)
-                    if tried.fits:
-                        kept, high = tried, middle
+                    if self._try(seam, point, middle, asked).fits:
+                        high = middle
                     else:
                         low = middle + 1
+                kept = min(
+                    (tried for tried in self.tried if tried.fits),
+                    key=lambda tried: (tried.reached.cycles, self._load(tried.used)),
+                )
         self.kept = kept
         self.departures = self._departures()
+        unstated = self.unstated()
+        if unstated:
+            warnings.warn(
+                "max_throughput: the budget is checked against a lower bound; these "
+                "members state no resources: "
+                + "; ".join(f"{name} ({why})" for name, why in unstated.items()),
+                UnstatedResourcesWarning,
+                stacklevel=2,
+            )
         if not kept.fits:
             warnings.warn(self.warning(), ResourceBudgetWarning, stacklevel=2)
         folded: S = kept.folded
         return folded
+
+    def unstated(self) -> dict[str, str]:
+        """Each member that states no resources at some point tried, with why (the first
+        why found)."""
+        found: dict[str, str] = {}
+        for tried in self.tried:
+            for name, why in tried.stated.unstated.items():
+                found.setdefault(name, why)
+        return found
+
+    def _load(self, used: Resources) -> tuple[float, ...]:
+        """``used`` against the budget, the highest use-to-budget ratio first: the lesser
+        is the lighter."""
+        found = (ratio(used, self.budget, name) for name in self.budget)
+        return tuple(sorted(found, reverse=True))
 
     def binding(self) -> str | None:
         """The resource the kept point uses most of against its budget."""
@@ -969,6 +1285,7 @@ class MaxThroughput:
             "strategy": self.strategy,
             "within": self.within,
             "budget": self.budget,
+            "kept_budget": None if kept is None else kept.cycles,
             "bottleneck": None
             if kept is None
             else {"members": list(kept.reached.members), "cycles": kept.reached.cycles},
@@ -981,6 +1298,8 @@ class MaxThroughput:
                 name: round(ratio(kept.used, self.budget, name), 4) if limit else None
                 for name, limit in self.budget.items()
             },
+            "lower_bound": None if kept is None else kept.stated.lower_bound,
+            "unstated": {} if kept is None else dict(kept.stated.unstated),
             "binding": self.binding(),
             "fits": None if kept is None else kept.fits,
             "fastest": self.fastest,
@@ -994,14 +1313,15 @@ class MaxThroughput:
         completed copy's bottleneck and resources, asking the seam through ``asked``."""
         folder = TargetCycles(_UNBOUNDED if cycles is None else cycles)
         folded = folder._explore(seam, point, asked)
-        reached, used = asked.ask(folded, "costed", lambda: self._cost(seam, folded))
-        fits = not over(used, self.budget)
-        tried = _Tried(cycles, folder.relaxed_to, folded, reached, used, fits)
+        reached, stated = asked.ask(folded, "costed", lambda: self._cost(seam, folded))
+        fits = not over(stated.used, self.budget)
+        tried = _Tried(cycles, folder.relaxed_to, folded, reached, stated, fits)
         self.tried.append(tried)
         return tried
 
-    def _cost(self, seam: Seam, folded: Space) -> tuple[Bottleneck, Resources]:
-        """The bottleneck and the root's resources of ``folded`` completed on a copy."""
+    def _cost(self, seam: Seam, folded: Space) -> tuple[Bottleneck, Stated]:
+        """The bottleneck and the root's resources, as far as they are stated, of
+        ``folded`` completed on a copy."""
         completed = seam.complete(folded).point
         cost = seam.cost(completed)
         reached, used = cost.bottleneck, seam.resources(completed)
@@ -1050,6 +1370,11 @@ class MaxThroughput:
 class ResourceBudgetWarning(UserWarning):
     """A point whose resources exceed a budget or the platform's part: a warning, never a
     refusal (RC5), naming the binding resource."""
+
+
+class UnstatedResourcesWarning(UserWarning):
+    """A budget checked against a lower bound: members that state no resources, each
+    named with why. A warning, never a refusal (RC5)."""
 
 
 #: ``TargetCycles``' budget for no budget at all: every member at its least parallelism.
@@ -1315,7 +1640,9 @@ __all__ = [
     "ResourceBudgetWarning",
     "Seam",
     "SizeFifos",
+    "Stated",
     "TargetCycles",
     "TargetThroughput",
+    "UnstatedResourcesWarning",
     "explore",
 ]
