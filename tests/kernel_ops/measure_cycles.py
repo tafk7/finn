@@ -72,7 +72,7 @@ class Layer:
 
 
 def schedule_of(root: ShellRoot, node: NodeProto) -> Any:
-    kernel = getattr(root.point.partition, member(node.name))
+    kernel = getattr(root.point, member(node.name))
     return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
 
 
