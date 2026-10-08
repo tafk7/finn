@@ -433,7 +433,8 @@ def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     partition's integration export's ends, PL0 set to the clock the bitfile delivers
     (report/delivered_clock.json). report/driver.json states what it takes and returns,
     by name, element and shape, and the host's nodes before and after it
-    (driver_description); the parent graph states it among its reports."""
+    (driver_description); the parent graph states it among its reports. driver/ is
+    written afresh: nothing an earlier build left there stays."""
     if KernelOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_kernel_driver.")
         return model
@@ -443,6 +444,7 @@ def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     fclk_mhz = _delivered_mhz(model)
     export = integration(model, completion(cfg.kernel_completion))
     driver_dir = os.path.join(cfg.output_dir, "driver")
+    shutil.rmtree(driver_dir, ignore_errors=True)
     write_driver(export, driver_dir, fclk_mhz)
     node, _, _ = partition_body(model)
     names = [each.name for each in model.graph.node]
@@ -485,15 +487,39 @@ def host_model(model: ModelWrapper, directory: Path) -> Path:
 def step_kernel_deployment_package(model: ModelWrapper, cfg: KernelBuildConfig):
     """Package the bitfile and the driver for deployment, if DEPLOYMENT_PACKAGE is asked,
     with the host's part of the parent graph as a model (deploy/model/, host_model) and
-    the driver's description (deploy/driver.json, report/driver.json)."""
+    the driver's description (deploy/driver.json, report/driver.json). It ships the
+    bitfile and the driver the parent graph states (finn.outputs), which this output
+    directory's bitfile and driver steps made: a model stating neither, or another
+    directory's, is refused by name, and deploy/ is written afresh."""
     if KernelOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         print("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
     _integrating_row(model, cfg, KernelOutputType.DEPLOYMENT_PACKAGE)
+    output = Path(cfg.output_dir)
+    made = {
+        "bitfile": (model.get(OUTPUT_BITFILE), output / "bitfile" / "finn-accel.bit"),
+        "pynq_driver": (
+            (model.get(OUTPUT_REPORTS) or {}).get("driver"),
+            output / "report" / "driver.json",
+        ),
+    }
+    for name, (stated, expected) in made.items():
+        if stated is None:
+            raise ValueError(
+                f"deployment_package: the model states no {name} (finn.outputs): the "
+                "deployment ships the bitfile and the driver its build made; ask bitfile "
+                "and pynq_driver with it"
+            )
+        if Path(stated) != expected:
+            raise ValueError(
+                f"deployment_package: the model's {name} is {stated}, not this output "
+                f"directory's ({expected})"
+            )
+    deploy = output / "deploy"
+    shutil.rmtree(deploy, ignore_errors=True)
     deployment_package(cfg.output_dir)
-    deploy = Path(cfg.output_dir) / "deploy"
     host_model(model, deploy / "model")
-    shutil.copy(Path(cfg.output_dir) / "report" / "driver.json", deploy / "driver.json")
+    shutil.copy(output / "report" / "driver.json", deploy / "driver.json")
     return model
 
 

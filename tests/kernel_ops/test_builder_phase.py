@@ -33,6 +33,7 @@ from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
 from finn.builder.build_dataflow_steps import delivered_clock
 from finn.builder.kernel_build_config import (
+    SHELL_OUTPUTS,
     KernelBuildConfig,
     KernelOutputType,
     KernelVerificationStepType,
@@ -56,6 +57,7 @@ from finn.transformation.fpgadataflow import pynq_runner
 from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
 from finn.transformation.fpgadataflow.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
+    OUTPUT_BITFILE,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_REPORTS,
@@ -312,6 +314,50 @@ def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: P
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
         step_kernel_bitfile(parent, cfg)
+
+
+def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> None:
+    """The driver sets the clock its bitfile delivers, and the deployment ships the bitfile
+    and the driver: asked without them, each is refused before any step runs, naming
+    what it lacks."""
+    needs = "it is made from them, in the same build"
+    driver = config(tmp_path, generate_outputs=[KernelOutputType.PYNQ_DRIVER])
+    assert failed_checks(driver) == {"kernel_output_needs": [f"pynq_driver needs bitfile: {needs}"]}
+    deployment = [KernelOutputType.BITFILE, KernelOutputType.DEPLOYMENT_PACKAGE]
+    assert failed_checks(config(tmp_path, generate_outputs=deployment)) == {
+        "kernel_output_needs": [f"deployment_package needs pynq_driver: {needs}"]
+    }
+    alone = config(tmp_path, generate_outputs=[KernelOutputType.DEPLOYMENT_PACKAGE])
+    assert failed_checks(alone) == {
+        "kernel_output_needs": [f"deployment_package needs bitfile, pynq_driver: {needs}"]
+    }
+    shell = [KernelOutputType.BITFILE, KernelOutputType.PYNQ_DRIVER]
+    assert failed_checks(config(tmp_path, generate_outputs=shell)) == {}
+
+
+def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path: Path) -> None:
+    """The deployment ships the bitfile and the driver the parent graph states, this output
+    directory's: a parent graph stating no driver (its driver step never ran), or another
+    directory's, is refused by name before anything is copied, whatever an earlier
+    build left in driver/."""
+    model = kernel_model(second_weights=False)
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    cfg = config(tmp_path, generate_outputs=list(SHELL_OUTPUTS))
+    output = Path(cfg.output_dir)
+    (output / "driver").mkdir(parents=True)
+    (output / "driver" / "driver.py").write_text("an earlier build's driver")
+    with pytest.raises(ValueError, match="the model states no bitfile"):
+        step_kernel_deployment_package(parent, cfg)
+    parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
+    with pytest.raises(ValueError, match="the model states no pynq_driver"):
+        step_kernel_deployment_package(parent, cfg)
+    elsewhere = tmp_path / "elsewhere" / "report" / "driver.json"
+    parent.set(OUTPUT_REPORTS, {"driver": str(elsewhere)})
+    with pytest.raises(ValueError, match="the model's pynq_driver is .*elsewhere.*, not this "):
+        step_kernel_deployment_package(parent, cfg)
+    assert not (output / "deploy").exists()
 
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
@@ -914,6 +960,10 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     )
     vivado = FakeVivado(timing=TIMING_REPORT)
     cfg._toolchain = cast(Toolchain, vivado)
+    # An earlier build's files in the same output directory, which nothing ships.
+    for stale in ("driver/stale.py", "deploy/driver/stale.py", "deploy/stale.bit"):
+        (Path(cfg.output_dir) / stale).parent.mkdir(parents=True, exist_ok=True)
+        (Path(cfg.output_dir) / stale).write_text("an earlier build's")
     parent = cut_tfc(source, cfg)
     for step in (
         step_kernel_bitfile,
@@ -1038,6 +1088,8 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     }
     # The deployment: bitfile, driver, description, and the host's model.
     deploy = output / "deploy"
+    assert not (output / "driver" / "stale.py").exists()
+    assert "stale.py" not in {path.name for path in (deploy / "driver").iterdir()}
     assert sorted(path.name for path in deploy.iterdir()) == [
         "bitfile",
         "driver",

@@ -17,8 +17,10 @@ from finn.builder.build_dataflow_config import (
     verify_step_prereqs,
 )
 from finn.builder.kernel_build_config import (
+    OUTPUT_NEEDS,
     SHELL_OUTPUTS,
     KernelBuildConfig,
+    KernelOutputType,
     KernelVerificationStepType,
 )
 from finn.platform import TargetRefused, shell_row
@@ -126,8 +128,9 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
     """The checks of a kernel-path build that its configuration's type does not make
     impossible: its target resolves (finn.platform.resolve_target); the shell outputs
     it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
-    ``ip``); the shell's build takes its shell_options; the verification input exists,
-    and the step that verifies runs."""
+    ``ip``), and each output those it is made from (OUTPUT_NEEDS); the shell's build
+    takes its shell_options; the verification input exists, and the step that verifies
+    runs."""
     checks = []
     try:
         target = cfg._resolve_target()
@@ -156,6 +159,20 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
                 "remove them from generate_outputs",
             )
         )
+    asked = {KernelOutputType(output) for output in cfg.generate_outputs}
+    for output, needs in OUTPUT_NEEDS.items():
+        missing = [need.value for need in needs if output in asked and need not in asked]
+        if missing:
+            checks.append(
+                _check(
+                    "kernel_output_needs",
+                    Severity.ERROR,
+                    False,
+                    f"{output.value} needs {', '.join(missing)}: it is made from them, "
+                    "in the same build",
+                    f"Add {', '.join(missing)} to generate_outputs, or remove {output.value}",
+                )
+            )
     try:
         cfg._resolve_shell_options()
     except ValueError as refused:
