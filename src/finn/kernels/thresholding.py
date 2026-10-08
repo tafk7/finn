@@ -41,7 +41,9 @@ disabled outputs may be unspecified. Placed in a kernel with children, it sits
 on an input, an output and (with several sets) a set-selector channel; its
 AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
 runtime-writable (``controlled``), and otherwise held idle by its module, as
-is the set selector of a single set. Multi-set AXI-Lite access is refused: the
+is the set selector of a single set. Presented, the bus carries the writes that
+put the kernel's table into the memories (``register_map``), at the addresses
+thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
 selection is supported. Floating-point threshold comparison is outside this
 profile.
@@ -80,7 +82,7 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Held
+from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
@@ -513,9 +515,38 @@ class ThresholdingAxiKernel(Kernel):
         """AXI-Lite, with runtime writes."""
         return (self.config_bus,) if self.use_axilite else ()
 
+    @derived
+    def register_map(self) -> RegisterMap:
+        """The AXI-Lite writes of its table: each threshold of a row at the wrapper's word
+        address (the row's channel fold, its lane, the threshold), its bits in 32-bit words
+        low first, the last of which commits it (FinnLib's ``axilite``). Rows are
+        channels, ``c = fold * lanes + lane``, ``lanes`` the effective PE (min(C, PE)); a
+        shared row (C = 1) is written once and reaches every lane."""
+        (_, rows, count), pe = self.shape, self.pe
+        bits = self.threshold_dtype.bitwidth()
+        lanes, words = min(rows, pe), (bits + 31) // 32
+        index_bits, lane_bits = (count - 1).bit_length(), (lanes - 1).bit_length()
+        word_bits = (words - 1).bit_length()
+        mask = (1 << bits) - 1
+        writes = []
+        for channel, row in enumerate(self.thresholds[0]):
+            fold, lane = divmod(channel, lanes)
+            for index, value in enumerate(row):
+                address = (fold << (lane_bits + index_bits)) | (lane << index_bits) | index
+                for word in range(words):
+                    writes.append(
+                        (
+                            ((address << word_bits) | word) << 2,
+                            ((value & mask) >> (32 * word)) & 0xFFFFFFFF,
+                        )
+                    )
+        return RegisterMap(tuple(writes))
+
     @view
     def control_bus(self) -> Control:
-        return Control(self.config_bus if self.controlled() else None)
+        if not self.controlled():
+            return Control(None)
+        return Control(self.config_bus, self.register_map)
 
     exports = {**Kernel.exports, CONTROL: {control: control_bus}}
 

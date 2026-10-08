@@ -8,8 +8,10 @@ and ABI (``Abi``: its pins, parameters as RTL spells them and aligned clocks),
 the files that provide it, the data it reads, and what it holds while part of
 it is idle (``Held``). A ``Composed`` module is a ``Fragment`` with an ABI:
 leaf instances, the ``Link`` of each channel hop between their pins and the
-control buses it presents (``BusExport``). Every instance is a leaf: the
-netlist is flat, and grouping it into modules is a later decision of the flow.
+control buses it presents (``BusExport``), each with the writes its kernel's
+configuration takes (``RegisterMap``: what a host, or a testbench, writes before
+streaming). Every instance is a leaf: the netlist is flat, and grouping it into
+modules is a later decision of the flow.
 
 A fragment names its instances by labels relative to its owner (``compute.packed``);
 its parent places it with ``under(node)`` and joins its children's with
@@ -280,13 +282,36 @@ class Link:
 
 
 @dataclass(frozen=True)
+class RegisterMap:
+    """The writes that put a kernel's configuration into its control bus's registers:
+    (byte address, word), in the order they are made, each word ``word_bits`` wide. Empty
+    for a bus whose configuration needs no write."""
+
+    writes: tuple[tuple[int, int], ...] = ()
+    word_bits: int = 32
+
+    def __post_init__(self) -> None:
+        writes = tuple((address, word) for address, word in self.writes)
+        if self.word_bits not in (32, 64):
+            raise BuildError(f"an AXI-Lite word is 32 or 64 bits, not {self.word_bits}")
+        step = self.word_bits // 8
+        for address, word in writes:
+            if address < 0 or address % step:
+                raise BuildError(f"{address:#x} is not a {self.word_bits}-bit word's address")
+            if not 0 <= word < 1 << self.word_bits:
+                raise BuildError(f"{word:#x} is not a {self.word_bits}-bit word")
+        object.__setattr__(self, "writes", writes)
+
+
+@dataclass(frozen=True)
 class BusExport:
     """An instance's bus, presented as the root's target port ``port`` (its members
-    ``<port>_<MEMBER>``)."""
+    ``<port>_<MEMBER>``), and the writes its configuration takes (``registers``)."""
 
     instance: str
     bus: Bus
     port: str
+    registers: RegisterMap = RegisterMap()
 
     def __post_init__(self) -> None:
         if not _IDENTIFIER.fullmatch(self.port):
@@ -471,6 +496,7 @@ __all__ = [
     "Module",
     "Abi",
     "ProducerIdentity",
+    "RegisterMap",
     "Scalar",
     "ScalarTable",
     "fingerprint",

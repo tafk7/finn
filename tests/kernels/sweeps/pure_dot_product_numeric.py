@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 from qonnx.core.datatype import DataType
 
+from finn.harness.pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
@@ -132,7 +133,9 @@ STRESS_CASES = (
 )
 
 
-def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int = 5) -> None:
+def run(
+    configuration: Configuration, evidence: Path, *, backpressure: Pace = STALLED.output(0)
+) -> None:
     c = configuration
     a_type, w_type = DataType[c.activation], DataType[c.weight]
     # Independent caller-side bound: cover every endpoint product and every
@@ -217,9 +220,7 @@ def run(configuration: Configuration, evidence: Path, *, backpressure_ticks: int
             {name + "_V": beats for name, beats in stimulus.items()},
             {"out0_V": case.repetitions * case.neuron_folds},
             {},
-            stalls=stalled,
-            input_stalls=False,
-            backpressure_ticks=backpressure_ticks,
+            pacing=Pacing(outputs=(backpressure,)) if stalled else FREE,
             directory=case_directory / ("stalled" if stalled else "free"),
         )
         actual = _unpack(case, measured["outputs"]["out0_V"], result_type.bitwidth())
@@ -244,7 +245,7 @@ def main() -> None:
     if arguments.case is not None:
         selected = tuple(case for case in available if case.label == arguments.case)
     for case in selected:
-        run(case, evidence, backpressure_ticks=32 if case in STRESS_CASES else 5)
+        run(case, evidence, backpressure=Pace(1, 32) if case in STRESS_CASES else STALLED.output(0))
     print(f"PASS {len(selected)} configurations, two transport modes each")
 
 

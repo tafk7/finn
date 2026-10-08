@@ -157,8 +157,8 @@ def test_writable_thresholds_without_a_control_bus_are_not_offered():
 @requires_xsim
 @pytest.mark.parametrize("writable", (False, True))
 def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writable):
-    # Writable, the exported AXI-Lite bus is held idle (every other top input is
-    # held at zero): the thresholds are still the initial table.
+    # Writable, the exported AXI-Lite bus is written the table its kernel declares (the
+    # initial one) before the streams start: the levels are the initial table's.
     module = activated(writable=writable).module
     x = [[(3 * r + 5 * k) % 8 - 4 for k in range(WIDTH)] for r in range(REPETITIONS)]
     w = [[(7 * h + 3 * k) % 8 - 4 for k in range(WIDTH)] for h in range(HEIGHT)]

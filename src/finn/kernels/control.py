@@ -12,8 +12,9 @@ kernel through ``Users(CONTROL)`` and exports an ``Exported`` bus under
 ``EXPORTED``; the kernel that declares the node presents it in its netlist
 (``BusExport``), each parent prefixing its port with the child's node
 (``first_s_axilite``), and the root's module renames the bus to that port
-(``top_bus``), associated with its clock and reset. One kernel is controlled
-through one bus node.
+(``top_bus``), associated with its clock and reset. The writes that put the
+kernel's configuration into the bus's registers (``RegisterMap``) travel with it
+to the root's ``BusExport``. One kernel is controlled through one bus node.
 
 A kernel whose control interface is not referenced, or that exposes none in
 its configuration (``Control(None)``), holds the bus inputs constant and
@@ -36,14 +37,16 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member
-from finn.kernels.artifacts.module import Held
+from finn.kernels.artifacts.module import Held, RegisterMap
 
 
 @dataclass(frozen=True)
 class Control:
-    """The control bus a kernel presents on one input; None presents nothing."""
+    """The control bus a kernel presents on one input, None presenting nothing, and the
+    writes that put its configuration into the bus's registers."""
 
     bus: Bus | None
+    registers: RegisterMap = RegisterMap()
 
 
 CONTROL_SEMANTICS = default_semantics(Control)
@@ -52,11 +55,13 @@ CONTROL = ViewKey("control", CONTROL_SEMANTICS)
 
 @dataclass(frozen=True)
 class Exported:
-    """A kernel's control bus, the node it belongs to, and the top port it becomes."""
+    """A kernel's control bus, the node it belongs to, the top port it becomes, and the
+    writes its configuration takes."""
 
     node: str
     child: Bus
     port: str
+    registers: RegisterMap = RegisterMap()
 
 
 EXPORTED_SEMANTICS = default_semantics(tuple)
@@ -102,11 +107,15 @@ class ControlBus(Space):
 
     @view(requires=(users,))
     def exported(self) -> tuple[Exported, ...] | Rejected:
-        present = [(str(user.node), user.value.bus) for user in self.users if user.value.bus]
+        present = [(str(user.node), user.value) for user in self.users if user.value.bus]
         if len(present) > 1:
             named = ", ".join(node for node, _ in present)
             return reject("control-users", f"one kernel per control bus; referenced by {named}")
-        return tuple(Exported(node, bus, self.port) for node, bus in present if bus is not None)
+        return tuple(
+            Exported(node, control.bus, self.port, control.registers)
+            for node, control in present
+            if control.bus is not None
+        )
 
     exports = {EXPORTED: exported}
 

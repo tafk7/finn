@@ -9,8 +9,9 @@ by the job's own code with the simulator replaced by a capture:
 - a conformance job (one pytest id of tests/kernels/test_conformance.py) runs
   under pytest with ``finn.harness.rtl.simulate`` capturing the simulation
   directory: the staged module sources (FinnLib's included, copied by
-  content), each memory's INIT_FILE, and the testbench ``check.sv``, which
-  carries the stimulus and the expected words;
+  content), each memory's INIT_FILE, the testbench ``check.sv`` and the
+  ``$readmemh`` files beside it that carry the stimulus, the expected words and
+  each control bus's writes;
 - a numeric sweep (``python -m kernels.sweeps.<module> ARGS``) runs its
   ``main`` with ``rtl_transport._run_worker`` capturing the request it would
   hand the simulation process: its sources by content (with every file of a

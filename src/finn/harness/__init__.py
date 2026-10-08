@@ -6,7 +6,9 @@ transformations and below the flow.
 
 ``finn.harness.rtl`` writes stream testbenches for a kernel module and runs them
 in XSim; ``finn.harness.toolchain`` resolves what a simulation runs on (FinnLib as
-FINN resolves it, Vivado through FINN's toolchain) and the revisions a run prints.
+FINN resolves it, Vivado through FINN's toolchain) and the revisions a run prints;
+``finn.harness.pacing`` states how a run stalls its streams, for the testbench and
+the XSI numeric transport alike.
 The tests that use the harness stay in ``tests/``; nothing here imports pytest or
 the test tree.
 
