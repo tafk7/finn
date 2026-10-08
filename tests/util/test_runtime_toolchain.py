@@ -439,7 +439,7 @@ def test_hls_build_uses_selected_frontend(tmp_path, frontend, version):
 
 def test_frontend_availability_does_not_override_compatibility(tmp_path):
     executable(tmp_path / "vitis_hls", 'print("AMD 2025.1")\n')
-    tc = Selection(command_dir=str(tmp_path)).prepare({})
+    tc = Selection(command_dir=str(tmp_path), hls_frontend="vitis_hls").prepare({})
     with pytest.raises(ValueError, match="incompatible"):
         tc.hls_command("build.tcl")
 

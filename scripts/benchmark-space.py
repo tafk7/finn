@@ -557,7 +557,6 @@ def kernel_fixtures(api):
         fabric=target.Fabric.ULTRASCALE,
         uram=True,
         uram_init=True,
-        clk2x=True,
         resources=None,
     )
     int3, int8 = dtype("INT3"), dtype("INT8")

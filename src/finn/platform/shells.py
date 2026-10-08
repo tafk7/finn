@@ -9,8 +9,9 @@ A shell row states what the shell gives a partition and what it takes from it:
 - its budgets, which the shell root's admission counts: the AXI-Lite buses the
   partition and its ends may present together, and the AXI memory ports the
   partition itself may use;
-- whether it supplies an aligned doubled clock (``ap_clk2x``), the one capability
-  of a shell a kernel reads (``finn.kernels.target.Platform.clk2x``);
+- whether it supplies an aligned doubled clock (``ap_clk2x``): the row owns the
+  fact, and the shell root's admission reads it against a module that takes one
+  (``clock-unavailable``); the target carries no copy;
 - how it is integrated and run on the host;
 - its static region: the logic it instantiates beside the partition and its ends,
   and what that uses of the device, by the counts that scale it

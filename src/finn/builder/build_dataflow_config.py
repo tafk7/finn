@@ -457,11 +457,13 @@ class DataflowBuildConfig:
     #: settings scripts to source (none: the environment is already configured, as
     #: by ``scripts/activate.sh``); ``command_dir``, a site command directory;
     #: ``launcher``, a site launcher prefix; ``hls_frontend``, ``vitis_hls`` (up to
-    #: 2024.2) or ``vitis-run`` (2025.1 on). A stated selection is used as stated.
-    #: Unset (None), the build runs by the machine's
+    #: 2024.2) or ``vitis-run`` (2025.1 on). The build runs by the machine's
     #: (:py:func:`finn.util.toolchain.machine_selection`): the environment as
-    #: configured, under the site command directory ``FINN_TOOL_DIR_OVERRIDE`` names.
-    #: In JSON: {"settings": [...], "command_dir": "", "launcher": [], "hls_frontend": "..."}.
+    #: configured, under the site command directory ``FINN_TOOL_DIR_OVERRIDE`` names,
+    #: with the machine file's release's frontend. A stated selection is laid over it:
+    #: each field it states wins (``null`` states none), and the machine's keep the
+    #: rest. In JSON: {"settings": [...], "command_dir": null, "launcher": [],
+    #: "hls_frontend": "vitis-run"}.
     toolchain: Optional[Selection] = field(
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
@@ -474,8 +476,10 @@ class DataflowBuildConfig:
             return self.hls_clk_period_ns
 
     def _resolve_selection(self) -> Selection:
-        """The selection this build runs its tools by: ``toolchain``, or the machine's."""
-        return machine_selection() if self.toolchain is None else self.toolchain
+        """The selection this build runs its tools by: ``toolchain`` laid over the
+        machine's (``machine_selection``), each field it states winning; unset, the
+        machine's."""
+        return machine_selection(stated=self.toolchain)
 
     def _resolve_toolchain(self) -> Toolchain:
         """The prepared toolchain every tool step of this build runs in: the resolved

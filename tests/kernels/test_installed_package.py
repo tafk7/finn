@@ -87,7 +87,6 @@ PLATFORM = Platform(
     fabric=Fabric.ULTRASCALE,
     uram=True,
     uram_init=True,
-    clk2x=True,
     resources=None,
 )
 

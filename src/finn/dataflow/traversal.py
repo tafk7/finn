@@ -443,6 +443,11 @@ def period(form: Traversal) -> Traversal:
     return Traversal(form.shape, loops[moving:], form.lane_loops)
 
 
+def passes(form: Traversal) -> int:
+    """How many times ``form`` presents its whole pass (its ``period``) a frame."""
+    return form.beats // period(form).beats
+
+
 def pack(
     form: Traversal, integers: Sequence[int] | npt.NDArray[np.int64], bits: int
 ) -> tuple[int, ...]:
@@ -522,6 +527,7 @@ __all__ = [
     "axis_strides",
     "classify",
     "pack",
+    "passes",
     "period",
     "regrouped",
     "require_positive",

@@ -250,8 +250,8 @@ def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
     assert {entry["by"] for entry in entries} == {"DEBUG: completed by placeholder", "size_fifos"}
     logged = capsys.readouterr().out
     debug = [line for line in logged.splitlines() if line.startswith("DEBUG: completed by")]
-    # The 12 foldings and 20 other values (the 13 transports are sized).
-    assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 32
+    # The 12 foldings and 24 other values (the 13 transports are sized).
+    assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 36
     assert "DEBUG: completed by placeholder: MatMul_0.compute.packed.pe = 1" in debug
     # The verification completes it the same way, and it passes.
     step_verify_kernel_partition(model, cfg)
@@ -405,6 +405,23 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
     python = config(tmp_path, verify_steps=[KernelVerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
+    # The testbench's run is the outputs' phase's, and needs the testbench asked.
+    testbench = [KernelVerificationStepType.STITCHED_IP_TESTBENCH]
+    cfg = config(tmp_path, steps=["phase_kernel_path"], verify_steps=testbench)
+    (warning,) = [
+        check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
+    ]
+    assert "neither phase_kernel_outputs nor step_kernel_stitched_ip" in warning.message
+    assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
+        "kernel_testbench_output": [
+            "verify_steps includes stitched_ip_testbench, which runs the testbench "
+            "stitched_ip writes, and generate_outputs does not ask for it"
+        ]
+    }
+    asked = config(
+        tmp_path, verify_steps=testbench, generate_outputs=[KernelOutputType.STITCHED_IP]
+    )
+    assert failed_checks(asked) == {}
 
 
 def test_a_dataflow_build_of_kernel_ops_is_refused(tmp_path: Path) -> None:
@@ -467,14 +484,18 @@ SET_FOLDING = {
 
 
 #: Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
-#: completed, 45 on 8 nodes: the Zynq landing's baseline build's (Ultra96, 5 ns,
-#: [target_throughput, size_fifos]), whose choices were all persisted then.
+#: completed, 53 on 8 nodes: the Zynq landing's baseline build's (Ultra96, 5 ns,
+#: [target_throughput, size_fifos]), whose choices were all persisted then, and each
+#: MatMul's pumping, completed off: the doubled clock is the shell's, which the kernels
+#: no longer read off the platform (SZ11 (e)), so the choice is open on pynq too.
 TFC_BUILT = {
     node: {
         **folding,
         **(
             {
+                "compute.packed.compute_pumping": False,
                 "compute.packed.reducer": "tree",
+                "w.source.memstream.pumped_memory": False,
                 "w.source.memstream.ram_style": "auto",
                 "w.transport": "direct",
                 "x.adapter.input_gen.input_gen.ram_style": "auto",
@@ -511,14 +532,14 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # On Ultra96 (DSP48E2) every MatMul's core is forced: no case is tried, and the
     # target is met.
     assert (target["cases"], target["unfolded"], target["met"]) == ({}, {}, True)
-    # Of TFC's 45 choices, the target throughput commits the folding (12), the only ones
+    # Of TFC's 53 choices, the target throughput commits the folding (12), the only ones
     # saved; the baseline completion completes the rest where the partition is built,
     # the 13 transports sized on its copy. The report names who made each.
     assert target["committed"] == 12
     made_by = [name for held in report["choices"].values() for name in held.values()]
     assert made_by == ["target_throughput"] * 12
     completed = [entry["by"] for held in report["completed"].values() for entry in held.values()]
-    assert (completed.count("baseline"), completed.count("size_fifos")) == (20, 13)
+    assert (completed.count("baseline"), completed.count("size_fifos")) == (28, 13)
     assert report["fifos"] == "sized at completion by baseline: 13 channels"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
     # frame a call), within the budget of 200; the Partition's slowest members, the
@@ -568,17 +589,17 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # At the period the input end sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It commits the 13 transports the completion sizes without it; the baseline
-    # completes the other 20.
+    # completes the other 28.
     assert [each["committed"] for each in report["strategies"]] == [12, 13]
-    assert len(sized) == 20 and len(plain) == 33
+    assert len(sized) == 28 and len(plain) == 41
     assert report["fifos"] == "sized by size_fifos: 13 channels"
     assert plain_report["completion"]["sizing"]["channels"] == sizing["channels"]
-    # The ends change no choice: TFC is built with the baseline build's 45 values.
+    # The ends change no choice: TFC is built with the baseline build's 53 values.
     persisted = json.loads((tmp_path / "sized" / "output" / "kernel_choices.json").read_text())
     for (node, attribute), value in sized.items():
         persisted.setdefault(node, {})[attribute] = value
     assert persisted == TFC_BUILT
-    assert sum(map(len, TFC_BUILT.values())) == 45
+    assert sum(map(len, TFC_BUILT.values())) == 53
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}

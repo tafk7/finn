@@ -80,7 +80,7 @@ from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, read_target, shape
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import PARTITION, admission_refusal, shell_root
-from finn.dataflow.traversal import Traversal, period
+from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
@@ -183,7 +183,7 @@ def stream_order(form: Traversal) -> dict[str, Any]:
     one = period(form)
     return {
         "row_major": one.row_major,
-        "passes": form.beats // one.beats,
+        "passes": passes(form),
         "shape": list(form.shape),
         "beat_loops": [[loop.extent, loop.stride] for loop in form.beat_loops],
         "lane_loops": [[loop.extent, loop.stride] for loop in form.lane_loops],

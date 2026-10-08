@@ -35,12 +35,14 @@ import re
 VIVADO_JOBS_CAP = 16
 
 
-def vivado_jobs(requested=None):
+def vivado_jobs(requested: "int | None" = None) -> int:
     """The number of runs Vivado launches at once (``launch_runs -jobs``): the
-    ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP."""
+    ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP.
+    The one check of a number of jobs: a positive integer (``finn.util.toolchain.
+    Selection.vivado_jobs`` states one through it)."""
     if requested is None:
         return max(1, min(os.cpu_count() or 1, VIVADO_JOBS_CAP))
-    if not isinstance(requested, int) or requested < 1:
+    if type(requested) is not int or requested < 1:
         raise ValueError(f"Vivado's jobs must be a positive number, not {requested!r}")
     return requested
 

@@ -17,9 +17,12 @@ holds what it needs and nothing of the machine:
   PATH (``xvlog``, ``xelab``, ``xsim``), ``glbl.v`` from ``$XILINX_VIVADO``, and exits
   0 printing ``PASS`` when every output word matched.
 
-The writer simulates nothing. ``write_testbench`` then runs the testbench once, through
-the toolchain it is given (``simulate``), so a testbench a build writes is one that
-passed. ``run.sh`` repeats ``simulate``'s commands with the directory's own paths.
+``write_testbench`` simulates nothing: the testbench is an output, and no build
+re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
+its ``run.sh`` as its user would, in a toolchain's environment: the build's
+verification step ``stitched_ip_testbench``, which the user asks for, and which fails
+on a mismatch. ``run.sh`` repeats ``finn.harness.rtl.simulate``'s commands with the
+directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
@@ -32,6 +35,7 @@ from its datatype.
 from __future__ import annotations
 
 import shlex
+import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -43,16 +47,23 @@ from qonnx.core.onnx_exec import execute_onnx
 
 from finn.core.onnx_exec import execute_onnx as execute_parent_graph
 from finn.custom_op.kernels.partition import member
-from finn.harness.rtl import Words, pack, simulate, stream_bench
+from finn.harness.rtl import SimulationFailed, Words, pack, stream_bench
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
 from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels.package import boundary_facts, configured_root
-from finn.util.toolchain import Toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain, run_process
 
 #: The directory of the testbench, beside the packaged IP.
 TESTBENCH_DIR = "testbench"
+
+#: The script that compiles, elaborates and runs the testbench, in its directory.
+RUN_SCRIPT = "run.sh"
+
+#: How long ``run_testbench`` lets the script run: three tool runs of at most five
+#: minutes each, as ``finn.harness.rtl.simulate`` allows each.
+RUN_TIMEOUT = 900
 
 
 def words(form: Any, values: NDArray[Any], bits: int) -> list[int]:
@@ -177,14 +188,12 @@ def write_testbench(
     *,
     completion: Completion | None = None,
     label: str = "the partition",
-    toolchain: Toolchain | None = None,
 ) -> None:
     """Write the XSim testbench of the partition ``body`` into ``directory``, streaming
     ``frame`` (its inputs by tensor) and expecting the body's outputs on it, executed in
     Python; see the module docstring. The module is the one PackagePartition packages
     (``configured_root`` under ``completion``), and the watchdog allows the cycles its
-    root states. The testbench is run once, through ``toolchain`` (the machine's by
-    default): a mismatch raises ``finn.harness.rtl.SimulationFailed``."""
+    root states. Nothing is simulated (``run_testbench`` runs it)."""
     point, boundary = configured_root(body, label, completion)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)
@@ -192,18 +201,57 @@ def write_testbench(
     bench = stream_bench(
         point.module, directory, inputs=inputs, outputs=outputs, cycles=int(point.cycles)
     )
+    (directory / "check.sv").write_text("`timescale 1ns/1ps\n" + bench.text)
     relative = [str(Path(source).relative_to(directory)) for source in bench.sources]
-    script = directory / "run.sh"
+    script = directory / RUN_SCRIPT
     script.write_text(_run_script(module_name(point.module), relative))
     script.chmod(0o755)
-    simulate(bench.sources, bench.text, directory, toolchain=toolchain)
+
+
+def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str:
+    """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
+    ``toolchain``'s environment (the machine's by default), a command directory it
+    selects first on ``PATH``. Returns what it printed, which ends in ``PASS``; a
+    mismatch, a tool's error or a timeout raises ``finn.harness.rtl.SimulationFailed``
+    with what it printed. A launcher route, which runs a tool elsewhere, runs no local
+    script: refused (``ValueError``)."""
+    toolchain = toolchain or machine_toolchain()
+    selection = toolchain.selection
+    if selection.launcher:
+        raise ValueError(
+            f"{directory / RUN_SCRIPT}: the toolchain's launcher route runs tools elsewhere, "
+            "not a local script; run the testbench on a local route"
+        )
+    environment = dict(toolchain.environment)
+    if selection.command_dir:
+        environment["PATH"] = f"{selection.command_dir}:{environment.get('PATH', '')}"
+    try:
+        result = run_process(
+            ["sh", str(directory / RUN_SCRIPT)],
+            env=environment,
+            cwd=directory,
+            timeout=RUN_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as expired:
+        printed = (expired.output or b"") + (expired.stderr or b"")
+        raise SimulationFailed(
+            f"{RUN_SCRIPT} ran over {RUN_TIMEOUT} s:\n" + printed.decode(errors="replace")
+        ) from expired
+    output = result.stdout.decode(errors="replace")
+    printed = output + result.stderr.decode(errors="replace")
+    if result.returncode != 0 or output.splitlines()[-1:] != ["PASS"]:
+        raise SimulationFailed(printed)
+    return output
 
 
 __all__ = [
+    "RUN_SCRIPT",
     "TESTBENCH_DIR",
     "boundary_words",
     "generated_frame",
     "partition_frame",
+    "run_testbench",
     "words",
     "write_testbench",
 ]

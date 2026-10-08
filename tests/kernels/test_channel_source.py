@@ -351,11 +351,9 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
     if refused:
         (outcome,) = report.outcomes
         assert codes(outcome.result) == refused
-    # A platform without a doubled clock forces an unpumped memory, and says why.
-    unpumped = placed_with(replace(platform, clk2x=False))
-    reasons = {item.key: item.refused for item in inspection.forced(unpumped)}
-    assert forced(unpumped)["w.source.memstream.pumped_memory"] is False
-    assert "clk2x-absent" in reasons["w.source.memstream.pumped_memory"]["True"]
+    # The platform does not narrow pumping: the doubled clock is the shell's, which
+    # its root admits.
+    assert "w.source.memstream.pumped_memory" not in forced(placed_with(platform))
 
 
 def test_a_channel_with_a_value_has_its_source_as_its_only_producer():

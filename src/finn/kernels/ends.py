@@ -16,11 +16,13 @@ stream side, the free side's contract:
 
 - it moves a frame between a flat buffer and the stream in order, a memory word after
   another, so the host's buffer holds the stream's beats as they come; the PYNQ driver
-  fills and reads that buffer as the tensor's row-major array. A free side whose pass
-  (``period``: its whole-pass repetition aside) is not row-major
-  (``Traversal.row_major``) is refused (``end-order``): the driver would feed it the
-  wrong elements with no error. A repeated pass (a streamed weight read a frame per
-  row) is admitted as before: its frame is the passes together;
+  fills and reads that buffer as the tensor's row-major array, one pass of it a
+  frame. A free side that presents its pass more than once a frame (``passes``: a
+  streamed weight read once per row of its activations) is refused
+  (``end-repetition``) until the host's or the end's repetition is designed: the
+  driver would move one pass where the stream takes several. A free side whose pass
+  is not row-major (``Traversal.row_major``) is refused (``end-order``): the driver
+  would feed it the wrong elements with no error;
 
 - its memory port is ``gcd(frame bits, cap)``, a frame's bits the stream's padded
   ``tdata`` times its beats, as ``InsertIODMA`` sizes ``intfWidth``; a frame is
@@ -71,7 +73,7 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import period
+from finn.dataflow.traversal import passes, period
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import Fit, Resources
@@ -251,21 +253,36 @@ class IodmaEnd(Space):
         return True
 
     @constraint
+    def single_pass(self) -> bool | Rejected:
+        """Its free side presents the tensor once a frame, as the host's buffer holds it."""
+        form = self.side.form
+        repeated = passes(form)
+        if repeated > 1:
+            return reject(
+                "end-repetition",
+                f"{self.side.transport.name}: an {IODMA_HLS} end moves one pass of a "
+                f"{list(form.shape)} buffer a frame, and this free side presents it "
+                f"{repeated} times a frame (repetition by the host or the end is not "
+                "designed yet)",
+            )
+        return True
+
+    @constraint
     def row_major(self) -> bool | Rejected:
         """Its free side presents each pass of the tensor row-major, the order of the
         host's buffer."""
-        form = self.side.form
-        if not period(form).row_major:
+        one = period(self.side.form)
+        if not one.row_major:
             return reject(
                 "end-order",
                 f"{self.side.transport.name}: an {IODMA_HLS} end moves a row-major buffer, "
-                f"and this free side presents {form.beats} beats of {form.lanes} lanes of "
-                f"{list(form.shape)} in another order",
+                f"and this free side presents {one.beats} beats of {one.lanes} lanes of "
+                f"{list(one.shape)} in another order",
             )
         return True
 
     # The candidate's refusal, which the end Decision's viability reads.
-    admission = ConstraintGroup(offered, row_major)
+    admission = ConstraintGroup(offered, single_pass, row_major)
 
     @derived
     def contract(self) -> EndContract:

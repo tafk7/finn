@@ -163,6 +163,23 @@ def test_an_iodma_refuses_a_free_side_that_is_not_row_major() -> None:
     )
 
 
+def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
+    """The end moves one pass of the host's buffer a frame: a free side presenting it
+    three times (a streamed weight, once per row) is refused by name, row-major or not,
+    until repetition by the host or the end is designed (SZ11 (f))."""
+    offers = (iodma_hls(128),)
+    repeated = free_side(vector_major((4, 6), 3).repeated(3))
+    refused = inspection.admission(design_space(IodmaEnd(offers=offers, side=repeated)))
+    assert isinstance(refused, Rejected)
+    ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
+    assert code == "end-repetition"
+    assert message == (
+        "s_axis_0: an iodma_hls end moves one pass of a [4, 6] buffer a frame, and this "
+        "free side presents it 3 times a frame (repetition by the host or the end is not "
+        "designed yet)"
+    )
+
+
 # -- on the Chain --------------------------------------------------------------------------
 
 
@@ -310,16 +327,14 @@ def built(model: ModelWrapper, report: dict[str, Any]) -> dict[str, dict[str, ob
 def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrapper) -> None:
     ip_model, ip = explored(tfc, 1e6, ULTRA96_IP, sizing=True)
     model, report = explored(tfc, 1e6, sizing=True)
-    # The ends change no choice: persisted alike, and completed alike but for the
-    # doubled clock the ip shell offers (each MatMul's pumping, completed off); 45
-    # values on 8 nodes.
+    # The ends change no choice: persisted alike, and completed alike, each MatMul's
+    # pumping off on both (the doubled clock is the shell's, admitted by its root, and
+    # no kernel reads it off the platform); 53 values on 8 nodes.
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
     values = built(model, report)
-    assert built(ip_model, ip) == {
-        node: {**held, **(PUMPING if node.startswith("MatMul") else {})}
-        for node, held in values.items()
-    }
-    assert (len(values), sum(map(len, values.values()))) == (8, 45)
+    assert built(ip_model, ip) == values
+    assert all(values[node].items() >= PUMPING.items() for node in values if "MatMul" in node)
+    assert (len(values), sum(map(len, values.values()))) == (8, 53)
     persisted = kernel_choices_config(model).values()
     assert not [key for held in persisted for key in held if "end" in key.split(".")]
     # The input end at max(196, 49) + 4 and the output end at max(10, 5) + 4, the
@@ -422,8 +437,8 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
     and no end; TFC explored by [target_throughput 1e6, size_fifos] makes the same
     choices as in the Zynq shell, at the same cycles but its two ended channels', and
     packages as the same module: an end binds no RTL."""
-    assert (ULTRA96_IP.shell, ULTRA96_IP.board, ULTRA96_IP.platform.clk2x) == ("ip", None, True)
-    assert ULTRA96_IP.platform == replace(ULTRA96.platform, clk2x=True)
+    assert (ULTRA96_IP.shell, ULTRA96_IP.board) == ("ip", None)
+    assert ULTRA96_IP.platform == ULTRA96.platform
     zynq_model, zynq = explored(tfc, 1e6, sizing=True)
     ip_model, ip = explored(tfc, 1e6, ULTRA96_IP, sizing=True)
     assert read_target(ip_model) == ULTRA96_IP

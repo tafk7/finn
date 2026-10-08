@@ -26,9 +26,10 @@ def resolve_target(
     names its part, and the target states none: the packaged IP is built for the part
     and integrated by its user, wherever the part is, so a build that names the board
     and one that names its part make the same model. The platform is the part's
-    capabilities and totals (``finn.platform.parts``), the shell's doubled clock
-    (``finn.platform.shells``) and the clock period. Every refusal is named
-    (``TargetRefused``)."""
+    capabilities and totals (``finn.platform.parts``) and the clock period; what the
+    shell gives (its doubled clock, its budgets) is its row's, for the shell and board
+    the target names (``finn.platform.shell_row``), and no copy of it is the target's.
+    Every refusal is named (``TargetRefused``)."""
     built_shell(shell)
     if not period_ns > 0:
         raise TargetRefused("period-invalid", f"a clock period is > 0 ns, not {period_ns!r}")
@@ -46,14 +47,13 @@ def resolve_target(
     if part is None:
         raise TargetRefused("target-unstated", "a target names a part or a board")
     facts = part_facts(part)
-    row = shell_row(shell, board)
+    shell_row(shell, board)  # a shell with no row for the board is refused (no-shell-row)
     platform = Platform(
         period_ns=float(period_ns),
         dsp=facts.dsp,
         fabric=facts.fabric,
         uram=facts.uram,
         uram_init=facts.uram_init,
-        clk2x=row.clk2x,
         resources=facts.resources,
     )
     return Target(
