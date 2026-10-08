@@ -1133,7 +1133,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     """The driver sets the clock its bitfile delivers and runs the bitfile the build
     ships: a parent graph that states no delivered clock is refused, so is one whose
     routed design states no PL clock, and so is one that states no bitfile."""
-    model = kernel_model(second_weights=False)
+    model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))

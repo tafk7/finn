@@ -138,10 +138,10 @@ def searched_tfc(
 @pytest.mark.slow
 def test_tfc_on_ip_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
     """1.6 % of the part's LUTs (1 128), between the least parallelism's 1 034 and the
-    1 143 of 3 136 cycles: 3 584 cycles at 1 116, the shell's total its partition's."""
+    1 143 of 3 136 cycles: 3 584 cycles at 1 114, the shell's total its partition's."""
     searched, report = searched_tfc(tfc, "ip", 0.016, 1128, 3584)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 1116 and resources["used"] == resources["shell"]["partition"]
+    assert resources["used"]["lut"] == 1114 and resources["used"] == resources["shell"]["partition"]
     # TargetCycles folds by cycles alone: a looser budget can pick a costlier shape.
     assert "no budget uses more than budget 25089: lut 1034 > 1027" in searched["departures"]
 
