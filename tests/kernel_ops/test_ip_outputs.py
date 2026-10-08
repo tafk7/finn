@@ -42,8 +42,10 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import (
     configured_root,
+    free_side,
     hierarchical_utilization,
     ooc_member_resources,
+    stream_order,
     write_boundary_facts,
 )
 from finn.util.toolchain import Toolchain, machine_toolchain
@@ -71,13 +73,16 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     }
     assert described["ip"]["top"].startswith("finn_partition__")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
-    # Each stream states its port's boundary facts, as the partition model does.
+    # Each stream states its port's boundary facts, as the partition model does, and the
+    # order its free side presents the tensor in: the Chain's, row-major.
     inputs, outputs = partition_facts(model)
-    facts = [{key: port[key] for key in (*STREAM_FACTS, "tdata")} for port in inputs + outputs]
-    stated = [
-        {key: stream[key] for key in (*STREAM_FACTS, "tdata")} for stream in described["streams"]
-    ]
+    keys = [key for key in (*STREAM_FACTS, "tdata") if key != "order"]
+    facts = [{key: port[key] for key in keys} for port in inputs + outputs]
+    stated = [{key: stream[key] for key in keys} for stream in described["streams"]]
     assert stated == facts
+    for stream, port in zip(described["streams"], inputs + outputs, strict=True):
+        assert stream["order"] == stream_order(free_side(point, port["tensor"]).form)
+        assert stream["order"]["row_major"] is True
     assert [(stream["name"], stream["direction"]) for stream in described["streams"]] == [
         ("s_axis_0", "in"),
         ("m_axis_0", "out"),

@@ -24,9 +24,12 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.custom_op.kernels.shell as shell
+from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import read_target, write_target
 from finn.custom_op.kernels.shell import ShellResources, persist, shell_resources, shell_root
 from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.traversal import Traversal, tile, vector_major
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.configure import chosen
 from finn.kernels.ends import (
@@ -37,6 +40,7 @@ from finn.kernels.ends import (
     NO_CONVERTER,
     EndContract,
     EndOffer,
+    IodmaEnd,
     converter_kind,
     iodma_hls,
     iodma_hls_resources,
@@ -44,6 +48,7 @@ from finn.kernels.ends import (
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, ends
 from finn.kernels.target import Target
+from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.utilization import Resources, total
 from finn.platform import IP_ROW, ShellRow, resolve_target, shell_row
 from finn.platform.shells import ZYNQ_STATIC_REGION
@@ -132,6 +137,32 @@ def test_an_iodma_states_its_resources_by_its_widths() -> None:
     assert narrow == iodma_hls_resources(direction="out", intf_width=64, stream_width=8)
     with pytest.raises(ValueError, match="in or out"):
         iodma_hls_resources(direction="both", intf_width=64, stream_width=8)
+
+
+def free_side(form: Traversal) -> StreamContract:
+    """An input's free side presenting UINT8 lanes in ``form``."""
+    beat = AxisBeat("s_axis_0", DataType["UINT8"], form.lanes, endpoint=Endpoint.TARGET)
+    element = ScalarEncoding(DataType["UINT8"])
+    return StreamContract(beat.native(clock="ap_clk", reset="ap_rst_n"), element, form)
+
+
+def test_an_iodma_refuses_a_free_side_that_is_not_row_major() -> None:
+    """The end moves a flat buffer in order, which the driver fills row-major: a free side
+    in another order (a (4, 6) matrix in 2 x 3 tiles) is refused by name, a row-major
+    one in any lanes admitted."""
+    offers = (iodma_hls(128),)
+    for form in (vector_major((4, 6), 3), vector_major((1, 784), 4), tile(4, 6, 1, 6)):
+        admitted = inspection.admission(design_space(IodmaEnd(offers=offers, side=free_side(form))))
+        assert admitted == Available(True)
+    tiled = design_space(IodmaEnd(offers=offers, side=free_side(tile(4, 6, 2, 3))))
+    refused = inspection.admission(tiled)
+    assert isinstance(refused, Rejected)
+    ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
+    assert code == "end-order"
+    assert message == (
+        "s_axis_0: an iodma_hls end moves a row-major buffer, and this free side presents "
+        "4 beats of 6 lanes of [4, 6] in another order"
+    )
 
 
 # -- on the Chain --------------------------------------------------------------------------

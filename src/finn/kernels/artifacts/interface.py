@@ -14,7 +14,8 @@ streams (the partition's boundary facts, ``finn.partition``):
 - ``resets``: each reset pin, its polarity and the clocks it is synchronous to;
 - ``streams``: each AXI-Stream port, its direction, ``tdata`` width and clock, and
   what it carries: the tensor, its element (the channel's, by name) and its value
-  range, the lanes a beat, the beats a frame and the frame's shape;
+  range, the lanes a beat, the beats a frame, the frame's shape and the ``order``
+  its beats and lanes present the frame in (whether row-major, and the traversal);
 - ``axilite``: each AXI-Lite bus, its address and data widths, its clock and its
   register map, the IP-XACT's one ``Reg0`` block (``ipxact.register_window``);
 - ``aximm``: each AXI-MM port with its map. The ABI has no AXI-MM protocol yet, so
@@ -45,7 +46,7 @@ from finn.kernels.artifacts.ipxact import address_width, frequency_hz, register_
 INTERFACE_FILE = "interface.json"
 
 #: Each stream fact the description states, from the boundary facts.
-STREAM_FACTS = ("tensor", "element", "range", "lanes", "beats", "shape")
+STREAM_FACTS = ("tensor", "element", "range", "lanes", "beats", "shape", "order")
 
 
 class InterfaceError(Exception):

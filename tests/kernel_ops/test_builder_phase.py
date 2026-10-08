@@ -340,7 +340,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     directory's: a parent graph stating no driver (its driver step never ran), or another
     directory's, is refused by name before anything is copied, whatever an earlier
     build left in driver/."""
-    model = kernel_model(second_weights=False)
+    model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
@@ -1114,7 +1114,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
 def test_a_driver_without_its_bitfiles_clock_is_refused(tmp_path: Path) -> None:
     """The driver sets the clock its bitfile delivers: a parent graph that states no
     delivered clock is refused, and so is one whose routed design states no PL clock."""
-    model = kernel_model(second_weights=False)
+    model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))

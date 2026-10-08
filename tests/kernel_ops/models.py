@@ -214,6 +214,20 @@ def kernel_model(**options: bool) -> ModelWrapper:
     return model
 
 
+#: The second MatMul's folding under which the Chain's streamed w2 presents each pass
+#: row-major at its free side, the order an IODMA end moves (``IodmaEnd.row_major``): a
+#: row of PE lanes a beat. At the Chain's own (2 x 2) it is tiled, and the pynq shell
+#: refuses it (``end-order``).
+ROW_MAJOR_W2 = {"compute.packed.pe": 4, "compute.packed.simd": 1}
+
+
+def row_major_w2(model: ModelWrapper) -> ModelWrapper:
+    """``model``, the Chain with w2 streamed, its second MatMul folded ``ROW_MAJOR_W2``."""
+    (second,) = [node for node in model.graph.node if node.name == "second"]
+    kernel_op(model, second).save(ROW_MAJOR_W2)
+    return model
+
+
 def open_memories(root: ShellRoot) -> tuple[Any, list[str]]:
     """The root's point and its open adapter memories."""
     return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
@@ -236,6 +250,8 @@ __all__ = [
     "configure_partition",
     "kernel_model",
     "open_memories",
+    "row_major_w2",
+    "ROW_MAJOR_W2",
     "schema_digest",
     "H",
     "INT3",

@@ -43,7 +43,7 @@ from finn.transformation.kernels.integration import (
     integration,
 )
 from finn.transformation.kernels.package import write_boundary_facts
-from kernel_ops.models import configure_partition, kernel_model
+from kernel_ops.models import configure_partition, kernel_model, row_major_w2
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls end at a 128-bit port.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -51,10 +51,12 @@ ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 
 def chain(shell: str = "ip") -> ModelWrapper:
     """The Chain, x and the streamed w2 crossing its boundary, its choices saved, for
-    Ultra96 on ``shell`` (the default ``ip``, or ``pynq``)."""
+    Ultra96 on ``shell`` (the default ``ip``, or ``pynq``, w2's pass row-major:
+    ``row_major_w2``)."""
     model = kernel_model(second_weights=False)
     if shell == "pynq":
         write_target(model, ZYNQ)
+        row_major_w2(model)
     configure_partition(model)
     return model
 
@@ -94,6 +96,10 @@ X = port("s_axis_0", "x", [3, 4], "INT3", 2, 6, 8)
 # The weights' repetition stays at the boundary: three rows, 4 beats each.
 W2 = port("s_axis_1", "w2", [4, 4], "INT3", 4, 12, 16)
 Y = port("m_axis_0", "y", [3, 4], "INT7", 2, 6, 16)
+#: y on pynq, its MatMul folded ``ROW_MAJOR_W2``: four lanes a beat, a 32-bit stream its
+#: end moves without a converter.
+PYNQ_Y = port("m_axis_0", "y", [3, 4], "INT7", 4, 3, 32)
+PYNQ_Y_END = {**iodma("out", 32), "converter": False, "call_cycles": 13}
 
 
 def test_on_ip_the_facts_are_the_boundary_streams_with_no_end() -> None:
@@ -108,7 +114,7 @@ def test_on_pynq_each_boundary_port_states_its_end_and_the_channels_element() ->
     write_boundary_facts(model)
     assert partition_facts(model) == (
         [{**X, "end": iodma("in", 16)}, {**W2, "end": iodma("in", 64)}],
-        [{**Y, "end": iodma("out", 32)}],
+        [{**PYNQ_Y, "end": PYNQ_Y_END}],
     )
 
 
@@ -188,11 +194,11 @@ def test_the_export_names_each_end_its_iodma_and_every_connection(tmp_path: Path
             "direction": "in",
         },
         {
-            "numInputVectors": [1, 6],
-            "NumChannels": 2,
+            "numInputVectors": [1, 3],
+            "NumChannels": 4,
             "dataType": "UINT8",
             "intfWidth": 32,
-            "streamWidth": 16,
+            "streamWidth": 32,
             "direction": "out",
         },
     ]
@@ -235,6 +241,16 @@ def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
         integration(parent)
 
 
+def test_an_iodma_end_refuses_w2_tiled_by_name() -> None:
+    """At the Chain's own folding w2's free side presents each pass in 2 x 2 tiles,
+    which the driver's row-major buffer does not hold: the pynq shell refuses it."""
+    model = kernel_model(second_weights=False)
+    write_target(model, ZYNQ)
+    with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable: .*end-order: s_axis_1"):
+        configure_partition(model)
+        write_boundary_facts(model)
+
+
 class PackagedHere:
     """A toolchain double for PackagePartition: Vivado "packages" by writing the IP's
     component.xml where package.tcl puts it."""
@@ -256,7 +272,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
     interfaces = packaged.get(OUTPUT_INTERFACES)
     assert (interfaces["s_axis"], interfaces["m_axis"]) == (
         [["s_axis_0", 8], ["s_axis_1", 16]],
-        [["m_axis_0", 16]],
+        [["m_axis_0", 32]],
     )
     added = {item.key for item in packaged.graph.metadata_props} - before
     assert added == {

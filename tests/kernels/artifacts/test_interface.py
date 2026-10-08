@@ -20,6 +20,23 @@ from finn.kernels.artifacts.interface import InterfaceError, describe_interface
 
 from .test_ipxact import PORTS
 
+#: x's order, row-major: six beats of three lanes.
+ROW_MAJOR = {
+    "row_major": True,
+    "passes": 1,
+    "shape": [6, 3],
+    "beat_loops": [[6, 3]],
+    "lane_loops": [[3, 1]],
+}
+#: y's order: a (3, 2) matrix column by column, one element a beat.
+TRANSPOSED = {
+    "row_major": False,
+    "passes": 1,
+    "shape": [3, 2],
+    "beat_loops": [[2, 1], [3, 2]],
+    "lane_loops": [],
+}
+
 FACTS: dict[str, dict[str, Any]] = {
     "s_axis_0": {
         "port": "s_axis_0",
@@ -30,6 +47,7 @@ FACTS: dict[str, dict[str, Any]] = {
         "lanes": 3,
         "beats": 6,
         "tdata": 12,
+        "order": ROW_MAJOR,
     },
     "m_axis_0": {
         "port": "m_axis_0",
@@ -40,6 +58,7 @@ FACTS: dict[str, dict[str, Any]] = {
         "lanes": 1,
         "beats": 6,
         "tdata": 8,
+        "order": TRANSPOSED,
     },
 }
 
@@ -68,6 +87,7 @@ def test_every_pin_is_described_with_what_it_carries() -> None:
             "lanes": 3,
             "beats": 6,
             "shape": [1, 6, 3],
+            "order": ROW_MAJOR,
         },
         {
             "name": "m_axis_0",
@@ -80,6 +100,7 @@ def test_every_pin_is_described_with_what_it_carries() -> None:
             "lanes": 1,
             "beats": 6,
             "shape": [1, 6],
+            "order": TRANSPOSED,
         },
     ]
     # The bus's map is the IP-XACT's: one register block, its window at least 4 KiB.
