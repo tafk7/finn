@@ -6,8 +6,10 @@
 """Driving one RTL top under XSI, and the process discipline that requires.
 
 Every sweep drives its design through this one transport -- the marshalling,
-the backpressure collector and the watchdog handling -- and compares the
-results itself.  A second copy of the transport would be a second place for the
+the paced drivers and the watchdog handling -- and compares the results
+itself. Its streams are paced by the harness's one spec (``finn.harness.pacing``),
+as the stream testbench paces its own: a ``Pacing`` gives each input and output
+its ``Pace`` by position.  A second copy of the transport would be a second place for the
 one-simulation-per-process rule to be got wrong.
 
 **Each simulation runs in its own process.**  XSI keeps state that outlives
@@ -33,20 +35,18 @@ import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any, cast
 
 import numpy as np
 
+from finn.harness.pacing import Pace, Pacing
+from finn.kernels.artifacts.module import RegisterMap
 from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
 
 #: Watchdog budget, in cycles without an accepted output beat.
 LIVENESS = 4000
-
-#: Output beats accepted between stalls, and how long each stall lasts.
-BACKPRESSURE_PERIOD = 1
-BACKPRESSURE_TICKS = 5
 
 
 def random_word(generator: np.random.RandomState, bits: int) -> int:
@@ -68,52 +68,75 @@ def random_word(generator: np.random.RandomState, bits: int) -> int:
     return int.from_bytes(raw, "little") & ((1 << bits) - 1)
 
 
-def _collect_with_backpressure(sim: object, stream: str, size: int, watchdog: object) -> object:
-    """Collect outputs while de-asserting ready every few accepted beats.
+class _PacedInput:
+    """Present ``values`` on an input stream in order, paced by ``pace`` as the stream
+    testbench paces it (``finn.harness.pacing``): after every ``burst`` handshakes, valid
+    low for ``pause`` cycles.
 
-    ``rtlsim_multi_io`` holds ready high forever, which never exercises the
-    stall path: the obligation is that the composition does not drop, duplicate
-    or reorder anything when the consumer is not listening, and a consumer that
-    always listens cannot show that.
+    Called before each rising edge with the pins as they are during the cycle (a
+    handshake completes at that edge); what it returns is driven after the edge."""
 
-    The watchdog is reset on every accepted beat, exactly as the stock
-    collector does; a deliberate stall must not read as a hang.
-    """
+    def __init__(self, top: Any, stream: str, values: list[int], pace: Pace) -> None:
+        self.valid = top.getPort(f"{stream}_tvalid")
+        self.ready = top.getPort(f"{stream}_tready")
+        self.data = top.getPort(f"{stream}_tdata")
+        if None in (self.valid, self.ready, self.data):
+            raise ValueError(f"missing stream pins of {stream}")
+        self.values, self.pace = values, pace
+        self.sent = self.burst = self.idle = 0
+        self.presenting = False
 
-    class ThrottledCollector:
-        def __init__(self) -> None:
-            # The bus-port accessor lives on the engine, which is what
-            # SimEngine.collect_output passes its own collector as ``top``.
-            self.vld = sim.get_bus_port(stream, "tvalid")  # type: ignore[attr-defined]
-            self.rdy = sim.get_bus_port(stream, "tready")  # type: ignore[attr-defined]
-            self.dat = sim.get_bus_port(stream, "tdata")  # type: ignore[attr-defined]
-            self.buf: list[str] = []
-            self.stall = 0
+    def __call__(self, _sim: object) -> dict[Any, str] | None:
+        if self.presenting and self.ready.read().as_bool():
+            self.sent += 1
+            self.burst += 1
+            if self.burst == self.pace.burst:
+                self.burst, self.idle = 0, self.pace.pause
+        elif self.idle:
+            self.idle -= 1
+        if self.sent == len(self.values):
+            if not self.presenting:
+                return None
+            self.presenting = False
+            return {self.valid: "0"}
+        self.presenting = not self.idle
+        if not self.presenting:
+            return {self.valid: "0"}
+        return {self.valid: "1", self.data: f"{self.values[self.sent]:x}"}
 
-        def __iter__(self):  # type: ignore[no-untyped-def]
-            return iter(self.buf)
 
-        def __call__(self, _sim: object) -> object:
-            if self.stall > 0:
-                self.stall -= 1
-                return {self.rdy: "0"} if self.rdy.as_bool() else {}
-            if self.rdy.as_bool():
-                if self.vld.read().as_bool():
-                    watchdog.reset()  # type: ignore[attr-defined]
-                    self.buf.append(self.dat.read().as_hexstr())
-                    if len(self.buf) == size:
-                        return {self.rdy: "0"}
-                    if len(self.buf) % BACKPRESSURE_PERIOD == 0:
-                        self.stall = BACKPRESSURE_TICKS
-                        return {self.rdy: "0"}
-                return {}
-            if len(self.buf) < size:
-                return {self.rdy: "1"}
-            return None
+class _PacedOutput:
+    """Collect ``size`` words of an output stream, paced by ``pace``: after every ``burst``
+    handshakes, ready low for ``pause`` cycles. Each accepted word resets ``watchdog``, so a
+    deliberate stall does not read as a hang."""
 
-    collector = ThrottledCollector()
-    sim.enlist(collector)  # type: ignore[attr-defined]
-    return collector
+    def __init__(self, top: Any, stream: str, size: int, pace: Pace, watchdog: Any) -> None:
+        self.valid = top.getPort(f"{stream}_tvalid")
+        self.ready = top.getPort(f"{stream}_tready")
+        self.data = top.getPort(f"{stream}_tdata")
+        if None in (self.valid, self.ready, self.data):
+            raise ValueError(f"missing stream pins of {stream}")
+        self.size, self.pace, self.watchdog = size, pace, watchdog
+        self.words: list[int] = []
+        self.burst = self.idle = 0
+        self.taking = False
+
+    def __call__(self, _sim: object) -> dict[Any, str] | None:
+        if self.taking and self.valid.read().as_bool():
+            self.watchdog.reset()
+            self.words.append(int(self.data.read().as_hexstr(), 16))
+            self.burst += 1
+            if self.burst == self.pace.burst:
+                self.burst, self.idle = 0, self.pace.pause
+        elif self.idle:
+            self.idle -= 1
+        if len(self.words) == self.size:
+            if not self.taking:
+                return None
+            self.taking = False
+            return {self.ready: "0"}
+        self.taking = not self.idle
+        return {self.ready: "1" if self.taking else "0"}
 
 
 def _die_with_parent() -> None:
@@ -165,10 +188,10 @@ def drive(
     stimulus: dict[str, list[int]],
     expected: int,
     *,
-    stalls: bool,
+    pacing: Pacing,
     data_files: Mapping[str, str] | None = None,
 ) -> list[int]:
-    """Compile and run one DUT in a fresh process, optionally stalling it.
+    """Compile and run one DUT in a fresh process, its streams paced by ``pacing``.
 
     Only marshals arguments across the process boundary; the simulation itself
     happens in :func:`simulate_once`, which is the whole body of that process.
@@ -184,7 +207,7 @@ def drive(
                     "sources": sources,
                     "stimulus": stimulus,
                     "expected": expected,
-                    "stalls": stalls,
+                    "pacing": pacing.as_json(),
                     "data_files": dict(data_files or {}),
                 }
             )
@@ -205,26 +228,22 @@ def drive_observed(
     expected_outputs: dict[str, int],
     observations: dict[str, dict[str, str]],
     *,
-    stalls: bool,
+    pacing: Pacing,
     directory: Path,
     drain_cycles: int = LIVENESS,
-    input_stalls: bool | None = None,
-    backpressure_ticks: int = BACKPRESSURE_TICKS,
     data_files: dict[str, str] | None = None,
-    axilite_writes: dict[str, list[tuple[int, int]]] | None = None,
+    registers: Mapping[str, RegisterMap] | None = None,
 ) -> dict[str, Any]:
     """Run an observed production artifact, retaining request, response and compile files.
 
-    Stream names are complete ABI bus names. Each observation names actual
+    Stream names are complete ABI bus names, paced by ``pacing`` in the order
+    ``stimulus`` and ``expected_outputs`` name them. Each observation names actual
     read-only data/valid/ready pins and optionally last; absent pins refuse.
-    input_stalls=False keeps producers continuous while output stalls remain enabled.
     data_files (name -> text) are placed where the simulation resolves relative
-    file names, such as an INIT_FILE. axilite_writes (bus -> [(byte address,
-    32-bit word)]) are carried out, in order, after reset and before any
-    stream starts.
+    file names, such as an INIT_FILE. ``registers`` (bus -> its writes, as a
+    module declares them: ``finn.harness.rtl.declared_registers``) are carried
+    out, in order, after reset and before any stream starts.
     """
-    if type(backpressure_ticks) is not int or backpressure_ticks < 0:
-        raise ValueError("backpressure_ticks must be a nonnegative integer")
     directory.mkdir(parents=True, exist_ok=False)
     request = directory / "request.json"
     response = directory / "response.json"
@@ -236,13 +255,13 @@ def drive_observed(
                 "stimulus": stimulus,
                 "expected_outputs": expected_outputs,
                 "observations": observations,
-                "stalls": stalls,
-                "input_stalls": stalls if input_stalls is None else input_stalls,
-                "backpressure_ticks": backpressure_ticks,
+                "pacing": pacing.as_json(),
                 "work_directory": str(directory / "compile"),
                 "drain_cycles": drain_cycles,
                 "data_files": data_files or {},
-                "axilite_writes": axilite_writes or {},
+                "axilite_writes": {
+                    bus: list(found.writes) for bus, found in (registers or {}).items()
+                },
             },
             indent=2,
         )
@@ -368,13 +387,10 @@ def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> di
             "last",
         }:
             raise ValueError("an observation names exactly data/valid/ready and optional last")
+    pacing = Pacing.from_json(request["pacing"])
     for index, (name, values) in enumerate(stimulus.items()):
-        throttle = (
-            (2 + index % 2, 3 + index % 3)
-            if request.get("input_stalls", request["stalls"])
-            else (float("inf"), 0)
-        )
-        sim.stream_input(name, iter(f"{value:x}" for value in values), throttle=throttle)
+        sim.enlist(_PacedInput(sim.top, name, list(values), pacing.input(index)))
+    paces = {name: pacing.output(index) for index, name in enumerate(outputs)}
     watchdogs = {name: sim.create_watchdog(f"{name} timeout", LIVENESS) for name in outputs}
 
     class ObservedCollector:
@@ -384,6 +400,7 @@ def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> di
                 name: {"words": [], "last": []} for name in monitors
             }
             self.inputs = dict.fromkeys(inputs, 0)
+            self.burst = dict.fromkeys(outputs, 0)
             self.stall = dict.fromkeys(outputs, 0)
             self.drain = 0
             self.held: dict[str, tuple[int, int | None]] = {}
@@ -435,8 +452,10 @@ def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> di
                         )
                     if len(self.outputs[name]) == expected[name]:
                         sim.remove_watchdog(watchdogs[name])
-                    elif request["stalls"]:
-                        self.stall[name] = request.get("backpressure_ticks", BACKPRESSURE_TICKS)
+                    else:  # after every burst, a pause (finn.harness.pacing)
+                        self.burst[name] += 1
+                        if self.burst[name] == paces[name].burst:
+                            self.burst[name], self.stall[name] = 0, paces[name].pause
                 # Keep ready high after the expected prefix to observe extras.
                 if len(self.outputs[name]) >= expected[name]:
                     self.stall[name] = 0
@@ -503,7 +522,7 @@ def simulate_once(request_path: str, response_path: str) -> int:
                     so_rel,
                     request["stimulus"],
                     request["expected"],
-                    stalls=request["stalls"],
+                    pacing=Pacing.from_json(request["pacing"]),
                     label=request["top_module"],
                 )
             }
@@ -519,30 +538,21 @@ def _simulate(
     stimulus: dict[str, list[int]],
     expected: int,
     *,
-    stalls: bool,
+    pacing: Pacing,
     label: str,
 ) -> list[int]:
     sim = load_sim_obj(sim_dir, so_rel)
     reset_rtlsim(sim)
-    # Different throttles per stream, so the two inputs also arrive out of step
-    # with each other rather than in lockstep.
-    throttles = {"in0": (2, 3), "in1": (3, 2)} if stalls else {}
-    for name, values in stimulus.items():
-        sim.stream_input(
-            f"{name}_V",
-            map(lambda value: f"{value:0x}", list(values)),
-            throttle=throttles.get(name, (float("inf"), 0)),
-        )
+    # Paced by position, so two inputs also arrive out of step rather than in lockstep.
+    for index, (name, values) in enumerate(stimulus.items()):
+        sim.enlist(_PacedInput(sim.top, f"{name}_V", list(values), pacing.input(index)))
     watchdog = sim.create_watchdog("out0_V timeout", LIVENESS)
-    if stalls:
-        collected = _collect_with_backpressure(sim, "out0_V", expected, watchdog)
-    else:
-        collected = sim.collect_output("out0_V", expected, watchdog=watchdog)
+    collected = _PacedOutput(sim.top, "out0_V", expected, pacing.output(0), watchdog)
+    sim.enlist(collected)
     timeouts = sim.run()
     if timeouts:
         raise AssertionError(f"{label}: deadlock, watchdogs fired: {timeouts}")
-    # Both collectors are iterables of hex strings; neither is typed as one.
-    result = [int(value, base=16) for value in cast("Iterable[str]", collected)]
+    result = collected.words
     if watchdog in sim.watchdogs:
         sim.remove_watchdog(watchdog)
     close_rtlsim(sim)

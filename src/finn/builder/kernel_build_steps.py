@@ -276,9 +276,9 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
     report/ooc_resources.json (ooc_member_resources). With STITCHED_IP, the XSim
     testbench is written into ``stitched_ip/testbench`` (finn.builder.kernel_testbench),
     on the partition's inputs from the parent graph executed on the first frame of
-    ``verify_input_npy`` when it exists, a generated frame otherwise; it is run once as
-    it is written, so the step fails if the module's outputs differ from the
-    partition's in Python."""
+    ``verify_input_npy`` when it exists, a generated frame otherwise; it is run once,
+    through the build's toolchain, so the step fails if the module's outputs differ
+    from the partition's in Python."""
     stitched = KernelOutputType.STITCHED_IP in cfg.generate_outputs
     ooc = KernelOutputType.OOC_SYNTH in cfg.generate_outputs
     if not (stitched or ooc):
@@ -309,7 +309,12 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
         else:
             frame, stimulus = generated_frame(body), "a generated frame"
         write_testbench(
-            body, directory / TESTBENCH_DIR, frame, completion=kernel_completion, label=node.name
+            body,
+            directory / TESTBENCH_DIR,
+            frame,
+            completion=kernel_completion,
+            label=node.name,
+            toolchain=cfg._resolve_toolchain(),
         )
         print(f"XSim testbench on {stimulus} in {directory / TESTBENCH_DIR}: PASS")
     return model

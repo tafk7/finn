@@ -130,6 +130,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
             )
         },
         outputs={"m_axis_0": ([pack(logits, bits)], bits * len(logits))},
+        cycles=root.point.cycles,  # its layers' work, beyond its boundary's beats
     )
 
 

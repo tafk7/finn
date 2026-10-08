@@ -30,6 +30,7 @@ from finn.kernels.artifacts.module import (
     Leaf,
     Link,
     LinkEnd,
+    RegisterMap,
     fingerprint,
     merge,
     module_name,
@@ -232,3 +233,17 @@ def test_every_instance_input_and_root_output_has_exactly_one_driver() -> None:
     twice = replace(leaf, held=Held((*leaf.held.inputs, ("ivld", 0)), leaf.held.unused))
     with pytest.raises(BuildError, match="more than one driver drives a.ivld"):
         replace(module, fragment=replace(module.fragment, instances=(("a", twice),)))
+
+
+def test_a_register_map_writes_whole_words_at_word_addresses() -> None:
+    assert RegisterMap(((0, 1), (4, 0xFFFFFFFF))).writes == ((0, 1), (4, 0xFFFFFFFF))
+    with pytest.raises(BuildError, match="not a 32-bit word's address"):
+        RegisterMap(((2, 1),))
+    with pytest.raises(BuildError, match="not a 32-bit word"):
+        RegisterMap(((0, 1 << 32),))
+    with pytest.raises(BuildError, match="32 or 64 bits"):
+        RegisterMap((), word_bits=16)
+    # A presented bus carries the writes of its kernel's configuration below a node too.
+    writes = RegisterMap(((0, 7),))
+    kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite", writes),))
+    assert kernel.under("activate").exports[0].registers == writes

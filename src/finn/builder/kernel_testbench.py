@@ -5,19 +5,21 @@
 module, its outputs checked against the partition's body executed in Python.
 
 ``write_testbench`` writes it with ``finn.harness.rtl``'s stream-testbench writer
-(``stream_through``: inputs and outputs stalled, each output word compared on its
-payload bits) into a directory that holds what it needs and nothing of the machine:
+(``stream_bench``: inputs and outputs stalled, every pin the module declares driven:
+``ap_clk2x`` aligned to ``ap_clk``, each AXI-Lite bus's declared register writes made
+before any stream, held ports at their values; each output word compared on its
+payload bits; a watchdog from the beats and the model's cycles) into a directory that
+holds what it needs and nothing of the machine:
 
-- ``check.sv``, the testbench, its words inline;
+- ``check.sv``, the testbench, and its stimulus and expected words in ``*.mem`` files;
 - ``module/``, the module's sources, and each memory's INIT_FILE beside the testbench;
 - ``run.sh``, which compiles, elaborates and runs it with Vivado's simulator found on
   PATH (``xvlog``, ``xelab``, ``xsim``), ``glbl.v`` from ``$XILINX_VIVADO``, and exits
   0 printing ``PASS`` when every output word matched.
 
-The harness writes a testbench by running it, so ``write_testbench`` simulates it once
-(through the machine's toolchain) and a testbench written is one that passed. Its
-commands are the harness's (``simulate``), repeated in ``run.sh`` with the directory's
-own paths.
+The writer simulates nothing. ``write_testbench`` then runs the testbench once, through
+the toolchain it is given (``simulate``), so a testbench a build writes is one that
+passed. ``run.sh`` repeats ``simulate``'s commands with the directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
@@ -41,11 +43,13 @@ from qonnx.core.onnx_exec import execute_onnx
 
 from finn.core.onnx_exec import execute_onnx as execute_parent_graph
 from finn.custom_op.kernels.partition import member
-from finn.harness.rtl import Words, materialize, pack, stream_through
+from finn.harness.rtl import Words, pack, simulate, stream_bench
+from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
 from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.util.toolchain import Toolchain
 
 #: The directory of the testbench, beside the packaged IP.
 TESTBENCH_DIR = "testbench"
@@ -173,22 +177,26 @@ def write_testbench(
     *,
     completion: Completion | None = None,
     label: str = "the partition",
+    toolchain: Toolchain | None = None,
 ) -> None:
     """Write the XSim testbench of the partition ``body`` into ``directory``, streaming
     ``frame`` (its inputs by tensor) and expecting the body's outputs on it, executed in
     Python; see the module docstring. The module is the one PackagePartition packages
-    (``configured_root`` under ``completion``). The testbench is run once as it is
-    written: a mismatch raises ``finn.harness.rtl.SimulationFailed``."""
+    (``configured_root`` under ``completion``), and the watchdog allows the cycles its
+    root states. The testbench is run once, through ``toolchain`` (the machine's by
+    default): a mismatch raises ``finn.harness.rtl.SimulationFailed``."""
     point, boundary = configured_root(body, label, completion)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)
     directory.mkdir(parents=True, exist_ok=True)
-    stream_through(point.module, directory, inputs=inputs, outputs=outputs)
-    top, sources, _ = materialize(point.module, directory)
-    relative = [str(Path(source).relative_to(directory)) for source in sources]
+    bench = stream_bench(
+        point.module, directory, inputs=inputs, outputs=outputs, cycles=int(point.cycles)
+    )
+    relative = [str(Path(source).relative_to(directory)) for source in bench.sources]
     script = directory / "run.sh"
-    script.write_text(_run_script(top, relative))
+    script.write_text(_run_script(module_name(point.module), relative))
     script.chmod(0o755)
+    simulate(bench.sources, bench.text, directory, toolchain=toolchain)
 
 
 __all__ = [

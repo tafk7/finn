@@ -401,7 +401,7 @@ class Kernel(Space):
                 f"{space_type.__qualname__} declares no module and places no kernel",
             )
         exports = tuple(
-            BusExport(item.node, item.child, item.port)
+            BusExport(item.node, item.child, item.port, item.registers)
             for located in self.presented
             for item in located.value
         )
