@@ -86,7 +86,7 @@ from finn.dataflow.traversal import Traversal, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
-from finn.kernels.artifacts.module import Abi, module_name
+from finn.kernels.artifacts.module import Abi, declared_registers, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import member_of, undecided
@@ -258,6 +258,7 @@ def interface_description(
             },
             part=built.part,
             period_ns=built.platform.period_ns,
+            registers=declared_registers(point.module),
         ),
     }
 

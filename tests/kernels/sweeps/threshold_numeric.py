@@ -33,8 +33,9 @@ from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, vector_major
 from finn.harness.pacing import FREE, STALLED
-from finn.harness.rtl import declared_registers, materialize
+from finn.harness.rtl import materialize
 from finn.harness.toolchain import print_identity
+from finn.kernels.artifacts.module import declared_registers
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlBus

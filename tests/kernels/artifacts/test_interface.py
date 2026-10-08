@@ -17,6 +17,7 @@ import pytest
 
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.interface import InterfaceError, describe_interface
+from finn.kernels.artifacts.module import RegisterMap
 
 from .test_ipxact import PORTS
 
@@ -134,3 +135,18 @@ def test_a_pin_outside_every_interface_is_refused() -> None:
     loose = Signal("debug", Direction.OUT, 1)
     with pytest.raises(InterfaceError, match="debug: a pin outside every interface"):
         describe_interface((*PORTS, loose), FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0)
+
+
+def test_a_buses_register_width_is_its_register_maps() -> None:
+    """The register map's width is the word its ``RegisterMap`` writes: 64 bits where the
+    bus's configuration writes 64-bit words, 32 for a bus that states no map."""
+
+    def width(registers: dict[str, RegisterMap] | None) -> int:
+        described = describe_interface(
+            PORTS, FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0, registers=registers
+        )
+        ((register,),) = [bus["register_map"] for bus in described["axilite"]]
+        return int(register["width"])
+
+    assert width({"s_axilite": RegisterMap(((0, 1), (8, 2)), word_bits=64)}) == 64
+    assert width({"s_axilite": RegisterMap()}) == width(None) == width({}) == 32

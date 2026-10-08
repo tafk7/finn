@@ -505,6 +505,14 @@ def fingerprint(module: Module) -> str:
     return digest(("module-v1", typed_canonical(module)))
 
 
+def declared_registers(module: Module) -> dict[str, RegisterMap]:
+    """Each control bus the module presents, by its root port, and the writes its kernel's
+    configuration declares; a leaf presents none."""
+    if not isinstance(module, Composed):
+        return {}
+    return {item.port: item.registers for item in module.fragment.exports}
+
+
 def module_name(module: Module) -> str:
     """A leaf's own name; a composed module's ``<stem>__<fingerprint[:16]>``."""
     if isinstance(module, Leaf):
@@ -528,6 +536,7 @@ __all__ = [
     "RegisterMap",
     "Scalar",
     "ScalarTable",
+    "declared_registers",
     "fingerprint",
     "merge",
     "module_name",
