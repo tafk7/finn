@@ -57,8 +57,10 @@ def body_of(model: ModelWrapper) -> ModelWrapper:
 
 #: Ultra96 in the Zynq shell: a target with a board and its part's resources.
 ULTRA96 = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
-#: VCK190's part on the ip shell: no board, its resources not known.
-VERSAL = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=4.0)
+#: VCK190's part on the ip shell, as a harness states it: no board, no resources (a
+#: resolved target always has its part's; a Platform built without a part has none).
+_VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=4.0)
+VERSAL = replace(_VCK190, platform=replace(_VCK190.platform, resources=None))
 
 
 def test_the_target_is_stated_typed_every_key_and_read_back() -> None:

@@ -138,6 +138,76 @@ In containers:
   `finn-resources fetch --all --dest DIR`, then `-e FINN_RESOURCES_DIR=DIR -e
   FINN_RESOURCES_OFFLINE=1` (see [offline use](#offline-use)).
 
+## Parts and custom devices
+
+A kernel-path build names its part (or a board, which names one), and FINN reads
+the part's facts from its part catalog, `finn.platform.catalog`: every part of
+Zynq-7000, UltraScale, UltraScale+ and Versal that Vivado 2025.2 installs, its
+device, and the device's LUTs, flip-flops, RAMB18s, UltraRAMs and DSPs per SLR.
+Devices with identical resources share one record, and each device states the
+others it shares with. A device sold on a larger die (an XCZU2EG on the XCZU3EG's)
+states its own totals; where it spans several SLRs, Vivado does not say how they
+split, and its `slrs` is `None`. What FINN builds on a device (its fabric, DSP block and
+whether an UltraRAM takes initial contents) is the rule for Vivado's
+`(ARCHITECTURE, FAMILY)` pair, `finn.platform.architectures`. A part the catalog
+does not have is refused, `unknown-part`, with close names and none chosen.
+
+```python
+from finn.platform import device, part
+
+found = part("xcvu9p-flga2104-2L-e")
+found.device.resources      # the device's totals: the sum of its SLRs'
+found.device.slrs           # three SLRs, each its own Resources
+device("xczu3eg").shared_with
+```
+
+The catalog is generated from the installed Vivado's part database and committed
+(`src/finn/platform/data/`). `python -m finn.platform.generate check` extracts it
+again and reports every part, device or field that differs (exit 0: identical);
+`write` replaces it. Both need Vivado and take about an hour (`--jobs`, Vivado
+processes at once, 8 by default).
+
+**A device FINN does not ship** (a new part, an engineering sample, a board with a
+custom part) is added without editing FINN: an overlay file, named by the machine
+setting `FINN_PLATFORM_CATALOG` (read once, when the catalog is first queried). It
+holds records of the committed data's schema, each list optional, and is validated
+when it is loaded (`catalog-overlay-invalid` names what is wrong):
+
+```json
+{
+  "source": "Acme's data sheet for the XCZU3EG-ES1, revision 0.3",
+  "devices": [
+    {
+      "name": "xczu3eg_es1",
+      "architecture": "zynquplus",
+      "family": "zynquplus",
+      "resources": {"slrs": [{"lut": 70000, "ff": 141120, "bram18": 432, "uram": 0, "dsp": 360}]}
+    }
+  ],
+  "parts": [
+    {"name": "xczu3eg_es1-sbva484-1-e", "device": "xczu3eg_es1",
+     "package": "sbva484", "speed": "-1", "temperature": "E"}
+  ]
+}
+```
+
+```bash
+FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
+```
+
+- A device's `resources` is its record, or the `digest` of one the catalog ships
+  (`device("xczu3eg").digest`); a part may sit on a shipped device. A record states
+  each SLR (`slrs`, as above), or, for a device of one SLR, only its `totals`; one of
+  several SLRs whose split is not known states `totals` and `slr_count`.
+- Its fabric and DSP block are its pair's rule. Where the pair has none, or the
+  device is built otherwise, the device states `fabric` (`series7`, `ultrascale`,
+  `versal`), `dsp` (`DSP48E1`, `DSP48E2`, `DSP58`) and, optionally, `uram_init`.
+- Every entry carries a `source`, its own or the file's. The part's `source`
+  states it with the overlay's path, and so does the exploration report
+  (`kernel_exploration.json`, `resources.part.source`).
+- An entry whose name is a shipped part or device is refused, unless it says
+  `"overrides": true`; `overrides` on a name the catalog does not ship is refused.
+
 ## Co-develop QONNX, Brevitas, finn-hlslib or another dependency
 
 Point the dependency's source at your checkout, locally (do not commit this):

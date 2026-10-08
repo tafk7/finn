@@ -16,12 +16,10 @@ from finn.kernels.target import DspBlock, Fabric, Target
 from finn.kernels.utilization import Resources
 from finn.platform import (
     BOARDS,
-    FAMILIES,
-    PARTS,
     ROWS,
     TargetRefused,
     TargetRequest,
-    part_facts,
+    part,
     refuse_drift,
     resolve_target,
     shell_row,
@@ -118,52 +116,56 @@ def test_every_pynq_rows_board_has_a_branch_in_the_zynq_template() -> None:
 # -- parts -------------------------------------------------------------------------------
 
 
-def test_a_tabled_part_states_its_totals_in_the_devices_units() -> None:
-    ultra96 = part_facts("xczu3eg-sbva484-1-e")
-    assert ultra96.resources == Resources(lut=70_560, ff=141_120, bram18=432, uram=0, dsp=360)
-    assert (ultra96.fabric, ultra96.dsp, ultra96.uram, ultra96.uram_init) == (
+def test_a_part_states_its_devices_totals_in_the_devices_units() -> None:
+    ultra96 = part("xczu3eg-sbva484-1-e")
+    assert ultra96.device.resources == Resources(
+        lut=70_560, ff=141_120, bram18=432, uram=0, dsp=360
+    )
+    assert (ultra96.device.fabric, ultra96.device.dsp, ultra96.device.uram_init) == (
         Fabric.ULTRASCALE,
         DspBlock.DSP48E2,
         False,
-        False,
     )
-    assert "DS890" in ultra96.source
-    zcu104 = part_facts("xczu7ev-ffvc1156-2-e")
+    assert ultra96.source.startswith("FINN's part catalog, from Vivado 2025.2")
+    zcu104 = resolve_target(board="ZCU104", period_ns=5.0).platform
     assert zcu104.resources is not None and zcu104.resources.uram == 96 and zcu104.uram
 
 
-@pytest.mark.parametrize("part", sorted(PARTS))
-def test_a_tabled_part_has_its_familys_capabilities(part: str) -> None:
-    facts = PARTS[part]
-    pattern, fabric, dsp, uram, uram_init = next(
-        row for row in FAMILIES if re.fullmatch(row[0].replace("*", ".*"), part.lower())
-    )
-    assert (facts.fabric, facts.dsp, facts.uram, facts.uram_init) == (fabric, dsp, uram, uram_init)
-    assert facts.resources is not None and facts.resources.bram18 % 2 == 0
+@pytest.mark.parametrize("board", sorted(BOARDS))
+def test_every_boards_part_is_in_the_catalog(board: str) -> None:
+    found = part(BOARDS[board].part)
+    assert found.name == BOARDS[board].part and found.device.unsupported is None
 
 
-def test_the_table_is_looked_up_without_case_and_answers_its_spelling() -> None:
-    assert len({part.lower() for part in PARTS}) == len(PARTS)
-    assert part_facts("XCK26-SFVC784-2lv-C").name == "xck26-sfvc784-2LV-c"
+def test_the_catalog_is_looked_up_without_case_and_answers_its_spelling() -> None:
+    assert part("XCK26-SFVC784-2lv-C").name == "xck26-sfvc784-2LV-c"
 
 
-def test_a_part_outside_the_table_has_its_familys_capabilities_and_no_totals() -> None:
-    facts = part_facts("xczu3eg-sbva484-2-e")  # ZU3EG, a speed grade the table has not
-    assert (facts.name, facts.dsp, facts.uram, facts.resources) == (
-        "xczu3eg-sbva484-2-e",
-        DspBlock.DSP48E2,
-        False,
-        None,
-    )
-    vck190 = part_facts("xcvc1902-vsva2197-2MP-e-S")
-    assert (vck190.fabric, vck190.dsp, vck190.uram_init, vck190.resources) == (
+def test_every_grade_of_a_device_has_its_totals() -> None:
+    """A speed or temperature grade no board carries resolves exactly, with its
+    device's totals: there is no family fallback without them."""
+    other_grade = resolve_target(part="xczu3eg-sbva484-2-e", period_ns=5.0).platform
+    assert other_grade == resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0).platform
+    vck190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0).platform
+    assert (vck190.fabric, vck190.dsp, vck190.uram, vck190.uram_init) == (
         Fabric.VERSAL,
         DspBlock.DSP58,
+        True,
         False,
-        None,
     )
-    with pytest.raises(TargetRefused, match="unknown-part: 'xcku040' is neither"):
-        part_facts("xcku040")
+    assert vck190.resources == Resources(
+        lut=899_840, ff=1_799_680, bram18=1_934, uram=463, dsp=1_968
+    )
+
+
+def test_a_name_the_catalog_lacks_is_refused_with_close_names_none_chosen() -> None:
+    with pytest.raises(
+        TargetRefused, match="unknown-part: 'xcku040' is not in the part catalog"
+    ) as refused:
+        resolve_target(part="xcku040", period_ns=5.0)  # a device, not a part
+    assert "Vivado 2025.2" in str(refused.value)
+    with pytest.raises(TargetRefused, match="close names: .*xczu3eg-sbva484-1-e") as refused:
+        resolve_target(part="xczu3eg-sbva484-1-x", period_ns=5.0)
 
 
 # -- shells ------------------------------------------------------------------------------
@@ -274,11 +276,10 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
 
 
 def test_two_spellings_of_one_part_are_one_target() -> None:
-    """A part outside the table keeps the spelling it was stated in; the build is not
-    refused for stating it in another case (the table's lookup ignores case too)."""
+    """The target names its part as Vivado spells it, however it was stated."""
     stated = resolve_target(part="xczu3eg-sbva484-2-e", period_ns=5.0)
     shouted = resolve_target(part="XCZU3EG-SBVA484-2-E", period_ns=5.0)
-    assert (stated.part, shouted.part) == ("xczu3eg-sbva484-2-e", "XCZU3EG-SBVA484-2-E")
+    assert stated == shouted and shouted.part == "xczu3eg-sbva484-2-e"
     refuse_drift(stated, shouted, "build")
     with pytest.raises(TargetRefused, match="target-drift: .*part: "):
         refuse_drift(stated, resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0), "build")

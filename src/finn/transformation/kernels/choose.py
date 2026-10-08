@@ -43,7 +43,9 @@ do, a lower bound (``lower_bound``), each other named with why (``unstated``), a
 ends and the static region are not counted. The ends' and the static region's are out
 of context, which the report says with how far that overstates the placed shell; the
 ``ip`` shell has neither, so its sum is its partition's. The platform's are its part's totals
-(``Platform.resources``), nothing subtracted: what the platform has, not a budget;
+(``Platform.resources``), nothing subtracted: what the platform has, not a budget,
+and ``part`` states the part's facts as the part catalog has them (its device, the
+device's SLRs, the devices that share them) and where they come from (``source``);
 ``share`` is the fraction of each the shell uses, ``binding`` the one it uses most of,
 and ``over`` each it uses more of than the part has. A point over the part is a warning
 (``ResourceBudgetWarning``, and the report's ``warning``) naming the binding resource,
@@ -104,6 +106,8 @@ from finn.kernels.explore import (
 )
 from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
+from finn.platform import TargetRefused
+from finn.platform import part as catalog_part
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
@@ -188,13 +192,39 @@ RESOURCES_EXACT = (
 a board the shell was not built and timed on, followed by its row's ``caveat``."""
 
 
+def part_report(name: str) -> dict[str, object]:
+    """The target's part as the part catalog states it (``finn.platform.catalog``):
+    its device, the device's resources per SLR (``None`` where Vivado states no split),
+    the devices that share them, and
+    where its facts come from (``source``); a part the catalog does not have says
+    why, with no source."""
+    try:
+        found = catalog_part(name)
+    except TargetRefused as refused:
+        return {"name": name, "source": None, "refused": str(refused)}
+    device = found.device
+    return {
+        "name": found.name,
+        "device": device.name,
+        "architecture": device.architecture,
+        "family": device.family,
+        "slrs": None if device.slrs is None else [asdict(slr) for slr in device.slrs],
+        "shared_with": list(device.shared_with),
+        "source": found.source,
+    }
+
+
 def _resources_report(
-    cost: Cost, split: ShellResources | str, platform: Platform | None, caveat: str | None
+    cost: Cost,
+    split: ShellResources | str,
+    platform: Platform | None,
+    part: Mapping[str, object],
+    caveat: str | None,
 ) -> dict[str, object]:
     """The shell's resources by member and their sum against the platform's part totals;
     where members state none, the sum of those that do, a lower bound (``lower_bound``),
-    and each that does not, with why (``unstated``); ``exact`` names the shell row's
-    ``caveat`` for its board, if any."""
+    and each that does not, with why (``unstated``); the part's facts with their source
+    (``part_report``); ``exact`` names the shell row's ``caveat`` for its board, if any."""
     unstated = dict(cost.unstated)
     if isinstance(split, str) and not unstated:
         unstated["shell"] = split
@@ -231,6 +261,7 @@ def _resources_report(
         "lower_bound": lower_bound,
         "unstated": unstated,
         "platform": None if totals is None else asdict(totals),
+        "part": dict(part),
         "share": share,
         "binding": most,
         "over": exceeded,
@@ -430,7 +461,13 @@ def explore_kernel_choices(
             completion_report["sizing"] = completed.sizing
     costed = point if completed is None else completed.point
     cost = seam.cost(costed)
-    resources = _resources_report(cost, shell_resources(costed), seam.platform, root.row.caveat)
+    resources = _resources_report(
+        cost,
+        shell_resources(costed),
+        seam.platform,
+        part_report(read_target(model).part),
+        root.row.caveat,
+    )
     ends: dict[str, object] = {}
     if root.ends and not cost.waiting and not cost.refused:
         ends = {"ends": _end_rows(costed, root.ends), "memory_latency": MEMORY_LATENCY}

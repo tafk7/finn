@@ -10,7 +10,7 @@ from dataclasses import fields
 
 from finn.kernels.target import Platform, Target
 from finn.platform.boards import BOARDS
-from finn.platform.parts import part_facts
+from finn.platform.catalog import part as catalog_part
 from finn.platform.refusal import TargetRefused
 from finn.platform.shells import IP, built_shell, shell_row
 
@@ -26,7 +26,10 @@ def resolve_target(
     names its part, and the target states none: the packaged IP is built for the part
     and integrated by its user, wherever the part is, so a build that names the board
     and one that names its part make the same model. The platform is the part's
-    capabilities and totals (``finn.platform.parts``) and the clock period; what the
+    facts in the catalog (``finn.platform.catalog``: its device's fabric, DSP block,
+    UltraRAM and totals) and the clock period; a part the catalog does not have is
+    refused (``unknown-part``), and so is one of a device FINN does not build for
+    (``unsupported-architecture``). The target names the part as Vivado spells it. What the
     shell gives (its doubled clock, its budgets) is its row's, for the shell and board
     the target names (``finn.platform.shell_row``), and no copy of it is the target's.
     Every refusal is named (``TargetRefused``)."""
@@ -38,7 +41,7 @@ def resolve_target(
             raise TargetRefused(
                 "unknown-board", f"{board!r} is not a board (one of {sorted(BOARDS)})"
             )
-        if part is not None and part_facts(part).name != BOARDS[board].part:
+        if part is not None and catalog_part(part).name != BOARDS[board].part:
             raise TargetRefused(
                 "board-part-mismatch",
                 f"board {board!r} carries {BOARDS[board].part!r}, not {part!r}",
@@ -46,30 +49,36 @@ def resolve_target(
         part = BOARDS[board].part
     if part is None:
         raise TargetRefused("target-unstated", "a target names a part or a board")
-    facts = part_facts(part)
+    found = catalog_part(part)
+    device = found.device
+    if device.fabric is None or device.dsp is None:
+        raise TargetRefused(
+            "unsupported-architecture",
+            f"{found.name} ({device.name}, {device.architecture}/{device.family}): "
+            f"{device.unsupported}",
+        )
     shell_row(shell, board)  # a shell with no row for the board is refused (no-shell-row)
+    resources = device.resources
     platform = Platform(
         period_ns=float(period_ns),
-        dsp=facts.dsp,
-        fabric=facts.fabric,
-        uram=facts.uram,
-        uram_init=facts.uram_init,
-        resources=facts.resources,
+        dsp=device.dsp,
+        fabric=device.fabric,
+        uram=resources.uram > 0,
+        uram_init=device.uram_init,
+        resources=resources,
     )
     return Target(
-        part=facts.name, platform=platform, shell=shell, board=None if shell == IP else board
+        part=found.name, platform=platform, shell=shell, board=None if shell == IP else board
     )
 
 
 def refuse_drift(stated: Target, built: Target, build: str) -> None:
     """Refuse a ``build`` (what it is, for the message) whose target, ``built``, is not
     the one a model states (``stated``), each differing field named
-    (``target-drift``): a model's target is changed only by converting it again. Parts
-    are compared without case, as the part table looks them up (``part_facts``): a
-    part outside the table keeps the spelling it was stated in, and two spellings of
-    one part are one target."""
+    (``target-drift``): a model's target is changed only by converting it again. A
+    resolved target names its part as Vivado spells it, so parts compare exactly."""
     pairs = [
-        ("part", stated.part.lower(), built.part.lower()),
+        ("part", stated.part, built.part),
         ("shell", stated.shell, built.shell),
         ("board", stated.board, built.board),
     ] + [
