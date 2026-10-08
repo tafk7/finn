@@ -7,7 +7,7 @@
 (from ``tests``, FinnLib
 and Vivado selected) builds each partition as the kernel path builds it (the
 Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
-``kernel_ops.tfc``) and measures, with ``kernels.xsim.measure``,
+``kernel_ops.tfc``) and measures, with ``finn.harness.rtl.measure``,
 ``N`` frames streamed back to back, never stalled:
 
 - the **stitched** partition, its root's latency, interval and total, and each
@@ -26,24 +26,23 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from kernels.toolchain import print_identity
-from kernels.xsim import Words, link_stream, measure, pack
 from numpy.typing import NDArray
 from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
+from finn.builder.kernel_testbench import boundary_words
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import ShellRoot, shell_root
-from finn.dataflow.traversal import Traversal
-from finn.transformation.kernels.package import boundary_facts
+from finn.harness.rtl import link_stream, measure
+from finn.harness.toolchain import print_identity
 
 
 @dataclass(frozen=True)
@@ -119,30 +118,6 @@ def folding(node: NodeProto, schedule: Any) -> str:
     return f"pe {schedule.factor(schedule.order[-1])}"
 
 
-def words(form: Traversal, values: NDArray[Any], bits: int) -> list[int]:
-    """The beats ``form`` presents of ``values``, each packed lane zero lowest."""
-    flat = values.reshape(form.shape)
-    return [pack([int(flat[position]) for position in beat], bits) for beat in form.positions()]
-
-
-def boundary_words(
-    model: ModelWrapper, root: ShellRoot, context: Mapping[str, Any], label: str
-) -> tuple[dict[str, Words], dict[str, Words]]:
-    """Each boundary port's words of one frame, inputs then outputs, from ``context``."""
-    inputs, outputs = boundary_facts(model, root.point, root.boundary, label)
-    found: tuple[dict[str, Words], dict[str, Words]] = ({}, {})
-    for side, facts in zip(found, (inputs, outputs)):
-        for each in facts:
-            ends = getattr(root.point, member(each["tensor"])).endpoints
-            end = ends.source if ends.source_owner is None else ends.sink
-            bits = int(end.element.bits)
-            side[each["port"]] = (
-                words(end.form, context[each["tensor"]], bits),
-                bits * each["lanes"],
-            )
-    return found
-
-
 def measure_partition(
     model: ModelWrapper,
     feed: dict[str, NDArray[Any]],
@@ -155,7 +130,7 @@ def measure_partition(
     context = execute_onnx(model, feed, return_full_exec_context=True)
     nodes = list(model.graph.node)
     root = shell_root(model, nodes, name=label)
-    inputs, outputs = boundary_words(model, root, context, label)
+    inputs, outputs = boundary_words(model, root.point, root.boundary, context, label)
     print(f"== {label}: stitched", flush=True)
     stitched = measure(
         root.point.module, directory / "stitched", inputs=inputs, outputs=outputs, frames=frames
@@ -182,7 +157,9 @@ def measure_partition(
     for index, node in enumerate(nodes):
         schedule = schedule_of(root, node)
         alone_root = shell_root(model, [node], name=node.name)
-        alone_in, alone_out = boundary_words(model, alone_root, context, node.name)
+        alone_in, alone_out = boundary_words(
+            model, alone_root.point, alone_root.boundary, context, node.name
+        )
         print(f"== {label}: {node.name} alone", flush=True)
         alone = measure(
             alone_root.point.module,

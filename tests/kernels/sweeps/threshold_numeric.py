@@ -30,14 +30,14 @@ from qonnx.core.datatype import DataType
 from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, vector_major
+from finn.harness.rtl import materialize
+from finn.harness.toolchain import print_identity
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, Root, with_direct_transports
 from kernels.sweeps.rtl_transport import drive_observed
-from kernels.toolchain import print_identity
-from kernels.xsim import materialize
 
 ELEMENT = DataType["INT4"]
 PIXELS, CHANNELS = 4, 8

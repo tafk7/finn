@@ -8,8 +8,10 @@ function, registered by name in ``kernel_build_step_lookup`` for a KernelBuildCo
 ``phase_kernel_path`` takes a streamlined model to a partition of KernelOps
 (finn.custom_op.kernels): the KernelOps bind kernels to RTL from the model's facts and
 the build's target, so there is no specialization, folding config or per-node IP
-generation. ``phase_kernel_outputs`` then makes what the configuration asks of the
-target's shell (its bitfile, driver and deployment package)."""
+generation. ``phase_kernel_outputs`` then makes the outputs the configuration asks:
+the partition's own on any shell (its packaged IP, interface description and testbench;
+its out-of-context resources), then the target's shell's (its bitfile, driver and
+deployment package)."""
 
 import copy
 import json
@@ -26,6 +28,12 @@ from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     KernelOutputType,
     KernelVerificationStepType,
+)
+from finn.builder.kernel_testbench import (
+    TESTBENCH_DIR,
+    generated_frame,
+    partition_frame,
+    write_testbench,
 )
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import read_target
@@ -55,7 +63,12 @@ from finn.transformation.kernels import (
     strategy,
 )
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN, integration
-from finn.transformation.kernels.package import ElaboratePartition, configured_root
+from finn.transformation.kernels.package import (
+    ElaboratePartition,
+    PackagePartition,
+    configured_root,
+    ooc_member_resources,
+)
 
 
 def _kernel_path_source(cfg: KernelBuildConfig) -> str:
@@ -251,6 +264,57 @@ def _integrating_row(model: ModelWrapper, cfg: KernelBuildConfig, output: Kernel
     return row
 
 
+def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
+    """Package the partition as an IP into ``stitched_ip/``, if STITCHED_IP or OOC_SYNTH
+    is asked: PackagePartition on the body the parent graph's partition node opens,
+    named as the partition (its node, ``partition``), its choices completed by
+    ``cfg.kernel_completion``, with the interface description beside it
+    (``interface.json``). The body, saved, states its IP (finn.outputs), and a shell's
+    integration later in the build takes that IP rather than package it again. With
+    OOC_SYNTH the module is synthesized out of context and the IP packages the
+    checkpoint; its resources per member of the shell root are written to
+    report/ooc_resources.json (ooc_member_resources). With STITCHED_IP, the XSim
+    testbench is written into ``stitched_ip/testbench`` (finn.builder.kernel_testbench),
+    on the partition's inputs from the parent graph executed on the first frame of
+    ``verify_input_npy`` when it exists, a generated frame otherwise; it is run once as
+    it is written, so the step fails if the module's outputs differ from the
+    partition's in Python."""
+    stitched = KernelOutputType.STITCHED_IP in cfg.generate_outputs
+    ooc = KernelOutputType.OOC_SYNTH in cfg.generate_outputs
+    if not (stitched or ooc):
+        print("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
+        return model
+    kernel_completion = completion(cfg.kernel_completion)
+    directory = Path(cfg.output_dir) / "stitched_ip"
+    node, body, body_file = partition_body(model)
+    body = body.transform(
+        PackagePartition(
+            node.name,
+            run_synth=ooc,
+            directory=directory,
+            toolchain=cfg._resolve_toolchain(),
+            completion=kernel_completion,
+        )
+    )
+    body.save(body_file)
+    print(f"Packaged IP {node.name} and its interface description in {directory}")
+    if ooc:
+        os.makedirs(cfg.output_dir + "/report", exist_ok=True)
+        with open(cfg.output_dir + "/report/ooc_resources.json", "w") as f:
+            json.dump(ooc_member_resources(body, directory, kernel_completion), f, indent=2)
+    if stitched:
+        if os.path.isfile(cfg.verify_input_npy):
+            frame = partition_frame(model, np.load(cfg.verify_input_npy)[0])
+            stimulus = f"the first input of {cfg.verify_input_npy}"
+        else:
+            frame, stimulus = generated_frame(body), "a generated frame"
+        write_testbench(
+            body, directory / TESTBENCH_DIR, frame, completion=kernel_completion, label=node.name
+        )
+        print(f"XSim testbench on {stimulus} in {directory / TESTBENCH_DIR}: PASS")
+    return model
+
+
 def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     """The Zynq block design's bitfile (the pynq shell's runner, build_pynq) from the
     partition's integration export, written as report/integration.json. Into the output
@@ -438,12 +502,14 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
 
 
 def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Phase: what the configuration asks of the target's shell (generate_outputs).
+    """Phase: the outputs the configuration asks (generate_outputs).
 
     Internal steps (each checks generate_outputs):
+    - step_kernel_stitched_ip: The partition's IP, its description, resources, testbench
     - step_kernel_bitfile: The shell built around the partition, to a bitfile
     - step_kernel_driver: The driver of the shell's host runtime
     - step_kernel_deployment_package: The bitfile and driver, packaged"""
+    model = _execute_step(step_kernel_stitched_ip, model, cfg)
     model = _execute_step(step_kernel_bitfile, model, cfg)
     model = _execute_step(step_kernel_driver, model, cfg)
     model = _execute_step(step_kernel_deployment_package, model, cfg)
@@ -459,6 +525,7 @@ kernel_build_step_lookup = {
         step_kernel_choices,
         step_kernel_partition,
         step_verify_kernel_partition,
+        step_kernel_stitched_ip,
         step_kernel_bitfile,
         step_kernel_driver,
         step_kernel_deployment_package,

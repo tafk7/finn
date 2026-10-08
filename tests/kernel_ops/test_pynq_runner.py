@@ -227,10 +227,12 @@ def recorded_build(
     toolchain: object,
     replaced: tuple[str, ...] = (*TOOL_STEPS, "PrepareIP"),
     options: PynqOptions = PynqOptions(),
+    packaged: Path | None = None,
 ) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
     """build_pynq over the Chain, the ``replaced`` steps replaced by recorders of what
     each is given: the parent graph, its export, what the runner collected, and each
-    recorded step's name, toolchain and arguments, in order."""
+    recorded step's name, toolchain and arguments, in order. With ``packaged``, the
+    body already states that IP, as STITCHED_IP leaves it."""
     seen: list[tuple[str, object, tuple[object, ...]]] = []
 
     def recorder(name: str) -> type[Transformation]:
@@ -263,6 +265,11 @@ def recorded_build(
         monkeypatch.setattr(pynq_runner, name, recorder(name))
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     parent = zynq_model(tmp_path)
+    if packaged is not None:
+        _, body, body_file = partition_body(parent)
+        body.set(OUTPUT_IP, str(packaged))
+        body.set(OUTPUT_VLNV, "xilinx_finn:finn:partition:1.0")
+        body.save(body_file)
     export = integration(parent)
     built = build_pynq(parent, export, tmp_path / "ends", toolchain=toolchain, options=options)
     return parent, export, built, seen
@@ -312,6 +319,23 @@ def test_a_build_generates_each_ends_ip_packages_the_partition_and_runs_vivado(
     assert Path(built.timing).name == "top_wrapper_timing_summary_routed.rpt"
     assert Path(built.placed) == project / "synth_report.xml"
     assert sorted(built.out_of_context) == ["top_idma0_0", "top_partition_0", "top_smartconnect_0"]
+
+
+def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A body that states its IP (STITCHED_IP or OOC_SYNTH packaged it) is instantiated
+    as it is: the partition is packaged once in a build."""
+    vivado = FakeVivado()
+    earlier = tmp_path / "stitched_ip" / "ip"
+    _, export, _, seen = recorded_build(monkeypatch, tmp_path, vivado, packaged=earlier)
+    assert "PackagePartition" not in [name for name, _, _ in seen]
+    ips = {
+        **built_ips(tmp_path),
+        "partition": InstanceIP("xilinx_finn:finn:partition:1.0", (str(earlier),)),
+    }
+    ((_, _, script),) = vivado.runs
+    assert block_design(export, ips) in script
 
 
 def test_the_debug_option_reaches_the_block_design(

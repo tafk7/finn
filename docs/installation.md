@@ -461,7 +461,14 @@ Zynq shell (the environment as configured, so `settings` stays empty):
 `target` states the clock period, a `board` or a `part` (a board gives its part; a
 part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
 packaged IP its user integrates, whose target states the part alone; `pynq`, the
-Zynq block design for a board. The outputs (`bitfile`, `pynq_driver`,
+Zynq block design for a board. `stitched_ip` and `ooc_synth` are the partition's
+own outputs, on any shell: `stitched_ip/` holds the packaged IP, its interface
+description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
+AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
+bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
+of `verify_input_npy` or a generated one, checked against the partition in
+Python); `ooc_synth` synthesizes the IP out of context and writes its resources per
+member to `report/ooc_resources.json`. The shell outputs (`bitfile`, `pynq_driver`,
 `deployment_package`) need a shell that integrates the partition, so they are
 refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
 choices, the partition and its verification) and `phase_kernel_outputs` (what the

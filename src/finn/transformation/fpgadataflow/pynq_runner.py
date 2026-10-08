@@ -13,7 +13,8 @@ The runner (``build_pynq``):
   (``CreateStitchedIP``, named as the end's instance: ``xilinx_finn:finn:<instance>:1.0``
   with the pins ``IODMA_PINS`` names);
 - packages the partition (``PackagePartition``: its body states its IP in
-  ``finn.outputs``);
+  ``finn.outputs``), unless its body already states the IP this build packaged
+  (``STITCHED_IP`` or ``OOC_SYNTH``: the partition is packaged once);
 - writes the block design (``block_design``) from the export's instances and
   connections into ``templates.custom_zynq_shell_template``, unchanged; the
   template's own debug block names nets of the HWCustomOp flow's partitions and stays
@@ -335,20 +336,22 @@ def build_pynq(
     """Build the kernel path's parent graph ``model`` in the Zynq block design of its
     integration export ``export`` (see the module docstring): the ends' IPs (their
     scratch models saved in ``directory``) and the partition's (its body saved with
-    its IP stated), the project (a new build directory), Vivado run on it, and what it
-    made collected. ``toolchain`` is the prepared toolchain every tool runs through,
-    by default the machine's; ``jobs`` the runs Vivado launches at once; ``options``
-    the shell's build options; ``completion`` the policy that completes the
-    partition's open choices where it is packaged (the build's)."""
+    its IP stated, or the IP the body states already), the project (a new build
+    directory), Vivado run on it, and what it made collected. ``toolchain`` is the
+    prepared toolchain every tool runs through, by default the machine's; ``jobs`` the
+    runs Vivado launches at once; ``options`` the shell's build options;
+    ``completion`` the policy that completes the partition's open choices where it is
+    packaged (the build's)."""
     toolchain = toolchain or machine_toolchain()
     node, body, body_file = partition_body(model)
     ips: Dict[str, InstanceIP] = {}
     for instance in _instances(export):
         if instance == export.partition:
-            body = body.transform(
-                PackagePartition(node.name, toolchain=toolchain, completion=completion)
-            )
-            body.save(body_file)
+            if body.get(OUTPUT_IP) is None:
+                body = body.transform(
+                    PackagePartition(node.name, toolchain=toolchain, completion=completion)
+                )
+                body.save(body_file)
             ips[instance] = InstanceIP(body.get(OUTPUT_VLNV), (body.get(OUTPUT_IP),))
         else:
             end = export.end(instance)
