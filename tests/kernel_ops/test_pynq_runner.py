@@ -34,6 +34,10 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_VLNV,
     partition_body,
 )
+from finn.transformation.fpgadataflow.make_driver import (
+    pynq_driver_text,
+    write_pynq_driver_support,
+)
 from finn.transformation.fpgadataflow.pynq_runner import (
     InstanceIP,
     PynqOptions,
@@ -50,7 +54,7 @@ from finn.transformation.kernels.integration import Integration, integration
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
 from kernel_ops.models import configure_partition, kernel_model
-from kernel_ops.packaging import FakeVivado, io_shape_dict
+from kernel_ops.packaging import FakeVivado, bitfile_default, io_shape_dict
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -440,9 +444,10 @@ def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(
 ) -> None:
     """The driver's I/O are the export's ends: each element, tensor shape, frame as the
     stream carries it (beats by lanes) and packed into bytes; it sets PL0 to the clock
-    it is given, and validate.py passes it on."""
+    it is given, and validate.py passes it on. Both run the bitfile they are given,
+    relative to their own directory, from whatever directory they are run."""
     export = integration(zynq_model(tmp_path))
-    write_driver(export, str(tmp_path / "driver"), 187.512)
+    write_driver(export, str(tmp_path / "driver"), 187.512, "../bitfile/finn-accel.bit")
     driver = (tmp_path / "driver" / "driver.py").read_text()
     shapes = io_shape_dict(driver)
     assert shapes["idt"] == [DataType["INT3"], DataType["INT3"]]
@@ -467,7 +472,13 @@ def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(
         in driver
     )
     validate = (tmp_path / "driver" / "validate.py").read_text()
-    assert "from driver import fclk_mhz, io_shape_dict" in validate
+    assert "from driver import default_bitfile, fclk_mhz, io_shape_dict" in validate
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    for script in ("driver.py", "validate.py"):
+        assert bitfile_default(tmp_path / "driver" / script, elsewhere) == str(
+            tmp_path / "bitfile" / "finn-accel.bit"
+        )
     assert "fclk_mhz=fclk_mhz," in validate
     assert {path.name for path in (tmp_path / "driver").iterdir()} == {
         "driver.py",
@@ -478,10 +489,23 @@ def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(
     }
 
 
+def test_the_legacy_driver_runs_resizer_bit_in_the_working_directory(tmp_path: Path) -> None:
+    """The HWCustomOp flow's driver, given no bitfile, keeps its default (ON8):
+    resizer.bit, relative to the directory driver.py and validate.py are run from."""
+    driver = tmp_path / "driver"
+    driver.mkdir()
+    write_pynq_driver_support(str(driver))
+    shapes = driver_shapes(integration(zynq_model(tmp_path)))
+    (driver / "driver.py").write_text(pynq_driver_text("zynq-iodma", shapes, 100.0))
+    for script in ("driver.py", "validate.py"):
+        assert bitfile_default(driver / script, tmp_path) == "resizer.bit"
+
+
 def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path) -> None:
     export = integration(zynq_model(tmp_path))
-    assert driver_description(export, 187.512, ["Reshape_0"], []) == {
+    assert driver_description(export, 187.512, "bitfile/finn-accel.bit", ["Reshape_0"], []) == {
         "host_runtime": "zynq-iodma",
+        "bitfile": "bitfile/finn-accel.bit",
         "fclk_mhz": 187.512,
         "takes": [
             {"name": "x", "element": "INT3", "shape": [3, 4], "dma": "idma0"},

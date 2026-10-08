@@ -400,23 +400,27 @@ def driver_shapes(export: Integration) -> Dict[str, Any]:
     return shapes
 
 
-def write_driver(export: Integration, directory: str, fclk_mhz: float) -> None:
+def write_driver(export: Integration, directory: str, fclk_mhz: float, bitfile: str) -> None:
     """The PYNQ driver of the integration ``export`` into ``directory``: its I/O the
     export's (``driver_shapes``), PL0 set to ``fclk_mhz``, the clock the bitfile
-    delivers."""
+    delivers; driver.py and validate.py run ``bitfile``, relative to ``directory``,
+    unless told another."""
     os.makedirs(directory, exist_ok=True)
     write_pynq_driver_support(directory)
     with open(os.path.join(directory, "driver.py"), "w") as f:
-        f.write(pynq_driver_text(export.host_runtime, driver_shapes(export), fclk_mhz))
+        f.write(
+            pynq_driver_text(export.host_runtime, driver_shapes(export), fclk_mhz, bitfile=bitfile)
+        )
 
 
 def driver_description(
-    export: Integration, fclk_mhz: float, before: list, after: list
+    export: Integration, fclk_mhz: float, bitfile: str, before: list, after: list
 ) -> Dict[str, Any]:
-    """What the driver of ``export`` takes and returns (SS9): the partition's inputs and
-    outputs, each by its tensor's name, element and shape, and the end that moves it;
-    the clock it sets; and the host's nodes of the parent graph that run ``before`` and
-    ``after`` it."""
+    """What the driver of ``export`` takes and returns (SS9): the bitfile it runs, by
+    its path in the build's output directory and in the deployment package, both of
+    which hold bitfile/ beside driver/; the partition's inputs and outputs, each by its
+    tensor's name, element and shape, and the end that moves it; the clock it sets; and
+    the host's nodes of the parent graph that run ``before`` and ``after`` it."""
 
     def tensors(direction: str) -> list:
         return [
@@ -432,6 +436,7 @@ def driver_description(
 
     return {
         "host_runtime": export.host_runtime,
+        "bitfile": bitfile,
         "fclk_mhz": fclk_mhz,
         "takes": tensors("in"),
         "returns": tensors("out"),

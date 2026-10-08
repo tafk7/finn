@@ -531,11 +531,20 @@ def pynq_driver_text(
     ext_weight_num: int = 0,
     ext_weight_shapes: Dict | None = None,
     mlo_config: Dict | None = None,
+    bitfile: str | None = None,
 ) -> str:
     """The generated PYNQ driver (driver.py) of an accelerator for ``platform``: its I/O
     (``shapes``, get_driver_shapes' form), the clock in MHz the overlay sets PL0 to on
-    Zynq (``fclk_mhz``), its external weights' count and input shapes, and its MLO
-    weight configuration."""
+    Zynq (``fclk_mhz``), its external weights' count and input shapes, its MLO weight
+    configuration, and the bitfile it runs unless told another: ``bitfile``, relative to
+    the driver's own directory, or, if None, resizer.bit in the working directory."""
+    if bitfile is None:
+        default_bitfile = '"resizer.bit"'
+    else:
+        default_bitfile = (
+            f"os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "
+            f"{bitfile!r}))"
+        )
     driver = template_driver.pynq_driver_template
     driver = driver.replace("$PLATFORM$", platform)
     driver = driver.replace("$INPUT_FINN_DATATYPE$", str(shapes["idt"]).replace('"', ""))
@@ -555,6 +564,7 @@ def pynq_driver_text(
     mlo_config_str = json.dumps(mlo_config or {}, indent=4).replace("\n", "\n    ")
     driver = driver.replace("$MLO_WEIGHT_CONFIG$", mlo_config_str)
     driver = driver.replace("$FCLK_MHZ$", repr(float(fclk_mhz)))
+    driver = driver.replace("$BITFILE$", default_bitfile)
     return driver
 
 

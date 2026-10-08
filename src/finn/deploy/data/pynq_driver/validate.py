@@ -28,7 +28,7 @@
 
 import argparse
 import numpy as np
-from driver import fclk_mhz, io_shape_dict
+from driver import default_bitfile, fclk_mhz, io_shape_dict
 from driver_base import FINNExampleOverlay
 
 if __name__ == "__main__":
@@ -43,7 +43,7 @@ if __name__ == "__main__":
         "--platform", help="Target platform: zynq-iodma vitis-xrt", default="zynq-iodma"
     )
     parser.add_argument(
-        "--bitfile", help='name of bitfile (i.e. "resizer.bit")', default="resizer.bit"
+        "--bitfile", help="the bitfile to run (default: %(default)s)", default=default_bitfile
     )
     parser.add_argument(
         "--dataset_root", help="dataset root dir for download/reuse", default="/tmp"
