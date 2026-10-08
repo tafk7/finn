@@ -3,11 +3,11 @@
 
 """The builder's kernel-path phase (``phase_kernel_path``) on TFC_W2A2, up to its partition.
 
-``build_dataflow_cfg`` runs ``kernel_path_dataflow_steps`` from the streamlined network for
-Ultra96 in the Zynq shell, stopping after the phase: no Vivado. Each step's output is
-recorded as it runs (``inject_steps_after``), and the partition is compared with the
-one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phase
-(``phase_generate_outputs``) is not a test.
+``build_dataflow_cfg`` runs a KernelBuildConfig's default steps from the streamlined
+network for Ultra96 in the Zynq shell, stopping after the phase: no Vivado. Each step's
+output is recorded as it runs (``inject_steps_after``), and the partition is compared
+with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phase
+(``phase_kernel_outputs``) is not a test.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -24,23 +25,18 @@ from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
-from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.build_dataflow_checks import (
-    KernelPathConfigError,
-    Severity,
-    run_all_config_checks,
+from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
+from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
+from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
+from finn.builder.build_dataflow_steps import delivered_clock
+from finn.builder.kernel_build_config import (
+    KernelBuildConfig,
+    KernelOutputType,
+    KernelVerificationStepType,
 )
-from finn.builder.build_dataflow_config import (
-    DataflowBuildConfig,
-    DataflowOutputType,
-    ShellFlowType,
-    VerificationStepType,
-    kernel_path_dataflow_steps,
-)
-from finn.builder.build_dataflow_steps import (
-    delivered_clock,
-    kernel_target,
+from finn.builder.kernel_build_steps import (
     step_infer_kernel_tensors,
+    step_kernel_bitfile,
     step_kernel_choices,
     step_kernel_ops,
     step_kernel_partition,
@@ -48,7 +44,7 @@ from finn.builder.build_dataflow_steps import (
 )
 from finn.custom_op.kernels.base import read_target
 from finn.kernels.explore import Ranked
-from finn.platform import TargetRefused, resolve_target
+from finn.platform import TargetRefused, TargetRequest, resolve_target
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.transformation.kernels import (
     explore_kernel_choices,
@@ -77,16 +73,18 @@ def source(tmp_path_factory: pytest.TempPathFactory) -> ModelWrapper:
     return streamlined(tmp_path_factory.mktemp("tfc"))
 
 
-def config(directory: Path, **settings: Any) -> DataflowBuildConfig:
-    """Ultra96 in the Zynq shell at 5 ns, the kernel path's steps, no debugger."""
-    return DataflowBuildConfig(
+#: TFC's target in the builder: Ultra96 in the Zynq shell at 5 ns (``ULTRA96``).
+ULTRA96_PYNQ = TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq")
+
+
+def config(directory: Path, **settings: Any) -> KernelBuildConfig:
+    """Ultra96 in the Zynq shell at 5 ns, a bitfile asked, the default steps, no
+    debugger."""
+    return KernelBuildConfig(
         **{
             "output_dir": str(directory / "output"),
-            "synth_clk_period_ns": 5.0,
-            "board": "Ultra96",
-            "shell_flow_type": ShellFlowType.VIVADO_ZYNQ,
-            "generate_outputs": [DataflowOutputType.BITFILE],
-            "steps": kernel_path_dataflow_steps,
+            "target": ULTRA96_PYNQ,
+            "generate_outputs": [KernelOutputType.BITFILE],
             "enable_build_pdb_debug": False,
             **settings,
         }
@@ -99,8 +97,8 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 ) -> None:
     seen: dict[str, ModelWrapper] = {}
 
-    def recorder(name: str) -> Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper]:
-        def record(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    def recorder(name: str) -> Callable[[ModelWrapper, KernelBuildConfig], ModelWrapper]:
+        def record(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
             seen[name] = ModelWrapper(copy.deepcopy(model.model))
             return model
 
@@ -120,9 +118,8 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
         tmp_path,
         stop_step="phase_kernel_path",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
-        verify_steps=[VerificationStepType.KERNEL_PARTITION_PYTHON],
+        verify_steps=[KernelVerificationStepType.PARTITION_PYTHON],
         verify_input_npy=str(tmp_path / "input.npy"),
-        verify_expected_output_npy=str(tmp_path / "expected_output.npy"),
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
     assert list(seen) == list(STEPS)
@@ -211,29 +208,31 @@ def test_the_verification_refuses_a_partition_for_another_target(
     for step in (step_kernel_ops, step_infer_kernel_tensors, step_kernel_choices):
         model = step(model, cfg)
     body = step_kernel_partition(model, cfg)
-    cfg.synth_clk_period_ns = 4.0
+    cfg.target = replace(ULTRA96_PYNQ, period_ns=4.0)
     with pytest.raises(
         TargetRefused, match="target-drift: .*period_ns: the model states 5.0, the build 4.0"
     ):
         step_verify_kernel_partition(body, cfg)
 
 
-def test_the_kernel_paths_target_is_its_shell_flows_shell(tmp_path: Path) -> None:
-    """Until the kernel path has a configuration of its own, the shell flow names its
-    shell: none the ip shell (the part alone), the Zynq flow pynq for the board; the
-    Vitis and SLASH flows name shells the kernel path does not build."""
-    assert kernel_target(config(tmp_path)) == ULTRA96
-    on_ip = kernel_target(config(tmp_path, shell_flow_type=None))
-    assert on_ip == resolve_target(part=ULTRA96.part, period_ns=5.0)
-    assert (on_ip.shell, on_ip.board) == ("ip", None)
+def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: Path) -> None:
+    """The configuration's target, resolved, is the one step_kernel_ops states in the
+    model: the shell it names, ``ip`` unless one is; on ``ip`` a board names its part
+    and the target states none, so naming the board or its part is the same target."""
+    converted = step_kernel_ops(chain_source(), config(tmp_path))
+    assert read_target(converted) == ULTRA96
+    on_ip = config(tmp_path, target=TargetRequest(board="Ultra96", period_ns=5.0))
+    assert on_ip._resolve_target() == resolve_target(part=ULTRA96.part, period_ns=5.0)
+    assert (on_ip._resolve_target().shell, on_ip._resolve_target().board) == ("ip", None)
+    asserted = TargetRequest(board="Ultra96", part="xczu3eg-sbva484-1-i", period_ns=5.0)
     with pytest.raises(TargetRefused, match="board-part-mismatch"):
-        kernel_target(config(tmp_path, fpga_part="xczu3eg-sbva484-1-i"))
-    vitis = config(tmp_path, board="U250", shell_flow_type=ShellFlowType.VITIS_ALVEO)
+        step_kernel_ops(chain_source(), config(tmp_path, target=asserted))
+    xrt = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0, shell="xrt")
     with pytest.raises(TargetRefused, match="unsupported-shell: 'xrt'"):
-        kernel_target(vitis)
+        step_kernel_ops(chain_source(), config(tmp_path, target=xrt))
 
 
-def failed_checks(cfg: DataflowBuildConfig, model: ModelWrapper) -> dict[str, list[str]]:
+def failed_checks(cfg: Any, model: ModelWrapper | None = None) -> dict[str, list[str]]:
     """The configuration errors of a build of ``model``, their messages by name."""
     failed: dict[str, list[str]] = {}
     for check in run_all_config_checks(cfg, model).checks:
@@ -242,52 +241,86 @@ def failed_checks(cfg: DataflowBuildConfig, model: ModelWrapper) -> dict[str, li
     return failed
 
 
-def test_the_kernel_path_refuses_what_only_the_hw_custom_op_path_makes(tmp_path: Path) -> None:
-    """step_kernel_ops, where a build takes the kernel path, refuses the outputs and
-    verifications only the HWCustomOp path makes, each naming the step that does it on
-    the kernel path, before it converts anything."""
-    cfg = config(
-        tmp_path,
-        generate_outputs=[
-            DataflowOutputType.STITCHED_IP,
-            DataflowOutputType.RTLSIM_PERFORMANCE,
-            DataflowOutputType.PORTABLE_RTL,
-            DataflowOutputType.BITFILE,
-        ],
-        verify_steps=[VerificationStepType.STITCHED_IP_RTLSIM],
+def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: Path) -> None:
+    """On the ``ip`` shell the build makes the packaged IP's outputs, none of a shell's:
+    a bitfile, driver or deployment asked is refused before the build, naming the
+    shell; on pynq they are accepted. The bitfile's step refuses it too."""
+    on_ip = TargetRequest(board="Ultra96", period_ns=5.0)
+    shells = list(KernelOutputType)
+    cfg = config(tmp_path, target=on_ip, generate_outputs=shells)
+    assert failed_checks(cfg) == {
+        "kernel_path_shell": [
+            "bitfile, pynq_driver, deployment_package: the 'ip' shell does not integrate "
+            "the partition; its outputs are the packaged IP's"
+        ]
+    }
+    assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=[])) == {}
+    assert failed_checks(config(tmp_path, generate_outputs=shells)) == {}
+    with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
+        step_kernel_bitfile(kernel_model(), cfg)
+
+
+def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
+    unknown = TargetRequest(board="U250", period_ns=5.0)
+    assert failed_checks(config(tmp_path, target=unknown, generate_outputs=[])) == {
+        "kernel_target": [
+            "unknown-board: 'U250' is not a board (one of ['AUP-ZU3_8GB', 'KV260_SOM', "
+            "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'ZCU102', 'ZCU104', 'ZCU111'])"
+        ]
+    }
+    # The ip shell takes the part.
+    on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
+    assert failed_checks(config(tmp_path, target=on_part, generate_outputs=[])) == {}
+
+
+def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> None:
+    verify = [KernelVerificationStepType.PARTITION_ELABORATION]
+    cfg = config(tmp_path, steps=["phase_kernel_outputs"], verify_steps=verify)
+    (warning,) = [
+        check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
+    ]
+    assert not warning.passed and warning.severity == Severity.WARNING
+    assert "kernel_partition_elaboration" in warning.message
+    cfg = config(tmp_path, verify_steps=verify)
+    assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
+    python = config(tmp_path, verify_steps=[KernelVerificationStepType.PARTITION_PYTHON])
+    assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
+
+
+def test_a_dataflow_build_of_kernel_ops_is_refused(tmp_path: Path) -> None:
+    """The HWCustomOp flow's configuration does not build KernelOps: a model that holds
+    them is refused, naming the kernel path's configuration; one without them is
+    checked as before."""
+    cfg = DataflowBuildConfig(
+        output_dir=str(tmp_path / "output"),
+        synth_clk_period_ns=5.0,
+        generate_outputs=[DataflowOutputType.STITCHED_IP],
+        steps=["phase_generate_outputs"],
     )
-    with pytest.raises(KernelPathConfigError) as refused:
-        step_kernel_ops(chain_source(), cfg)
-    message = str(refused.value)
-    for output, step in (
-        ("stitched_ip:", "step_synthesize_bitfile packages the partition"),
-        ("rtlsim_performance:", "step_kernel_choices reports each member's cycles"),
-        ("portable_rtl:", "step_synthesize_bitfile emits the partition's RTL"),
-        ("stitched_ip_rtlsim:", "step_verify_kernel_partition checks the partition"),
-    ):
-        assert f"{output} the kernel path does not make it: {step}" in message
-    # The outputs it makes are accepted.
-    cfg = config(tmp_path, generate_outputs=[DataflowOutputType.BITFILE])
-    converted = step_kernel_ops(chain_source(), cfg)
-    assert {node.domain for node in converted.graph.node} >= {KERNEL_OPS_DOMAIN}
-
-
-def test_a_build_from_kernel_ops_is_on_the_kernel_path_whatever_its_steps(
-    tmp_path: Path,
-) -> None:
-    """The build's checks read the path from the model it starts from: one of KernelOps
-    built by its outputs phase alone is checked as the kernel path (its refusals, and
-    none of the HWCustomOp path's folding checks); a model without KernelOps through
-    the HWCustomOp path's phases is not."""
-    stitched = [DataflowOutputType.STITCHED_IP, DataflowOutputType.BITFILE]
-    cfg = config(tmp_path, steps=["phase_generate_outputs"], generate_outputs=stitched)
     failed = failed_checks(cfg, kernel_model())
-    assert list(failed) == ["kernel_path_output"]
-    assert failed["kernel_path_output"][0].startswith("stitched_ip: the kernel path")
-    cfg = config(tmp_path, steps=None, generate_outputs=stitched)
-    failed = failed_checks(cfg, chain_source())
-    assert "kernel_path_output" not in failed
-    assert "folding_missing" in failed
+    assert list(failed) == ["kernel_ops_model"]
+    assert "KernelBuildConfig" in failed["kernel_ops_model"][0]
+    assert "kernel_ops_model" not in failed_checks(cfg, chain_source())
+
+
+def test_a_kernel_path_step_is_not_a_dataflow_builds(tmp_path: Path) -> None:
+    """Each configuration's steps are its flow's: the kernel path's names are refused
+    in a DataflowBuildConfig's steps, and the HWCustomOp flow's in a KernelBuildConfig's."""
+    dataflow = DataflowBuildConfig(
+        output_dir=str(tmp_path / "output"),
+        synth_clk_period_ns=5.0,
+        generate_outputs=[],
+        steps=["phase_kernel_path"],
+    )
+    with pytest.raises(ValueError, match="Unknown step or phase: phase_kernel_path"):
+        resolve_build_steps(dataflow)
+    kernel = config(tmp_path, steps=["phase_generate_outputs"])
+    with pytest.raises(ValueError, match="Unknown step or phase: phase_generate_outputs"):
+        resolve_build_steps(kernel)
+    assert [step.__name__ for step in resolve_build_steps(config(tmp_path))] == [
+        "phase_kernel_path",
+        "phase_kernel_outputs",
+    ]
 
 
 def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:

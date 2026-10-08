@@ -438,17 +438,17 @@ site owns remote activation, path visibility and remote cancellation.
 
 A build configuration may name its toolchain, the HLS frontend included; a
 stated selection never guesses its frontend, and `vitis_hls`, its default, is
-refused on 2025.x. A kernel-path build of TFC for Ultra96
-(`dataflow_build_config.json`; the environment as configured, so `settings`
-stays empty):
+refused on 2025.x. A kernel-path build has a configuration of its own,
+`finn.builder.kernel_build_config.KernelBuildConfig`, written as
+`kernel_build_config.json` beside `model.onnx` (a build directory states one
+configuration: `dataflow_build_config.json` for the HWCustomOp flow, or this one;
+`build_dataflow` builds either). A kernel-path build of TFC for Ultra96 in the
+Zynq shell (the environment as configured, so `settings` stays empty):
 
 ```json
 {
   "output_dir": "output",
-  "synth_clk_period_ns": 5.0,
-  "board": "Ultra96",
-  "shell_flow_type": "vivado_zynq",
-  "steps": ["phase_kernel_path", "phase_generate_outputs"],
+  "target": {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq"},
   "kernel_exploration": [
     {"strategy": "target_throughput", "fps": 1000000},
     {"strategy": "size_fifos"}
@@ -457,6 +457,17 @@ stays empty):
   "toolchain": {"hls_frontend": "vitis-run"}
 }
 ```
+
+`target` states the clock period, a `board` or a `part` (a board gives its part; a
+part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
+packaged IP its user integrates, whose target states the part alone; `pynq`, the
+Zynq block design for a board. The outputs (`bitfile`, `pynq_driver`,
+`deployment_package`) need a shell that integrates the partition, so they are
+refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
+choices, the partition and its verification) and `phase_kernel_outputs` (what the
+shell makes). None of the HWCustomOp flow's fields (`synth_clk_period_ns`,
+`board`, `shell_flow_type`, `target_fps`, `folding_config_file`, ...) is read:
+stated, it is refused by name.
 
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:

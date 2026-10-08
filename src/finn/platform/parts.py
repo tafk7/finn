@@ -4,8 +4,9 @@
 """What a part is: its fabric, its DSP block, its UltraRAM and its resource totals.
 
 ``PARTS`` is an exact table, keyed by the canonical part name (no pattern matches
-into it). Each row states the device's totals as AMD's public data sheet for its
-family does, nothing subtracted: a shell's occupancy is the shell's. A part outside
+into it). Each row states the device's totals, nothing subtracted (a shell's
+occupancy is the shell's), and cites what they were read from: AMD's public data
+sheet where its row was read, otherwise Vivado's part database (``_VIVADO``). A part outside
 the table is read from its family (``FAMILIES``, the first pattern its lower-cased
 name matches): its capabilities are its family's and its resources are not known
 (``None``). A part matching neither is refused (``unknown-part``).
@@ -53,7 +54,7 @@ def _part(
     uram: int,
     dsps: int,
 ) -> PartFacts:
-    """A row as the data sheets state it: block RAM in 36 Kb blocks (two RAMB18 each)."""
+    """A row as its source states it: block RAM in 36 Kb blocks (two RAMB18 each)."""
     totals = Resources(lut=lut, ff=ff, bram18=2 * bram36, uram=uram, dsp=dsps)
     return PartFacts(
         name=name,
@@ -69,7 +70,9 @@ def _part(
 _ZU3EG = dict(lut=70_560, ff=141_120, bram36=216, uram=0, dsps=360)
 _ZU2X_4XDR = dict(lut=425_280, ff=850_560, bram36=1_080, uram=80, dsps=4_272)
 _DS890_EG = "AMD DS890, Zynq UltraScale+ MPSoC EG device table"
-_DS889 = "AMD DS889, Zynq UltraScale+ RFSoC device table"
+_VIVADO = (
+    "Vivado 2025.2 part database (get_parts; LUT_ELEMENTS, FLIPFLOPS, BLOCK_RAMS, ULTRA_RAMS, DSP)"
+)
 _US, _E2 = Fabric.ULTRASCALE, DspBlock.DSP48E2
 
 PARTS: dict[str, PartFacts] = {
@@ -80,7 +83,7 @@ PARTS: dict[str, PartFacts] = {
         _part("xczu3eg-sfvc784-2-e", f"{_DS890_EG} (ZU3EG)", _US, _E2, **_ZU3EG),  # AUP-ZU3
         _part(
             "xczu9eg-ffvb1156-2-e",  # ZCU102
-            f"{_DS890_EG} (ZU9EG)",
+            _VIVADO,
             _US,
             _E2,
             lut=274_080,
@@ -100,11 +103,11 @@ PARTS: dict[str, PartFacts] = {
             uram=96,
             dsps=1_728,
         ),
-        _part("xczu28dr-ffvg1517-2-e", f"{_DS889} (ZU28DR)", _US, _E2, **_ZU2X_4XDR),  # ZCU111
-        _part("xczu48dr-ffvg1517-2-e", f"{_DS889} (ZU48DR)", _US, _E2, **_ZU2X_4XDR),  # RFSoC4x2
+        _part("xczu28dr-ffvg1517-2-e", _VIVADO, _US, _E2, **_ZU2X_4XDR),  # ZCU111
+        _part("xczu48dr-ffvg1517-2-e", _VIVADO, _US, _E2, **_ZU2X_4XDR),  # RFSoC4x2
         _part(
             "xck26-sfvc784-2LV-c",  # KV260
-            "AMD DS987, Kria K26 SOM data sheet",
+            _VIVADO,
             _US,
             _E2,
             lut=117_120,
@@ -115,7 +118,7 @@ PARTS: dict[str, PartFacts] = {
         ),
         _part(
             "xc7z020clg400-1",  # Pynq-Z1, Pynq-Z2
-            "AMD DS190, Zynq 7000 SoC device table (Z-7020)",
+            _VIVADO,
             Fabric.SERIES7,
             DspBlock.DSP48E1,
             lut=53_200,
@@ -126,8 +129,7 @@ PARTS: dict[str, PartFacts] = {
         ),
     )
 }
-"""The exact table: a part's facts, its totals as its family's public data sheet
-states them."""
+"""The exact table: a part's facts, its totals as the source it cites states them."""
 
 _FOLDED = {name.lower(): facts for name, facts in PARTS.items()}
 

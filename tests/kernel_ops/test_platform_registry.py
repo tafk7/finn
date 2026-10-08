@@ -20,6 +20,7 @@ from finn.platform import (
     PARTS,
     ROWS,
     TargetRefused,
+    TargetRequest,
     part_facts,
     refuse_drift,
     resolve_target,
@@ -57,7 +58,10 @@ def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     assert target.platform.resources is not None  # every board's part is in the table
     (end,) = shell_row("pynq", board).ends
     assert end == iodma_hls(pynq_native_port_width[board])
-    assert resolve_target(board=board, period_ns=5.0).board == board  # ip, the board stated
+    # On ip the board names its part, and the target states none: the part's target.
+    on_ip = resolve_target(board=board, period_ns=5.0)
+    assert on_ip == resolve_target(part=BOARDS[board].part, period_ns=5.0)
+    assert (on_ip.shell, on_ip.board) == ("ip", None)
 
 
 @pytest.mark.parametrize("board", sorted(set(part_map) - set(pynq_part_map)))
@@ -181,6 +185,17 @@ def test_a_part_stated_beside_its_board_is_an_assertion() -> None:
     asserted = resolve_target(board="Ultra96", part="XCZU3EG-SBVA484-1-E", period_ns=5.0)
     assert asserted == resolve_target(board="Ultra96", period_ns=5.0)
     assert asserted.part == "xczu3eg-sbva484-1-e"
+
+
+def test_a_request_resolves_as_the_resolver_does() -> None:
+    """A build's statement of its target (TargetRequest), ip unless a shell is named."""
+    assert TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e").resolve() == (
+        resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
+    )
+    pynq = TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq")
+    assert pynq.resolve() == resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+    with pytest.raises(TargetRefused, match="board-required"):
+        TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e", shell="pynq").resolve()
 
 
 # -- drift -------------------------------------------------------------------------------

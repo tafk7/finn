@@ -10,7 +10,9 @@ a build's target from them.
   clock, integration, host runtime and static region;
 - ``finn.platform.resolve``: ``resolve_target``, a part or a board, a clock period
   and a shell to the target (``finn.kernels.target.Target``), and ``refuse_drift``,
-  which refuses a build whose target is not its model's.
+  which refuses a build whose target is not its model's;
+- ``finn.platform.request``: ``TargetRequest``, what a build configuration states of
+  its target, resolved by ``resolve_target``.
 
 Kernels never import it: they read the capabilities it resolves
 (``finn.kernels.target.Platform``), which the model states (the ``finn.platform``
@@ -21,6 +23,7 @@ graph metadata, ``finn.custom_op.kernels.base.read_target``). Every refusal is n
 from finn.platform.boards import BOARDS, Board
 from finn.platform.parts import FAMILIES, PARTS, PartFacts, part_facts
 from finn.platform.refusal import TargetRefused
+from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
 from finn.platform.shells import (
     IP,
@@ -49,6 +52,7 @@ __all__ = [
     "ShellRow",
     "StaticRegion",
     "TargetRefused",
+    "TargetRequest",
     "part_facts",
     "refuse_drift",
     "resolve_target",

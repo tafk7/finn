@@ -248,14 +248,22 @@ def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrappe
 def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(tfc: ModelWrapper) -> None:
     """3e6 frames a second, a budget of 66 cycles: on a 64-bit port TFC's 6 272 input
     bits are 98 words, so the input end binds whatever the folding, and the strategy
-    relaxes to what the root reaches; on 128 bits, 49 words, MatMul_3 binds at 64."""
+    relaxes to what the root reaches; on 128 bits, 49 words, MatMul_3 binds at 64.
+
+    The first fold's input end takes 98 + 4 = 102 cycles (MultiThreshold_0 at 14
+    lanes, so a width converter). Relaxed to 102, the strategy refolds to the least
+    parallelism within it: MultiThreshold_0 at 8 lanes, whose stream is the port's
+    width, so no converter and a call constant of 13. The end is named at
+    max(beats, 98) + 13 = 111, the bottleneck that fold reaches (TargetCycles as
+    built: the report states the budget relaxed to and the cycles reached)."""
     _, narrow = explored(tfc, 3e6, iodma_hls(64))
     end = narrow["ends"]["Reshape_0_out0"]
     assert (end["memory_width"], end["words"]) == (64, 98)
-    assert end["cycles"] >= 98 + 4
+    assert (end["tdata"], end["beats"], end["lanes"]) == (64, 98, 8)
+    assert (end["converter"], end["call_cycles"], end["cycles"]) == (False, 13, 111)
     (target,) = narrow["strategies"]
-    assert target["cycles"] == 66 and target["relaxed_to"] is not None
-    assert narrow["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": end["cycles"]}
+    assert (target["cycles"], target["relaxed_to"]) == (66, 102)
+    assert narrow["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 111}
     _, wide = explored(tfc, 3e6, iodma_hls(128))
     end = wide["ends"]["Reshape_0_out0"]
     assert (end["memory_width"], end["words"], end["cycles"]) == (128, 49, 60)

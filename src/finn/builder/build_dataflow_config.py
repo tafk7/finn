@@ -96,13 +96,6 @@ class VerificationStepType(str, Enum):
     NODE_BY_NODE_RTLSIM = "node_by_node_rtlsim"
     #: verify after step_create_stitched_ip, using stitched-ip Verilog
     STITCHED_IP_RTLSIM = "stitched_ip_rtlsim"
-    #: verify the kernel path's partition (step_verify_kernel_partition): its own
-    #: outputs, the parent graph with the partition of KernelOps executed in Python,
-    #: against the model the kernel path started from, on each verify_input_npy input
-    KERNEL_PARTITION_PYTHON = "kernel_partition_python"
-    #: verify the kernel path's partition (step_verify_kernel_partition): its emitted
-    #: RTL compiles and elaborates in XSim (xvlog, xelab); needs Vivado
-    KERNEL_PARTITION_ELABORATION = "kernel_partition_elaboration"
 
 
 #: Maps each VerificationStepType to the (phase, step) it depends on.
@@ -121,14 +114,6 @@ verify_step_prereqs = {
     VerificationStepType.STITCHED_IP_RTLSIM: (
         "phase_generate_outputs",
         "step_create_stitched_ip",
-    ),
-    VerificationStepType.KERNEL_PARTITION_PYTHON: (
-        "phase_kernel_path",
-        "step_verify_kernel_partition",
-    ),
-    VerificationStepType.KERNEL_PARTITION_ELABORATION: (
-        "phase_kernel_path",
-        "step_verify_kernel_partition",
     ),
 }
 
@@ -157,21 +142,23 @@ estimate_only_dataflow_steps = [
 #: without any synthesis.
 hw_codegen_dataflow_steps = estimate_only_dataflow_steps + ["step_hw_codegen"]
 
-#: List of steps for a build through the kernel path (KernelOps, finn.custom_op.kernels),
-#: from a streamlined model: the kernel-path phase (the target, KernelOps, their
-#: choices, the partition, its verification), then the outputs (the shell build).
-kernel_path_dataflow_steps = ["phase_kernel_path", "phase_generate_outputs"]
 
+def declared(cls: type, name: str) -> Callable[[Any], Any]:
+    """The decoder of the nested dataclass ``cls`` a configuration states as ``name``,
+    refusing keys ``cls`` does not declare (dataclasses_json would drop them, as it
+    does a nested dataclass's), naming them."""
 
-def _toolchain_selection(stated: Any) -> Optional[Selection]:
-    """The ``toolchain`` a configuration states, refusing keys Selection does not declare
-    (dataclasses_json would drop them, as it does a nested dataclass's)."""
-    if stated is None or isinstance(stated, Selection):
-        return stated
-    unknown = sorted(set(stated) - {item.name for item in fields(Selection)})
-    if unknown:
-        raise UndefinedParameterError(f"toolchain: keys Selection does not declare: {unknown}")
-    return Selection(**stated)
+    def decode(stated: Any) -> Any:
+        if stated is None or isinstance(stated, cls):
+            return stated
+        unknown = sorted(set(stated) - {item.name for item in fields(cls)})
+        if unknown:
+            raise UndefinedParameterError(
+                f"{name}: keys {cls.__name__} does not declare: {unknown}"
+            )
+        return cls(**stated)
+
+    return decode
 
 
 # undefined=RAISE: a key the configuration does not declare is refused, named, when a
@@ -184,6 +171,8 @@ class DataflowBuildConfig:
     serialized into or de-serialized from JSON files for persistence; reading one
     refuses a key it does not declare (``UndefinedParameterError``, naming the keys).
     See list of attributes below for more information on the build configuration.
+    It configures the HWCustomOp flow; the kernel path (KernelOps) has its own,
+    finn.builder.kernel_build_config.KernelBuildConfig.
     """
 
     #: Directory where the final build outputs will be written into
@@ -474,39 +463,8 @@ class DataflowBuildConfig:
     #: configured, under the site command directory ``FINN_TOOL_DIR_OVERRIDE`` names.
     #: In JSON: {"settings": [...], "command_dir": "", "launcher": [], "hls_frontend": "..."}.
     toolchain: Optional[Selection] = field(
-        default=None, metadata=config(decoder=_toolchain_selection)
+        default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
-
-    # The kernel path's choices: what explores them, and what completes the rest. The
-    # three fields read nothing else of this configuration, and nothing else reads
-    # them but the kernel path's steps, so that the kernel path's own configuration
-    # takes them over as they are.
-
-    #: The kernel path's exploration (step_kernel_choices): the strategies that choose
-    #: the KernelOps' open choices through the DSE seam, run as written, each a spec
-    #: with its own parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
-    #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
-    #: ``{"strategy": "target_throughput", "fps": ..., "relax": true}`` (the least
-    #: parallelism meeting fps at the target's clock), ``{"strategy": "size_fifos",
-    #: "margin": 0}`` (each channel's FIFO from both ends' beat patterns). None by
-    #: default: what no strategy chooses stays open, and kernel_completion completes
-    #: it. The kernel path reads no other field for it (not target_fps,
-    #: folding_config_file or auto_fifo_depths).
-    kernel_exploration: List[Dict[str, Any]] = field(default_factory=list)
-
-    #: Clear the KernelOps' saved choices before exploring: re-explore from scratch.
-    #: Otherwise a saved choice is pinned and the exploration fills only open ones.
-    kernel_exploration_fresh: bool = False
-
-    #: The completion policy (finn.transformation.kernels.KERNEL_COMPLETIONS) that
-    #: completes what no strategy chose, on a copy that is never saved, wherever the
-    #: partition is costed or built: ``baseline``, every open choice at its kernel's
-    #: baseline (its first viable case: the least parallelism, ``auto`` memories) and,
-    #: when the partition is built, its FIFOs sized at that folding; a required choice
-    #: (a FIFO's depth) is refused, named. ``placeholder``, for debugging, also takes
-    #: the first case of a required choice. report/kernel_exploration.json lists every
-    #: value completed.
-    kernel_completion: str = "baseline"
 
     def _resolve_hls_clk_period(self):
         if self.hls_clk_period_ns is None:

@@ -50,7 +50,6 @@ import os
 import shutil
 from copy import deepcopy
 from functools import partial
-from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.bipolar_to_xnor import ConvertBipolarMatMulToXnorPopcount
@@ -87,7 +86,6 @@ from finn.analysis.fpgadataflow.res_estimation import (
 from finn.analysis.fpgadataflow.validate_dataflow_conversion import (
     validate_dataflow_conversion,
 )
-from finn.builder.build_dataflow_checks import refuse_kernel_path_config
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -96,8 +94,6 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.core.onnx_exec import execute_onnx, execute_parent
 from finn.core.rtlsim_exec import prepare_stitched_rtlsim
-from finn.custom_op.kernels.base import read_target
-from finn.platform import IP, PYNQ, SLASH, XRT, refuse_drift, resolve_target
 from finn.transformation.fpgadataflow.absorb_into_requant import (
     AbsorbElementwiseOpsIntoRequant,
 )
@@ -123,7 +119,6 @@ from finn.transformation.fpgadataflow.export_portable_rtl import ExportPortableR
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
-from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.loop_rolling import LoopExtraction, LoopRolling
 from finn.transformation.fpgadataflow.make_driver import MakeCPPDriver, MakePYNQDriver
 from finn.transformation.fpgadataflow.make_zynq_proj import ZynqBuild
@@ -153,16 +148,6 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
     ShuffleDecomposition,
 )
 from finn.transformation.general import ApplyConfig
-from finn.transformation.kernels import (
-    InferKernelTensors,
-    ToKernelOps,
-    completion,
-    explore_kernel_choices,
-    kernel_choices_config,
-    partition_bottleneck,
-    strategy,
-)
-from finn.transformation.kernels.package import ElaboratePartition, configured_root
 from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
@@ -639,194 +624,6 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
         model, cfg.output_dir + "/template_specialize_layers_config.json", attrs
     )
 
-    return model
-
-
-#: The kernel path's shell for each shell flow (finn.platform.shells), until the kernel
-#: path has a build configuration of its own: none is the packaged IP's.
-_KERNEL_SHELLS = {
-    None: IP,
-    ShellFlowType.VIVADO_ZYNQ: PYNQ,
-    ShellFlowType.VITIS_ALVEO: XRT,
-    ShellFlowType.SLASH_ALVEO: SLASH,
-}
-
-
-def kernel_target(cfg: DataflowBuildConfig):
-    """The kernel path's build target, from the build configuration
-    (finn.platform.resolve_target): the shell the shell flow names (_KERNEL_SHELLS),
-    the synthesis clock period, and the board with fpga_part as its assertion, or, on
-    the ip shell, the part alone (the board's, unless fpga_part names one). The one
-    place a build states its target: step_kernel_ops writes it into the model, and
-    the build's later steps refuse a model whose target is not it (refuse_drift)."""
-    flow = None if cfg.shell_flow_type is None else ShellFlowType(cfg.shell_flow_type)
-    shell = _KERNEL_SHELLS[flow]
-    period_ns = cfg.synth_clk_period_ns
-    if shell == IP:
-        return resolve_target(part=cfg._resolve_fpga_part(), period_ns=period_ns)
-    return resolve_target(board=cfg.board, part=cfg.fpga_part, period_ns=period_ns, shell=shell)
-
-
-def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
-    """Where step_kernel_ops keeps the model it converts, the reference of the
-    partition's Python check."""
-    return cfg.output_dir + "/intermediate_models/kernel_path_source.onnx"
-
-
-def step_kernel_ops(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """State the build target in the model (kernel_target) and rewrite each node a
-    KernelOp binds (MatMul, MultiThreshold) as one: ToKernelOps. The build is on the
-    kernel path from here, so the configuration is checked for it first: what only the
-    HWCustomOp path makes is refused, naming the step that does it on the kernel path
-    (build_dataflow_checks.kernel_path_checks). When KERNEL_PARTITION_PYTHON is asked,
-    the model it converts is kept as that check's reference (kernel_path_source.onnx)."""
-    refuse_kernel_path_config(cfg)
-    if VerificationStepType.KERNEL_PARTITION_PYTHON in cfg._resolve_verification_steps():
-        os.makedirs(os.path.dirname(_kernel_path_source(cfg)), exist_ok=True)
-        model.save(_kernel_path_source(cfg))
-    return model.transform(ToKernelOps(kernel_target(cfg)))
-
-
-def step_infer_kernel_tensors(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Infer every tensor in graph order, the KernelOps answering from their kernels."""
-    return model.transform(InferKernelTensors())
-
-
-def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Explore the KernelOps' open choices through the DSE seam by the strategies
-    ``cfg.kernel_exploration`` lists, in order (finn.transformation.kernels.strategy:
-    each a spec, {"strategy": name, **parameters}), and save them on their nodes
-    (explore_kernel_choices): the choices strategies made, never a completed one. What
-    no strategy chose stays open, and ``cfg.kernel_completion`` completes it wherever
-    the partition is costed or built. Nothing else of the configuration is read: a
-    strategy carries its own objective (target_fps, folding_config_file and
-    auto_fifo_depths are the standard flow's). Writes report/kernel_exploration.json
-    (the strategies, each with the choices it committed, attempts and time, and the
-    completed values it read; every committed choice with the strategy that made it;
-    the completion policy, every value it completes and the required choices it
-    leaves open; whether FIFOs were sized; the dropped choices with why, per member
-    cycles and buffering and the bottleneck, of the completed point) and
-    kernel_choices.json (the nodes' choices, sparse, ApplyConfig's form, which a
-    "pinned" strategy reads back), and logs what each strategy committed, what the
-    completion completed (each value, for the debug placeholder), and whether FIFOs
-    were sized."""
-    strategies = [strategy(spec) for spec in cfg.kernel_exploration]
-    explored = explore_kernel_choices(
-        model,
-        strategies,
-        fresh=cfg.kernel_exploration_fresh,
-        completion=completion(cfg.kernel_completion),
-    )
-    os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-    with open(cfg.output_dir + "/report/kernel_exploration.json", "w") as f:
-        json.dump(explored.report, f, indent=2)
-    with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
-        json.dump(kernel_choices_config(model), f, indent=2)
-    report = explored.report
-    for each in report["strategies"]:
-        print(f"Kernel choices: {each['strategy']} committed {each['committed']}")
-        if "read_completed" in each:
-            print(f"Kernel choices: {each['strategy']} {each['read_completed']}")
-    completed = [
-        (f"{node}.{attribute}", entry)
-        for node, held in report["completed"].items()
-        for attribute, entry in held.items()
-    ]
-    policy = report["completion"]
-    print(f"Kernel choices: {policy['policy']} completes {len(completed)}")
-    for name, entry in completed:
-        if entry["by"].startswith("DEBUG"):
-            print(f"{entry['by']}: {name} = {entry['value']!r}")
-    if "refused" in policy:
-        print(f"Kernel choices: the {policy['policy']} completion refuses: {policy['refused']}")
-    if policy.get("open"):
-        print(f"Kernel choices: open, to choose before packaging: {', '.join(policy['open'])}")
-    print(f"FIFOs: {report['fifos']}")
-    return model
-
-
-def step_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """The KernelOps as one StreamingDataflowPartition, the nodes before and after it
-    on the host: the partition's body, which carries the target."""
-    return _dataflow_partition(model, cfg)
-
-
-def verify_kernel_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> bool:
-    """The partition's own outputs, for each input ``verify_input_npy`` states: the
-    parent graph executed with the partition of KernelOps, against the model the
-    kernel path started from (step_kernel_ops' kernel_path_source.onnx) on the same
-    input, value for value. Each input's partition outputs are saved as
-    verification_output/verify_kernel_partition_python_<index>_<SUCCESS|FAIL>.npz."""
-    source_file = _kernel_path_source(cfg)
-    if not os.path.isfile(source_file):
-        raise FileNotFoundError(
-            f"{source_file}: the kernel path's source, which step_kernel_ops keeps when "
-            "KERNEL_PARTITION_PYTHON is asked, is not there (did the build start after it?)"
-        )
-    assert cfg.save_intermediate_models, "Enable save_intermediate_models for verification"
-    intermediate = cfg.output_dir + "/intermediate_models"
-    verify_out_dir = cfg.output_dir + "/verification_output"
-    os.makedirs(verify_out_dir, exist_ok=True)
-    child_file = intermediate + "/verify_kernel_partition_python.onnx"
-    model.save(child_file)
-    parent_file = intermediate + "/dataflow_parent.onnx"
-    source = ModelWrapper(source_file)
-    source_input = source.graph.input[0].name
-    ishape = tuple(source.get_tensor_shape(source_input))
-    outputs = [item.name for item in model.graph.output]
-    inputs = np.load(cfg.verify_input_npy)
-    all_match = True
-    for index in range(inputs.shape[0]):
-        frame = inputs[index : index + 1].reshape((1,) + ishape[1:])
-        built = execute_parent(parent_file, child_file, frame, return_full_ctx=True)
-        expected = execute_onnx(source, {source_input: frame}, True)
-        mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
-        for name in mismatched:
-            print(
-                f"kernel_partition_python: input {index}: {name} differs from the source's in "
-                f"{int(np.sum(built[name] != expected[name]))} of {built[name].size} values"
-            )
-        result = "FAIL" if mismatched else "SUCCESS"
-        all_match = all_match and not mismatched
-        np.savez(
-            f"{verify_out_dir}/verify_kernel_partition_python_{index}_{result}.npz",
-            **{name: built[name] for name in outputs},
-        )
-    print(
-        f"kernel_partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
-        f"inputs of {cfg.verify_input_npy}, against the model the kernel path started from"
-    )
-    return all_match
-
-
-def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig):
-    """Check the kernel path's partition before a shell builds it.
-
-    Always: its choices replay to a configured root, completed by
-    ``cfg.kernel_completion`` (none stale, none left open, its ports its graph's
-    inputs and outputs in order; configured_root), and it states
-    the configuration's target. As ``verify_steps`` asks:
-    KERNEL_PARTITION_PYTHON compares the partition's own outputs, with the parent
-    graph executed, against the model the kernel path started from, on each input
-    verify_input_npy states (verify_kernel_partition_python);
-    KERNEL_PARTITION_ELABORATION compiles and elaborates the partition's emitted RTL
-    in XSim, through the build's toolchain."""
-    configured_root(model, "the kernel path's partition", completion(cfg.kernel_completion))
-    refuse_drift(read_target(model), kernel_target(cfg), "build")
-    verify_steps = cfg._resolve_verification_steps()
-    if VerificationStepType.KERNEL_PARTITION_PYTHON in verify_steps:
-        matched = verify_kernel_partition_python(model, cfg)
-        print("Verification for kernel_partition_python : " + ("SUCCESS" if matched else "FAIL"))
-    if VerificationStepType.KERNEL_PARTITION_ELABORATION in verify_steps:
-        directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
-        model.transform(
-            ElaboratePartition(
-                directory=Path(directory),
-                toolchain=cfg._resolve_toolchain(),
-                completion=completion(cfg.kernel_completion),
-            )
-        )
-        print("Verification for kernel_partition_elaboration : SUCCESS")
     return model
 
 
@@ -1585,14 +1382,45 @@ def delivered_clock(
     return report
 
 
-def _objective_fps(cfg: DataflowBuildConfig):
-    """The throughput the kernel exploration's target_throughput strategy asks, if any."""
-    asked = [
-        spec["fps"]
-        for spec in cfg.kernel_exploration
-        if spec.get("strategy") == "target_throughput" and "fps" in spec
-    ]
-    return asked[0] if asked else None
+def collect_zynq_bitfile(
+    model: ModelWrapper,
+    output_dir: str,
+    period_ns: float,
+    cycles: int | None = None,
+    objective_fps: float | None = None,
+) -> None:
+    """What ZynqBuild made of ``model`` (its metadata), into a build's ``output_dir``:
+    the bitfile and hardware handoff (bitfile/), the synthesis and routed timing
+    reports (report/), and the clock the routed design delivers beside the
+    ``period_ns`` asked (report/delivered_clock.json, delivered_clock, with the
+    partition's bottleneck ``cycles`` and the ``objective_fps`` asked, if given); a
+    delivered clock other than the one asked is a warning."""
+    bitfile_dir = output_dir + "/bitfile"
+    os.makedirs(bitfile_dir, exist_ok=True)
+    report_dir = output_dir + "/report"
+    os.makedirs(report_dir, exist_ok=True)
+    copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")
+    copy(model.get_metadata_prop("hw_handoff"), bitfile_dir + "/finn-accel.hwh")
+    copy(
+        model.get_metadata_prop("vivado_synth_rpt"),
+        report_dir + "/post_synth_resources.xml",
+    )
+
+    post_synth_resources = model.analysis(post_synth_res)
+    with open(report_dir + "/post_synth_resources.json", "w") as f:
+        json.dump(post_synth_resources, f, indent=2)
+
+    vivado_pynq_proj_dir = model.get_metadata_prop("vivado_pynq_proj")
+    timing_rpt = (
+        "%s/finn_zynq_link.runs/impl_1/top_wrapper_timing_summary_routed.rpt" % vivado_pynq_proj_dir
+    )
+    copy(timing_rpt, report_dir + "/post_route_timing.rpt")
+    clock = delivered_clock(timing_rpt, period_ns, cycles, objective_fps)
+    with open(report_dir + "/delivered_clock.json", "w") as f:
+        json.dump(clock, f, indent=2)
+    if "warning" in clock:
+        print("WARNING: " + clock["warning"])
+    print("Bitfile written into " + bitfile_dir)
 
 
 def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
@@ -1600,9 +1428,8 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
     Vivado or Vitis, to target the specified board.
 
     In the Zynq shell it then reads the clock the routed design delivers
-    (report/delivered_clock.json, delivered_clock): beside the period asked, and for
-    a partition of KernelOps its throughput at each, with the objective its
-    exploration asked; a delivered clock other than the one asked is a warning."""
+    (report/delivered_clock.json, collect_zynq_bitfile) beside the period asked; a
+    delivered clock other than the one asked is a warning."""
 
     if DataflowOutputType.BITFILE in cfg.generate_outputs:
         bitfile_dir = cfg.output_dir + "/bitfile"
@@ -1611,12 +1438,6 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
         os.makedirs(report_dir, exist_ok=True)
         partition_model_dir = cfg.output_dir + "/intermediate_models/kernel_partitions"
         if cfg.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:
-            kernel_completion = completion(cfg.kernel_completion)
-            bottleneck = (
-                partition_bottleneck(model, kernel_completion)
-                if is_kernel_partition(model)
-                else None
-            )
             model = model.transform(
                 ZynqBuild(
                     cfg.board,
@@ -1625,36 +1446,10 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
                     partition_model_dir=partition_model_dir,
                     toolchain=cfg._resolve_toolchain(),
                     vivado_jobs=cfg.vivado_jobs,
-                    completion=kernel_completion,
                 )
             )
-            copy(model.get_metadata_prop("bitfile"), bitfile_dir + "/finn-accel.bit")
-            copy(model.get_metadata_prop("hw_handoff"), bitfile_dir + "/finn-accel.hwh")
-            copy(
-                model.get_metadata_prop("vivado_synth_rpt"),
-                report_dir + "/post_synth_resources.xml",
-            )
-
-            post_synth_resources = model.analysis(post_synth_res)
-            with open(report_dir + "/post_synth_resources.json", "w") as f:
-                json.dump(post_synth_resources, f, indent=2)
-
-            vivado_pynq_proj_dir = model.get_metadata_prop("vivado_pynq_proj")
-            timing_rpt = (
-                "%s/finn_zynq_link.runs/impl_1/top_wrapper_timing_summary_routed.rpt"
-                % vivado_pynq_proj_dir
-            )
-            copy(timing_rpt, report_dir + "/post_route_timing.rpt")
-            clock = delivered_clock(
-                timing_rpt,
-                cfg.synth_clk_period_ns,
-                None if bottleneck is None else bottleneck.cycles,
-                _objective_fps(cfg) if bottleneck is not None else None,
-            )
-            with open(report_dir + "/delivered_clock.json", "w") as f:
-                json.dump(clock, f, indent=2)
-            if "warning" in clock:
-                print("WARNING: " + clock["warning"])
+            collect_zynq_bitfile(model, cfg.output_dir, cfg.synth_clk_period_ns)
+            return model
 
         elif cfg.shell_flow_type == ShellFlowType.VITIS_ALVEO:
             model = model.transform(
@@ -1715,21 +1510,25 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model
 
 
+def deployment_package(output_dir: str) -> None:
+    """A build's bitfile and driver (``output_dir``'s bitfile/ and driver/), copied
+    into its deployment package (deploy/)."""
+    deploy_dir = output_dir + "/deploy"
+    os.makedirs(deploy_dir, exist_ok=True)
+    shutil.copytree(output_dir + "/bitfile", deploy_dir + "/bitfile", dirs_exist_ok=True)
+    shutil.copytree(
+        output_dir + "/driver",
+        deploy_dir + "/driver",
+        dirs_exist_ok=True,
+        copy_function=shutil.copyfile,
+    )
+
+
 def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Create a deployment package including the driver and bitfile."""
 
     if DataflowOutputType.DEPLOYMENT_PACKAGE in cfg.generate_outputs:
-        deploy_dir = cfg.output_dir + "/deploy"
-        bitfile_dir = cfg.output_dir + "/bitfile"
-        driver_dir = cfg.output_dir + "/driver"
-        os.makedirs(deploy_dir, exist_ok=True)
-        shutil.copytree(bitfile_dir, deploy_dir + "/bitfile", dirs_exist_ok=True)
-        shutil.copytree(
-            driver_dir,
-            deploy_dir + "/driver",
-            dirs_exist_ok=True,
-            copy_function=shutil.copyfile,
-        )
+        deployment_package(cfg.output_dir)
     else:
         print(
             """DataflowOutputType.DEPLOYMENT_PACKAGE not in requested outputs,
@@ -1895,11 +1694,6 @@ build_dataflow_step_lookup = {
     "step_convert_to_hw": step_convert_to_hw,
     "step_specialize_layers": step_specialize_layers,
     "step_create_dataflow_partition": step_create_dataflow_partition,
-    "step_kernel_ops": step_kernel_ops,
-    "step_infer_kernel_tensors": step_infer_kernel_tensors,
-    "step_kernel_choices": step_kernel_choices,
-    "step_kernel_partition": step_kernel_partition,
-    "step_verify_kernel_partition": step_verify_kernel_partition,
     "step_target_fps_parallelization": step_target_fps_parallelization,
     "step_apply_folding_config": step_apply_folding_config,
     "step_minimize_bit_width": step_minimize_bit_width,

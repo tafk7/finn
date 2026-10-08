@@ -22,7 +22,10 @@ def resolve_target(
     ``shell`` (``ip`` unless one is stated).
 
     A board names its part; a part stated beside it is an assertion, refused when it
-    is not the board's (``board-part-mismatch``). The platform is the part's
+    is not the board's (``board-part-mismatch``). On the ``ip`` shell a board only
+    names its part, and the target states none: the packaged IP is built for the part
+    and integrated by its user, wherever the part is, so a build that names the board
+    and one that names its part make the same model. The platform is the part's
     capabilities and totals (``finn.platform.parts``), the shell's doubled clock
     (``finn.platform.shells``) and the clock period. Every refusal is named
     (``TargetRefused``)."""
@@ -53,7 +56,9 @@ def resolve_target(
         clk2x=row.clk2x,
         resources=facts.resources,
     )
-    return Target(part=facts.name, platform=platform, shell=shell, board=board)
+    return Target(
+        part=facts.name, platform=platform, shell=shell, board=None if shell == IP else board
+    )
 
 
 def refuse_drift(stated: Target, built: Target, build: str) -> None:

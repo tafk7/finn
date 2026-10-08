@@ -12,12 +12,15 @@ from enum import Enum
 from typing import Any, List, Optional, Tuple
 
 from finn.builder.build_dataflow_config import (
-    DataflowBuildConfig,
     DataflowOutputType,
     ShellFlowType,
-    VerificationStepType,
     verify_step_prereqs,
 )
+from finn.builder.kernel_build_config import (
+    KernelBuildConfig,
+    KernelVerificationStepType,
+)
+from finn.platform import TargetRefused, shell_row
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.util.basic import (
     get_vivado_version,
@@ -60,93 +63,154 @@ def _check(name, severity, condition, msg_fail, suggestion=None):
     return Check(name, severity, False, msg_fail, suggestion)
 
 
-class KernelPathConfigError(AssertionError):
-    """A build configuration the kernel path cannot build, each refusal named."""
-
-
 def holds_kernel_ops(model: Any) -> bool:
-    """Whether the model holds KernelOps (finn.custom_op.kernels): it is on the kernel
-    path, whose steps decide nothing of the HWCustomOp path's."""
+    """Whether the model holds KernelOps (finn.custom_op.kernels): it is built by a
+    KernelBuildConfig, not by this flow's steps."""
     return any(node.domain == KERNEL_OPS_DOMAIN for node in model.graph.node)
 
 
-#: The outputs and verifications only the HWCustomOp path makes, each with what the
-#: kernel path does instead: asked for on the kernel path, its steps would run the
-#: HWCustomOp path's transformations on KernelOps.
-KERNEL_PATH_REFUSED = {
-    DataflowOutputType.STITCHED_IP: "step_synthesize_bitfile packages the partition as IP "
-    "(ZynqBuild's PackagePartition); there is no stitched IP of its own",
-    DataflowOutputType.OOC_SYNTH: "there is no out-of-context synthesis of the partition; "
-    "step_synthesize_bitfile reports the placed design (post_synth_resources.json)",
-    DataflowOutputType.RTLSIM_PERFORMANCE: "step_kernel_choices reports each member's "
-    "cycles and the bottleneck (report/kernel_exploration.json); no step measures them "
-    "in simulation",
-    DataflowOutputType.PORTABLE_RTL: "step_synthesize_bitfile emits the partition's RTL "
-    "into its packaged IP; no step exports it as a portable project",
-    VerificationStepType.STITCHED_IP_RTLSIM: "step_verify_kernel_partition checks the "
-    "partition (kernel_partition_python, kernel_partition_elaboration)",
-}
-
-
-def kernel_path_checks(cfg: DataflowBuildConfig) -> List[Check]:
-    """The checks of a build on the kernel path (one whose model holds KernelOps): it
-    refuses the outputs and verifications only the HWCustomOp path makes, naming the
-    step that does it on the kernel path (KERNEL_PATH_REFUSED), and a bitfile in a shell
-    other than Zynq's. Run before the build when the model it starts from holds
-    KernelOps, and by step_kernel_ops when it makes them (refuse_kernel_path_config)."""
+def _vivado_checks(board: Optional[str], v: Optional[Tuple[int, int]]) -> List[Check]:
+    """The Vivado release a build for ``board`` needs, and whether ``v`` is one FINN
+    recommends."""
     checks = []
-    asked = {*(cfg.generate_outputs or ()), *cfg._resolve_verification_steps()}
-    for refused, instead in KERNEL_PATH_REFUSED.items():
-        if refused in asked:
-            checks.append(
-                _check(
-                    "kernel_path_output",
-                    Severity.ERROR,
-                    False,
-                    f"{refused.value}: the kernel path does not make it: {instead}",
-                    f"Remove {refused.name} from "
-                    + (
-                        "verify_steps"
-                        if isinstance(refused, VerificationStepType)
-                        else "generate_outputs"
-                    ),
-                )
-            )
-    has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
-    if has_bitfile and cfg.shell_flow_type != ShellFlowType.VIVADO_ZYNQ:
+    if board == "V80":
         checks.append(
             _check(
-                "kernel_path_shell",
+                "v80_vivado",
                 Severity.ERROR,
+                v and v >= (2024, 2),
+                "V80 board requires Vivado 2024.2 or later, "
+                f"found {v[0]}.{v[1] if v else 'unknown'}",
+                "Upgrade to Vivado 2024.2 or later to use V80",
+            )
+        )
+    if board == "AUP-ZU3_8GB":
+        checks.append(
+            _check(
+                "aupzu3_vivado",
+                Severity.ERROR,
+                v and v >= (2024, 1),
+                f"AUP-ZU3_8GB board requires Vivado 2024.1 or later, "
+                f"found {v[0]}.{v[1] if v else 'unknown'}",
+                "Upgrade to Vivado 2024.1 or later to use AUP-ZU3_8GB",
+            )
+        )
+    if v and v not in [(2022, 2), (2024, 2)]:
+        checks.append(
+            _check(
+                "vivado_stable",
+                Severity.INFO,
                 False,
-                f"The kernel path builds a bitfile in the Zynq shell only, not in "
-                f"{cfg.shell_flow_type}: step_synthesize_bitfile's other shells build "
-                "HWCustomOp partitions",
-                "Set shell_flow_type to VIVADO_ZYNQ, or remove BITFILE from generate_outputs",
+                f"Vivado {v[0]}.{v[1]} is used. Recommended versions are "
+                "2022.2 and 2024.2, other versions can be used but may have unexpected issues.",
             )
         )
     return checks
 
 
-def refuse_kernel_path_config(cfg: DataflowBuildConfig) -> None:
-    """Refuse a configuration the kernel path cannot build (kernel_path_checks), every
-    refusal named; mute_config_assertions mutes it as it does the build's checks."""
-    failed = [check for check in kernel_path_checks(cfg) if not check.passed]
-    if not failed:
-        return
-    named = "; ".join(f"{check.name}: {check.message}" for check in failed)
-    if cfg.mute_config_assertions:
-        print(f"WARNING: muted by mute_config_assertions=True: {named}")
-        return
-    raise KernelPathConfigError(f"The kernel path refuses the configuration: {named}")
+def _resolved_step_names(cfg: Any) -> Optional[set]:
+    """The names of the steps the build runs (steps, start_step, stop_step), or None
+    when they cannot be resolved (the build then fails on its own when it starts)."""
+    try:
+        # imported lazily via importlib (rather than a top-level import) since
+        # build_dataflow imports this module, and a top-level import back
+        # would be circular
+        build_dataflow_mod = importlib.import_module("finn.builder.build_dataflow")
+        return {fn.__name__ for fn in build_dataflow_mod.resolve_build_steps(cfg, partial=True)}
+    except (ValueError, AttributeError):
+        return None
 
 
-def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report:
-    """Run all configuration checks and return report. ``model`` is the model the
-    build starts from: one that holds KernelOps is on the kernel path
-    (kernel_path_checks), and the HWCustomOp path's checks do not apply to it."""
-    v = get_vivado_version()
+def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
+    """The checks of a kernel-path build that its configuration's type does not make
+    impossible: its target resolves (finn.platform.resolve_target); the outputs it
+    asks for need a shell that integrates the partition (not ``ip``); the
+    verification input exists, and the step that verifies runs."""
     checks = []
+    try:
+        target = cfg._resolve_target()
+    except TargetRefused as refused:
+        return [
+            _check(
+                "kernel_target",
+                Severity.ERROR,
+                False,
+                str(refused),
+                "State a target the platform registry resolves (finn.platform)",
+            )
+        ]
+    row = shell_row(target.shell, target.board)
+    if cfg.generate_outputs and row.integration is None:
+        asked = ", ".join(output.value for output in cfg.generate_outputs)
+        checks.append(
+            _check(
+                "kernel_path_shell",
+                Severity.ERROR,
+                False,
+                f"{asked}: the {target.shell!r} shell does not integrate the partition; "
+                "its outputs are the packaged IP's",
+                "State a shell that integrates it (pynq, for a board), or remove them "
+                "from generate_outputs",
+            )
+        )
+    if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(
+        cfg.verify_input_npy
+    ):
+        checks.append(
+            _check(
+                "verify_files",
+                Severity.ERROR,
+                False,
+                f"verify_input_npy not found: {cfg.verify_input_npy}",
+                "Provide a valid verification input .npy file or disable verification",
+            )
+        )
+    resolved_names = _resolved_step_names(cfg)
+    verifies = {"phase_kernel_path", "step_verify_kernel_partition"}
+    if cfg.verify_steps and resolved_names is not None and not resolved_names & verifies:
+        asked = ", ".join(vstep.value for vstep in cfg.verify_steps)
+        checks.append(
+            _check(
+                "verify_step_prereq",
+                Severity.WARNING,
+                False,
+                f"verify_steps includes {asked}, but neither phase_kernel_path nor "
+                "step_verify_kernel_partition is in the resolved build steps "
+                "(steps/start_step/stop_step). That verification would silently never run",
+                "Include phase_kernel_path (or step_verify_kernel_partition) in steps, "
+                "adjust start_step/stop_step so it runs, or remove it from verify_steps",
+            )
+        )
+    return checks
+
+
+def run_all_config_checks(cfg: Any, model: Any = None) -> Report:
+    """Run all configuration checks and return report. A KernelBuildConfig's build is
+    checked as the kernel path (kernel_path_checks); a DataflowBuildConfig's by this
+    flow's checks, ``model`` being the model it starts from: one that holds KernelOps
+    is refused (a KernelBuildConfig builds it)."""
+    v = get_vivado_version()
+    if isinstance(cfg, KernelBuildConfig):
+        board = None
+        try:
+            board = cfg._resolve_target().board
+        except TargetRefused:
+            pass  # kernel_path_checks names it
+        checks = _vivado_checks(board, v) + kernel_path_checks(cfg)
+        return Report(timestamp=datetime.now().isoformat(), vivado_version=v, checks=checks)
+    checks = []
+
+    if model is not None and holds_kernel_ops(model):
+        checks.append(
+            _check(
+                "kernel_ops_model",
+                Severity.ERROR,
+                False,
+                "The model holds KernelOps (finn.custom_op.kernels): a DataflowBuildConfig's "
+                "steps do not build them, a KernelBuildConfig's do",
+                "Build it with a KernelBuildConfig (finn.builder.kernel_build_config)",
+            )
+        )
 
     has_bitfile = cfg.generate_outputs and DataflowOutputType.BITFILE in cfg.generate_outputs
     try:
@@ -164,12 +228,6 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
         # steps/start_step/stop_step can't be resolved; that will fail on its
         # own once the build actually starts, nothing more to check here
         resolved_names = all_names = None
-    # A build is on the kernel path when its model holds KernelOps: the model it
-    # starts from here, or the one step_kernel_ops makes, which checks it then. Each
-    # HWCustomOp path check applies where the step it is about runs.
-    kernel_path = model is not None and holds_kernel_ops(model)
-    if kernel_path:
-        checks += kernel_path_checks(cfg)
     folds = all_names is not None and bool(
         all_names
         & {
@@ -185,17 +243,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
     pynq_boards = set(pynq_part_map.keys())
 
     # === Vivado Version Checks ===
-    if cfg.board == "V80":
-        checks.append(
-            _check(
-                "v80_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 2),
-                "V80 board requires Vivado 2024.2 or later, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",
-                "Upgrade to Vivado 2024.2 or later to use V80",
-            )
-        )
+    checks += _vivado_checks(cfg.board, v)
 
     if cfg.shell_flow_type == ShellFlowType.SLASH_ALVEO:
         checks.append(
@@ -217,29 +265,6 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
                 v and v >= (2024, 2),
                 "MLO requires Vivado 2024.2 or later, " f"found {v[0]}.{v[1] if v else 'unknown'}",
                 "Upgrade to Vivado 2024.2 or later for MLO support",
-            )
-        )
-
-    if cfg.board == "AUP-ZU3_8GB":
-        checks.append(
-            _check(
-                "aupzu3_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 1),
-                f"AUP-ZU3_8GB board requires Vivado 2024.1 or later, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",
-                "Upgrade to Vivado 2024.1 or later to use AUP-ZU3_8GB",
-            )
-        )
-
-    if v and v not in [(2022, 2), (2024, 2)]:
-        checks.append(
-            _check(
-                "vivado_stable",
-                Severity.INFO,
-                False,
-                f"Vivado {v[0]}.{v[1]} is used. Recommended versions are "
-                "2022.2 and 2024.2, other versions can be used but may have unexpected issues.",
             )
         )
 
@@ -388,13 +413,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
     needs_folding = cfg.generate_outputs and any(
         o != DataflowOutputType.ESTIMATE_REPORTS for o in cfg.generate_outputs
     )
-    if (
-        needs_folding
-        and folds
-        and not kernel_path
-        and cfg.target_fps is None
-        and cfg.folding_config_file is None
-    ):
+    if needs_folding and folds and cfg.target_fps is None and cfg.folding_config_file is None:
         checks.append(
             _check(
                 "folding_missing",
@@ -513,7 +532,7 @@ def run_all_config_checks(cfg: DataflowBuildConfig, model: Any = None) -> Report
             )
         )
 
-    if not cfg.standalone_thresholds and converts and not kernel_path:
+    if not cfg.standalone_thresholds and converts:
         checks.append(
             _check(
                 "standalone_thresholds",
