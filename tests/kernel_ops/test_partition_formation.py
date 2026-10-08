@@ -1,8 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""CreateDataflowPartition over KernelOps: one StreamingDataflowPartition, its body a model
-of KernelOps, the graph's other ops left on the host.
+"""The kernel path's partitioning (``partition_kernel_ops``): its KernelOps one
+StreamingDataflowPartition of the partition domain, its body a model of KernelOps, the
+graph's other ops left on the host.
 
 The Chain (``kernels.chain``) as KernelOps, its choices saved, between two host ops (an
 Identity in front, as TFC's flatten, and one behind, as its label select).
@@ -11,6 +12,7 @@ Identity in front, as TFC's flatten, and one behind, as its label select).
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -19,10 +21,11 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
+import finn.custom_op.partition as partition_domain
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.shell import shell_root
-from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels.cut import partition_kernel_ops
 from kernel_ops.models import configure_partition, kernel_model
 
 
@@ -50,15 +53,15 @@ def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:
     return model
 
 
-def partitioned(tmp_path: object) -> tuple[ModelWrapper, ModelWrapper]:
+def partitioned(tmp_path: Path) -> tuple[ModelWrapper, ModelWrapper]:
     source = kernel_model()
     configure_partition(source)
     source = on_the_host(source)
-    parent = source.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
+    parent = partition_kernel_ops(source, tmp_path)
     return source, parent
 
 
-def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: object) -> None:
+def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path) -> None:
     source, parent = partitioned(tmp_path)
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Identity", "flatten"),
@@ -66,8 +69,8 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: obje
         ("Identity", "select"),
     ]
     sdp = getCustomOp(parent.graph.node[1])
-    # Placement is the partition's, unset: KernelOps carry none.
-    assert (sdp.get_nodeattr("slr"), sdp.get_nodeattr("mem_port")) == (-1, "")
+    # The node states its body and nothing else: no placement, no estimates.
+    assert [item.name for item in parent.graph.node[1].attribute] == ["model"]
     body = ModelWrapper(sdp.get_nodeattr("model"))
     assert [node.name for node in body.graph.node] == ["first", "activate", "second"]
     assert [item.name for item in body.graph.input] == ["x_flat"]
@@ -77,19 +80,21 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: obje
     assert np.array_equal(execute_onnx(parent, {"x": x})["y"], execute_onnx(source, {"x": x})["y"])
 
 
-def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: object) -> None:
+def test_the_parent_graph_imports_its_partition_nodes_domain(tmp_path: Path) -> None:
     """The parent graph states the domain of its StreamingDataflowPartition, so reading
-    the node warns of no fallback version (TFC's one build-log warning, observation 37)."""
+    the node warns of no fallback version (TFC's one build-log warning, observation 37).
+    The domain is the kernel path's own, the package that registers the node."""
     _, parent = partitioned(tmp_path)
     imported = {opset.domain: opset.version for opset in parent.model.opset_import}
-    assert imported["finn.custom_op.fpgadataflow"] == 1
+    assert imported["finn.custom_op.partition"] == 1
+    assert parent.graph.node[1].domain == partition_domain.__name__
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         (node,) = parent.get_nodes_by_op_type("StreamingDataflowPartition")
         getCustomOp(node).get_nodeattr("model")
 
 
-def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
+def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
     source, parent = partitioned(tmp_path)
     body = ModelWrapper(getCustomOp(parent.graph.node[1]).get_nodeattr("model"))
     module = PackagePartition(parent.graph.node[1].name).module(body)
@@ -105,18 +110,18 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
     ]
 
 
-def test_a_host_op_between_kernel_ops_refuses(tmp_path: object) -> None:
+def test_a_host_op_between_kernel_ops_refuses(tmp_path: Path) -> None:
     source = kernel_model()
     configure_partition(source)
     source = on_the_host(source, between=True)
     with pytest.raises(AssertionError, match="partition depends on itself"):
-        source.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
+        partition_kernel_ops(source, tmp_path)
 
 
-def test_a_graph_without_kernel_ops_is_left_alone(tmp_path: object) -> None:
+def test_a_graph_without_kernel_ops_is_left_alone(tmp_path: Path) -> None:
     x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])
     y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
     graph = helper.make_graph([helper.make_node("Identity", ["x"], ["y"])], "host", [x], [y])
     model = ModelWrapper(helper.make_model(graph))
-    parent = model.transform(CreateDataflowPartition(partition_model_dir=str(tmp_path)))
+    parent = partition_kernel_ops(model, tmp_path)
     assert [node.op_type for node in parent.graph.node] == ["Identity"]

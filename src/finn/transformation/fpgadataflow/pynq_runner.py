@@ -45,16 +45,16 @@ from qonnx.util.basic import qonnx_make_model
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from finn import resources
+from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_IP,
+    OUTPUT_VLNV,
+    partition_body,
+)
 from finn.transformation.fpgadataflow.create_stitched_ip import (
     CreateStitchedIP,
     collect_ip_dirs,
 )
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
-from finn.transformation.fpgadataflow.kernel_partitions import (
-    OUTPUT_IP,
-    OUTPUT_VLNV,
-    partition_body,
-)
 from finn.transformation.fpgadataflow.make_driver import (
     packed_shape,
     pynq_driver_text,

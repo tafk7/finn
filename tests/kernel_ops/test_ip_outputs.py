@@ -38,17 +38,17 @@ from finn.builder.kernel_build_config import (
 from finn.builder.kernel_build_steps import step_kernel_stitched_ip
 from finn.builder.kernel_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_IP,
+    partition_body,
+)
 from finn.harness.rtl import SimulationFailed
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import (
-    OUTPUT_IP,
-    partition_body,
-)
 from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import (
     boundary_facts,
     configured_root,

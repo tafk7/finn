@@ -37,7 +37,7 @@ from qonnx.transformation.base import Transformation
 from shutil import copytree
 
 from finn import deploy
-from finn.transformation.fpgadataflow.kernel_partitions import is_kernel_partition
+from finn.custom_op.partition.kernel_partitions import is_kernel_partition
 from finn.transformation.fpgadataflow.replace_verilog_relpaths import (
     ReplaceVerilogRelPaths,
 )

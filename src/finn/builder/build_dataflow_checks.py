@@ -24,8 +24,8 @@ from finn.builder.kernel_build_config import (
     KernelOutputType,
     KernelVerificationStepType,
 )
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.platform import TargetRefused, shell_row
-from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.util.basic import (
     get_vivado_version,
     part_map,

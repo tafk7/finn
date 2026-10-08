@@ -47,11 +47,11 @@ from qonnx.core.onnx_exec import execute_onnx
 
 from finn.core.onnx_exec import execute_onnx as execute_parent_graph
 from finn.custom_op.kernels.shell import member
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.harness.rtl import SimulationFailed, Words, pack, stream_bench
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
-from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels.package import boundary_facts, configured_root
 from finn.util.toolchain import Toolchain, machine_toolchain, run_process
 

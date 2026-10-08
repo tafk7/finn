@@ -49,11 +49,11 @@ from typing import TYPE_CHECKING, Any
 
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import member
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
 from finn.kernels.explore import Completion
-from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels.package import configured_root
 
 if TYPE_CHECKING:

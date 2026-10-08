@@ -25,12 +25,12 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.custom_op.kernels.shell import member, shell_root
-from finn.harness.rtl import pack, stream_through
-from finn.kernels.configure import commit, undecided
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_VLNV,
 )
+from finn.harness.rtl import pack, stream_through
+from finn.kernels.configure import commit, undecided
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.package import boundary_facts, configured_root
 from kernel_ops.packaging import reaches_vivado, read_back

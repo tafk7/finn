@@ -5,16 +5,15 @@
 
 Partitioning is a graph operation, and the kernel path's first after inference: it
 decides which nodes run in the fabric and which on the host. ``CutKernelPartition``
-cuts a model of KernelOps and host nodes once (``CreateDataflowPartition``, whose
-segmentation is the one rule of which KernelOps go together: all of them, contiguous):
-the KernelOps become one StreamingDataflowPartition and the nodes before and after it
-stay on the host. The result is the parent graph, which the build keeps as its model.
+cuts a model of KernelOps and host nodes once (``partition_kernel_ops``, the one rule of
+which KernelOps go together: all of them, contiguous): the KernelOps become one
+StreamingDataflowPartition (``finn.custom_op.partition``) and the nodes before and after
+it stay on the host. The result is the parent graph, which the build keeps as its model.
 The partition has one name, ``PARTITION`` (``partition``), for its node, its body's file
 (``<directory>/partition.onnx``), the IP it is packaged as (the shell root's module,
 ``finn_partition``) and the block design's instance; its body carries the parent's
-target. Nothing of the space
-is read or stored: everything after the cut, exploration first, opens the body through
-the node (``kernel_partitions.partition_body``).
+target. Nothing of the space is read or stored: everything after the cut, exploration
+first, opens the body through the node (``kernel_partitions.partition_body``).
 
 KernelOps that form more than one partition are refused: several partitions are to be
 designed as one shell root, when CNV or Alveo needs them, not as neighbouring roots.
@@ -24,18 +23,47 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+
+from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
+from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 
 from finn.custom_op.kernels.shell import PARTITION
-from finn.transformation.fpgadataflow.create_dataflow_partition import (
-    CreateDataflowPartition,
-)
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
+    KERNEL_OPS_DOMAIN,
+    PARTITION_DOMAIN,
     PARTITION_OP,
     kernel_partition_nodes,
 )
+
+#: The partition PartitionFromLambda puts the KernelOps in; every other node stays on
+#: the host (-1).
+_KERNEL_OPS = "kernels"
+
+
+def _kernel_ops_together(node: NodeProto) -> str | int:
+    return _KERNEL_OPS if node.domain == KERNEL_OPS_DOMAIN else -1
+
+
+def partition_kernel_ops(model: ModelWrapper, directory: Path) -> ModelWrapper:
+    """The parent graph of ``model``: its KernelOps as one StreamingDataflowPartition
+    (``PARTITION_DOMAIN``, the domain imported), its body ``model`` attribute a file in
+    ``directory``, every other node on the host. KernelOps a host node stands between
+    are refused (the partition would depend on itself); a model without KernelOps is
+    returned as it is."""
+    partitioning = PartitionFromLambda(  # type: ignore[no-untyped-call]
+        partitioning=_kernel_ops_together, partition_dir=str(directory)
+    )
+    parent: ModelWrapper = model.transform(partitioning)
+    nodes = parent.get_nodes_by_op_type("GenericPartition")
+    imported = {opset.domain for opset in parent.model.opset_import}
+    if nodes and PARTITION_DOMAIN not in imported:
+        parent.model.opset_import.append(helper.make_opsetid(PARTITION_DOMAIN, 1))
+    for node in nodes:
+        node.op_type, node.domain = PARTITION_OP, PARTITION_DOMAIN
+    return parent
 
 
 class CutKernelPartition(Transformation):
@@ -52,20 +80,19 @@ class CutKernelPartition(Transformation):
             raise ValueError("the model holds a partition already: the kernel path cuts once")
         self.directory.mkdir(parents=True, exist_ok=True)
         cut = Path(tempfile.mkdtemp(prefix="cut_", dir=self.directory))
-        parent = model.transform(CreateDataflowPartition(partition_model_dir=str(cut)))
+        parent = partition_kernel_ops(model, cut)
         found = kernel_partition_nodes(parent)
-        partitions = parent.get_nodes_by_op_type(PARTITION_OP)
-        if len(found) != 1 or len(partitions) != 1:
+        if len(found) != 1:
             raise ValueError(
-                f"the KernelOps form {len(found)} partitions beside {len(partitions) - len(found)} "
-                "others; the kernel path cuts them into one (a second partition of KernelOps "
-                "waits for several partitions designed as one shell root)"
+                f"the KernelOps form {len(found)} partitions; the kernel path cuts them into "
+                "one (a second partition of KernelOps waits for several partitions designed "
+                "as one shell root)"
             )
         (node,) = found
         if any(each.name == PARTITION for each in parent.graph.node if each is not node):
             raise ValueError(f"a host node is named {PARTITION!r}, the partition's name")
         op = getCustomOp(node)
-        cut_file = Path(op.get_nodeattr("model"))
+        cut_file = Path(str(op.get_nodeattr("model")))
         body = ModelWrapper(str(cut_file))
         body_file = self.directory / f"{PARTITION}.onnx"
         body.save(str(body_file))
@@ -76,4 +103,4 @@ class CutKernelPartition(Transformation):
         return parent, False
 
 
-__all__ = ["CutKernelPartition"]
+__all__ = ["CutKernelPartition", "partition_kernel_ops"]

@@ -25,15 +25,14 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import write_target
-from finn.platform import resolve_target
-from finn.transformation.fpgadataflow import pynq_runner
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
     partition_body,
 )
+from finn.platform import resolve_target
+from finn.transformation.fpgadataflow import pynq_runner
 from finn.transformation.fpgadataflow.make_driver import (
     pynq_driver_text,
     write_pynq_driver_support,
@@ -50,6 +49,7 @@ from finn.transformation.fpgadataflow.pynq_runner import (
     write_driver,
 )
 from finn.transformation.fpgadataflow.templates import custom_zynq_shell_template
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain

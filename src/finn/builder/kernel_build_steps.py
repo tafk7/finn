@@ -39,9 +39,7 @@ from finn.builder.kernel_testbench import (
 )
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import read_target
-from finn.platform import refuse_drift, shell_row
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
@@ -50,6 +48,7 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_REPORTS,
     partition_body,
 )
+from finn.platform import refuse_drift, shell_row
 from finn.transformation.fpgadataflow.pynq_runner import (
     build_pynq,
     driver_description,
@@ -64,6 +63,7 @@ from finn.transformation.kernels import (
     shell_bottleneck,
     strategy,
 )
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN, integration
 from finn.transformation.kernels.package import (
     ElaboratePartition,

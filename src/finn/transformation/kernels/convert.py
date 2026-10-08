@@ -26,8 +26,8 @@ from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
 from finn.custom_op.kernels.base import write_target
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.kernels.target import Target
-from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

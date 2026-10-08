@@ -50,12 +50,7 @@ from finn.builder.kernel_build_steps import (
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import read_target, write_target
-from finn.kernels.artifacts.module import module_name
-from finn.kernels.explore import Ranked
-from finn.platform import TargetRefused, TargetRequest, resolve_target
-from finn.transformation.fpgadataflow import pynq_runner
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_BITFILE,
     OUTPUT_INTERFACES,
@@ -65,6 +60,10 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUTS,
     partition_body,
 )
+from finn.kernels.artifacts.module import module_name
+from finn.kernels.explore import Ranked
+from finn.platform import TargetRefused, TargetRequest, resolve_target
+from finn.transformation.fpgadataflow import pynq_runner
 from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.fpgadataflow.pynq_runner import (
     InstanceIP,
@@ -78,6 +77,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
     shell_bottleneck,
 )
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts, configured_root
 from finn.util.toolchain import Toolchain

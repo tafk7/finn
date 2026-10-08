@@ -6,7 +6,9 @@
 ``ToKernelOps`` rewrites the nodes a KernelOp binds and states the build
 target it is given (``finn.platform.resolve_target``);
 ``InferKernelTensors`` infers every tensor in graph order, the KernelOps
-answering from their kernels; ``ExploreKernelChoices`` explores the open
+answering from their kernels; ``cut.CutKernelPartition`` cuts the KernelOps once into
+the partition, the parent graph's one ``StreamingDataflowPartition``
+(``finn.custom_op.partition``); ``ExploreKernelChoices`` explores the open
 choices of a partition's body (the KernelOps the cut put together) through the
 DSE seam (``finn.kernels.explore``) by a list of strategies
 (``strategy``: one from its spec) and saves them, and a completion policy

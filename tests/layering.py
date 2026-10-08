@@ -97,17 +97,12 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel partition's body and outputs. The module sits in the flow's package
-    # but below both its writers (the cut, PackagePartition) and its readers (the
-    # builder, the integration export): it imports qonnx only, so the flow imports
-    # it without loading the kernel stack.
-    Layer(
-        "kernel_partitions",
-        ("finn.transformation.fpgadataflow.kernel_partitions",),
-        (),
-        ("qonnx",),
-        "tests/kernel_ops",
-    ),
+    # The kernel path's partition node (its ONNX domain) and what is read and built of
+    # a partition (kernel_partitions): below both their writers (the cut,
+    # PackagePartition) and their readers (the builder, the integration export, the
+    # shell's build). qonnx only, so the builder reads it without loading the kernel
+    # stack.
+    Layer("partition", ("finn.custom_op.partition",), (), ("qonnx",), "tests/kernel_ops"),
     # What the flow and the kernel tests build on: helpers, the resource store and
     # the XSI binding (finn.util and finn.xsi import each other). Below the flow:
     # no module here imports a flow module.
@@ -117,7 +112,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "transformation.kernels",
         ("finn.transformation.kernels",),
-        (*_KERNEL_STACK, "custom_op.kernels", "kernel_partitions", "util"),
+        (*_KERNEL_STACK, "custom_op.kernels", "partition", "util"),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -142,7 +137,7 @@ LAYERS: tuple[Layer, ...] = (
             *_KERNEL_STACK,
             "platform",
             "custom_op.kernels",
-            "kernel_partitions",
+            "partition",
             "util",
             "transformation.kernels",
             "harness",

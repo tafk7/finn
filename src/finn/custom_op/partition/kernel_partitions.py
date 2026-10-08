@@ -6,7 +6,8 @@ built of it.
 
 A kernel partition is a partition model whose nodes are all KernelOps (the
 ``finn.custom_op.kernels`` domain, ``KERNEL_OPS_DOMAIN``), or the
-StreamingDataflowPartition node whose body is one. The kernel path cuts its model once:
+StreamingDataflowPartition node (of this package's domain, ``PARTITION_DOMAIN``) whose
+body is one. The kernel path cuts its model once (``finn.transformation.kernels.cut``):
 the parent graph holds one such node, and its body is opened through it
 (``partition_body``).
 
@@ -20,19 +21,24 @@ stored: what reads it (the integration export and the driver it describes, the
 interface description, the testbench) derives it from the configured root
 (``finn.transformation.kernels.package.configured_root``).
 
-This module depends on qonnx only, so the flow imports it at the top without
-loading the kernel stack.
+This module depends on qonnx only, below the KernelOps and their transformations, so
+the builder and the flow import it without loading the kernel stack.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from qonnx.core.metadata import JSON, Namespace
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
-from typing import Any
 
 KERNEL_OPS_DOMAIN = "finn.custom_op.kernels"
 """The KernelOps' ONNX domain: the name of the package that registers them."""
+
+PARTITION_DOMAIN = "finn.custom_op.partition"
+"""The domain of the parent graph's partition node: the name of the package that
+registers it."""
 
 PARTITION_OP = "StreamingDataflowPartition"
 """The op type of the parent graph's node whose body is a partition."""
@@ -94,11 +100,13 @@ def _body_file(node: Any) -> str:
 
 
 def kernel_partition_nodes(model: Any) -> list[Any]:
-    """The model's StreamingDataflowPartition nodes whose body is a partition of KernelOps."""
+    """The model's partition nodes (``PARTITION_DOMAIN``'s StreamingDataflowPartition)
+    whose body is a partition of KernelOps."""
     return [
         node
         for node in model.graph.node
-        if node.op_type == PARTITION_OP and is_kernel_partition(ModelWrapper(_body_file(node)))
+        if (node.domain, node.op_type) == (PARTITION_DOMAIN, PARTITION_OP)
+        and is_kernel_partition(ModelWrapper(_body_file(node)))
     ]
 
 
@@ -128,6 +136,7 @@ __all__ = [
     "OUTPUT_PROJECT",
     "OUTPUT_REPORTS",
     "OUTPUT_VLNV",
+    "PARTITION_DOMAIN",
     "PARTITION_OP",
     "is_kernel_partition",
     "kernel_partition_nodes",

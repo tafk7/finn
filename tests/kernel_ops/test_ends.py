@@ -27,6 +27,7 @@ import finn.custom_op.kernels.shell as shell
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import read_target, write_target
 from finn.custom_op.kernels.shell import ShellResources, persist, shell_resources, shell_root
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -52,12 +53,11 @@ from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.utilization import Resources, total
 from finn.platform import IP_ROW, ShellRow, resolve_target, shell_row
 from finn.platform.shells import ZYNQ_STATIC_REGION
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,
 )
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96

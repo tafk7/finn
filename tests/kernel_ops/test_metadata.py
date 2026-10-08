@@ -23,9 +23,7 @@ from finn.custom_op.kernels.base import (
     read_target,
     write_target,
 )
-from finn.kernels.target import Target
-from finn.platform import resolve_target
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
@@ -35,6 +33,8 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_REPORTS,
     OUTPUT_VLNV,
 )
+from finn.kernels.target import Target
+from finn.platform import resolve_target
 from finn.transformation.kernels import ToKernelOps
 from kernel_ops.models import TARGET, chain_source
 
