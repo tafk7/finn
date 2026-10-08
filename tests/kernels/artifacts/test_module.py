@@ -137,6 +137,27 @@ def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
     assert stream.under("outer.x").links[1].sink.instance == "outer.compute.packed"
 
 
+def test_a_fragment_inlined_drops_one_node_s_level() -> None:
+    """``inlined(node)`` undoes ``under(node)`` for what lies below ``node``: labels, link
+    ends and presented ports; anything beside it is unchanged."""
+    kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite"),))
+    stream = Fragment(
+        (("adapter.vpc.vpc", stage()),),
+        (link(None, "adapter.vpc.vpc"), link("adapter.vpc.vpc", "^compute.packed")),
+    )
+    flat = merge(kernel.under("compute.packed"), stream.under("x"))
+    # Beside the node, a stage linked to an instance below it.
+    beside = Fragment((("stage", stage()),), (link("stage", "partition.x.adapter.vpc.vpc"),))
+    nested = merge(flat.under("partition"), beside)
+    inlined = nested.inlined("partition")
+    assert inlined.instances == (*flat.instances, *beside.instances)
+    assert inlined.links == (*flat.links, link("stage", "x.adapter.vpc.vpc"))
+    assert inlined.exports == flat.exports
+    assert inlined.exports[0].port == "compute_packed_s_axilite"
+    with pytest.raises(BuildError, match="places \\['stage'\\] twice"):
+        merge(Fragment((("stage", stage()),)).under("partition"), beside).inlined("partition")
+
+
 def test_merged_fragments_place_each_label_and_present_each_port_once() -> None:
     first = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite"),))
     merged = merge(first.under("first"), first.under("second"))

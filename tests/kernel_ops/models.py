@@ -21,7 +21,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
-from finn.custom_op.kernels.partition import PartitionRoot, partition_root, persist
+from finn.custom_op.kernels.shell import ShellRoot, persist, shell_root
 from finn.kernels.configure import commit, undecided
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, resolve_target
 
@@ -213,17 +213,17 @@ def kernel_model(**options: bool) -> ModelWrapper:
     return model
 
 
-def open_memories(root: PartitionRoot) -> tuple[Any, list[str]]:
+def open_memories(root: ShellRoot) -> tuple[Any, list[str]]:
     """The root's point and its open adapter memories."""
     return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
 
 
-def configure_partition(model: ModelWrapper) -> tuple[PartitionRoot, Any]:
+def configure_partition(model: ModelWrapper) -> tuple[ShellRoot, Any]:
     """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
-    root = partition_root(model, model.graph.node, name="chain")
+    root = shell_root(model, model.graph.node, name="chain")
     _, styles = open_memories(root)
     persist(model, root, commit(root.point, dict.fromkeys(styles, "auto")))
-    root = partition_root(model, model.graph.node, name="chain")
+    root = shell_root(model, model.graph.node, name="chain")
     point, open_styles = open_memories(root)
     assert open_styles == [] and not root.dropped
     return root, point

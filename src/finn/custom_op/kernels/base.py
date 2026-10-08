@@ -9,7 +9,7 @@ from the model's ``finn.platform`` metadata. An initializer the node owns is a
 value its channel carries (``Facts.values``), and the channel's tensor states
 its range. It states its placement once, as data (``kernel``, ``formals``,
 ``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
-root is generated from it, and a partition root places the same kernel. It
+root is generated from it, and a Partition places the same kernel. It
 binds its node root through the bind cache, on its inputs for inference and
 whole for its choices, replays the choices its node holds, and answers the
 compiler's queries from the result.
@@ -452,7 +452,7 @@ class KernelOp(CustomOp):
 
     def node_part(self, facts: Facts, choices: Mapping[str, object]) -> dict[str, object]:
         """The choices a node root replays: its kernel's and its owned channels'. An
-        edge's, input or output, belong to the partition root that declares the edge."""
+        edge's, input or output, belong to the root that declares the edge."""
         edges = ({port for port in self.ports if port} - set(facts.owned)) | set(self.outputs)
         return {
             name: value for name, value in choices.items() if name.partition(".")[0] not in edges
@@ -506,7 +506,7 @@ class KernelOp(CustomOp):
         for name, value in sorted(merged.items()):
             self.set_nodeattr(name, int(value) if isinstance(value, bool) else value)
 
-    # -- in a partition root ---------------------------------------------------------------
+    # -- in a Partition -------------------------------------------------------------------
 
     def inputs(self) -> dict[str, str]:
         """The tensor of each of this node's input channels, by port."""

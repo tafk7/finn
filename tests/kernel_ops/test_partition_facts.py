@@ -3,7 +3,7 @@
 
 """A partition's boundary facts (``finn.partition``) and the steps that read them.
 
-PackagePartition writes the facts from the partition root's boundary;
+PackagePartition writes the facts from the shell root's boundary;
 InsertIODMA and ``get_driver_shapes`` read them for a partition of KernelOps
 instead of asking a first or last HW node. The Chain (``kernels.chain``), its choices
 saved, as the partition; no Vivado.

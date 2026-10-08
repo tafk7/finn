@@ -3,9 +3,11 @@
 
 """Exploring a model's open kernel choices through the DSE seam, and saving them.
 
-``ExploreKernelChoices(strategies, completion=...)`` builds the partition root of
-the model's KernelOps once (``partition_root``: their kernels and the channels
-between them, the nodes' saved choices replayed, a stale one dropped with why),
+``ExploreKernelChoices(strategies, completion=...)`` builds the shell root of
+the model's KernelOps once (``shell_root``: their Partition, its kernels and the
+channels between them, and the channels on its boundary; the nodes' saved choices
+replayed, a stale one dropped with why; members named by path,
+``partition.MatMul_0``),
 runs the strategies in order through one ``Seam`` (``finn.kernels.explore``), each
 from the point the one before returned, and then:
 
@@ -49,7 +51,7 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
-from finn.custom_op.kernels.partition import partition_root, persist
+from finn.custom_op.kernels.shell import persist, shell_root
 from finn.kernels.explore import (
     Baseline,
     Bottleneck,
@@ -112,7 +114,7 @@ def strategy(spec: Mapping[str, Any]) -> Explorer:
 
 @dataclass(frozen=True)
 class Explored:
-    """An exploration's result: the configured point of the partition root (what the
+    """An exploration's result: the configured point of the shell root (what the
     strategies committed), its completion as hardware generation completes it (None
     where the policy refused), the cost of the completed point, and the report (JSON
     values)."""
@@ -213,7 +215,7 @@ def explore_kernel_choices(
             op = kernel_op(model, node)
             op.save(dict.fromkeys(op.choices()))
     started = time.perf_counter()
-    root = partition_root(model, nodes)
+    root = shell_root(model, nodes)
     seam = Seam(root.members, root.owners, read_target(model).platform, completion)
     point = root.point
     # Who made each choice: the model before the strategies, or the strategy that
@@ -274,11 +276,11 @@ def explore_kernel_choices(
 def partition_bottleneck(
     model: ModelWrapper, completion: Completion | None = None
 ) -> Bottleneck | None:
-    """The slowest members of a partition model of KernelOps and their cycles a frame,
-    its saved choices replayed and completed as hardware generation completes them, by
-    ``completion`` (``Baseline()`` by default; None where a member's cycles wait on a
-    choice the policy leaves open)."""
-    root = partition_root(model, model.graph.node)
+    """The slowest members of a partition model of KernelOps and their cycles a frame, on
+    its shell root (members by path), its saved choices replayed and completed as
+    hardware generation completes them, by ``completion`` (``Baseline()`` by default;
+    None where a member's cycles wait on a choice the policy leaves open)."""
+    root = shell_root(model, model.graph.node)
     seam = Seam(root.members, root.owners, read_target(model).platform, completion)
     return seam.cost(seam.completion.complete(seam, root.point, sizing=True).point).bottleneck
 

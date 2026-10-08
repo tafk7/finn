@@ -40,7 +40,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.custom_op.kernels.partition import PartitionRoot, member, partition_root
+from finn.custom_op.kernels.partition import member
+from finn.custom_op.kernels.shell import ShellRoot, shell_root
 from finn.dataflow.traversal import Traversal
 from finn.transformation.kernels.package import boundary_facts
 
@@ -69,8 +70,8 @@ class Layer:
     """Alone, the first frame's latency."""
 
 
-def schedule_of(root: PartitionRoot, node: NodeProto) -> Any:
-    kernel = getattr(root.point, member(node.name))
+def schedule_of(root: ShellRoot, node: NodeProto) -> Any:
+    kernel = getattr(root.point.partition, member(node.name))
     return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
 
 
@@ -125,7 +126,7 @@ def words(form: Traversal, values: NDArray[Any], bits: int) -> list[int]:
 
 
 def boundary_words(
-    model: ModelWrapper, root: PartitionRoot, context: Mapping[str, Any], label: str
+    model: ModelWrapper, root: ShellRoot, context: Mapping[str, Any], label: str
 ) -> tuple[dict[str, Words], dict[str, Words]]:
     """Each boundary port's words of one frame, inputs then outputs, from ``context``."""
     inputs, outputs = boundary_facts(model, root.point, root.boundary, label)
@@ -153,7 +154,7 @@ def measure_partition(
     """The stitched partition of ``model``'s nodes and each node alone, measured."""
     context = execute_onnx(model, feed, return_full_exec_context=True)
     nodes = list(model.graph.node)
-    root = partition_root(model, nodes, name=label)
+    root = shell_root(model, nodes, name=label)
     inputs, outputs = boundary_words(model, root, context, label)
     print(f"== {label}: stitched", flush=True)
     stitched = measure(
@@ -180,7 +181,7 @@ def measure_partition(
     recorded = {"stitched": dict(stitched.beats)}
     for index, node in enumerate(nodes):
         schedule = schedule_of(root, node)
-        alone_root = partition_root(model, [node], name=node.name)
+        alone_root = shell_root(model, [node], name=node.name)
         alone_in, alone_out = boundary_words(model, alone_root, context, node.name)
         print(f"== {label}: {node.name} alone", flush=True)
         alone = measure(

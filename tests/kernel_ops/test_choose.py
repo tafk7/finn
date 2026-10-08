@@ -21,7 +21,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Choice, ExploreError, Ranked, RankPolicy
 from finn.kernels.target import Target
@@ -113,7 +113,7 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     assert saved["activate"]["pe"] == 2
     model.save(tmp_path / "chosen.onnx")
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
-    root = partition_root(again, again.graph.node)
+    root = shell_root(again, again.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     assert inspection.viable(root.point) == ()
     # Nothing is left to choose, so a second pass commits nothing.

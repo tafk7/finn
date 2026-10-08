@@ -324,9 +324,14 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert (completed.count("baseline"), completed.count("size_fifos")) == (20, 13)
     assert report["fifos"] == "sized at completion by baseline: 13 channels"
     # Four members tie at the bottleneck: the first layer's activations, its weights,
-    # its thresholds and its MatMul.
+    # its thresholds and its MatMul, all the shell root's Partition's.
     assert report["bottleneck"] == {
-        "members": ["MultiThreshold_0_out0", "MatMul_0_param0", "MultiThreshold_0", "MatMul_0"],
+        "members": [
+            "partition.MultiThreshold_0_out0",
+            "partition.MatMul_0_param0",
+            "partition.MultiThreshold_0",
+            "partition.MatMul_0",
+        ],
         "cycles": 196,
     }
 
@@ -373,13 +378,13 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
     assert whys["Reshape_0_out0"] == whys["MatMul_3_out0"] == "a boundary: not modelled"
-    assert {whys[f"MatMul_{index}_param0"] for index in range(4)} == {
+    assert {whys[f"partition.MatMul_{index}_param0"] for index in range(4)} == {
         "a memory source: paced by its consumer"
     }
     # Every activation between two layers: the consumer, or its input_gen's buffer of
     # frames, takes each word no later than the producer's idle time allows.
-    inner = [f"MultiThreshold_{index}_out0" for index in range(4)]
-    inner += [f"MatMul_{index}_out0" for index in range(3)]
+    inner = [f"partition.MultiThreshold_{index}_out0" for index in range(4)]
+    inner += [f"partition.MatMul_{index}_out0" for index in range(3)]
     assert {whys[name] for name in inner} == {"direct absorbs it"}
     assert len(rows) == 2 + 4 + len(inner)
     # The partition's buffering: the input_gens' buffers as the RTL allocates them

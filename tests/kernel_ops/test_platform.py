@@ -20,7 +20,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -82,17 +82,17 @@ def test_runtime_writable_thresholds_need_a_control_port_and_bus() -> None:
 
 def test_a_partitions_weight_stream_reads_the_platform() -> None:
     model = targeted(matmul_model(), ZYNQ).transform(InferKernelTensors())
-    root = partition_root(model, model.graph.node)
-    stream = root.point.w
+    root = shell_root(model, model.graph.node)
+    stream = root.point.partition.w
     assert stream.platform == ZYNQ.platform
     assert isinstance(stream.source, MemStreamKernel)
     with pytest.raises(ValueError, match="clk2x-absent"):
-        commit(root.point, {"w.source.memstream.pumped_memory": True})
+        commit(root.point, {"partition.w.source.memstream.pumped_memory": True})
     # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
-    fifo = {"w.transport": "fifo", "w.transport.fifo.buffer.depth": 4096}
+    fifo = {"partition.w.transport": "fifo", "partition.w.transport.fifo.buffer.depth": 4096}
     with pytest.raises(ValueError, match="uram-absent"):
-        commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"})
-    assert commit(root.point, {**fifo, "w.transport.fifo.buffer.ram_style": "block"})
+        commit(root.point, {**fifo, "partition.w.transport.fifo.buffer.ram_style": "ultra"})
+    assert commit(root.point, {**fifo, "partition.w.transport.fifo.buffer.ram_style": "block"})
 
 
 def test_a_bare_kernel_states_its_platform() -> None:

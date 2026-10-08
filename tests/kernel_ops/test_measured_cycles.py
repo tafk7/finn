@@ -19,7 +19,8 @@ from kernels import chain
 from kernels.xsim import measure, requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 
-from finn.custom_op.kernels.partition import member, partition_root
+from finn.custom_op.kernels.partition import member
+from finn.custom_op.kernels.shell import shell_root
 from kernel_ops.measure_cycles import boundary_words, schedule_of
 from kernel_ops.models import configure_partition, kernel_model
 
@@ -30,7 +31,7 @@ def test_the_chain_leaves_a_frame_per_bottleneck_beat_count(tmp_path: Path) -> N
     configure_partition(model)
     feed = {"x": np.array(chain.X, dtype=np.float32)}
     context = execute_onnx(model, feed, return_full_exec_context=True)
-    root = partition_root(model, model.graph.node, name="chain")
+    root = shell_root(model, model.graph.node, name="chain")
     inputs, outputs = boundary_words(model, root, context, "chain")
     beats = {node.name: schedule_of(root, node).beat_count for node in model.graph.node}
     assert beats == {"first": 12, "activate": 6, "second": 12}

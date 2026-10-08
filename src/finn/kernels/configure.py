@@ -13,11 +13,13 @@ A Decision whose one viable case is forced needs no commitment (the engine's
 ``inspection.forced``); ``inspection.admission`` reads a kernel's own refusal,
 its ``admission`` member. ``undecided`` names the open Decisions: neither
 committed nor forced; ``chosen`` the committed ones, the choices made on purpose.
+In a root whose members sit at paths (``partition.MatMul_0``), ``member_of`` names
+the member a key belongs to.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Container, Iterable, Mapping
 from fnmatch import fnmatchcase
 from typing import Any, TypeVar
 
@@ -93,4 +95,16 @@ def chosen(point: Space) -> dict[str, object]:
     return found
 
 
-__all__ = ["chosen", "commit", "describe", "undecided"]
+def member_of(paths: Container[str], key: str) -> str | None:
+    """The longest of ``paths``, member paths of a root (``partition.MatMul_0``), that is
+    ``key`` or one of its prefixes at a segment (``partition.MatMul_0.compute.pe``), or
+    None: the member a key belongs to."""
+    parts = key.split(".")
+    for end in range(len(parts), 0, -1):
+        path = ".".join(parts[:end])
+        if path in paths:
+            return path
+    return None
+
+
+__all__ = ["chosen", "commit", "describe", "member_of", "undecided"]

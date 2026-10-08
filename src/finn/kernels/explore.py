@@ -4,7 +4,9 @@
 """The DSE seam: what a design space exploration asks of a configured root, and strategies.
 
 A ``Seam`` answers three questions about a point, an immutable configuration of
-one root (a partition root, its members the channels and kernels it declares):
+one root (a shell root, its members the channels and kernels below it, each at
+its path: ``partition.MatMul_0``; a key belongs to the longest member path that
+prefixes it, ``member_of``):
 
 - ``choices(point)``: each open Decision as a ``Choice``: its key, who persists it
   (``owner``: the node and attribute), the Space class that declares it, its
@@ -83,7 +85,7 @@ from finn.core.space import (
 )
 from finn.kernels.base import BUFFERING, CYCLES
 from finn.kernels.channels import Channel
-from finn.kernels.configure import chosen, describe
+from finn.kernels.configure import chosen, describe, member_of
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import Sized, size
 from finn.kernels.target import Platform
@@ -168,8 +170,9 @@ class Cost:
 
 
 class Seam:
-    """The seam over the points of one root: its ``members`` (whose cost it reads); for
-    each member, the owner that persists its choices and the owner's key prefix; the
+    """The seam over the points of one root: its ``members`` by path (whose cost it
+    reads); for each member, by path, the owner that persists its choices and the
+    owner's key prefix; the
     ``platform`` its kernels are built for (its clock, which a throughput reads); and
     the ``completion`` policy that completes a point on a copy (``Baseline()`` unless
     the build names another). ``attempts`` counts the attempts made through it, and
@@ -184,6 +187,7 @@ class Seam:
         completion: Completion | None = None,
     ) -> None:
         self.members = tuple(members)
+        self._members = frozenset(self.members)
         self.owners = MappingProxyType(dict(owners or {}))
         self.platform = platform
         self.completion: Completion = Baseline() if completion is None else completion
@@ -203,13 +207,18 @@ class Seam:
         declares it: what lies under a choice's cases, found by structure."""
         return {key: info.space_type for key, info in self._info(point).items()}
 
+    def member_of(self, key: str) -> str | None:
+        """The member ``key`` belongs to: the longest member path that prefixes it."""
+        return member_of(self._members, key)
+
     def owner(self, key: str) -> tuple[str, str] | None:
-        """The owner that persists ``key``, and the key there (its attribute)."""
-        head, _, rest = key.partition(".")
-        if head not in self.owners:
+        """The owner that persists ``key``, and the key there (its attribute): the owner of
+        the longest owned member path that prefixes it."""
+        path = member_of(self.owners, key)
+        if path is None:
             return None
-        node, prefix = self.owners[head]
-        return node, prefix + rest
+        node, prefix = self.owners[path]
+        return node, prefix + key[len(path) + 1 :]
 
     def key(self, owner: str, attribute: str) -> str | None:
         """The root key an owner's attribute names: the member's whose prefix it carries
@@ -302,8 +311,8 @@ class Seam:
             if not item.cases:
                 detail = "; ".join(f"{case}: {reason}" for case, reason in item.refused.items())
                 why[item.key] = f"no case is viable: {detail}"
-        touched = dict.fromkeys(key.partition(".")[0] for key in batch)
-        why |= self.refusals(configured, (name for name in touched if name in self.members))
+        touched = dict.fromkeys(self.member_of(key) for key in batch)
+        why |= self.refusals(configured, (name for name in touched if name is not None))
         return Refused(why) if why else Accepted(configured)
 
     def refusals(self, point: Space, members: Iterable[str] | None = None) -> dict[str, str]:
@@ -313,7 +322,7 @@ class Seam:
         changes its channels' plans)."""
         found: dict[str, str] = {}
         for name in self.members if members is None else members:
-            admitted = inspection.admission(getattr(point, name))
+            admitted = inspection.admission(_member(point, name))
             if isinstance(admitted, Rejected):
                 found[name] = describe([admitted])
         return found
@@ -327,7 +336,7 @@ class Seam:
         waiting: dict[str, tuple[str, ...]] = {}
         refused: dict[str, str] = {}
         for name in self.members if members is None else members:
-            member = getattr(point, name)
+            member = _member(point, name)
             exports = type(member).exports
             held = member.query(exports[BUFFERING])
             if isinstance(held, Available):
@@ -677,7 +686,7 @@ class TargetCycles:
                 if choice is not None
                 and choice.ordered
                 and choice.cases
-                and choice.key.partition(".")[0] == name
+                and seam.member_of(choice.key) == name
             ]
             if not usable or len(usable) != len(waits):
                 return None
@@ -979,7 +988,7 @@ def _transport(
 
 
 def _member(point: object, path: str) -> Any:
-    """The member at a dotted ``path`` below ``point``."""
+    """The member at a dotted ``path`` below ``point`` (``partition.MatMul_0``)."""
     found = point
     for name in path.split("."):
         found = getattr(found, name)

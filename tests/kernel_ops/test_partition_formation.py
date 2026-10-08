@@ -20,7 +20,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import PackagePartition
 from kernel_ops.models import configure_partition, kernel_model
@@ -95,7 +95,7 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: object) -> None:
     module = PackagePartition(parent.graph.node[1].name).module(body)
     # The same module as the root of the KernelOps where they stood.
     kernel_ops = [node for node in source.graph.node if node.domain == "finn.custom_op.kernels"]
-    reference = partition_root(source, kernel_ops).point.module
+    reference = shell_root(source, kernel_ops).point.module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",

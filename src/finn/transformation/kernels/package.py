@@ -25,7 +25,7 @@ the partition: its module, part, clock and name, and the toolchain Vivado runs i
 The partition's boundary facts are typed metadata on the partition model, the
 ``finn.partition`` namespace that ``finn.transformation.fpgadataflow.kernel_partitions``
 owns and the flow reads (InsertIODMA, ``get_driver_shapes``). They are read from
-the partition root's boundary channels where the boundary presents them
+the shell root's boundary channels where the boundary presents them
 (``boundary_facts``), and PackagePartition writes them (``write_boundary_facts``).
 
 The part and the clock period are the model's build target (``read_target(model)``,
@@ -70,7 +70,8 @@ from qonnx.transformation.base import Transformation
 
 from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, datatype, read_target, shape
-from finn.custom_op.kernels.partition import member, partition_root
+from finn.custom_op.kernels.partition import member
+from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.artifacts.build import EmittedModule, emit_module
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
 from finn.kernels.artifacts.module import Abi
@@ -92,12 +93,12 @@ if TYPE_CHECKING:
 def configured_root(
     model: ModelWrapper, label: str, completion: Completion | None = None
 ) -> tuple[Any, tuple[tuple[str, str], ...]]:
-    """A partition model's root point, replayed from its nodes (a Decision with one
-    viable case is forced, nothing to commit) and completed by ``completion``
-    (``Baseline()`` by default) on a copy, as hardware generation builds it, and its
-    boundary (tensor, port). A stale choice, a choice the completion leaves open (a
+    """A partition model's shell root point (``shell_root``), replayed from its nodes
+    (a Decision with one viable case is forced, nothing to commit) and completed by
+    ``completion`` (``Baseline()`` by default) on a copy, as hardware generation builds
+    it, and its boundary (tensor, port). A stale choice, a choice the completion leaves open (a
     required one), or graph inputs and outputs out of port order refuse, named."""
-    root = partition_root(model, model.graph.node)
+    root = shell_root(model, model.graph.node)
     if root.dropped:
         raise KernelOpError(
             f"{label}: stale choices, refused by the partition: "

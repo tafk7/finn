@@ -63,7 +63,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     second.save({**second.choices(), "x.transport": "fifo"})
     with pytest.raises(KernelOpError, match=r"open Decisions.*depth \(required\)") as refused:
         PackagePartition("sdp_1").module(model)
-    assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
+    assert refused.value.keys == ("partition.levels.transport.fifo.buffer.depth",)
 
 
 def test_the_graphs_input_order_is_the_port_order() -> None:

@@ -27,7 +27,7 @@ things are built with it:
   a kernel's cores bind their extents from the ports on its channels
   (``kernel-extents``), so a node alone can commit its own choices only on
   channels;
-- the **partition root** (``finn.custom_op.kernels.partition``): the same
+- the **Partition** (``finn.custom_op.kernels.partition``), in its shell root: the same
   placement with literal formals, on channels the partition declares once per
   ONNX tensor and shares between nodes.
 

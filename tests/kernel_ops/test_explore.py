@@ -22,8 +22,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op, read_target, write_target
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.explore import (
+    Accepted,
     Baseline,
     ExploreError,
     Pinned,
@@ -50,18 +51,41 @@ VCK190 = resolve_target("xcvc1902-vsva2197-2MP-e-S", 5.0)
 
 
 def seam_of(model: ModelWrapper) -> tuple[Seam, Any]:
-    root = partition_root(model, model.graph.node)
+    root = shell_root(model, model.graph.node)
     return Seam(root.members, root.owners, read_target(model).platform), root.point
 
 
 def test_a_choice_names_the_node_and_attribute_that_persist_it() -> None:
     explorer, point = seam_of(kernel_model())
     offered = {choice.key: choice for choice in explorer.choices(point)}
-    assert offered["first.compute.packed.pe"].owner == ("first", "compute.packed.pe")
-    # An edge's choice is its consumer's.
-    assert offered["levels.transport"].owner == ("second", "x.transport")
-    assert explorer.key("second", "x.transport") == "levels.transport"
-    assert explorer.key("second", "compute.packed.pe") == "second.compute.packed.pe"
+    assert offered["partition.first.compute.packed.pe"].owner == ("first", "compute.packed.pe")
+    # An edge's choice is its consumer's, a boundary channel's at the shell root's level.
+    assert offered["partition.levels.transport"].owner == ("second", "x.transport")
+    assert offered["y.transport"].owner == ("second", "y.transport")
+    assert explorer.key("second", "x.transport") == "partition.levels.transport"
+    assert explorer.key("second", "compute.packed.pe") == "partition.second.compute.packed.pe"
+    assert explorer.key("second", "y.transport") == "y.transport"
+    # A key's member is the longest member path that prefixes it, at a segment.
+    assert explorer.member_of("partition.levels.transport") == "partition.levels"
+    assert explorer.member_of("y.transport.fifo.buffer.depth") == "y"
+    assert explorer.member_of("partition.levelsx.transport") is None
+    assert explorer.member_of("partition") is None
+
+
+def test_the_seam_reads_each_member_at_its_path() -> None:
+    """Cost and refusals read members below the Partition by path, and an attempt checks
+    the members its keys belong to."""
+    explorer, point = seam_of(kernel_model())
+    cost = explorer.cost(point)
+    assert set(cost.waiting) | set(cost.cycles) == set(explorer.members)
+    assert "partition.first" in cost.waiting
+    hidden = explorer.cost(point, ("partition.hidden",))
+    assert {*hidden.cycles, *hidden.waiting} == {"partition.hidden"}
+    assert explorer.refusals(point) == {}
+    outcome = explorer.attempt(point, {"partition.first.compute.packed.pe": 1})
+    assert isinstance(outcome, Accepted)
+    folded = explorer.cost(outcome.point, ("partition.first",))
+    assert "partition.first" in folded.cycles or "partition.first" in folded.waiting
 
 
 def test_a_spec_names_its_strategy_and_its_parameters() -> None:
@@ -90,17 +114,20 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     saved = choices(model)
     assert saved["first"]["compute.packed.pe"] == 2 and saved["second"]["x.transport"] == "direct"
     report = explored.report
-    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 12}
+    assert report["bottleneck"] == {
+        "members": ["x", "partition.levels", "partition.first", "partition.second"],
+        "cycles": 12,
+    }
     # levels: the replay of a frame of two beats of two 2-bit levels, in input_gen's
     # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
-    assert report["members"]["levels"] == {"cycles": 12, "buffering": 8 * 2 * 2}
+    assert report["members"]["partition.levels"] == {"cycles": 12, "buffering": 8 * 2 * 2}
     (ranked,) = report["strategies"]
     assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0
     # Nothing was left to complete.
     assert report["completed"] == {} and report["completion"] == {"policy": "baseline", "open": []}
     assert json.loads(json.dumps(report)) == report
     # The model replays to the explored point: nothing open, nothing stale.
-    root = partition_root(model, model.graph.node)
+    root = shell_root(model, model.graph.node)
     assert inspection.viable(root.point) == () and not root.dropped
 
 
@@ -265,12 +292,12 @@ def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() ->
     assert "compute.packed.pe" in saved and "compute" not in saved
     write_target(model, VCK190)
     model = model.transform(InferKernelTensors())
-    root = partition_root(model, model.graph.node)
-    assert "first.compute.packed.pe" in root.dropped
-    assert "first.compute" in {item.key for item in inspection.viable(root.point)}
+    root = shell_root(model, model.graph.node)
+    assert "partition.first.compute.packed.pe" in root.dropped
+    assert "partition.first.compute" in {item.key for item in inspection.viable(root.point)}
     explored = explore_kernel_choices(model, [Ranked(Lanes())])
-    assert "first.compute.packed.pe" in explored.report["dropped"]
+    assert "partition.first.compute.packed.pe" in explored.report["dropped"]
     held = kernel_op(model, model.graph.node[0]).choices()
     assert "compute" in held
-    again = partition_root(model, model.graph.node)
+    again = shell_root(model, model.graph.node)
     assert not again.dropped and inspection.viable(again.point) == ()

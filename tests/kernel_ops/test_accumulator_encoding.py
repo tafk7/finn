@@ -39,7 +39,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.partition import partition_root
+from finn.custom_op.kernels.shell import shell_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Ranked
@@ -238,7 +238,7 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
 
 def _computes(case: Case, directory: Path, **options: Any) -> None:
     model = kernel_ops(case, **options)
-    root = partition_root(model, model.graph.node)
+    root = shell_root(model, model.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)
