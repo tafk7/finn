@@ -75,7 +75,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
 from math import floor
@@ -102,6 +102,7 @@ from finn.kernels.target import Platform
 from finn.kernels.utilization import RESOURCE_NAMES, Resources, binding, over, ratio, total
 
 S = TypeVar("S", bound=Space)
+T = TypeVar("T")
 
 
 # The seam's records are results an explorer reads, never values a Space holds: plain
@@ -668,7 +669,7 @@ class TargetCycles:
     domain's order, the last by bisection (more parallelism, fewer cycles: the
     strategy's assumption, not a rule); a refused attempt is skipped. With ``relax``,
     a budget the bottleneck exceeds is relaxed to the bottleneck reached, and the
-    members are folded again to it.
+    members are folded again to it, from what the first fold already asked (``_Asked``).
 
     A member whose cycles wait on a Decision that is not an ordered open choice of its
     own is left to the next explorer; so is every Decision its cycles do not read.
@@ -683,15 +684,22 @@ class TargetCycles:
         self.relax = relax
         self.relaxed_to: int | None = None
         self.reached: Bottleneck | None = None
+        self._asked = _Asked()
 
     def explore(self, seam: Seam, point: S) -> S:
+        return self._explore(seam, point, _Asked())
+
+    def _explore(self, seam: Seam, point: S, asked: _Asked) -> S:
+        """``explore``, asking the seam through ``asked``: what folds of the same seam
+        asked before (``MaxThroughput``'s budgets)."""
+        self._asked = asked
         folded = self._fold_all(seam, point, self.cycles)
         reached = seam.cost(folded).bottleneck
         if self.relax and reached is not None and reached.cycles > self.cycles:
             self.relaxed_to = reached.cycles
             folded = self._fold_all(seam, point, reached.cycles)
             reached = seam.cost(folded).bottleneck
-        self.reached = reached
+        self.reached, self._asked = reached, _Asked()
         return folded
 
     def report(self) -> dict[str, object]:
@@ -714,6 +722,9 @@ class TargetCycles:
     def _axes(self, seam: Seam, point: S, name: str) -> list[Choice] | None:
         """The member's scaling axes, found by committing each Decision its cycles wait
         on to its first case, in turn; None if one is no ordered open choice of its own."""
+        return self._asked.ask(point, ("axes", name), lambda: self._find_axes(seam, point, name))
+
+    def _find_axes(self, seam: Seam, point: S, name: str) -> list[Choice] | None:
         axes: list[Choice] = []
         probe = point
         while True:
@@ -746,13 +757,18 @@ class TargetCycles:
             return point
         lists = [tuple(axis.cases or ()) for axis in axes]
 
-        def evaluate(cases: tuple[object, ...]) -> tuple[int, S] | None:
-            outcome = seam.attempt(point, {axis.key: case for axis, case in zip(axes, cases)})
+        def configure(batch: dict[str, object]) -> tuple[int, S] | None:
+            outcome = seam.attempt(point, batch)
             if isinstance(outcome, Refused):
                 return None
             configured = outcome.point
             cycles = seam.cost(configured, (name,)).cycles.get(name)
             return None if cycles is None else (cycles, configured)
+
+        def evaluate(cases: tuple[object, ...]) -> tuple[int, S] | None:
+            batch = {axis.key: case for axis, case in zip(axes, cases)}
+            question = ("fold", name, tuple(batch.items()))
+            return self._asked.ask(point, question, lambda: configure(batch))
 
         best: tuple[int, S] | None = None
         fastest: tuple[int, S] | None = None
@@ -804,6 +820,28 @@ class TargetThroughput(TargetCycles):
         return {**super().report(), "fps": self.fps}
 
 
+class _Asked:
+    """What a fold asked of the seam, by the point asked: a point is immutable, so the
+    same question of the same point has the same answer, and folds that pass through
+    the same points (a relaxed refold; ``MaxThroughput``'s budgets, whose folds agree
+    on the members before the first that folds otherwise) ask it once. An answer's
+    points are the ones first answered, so a fold that agrees reaches the same point
+    objects. Each answer is kept with the point it answers, so that the point's
+    identity is never reused while it is held."""
+
+    def __init__(self) -> None:
+        self._answers: dict[tuple[int, Hashable], tuple[Space, Any]] = {}
+
+    def ask(self, point: Space, question: Hashable, answer: Callable[[], T]) -> T:
+        """``answer()``, the first time ``question`` is asked of ``point``."""
+        key = (id(point), question)
+        held = self._answers.get(key)
+        if held is None:
+            held = self._answers[key] = (point, answer())
+        found: T = held[1]
+        return found
+
+
 # -- throughput within resources -----------------------------------------------------------
 
 
@@ -847,6 +885,11 @@ class MaxThroughput:
     reaching fewer cycles or using more, or a budget relaxed above itself: an end's
     converter, SZ6), the report states it, and the search goes on as bisection.
 
+    Its folds share what they ask of the seam (``_Asked``): a budget whose fold agrees
+    with an earlier budget's on its first members reaches the same points there without
+    asking again, and a point already costed is not completed and costed again. Each
+    budget's point is the one ``TargetCycles`` alone folds it to.
+
     It refuses nothing (RC5): where even the least parallelism does not fit, it returns
     that point and warns, naming the binding resource. ``report`` states the budget,
     the bottleneck reached, the resources against the budget, the binding resource (the
@@ -884,16 +927,17 @@ class MaxThroughput:
             for name, fraction in self.within.items()
         }
         self.tried, self.departures = [], []
-        fastest = self._try(seam, point, 1)
+        asked = _Asked()
+        fastest = self._try(seam, point, 1, asked)
         self.fastest = fastest.reached.cycles
         kept = fastest
         if not fastest.fits:
-            kept = slowest = self._try(seam, point, None)
+            kept = slowest = self._try(seam, point, None, asked)
             if slowest.fits:
                 low, high = fastest.reached.cycles + 1, slowest.reached.cycles
                 while low < high:
                     middle = (low + high) // 2
-                    tried = self._try(seam, point, middle)
+                    tried = self._try(seam, point, middle, asked)
                     if tried.fits:
                         kept, high = tried, middle
                     else:
@@ -945,11 +989,19 @@ class MaxThroughput:
             "departures": self.departures,
         }
 
-    def _try(self, seam: Seam, point: S, cycles: int | None) -> _Tried:
+    def _try(self, seam: Seam, point: S, cycles: int | None, asked: _Asked) -> _Tried:
         """``point`` folded by ``TargetCycles`` at ``cycles`` (None: no budget), and its
-        completed copy's bottleneck and resources."""
+        completed copy's bottleneck and resources, asking the seam through ``asked``."""
         folder = TargetCycles(_UNBOUNDED if cycles is None else cycles)
-        folded = folder.explore(seam, point)
+        folded = folder._explore(seam, point, asked)
+        reached, used = asked.ask(folded, "costed", lambda: self._cost(seam, folded))
+        fits = not over(used, self.budget)
+        tried = _Tried(cycles, folder.relaxed_to, folded, reached, used, fits)
+        self.tried.append(tried)
+        return tried
+
+    def _cost(self, seam: Seam, folded: Space) -> tuple[Bottleneck, Resources]:
+        """The bottleneck and the root's resources of ``folded`` completed on a copy."""
         completed = seam.complete(folded).point
         cost = seam.cost(completed)
         reached, used = cost.bottleneck, seam.resources(completed)
@@ -961,10 +1013,7 @@ class MaxThroughput:
             )
         if isinstance(used, str):
             raise ExploreError(f"max_throughput needs the root's resources: {used}")
-        fits = not over(used, self.budget)
-        tried = _Tried(cycles, folder.relaxed_to, folded, reached, used, fits)
-        self.tried.append(tried)
-        return tried
+        return reached, used
 
     def _departures(self) -> list[str]:
         """Where the budgets tried depart from the search's assumption (fewer cycles,
