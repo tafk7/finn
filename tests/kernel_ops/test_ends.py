@@ -163,6 +163,23 @@ def test_an_iodma_refuses_a_free_side_that_is_not_row_major() -> None:
     )
 
 
+def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
+    """The end moves one pass of the host's buffer a frame: a free side presenting it
+    three times (a streamed weight, once per row) is refused by name, row-major or not,
+    until repetition by the host or the end is designed (SZ11 (f))."""
+    offers = (iodma_hls(128),)
+    repeated = free_side(vector_major((4, 6), 3).repeated(3))
+    refused = inspection.admission(design_space(IodmaEnd(offers=offers, side=repeated)))
+    assert isinstance(refused, Rejected)
+    ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
+    assert code == "end-repetition"
+    assert message == (
+        "s_axis_0: an iodma_hls end moves one pass of a [4, 6] buffer a frame, and this "
+        "free side presents it 3 times a frame (repetition by the host or the end is not "
+        "designed yet)"
+    )
+
+
 # -- on the Chain --------------------------------------------------------------------------
 
 

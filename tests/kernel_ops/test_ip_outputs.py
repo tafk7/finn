@@ -100,6 +100,22 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     assert (described["axilite"], described["aximm"]) == ([], [])
 
 
+def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> None:
+    """On ``ip``, whose integrator moves the streams, the Chain's streamed w2 crosses the
+    boundary once per row of x, three times a frame, which no end refuses there: the
+    description states each stream's passes (``order``), so that its integrator supplies
+    w2 three times (SZ11 (f))."""
+    configure_partition(model := kernel_model(second_weights=False))
+    write_boundary_facts(model, "sdp_1")
+    stub = cast(Toolchain, PackagedByStub())
+    model.transform(PackagePartition("sdp_1", directory=tmp_path, toolchain=stub))
+    described = json.loads((tmp_path / "interface.json").read_text())
+    assert [
+        (stream["name"], stream["tensor"], stream["beats"], stream["order"]["passes"])
+        for stream in described["streams"]
+    ] == [("s_axis_0", "x", 6, 1), ("s_axis_1", "w2", 12, 3), ("m_axis_0", "y", 6, 1)]
+
+
 #: Vivado's hierarchical utilization table, an UltraScale+ part (its columns, Vivado
 #: 2025.2; the cells narrowed); two levels below the top.
 REPORT = """\

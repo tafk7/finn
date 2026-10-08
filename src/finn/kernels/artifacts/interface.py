@@ -15,7 +15,10 @@ streams (the partition's boundary facts, ``finn.partition``):
 - ``streams``: each AXI-Stream port, its direction, ``tdata`` width and clock, and
   what it carries: the tensor, its element (the channel's, by name) and its value
   range, the lanes a beat, the beats a frame, the frame's shape and the ``order``
-  its beats and lanes present the frame in (whether row-major, and the traversal);
+  its beats and lanes present the frame in: whether each pass is row-major, how many
+  times a frame it presents the whole tensor (``passes``: a streamed weight, read
+  once per row of its activations, presents it once per row, and the integrator
+  supplies or reads it that many times), and the traversal;
 - ``axilite``: each AXI-Lite bus, its address and data widths, its clock and its
   register map, the IP-XACT's one ``Reg0`` block (``ipxact.register_window``), its
   registers as wide as the bus's ``RegisterMap`` writes them (32 bits for a bus that

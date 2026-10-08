@@ -109,12 +109,15 @@ def thresholding_model(
     return model.transform(InferKernelTensors()) if infer else model
 
 
-def chain_source(*, annotate_input: bool = True, second_weights: bool = True) -> ModelWrapper:
+def chain_source(
+    *, annotate_input: bool = True, second_weights: bool = True, rows: int = chain.ROWS
+) -> ModelWrapper:
     """The Chain as an ONNX model, before conversion: x -> MatMul ``first`` (w1)
     -> hidden -> MultiThreshold ``activate`` -> levels -> MatMul ``second`` (w2) -> y.
-    Only x's shape is known (a fresh graph); w2 is a graph input unless ``second_weights``.
+    Only x's shape is known (a fresh graph), ``rows`` rows (the Chain's 3 by default);
+    w2 is a graph input unless ``second_weights``.
     """
-    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [chain.ROWS, chain.INPUTS])
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [rows, chain.INPUTS])
     y = helper.make_tensor_value_info("y", TensorProto.FLOAT, None)
     nodes = [
         helper.make_node("MatMul", ["x", "w1"], ["hidden"], name="first"),
@@ -193,7 +196,7 @@ THRESHOLDING = {
 }
 
 
-def kernel_model(**options: bool) -> ModelWrapper:
+def kernel_model(**options: Any) -> ModelWrapper:
     """The Chain as KernelOps, each node's choices saved as ``kernels.chain`` configures them."""
     model = (
         chain_source(**options)
@@ -221,8 +224,16 @@ def kernel_model(**options: bool) -> ModelWrapper:
 ROW_MAJOR_W2 = {"compute.packed.pe": 4, "compute.packed.simd": 1}
 
 
-def row_major_w2(model: ModelWrapper) -> ModelWrapper:
-    """``model``, the Chain with w2 streamed, its second MatMul folded ``ROW_MAJOR_W2``."""
+def streamed_w2_model() -> ModelWrapper:
+    """The Chain with x and w2 streamed as IODMA ends move them, each one pass a frame
+    (``IodmaEnd.single_pass``): one row of x, so w2 presents its pass once (at the
+    Chain's three rows it presents it three times, which the pynq shell refuses,
+    ``end-repetition``), and the first MatMul folded at PE 4, all of its outputs, so
+    that x is read once (at PE 2 it is read twice: over one row, the replay of each
+    row is a repetition of the whole pass); the second folded ``ROW_MAJOR_W2``."""
+    model = kernel_model(second_weights=False, rows=1)
+    (first,) = [node for node in model.graph.node if node.name == "first"]
+    kernel_op(model, first).save({"compute.packed.pe": 4})
     (second,) = [node for node in model.graph.node if node.name == "second"]
     kernel_op(model, second).save(ROW_MAJOR_W2)
     return model
@@ -250,7 +261,7 @@ __all__ = [
     "configure_partition",
     "kernel_model",
     "open_memories",
-    "row_major_w2",
+    "streamed_w2_model",
     "ROW_MAJOR_W2",
     "schema_digest",
     "H",
