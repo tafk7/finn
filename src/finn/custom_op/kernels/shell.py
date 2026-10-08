@@ -13,9 +13,14 @@ Every exploration and packaging of KernelOps reads one root, built by
   inputs supplied with them: input channels, the Partition, output channels. So
   what crosses the boundary is the shell's, and the Partition's own channels and
   kernels are below it (``partition.MatMul_0``, ``partition.MatMul_0_out0``);
-- **the ``ip`` shell**: with no row, the root offers no end on a boundary channel;
-  its IP is the module the shells read (``PackagePartition``), and a testbench
-  drives the same pins;
+- **ends**: the ends the shell offers (``offers``, ``finn.kernels.ends.EndOffer``),
+  supplied to each boundary channel whose free side meets the host (not one a
+  KernelOp outside the nodes produces or consumes); each such channel places its
+  ``end`` from them (``Channel.end``: one offered is forced, so nothing is
+  persisted), and its cycles are the channel's. With no offers, the root is the
+  **``ip`` shell**: no end on any boundary channel; its IP is the module the shells
+  read (``PackagePartition``), and a testbench drives the same pins. Either way
+  the module is the same: an end binds no RTL;
 - **paths**: a key of the root is a member path and the key below it
   (``partition.MatMul_0.compute.packed.pe``, ``Reshape_0_out0.transport``): the
   owners, the replayed choices, the dropped ones and the members whose cost a
@@ -37,14 +42,14 @@ Every exploration and packaging of KernelOps reads one root, built by
   named and identified as the Partition (its stem ``finn_<name>``; the Partition's
   producer), since an end is integrated beside the IP, not in it.
 
-The class is kept with its Partition's (``SHELLS``, by ``ShellKey``), so a call on
-the same facts compiles nothing again; the choices are replayed on a fresh design
+The class is kept with its Partition's and its offers (``SHELLS``, by ``ShellKey``),
+so a call on the same facts compiles nothing again; the choices are replayed on a fresh design
 space every call.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -58,10 +63,17 @@ from finn.custom_op.kernels.base import (
     typed_choices,
 )
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
-from finn.custom_op.kernels.partition import Partition, Partitioned, member, partition
+from finn.custom_op.kernels.partition import (
+    KERNEL_OPS,
+    Partition,
+    Partitioned,
+    member,
+    partition,
+)
 from finn.kernels.artifacts.module import BuildError, BusExport, Fragment, ProducerIdentity, merge
 from finn.kernels.base import Kernel
 from finn.kernels.configure import chosen, member_of
+from finn.kernels.ends import ENDS, EndOffer
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -103,10 +115,12 @@ class Shell(Kernel):
 
 @dataclass(frozen=True)
 class ShellKey:
-    """What a shell root's class is built from, by value: its Partition's class (the
-    ``ip`` shell: no ends)."""
+    """What a shell root's class is built from, by value: its Partition's class, the
+    ends it offers (none: the ``ip`` shell) and the boundary tensors offered them."""
 
     partition: type[Partition]
+    offers: tuple[EndOffer, ...]
+    ended: tuple[str, ...]
 
 
 SHELLS: LeastRecentlyUsed[type[Shell]] = LeastRecentlyUsed(16)
@@ -118,13 +132,14 @@ class ShellRoot:
     """The configured root; each member's owning node and attribute prefix, by member
     path; the choices replay dropped as stale, each with why; each boundary tensor's
     port; its members by path (channels, then kernels), whose cost a design space
-    exploration reads."""
+    exploration reads; the boundary channels offered ends, by member path."""
 
     point: Any
     owners: Mapping[str, tuple[str, str]]
     dropped: Mapping[str, str]
     boundary: tuple[tuple[str, str], ...]
     members: tuple[str, ...]
+    ends: tuple[str, ...]
 
     def owner(self, key: str) -> tuple[str, str] | None:
         """The node that persists ``key`` and the key there (its attribute): its longest
@@ -136,11 +151,15 @@ class ShellRoot:
         return node, prefix + key[len(path) + 1 :]
 
 
-def _class(built: Partitioned) -> type[Shell]:
-    """The shell root's class: input channels, the Partition, output channels."""
+def _class(built: Partitioned, key: ShellKey) -> type[Shell]:
+    """The shell root's class: input channels, the Partition, output channels; the
+    channels ``key.ended`` names offered ``key.offers``."""
     declared = dict(built.channels)
     channels = {
-        member(tensor): declared[tensor].channel(built.platform) for tensor, _ in built.boundary
+        member(tensor): declared[tensor].channel(
+            built.platform, end_offer=key.offers if tensor in key.ended else ()
+        )
+        for tensor, _ in built.boundary
     }
     if PARTITION in channels:
         raise KernelOpError(f"a boundary tensor is named {PARTITION}, the shell's Partition")
@@ -179,27 +198,57 @@ def _replay(point: S, choices: Mapping[str, object]) -> tuple[S, dict[str, str]]
     return point, dropped
 
 
+def _ended(model: ModelWrapper, built: Partitioned) -> tuple[str, ...]:
+    """The boundary tensors whose free side meets the host: neither an output handed on
+    to a KernelOp outside nor an input a KernelOp produces."""
+    declared = dict(built.channels)
+    found = []
+    for tensor, port in built.boundary:
+        if port.startswith("s_axis_"):
+            producer = model.find_producer(tensor)
+            if producer is not None and producer.domain == KERNEL_OPS:
+                continue
+        elif declared[tensor].direct:
+            continue
+        found.append(tensor)
+    return tuple(found)
+
+
 def shell_root(
-    model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = "partition"
+    model: ModelWrapper,
+    nodes: Iterable[NodeProto],
+    *,
+    name: str = "partition",
+    offers: Sequence[EndOffer] = (),
 ) -> ShellRoot:
     """The shell root of ``nodes``, KernelOp nodes of ``model``, their Partition named
-    ``name``; see the module docstring."""
+    ``name``, offering ``offers`` on the boundary channels that meet the host (none:
+    the ``ip`` shell); see the module docstring."""
+    offers = tuple(offers)
+    kinds = [offer.kind for offer in offers]
+    unknown = sorted(set(kinds) - set(ENDS))
+    if unknown:
+        raise KernelOpError(f"no end of kind {', '.join(unknown)} (one of {sorted(ENDS)})")
+    if len(set(kinds)) != len(kinds):
+        raise KernelOpError(f"a shell offers each kind of end once, not {kinds}")
     built = partition(model, nodes, name=name)
     boundary = {member(tensor) for tensor, _ in built.boundary}
+    key = ShellKey(built.space, offers, _ended(model, built) if offers else ())
 
     def path(key: str) -> str:
         """A key of the Partition as the shell root names it."""
         head = key.partition(".")[0]
         return key if head in boundary else f"{PARTITION}.{key}"
 
-    root: Any = SHELLS.get(ShellKey(built.space), lambda: _class(built))
+    root: Any = SHELLS.get(key, lambda: _class(built, key))
     point, dropped = _replay(
         design_space(root()), {path(key): value for key, value in built.choices.items()}
     )
     stale = {path(key): why for key, why in built.stale.items()}
     members = (*(path(member(tensor)) for tensor, _ in built.channels), *map(path, built.kernels))
     owners = {path(name): owner for name, owner in built.owners.items()}
-    return ShellRoot(point, owners, stale | dropped, built.boundary, members)
+    ends = tuple(member(tensor) for tensor in key.ended)
+    return ShellRoot(point, owners, stale | dropped, built.boundary, members, ends)
 
 
 def persist(model: ModelWrapper, root: ShellRoot, point: Any) -> dict[str, dict[str, object]]:

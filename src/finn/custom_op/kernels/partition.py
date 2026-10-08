@@ -67,6 +67,7 @@ from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
+from finn.kernels.ends import EndOffer
 from finn.kernels.target import Platform
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -94,12 +95,20 @@ class Declared:
     port: str | None = None
     direct: bool = False
 
-    def channel(self, platform: Platform, contents: IntegerTensorValue | None = None) -> Channel:
+    def channel(
+        self,
+        platform: Platform,
+        contents: IntegerTensorValue | None = None,
+        end_offer: tuple[EndOffer, ...] = (),
+    ) -> Channel:
         """The channel on the target's ``platform``, carrying ``contents`` (an owned
-        parameter's value) when given."""
+        parameter's value) when given, its free side offered the ends ``end_offer``
+        when any."""
         settings: dict[str, Any] = {"tensor": self.tensor}
         if contents is not None:
             settings["contents"] = contents
+        if end_offer:
+            settings["end_offer"] = end_offer
         if self.port is not None:
             settings["port"] = self.port
         if self.direct:

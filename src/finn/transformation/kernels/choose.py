@@ -29,6 +29,11 @@ from the point the one before returned, and then:
   FIFOs were sized; the dropped choices with why, per member cycles and
   buffering, the bottleneck), so an outer search can compare.
 
+``offers`` are the ends the shell offers its boundary channels (``shell_root``;
+none: the ``ip`` shell). Where a channel has an end, the report has its row
+(``ends``: its facts and its cycles a frame, a frame a call and 16) and says what
+the cycles leave out (``memory_latency``: unmeasured, each call adds it).
+
 ``fresh`` clears the nodes' choices before the root is built, so the strategies
 explore from scratch; otherwise a saved choice is pinned and an exploration
 resumes from what was saved.
@@ -52,6 +57,7 @@ from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
 from finn.custom_op.kernels.shell import persist, shell_root
+from finn.kernels.ends import MEMORY_LATENCY, EndContract, EndOffer
 from finn.kernels.explore import (
     Baseline,
     Bottleneck,
@@ -197,16 +203,41 @@ def _fifos(
     return f"sized by size_fifos: {channels} channels"
 
 
+def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
+    """Each end's facts and cycles a frame, by its boundary channel."""
+    rows: dict[str, dict[str, object]] = {}
+    for name in ends:
+        contract: EndContract = getattr(point, name).end_contract
+        rows[name] = {
+            "kind": contract.kind,
+            "direction": contract.direction,
+            "port": contract.port,
+            "tdata": contract.tdata,
+            "beats": contract.beats,
+            "lanes": contract.lanes,
+            "element": contract.element.dtype.name,
+            "memory_width": contract.memory_width,
+            "words": contract.words,
+            "converter": contract.converter,
+            "call_cycles": contract.call_cycles,
+            "frames_per_call": contract.frames_per_call,
+            "cycles": contract.cycles,
+            "cycles_16_frames_a_call": contract.cycles_at(16),
+        }
+    return rows
+
+
 def explore_kernel_choices(
     model: ModelWrapper,
     strategies: Sequence[Explorer],
     *,
     fresh: bool = False,
     completion: Completion | None = None,
+    offers: Sequence[EndOffer] = (),
 ) -> Explored:
     """The model's KernelOps explored by ``strategies`` and their choices persisted, the
-    point completed by ``completion`` (``Baseline()`` by default) for its report; see
-    the module docstring."""
+    point completed by ``completion`` (``Baseline()`` by default) for its report, on the
+    shell root offering ``offers``; see the module docstring."""
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     if not nodes:
         raise KernelOpError("no KernelOp to explore")
@@ -215,7 +246,7 @@ def explore_kernel_choices(
             op = kernel_op(model, node)
             op.save(dict.fromkeys(op.choices()))
     started = time.perf_counter()
-    root = shell_root(model, nodes)
+    root = shell_root(model, nodes, offers=offers)
     seam = Seam(root.members, root.owners, read_target(model).platform, completion)
     point = root.point
     # Who made each choice: the model before the strategies, or the strategy that
@@ -258,7 +289,11 @@ def explore_kernel_choices(
         ]
         if completed.sizing is not None:
             completion_report["sizing"] = completed.sizing
-    cost = seam.cost(point if completed is None else completed.point)
+    costed = point if completed is None else completed.point
+    cost = seam.cost(costed)
+    ends: dict[str, object] = {}
+    if root.ends and not cost.waiting and not cost.refused:
+        ends = {"ends": _end_rows(costed, root.ends), "memory_latency": MEMORY_LATENCY}
     report = {
         "strategies": explorers,
         "choices": _choices_by_owner(seam, made_by),
@@ -268,6 +303,7 @@ def explore_kernel_choices(
         "fresh": fresh,
         "dropped": dict(root.dropped),
         **_cost_report(seam, cost),
+        **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
     return Explored(point, completed, cost, report)
@@ -287,8 +323,8 @@ def partition_bottleneck(
 
 class ExploreKernelChoices(Transformation):
     """Every open choice of the model's KernelOps explored by ``strategies``, in order,
-    and saved, the point completed by ``completion`` for the report; ``explored``
-    holds the result (``explore_kernel_choices``)."""
+    and saved, the point completed by ``completion`` for the report, on the shell root
+    offering ``offers``; ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(
         self,
@@ -296,16 +332,22 @@ class ExploreKernelChoices(Transformation):
         *,
         fresh: bool = False,
         completion: Completion | None = None,
+        offers: Sequence[EndOffer] = (),
     ) -> None:
         super().__init__()
         self.strategies = tuple(strategies)
         self.fresh = fresh
         self.completion = completion
+        self.offers = tuple(offers)
         self.explored: Explored | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         self.explored = explore_kernel_choices(
-            model, self.strategies, fresh=self.fresh, completion=self.completion
+            model,
+            self.strategies,
+            fresh=self.fresh,
+            completion=self.completion,
+            offers=self.offers,
         )
         return model, False
 

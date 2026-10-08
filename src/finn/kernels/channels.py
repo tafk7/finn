@@ -80,8 +80,19 @@ A channel refuses itself as a kernel does, through its ``admission``
 waits on no admission and reads no memory style: under ``CYCLES`` the clock
 cycles a frame takes through its own stages (the most beats its source's or an
 adapter's port carries a frame; a FIFO presents what arrives, so it adds none,
-and a channel of wires takes none of its own), under ``BUFFERING`` the bits its
-stages hold (an adapter's ``input_gen`` buffers, a FIFO's depth).
+and a channel of wires takes none of its own) and its end's, if it has one,
+under ``BUFFERING`` the bits its stages hold (an adapter's ``input_gen``
+buffers, a FIFO's depth).
+
+A boundary channel's side without a user is its **free side** (``free_side``):
+the AXIS port the root presents. A shell that integrates ends supplies the ends
+it offers there (``end_offer``, ``finn.kernels.ends``), and the channel's ``end``
+Decision places one, as it places its ``source``: it applies only when offers
+are supplied, its candidates are the kinds ``ENDS`` knows, each refusing a kind
+not offered, so one offered is forced and nothing is persisted. The end is not a
+user: it reads the free side the channel's one user determines, binds no RTL
+(the root's pins stay its pins), and exports its facts (``end_contract``). Its
+cycles a frame (``end_cycles``) are the channel's, beside its stages'.
 
 The Space class refers to itself (``index``) and, through its source's port, is
 referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
@@ -119,6 +130,7 @@ from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapte
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd, Marker
 from finn.kernels.base import BOUNDARY, BUFFERING, CLOCK, CYCLES, NETLIST, PORT, RESET
+from finn.kernels.ends import ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
@@ -266,9 +278,10 @@ class Channel(Space):
     ``users`` holds the port each present user presents on this channel,
     located by the user's name and the input it references this channel
     through. A side without a user is the root's boundary, presented as the
-    AXIS port ``port``. A channel with a known value has its ``source`` as its
-    producer. ``platform`` is the target's, stated by whoever declares the
-    channel: its source, its adapter's stages and its FIFO read it.
+    AXIS port ``port``, where the ``end`` the shell offers (``end_offer``) sits.
+    A channel with a known value has its ``source`` as its producer.
+    ``platform`` is the target's, stated by whoever declares the channel: its
+    source, its adapter's stages and its FIFO read it.
     """
 
     tensor: Tensor = Param()
@@ -280,9 +293,13 @@ class Channel(Space):
     sets: int = Param(default=1)
     index: Channel = Param(required=False)
     platform: Platform = Param()
+    end_offer: tuple[EndOffer, ...] = Param(required=False)
     # Whether the channel carries a known value, which its source drives: where nothing
     # supplies ``contents``, the source never applies and its candidates are not compiled.
     valued = supplied(contents)
+    # Whether a shell offers ends on its free side: where nothing supplies the offers,
+    # the end never applies and its candidates are not compiled.
+    ended = supplied(end_offer)
 
     @derived
     def consumed(self) -> StreamContract | Rejected:
@@ -376,6 +393,27 @@ class Channel(Space):
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
         form = unreplayed(inside.form) if endpoint is Endpoint.TARGET else inside.form
         return boundary_contract(self.port, self.tensor.element, BeatSequence(form), endpoint)
+
+    @derived
+    def free_side(self) -> StreamContract | Rejected:
+        """The side without a user, as the root presents it: where an end sits."""
+        found = self.endpoints
+        if found.source_owner is None:
+            return found.source
+        if found.sink_owner is None:
+            return found.sink
+        return reject(
+            "channel-end", "an end sits on a boundary's free side, and both sides have a user"
+        )
+
+    end: IodmaEnd = Decision(ENDS, when=ended, offers=end_offer, side=free_side)
+    end_contract = View(end.contract)
+
+    @derived
+    def end_cycles(self) -> int:
+        """Its end's cycles a frame (``EndContract.cycles``)."""
+        contract: EndContract = self.end_contract
+        return contract.cycles
 
     @derived
     def ends(self) -> Ends:
@@ -573,8 +611,11 @@ class Channel(Space):
     @derived
     def frame_cycles(self) -> int:
         """The clock cycles a frame takes through its own stages: the most beats its
-        source's port or an adapter's carries a frame (one beat a cycle at best)."""
+        source's port or an adapter's carries a frame (one beat a cycle at best), or its
+        end's cycles."""
         found = [0]
+        if self.ended:
+            found.append(self.end_cycles)
         if self.valued:
             found.append(self.source_contract.form.beats)
         if self.output_adapting:

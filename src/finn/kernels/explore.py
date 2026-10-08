@@ -819,9 +819,9 @@ class SizeFifos:
     case with its depth (the least DEPTH whose storage holds the least words plus
     ``margin``) and ``ram_style`` (``auto``:
     FinnLib's own selection by depth and width, until resources are exported; FS4). A
-    channel the model does not read (a boundary, a memory source) is direct, with why.
-    Where the seam refuses a channel's FIFO, that channel falls back to direct, its
-    refusal reported, and the batch is attempted again.
+    channel the model does not read (a boundary without an end, a memory source) is
+    direct, with why. Where the seam refuses a channel's FIFO, that channel falls back
+    to direct, its refusal reported, and the batch is attempted again.
 
     ``method`` is ``"analytical"`` (K12), the only one; ``frames`` the frames the
     model runs to reach its periodic state.
