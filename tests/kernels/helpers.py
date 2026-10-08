@@ -95,7 +95,6 @@ def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:
         fabric=Fabric.ULTRASCALE,
         uram=True,
         uram_init=True,
-        clk2x=True,
         resources=None,
     )
 

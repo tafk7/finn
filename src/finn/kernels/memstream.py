@@ -22,10 +22,10 @@ reference to it, and its set port references the channel's ``index``.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
-driven by role, and tied low when unpumped. Each case states what it needs of
-the ``platform``: ``ultra`` UltraRAM that takes initial contents (on Zynq
-UltraScale+ an initialized UltraRAM is built as block RAM), a pumped memory the
-doubled clock.
+driven by role, and tied low when unpumped. ``ultra`` states what it needs of
+the ``platform``: UltraRAM that takes initial contents (on Zynq UltraScale+ an
+initialized UltraRAM is built as block RAM). A pumped memory takes the doubled
+clock, which its module states and the shell root admits (``clock-unavailable``).
 """
 
 from __future__ import annotations
@@ -135,14 +135,8 @@ class MemStreamKernel(Kernel):
             ),
         ),
     )
-    pumped_memory: bool = Decision(
-        values=(False, True),
-        requires=(
-            requires(
-                platform.clk2x, "clk2x-absent: the platform has no doubled clock", cases=(True,)
-            ),
-        ),
-    )
+    # A pumped memory takes a doubled clock, which the shell admits.
+    pumped_memory: bool = Decision(values=(False, True))
 
     @derived
     def value_range(self) -> tuple[int, ...] | Rejected:

@@ -45,15 +45,15 @@ NO_FILE = {"FINN_XILINX_ENV": ""}
 def test_the_machine_selection_is_the_configured_environment_under_the_site_directory(
     monkeypatch, tmp_path
 ):
-    assert machine_selection(NO_FILE) == Selection()
+    assert machine_selection(NO_FILE) == Selection(hls_frontend="vitis_hls")
     site = {**NO_FILE, "FINN_TOOL_DIR_OVERRIDE": "/site/tools"}
-    assert machine_selection(site) == Selection(command_dir="/site/tools")
+    assert machine_selection(site) == Selection(command_dir="/site/tools", hls_frontend="vitis_hls")
     monkeypatch.setenv("FINN_XILINX_ENV", "")
     monkeypatch.delenv("FINN_XILINX_VERSION", raising=False)
     monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", str(tmp_path))
     monkeypatch.setenv("SELECTED_BY_THE_MACHINE", "1")
     toolchain = machine_toolchain()
-    assert toolchain.selection == Selection(command_dir=str(tmp_path))
+    assert toolchain.selection == Selection(command_dir=str(tmp_path), hls_frontend="vitis_hls")
     assert toolchain.environment["SELECTED_BY_THE_MACHINE"] == "1"
 
 

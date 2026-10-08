@@ -34,6 +34,7 @@ from finn.builder.kernel_testbench import (
     TESTBENCH_DIR,
     generated_frame,
     partition_frame,
+    run_testbench,
     write_testbench,
 )
 from finn.core.onnx_exec import execute_onnx
@@ -287,9 +288,11 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
     reports (``ooc_synth``), which report/resources.json reads. With STITCHED_IP, the XSim
     testbench is written into ``stitched_ip/testbench`` (finn.builder.kernel_testbench),
     on the partition's inputs from the parent graph executed on the first frame of
-    ``verify_input_npy`` when it exists, a generated frame otherwise; it is run once,
-    through the build's toolchain, so the step fails if the module's outputs differ
-    from the partition's in Python."""
+    ``verify_input_npy`` when it exists, a generated frame otherwise. It is an output,
+    and not run, unless STITCHED_IP_TESTBENCH is among ``verify_steps``: then its run.sh
+    runs once, in the build's toolchain's environment, and the step fails
+    (``SimulationFailed``) if the module's outputs differ from the partition's in
+    Python."""
     stitched = KernelOutputType.STITCHED_IP in cfg.generate_outputs
     ooc = KernelOutputType.OOC_SYNTH in cfg.generate_outputs
     if not (stitched or ooc):
@@ -318,15 +321,12 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
             stimulus = f"the first input of {cfg.verify_input_npy}"
         else:
             frame, stimulus = generated_frame(body), "a generated frame"
-        write_testbench(
-            body,
-            directory / TESTBENCH_DIR,
-            frame,
-            completion=kernel_completion,
-            label=node.name,
-            toolchain=cfg._resolve_toolchain(),
-        )
-        print(f"XSim testbench on {stimulus} in {directory / TESTBENCH_DIR}: PASS")
+        testbench = directory / TESTBENCH_DIR
+        write_testbench(body, testbench, frame, completion=kernel_completion, label=node.name)
+        print(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
+        if KernelVerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
+            run_testbench(testbench, toolchain=cfg._resolve_toolchain())
+            print("Verification for stitched_ip_testbench : SUCCESS")
     return model
 
 

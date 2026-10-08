@@ -268,10 +268,9 @@ def test_narrow_weights_may_be_as_wide_as_the_dsp_a_input():
     assert narrow.inspect(DotpAxiKernel.core_supported).result == Available(True)
 
 
-def test_pumped_compute_needs_the_platforms_doubled_clock():
-    point = kernel(compute_pumping=None, platform=replace(FULL_DSP58, clk2x=False))
-    (item,) = [item for item in inspection.forced(point) if item.key.endswith("compute_pumping")]
-    assert item.value is False and "clk2x-absent" in item.refused["True"]
+def test_pumped_compute_is_offered_on_any_platform():
+    """The doubled clock is the shell's, which its root admits (clock-unavailable): the
+    platform does not narrow pumping, and only SIMD 1 does."""
     assert not any(
         item.key.endswith("compute_pumping")
         for item in inspection.forced(kernel(compute_pumping=None))

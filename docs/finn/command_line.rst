@@ -44,8 +44,8 @@ To use it, first create a folder with the necessary configuration and model file
    Read more about the build configuration options on :py:mod:`finn.builder.build_dataflow_config.DataflowBuildConfig`.
    A key the configuration does not declare (a misspelling, or a field's old name) is refused, named, when the file is read.
    You can find an example .json file under ``src/finn/qnn-data/build_dataflow/dataflow_build_config.json``
-   With Vivado/Vitis 2025.x, name the HLS frontend: ``"toolchain": {"hls_frontend": "vitis-run"}``.
-   The toolchain selection never guesses its frontend, and its default, ``vitis_hls``, is refused on 2025.x.
+   The HLS frontend is the machine file's release's (``vitis-run`` from 2025.1), or the one the configuration
+   states: ``"toolchain": {"hls_frontend": "vitis-run"}``. A stated toolchain is laid over the machine's, each field it states winning.
    A build through the kernel path (KernelOps) states its configuration instead as
    ``dataflow_build_dir/kernel_build_config.json``
    (:py:mod:`finn.builder.kernel_build_config.KernelBuildConfig`); the folder states one of the two,

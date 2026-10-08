@@ -111,7 +111,6 @@ PLATFORM_KEYS: dict[str, Key[Any]] = dict(
     fabric=PLATFORM.key("fabric", Fabric),
     uram=PLATFORM.key("uram", bool),
     uram_init=PLATFORM.key("uram_init", bool),
-    clk2x=PLATFORM.key("clk2x", bool),
     resources=PLATFORM.key(
         "resources",
         JSON,

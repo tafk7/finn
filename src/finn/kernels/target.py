@@ -65,13 +65,15 @@ class Platform:
     - ``uram``: the device has UltraRAM;
     - ``uram_init``: an UltraRAM takes initial contents (UltraScale+ ignores its
       INIT and builds block RAM);
-    - ``clk2x``: the shell supplies an aligned 2x clock (``ap_clk2x``);
     - ``resources``: the part's totals, nothing subtracted: what the platform has,
       not a budget (``None``: not known for this part). No kernel reads it; a
       strategy may.
 
-    What a shell lets a partition present (AXI-Lite buses, memory ports) is not a
-    capability here: it is the shell's budget, which the shell root admits.
+    What a shell gives a partition is not a capability here: its budgets (AXI-Lite
+    buses, memory ports) and its aligned doubled clock (``ap_clk2x``) are the shell
+    row's (``finn.platform.ShellRow``), which the shell root admits what the
+    partition's module presents against. A kernel states that it takes the doubled
+    clock (its module's clocking), and offers its pumped cases on any platform.
     """
 
     period_ns: float
@@ -79,7 +81,6 @@ class Platform:
     fabric: Fabric
     uram: bool
     uram_init: bool
-    clk2x: bool
     resources: Resources | None
 
 

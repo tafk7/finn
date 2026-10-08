@@ -85,7 +85,11 @@ def test_a_configuration_holds_through_json() -> None:
         "pynq_driver",
         "deployment_package",
     ]
-    assert stated["verify_steps"] == ["kernel_partition_python", "kernel_partition_elaboration"]
+    assert stated["verify_steps"] == [
+        "kernel_partition_python",
+        "kernel_partition_elaboration",
+        "stitched_ip_testbench",
+    ]
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
     assert stated["toolchain"]["vivado_jobs"] == 4
     # Debug cores are an option of the pynq shell's build (SZ7).

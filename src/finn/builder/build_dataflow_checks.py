@@ -19,6 +19,7 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.kernel_build_config import (
     OUTPUT_NEEDS,
     SHELL_OUTPUTS,
+    VERIFIED_BY,
     KernelBuildConfig,
     KernelOutputType,
     KernelVerificationStepType,
@@ -129,8 +130,8 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
     impossible: its target resolves (finn.platform.resolve_target); the shell outputs
     it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
     ``ip``), and each output those it is made from (OUTPUT_NEEDS); the shell's build
-    takes its shell_options; the verification input exists, and the step that verifies
-    runs."""
+    takes its shell_options; the verification input exists, the testbench a
+    verification runs is asked for, and the step that runs each verification runs."""
     checks = []
     try:
         target = cfg._resolve_target()
@@ -198,22 +199,37 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
                 "Provide a valid verification input .npy file or disable verification",
             )
         )
-    resolved_names = _resolved_step_names(cfg)
-    verifies = {"phase_kernel_path", "step_verify_kernel_partition"}
-    if cfg.verify_steps and resolved_names is not None and not resolved_names & verifies:
-        asked = ", ".join(vstep.value for vstep in cfg.verify_steps)
+    testbench = KernelVerificationStepType.STITCHED_IP_TESTBENCH
+    if testbench in cfg.verify_steps and KernelOutputType.STITCHED_IP not in asked:
         checks.append(
             _check(
-                "verify_step_prereq",
-                Severity.WARNING,
+                "kernel_testbench_output",
+                Severity.ERROR,
                 False,
-                f"verify_steps includes {asked}, but neither phase_kernel_path nor "
-                "step_verify_kernel_partition is in the resolved build steps "
-                "(steps/start_step/stop_step). That verification would silently never run",
-                "Include phase_kernel_path (or step_verify_kernel_partition) in steps, "
-                "adjust start_step/stop_step so it runs, or remove it from verify_steps",
+                f"verify_steps includes {testbench.value}, which runs the testbench "
+                f"{KernelOutputType.STITCHED_IP.value} writes, and generate_outputs does "
+                "not ask for it",
+                f"Add {KernelOutputType.STITCHED_IP.value} to generate_outputs, or remove "
+                f"{testbench.value} from verify_steps",
             )
         )
+    resolved_names = _resolved_step_names(cfg)
+    for vstep in cfg.verify_steps if resolved_names is not None else ():
+        vstep = KernelVerificationStepType(vstep)
+        steps = VERIFIED_BY[vstep]
+        if not resolved_names & set(steps):
+            checks.append(
+                _check(
+                    "verify_step_prereq",
+                    Severity.WARNING,
+                    False,
+                    f"verify_steps includes {vstep.value}, but neither {' nor '.join(steps)} "
+                    "is in the resolved build steps (steps/start_step/stop_step). That "
+                    "verification would silently never run",
+                    f"Include {steps[0]} (or {steps[1]}) in steps, adjust "
+                    "start_step/stop_step so it runs, or remove it from verify_steps",
+                )
+            )
     return checks
 
 

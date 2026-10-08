@@ -11,23 +11,23 @@ kernel, with no model, has no platform: its caller must state one.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from typing import Any
 
 import pytest
 from kernels.helpers import FULL_DSP58
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import DefinitionError, Rejected, design_space, inspection
+from finn.core.space import DefinitionError, Rejected, design_space
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
 from finn.custom_op.kernels.shell import shell_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Target
+from finn.kernels.target import DspBlock, Platform, Target
 from finn.platform import resolve_target
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import matmul_model, thresholding_model
+from kernel_ops.models import TARGET, matmul_model, thresholding_model
 
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")  # Ultra96 in its shell
 URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")
@@ -59,17 +59,15 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
     assert uram.point().w.source.ram_style == "ultra"
 
 
-def test_a_doubled_clock_is_the_shells_and_forced_off_without_it() -> None:
-    zynq = op(targeted(matmul_model(), ZYNQ))
-    with pytest.raises(KernelOpError, match="pumped_memory.*clk2x-absent"):
-        zynq.save({"w.source.memstream.pumped_memory": True})
-    forced = {item.key: item for item in inspection.forced(zynq.point())}
-    pumped = forced["w.source.memstream.pumped_memory"]
-    assert pumped.value is False and "clk2x-absent" in pumped.refused["True"]
-    # Without a shell (a stitched IP), nothing states the clock away.
-    alone = op(matmul_model())
-    alone.save({"w.source.memstream.pumped_memory": True})
-    assert alone.point().w.source.pumped_memory is True
+def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
+    """The platform carries no doubled clock (the shell row owns it, and the shell root
+    admits it): a KernelOp offers a pumped memory on any target, the Zynq shell's
+    included, whose root then refuses it (``test_shell_admission``)."""
+    assert "clk2x" not in {item.name for item in fields(Platform)}
+    for target in (TARGET, ZYNQ):
+        node = op(targeted(matmul_model(), target))
+        node.save({"w.source.memstream.pumped_memory": True})
+        assert node.point().w.source.pumped_memory is True
 
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:
@@ -84,8 +82,6 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
     stream = root.point.partition.w
     assert stream.platform == ZYNQ.platform
     assert isinstance(stream.source, MemStreamKernel)
-    with pytest.raises(ValueError, match="clk2x-absent"):
-        commit(root.point, {"partition.w.source.memstream.pumped_memory": True})
     # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
     fifo = {"partition.w.transport": "fifo", "partition.w.transport.fifo.buffer.depth": 4096}
     with pytest.raises(ValueError, match="uram-absent"):

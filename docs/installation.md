@@ -431,14 +431,18 @@ first step that runs a tool) and passes it to every HLS synthesis, simulation,
 stitching, FIFO-sizing, shell-build, link and driver step;
 `build_dataflow_directory` prepares its build process's environment from the same
 selection; `ZynqBuild`, `PrepareForLinking` and `InsertAndSetFIFODepths` likewise
-pass theirs to the tool steps they run. A stated selection is used as stated:
-its `command_dir` and `hls_frontend` win over the machine's. Launcher prefixes
+pass theirs to the tool steps they run. A stated selection is laid over the
+machine's (`machine_selection(stated=...)`): each field it states wins, and a field
+it leaves `null` (`command_dir`, `hls_frontend`, `vivado_jobs`) is the machine's, so
+stating one field drops none of the others. How many runs Vivado launches at once is
+the machine setting `FINN_VIVADO_JOBS` (unset: the machine's cores, at most 16), which
+a kernel-path build may state over as `toolchain.vivado_jobs`. Launcher prefixes
 preserve tool names and do not substitute local absolute vendor executables. The
 site owns remote activation, path visibility and remote cancellation.
 
-A build configuration may name its toolchain, the HLS frontend included; a
-stated selection never guesses its frontend, and `vitis_hls`, its default, is
-refused on 2025.x. A kernel-path build has a configuration of its own,
+A build configuration may name its toolchain, the HLS frontend included; the
+frontend is never guessed from the executables found: it is the one stated, or the
+machine file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build has a configuration of its own,
 `finn.builder.kernel_build_config.KernelBuildConfig`, written as
 `kernel_build_config.json` beside `model.onnx` (a build directory states one
 configuration: `dataflow_build_config.json` for the HWCustomOp flow, or this one;
@@ -453,8 +457,7 @@ Zynq shell (the environment as configured, so `settings` stays empty):
     {"strategy": "target_throughput", "fps": 1000000},
     {"strategy": "size_fifos"}
   ],
-  "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
-  "toolchain": {"hls_frontend": "vitis-run"}
+  "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"]
 }
 ```
 

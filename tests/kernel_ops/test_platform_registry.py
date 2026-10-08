@@ -171,8 +171,9 @@ def test_a_part_outside_the_table_has_its_familys_capabilities_and_no_totals() -
 
 def test_the_ip_shell_is_the_default_with_a_doubled_clock_and_no_bound() -> None:
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
-    assert (target.shell, target.board, target.platform.clk2x) == ("ip", None, True)
+    assert (target.shell, target.board) == ("ip", None)
     row = shell_row("ip", None)
+    assert row.clk2x
     assert row == shell_row("ip", "Ultra96") == ROWS["ip", None]
     assert (row.ends, row.control_budget, row.memory_ports) == ((), None, None)
     assert (row.integration, row.host_runtime, row.static_region) == (None, None, None)
@@ -188,7 +189,10 @@ def test_the_pynq_row_states_its_ends_budgets_integration_and_static_region() ->
     limit = re.search(r"if \{\$NUM_AXILITE > (\d+)\}", custom_zynq_shell_template)
     assert limit is not None and int(limit.group(1)) == PYNQ_CONTROL_BUDGET
     target = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
-    assert (target.shell, target.board, target.platform.clk2x) == ("pynq", "Ultra96", False)
+    assert (target.shell, target.board) == ("pynq", "Ultra96")
+    # The row owns the doubled clock; the target's platform is the part's and the
+    # period's alone, the same on either shell.
+    assert target.platform == resolve_target(board="Ultra96", period_ns=5.0).platform
 
 
 def test_the_zynq_static_region_states_its_resources_by_masters_and_slaves() -> None:
@@ -264,7 +268,7 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
         refuse_drift(stated, other, "build")
     message = str(refused.value)
     assert message.startswith("target-drift: the model's target is not the build's: part: ")
-    for name in ("part", "shell", "board", "period_ns", "uram", "clk2x", "resources"):
+    for name in ("part", "shell", "board", "period_ns", "uram", "resources"):
         assert f"{name}: the model states" in message
     assert "dsp:" not in message and "fabric:" not in message
 

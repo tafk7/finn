@@ -43,7 +43,10 @@ from finn.transformation.fpgadataflow import alveo_build, set_fifo_depths
 from finn.transformation.fpgadataflow.alveo_build import PrepareForLinking
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.util import hls
+from finn.builder.kernel_build_config import KernelBuildConfig
+from finn.platform import TargetRequest
 from finn.util.toolchain import Selection, machine_selection
+from finn.util.vivado import vivado_jobs
 
 pytestmark = pytest.mark.util
 
@@ -256,25 +259,56 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
         return prepared[-1][1]
 
     monkeypatch.setattr(Selection, "prepare", prepare)
-    # A stated selection is used as stated: the machine's command directory and
-    # release (whose frontend is Vitis HLS) select nothing.
+    # A stated selection is laid over the machine's: what it states wins (its settings
+    # and frontend), and the machine's command directory and jobs stay.
     monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/site/tools")
     monkeypatch.setenv("FINN_XILINX_VERSION", "2024.2")
+    monkeypatch.setenv("FINN_VIVADO_JOBS", "6")
     selection = Selection(settings=("/opt/xilinx/settings64.sh",), hls_frontend="vitis-run")
     cfg = DataflowBuildConfig(
         output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[], toolchain=selection
     )
     assert prepared == []
     assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0][1]
-    assert [named for named, _ in prepared] == [selection]
+    assert [named for named, _ in prepared] == [
+        Selection(
+            settings=("/opt/xilinx/settings64.sh",),
+            command_dir="/site/tools",
+            hls_frontend="vitis-run",
+            vivado_jobs=6,
+        )
+    ]
     # Unset, it is the machine's: the environment as configured, under the site
     # command directory, with the release's frontend.
     unset = DataflowBuildConfig(output_dir="out", synth_clk_period_ns=5.0, generate_outputs=[])
     assert unset.toolchain is None
     assert unset._resolve_selection() == Selection(
-        command_dir="/site/tools", hls_frontend="vitis_hls"
+        command_dir="/site/tools", hls_frontend="vitis_hls", vivado_jobs=6
     )
     assert unset._resolve_toolchain() is prepared[1][1]
+
+
+def test_a_stated_selection_drops_none_of_the_machines_fields(monkeypatch):
+    """Stating one field of the toolchain changes that field only: the machine's tool
+    route (ON4) and HLS frontend stay, and a field the selection states wins over the
+    machine's, an empty command directory included."""
+    machine = {"FINN_XILINX_ENV": "", "FINN_TOOL_DIR_OVERRIDE": "/site/tools"}
+    machine |= {"FINN_XILINX_VERSION": "2025.2", "FINN_VIVADO_JOBS": "8"}
+    for name, value in machine.items():
+        monkeypatch.setenv(name, value)
+    jobs = KernelBuildConfig(
+        output_dir="out",
+        target=TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e"),
+        toolchain=Selection(vivado_jobs=2),
+    )
+    assert jobs._resolve_selection() == Selection(
+        command_dir="/site/tools", hls_frontend="vitis-run", vivado_jobs=2
+    )
+    local = Selection(command_dir="", hls_frontend="vitis_hls")
+    assert machine_selection(stated=local) == Selection(
+        command_dir="", hls_frontend="vitis_hls", vivado_jobs=8
+    )
+    assert machine_selection(stated=Selection()) == machine_selection()
 
 
 def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch):
@@ -287,7 +321,7 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
         "settings": [],
         "command_dir": "/site/bin",
         "launcher": ["ssh", "build"],
-        "hls_frontend": "vitis_hls",
+        "hls_frontend": None,
         "vivado_jobs": None,
     }
     restored = DataflowBuildConfig.from_json(cfg.to_json())
@@ -383,7 +417,9 @@ def test_the_builder_runs_hls_synthesis_in_its_prepared_toolchain(monkeypatch, t
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     monkeypatch.setattr(hls, "machine_toolchain", machine_refused)
     cfg = builder_config(
-        tmp_path, fpga_part=ALVEO_PART, toolchain=Selection(command_dir=str(tools))
+        tmp_path,
+        fpga_part=ALVEO_PART,
+        toolchain=Selection(command_dir=str(tools), hls_frontend="vitis_hls"),
     )
     model = mvau_model().transform(SpecializeLayers(ALVEO_PART))
     model = build_dataflow_steps.step_hw_codegen(model, cfg)
@@ -498,7 +534,7 @@ def simulation_config(tmp_path, configured, *verification, **settings):
     return builder_config(
         tmp_path,
         fpga_part=ALVEO_PART,
-        toolchain=Selection(command_dir=str(configured.directory)),
+        toolchain=Selection(command_dir=str(configured.directory), hls_frontend="vitis_hls"),
         verify_steps=list(verification),
         verify_input_npy="unused.npy",
         verify_expected_output_npy="unused.npy",
@@ -587,14 +623,24 @@ def test_a_build_with_no_toolchain_stated_runs_under_the_site_directory(
     assert site.calls == ["g++"]
 
 
-def test_vivados_jobs_are_the_selections_and_the_kernel_paths_only():
-    """SZ7: how many runs Vivado launches at once is a machine setting of the toolchain's
-    selection, a positive number or None (the machine's cores); the HWCustomOp flow keeps
-    its own field, and refuses the selection's rather than ignore it."""
+def test_vivados_jobs_are_a_machine_setting_of_the_selection(monkeypatch):
+    """SZ7, SZ11 (b): how many runs Vivado launches at once is a machine setting
+    (FINN_VIVADO_JOBS), read into the machine's selection, a positive number or None (the
+    machine's cores); one check refuses anything else, stated or set. The HWCustomOp
+    flow keeps its own field, and refuses the selection's rather than ignore it."""
     assert Selection(vivado_jobs=3).vivado_jobs == 3 and Selection().vivado_jobs is None
     for refused in (0, -1, 2.0, True):
         with pytest.raises(ValueError, match="positive number"):
             Selection(vivado_jobs=refused)
+        with pytest.raises(ValueError, match="positive number"):
+            vivado_jobs(refused)
+    no_file = {"FINN_XILINX_ENV": ""}
+    assert machine_selection(no_file).vivado_jobs is None
+    assert machine_selection({**no_file, "FINN_VIVADO_JOBS": "12"}).vivado_jobs == 12
+    with pytest.raises(ValueError, match="FINN_VIVADO_JOBS: Vivado's jobs must be a positive"):
+        machine_selection({**no_file, "FINN_VIVADO_JOBS": "0"})
+    with pytest.raises(ValueError, match="FINN_VIVADO_JOBS=four is not a number of runs"):
+        machine_selection({**no_file, "FINN_VIVADO_JOBS": "four"})
     cfg = DataflowBuildConfig(
         output_dir="out",
         synth_clk_period_ns=5.0,
