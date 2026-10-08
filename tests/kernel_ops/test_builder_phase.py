@@ -82,7 +82,7 @@ from finn.transformation.kernels.package import configured_root
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import chain_source, configure_partition, kernel_model, matmul_model
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
-from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
+from kernel_ops.tfc import SHAPE, ULTRA96, built, partition
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phase's steps on it takes about ten seconds more.
@@ -98,9 +98,9 @@ STEPS = (
 
 
 @pytest.fixture(scope="module")
-def source(tmp_path_factory: pytest.TempPathFactory) -> ModelWrapper:
-    """TFC_W2A2, streamlined (half a minute)."""
-    return streamlined(tmp_path_factory.mktemp("tfc"))
+def source(tfc_streamlined: Path) -> ModelWrapper:
+    """TFC_W2A2, streamlined."""
+    return ModelWrapper(str(tfc_streamlined))
 
 
 #: TFC's target in the builder: Ultra96 in the Zynq shell at 5 ns (``ULTRA96``).
@@ -627,16 +627,33 @@ def cut_tfc(source: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     return parent
 
 
+@pytest.fixture(scope="session")
+def z0_cut(tfc_cache: Path, tfc_streamlined: Path) -> Path:
+    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq, cut once a run: the parent graph's
+    file, its build's output directory beside it (``output``)."""
+
+    def cut(directory: Path) -> ModelWrapper:
+        source = ModelWrapper(str(tfc_streamlined))
+        return cut_tfc(source, config(directory, kernel_exploration=Z0_CHAIN))
+
+    return built(tfc_cache / "z0" / "parent.onnx", cut)
+
+
+@pytest.fixture(scope="module")
+def z0_tfc(z0_cut: Path) -> ModelWrapper:
+    """Z0's TFC cut: the parent graph."""
+    return ModelWrapper(str(z0_cut))
+
+
 @pytest.mark.slow
 def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
-    source: ModelWrapper, tmp_path: Path
+    z0_tfc: ModelWrapper, z0_cut: Path
 ) -> None:
     """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: the export configures each end's
     IODMA_hls as ZynqBuild inserted it, names the block design's connections as Z0's
     ip_config.tcl makes them (its partition then named StreamingDataflowPartition_1),
     and the partition is Z0's module, with Z0's choices."""
-    cfg = config(tmp_path, kernel_exploration=Z0_CHAIN)
-    parent = cut_tfc(source, cfg)
+    parent, output = z0_tfc, z0_cut.parent / "output"
     export = integration(parent, completion("baseline"))
     assert [(end.instance, end.tensor, end.port) for end in export.ends] == [
         ("idma0", "Reshape_0_out0", "s_axis_0"),
@@ -668,9 +685,9 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     node, body, _ = partition_body(parent)
     point, _ = configured_root(body, node.name, completion("baseline"))
     assert module_name(point.module) == "finn_partition__481b9e45abc00364"
-    persisted = json.loads((Path(cfg.output_dir) / "kernel_choices.json").read_text())
+    persisted = json.loads((output / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
-    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
+    report = json.loads((output / "report" / "kernel_exploration.json").read_text())
     for name, held in report["completed"].items():
         for attribute, entry in held.items():
             persisted.setdefault(name, {})[attribute] = entry["value"]
@@ -760,12 +777,6 @@ Stream2Mem_Batch<DataWidth1, NumBytes1>(dwc2dma, out0_V, numReps);
 }
 """,
 }
-
-
-@pytest.fixture(scope="module")
-def z0_tfc(source: ModelWrapper, tmp_path_factory: pytest.TempPathFactory) -> ModelWrapper:
-    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq, cut once: the parent graph."""
-    return cut_tfc(source, config(tmp_path_factory.mktemp("z0"), kernel_exploration=Z0_CHAIN))
 
 
 @pytest.mark.slow

@@ -14,10 +14,16 @@ Every open kernel choice (folding, memories, transports) is committed before
 partitioning, ranked by hand (``ExploreKernelChoices([Ranked(Lanes(16))])``,
 ``kernels.helpers.Lanes``): 16 lanes where they divide, the whole extent otherwise,
 every other choice its kernel's baseline.
+
+Building TFC takes about 17 s (torch, the export, streamlining). A test that only
+reads it loads ``conftest.py``'s files (``built``), built once a run, across the
+pytest-xdist workers too.
 """
 
 from __future__ import annotations
 
+import fcntl
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -136,3 +142,21 @@ def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapp
     partition's body, every choice committed at 16 lanes (``LANES``)."""
     source = streamlined(directory)
     return (source, *partition(source, directory))
+
+
+def kernel_ops(source: ModelWrapper) -> ModelWrapper:
+    """The streamlined ``source`` as KernelOps for Ultra96 at 5 ns in the Zynq shell
+    (``ULTRA96``), every choice open."""
+    return source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
+
+
+def built(path: Path, build: Callable[[Path], ModelWrapper]) -> Path:
+    """``path``, the model ``build`` makes (given ``path``'s directory), saved there by the
+    first process to ask for it: every process that names the same path waits on one
+    lock and reads the one build."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not path.is_file():
+            build(path.parent).save(str(path))
+    return path

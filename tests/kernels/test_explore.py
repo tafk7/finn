@@ -284,6 +284,26 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
     assert report["fastest"] == 6 and report["monotone"] and report["departures"] == []
 
 
+def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_point_once() -> None:
+    """The search's folds share what they ask of the seam: each budget tried folds to the
+    point ``TargetCycles`` alone folds it to, and its bottleneck and resources are those
+    of that point completed, in fewer attempts than folding and completing each alone."""
+    explorer, point = within_part()
+    strategy = MaxThroughput({"dsp": 0.5})
+    strategy.explore(explorer, point)
+    alone = Seam(MEMBERS, platform=PART)
+    for tried in strategy.tried:
+        budget = explore_module._UNBOUNDED if tried.cycles is None else tried.cycles
+        folder = TargetCycles(budget)
+        folded = folder.explore(alone, point)
+        assert explorer.chosen(tried.folded) == alone.chosen(folded)
+        assert tried.relaxed_to == folder.relaxed_to
+        completed = alone.complete(folded).point
+        assert tried.reached == alone.cost(completed).bottleneck
+        assert tried.used == alone.resources(completed)
+    assert explorer.attempts < alone.attempts
+
+
 def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> None:
     explorer, point = within_part()
     # The fastest point fits both budgets: one fold, LUT the nearer its budget.
