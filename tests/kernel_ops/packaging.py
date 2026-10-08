@@ -228,8 +228,9 @@ def bitfile_default(script: Path, cwd: Path) -> str:
         text=True,
         check=True,
     ).stdout
-    (default,) = re.findall(r"--bitfile BITFILE\s+the bitfile to run \(default: (\S+)\)", shown)
-    return default
+    found = re.search(r"--bitfile BITFILE\s+the bitfile to run \(default: (\S+)\)", shown)
+    assert found is not None, shown
+    return found.group(1)
 
 
 class PackagedByStub:
