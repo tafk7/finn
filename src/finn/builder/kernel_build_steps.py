@@ -29,6 +29,7 @@ from finn.builder.kernel_build_config import (
     KernelOutputType,
     KernelVerificationStepType,
 )
+from finn.builder.kernel_resources import RESOURCES_FILE, shell_resources_report
 from finn.builder.kernel_testbench import (
     TESTBENCH_DIR,
     generated_frame,
@@ -67,7 +68,6 @@ from finn.transformation.kernels.package import (
     ElaboratePartition,
     PackagePartition,
     configured_root,
-    ooc_member_resources,
 )
 
 
@@ -283,8 +283,8 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
     (``interface.json``). The body, saved, states its IP (finn.outputs), and a shell's
     integration later in the build takes that IP rather than package it again. With
     OOC_SYNTH the module is synthesized out of context and the IP packages the
-    checkpoint; its resources per member of the shell root are written to
-    report/ooc_resources.json (ooc_member_resources). With STITCHED_IP, the XSim
+    checkpoint; the parent graph states its hierarchical utilization report among its
+    reports (``ooc_synth``), which report/resources.json reads. With STITCHED_IP, the XSim
     testbench is written into ``stitched_ip/testbench`` (finn.builder.kernel_testbench),
     on the partition's inputs from the parent graph executed on the first frame of
     ``verify_input_npy`` when it exists, a generated frame otherwise; it is run once,
@@ -310,9 +310,8 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
     body.save(body_file)
     print(f"Packaged IP {node.name} and its interface description in {directory}")
     if ooc:
-        os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-        with open(cfg.output_dir + "/report/ooc_resources.json", "w") as f:
-            json.dump(ooc_member_resources(body, directory, kernel_completion), f, indent=2)
+        (report,) = directory.glob("*_partition_util.rpt")
+        model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "ooc_synth": str(report)})
     if stitched:
         if os.path.isfile(cfg.verify_input_npy):
             frame = partition_frame(model, np.load(cfg.verify_input_npy)[0])
@@ -385,7 +384,8 @@ def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     model.set(OUTPUT_PROJECT, built.project)
     model.set(OUTPUT_BITFILE, str(bitfile_dir / "finn-accel.bit"))
     model.set(OUTPUT_HWH, str(bitfile_dir / "finn-accel.hwh"))
-    model.set(OUTPUT_REPORTS, {name: str(path) for name, path in reports.items()})
+    stated = {name: str(path) for name, path in reports.items()}
+    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), **stated})
     if export.host_runtime is not None:
         model.set(OUTPUT_HOST_RUNTIME, export.host_runtime)
     return model
@@ -497,6 +497,23 @@ def step_kernel_deployment_package(model: ModelWrapper, cfg: KernelBuildConfig):
     return model
 
 
+def step_kernel_resources(model: ModelWrapper, cfg: KernelBuildConfig):
+    """Write report/resources.json: the resources of each member of the partition's
+    shell (the partition, each end, each IP of the static region) and their total, as
+    the shell root states them (the model), as Vivado synthesized each IP out of
+    context, and as placed, from the reports the parent graph states
+    (finn.builder.kernel_resources); a column the build did not make is stated absent.
+    The parent graph states it among its reports (``resources``)."""
+    report = Path(cfg.output_dir) / RESOURCES_FILE
+    report.parent.mkdir(parents=True, exist_ok=True)
+    stated = shell_resources_report(model, completion(cfg.kernel_completion))
+    report.write_text(json.dumps(stated, indent=2))
+    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "resources": str(report)})
+    absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())
+    print(f"Resources per member written to {report}" + (f"; absent: {absent}" if absent else ""))
+    return model
+
+
 def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
     """Phase: the kernel path, from a streamlined model to a partition of KernelOps.
 
@@ -520,14 +537,16 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
 def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig):
     """Phase: the outputs the configuration asks (generate_outputs).
 
-    Internal steps (each checks generate_outputs):
+    Internal steps (each but step_kernel_resources checks generate_outputs):
     - step_kernel_stitched_ip: The partition's IP, its description, resources, testbench
     - step_kernel_bitfile: The shell built around the partition, to a bitfile
     - step_kernel_driver: The driver of the shell's host runtime
+    - step_kernel_resources: The resources per member of the shell
     - step_kernel_deployment_package: The bitfile and driver, packaged"""
     model = _execute_step(step_kernel_stitched_ip, model, cfg)
     model = _execute_step(step_kernel_bitfile, model, cfg)
     model = _execute_step(step_kernel_driver, model, cfg)
+    model = _execute_step(step_kernel_resources, model, cfg)
     model = _execute_step(step_kernel_deployment_package, model, cfg)
     return model
 
@@ -544,6 +563,7 @@ kernel_build_step_lookup = {
         step_kernel_stitched_ip,
         step_kernel_bitfile,
         step_kernel_driver,
+        step_kernel_resources,
         step_kernel_deployment_package,
         phase_kernel_path,
         phase_kernel_outputs,

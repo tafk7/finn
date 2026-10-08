@@ -76,6 +76,16 @@ IODMA_DOMAIN = "finn.custom_op.fpgadataflow.hls"
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
 
+#: The template's instance of each part of the static region (``StaticRegion``'s
+#: fields); the reset's is a prefix, as Vivado's clock automation names it after the
+#: processor's clock (``rst_zynq_ps_187M``).
+STATIC_INSTANCES = {
+    "processor": "zynq_ps",
+    "reset": "rst_zynq_ps_",
+    "memory_interconnect": "smartconnect_0",
+    "control_interconnect": "axi_interconnect_0",
+}
+
 
 @dataclass(frozen=True)
 class PynqOptions:

@@ -467,10 +467,14 @@ description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
 AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
 bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
 of `verify_input_npy` or a generated one, checked against the partition in
-Python); `ooc_synth` synthesizes the IP out of context and writes its resources per
-member to `report/ooc_resources.json`. The shell outputs (`bitfile`, `pynq_driver`,
-`deployment_package`) need a shell that integrates the partition, so they are
-refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
+Python); `ooc_synth` synthesizes the IP out of context. Every kernel-path build
+writes `report/resources.json`: each member of the shell (the partition, each end,
+each IP of the static region) and their total, as the model states them, as Vivado
+synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
+packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); with
+`ooc_synth`, also the partition per member, what synthesis flattened
+`unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
+need a shell that integrates the partition, so they are refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
 choices, the partition and its verification) and `phase_kernel_outputs` (what the
 shell makes). None of the HWCustomOp flow's fields (`synth_clk_period_ns`,
 `board`, `shell_flow_type`, `target_fps`, `folding_config_file`, ...) is read:

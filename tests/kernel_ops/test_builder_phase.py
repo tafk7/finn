@@ -45,6 +45,7 @@ from finn.builder.kernel_build_steps import (
     step_kernel_driver,
     step_kernel_ops,
     step_kernel_partition,
+    step_kernel_resources,
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import read_target, write_target
@@ -80,7 +81,7 @@ from finn.transformation.kernels.integration import Address, Connection, integra
 from finn.transformation.kernels.package import configured_root
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import chain_source, configure_partition, kernel_model, matmul_model
-from kernel_ops.packaging import FakeVivado, io_shape_dict
+from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, io_shape_dict
 from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -885,6 +886,9 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     - The driver's io_shape_dict is the kernel path's before the runner, the logits
       INT8, and it sets PL0 to the delivered clock; report/driver.json states what it
       takes and returns.
+    - report/resources.json states each member of the shell by the model, out of
+      context (the fake per-IP runs) and placed (the fake hierarchy), by its instance;
+      what no member's row holds is unattributed.
     - The deployment ships the bitfile, the driver, its description and the host's
       part of the parent graph, whose partition node reads its body by a relative path:
       executed from there, it gives the build's labels."""
@@ -903,7 +907,12 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     vivado = FakeVivado(timing=TIMING_REPORT)
     cfg._toolchain = cast(Toolchain, vivado)
     parent = cut_tfc(source, cfg)
-    for step in (step_kernel_bitfile, step_kernel_driver, step_kernel_deployment_package):
+    for step in (
+        step_kernel_bitfile,
+        step_kernel_driver,
+        step_kernel_resources,
+        step_kernel_deployment_package,
+    ):
         parent = step(parent, cfg)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
     ((_, _, script),) = vivado.runs
@@ -925,13 +934,14 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
             "out_of_context": str(report / "out_of_context"),
             "delivered_clock": str(report / "delivered_clock.json"),
             "driver": str(report / "driver.json"),
+            "resources": str(report / "resources.json"),
         },
         "host_runtime": "zynq-iodma",
     }
     assert (output / "bitfile" / "finn-accel.hwh").read_text() == "top.hwh"
-    assert (report / "placed_utilization.xml").read_text() == "synth_report.xml"
+    assert (report / "placed_utilization.xml").read_text() == PLACED_HIERARCHY
     assert sorted(path.name for path in (report / "out_of_context").iterdir()) == [
-        f"top_{name}_0_utilization_synth.rpt" for name in ("idma0", "partition", "smartconnect")
+        f"top_{name}_0_utilization_synth.rpt" for name in ("idma0", "partition", "smartconnect_0")
     ]
     _, body, _ = partition_body(reread)
     assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
@@ -947,6 +957,63 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
     assert clock["objective_fps"] == 1_000_000
+    # The resources per member: Z7's model of TFC; the fake reports' counts.
+    stated = json.loads((report / "resources.json").read_text())
+    assert (stated["shell"], stated["absent"]) == ("pynq", {})
+    assert "partition_members" not in stated
+    members = stated["members"]
+    rows = {
+        "partition": members["partition"],
+        **{f"ends.{key}": row for key, row in members["ends"].items()},
+        **{f"static_region.{key}": row for key, row in members["static_region"].items()},
+    }
+    assert {key: row["instance"] for key, row in rows.items()} == {
+        "partition": "partition",
+        "ends.Reshape_0_out0": "idma0",
+        "ends.MatMul_3_out0": "odma0",
+        "static_region.zynq_ultra_ps_e": "zynq_ps",
+        "static_region.proc_sys_reset": "rst_zynq_ps_",
+        "static_region.smartconnect": "smartconnect_0",
+        "static_region.axi_interconnect": "axi_interconnect_0",
+    }
+
+    def counts(lut: int, ff: int, bram18: int = 0, dsp: int = 0) -> dict[str, int]:
+        return {"lut": lut, "ff": ff, "bram18": bram18, "uram": 0, "dsp": dsp}
+
+    assert {key: row["model"] for key, row in rows.items()} == {
+        "partition": counts(5202, 7081, 22, 100),
+        "ends.Reshape_0_out0": counts(1305, 2279, 4),
+        "ends.MatMul_3_out0": counts(1390, 2069),
+        "static_region.zynq_ultra_ps_e": counts(264, 0),
+        "static_region.proc_sys_reset": counts(19, 40),
+        "static_region.smartconnect": counts(5364, 8530),
+        "static_region.axi_interconnect": counts(1402, 1535),
+    }
+    # FakeVivado's runs: idma0, the partition and the SmartConnect, each its own LUTs.
+    synthesized = {"partition": 200, "ends.Reshape_0_out0": 100, "static_region.smartconnect": 300}
+    assert {key: row["out_of_context"] for key, row in rows.items()} == {
+        key: counts(synthesized[key], 10, 5, 3) if key in synthesized else None for key in rows
+    }
+    # The placed hierarchy lists neither the processor nor its reset.
+    assert {key: row["placed"] for key, row in rows.items()} == {
+        "partition": counts(400, 800, 3, 4),
+        "ends.Reshape_0_out0": counts(100, 250, 2),
+        "ends.MatMul_3_out0": counts(90, 240),
+        "static_region.zynq_ultra_ps_e": None,
+        "static_region.proc_sys_reset": None,
+        "static_region.smartconnect": counts(300, 500),
+        "static_region.axi_interconnect": counts(100, 200),
+    }
+    assert stated["total"] == {
+        "model": counts(14946, 21534, 26, 100),
+        "out_of_context": counts(600, 30, 15, 9),
+        "placed": counts(1000, 2000, 5, 4),
+    }
+    assert stated["unattributed"] == {
+        "model": counts(0, 0),
+        "out_of_context": counts(0, 0),
+        "placed": counts(10, 10),
+    }
     # The driver: today's I/O, the delivered clock.
     driver = (output / "driver" / "driver.py").read_text()
     assert io_shape_dict(driver) == TFC_IO_SHAPES

@@ -60,6 +60,87 @@ def reaches_vivado(model: ModelWrapper, name: str, project: Path) -> None:
     assert toolchain.ran == ["vivado"]
 
 
+#: A synthesized IP's flat utilization report (``<run>_utilization_synth.rpt``), Vivado's
+#: format with invented counts; ``lut`` and ``ff`` to fill.
+UTILIZATION_SYNTH = """\
+1. CLB Logic
+------------
+
++----------------------------+-------+-------+------------+-----------+-------+
+|          Site Type         |  Used | Fixed | Prohibited | Available | Util% |
++----------------------------+-------+-------+------------+-----------+-------+
+| CLB LUTs*                  | {lut} |     0 |          0 |     70560 |  1.80 |
+|   LUT as Logic             | {lut} |     0 |          0 |     70560 |  1.71 |
+| CLB Registers              | {ff}  |     0 |          0 |    141120 |  1.57 |
++----------------------------+-------+-------+------------+-----------+-------+
+
+2. BLOCKRAM
+-----------
+
++-------------------+------+-------+------------+-----------+-------+
+|     Site Type     | Used | Fixed | Prohibited | Available | Util% |
++-------------------+------+-------+------------+-----------+-------+
+| Block RAM Tile    |  2.5 |     0 |          0 |       216 |  1.16 |
+|   RAMB36/FIFO*    |    2 |     0 |          0 |       216 |  0.93 |
+|   RAMB18          |    1 |     0 |          0 |       432 |  0.23 |
++-------------------+------+-------+------------+-----------+-------+
+
+3. ARITHMETIC
+-------------
+
++-----------+------+-------+------------+-----------+-------+
+| Site Type | Used | Fixed | Prohibited | Available | Util% |
++-----------+------+-------+------------+-----------+-------+
+| DSPs      |    3 |     0 |          0 |       360 |  0.83 |
++-----------+------+-------+------------+-----------+-------+
+
+8. Primitives
+-------------
+
++----------+------+---------------------+
+| Ref Name | Used | Functional Category |
++----------+------+---------------------+
+| RAMB18E2 |    1 |            BLOCKRAM |
++----------+------+---------------------+
+"""
+
+
+def _placed_row(name: str, *counts: int) -> str:
+    cells = [name, "m", *(str(count) for count in counts)]
+    return (
+        "<tablerow>" + "".join(f'<tablecell contents="{cell}"/>' for cell in cells) + "</tablerow>"
+    )
+
+
+_PLACED_COLUMNS = (
+    "Instance",
+    "Module",
+    "Total LUTs",
+    "FFs",
+    "RAMB36",
+    "RAMB18",
+    "URAM",
+    "DSP Blocks",
+)
+
+#: The routed design's hierarchical utilization (``synth_report.xml``), Vivado's XML
+#: format with invented counts: the processor and its reset are not listed.
+PLACED_HIERARCHY = (
+    '<RptDoc><section title="Utilization by Hierarchy"><table><tablerow>'
+    + "".join(f'<tableheader contents="{name}"/>' for name in _PLACED_COLUMNS)
+    + "</tablerow>"
+    + _placed_row("top_wrapper", 1000, 2000, 2, 1, 0, 4)
+    + _placed_row("  top_i", 1000, 2000, 2, 1, 0, 4)
+    + _placed_row("    smartconnect_0", 300, 500, 0, 0, 0, 0)
+    + _placed_row("      inst", 300, 500, 0, 0, 0, 0)
+    + _placed_row("    partition", 400, 800, 1, 1, 0, 4)
+    + _placed_row("    axi_interconnect_0", 100, 200, 0, 0, 0, 0)
+    + _placed_row("    idma0", 100, 250, 1, 0, 0, 0)
+    + _placed_row("    odma0", 90, 240, 0, 0, 0, 0)
+    + "</table></section></RptDoc>"
+)
+
+
 class FakeVivado:
     """A toolchain double for the pynq shell's runner (``pynq_runner.build_pynq``): its
     Vivado run keeps the project's Tcl and makes what the template's project makes
@@ -84,13 +165,16 @@ class FakeVivado:
             root / "finn_zynq_link.gen" / "sources_1" / "bd" / "top" / "hw_handoff" / "top.hwh",
             root / "synth_report.xml",
         ]
-        made += [
+        synthesized = [
             runs / f"top_{name}_0_synth_1" / f"top_{name}_0_utilization_synth.rpt"
-            for name in ("idma0", "partition", "smartconnect")
+            for name in ("idma0", "partition", "smartconnect_0")
         ]
-        for path in made:
+        for path in made + synthesized:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(path.name)
+        for index, path in enumerate(synthesized):
+            path.write_text(UTILIZATION_SYNTH.format(lut=100 * (index + 1), ff=10))
+        made[3].write_text(PLACED_HIERARCHY)
         if self.timing is not None:
             made[1].write_text(self.timing)
 
@@ -157,8 +241,10 @@ def read_back(described: dict[str, Any], pins: Sequence[Pin], period_ns: float) 
 __all__ = [
     "FakeVivado",
     "NoVivado",
+    "PLACED_HIERARCHY",
     "PackagedByStub",
     "ReachedVivado",
+    "UTILIZATION_SYNTH",
     "io_shape_dict",
     "reaches_vivado",
     "read_back",

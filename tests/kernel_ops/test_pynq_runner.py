@@ -318,7 +318,11 @@ def test_a_build_generates_each_ends_ip_packages_the_partition_and_runs_vivado(
     assert Path(built.hwh).read_text() == "top.hwh"
     assert Path(built.timing).name == "top_wrapper_timing_summary_routed.rpt"
     assert Path(built.placed) == project / "synth_report.xml"
-    assert sorted(built.out_of_context) == ["top_idma0_0", "top_partition_0", "top_smartconnect_0"]
+    assert sorted(built.out_of_context) == [
+        "top_idma0_0",
+        "top_partition_0",
+        "top_smartconnect_0_0",
+    ]
 
 
 def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
