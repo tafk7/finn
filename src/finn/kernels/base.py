@@ -47,7 +47,11 @@ with a schedule overrides ``frame_cycles`` with the schedule's beat count (one
 beat a cycle at best); a kernel with children takes its slowest member's, kernels
 and channels alike, so a root's cycles are its bottleneck. ``buffering``
 (``BUFFERING``) is the bits its channels' stages hold, summed over its members (a
-leaf holds none).
+leaf holds none). ``resources`` (``RESOURCES``) is what it uses of the device: a leaf
+states its own by overriding ``resource_use``, from its RTL's parameters and its
+memory styles (``finn.kernels.utilization``), and a leaf that states none is refused
+by name (``kernel-resources``), never counted as nothing; a kernel with children's is
+the sum over its members, kernels and channels alike.
 """
 
 from __future__ import annotations
@@ -103,6 +107,7 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.control import EXPORTED, top_bus
 from finn.kernels.transport import STREAM_CONTRACT
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
 
 
 def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
@@ -153,6 +158,11 @@ a kernel with children's is its slowest member's."""
 BUFFERING = ViewKey("buffering", default_semantics(int))
 """The bits a channel's stages hold between its ends (an adapter's frame, a FIFO's depth);
 a kernel with children's is the sum over its members."""
+
+RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
+"""What a kernel or a channel uses of the device (``finn.kernels.utilization.Resources``):
+a leaf's own statement; a kernel with children's and a channel's the sum over its
+members and stages."""
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
@@ -466,6 +476,7 @@ class Kernel(Space):
 
     member_cycles = Members(CYCLES)
     member_buffering = Members(BUFFERING)
+    member_resources = Members(RESOURCES)
 
     @derived
     def frame_cycles(self) -> int | Rejected:
@@ -484,12 +495,28 @@ class Kernel(Space):
         """The bits its channels' stages hold; a leaf holds none of them."""
         return sum(item.value for item in self.member_buffering)
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        """What it uses of the device: a leaf overrides it with its own statement; a
+        kernel with children's is the sum over its members."""
+        space_type = type(self)
+        if space_type.rtl_module:
+            return reject("kernel-resources", f"{space_type.__qualname__} states no resources")
+        return total(item.value for item in self.member_resources)
+
     # Cost, not validity: a configuration's admission is the engine's, read apart.
     cycles = View(frame_cycles)
     buffering = View(held_bits)
+    resources = View(resource_use)
 
     # A kernel adding exports of its own extends these: ``{**Kernel.exports, KEY: ...}``.
-    exports = {NETLIST: netlist, MODULE: module, CYCLES: cycles, BUFFERING: buffering}
+    exports = {
+        NETLIST: netlist,
+        MODULE: module,
+        CYCLES: cycles,
+        BUFFERING: buffering,
+        RESOURCES: resources,
+    }
 
 
 def extent_of(index: Index) -> int:
@@ -558,6 +585,7 @@ __all__ = [
     "PINS",
     "PORT",
     "RESET",
+    "RESOURCES",
     "extent_of",
     "factor_domain",
 ]

@@ -12,6 +12,7 @@ retargeted from Ultra96 to a VCK190.
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,7 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
+from finn.kernels.utilization import Resources
 from finn.platform import resolve_target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
@@ -120,7 +122,23 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     }
     # levels: the replay of a frame of two beats of two 2-bit levels, in input_gen's
     # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
-    assert report["members"]["partition.levels"] == {"cycles": 12, "buffering": 8 * 2 * 2}
+    levels = report["members"]["partition.levels"]
+    assert (levels["cycles"], levels["buffering"]) == (12, 8 * 2 * 2)
+    # Every member states its resources; the total is their sum, against the part's
+    # totals, and says that the shell is not counted.
+    resources = report["resources"]
+    assert resources["unstated"] == {}
+    assert resources["used"] == {
+        key: sum(member["resources"][key] for member in report["members"].values())
+        for key in ("lut", "ff", "bram18", "uram", "dsp")
+    }
+    # Two packed dot products at PE 2, SIMD 2, both PE lanes packed in one pipe: a
+    # slice a SIMD element each.
+    assert resources["used"]["dsp"] == 4
+    platform = read_target(model).platform.resources
+    assert platform is not None and resources["platform"] == asdict(platform)
+    assert resources["share"]["dsp"] == round(4 / platform.dsp, 4)
+    assert "not the shell" in resources["counted"]
     (ranked,) = report["strategies"]
     assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0
     # Nothing was left to complete.
@@ -129,6 +147,20 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     # The model replays to the explored point: nothing open, nothing stale.
     root = shell_root(model, model.graph.node)
     assert inspection.viable(root.point) == () and not root.dropped
+
+
+def test_resources_are_a_total_only_once_every_member_states_them() -> None:
+    """A member whose resources wait on an open choice (a transport, a memory style, a
+    folding) says so, and the seam states no total from the others: a partial sum is
+    never a total. Completed, every member states its own."""
+    seam, point = seam_of(kernel_model())
+    cost = seam.cost(point)
+    assert cost.used is None and cost.resources == {}
+    assert cost.unstated["x"] == "waits on x.transport"
+    assert cost.unstated["partition.activate"] == "waits on partition.activate.ram_style"
+    completed = seam.cost(seam.complete(point).point)
+    assert completed.unstated == {}
+    assert completed.used == sum(completed.resources.values(), Resources())
 
 
 def test_what_no_strategy_chose_is_completed_on_a_copy_and_never_saved() -> None:

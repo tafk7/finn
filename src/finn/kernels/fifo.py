@@ -34,6 +34,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, lutram, memory
 
 
 @dataclass(frozen=True)
@@ -68,19 +69,56 @@ def fifo_storage(depth: int, bits: int, style: str) -> FifoStorage | None:
         # DEPTH - 1 LUTRAM entries behind one output register.
         capacity = depth
     else:
-        # Native memory decomposition; include the BRAM read pipeline or
-        # the URAM credit-limited output queue in accepted-word capacity.
+        # Include the BRAM read pipeline or the URAM credit-limited output queue in
+        # accepted-word capacity.
         ultra = effective == "ultra"
-        required = depth - (17 if ultra else 1)
-        lo, hi = (required - 1).bit_length(), 0
-        if lo > (12 if ultra else 9):
-            remainder_bits = (required - (1 << (lo - 1)) - 1).bit_length()
-            if remainder_bits < lo - 1:
-                lo, hi = lo - 1, max(1, remainder_bits)
+        lo, hi = _decomposition(depth, ultra)
         if lo >= 32:
             return None
         capacity = (1 << lo) + ((1 << hi) if hi else 0) + (17 if ultra else 2)
     return FifoStorage(effective, capacity)
+
+
+def _decomposition(depth: int, ultra: bool) -> tuple[int, int]:
+    """The address bits of the native memory's ``lo`` and ``hi`` spaces (``hi`` 0: none):
+    the words beyond the output register or queue, in a power of two or two."""
+    required = depth - (17 if ultra else 1)
+    lo, hi = (required - 1).bit_length(), 0
+    if lo > (12 if ultra else 9):
+        remainder_bits = (required - (1 << (lo - 1)) - 1).bit_length()
+        if remainder_bits < lo - 1:
+            lo, hi = lo - 1, max(1, remainder_bits)
+    return lo, hi
+
+
+def fifo_resources(depth: int, data_width: int, ram_style: str) -> Resources:
+    """FinnLib ``fifo`` for DEPTH, DATA_WIDTH and the RAM_STYLE it is given, in the
+    storage it selects (``_selected``). The storage is the RTL's: a shift register of
+    ``DEPTH - 1`` words (four at least), a LUT a bit for 32 of them; a LUTRAM of
+    ``DEPTH - 1`` words rounded up to a power of two; or block RAM or UltraRAM, its
+    ``lo`` space and its ``hi`` one (``_decomposition``), a ``hi`` space shallower than
+    the primitive left ``auto``. The control (pointers, the output register, the
+    UltraRAM output queue) is FINN's FIFO model (``finn.util.resource_models``, fitted
+    against finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor)."""
+    bits, effective = data_width, _selected(depth, data_width, ram_style)
+    counter = depth.bit_length() + 1
+    if effective == "shift":
+        stages = -(-max(depth - 1, 4) // 32)
+        return Resources(lut=stages * bits + 5 * counter - 7, ff=bits + counter)
+    if effective == "distributed":
+        words = 1 << (depth - 2).bit_length()
+        return Resources(lut=lutram(words, bits) + 8 * counter - 15, ff=bits + 2 * counter)
+    ultra = effective == "ultra"
+    lo, hi = _decomposition(depth, ultra)
+    storage = memory(1 << lo, bits, effective)
+    if hi:
+        # The RTL relaxes a hi space shallower than its primitive to ``auto``.
+        storage = storage + memory(
+            1 << hi, bits, effective if hi >= (12 if ultra else 9) else "auto"
+        )
+    if ultra:
+        return storage + Resources(lut=6 * counter + bits, ff=2 * bits)
+    return storage + Resources(lut=54, ff=bits + 2 * counter)
 
 
 def _given(depth: int, bits: int, style: str, uram: bool) -> str:
@@ -154,6 +192,10 @@ class FifoKernel(Kernel):
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        return fifo_resources(self.depth, self.word_bits, self.rtl_ram_style)
+
     def parameters(self) -> Mapping[str, int | str]:
         return {
             "DATA_WIDTH": self.word_bits,
@@ -165,4 +207,10 @@ class FifoKernel(Kernel):
         return (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
 
 
-__all__ = ["FifoKernel", "FifoStorage", "fifo_storage", "least_depth_holding"]
+__all__ = [
+    "FifoKernel",
+    "FifoStorage",
+    "fifo_resources",
+    "fifo_storage",
+    "least_depth_holding",
+]

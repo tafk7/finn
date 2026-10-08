@@ -23,10 +23,12 @@ prefixes it, ``member_of``):
   member a key of the batch belongs to refuses itself (its ``admission``, as far as
   it is decided). Viable is not feasible: a refusal names why, so an explorer can
   recover.
-- ``cost(point)``: each member's cycles a frame and buffering, as the kernels and
-  channels export them (``CYCLES``, ``BUFFERING``), and the bottleneck, every
-  member tied at the most cycles, once every member's cycles are known. A member
-  whose cycles wait on open choices names them.
+- ``cost(point)``: each member's cycles a frame, buffering and resources, as the
+  kernels and channels export them (``CYCLES``, ``BUFFERING``, ``RESOURCES``); the
+  bottleneck, every member tied at the most cycles, once every member's cycles are
+  known; and the resources used, once every member states its own. A member whose
+  cycles wait on open choices names them, and a member that states no resources
+  says why (its memory style open, or no model of its leaf).
 
 The engine decides validity; an explorer only proposes and prefers. An
 ``Explorer`` (``explore(seam, point) -> point``) proposes batches, and may keep,
@@ -83,12 +85,13 @@ from finn.core.space import (
     Unresolved,
     inspection,
 )
-from finn.kernels.base import BUFFERING, CYCLES
+from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, describe, member_of
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import Sized, size
 from finn.kernels.target import Platform
+from finn.kernels.utilization import Resources, total
 
 S = TypeVar("S", bound=Space)
 
@@ -149,14 +152,26 @@ class Bottleneck:
 
 @dataclass
 class Cost:
-    """What a point costs, by member: the clock cycles a frame takes (``cycles``) and the
-    bits its stages hold (``buffering``) where known; for a member whose cycles are not
-    known yet, the open Decisions they wait on (``waiting``), or why they are refused."""
+    """What a point costs, by member: the clock cycles a frame takes (``cycles``), the
+    bits its stages hold (``buffering``) and what it uses of the device (``resources``)
+    where known; for a member whose cycles are not known yet, the open Decisions they
+    wait on (``waiting``), or why they are refused; for a member that states no
+    resources, why (``unstated``)."""
 
     cycles: Mapping[str, int]
     buffering: Mapping[str, int]
     waiting: Mapping[str, tuple[str, ...]]
     refused: Mapping[str, str]
+    resources: Mapping[str, Resources]
+    unstated: Mapping[str, str]
+
+    @property
+    def used(self) -> Resources | None:
+        """The members' resources summed, once every member states its own: a partial
+        sum is never a total."""
+        if self.unstated:
+            return None
+        return total(self.resources.values())
 
     @property
     def bottleneck(self) -> Bottleneck | None:
@@ -328,31 +343,36 @@ class Seam:
         return found
 
     def cost(self, point: Space, members: Iterable[str] | None = None) -> Cost:
-        """Each member's cycles a frame and buffering, read from its exports (only
-        ``members``' when named), one member at a time, so a member that waits hides no
-        other."""
+        """Each member's cycles a frame, buffering and resources, read from its exports
+        (only ``members``' when named), one member at a time, so a member that waits
+        hides no other."""
         cycles: dict[str, int] = {}
         buffering: dict[str, int] = {}
         waiting: dict[str, tuple[str, ...]] = {}
         refused: dict[str, str] = {}
+        resources: dict[str, Resources] = {}
+        unstated: dict[str, str] = {}
         for name in self.members if members is None else members:
             member = _member(point, name)
             exports = type(member).exports
             held = member.query(exports[BUFFERING])
             if isinstance(held, Available):
                 buffering[name] = held.value
+            used = member.query(exports[RESOURCES])
+            if isinstance(used, Available):
+                resources[name] = used.value
+            elif isinstance(used, Unresolved):
+                unstated[name] = "waits on " + ", ".join(_awaited(used))
+            else:
+                unstated[name] = describe([used])
             answer = member.query(exports[CYCLES])
             if isinstance(answer, Available):
                 cycles[name] = answer.value
             elif isinstance(answer, Unresolved):
-                waiting[name] = tuple(
-                    dict.fromkeys(
-                        item.owner for item in answer.findings if item.code == "decision-unassigned"
-                    )
-                )
+                waiting[name] = _awaited(answer)
             else:
                 refused[name] = describe([answer])
-        return Cost(cycles, buffering, waiting, refused)
+        return Cost(cycles, buffering, waiting, refused, resources, unstated)
 
     def chosen(self, point: Space) -> dict[str, object]:
         """Every Decision ``point`` commits, by key: the choices made on purpose."""
@@ -984,6 +1004,13 @@ def _transport(
         )
     return _Transport(
         choice, channel, directs[0], fifos[0], fifo["depth"], fifo["ram_style"], refused
+    )
+
+
+def _awaited(answer: Unresolved) -> tuple[str, ...]:
+    """The open Decisions an unresolved answer waits on."""
+    return tuple(
+        dict.fromkeys(item.owner for item in answer.findings if item.code == "decision-unassigned")
     )
 
 

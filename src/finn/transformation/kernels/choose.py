@@ -29,8 +29,15 @@ from the point the one before returned, and then:
   one the model held before; the completion policy and every value it completed,
   by owner, with who completed it; the required choices it leaves open, which
   hardware generation refuses; whether FIFOs were sized; the dropped choices with
-  why, per member cycles and buffering, the bottleneck), so an outer search can
+  why, per member cycles, buffering and resources, the bottleneck, and the
+  resources used against the platform's, ``resources``), so an outer search can
   compare.
+
+The resources are the members' own statements (``finn.kernels.base.RESOURCES``):
+the partition's kernels and its channels, boundary channels included, and nothing
+of the shell (its ends, its static region), which the report says. The platform's
+are its part's totals (``Platform.resources``), nothing subtracted: what the
+platform has, not a budget; ``share`` is the fraction of each a design uses.
 
 The shell is the model's target's (``shell_root``): its row offers the boundary
 channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
@@ -53,7 +60,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
@@ -75,6 +82,7 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
+from finn.kernels.target import Platform
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
@@ -134,17 +142,58 @@ class Explored:
     report: Mapping[str, Any]
 
 
+RESOURCES_COUNTED = (
+    "the partition's kernels and channels, each its own statement; not the shell's ends "
+    "or static region"
+)
+"""What the report's resources count, as it states it."""
+
+RESOURCES_EXACT = (
+    "DSP slices, and block RAM and UltraRAM where a memory's style is explicit, are the "
+    "RTL's; LUTs, FFs and auto memories are models (about 10 % on LUT and FF)"
+)
+"""Which of the report's resources are exact and which are models, as it states it."""
+
+
+def _resources_report(cost: Cost, platform: Platform | None) -> dict[str, object]:
+    """The resources used (``None`` until every member states its own, and then which
+    do not, with why) against the platform's part totals."""
+    used = cost.used
+    totals = None if platform is None else platform.resources
+    share = None
+    if used is not None and totals is not None:
+        available = asdict(totals)
+        share = {
+            key: round(count / available[key], 4)
+            for key, count in asdict(used).items()
+            if available[key]
+        }
+    return {
+        "used": None if used is None else asdict(used),
+        "unstated": dict(cost.unstated),
+        "platform": None if totals is None else asdict(totals),
+        "share": share,
+        "counted": RESOURCES_COUNTED,
+        "exact": RESOURCES_EXACT,
+    }
+
+
 def _cost_report(seam: Seam, cost: Cost) -> dict[str, object]:
     bottleneck = cost.bottleneck
     return {
         "members": {
-            name: {"cycles": cost.cycles.get(name), "buffering": cost.buffering.get(name)}
+            name: {
+                "cycles": cost.cycles.get(name),
+                "buffering": cost.buffering.get(name),
+                "resources": asdict(cost.resources[name]) if name in cost.resources else None,
+            }
             for name in seam.members
         },
         "bottleneck": None
         if bottleneck is None
         else {"members": list(bottleneck.members), "cycles": bottleneck.cycles},
         "buffering": sum(cost.buffering.values()),
+        "resources": _resources_report(cost, seam.platform),
     }
 
 

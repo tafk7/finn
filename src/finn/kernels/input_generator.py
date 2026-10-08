@@ -56,6 +56,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
 from finn.kernels.transport import MarkerKind, StreamMarker
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 
 _INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
@@ -64,6 +65,22 @@ SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:inp
 
 def _vector(values: IntegerVector) -> str:
     return "'{" + ", ".join(map(str, values)) + "}"
+
+
+def input_gen_resources(*, buf_size: int, data_width: int, d: int, ram_style: str) -> Resources:
+    """FinnLib ``input_gen``: its buffer, BUF_SIZE words of DATA_WIDTH bits, simple dual
+    port, in RAM_STYLE (``nest_geometry`` reads BUF_SIZE from the RTL), and its read and
+    output registers, two a bit. The nest's D counters and pointers are a ``Fit`` over
+    their address bits."""
+    address = d * max(buf_size - 1, 1).bit_length()
+    return memory(buf_size, data_width, ram_style) + Resources(
+        lut=_INPUT_GEN_LUT.at(address), ff=2 * data_width + _INPUT_GEN_FF.at(address)
+    )
+
+
+# Feature: the loops' address bits, D * clog2(BUF_SIZE).
+_INPUT_GEN_LUT = Fit(9.9, (3.07,))
+_INPUT_GEN_FF = Fit(12.7, (2.31,))
 
 
 class InputGeneratorKernel(Kernel):
@@ -124,6 +141,16 @@ class InputGeneratorKernel(Kernel):
     @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
+
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        try:
+            words = nest_geometry(self.frame_words, self.dims, self.strides).buffer_words
+        except GeometryError as error:
+            return reject("input-generator-geometry", str(error))
+        return input_gen_resources(
+            buf_size=words, data_width=self.word_bits, d=len(self.dims), ram_style=self.ram_style
+        )
 
     def parameters(self) -> Mapping[str, int | str]:
         return {
@@ -256,6 +283,7 @@ __all__ = [
     "InputGeneratorKernel",
     "NestBuffer",
     "NestGeometry",
+    "input_gen_resources",
     "nest_buffer",
     "nest_geometry",
 ]

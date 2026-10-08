@@ -82,7 +82,10 @@ cycles a frame takes through its own stages (the most beats its source's or an
 adapter's port carries a frame; a FIFO presents what arrives, so it adds none,
 and a channel of wires takes none of its own) and its end's, if it has one,
 under ``BUFFERING`` the bits its stages hold (an adapter's ``input_gen``
-buffers, a FIFO's depth).
+buffers, a FIFO's depth), and under ``RESOURCES`` what its source and stages use
+of the device, each stage kernel's own statement summed (a channel of wires uses
+none). Its end is not counted: the shell integrates it beside the root, and its
+resources are the shell's.
 
 A boundary channel's side without a user is its **free side** (``free_side``):
 the AXIS port the root presents. A shell that integrates ends supplies the ends
@@ -131,7 +134,16 @@ from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd, Marker
-from finn.kernels.base import BOUNDARY, BUFFERING, CLOCK, CYCLES, NETLIST, PORT, RESET
+from finn.kernels.base import (
+    BOUNDARY,
+    BUFFERING,
+    CLOCK,
+    CYCLES,
+    NETLIST,
+    PORT,
+    RESET,
+    RESOURCES,
+)
 from finn.kernels.ends import END_CONTROL, ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -146,6 +158,7 @@ from finn.kernels.transport import (
     marker_bit,
     marker_pairs,
 )
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -205,6 +218,10 @@ class _Direct(Space):
     def held_bits(self) -> int:
         return 0
 
+    @view(semantics=RESOURCES_SEMANTICS)
+    def resources(self) -> Resources:
+        return Resources()
+
 
 class ChannelFifo(Space):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO."""
@@ -245,6 +262,12 @@ class ChannelFifo(Space):
     def held_bits(self) -> int:
         """Its depth of words."""
         return self.buffer.depth * self.word_bits
+
+    @view(semantics=RESOURCES_SEMANTICS)
+    def resources(self) -> Resources:
+        """Its FIFO's own statement."""
+        used: Resources = self.buffer.resources
+        return used
 
     @view
     def stages(self) -> tuple[Stage, ...]:
@@ -337,6 +360,7 @@ class Channel(Space):
     )
     source_case = selected(source)
     source_module = View(source.module)
+    source_resources = View(source.resources)
 
     @derived
     def source_label(self) -> str:
@@ -488,6 +512,7 @@ class Channel(Space):
     output_adapter_stages = View(output_adapter.stages)
     output_adapter_beats = View(output_adapter.beats)
     output_adapter_held = View(output_adapter.held_bits)
+    output_adapter_resources = View(output_adapter.resources)
 
     adapter: StreamAdapter = Decision(
         ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
@@ -495,6 +520,7 @@ class Channel(Space):
     adapter_stages = View(adapter.stages)
     adapter_beats = View(adapter.beats)
     adapter_held = View(adapter.held_bits)
+    adapter_resources = View(adapter.resources)
 
     @derived
     def output_adapted(self) -> tuple[Stage, ...]:
@@ -533,6 +559,7 @@ class Channel(Space):
     transport_stages = View(transport.stages)
 
     transport_held = View(transport.held_bits)
+    transport_resources = View(transport.resources)
 
     @view
     def stages(self) -> tuple[Stage, ...]:
@@ -646,9 +673,23 @@ class Channel(Space):
             held += self.adapter_held
         return held
 
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        """What its source and stages use of the device, each one's own statement; not
+        its end's, which is the shell's."""
+        used: Resources = self.transport_resources
+        if self.valued:
+            used = used + self.source_resources
+        if self.output_adapting:
+            used = used + self.output_adapter_resources
+        if self.adapting:
+            used = used + self.adapter_resources
+        return used
+
     # Cost, not validity: read apart from the channel's admission.
     cycles = View(frame_cycles)
     buffering = View(held_bits)
+    resources = View(resource_use)
 
     @view(requires=(well_formed, realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
@@ -664,6 +705,7 @@ class Channel(Space):
         BOUNDARY: boundary_bus,
         CYCLES: cycles,
         BUFFERING: buffering,
+        RESOURCES: resources,
         END_CONTROL: end_control,
     }
 
