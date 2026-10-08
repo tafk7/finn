@@ -14,9 +14,12 @@ streams (the partition's boundary facts, ``finn.partition``):
 - ``resets``: each reset pin, its polarity and the clocks it is synchronous to;
 - ``streams``: each AXI-Stream port, its direction, ``tdata`` width and clock, and
   what it carries: the tensor, its element (the channel's, by name) and its value
-  range, the lanes a beat, the beats a frame and the frame's shape;
+  range, the lanes a beat, the beats a frame, the frame's shape and the ``order``
+  its beats and lanes present the frame in (whether row-major, and the traversal);
 - ``axilite``: each AXI-Lite bus, its address and data widths, its clock and its
-  register map, the IP-XACT's one ``Reg0`` block (``ipxact.register_window``);
+  register map, the IP-XACT's one ``Reg0`` block (``ipxact.register_window``), its
+  registers as wide as the bus's ``RegisterMap`` writes them (32 bits for a bus that
+  states none);
 - ``aximm``: each AXI-MM port with its map. The ABI has no AXI-MM protocol yet, so
   the list is empty.
 
@@ -40,12 +43,13 @@ from finn.kernels.artifacts.abi import (
     StandardProtocol,
 )
 from finn.kernels.artifacts.ipxact import address_width, frequency_hz, register_window
+from finn.kernels.artifacts.module import RegisterMap
 
 #: The file the description is written to, beside the packaged IP.
 INTERFACE_FILE = "interface.json"
 
 #: Each stream fact the description states, from the boundary facts.
-STREAM_FACTS = ("tensor", "element", "range", "lanes", "beats", "shape")
+STREAM_FACTS = ("tensor", "element", "range", "lanes", "beats", "shape", "order")
 
 
 class InterfaceError(Exception):
@@ -62,9 +66,13 @@ def describe_interface(
     *,
     part: str,
     period_ns: float,
+    registers: Mapping[str, RegisterMap] | None = None,
 ) -> dict[str, Any]:
     """The interface description of a module with ``pins``; ``streams`` holds each
-    AXI-Stream port's facts by port name (``STREAM_FACTS`` and its ``tdata``)."""
+    AXI-Stream port's facts by port name (``STREAM_FACTS`` and its ``tdata``), and
+    ``registers`` each AXI-Lite bus's ``RegisterMap`` by port name (none: the default
+    map, 32-bit words)."""
+    registers = registers or {}
     described: dict[str, Any] = {
         "part": part,
         "period_ns": period_ns,
@@ -123,7 +131,7 @@ def describe_interface(
                             "name": "Reg0",
                             "base": 0,
                             "range": register_window(pin),
-                            "width": 32,
+                            "width": registers.get(pin.name, RegisterMap()).word_bits,
                             "usage": "register",
                         }
                     ],

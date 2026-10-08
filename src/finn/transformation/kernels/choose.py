@@ -173,15 +173,16 @@ RESOURCES_EXACT = (
     "LUT and FF); the ends and the static region are models, " + SHELL_CHARACTERISED + ", "
     "which overstate the placed shell (by about 28 % of its LUTs, TFC on Ultra96)"
 )
-"""Which of the report's resources are exact and which are models, as it states it."""
+"""Which of the report's resources are exact and which are models, as it states it; on
+a board the shell was not built and timed on, followed by its row's ``caveat``."""
 
 
 def _resources_report(
-    cost: Cost, split: ShellResources | str, platform: Platform | None
+    cost: Cost, split: ShellResources | str, platform: Platform | None, caveat: str | None
 ) -> dict[str, object]:
     """The shell's resources by member and their sum (``None`` until every member
     states its own, and then which do not, with why) against the platform's part
-    totals."""
+    totals; ``exact`` names the shell row's ``caveat`` for its board, if any."""
     unstated = dict(cost.unstated)
     if isinstance(split, str) and not unstated:
         unstated["shell"] = split
@@ -219,7 +220,7 @@ def _resources_report(
         "over": exceeded,
         "warning": _over_warning(most, exceeded),
         "counted": RESOURCES_COUNTED,
-        "exact": RESOURCES_EXACT,
+        "exact": RESOURCES_EXACT if caveat is None else f"{RESOURCES_EXACT}; {caveat}",
     }
 
 
@@ -407,7 +408,7 @@ def explore_kernel_choices(
             completion_report["sizing"] = completed.sizing
     costed = point if completed is None else completed.point
     cost = seam.cost(costed)
-    resources = _resources_report(cost, shell_resources(costed), seam.platform)
+    resources = _resources_report(cost, shell_resources(costed), seam.platform, root.row.caveat)
     ends: dict[str, object] = {}
     if root.ends and not cost.waiting and not cost.refused:
         ends = {"ends": _end_rows(costed, root.ends), "memory_latency": MEMORY_LATENCY}

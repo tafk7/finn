@@ -60,6 +60,10 @@ def test_lutram_follows_the_port_mode() -> None:
     # Simple dual port (input_gen's buffer): 32 x 14 in eight LUTs; measured 76 and 296.
     assert lutram(16, 128) == 74
     assert lutram(4, 512) == 293
+    # Deeper: eight LUTs a RAM64M8 of 64 x 7, and a remainder's bits a LUT each beside
+    # their write address; a whole number of RAM64M8 has no remainder (no phantom LUT).
+    assert lutram(64, 7) == 8 and lutram(64, 14) == 16 and lutram(128, 7) == 16
+    assert lutram(64, 8) == 8 + 2
 
 
 def test_auto_places_by_size_and_depth_as_measured() -> None:

@@ -152,3 +152,15 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         patched.setattr(shell, "shell_row", lambda *_: replace(IP_ROW, clk2x=False))
         with pytest.raises(KernelOpError, match="clock-unavailable"):
             configured_root(model, "chain")
+
+
+def test_the_shells_fragment_is_a_kernels_with_its_partition_inlined() -> None:
+    """The shell root's netlist is ``Kernel``'s composition with the Partition in place,
+    each bus it presents with the writes its thresholding's table takes."""
+    point = thresholdings(2, IP_ROW)
+    assert point.fragment == point.composed_fragment().inlined(PARTITION)
+    partition = getattr(point, PARTITION)
+    assert [(item.port, item.registers) for item in point.fragment.exports] == [
+        (f"t{index}_s_axilite", getattr(partition, f"t{index}").register_map) for index in range(2)
+    ]
+    assert all(len(item.registers.writes) == 6 for item in point.fragment.exports)

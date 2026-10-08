@@ -38,14 +38,13 @@ from finn.harness.rtl import (
     SimulationFailed,
     Undriven,
     Words,
-    declared_registers,
     simulate,
     stream_bench,
     stream_through,
 )
 from finn.harness.toolchain import SIMULATOR_TOOLS, vivado_simulator
 from finn.kernels.artifacts.abi import ClockAlignment
-from finn.kernels.artifacts.module import Held, RegisterMap
+from finn.kernels.artifacts.module import Held, RegisterMap, declared_registers
 from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.matmul import datatype_range
 from finn.kernels.target import DspBlock

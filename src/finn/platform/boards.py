@@ -4,9 +4,11 @@
 """The boards a build may name: each board's part and the Vivado board preset the
 Zynq shell's block design selects for it.
 
-The boards are those the Zynq shell's template builds for, less the retired Zynq 7000
-boards (Pynq-Z1, Pynq-Z2). A board is a FINN name for one board revision; its part is
-the one part it carries.
+The boards are FINN's PYNQ boards (``finn.util.basic.pynq_part_map``), less the retired
+Zynq 7000 boards (Pynq-Z1, Pynq-Z2). A board is a FINN name for one board revision; its
+part is the one part it carries. The Zynq template has a branch for each board with a
+preset; a board without one (ZCU111) is named for its part, on the ``ip`` shell, and
+the ``pynq`` shell is not built for it (``finn.platform.shells``).
 """
 
 from __future__ import annotations
@@ -17,8 +19,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True, kw_only=True)
 class Board:
     """A board: its FINN ``name``, its ``part``, and the ``preset`` (Vivado's
-    ``board_part``) the Zynq template selects for it (``None``: it selects none, and
-    the processing system keeps its defaults)."""
+    ``board_part``) the Zynq template's branch for it selects (``None``: the template
+    has no branch for it, so it cannot build the block design there, and the ``pynq``
+    shell has no row for it)."""
 
     name: str
     part: str

@@ -187,7 +187,7 @@ def lutram(words: int, bits: int, *, single_port: bool = False) -> int:
         return banks * bits + mux
     if words <= 32:
         return 8 * (bits // 14) + (bits % 14 + 1) // 2 + (1 if bits % 14 else 0)
-    return banks * (8 * (bits // 7) + (bits % 7 + 1)) + mux
+    return banks * (8 * (bits // 7) + (bits % 7 + 1 if bits % 7 else 0)) + mux
 
 
 def memory(

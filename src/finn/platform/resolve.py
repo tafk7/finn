@@ -64,9 +64,12 @@ def resolve_target(
 def refuse_drift(stated: Target, built: Target, build: str) -> None:
     """Refuse a ``build`` (what it is, for the message) whose target, ``built``, is not
     the one a model states (``stated``), each differing field named
-    (``target-drift``): a model's target is changed only by converting it again."""
+    (``target-drift``): a model's target is changed only by converting it again. Parts
+    are compared without case, as the part table looks them up (``part_facts``): a
+    part outside the table keeps the spelling it was stated in, and two spellings of
+    one part are one target."""
     pairs = [
-        ("part", stated.part, built.part),
+        ("part", stated.part.lower(), built.part.lower()),
         ("shell", stated.shell, built.shell),
         ("board", stated.board, built.board),
     ] + [

@@ -36,7 +36,9 @@ class KernelOutputType(str, Enum):
     The shell's, each needing a shell that integrates the partition
     (``finn.platform.ShellRow.integration``; not the ``ip`` shell's): its bitfile, the
     driver its host runtime runs, and the deployment package of both
-    (``SHELL_OUTPUTS``)."""
+    (``SHELL_OUTPUTS``). The driver sets the clock its bitfile delivers, and the
+    deployment ships both: each needs the outputs it is made from asked with it
+    (``OUTPUT_NEEDS``)."""
 
     STITCHED_IP = "stitched_ip"
     OOC_SYNTH = "ooc_synth"
@@ -51,6 +53,14 @@ SHELL_OUTPUTS = (
     KernelOutputType.PYNQ_DRIVER,
     KernelOutputType.DEPLOYMENT_PACKAGE,
 )
+
+#: The outputs each output is made from, which a build asking for it asks for too: the
+#: driver from its bitfile's delivered clock, the deployment from the bitfile and the
+#: driver of the same build.
+OUTPUT_NEEDS = {
+    KernelOutputType.PYNQ_DRIVER: (KernelOutputType.BITFILE,),
+    KernelOutputType.DEPLOYMENT_PACKAGE: (KernelOutputType.BITFILE, KernelOutputType.PYNQ_DRIVER),
+}
 
 
 class KernelVerificationStepType(str, Enum):

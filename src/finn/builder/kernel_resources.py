@@ -19,6 +19,9 @@ total, up to three columns:
   instance below the block design's top its member's. ``ip`` is not placed.
 
 A column the build did not make is ``null`` for every member, and ``absent`` says why.
+``caveat`` is the shell row's for the board (``finn.platform.ShellRow.caveat``): on a
+board the shell was not built and timed on, the ends' and static region's ``model``
+counts are carried over from where they were characterised; ``null`` otherwise.
 A member a column does not list (the placed design lists no row for the processor and
 its reset) is ``null`` there. ``unattributed`` is each column's total less its members'
 sum: what the report lists outside the members, or what no member's row holds. The
@@ -50,7 +53,7 @@ from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import ShellResources, shell_resources
 from finn.kernels.explore import Completion
-from finn.kernels.utilization import Resources
+from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
 from finn.transformation.fpgadataflow.kernel_partitions import OUTPUT_REPORTS, partition_body
 from finn.transformation.fpgadataflow.pynq_runner import STATIC_INSTANCES
@@ -302,10 +305,11 @@ def shell_resources_report(
         "shell": target.shell,
         "board": target.board,
         "part": target.part,
+        "caveat": shell_row(target.shell, target.board).caveat,
         "columns": {
             "model": "the shell root's statements (RESOURCES): the partition's kernels from "
-            "their RTL's fits; each end and each static IP out of context, Vivado 2025.2, "
-            "xczu3eg/xczu7ev, which overstate the placed shell",
+            f"their RTL's fits; each end and each static IP {SHELL_CHARACTERISED}, which "
+            "overstate the placed shell",
             "out_of_context": "Vivado's synthesis of each IP alone",
             "placed": "the routed design's hierarchical utilization",
         },

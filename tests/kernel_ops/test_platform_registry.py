@@ -50,7 +50,10 @@ def test_the_boards_are_the_templates_less_the_retired() -> None:
     assert set(BOARDS) == set(pynq_part_map) - retired_pynq_boards
 
 
-@pytest.mark.parametrize("board", sorted(BOARDS))
+PYNQ_BOARDS = sorted(board for shell, board in ROWS if shell == "pynq" and board is not None)
+
+
+@pytest.mark.parametrize("board", PYNQ_BOARDS)
 def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     target = resolve_target(board=board, period_ns=5.0, shell="pynq")
     assert target.part == BOARDS[board].part == part_map[board]
@@ -58,9 +61,14 @@ def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     assert target.platform.resources is not None  # every board's part is in the table
     (end,) = shell_row("pynq", board).ends
     assert end == iodma_hls(pynq_native_port_width[board])
+
+
+@pytest.mark.parametrize("board", sorted(BOARDS))
+def test_on_ip_a_board_names_its_part(board: str) -> None:
     # On ip the board names its part, and the target states none: the part's target.
     on_ip = resolve_target(board=board, period_ns=5.0)
     assert on_ip == resolve_target(part=BOARDS[board].part, period_ns=5.0)
+    assert on_ip.part == part_map[board] and on_ip.platform.resources is not None
     assert (on_ip.shell, on_ip.board) == ("ip", None)
 
 
@@ -70,17 +78,41 @@ def test_every_other_boards_part_resolves_on_the_ip_shell(board: str) -> None:
     assert platform.dsp is DspBlock(get_dsp_block(part_map[board]))
 
 
-def test_each_boards_preset_is_the_one_the_zynq_template_selects() -> None:
-    selected = dict(
-        re.findall(
-            r'\$BOARD == "([^"]+)"\} \{\n(?:.*\n)??\s*set_property board_part (\S+)',
-            custom_zynq_shell_template,
-        )
-    )
+def zynq_template_branches() -> dict[str, tuple[str | None, str | None]]:
+    """Each board the Zynq template's board chain has a branch for, read from its text:
+    the ``board_part`` the branch selects and the ``ZYNQ_TYPE`` it sets (``None``: it
+    sets none)."""
+    branches: dict[str, tuple[str | None, str | None]] = {}
+    for name, body in re.findall(
+        r'\$BOARD == "([^"]+)"\} \{\n((?:    \S.*\n)+)', custom_zynq_shell_template
+    ):
+        zynq_type = re.search(r'set ZYNQ_TYPE "([^"]+)"', body)
+        if zynq_type is None:
+            continue  # not the board chain: a board's tweak inside a Zynq type's block
+        preset = re.search(r"set_property board_part (\S+)", body)
+        branches[name] = (None if preset is None else preset[1], zynq_type[1])
+    return branches
+
+
+def test_every_pynq_rows_board_has_a_branch_in_the_zynq_template() -> None:
+    """The ``pynq`` shell is built only where the template's board chain builds a Zynq
+    UltraScale+ block design, and each board's preset is its branch's ``board_part``; a
+    board with no branch (ZCU111) has no preset and no row, and is refused by name."""
+    branches = zynq_template_branches()
+    assert {"Ultra96", "Pynq-Z1"} <= set(branches)  # the reading finds the chain
+    for board in PYNQ_BOARDS:
+        assert branches[board] == (BOARDS[board].preset, "zynq_us+")
     assert {name: board.preset for name, board in BOARDS.items()} == {
-        name: selected.get(name) for name in BOARDS
+        name: branches.get(name, (None, None))[0] for name in BOARDS
     }
-    assert BOARDS["ZCU111"].preset is None
+    unbuilt = sorted(set(BOARDS) - set(PYNQ_BOARDS))
+    assert unbuilt == ["ZCU111"] and "ZCU111" not in branches
+    with pytest.raises(
+        TargetRefused,
+        match="no-shell-row: the 'pynq' shell has no row for board 'ZCU111': the Zynq "
+        "template has no branch for it",
+    ):
+        resolve_target(board="ZCU111", period_ns=5.0, shell="pynq")
 
 
 # -- parts -------------------------------------------------------------------------------
@@ -235,6 +267,17 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
     for name in ("part", "shell", "board", "period_ns", "uram", "clk2x", "resources"):
         assert f"{name}: the model states" in message
     assert "dsp:" not in message and "fabric:" not in message
+
+
+def test_two_spellings_of_one_part_are_one_target() -> None:
+    """A part outside the table keeps the spelling it was stated in; the build is not
+    refused for stating it in another case (the table's lookup ignores case too)."""
+    stated = resolve_target(part="xczu3eg-sbva484-2-e", period_ns=5.0)
+    shouted = resolve_target(part="XCZU3EG-SBVA484-2-E", period_ns=5.0)
+    assert (stated.part, shouted.part) == ("xczu3eg-sbva484-2-e", "XCZU3EG-SBVA484-2-E")
+    refuse_drift(stated, shouted, "build")
+    with pytest.raises(TargetRefused, match="target-drift: .*part: "):
+        refuse_drift(stated, resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0), "build")
 
 
 # -- resources ---------------------------------------------------------------------------

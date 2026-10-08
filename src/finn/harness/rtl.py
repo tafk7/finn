@@ -24,7 +24,7 @@ never by hand per test:
   clock has no edge;
 - **each AXI-Lite control bus** the root presents is written, after reset and
   before any stream starts, with the writes its kernel's configuration declares
-  (``BusExport.registers``, read by ``declared_registers``), one at a time:
+  (``BusExport.registers``, read by ``module.declared_registers``), one at a time:
   address and data, then the response, which must be OKAY. ``registers``
   replaces a bus's declared writes, for a test that writes something its
   kernel does not declare;
@@ -91,7 +91,14 @@ from finn.kernels.artifacts.abi import (
     abi_pins,
 )
 from finn.kernels.artifacts.build import emit_module, instance_net
-from finn.kernels.artifacts.module import Composed, Leaf, Link, Module, RegisterMap
+from finn.kernels.artifacts.module import (
+    Composed,
+    Leaf,
+    Link,
+    Module,
+    RegisterMap,
+    declared_registers,
+)
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.util.toolchain import Toolchain, machine_toolchain
 
@@ -394,14 +401,6 @@ def _configured(
             + (", ".join(found) or "none")
         )
     return found
-
-
-def declared_registers(module: Module) -> dict[str, RegisterMap]:
-    """Each control bus the module presents, by its root port, and the writes its kernel's
-    configuration declares; a leaf presents none."""
-    if not isinstance(module, Composed):
-        return {}
-    return {item.port: item.registers for item in module.fragment.exports}
 
 
 def _undriven(

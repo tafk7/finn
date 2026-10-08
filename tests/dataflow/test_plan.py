@@ -11,6 +11,7 @@ from finn.dataflow.plan import Step, Unrealizable, plan, presented
 from finn.dataflow.traversal import (
     BeatSequence,
     LevelEnd,
+    Loop,
     Repetition,
     Traversal,
     regrouped,
@@ -95,3 +96,15 @@ def test_a_plan_splits_at_the_transport_after_its_leading_width_conversions() ->
     # A width conversion alone is the producer's side; nothing is left after the transport.
     alone = plan(BeatSequence(wide), BeatSequence(ROWS))
     assert alone.output.steps == (Step.WIDTH,) and not alone.input
+
+
+def test_a_traversal_is_row_major_when_it_presents_a_flat_buffer_in_order() -> None:
+    """Every position once, beat after beat, lane zero first: any lane count of the
+    default order, and a tiling whose tiles are whole rows; not a tiling across rows,
+    a transpose, a replay or a traversal that skips positions."""
+    assert vector_major((4, 6), 3).row_major and vector_major((1, 784), 4).row_major
+    assert tile(4, 6, 1, 6).row_major and Traversal((1,), (), ()).row_major
+    assert not tile(4, 6, 2, 3).row_major
+    assert not Traversal.over((3, 2), ((1, 2, 1), (0, 3, 1)), ()).row_major
+    assert not ROWS.replayed(2, inner_beats=K // SIMD).row_major
+    assert not Traversal((5,), (Loop(2, 2),), ()).row_major

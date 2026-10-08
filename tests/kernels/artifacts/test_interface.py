@@ -17,8 +17,26 @@ import pytest
 
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.interface import InterfaceError, describe_interface
+from finn.kernels.artifacts.module import RegisterMap
 
 from .test_ipxact import PORTS
+
+#: x's order, row-major: six beats of three lanes.
+ROW_MAJOR = {
+    "row_major": True,
+    "passes": 1,
+    "shape": [6, 3],
+    "beat_loops": [[6, 3]],
+    "lane_loops": [[3, 1]],
+}
+#: y's order: a (3, 2) matrix column by column, one element a beat.
+TRANSPOSED = {
+    "row_major": False,
+    "passes": 1,
+    "shape": [3, 2],
+    "beat_loops": [[2, 1], [3, 2]],
+    "lane_loops": [],
+}
 
 FACTS: dict[str, dict[str, Any]] = {
     "s_axis_0": {
@@ -30,6 +48,7 @@ FACTS: dict[str, dict[str, Any]] = {
         "lanes": 3,
         "beats": 6,
         "tdata": 12,
+        "order": ROW_MAJOR,
     },
     "m_axis_0": {
         "port": "m_axis_0",
@@ -40,6 +59,7 @@ FACTS: dict[str, dict[str, Any]] = {
         "lanes": 1,
         "beats": 6,
         "tdata": 8,
+        "order": TRANSPOSED,
     },
 }
 
@@ -68,6 +88,7 @@ def test_every_pin_is_described_with_what_it_carries() -> None:
             "lanes": 3,
             "beats": 6,
             "shape": [1, 6, 3],
+            "order": ROW_MAJOR,
         },
         {
             "name": "m_axis_0",
@@ -80,6 +101,7 @@ def test_every_pin_is_described_with_what_it_carries() -> None:
             "lanes": 1,
             "beats": 6,
             "shape": [1, 6],
+            "order": TRANSPOSED,
         },
     ]
     # The bus's map is the IP-XACT's: one register block, its window at least 4 KiB.
@@ -113,3 +135,18 @@ def test_a_pin_outside_every_interface_is_refused() -> None:
     loose = Signal("debug", Direction.OUT, 1)
     with pytest.raises(InterfaceError, match="debug: a pin outside every interface"):
         describe_interface((*PORTS, loose), FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0)
+
+
+def test_a_buses_register_width_is_its_register_maps() -> None:
+    """The register map's width is the word its ``RegisterMap`` writes: 64 bits where the
+    bus's configuration writes 64-bit words, 32 for a bus that states no map."""
+
+    def width(registers: dict[str, RegisterMap] | None) -> int:
+        described = describe_interface(
+            PORTS, FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0, registers=registers
+        )
+        ((register,),) = [bus["register_map"] for bus in described["axilite"]]
+        return int(register["width"])
+
+    assert width({"s_axilite": RegisterMap(((0, 1), (8, 2)), word_bits=64)}) == 64
+    assert width({"s_axilite": RegisterMap()}) == width(None) == width({}) == 32

@@ -405,10 +405,16 @@ class Kernel(Space):
             leaf = self.module
             assert isinstance(leaf, Leaf)
             return Fragment((("", leaf),))
+        return self.composed_fragment()
+
+    def composed_fragment(self) -> Fragment | Rejected:
+        """A kernel with children's ``fragment``: each member's netlist under its node, and
+        the buses its ``ControlBus`` nodes present with the writes their configuration
+        takes. A kernel that places none is refused."""
         if not self.netlists:
             return reject(
                 "kernel-module",
-                f"{space_type.__qualname__} declares no module and places no kernel",
+                f"{type(self).__qualname__} declares no module and places no kernel",
             )
         exports = tuple(
             BusExport(item.node, item.child, item.port, item.registers)

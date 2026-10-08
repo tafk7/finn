@@ -29,7 +29,8 @@ from finn.platform.refusal import TargetRefused
 
 @dataclass(frozen=True, kw_only=True)
 class PartFacts:
-    """A part's facts: its canonical ``name``, its ``fabric`` and ``dsp`` block, whether
+    """A part's facts: its ``name`` (a table row's canonical spelling; outside the
+    table, the spelling it was stated in), its ``fabric`` and ``dsp`` block, whether
     it has UltraRAM (``uram``) that takes initial contents (``uram_init``), its
     resource totals (``None``: not known) and where they come from (``source``)."""
 
@@ -139,7 +140,10 @@ FAMILIES: tuple[tuple[str, Fabric, DspBlock, bool, bool], ...] = (
     ("xczu28dr-*", _US, _E2, True, False),
     ("xczu48dr-*", _US, _E2, True, False),
     ("xck26-*", _US, _E2, True, False),
-    ("xczu*", _US, _E2, False, False),  # other Zynq UltraScale+ (ZU3EG, ZU9EG): none stated
+    # Any other Zynq UltraScale+ part (a ZU3EG or ZU9EG in another package or grade, an
+    # EG, EV or DR device the table lacks): no UltraRAM. The EG devices have none; an EV
+    # or DR device's is not stated here, so none is used.
+    ("xczu*", _US, _E2, False, False),
     ("xcu*", _US, _E2, True, False),  # Alveo (Virtex UltraScale+)
     ("xcvc*", Fabric.VERSAL, DspBlock.DSP58, True, False),  # Versal AI Core
     ("xcve*", Fabric.VERSAL, DspBlock.DSP58, True, False),  # Versal AI Edge

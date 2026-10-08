@@ -12,17 +12,23 @@ from __future__ import annotations
 from dataclasses import asdict
 from pathlib import Path
 
+import pytest
+
 from finn.builder.kernel_resources import (
     placed_hierarchy,
     shell_resources_report,
     utilization_synth,
 )
+from finn.custom_op.kernels.base import write_target
 from finn.custom_op.kernels.shell import ShellResources, shell_resources
-from finn.kernels.utilization import Resources
+from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
+from finn.platform import resolve_target, shell_row
+from finn.platform.shells import PYNQ_CHARACTERISED
 from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
 from finn.transformation.fpgadataflow.kernel_partitions import partition_body
+from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.package import configured_root
-from kernel_ops.models import kernel_model
+from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 
@@ -58,7 +64,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     modelled = shell_resources(point)
     assert isinstance(modelled, ShellResources)
     stated = shell_resources_report(parent)
-    assert stated["shell"] == "ip"
+    assert (stated["shell"], stated["caveat"]) == ("ip", None)
     assert stated["members"] == {
         "partition": {
             "instance": "partition",
@@ -77,3 +83,31 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     assert stated["unattributed"]["model"] == asdict(Resources())
     assert set(stated["absent"]) == {"out_of_context", "placed"}
     assert "not placed" in stated["absent"]["placed"]
+
+
+@pytest.mark.parametrize("board", ["Ultra96", "ZCU104"])
+def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
+    board: str, tmp_path: Path
+) -> None:
+    """SZ2: the pynq shell was built and timed on Ultra96 only, its ends and static region
+    characterised on xczu3eg and xczu7ev. Every pynq row says so; on another board
+    kernel_exploration.json's ``exact`` and resources.json's ``caveat`` name it, the
+    board and its part; on Ultra96 neither has a caveat."""
+    row = shell_row("pynq", board)
+    assert row.characterised == PYNQ_CHARACTERISED
+    assert "xczu3eg and xczu7ev" in PYNQ_CHARACTERISED
+    assert "built and timed on Ultra96 only" in PYNQ_CHARACTERISED
+    model = kernel_model()
+    write_target(model, resolve_target(board=board, period_ns=5.0, shell="pynq"))
+    configure_partition(model)
+    exact = explore_kernel_choices(model, []).report["resources"]["exact"]
+    stated = shell_resources_report(model.transform(CutKernelPartition(tmp_path)))
+    assert stated["caveat"] == row.caveat
+    assert SHELL_CHARACTERISED in stated["columns"]["model"]
+    if board == "Ultra96":
+        assert row.caveat is None and "carried over" not in exact
+        return
+    assert row.caveat is not None and exact.endswith("; " + row.caveat)
+    for named in ("built and timed on Ultra96 only", SHELL_CHARACTERISED, board):
+        assert named in row.caveat
+    assert "on ZCU104 (xczu7ev-ffvc1156-2-e) its cost is carried over" in row.caveat

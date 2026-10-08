@@ -82,10 +82,11 @@ from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, read_target, shape
 from finn.custom_op.kernels.partition import member
 from finn.custom_op.kernels.shell import PARTITION, admission_refusal, shell_root
+from finn.dataflow.traversal import Traversal, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
 from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
-from finn.kernels.artifacts.module import Abi, module_name
+from finn.kernels.artifacts.module import Abi, declared_registers, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import member_of, undecided
@@ -170,6 +171,29 @@ def end_facts(contract: EndContract) -> dict[str, Any]:
     }
 
 
+def free_side(point: Any, tensor: str) -> Any:
+    """The stream at the free side of the boundary channel carrying ``tensor``: the
+    channel's end no kernel of the partition owns (a ``StreamContract``)."""
+    ends = getattr(point, member(tensor)).endpoints
+    return ends.source if ends.source_owner is None else ends.sink
+
+
+def stream_order(form: Traversal) -> dict[str, Any]:
+    """The order a stream presents its tensor in, as the interface description states
+    it: whether each pass is row-major (``Traversal.row_major`` of its ``period``), the
+    passes a frame repeats (``passes``), and its traversal: the shape it walks and its
+    beat and lane loops, outer first, each ``[extent, stride]``, a stride in elements
+    of that shape's row-major index (0: a repetition or a replay)."""
+    one = period(form)
+    return {
+        "row_major": one.row_major,
+        "passes": form.beats // one.beats,
+        "shape": list(form.shape),
+        "beat_loops": [[loop.extent, loop.stride] for loop in form.beat_loops],
+        "lane_loops": [[loop.extent, loop.stride] for loop in form.lane_loops],
+    }
+
+
 def boundary_facts(
     model: ModelWrapper, point: Any, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -181,8 +205,7 @@ def boundary_facts(
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
         channel = getattr(point, member(tensor))
-        ends = channel.endpoints
-        side = ends.source if ends.source_owner is None else ends.sink
+        side = free_side(point, tensor)
         element = side.element
         facts = {
             "port": port,
@@ -218,16 +241,24 @@ def interface_description(
 ) -> dict[str, Any]:
     """The interface description of a partition model's IP (``describe_interface``): its
     name, VLNV and top, then the module's pins with the boundary facts of its streams, at
-    the model's target (part and period)."""
+    the model's target (part and period), each stream's order its free side's
+    (``stream_order``)."""
     built = read_target(model)
     inputs, outputs = boundary_facts(model, point, boundary, ip_name)
     return {
         "ip": {"name": ip_name, "vlnv": vlnv(ip_name), "top": module_name(point.module)},
         **describe_interface(
             point.module.abi.pins,
-            {facts["port"]: facts for facts in (*inputs, *outputs)},
+            {
+                facts["port"]: {
+                    **facts,
+                    "order": stream_order(free_side(point, facts["tensor"]).form),
+                }
+                for facts in (*inputs, *outputs)
+            },
             part=built.part,
             period_ns=built.platform.period_ns,
+            registers=declared_registers(point.module),
         ),
     }
 

@@ -139,6 +139,15 @@ class Traversal:
     def beats(self) -> int:
         return prod(loop.extent for loop in self.beat_loops)
 
+    @property
+    def row_major(self) -> bool:
+        """Whether it presents each position once, in the operand's row-major order: beat
+        after beat, lane zero first, as a flat buffer of the tensor holds them."""
+        lanes, beats = self.lanes, self.beats
+        if lanes * beats != prod(self.shape):
+            return False
+        return self == Traversal(self.shape, (Loop(beats, lanes),), (Loop(lanes, 1),))
+
     def position(self, beat: int, lane: int) -> Position:
         flat = 0
         for loops, index in ((self.beat_loops, beat), (self.lane_loops, lane)):

@@ -53,7 +53,7 @@ from finn.transformation.fpgadataflow.templates import custom_zynq_shell_templat
 from finn.transformation.kernels.integration import Integration, integration
 from finn.util import hls
 from finn.util.toolchain import Selection, Toolchain
-from kernel_ops.models import configure_partition, kernel_model
+from kernel_ops.models import configure_partition, kernel_model, row_major_w2
 from kernel_ops.packaging import FakeVivado, bitfile_default, io_shape_dict
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
@@ -62,10 +62,11 @@ ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 
 def zynq_model(directory: Path) -> ModelWrapper:
     """The Chain as KernelOps, x and w2 crossing its boundary, stated for Ultra96 in the
-    Zynq shell, its choices saved, cut once (its body in ``directory``): the kernel
-    path's parent graph."""
+    Zynq shell, w2's pass row-major (``row_major_w2``), its choices saved, cut once
+    (its body in ``directory``): the kernel path's parent graph."""
     model = kernel_model(second_weights=False)
     write_target(model, ZYNQ)
+    row_major_w2(model)
     configure_partition(model)
     parent: ModelWrapper = model.transform(CutKernelPartition(directory / "cut"))
     return parent
@@ -455,12 +456,12 @@ def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(
     assert (shapes["ishape_normal"], shapes["oshape_normal"]) == ([(3, 4), (4, 4)], [(3, 4)])
     assert (shapes["ishape_folded"], shapes["oshape_folded"]) == (
         [(1, 6, 2), (1, 12, 4)],
-        [(1, 6, 2)],
+        [(1, 3, 4)],
     )
-    # Two and four INT3 lanes in one and two bytes a beat; two INT7 lanes in two.
+    # Two and four INT3 lanes in one and two bytes a beat; four INT7 lanes in four.
     assert (shapes["ishape_packed"], shapes["oshape_packed"]) == (
         [(1, 6, 1), (1, 12, 2)],
-        [(1, 6, 2)],
+        [(1, 3, 4)],
     )
     assert (shapes["input_dma_name"], shapes["output_dma_name"]) == (["idma0", "idma1"], ["odma0"])
     assert (shapes["num_inputs"], shapes["num_outputs"]) == (2, 1)

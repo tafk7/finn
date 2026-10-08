@@ -98,8 +98,37 @@ def fifo_resources(depth: int, data_width: int, ram_style: str) -> Resources:
     ``DEPTH - 1`` words rounded up to a power of two; or block RAM or UltraRAM, its
     ``lo`` space and its ``hi`` one (``_decomposition``), a ``hi`` space shallower than
     the primitive left ``auto``. The control (pointers, the output register, the
-    UltraRAM output queue) is FINN's FIFO model (``finn.util.resource_models``, fitted
-    against finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor)."""
+    UltraRAM output queue) is taken from the HWCustomOp flow's FIFO model
+    (``finn.util.resource_models._fifo_cost``, fitted against finn-rtllib's ``fifo.sv``,
+    the same design with an occupancy monitor), which this one duplicates until that
+    flow retires; the terms it does not carry over are listed below."""
+    # A deliberate duplicate of ``finn.util.resource_models._fifo_cost``, the HWCustomOp
+    # flow's model of the same RTL; one goes when that flow retires. Where the two
+    # differ, by what this one does not carry over (FinnLib's ``rtl/infra/fifo.sv``):
+    # - the storage is stated by ``finn.kernels.utilization`` from the arrays the RTL
+    #   declares, not by the legacy model's fitted packing. A LUTRAM is RAM64M8s
+    #   (``lutram``), as fifo.sv's header sizes its ``distributed`` path ("1 LUT/bit
+    #   via RAM64M8"; DEPTH 257, "the natural capacity of 4x RAM64M8 per byte"), its
+    #   four banks selected by F7/F8 for free; the legacy model counts RAM32X2s with a
+    #   fitted 5/4 and a mux LUT for every two bits a further 128 rows. So the two part
+    #   at depth 129 and above: 257 x 32 bits is 213 LUTs here, 257 there.
+    # - the shift path's cascade mux over SRLC32Es, which the legacy model counts on
+    #   Versal only (UltraScale+'s F7/F8 absorb it), and the other Versal terms (its
+    #   RAMB18E5 and URAM288E5 plans, the URAM read pipeline's 20 LUTs): this model
+    #   states UltraScale+, where the kernels were characterised (``CHARACTERISED``).
+    # - the block path's cascade decode (3 LUTs a level of the tile plan, 2 a 5 tiles):
+    #   Vivado's decode of ``MemLo`` across tiles, which fifo.sv does not write and the
+    #   legacy model fits; 2028 x 32 bits is 54 LUTs here, 67 there.
+    # - the lo/hi output select of a decomposed memory (fifo.sv's ``genOutMux``, a
+    #   DATA_WIDTH-wide 2:1 mux and its pointer compare; 18 + 3W/7 fitted), and under
+    #   UltraRAM a LUTRAM ``hi`` space's delay to the URAM read latency (W LUTs);
+    #   1500 x 32 bits, a 1024-word and a 512-word space, is 54 LUTs here, 92 there.
+    # - the UltraRAM read pipeline's growth: fifo.sv's ``PIPE_DEPTH`` is
+    #   3 + (2**lo - 1)/8192, a stage more each 8192 rows, which the legacy model fits as
+    #   a further W LUTs each 4 cascaded URAMs past 12; here the output queue is W at
+    #   any depth (100000 x 72 bits is 180 LUTs here, 540 there).
+    # The last three are not measured against this model: they are under-counts of
+    # deep or decomposed FIFOs, kept as R1 carried the control over, not refit.
     bits, effective = data_width, _selected(depth, data_width, ram_style)
     counter = depth.bit_length() + 1
     if effective == "shift":
