@@ -30,7 +30,8 @@ class KernelOutputType(str, Enum):
     DataflowOutputType's.
 
     The partition's own, on every shell: ``stitched_ip``, the shell root's packaged IP
-    with its interface description and its XSim testbench; ``ooc_synth``, the IP
+    with its interface description and its XSim testbench, written and not run (the
+    verification step STITCHED_IP_TESTBENCH runs it); ``ooc_synth``, the IP
     synthesized out of context, with its resources per member of the shell root.
 
     The shell's, each needing a shell that integrates the partition
@@ -64,7 +65,11 @@ OUTPUT_NEEDS = {
 
 
 class KernelVerificationStepType(str, Enum):
-    """The checks step_verify_kernel_partition runs on the partition, as asked."""
+    """The checks a build runs, as asked: none by default, since no build re-verifies
+    the partition's computation (its KernelOps' ``execute_node`` is the reference, and
+    the harness checks the hardware against it). step_verify_kernel_partition runs the
+    partition's; step_kernel_stitched_ip runs its testbench's. A check that fails stops
+    the build."""
 
     #: the partition's own outputs, the parent graph with the partition of KernelOps
     #: executed in Python, against the model the build started from, on each
@@ -73,6 +78,28 @@ class KernelVerificationStepType(str, Enum):
     #: the partition's emitted RTL compiles and elaborates in XSim (xvlog, xelab);
     #: needs Vivado
     PARTITION_ELABORATION = "kernel_partition_elaboration"
+    #: the packaged IP's XSim testbench (STITCHED_IP's, its run.sh) run once, through
+    #: the build's toolchain: its module's outputs on the testbench's frame against the
+    #: partition's in Python; needs STITCHED_IP and Vivado
+    STITCHED_IP_TESTBENCH = "stitched_ip_testbench"
+
+
+#: The steps that run each verification, any of which the build's steps must include
+#: for it to run: the phase, or the step itself.
+VERIFIED_BY = {
+    KernelVerificationStepType.PARTITION_PYTHON: (
+        "phase_kernel_path",
+        "step_verify_kernel_partition",
+    ),
+    KernelVerificationStepType.PARTITION_ELABORATION: (
+        "phase_kernel_path",
+        "step_verify_kernel_partition",
+    ),
+    KernelVerificationStepType.STITCHED_IP_TESTBENCH: (
+        "phase_kernel_outputs",
+        "step_kernel_stitched_ip",
+    ),
+}
 
 
 #: The steps of a kernel-path build, from a streamlined model: the kernel-path phase
@@ -137,12 +164,14 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: value completed.
     kernel_completion: str = "baseline"
 
-    #: The checks step_verify_kernel_partition runs (KernelVerificationStepType).
+    #: The checks the build runs (KernelVerificationStepType), none by default:
+    #: step_verify_kernel_partition's, and step_kernel_stitched_ip's testbench.
     verify_steps: List[KernelVerificationStepType] = field(default_factory=list)
 
     #: The .npy file of inputs PARTITION_PYTHON runs the partition and the source on,
     #: one frame per index of its first axis. STITCHED_IP's testbench streams its first
-    #: frame when the file exists, a generated frame otherwise.
+    #: frame when the file exists, a generated frame otherwise, and
+    #: STITCHED_IP_TESTBENCH runs it.
     verify_input_npy: str = "input.npy"
 
     #: The AMD tool installation every tool step of the build runs in, and the

@@ -7,9 +7,11 @@ per member out of context, and its XSim testbench.
 
 The Chain (``kernel_ops.models``) is packaged against a toolchain double that stands
 for Vivado (``kernel_ops.packaging.PackagedByStub``), so its description and its
-resources from a report are read in the fast gate. TFC_W2A2 is built through the
-builder on the ``ip`` shell to its packaged IP and testbench, which is then run on its
-own (marker ``xsim``; it packages with Vivado too).
+resources from a report are read in the fast gate, and so is the step that writes the
+testbench and runs it only when the verification step is asked. TFC_W2A2 is built
+through the builder on the ``ip`` shell to its packaged IP and testbench, which the
+verification step runs and which then runs on its own (marker ``xsim``; it packages
+with Vivado too).
 """
 
 from __future__ import annotations
@@ -26,14 +28,22 @@ import pytest
 from kernels.xsim import requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.builder import kernel_build_steps
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.kernel_build_config import KernelBuildConfig, KernelOutputType
-from finn.builder.kernel_testbench import TESTBENCH_DIR
+from finn.builder.kernel_build_config import (
+    KernelBuildConfig,
+    KernelOutputType,
+    KernelVerificationStepType,
+)
+from finn.builder.kernel_build_steps import step_kernel_stitched_ip
+from finn.builder.kernel_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.custom_op.kernels.shell import shell_root
+from finn.harness.rtl import SimulationFailed
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
+from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
 from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_IP,
     partition_body,
@@ -48,7 +58,7 @@ from finn.transformation.kernels.package import (
     stream_order,
     write_boundary_facts,
 )
-from finn.util.toolchain import Toolchain, machine_toolchain
+from finn.util.toolchain import Selection, Toolchain, machine_toolchain
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import PackagedByStub, read_back
 from kernel_ops.tfc import SHAPE
@@ -153,15 +163,76 @@ def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
     assert found["unreported_instances"] == ["second.compute.packed"]
 
 
+def test_the_testbench_is_an_output_run_only_by_its_verification_step(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """STITCHED_IP writes the testbench beside the IP and simulates nothing (PRINCIPLES
+    §8: no build re-verifies the computation); STITCHED_IP_TESTBENCH, asked, runs it
+    once, in the build's toolchain."""
+    ran: list[tuple[Path, object]] = []
+    monkeypatch.setattr(
+        kernel_build_steps,
+        "run_testbench",
+        lambda directory, *, toolchain: ran.append((directory, toolchain)),
+    )
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    stub = PackagedByStub()
+    for verify_steps in ([], [KernelVerificationStepType.STITCHED_IP_TESTBENCH]):
+        output = tmp_path / f"output_{len(verify_steps)}"
+        cfg = KernelBuildConfig(
+            output_dir=str(output),
+            target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
+            generate_outputs=[KernelOutputType.STITCHED_IP],
+            verify_steps=verify_steps,
+            verify_input_npy=str(tmp_path / "absent.npy"),
+        )
+        cfg._toolchain = stub  # type: ignore[attr-defined]
+        step_kernel_stitched_ip(parent, cfg)
+        testbench = output / "stitched_ip" / TESTBENCH_DIR
+        assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
+        assert (testbench / RUN_SCRIPT).is_file()
+        assert not (testbench / "xsim.log").exists()
+        assert ran == ([(testbench, stub)] if verify_steps else [])
+
+
+def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:
+    """``run_testbench`` runs the directory's run.sh as its user would, the toolchain's
+    command directory first on PATH, and returns what it printed when it ends in PASS;
+    anything else is ``SimulationFailed`` with what it printed. A launcher route runs
+    no local script."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    simulator = tools / "fake_xsim"
+    simulator.write_text('#!/bin/sh\necho "STREAM_$1"\n')
+    simulator.chmod(0o755)
+    toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
+    for verdict in ("PASS", "FAIL"):
+        bench = tmp_path / verdict
+        bench.mkdir()
+        (bench / RUN_SCRIPT).write_text(
+            f"set -e\nfake_xsim {verdict} > xsim.log\ngrep -q STREAM_PASS xsim.log\necho PASS\n"
+        )
+        if verdict == "PASS":
+            assert run_testbench(bench, toolchain=toolchain) == "PASS\n"
+        else:
+            with pytest.raises(SimulationFailed):
+                run_testbench(bench, toolchain=toolchain)
+        assert (bench / "xsim.log").read_text() == f"STREAM_{verdict}\n"
+    remote = Toolchain(Selection(launcher=("site",)), {"PATH": os.defpath})
+    with pytest.raises(ValueError, match="launcher route runs tools elsewhere"):
+        run_testbench(tmp_path / "PASS", toolchain=remote)
+
+
 @requires_xsim
 @pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
 def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     tmp_path: Path, tfc_streamlined: Path
 ) -> None:
     """TFC_W2A2 through the builder on ``ip`` (Ultra96's part at 5 ns, the Z0 baseline's
-    exploration), STITCHED_IP asked: the IP packages, its description reads back against
-    the module's pins, and the testbench written beside it, on the first image of
-    verify_input_npy, prints PASS when run by its own script."""
+    exploration), STITCHED_IP asked and STITCHED_IP_TESTBENCH: the IP packages, its
+    description reads back against the module's pins, the verification step runs the
+    testbench written beside it, on the first image of verify_input_npy, and it prints
+    PASS when run by its own script."""
     source_file = tmp_path / "streamlined.onnx"
     shutil.copyfile(tfc_streamlined, source_file)
     images = np.random.default_rng(3).integers(0, 256, size=(2, *SHAPE[1:])).astype(np.float32)
@@ -175,10 +246,13 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
             {"strategy": "target_throughput", "fps": 1e6},
             {"strategy": "size_fifos"},
         ],
+        verify_steps=[KernelVerificationStepType.STITCHED_IP_TESTBENCH],
         verify_input_npy=str(tmp_path / "input.npy"),
         enable_build_pdb_debug=False,
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
+    log = (output / "build_dataflow.log").read_text()
+    assert "Verification for stitched_ip_testbench : SUCCESS" in log
     ip = output / "stitched_ip"
     assert (ip / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.

@@ -393,6 +393,23 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
     python = config(tmp_path, verify_steps=[KernelVerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
+    # The testbench's run is the outputs' phase's, and needs the testbench asked.
+    testbench = [KernelVerificationStepType.STITCHED_IP_TESTBENCH]
+    cfg = config(tmp_path, steps=["phase_kernel_path"], verify_steps=testbench)
+    (warning,) = [
+        check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
+    ]
+    assert "neither phase_kernel_outputs nor step_kernel_stitched_ip" in warning.message
+    assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
+        "kernel_testbench_output": [
+            "verify_steps includes stitched_ip_testbench, which runs the testbench "
+            "stitched_ip writes, and generate_outputs does not ask for it"
+        ]
+    }
+    asked = config(
+        tmp_path, verify_steps=testbench, generate_outputs=[KernelOutputType.STITCHED_IP]
+    )
+    assert failed_checks(asked) == {}
 
 
 def test_a_dataflow_build_of_kernel_ops_is_refused(tmp_path: Path) -> None:
