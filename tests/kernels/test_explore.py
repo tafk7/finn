@@ -18,7 +18,9 @@ from typing import Any
 import pytest
 
 import finn.kernels.explore as explore_module
-from finn.core.space import design_space
+from finn.core.space import derived, design_space
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
     Accepted,
@@ -31,14 +33,18 @@ from finn.kernels.explore import (
     Refused,
     ResourceBudgetWarning,
     Seam,
+    Stated,
     TargetCycles,
     TargetThroughput,
+    UnstatedResourcesWarning,
     explore,
 )
+from finn.kernels.matmul import MatMulKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.utilization import Resources
+from finn.kernels.utilization import RESOURCE_NAMES, Resources, total
+from finn.kernels.values.domains import stored_element
 from kernels import chain
-from kernels.helpers import FULL_DSP48E2, Lanes
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, Root
 
 MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "second")
 
@@ -144,10 +150,14 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
         "second.compute.packed.pe": 1,
         "second.compute.packed.simd": 4,
     }
-    assert strategy.report()["bottleneck"] == {
+    report = strategy.report()
+    assert report["bottleneck"] == {
         "members": ["x", "hidden", "levels", "first", "second"],
         "cycles": 12,
     }
+    assert (report["bottleneck_of"], report["met"], report["unfolded"]) == ("folded", True, {})
+    # The Chain's cores are forced (a DSP48E2 platform): no case is tried.
+    assert report["cases"] == {}
     assert strategy.relaxed_to is None
 
 
@@ -162,8 +172,142 @@ def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None
     assert explorer.cost(explorer.complete(folded).point).bottleneck == Bottleneck(
         ("x", "levels", "first", "activate", "second"), 6
     )
-    unrelaxed = TargetCycles(1, relax=False).explore(explorer, point)
-    assert explorer.chosen(unrelaxed)["first.compute.packed.pe"] == 4
+    unrelaxed = TargetCycles(1, relax=False)
+    assert explorer.chosen(unrelaxed.explore(explorer, point))["first.compute.packed.pe"] == 4
+    # A miss is stated: the bottleneck reached and that it does not meet the budget.
+    report = unrelaxed.report()
+    assert report["bottleneck"]["cycles"] == 6  # type: ignore[index]
+    assert "activate" in report["bottleneck"]["members"]  # type: ignore[index]
+    assert (report["relaxed_to"], report["met"]) == (None, False)
+    assert strategy.report()["met"] is False
+
+
+def test_target_cycles_states_the_bottleneck_of_the_completed_point_where_it_leaves_one_open() -> (
+    None
+):
+    """A member whose cycles wait on a choice that is not its own is left to the next
+    explorer; the report still states the bottleneck, of the point the seam's policy
+    completes, and whether it meets the budget."""
+
+    class Partial(TargetCycles):
+        def _fold(self, seam: Seam, point: Any, name: str, budget: int) -> Any:
+            if name == "second":
+                return explore_module._Folded(None, point, "left by the test")
+            return super()._fold(seam, point, name, budget)
+
+    explorer, point = seam()
+    strategy = Partial(12)
+    folded = strategy.explore(explorer, point)
+    assert "second.compute.packed.pe" not in explorer.chosen(folded)
+    report = strategy.report()
+    # second, and the channels whose cycles wait on its folding.
+    unfolded = report["unfolded"]
+    assert isinstance(unfolded, dict) and unfolded["second"] == "left by the test"
+    assert all("second." in why for name, why in unfolded.items() if name != "second")
+    # Completed at its baseline, second takes 48 cycles: the budget is missed, and said.
+    assert report["bottleneck"]["cycles"] == 48  # type: ignore[index]
+    assert "second" in report["bottleneck"]["members"]  # type: ignore[index]
+    assert (report["bottleneck_of"], report["met"]) == ("completed", False)
+    assert explorer.reads == []  # a report's reading: nothing is committed from it
+
+
+def dsp58_matmul() -> tuple[Seam, Any]:
+    """The Chain's first MatMul alone, on a DSP58 platform: its core an open choice."""
+
+    class Single(Root):
+        @derived
+        def y_tensor(self) -> Tensor:
+            return self.first.result_tensor
+
+        x = Channel(
+            platform=FULL_DSP58,
+            tensor=Tensor((chain.ROWS, chain.INPUTS), ScalarEncoding(chain.A)),
+            port="s_axis_0",
+        )
+        w = Channel(
+            tensor=Tensor((chain.INPUTS, chain.HIDDEN), stored_element(chain.W, (-3, 3))),
+            contents=chain.W1,
+            platform=FULL_DSP58,
+        )
+        y = Channel(tensor=y_tensor, port="m_axis_0", platform=FULL_DSP58)
+        first = MatMulKernel(
+            m=chain.ROWS,
+            n=chain.HIDDEN,
+            k=chain.INPUTS,
+            activation_dtype=chain.A,
+            weights_dtype=chain.W,
+            platform=FULL_DSP58,
+            x_channel=x,
+            w_channel=w,
+            y_channel=y,
+        )
+
+    return Seam(("x", "w", "y", "first"), platform=FULL_DSP58), design_space(Single())
+
+
+def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on() -> None:
+    """On a DSP58 platform a MatMul's core is an open, unordered choice (``packed`` or
+    ``int8_dsp58``) its cycles wait on. Each case is folded, and the case kept meets the
+    budget with the least parallelism, then the fewest resources; no order is imposed
+    on the cases, and the report names the case taken and why."""
+    explorer, point = dsp58_matmul()
+    offered = {choice.key: choice for choice in explorer.choices(point)}
+    assert not offered["first.compute"].ordered
+    assert set(offered["first.compute"].cases or ()) == {"packed", "int8_dsp58"}
+    strategy = TargetCycles(6)
+    folded = strategy.explore(explorer, point)
+    report = strategy.report()
+    assert (report["met"], report["unfolded"]) == (True, {})
+    (row,) = report["cases"].values()  # type: ignore[attr-defined]
+    taken = row["taken"]
+    assert explorer.chosen(folded)["first.compute"] == taken
+    assert explorer.chosen(folded)[f"first.compute.{taken}.simd"]
+    folds = row["folded"]
+    assert set(folds) == {"packed", "int8_dsp58"} and row["refused"] == {}
+    # Both cores fold to the most cycles within 6; tied, the lighter by dominance is kept.
+    assert {case: each["cycles"] for case, each in folds.items()} == {
+        "packed": 6,
+        "int8_dsp58": 6,
+    }
+    assert "tied on cycles" in row["why"] and "dominance" in row["why"]
+    used = {case: Resources(**each["resources"]) for case, each in folds.items()}
+    other = next(case for case in used if case != taken)
+    assert used[taken] != used[other]
+    assert all(
+        getattr(used[taken], name) <= getattr(used[other], name) for name in RESOURCE_NAMES
+    ) or ("listing order" in row["why"])
+    # What it read to compare (the core's own choices, completed) is recorded.
+    assert explorer.reads and all(
+        key.startswith("first.") for read in explorer.reads for key in read
+    )
+
+
+def test_target_cycles_keeps_the_case_with_the_least_parallelism_that_meets_the_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cycles come first: where one case meets the budget at more cycles than another, it
+    is kept whatever it uses; where no case meets it, the fewest cycles."""
+    explorer, point = dsp58_matmul()
+    cost = Seam.cost
+
+    def slower_int8(self: Seam, at: Any, members: Any = None) -> Any:
+        found = cost(self, at, members)
+        if "first" in found.cycles and self.chosen(at).get("first.compute") == "int8_dsp58":
+            found.cycles = {**found.cycles, "first": found.cycles["first"] + 1}
+        return found
+
+    monkeypatch.setattr(Seam, "cost", slower_int8)
+    strategy = TargetCycles(12)
+    strategy.explore(explorer, point)
+    (row,) = strategy.report()["cases"].values()  # type: ignore[attr-defined]
+    folds = {case: each["cycles"] for case, each in row["folded"].items()}
+    assert row["taken"] == max(folds, key=folds.__getitem__) and "least parallelism" in row["why"]
+    assert all("resources" not in each for each in row["folded"].values())
+    missed = TargetCycles(1, relax=False)
+    missed.explore(explorer, point)
+    (row,) = missed.report()["cases"].values()  # type: ignore[attr-defined]
+    assert row["taken"] == "packed" and row["why"].startswith("no case meets the budget of 1")
+    assert missed.report()["met"] is False
 
 
 def test_a_target_throughput_is_a_cycles_budget_at_the_platform_s_clock() -> None:
@@ -253,7 +397,8 @@ def test_the_seam_states_the_root_s_own_resources_once_its_members_do() -> None:
     waiting = explorer.resources(point)
     assert isinstance(waiting, str) and waiting.startswith("waits on ")
     completed = explorer.complete(point).point
-    assert explorer.resources(completed) == explorer.cost(completed).used
+    used = explorer.cost(completed).used
+    assert used is not None and explorer.resources(completed) == Stated(used, {})
 
 
 def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
@@ -270,8 +415,9 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
     # The folded point is returned with the rest open, for the explorers after it.
     assert explorer.choices(folded)
     report = strategy.report()
-    assert report["budget"] == {"dsp": 5}
+    assert report["budget"] == {"dsp": 5} and report["kept_budget"] is not None
     assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
+    assert (report["lower_bound"], report["unstated"]) == (False, {})
     assert report["used"] == asdict(Resources(lut=330, ff=380, dsp=4))
     assert report["ratio"] == {"dsp": 0.8} and report["binding"] == "dsp" and report["fits"]
     tried = report["tried"]
@@ -300,7 +446,7 @@ def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_poi
         assert tried.relaxed_to == folder.relaxed_to
         completed = alone.complete(folded).point
         assert tried.reached == alone.cost(completed).bottleneck
-        assert tried.used == alone.resources(completed)
+        assert tried.stated == alone.resources(completed)
     assert explorer.attempts < alone.attempts
 
 
@@ -331,8 +477,9 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     """Bisection assumes a larger budget folds to more cycles and fewer resources. A budget
     whose fold reaches more cycles than itself (an end's converter, SZ6) departs from
     that: here every budget from 13 to 23 folds as no budget does, to 48 cycles. The
-    search is not corrected: it keeps the least budget that fits, 13, at 48 cycles where
-    budget 27 reached 24, and states each departure."""
+    search is not corrected, and states each departure; but of every point it tried it
+    keeps the one that fits with the fewest cycles: budget 27's, at 24 cycles, not the
+    least budget that fits, 13, at 48."""
 
     class Departing(TargetCycles):
         def _fold_all(self, seam: Seam, point: Any, budget: int) -> Any:
@@ -346,12 +493,66 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     tried = report["tried"]
     assert isinstance(tried, list)
     assert [row["cycles"] for row in tried] == [1, None, 27, 17, 12, 15, 14, 13]
-    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 48}
+    assert [row["bottleneck"] for row in tried if row["cycles"] == 13] == [48]
+    assert report["kept_budget"] == 27
+    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
+    assert report["used"] == asdict(Resources(lut=330, ff=380, dsp=4)) and report["fits"]
     assert not report["monotone"]
     departures = report["departures"]
     assert isinstance(departures, list)
     assert "budget 13 relaxed to 48, reaching 48" in departures
     assert "budget 27 reached 24, fewer than budget 17's 48" in departures
+
+
+def test_max_throughput_keeps_the_tie_on_cycles_that_uses_the_least(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two fitting points at the same cycles: the one using less of the budget is kept,
+    not the last the bisection reached. Here budget 24 also folds ``second`` to 6
+    cycles: 24 cycles still, at 6 DSPs where budget 27's point uses 4."""
+
+    class Heavier(TargetCycles):
+        def _fold(self, seam: Seam, point: Any, name: str, budget: int) -> Any:
+            return super()._fold(
+                seam, point, name, 6 if (name, budget) == ("second", 24) else budget
+            )
+
+    monkeypatch.setattr(explore_module, "TargetCycles", Heavier)
+    explorer, point = within_part()
+    strategy = MaxThroughput({"dsp": 0.6})
+    strategy.explore(explorer, point)
+    rows = {row.cycles: (row.reached.cycles, row.used.dsp, row.fits) for row in strategy.tried}
+    assert rows[27] == (24, 4, True) and rows[24] == (24, 6, True)
+    # The bisection's last fitting point.
+    assert [row.cycles for row in strategy.tried if row.fits][-1] == 24
+    report = strategy.report()
+    assert report["kept_budget"] == 27 and report["used"]["dsp"] == 4  # type: ignore[index]
+
+
+def test_max_throughput_budgets_what_is_stated_where_a_member_states_no_resources() -> None:
+    """A member that states no resources (here a compressor reducer, whose resources are
+    not characterised) is allowed (RC5): the budget is checked against the members that
+    state theirs, a lower bound, and it warns, naming the member and why."""
+    explorer, point = within_part()
+    pinned = explorer.attempt(point, {"first.compute.packed.reducer": "compressor"})
+    assert isinstance(pinned, Accepted)
+    strategy = MaxThroughput({"dsp": 0.5})
+    with pytest.warns(UnstatedResourcesWarning, match="lower bound.*first .*compressor"):
+        folded = strategy.explore(explorer, pinned.point)
+    assert explorer.chosen(folded)["first.compute.packed.reducer"] == "compressor"
+    report = strategy.report()
+    assert report["lower_bound"] is True and report["fits"] is True
+    unstated = report["unstated"]
+    assert isinstance(unstated, dict) and list(unstated) == ["first"]
+    assert "not characterised" in unstated["first"]
+    # What is stated, without first's: at 6 cycles, second's 4 DSPs of the budget's 5.
+    completed = explorer.complete(folded).point
+    stated = explorer.resources(completed)
+    assert isinstance(stated, Stated) and stated.lower_bound
+    assert stated.used == total(
+        used for name, used in explorer.cost(completed).resources.items() if name != "first"
+    )
+    assert report["used"] == asdict(stated.used) and report["bottleneck"]["cycles"] == 6  # type: ignore[index]
 
 
 def test_max_throughput_needs_a_budget_of_named_resources_and_the_part_s_totals() -> None:

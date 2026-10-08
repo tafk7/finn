@@ -497,6 +497,9 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         200,
         None,
     )
+    # On Ultra96 (DSP48E2) every MatMul's core is forced: no case is tried, and the
+    # target is met.
+    assert (target["cases"], target["unfolded"], target["met"]) == ({}, {}, True)
     # Of TFC's 45 choices, the target throughput commits the folding (12), the only ones
     # saved; the baseline completion completes the rest where the partition is built,
     # the 13 transports sized on its copy. The report names who made each.

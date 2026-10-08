@@ -36,9 +36,11 @@ from the point the one before returned, and then:
 The resources are the shell root's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
 and its channels, boundary channels included), each end and its static region, and
-their sum, ``used``. The ends' and the static region's are out of context, which the
-report says with how far that overstates the placed shell; the ``ip`` shell has
-neither, so its sum is its partition's. The platform's are its part's totals
+their sum, ``used``; where members state none, ``used`` is the sum of those that
+do, a lower bound (``lower_bound``), each other named with why (``unstated``), and the
+ends and the static region are not counted. The ends' and the static region's are out
+of context, which the report says with how far that overstates the placed shell; the
+``ip`` shell has neither, so its sum is its partition's. The platform's are its part's totals
 (``Platform.resources``), nothing subtracted: what the platform has, not a budget;
 ``share`` is the fraction of each the shell uses, ``binding`` the one it uses most of,
 and ``over`` each it uses more of than the part has. A point over the part is a warning
@@ -99,7 +101,7 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.target import Platform
-from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over
+from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
@@ -167,6 +169,13 @@ RESOURCES_COUNTED = (
 )
 """What the report's resources count, as it states it."""
 
+RESOURCES_LOWER_BOUND = (
+    "a lower bound: the members that state their own resources (the partition's kernels "
+    "and channels, boundary channels included); the members named under unstated state "
+    "none, and the ends and the static region are not counted while they do not"
+)
+"""What the report's resources count where members state none, as it states it."""
+
 RESOURCES_EXACT = (
     "the partition's DSP slices, and block RAM and UltraRAM where a memory's style is "
     "explicit, are the RTL's; its LUTs, FFs and auto memories are models (about 10 % on "
@@ -180,14 +189,18 @@ a board the shell was not built and timed on, followed by its row's ``caveat``."
 def _resources_report(
     cost: Cost, split: ShellResources | str, platform: Platform | None, caveat: str | None
 ) -> dict[str, object]:
-    """The shell's resources by member and their sum (``None`` until every member
-    states its own, and then which do not, with why) against the platform's part
-    totals; ``exact`` names the shell row's ``caveat`` for its board, if any."""
+    """The shell's resources by member and their sum against the platform's part totals;
+    where members state none, the sum of those that do, a lower bound (``lower_bound``),
+    and each that does not, with why (``unstated``); ``exact`` names the shell row's
+    ``caveat`` for its board, if any."""
     unstated = dict(cost.unstated)
     if isinstance(split, str) and not unstated:
         unstated["shell"] = split
     stated = None if isinstance(split, str) or unstated else split
-    used = None if stated is None else stated.total
+    lower_bound = stated is None and bool(cost.unstated)
+    used = stated.total if stated is not None else None
+    if lower_bound:
+        used = total(cost.resources.values())
     totals = None if platform is None else platform.resources
     share = None
     most = None
@@ -213,13 +226,14 @@ def _resources_report(
             "ends": {name: asdict(each) for name, each in stated.ends},
             "static_region": {name: asdict(each) for name, each in stated.static_region},
         },
+        "lower_bound": lower_bound,
         "unstated": unstated,
         "platform": None if totals is None else asdict(totals),
         "share": share,
         "binding": most,
         "over": exceeded,
         "warning": _over_warning(most, exceeded),
-        "counted": RESOURCES_COUNTED,
+        "counted": RESOURCES_LOWER_BOUND if lower_bound else RESOURCES_COUNTED,
         "exact": RESOURCES_EXACT if caveat is None else f"{RESOURCES_EXACT}; {caveat}",
     }
 

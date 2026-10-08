@@ -265,7 +265,9 @@ def test_before_folding_it_sizes_at_the_completed_folding() -> None:
     class Nothing:
         name = label = "nothing"
 
-        def complete(self, seam: Seam, point: Any, *, sizing: bool = False) -> Completed[Any]:
+        def complete(
+            self, seam: Seam, point: Any, *, sizing: bool = False, members: Any = None
+        ) -> Completed[Any]:
             return Completed(point, {}, {}, None, ())
 
     with pytest.raises(ExploreError, match="needs every member's cycles"):
