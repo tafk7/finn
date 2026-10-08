@@ -30,7 +30,7 @@ from typing import Any
 import numpy as np
 import pytest
 from kernels.helpers import Lanes
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -41,6 +41,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.partition import partition_root
 from finn.dataflow.tensor import ScalarEncoding
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Ranked
 from finn.kernels.matmul import column_range

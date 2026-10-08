@@ -24,7 +24,7 @@ them. The edge choices are the root's (``x.adapter``,
 concrete facts and choices.
 
 What a simulation runs on (FinnLib, Vivado, the run's identity) is
-``kernels.toolchain``'s: this module only constructs."""
+``finn.harness.toolchain``'s: this module only constructs."""
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -81,7 +81,7 @@ XSIM_KEY = "construction"
 it constructs, not by its code. What it builds reaches a simulation only through the
 captured designs and, for a numeric sweep, the results of the calls the sweep makes
 here, which the capture records. Code whose effect reaches a verdict otherwise is
-harness (``kernels.toolchain``)."""
+harness (``finn.harness``)."""
 
 
 def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:

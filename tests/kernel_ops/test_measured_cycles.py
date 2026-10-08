@@ -16,10 +16,11 @@ from pathlib import Path
 
 import numpy as np
 from kernels import chain
-from kernels.xsim import measure, requires_xsim
+from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.custom_op.kernels.partition import member, partition_root
+from finn.harness.rtl import measure
 from kernel_ops.measure_cycles import boundary_words, schedule_of
 from kernel_ops.models import configure_partition, kernel_model
 

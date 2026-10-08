@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 from qonnx.core.datatype import DataType
 
+from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.target import DspBlock
@@ -31,7 +32,6 @@ from kernels.sweeps.dotp_support import (
     _wrapper,
 )
 from kernels.sweeps.rtl_transport import drive_observed
-from kernels.toolchain import finnlib_root, print_identity
 
 
 @dataclass(frozen=True)

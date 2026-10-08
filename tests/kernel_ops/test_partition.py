@@ -19,13 +19,14 @@ import numpy as np
 import pytest
 from kernels import chain
 from kernels.helpers import labels
-from kernels.xsim import pack, requires_xsim, stream_through
+from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op
 from finn.custom_op.kernels.partition import partition_root, persist
+from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import chosen, commit
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import (

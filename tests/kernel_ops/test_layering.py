@@ -4,7 +4,7 @@
 """The rows of the layer table (``tests/layering.py``) that this tree checks.
 
 They are the layers above the kernels: the KernelOps, their transformations,
-the kernel-partition facts, util and the flow.
+the kernel-partition facts, util, the harness and the flow.
 """
 
 from __future__ import annotations

@@ -17,6 +17,7 @@ from finn.core.space import (
     reject,
     selections,
 )
+from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
@@ -31,7 +32,6 @@ from kernels.helpers import (
     matmul_point,
     placed,
 )
-from kernels.toolchain import finnlib_root
 
 FACTS = dict(
     m=2,

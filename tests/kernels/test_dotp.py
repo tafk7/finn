@@ -24,6 +24,7 @@ from finn.core.space import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding
+from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
@@ -33,7 +34,6 @@ from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import DspBlock
 from kernels import helpers
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
-from kernels.toolchain import finnlib_root
 
 
 def parameters(**updates):

@@ -6,8 +6,10 @@
 ```text
 finn.core.space  <-  finn.kernels  <-  finn.custom_op.kernels
 finn.dataflow    <-                <-  finn.transformation.kernels
+                                   <-  finn.harness
                                    <-  the flow (all other finn)
-finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, the flow
+finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, finn.harness,
+                                               the flow
 ```
 
 ``LAYERS`` is the one statement of that order. A module belongs to the layer
@@ -116,6 +118,16 @@ LAYERS: tuple[Layer, ...] = (
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
+    # The kernel harness: what checks a kernel's hardware (the RTL testbench writer and
+    # its simulation, through util's toolchain). It reads no test tree and no pytest;
+    # the tests that use it stay in tests/. Nothing below the flow imports it.
+    Layer(
+        "harness",
+        ("finn.harness",),
+        (*_KERNEL_STACK, "util", "transformation.kernels"),
+        (),
+        "tests/kernel_ops",
+    ),
     # The flow: every FINN module no other layer claims. finn.util.torch_hw_modules
     # is here by its imports: the PyTorch twin of the PWPolyF custom op, it reads
     # that op's constants (finn.custom_op.general). Upstream FINN documents it at
@@ -129,6 +141,7 @@ LAYERS: tuple[Layer, ...] = (
             "kernel_partitions",
             "util",
             "transformation.kernels",
+            "harness",
         ),
         ANY,
         "tests/kernel_ops",
@@ -154,14 +167,21 @@ LAYERS: tuple[Layer, ...] = (
         ("pytest", "qonnx.core.datatype"),
         "tests/dataflow",
     ),
-    # The kernel tests need no graph either: the kernel stack, util for the XSim
-    # harness and the resource store, and the space tests' helpers. The one flow
+    # The kernel tests need no graph either: the kernel stack, the harness, util for
+    # the XSI runtime and the resource store, and the space tests' helpers. The one flow
     # module is an oracle: the stream contracts are compared with the shuffle
     # decomposition that baseline FINN hard-codes.
     Layer(
         "tests.kernels",
         ("kernels",),
-        (*_KERNEL_STACK, "util", "tests.layering", "tests.value_classes", "tests.core.space"),
+        (
+            *_KERNEL_STACK,
+            "util",
+            "harness",
+            "tests.layering",
+            "tests.value_classes",
+            "tests.core.space",
+        ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype"),
         "tests/kernels",
         also=("finn.transformation.fpgadataflow.transpose_decomposition",),
