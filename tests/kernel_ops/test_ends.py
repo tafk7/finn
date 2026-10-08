@@ -7,9 +7,10 @@ The shell root reads its target's shell row (``finn.platform``), whose offer pla
 an ``IODMA_hls`` end on each free side that meets the host: forced, so nothing is
 persisted; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
-both boundaries through it. On the Chain (``kernels.chain`` as KernelOps), and on
-TFC_W2A2 for Ultra96 in the Zynq shell (``pynq``), whose memory port is 128 bits
-wide.
+both boundaries through it; its resources by its widths are the shell's, which
+the shell root sums with its partition's and its static region's. On the Chain
+(``kernels.chain`` as KernelOps), and on TFC_W2A2 for Ultra96 in the Zynq shell
+(``pynq``), whose memory port is 128 bits wide.
 """
 
 from __future__ import annotations
@@ -25,15 +26,28 @@ from qonnx.custom_op.registry import getCustomOp
 
 import finn.custom_op.kernels.shell as shell
 from finn.custom_op.kernels.base import read_target, write_target
-from finn.custom_op.kernels.shell import persist, shell_root
+from finn.custom_op.kernels.shell import ShellResources, persist, shell_resources, shell_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.configure import chosen
-from finn.kernels.ends import IODMA_HLS, MEMORY_LATENCY, EndContract, EndOffer, iodma_hls
+from finn.kernels.ends import (
+    DIVISIBLE,
+    IODMA_HLS,
+    LCM,
+    MEMORY_LATENCY,
+    NO_CONVERTER,
+    EndContract,
+    EndOffer,
+    converter_kind,
+    iodma_hls,
+    iodma_hls_resources,
+)
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, ends
 from finn.kernels.target import Target
+from finn.kernels.utilization import Resources, total
 from finn.platform import IP_ROW, ShellRow, resolve_target, shell_row
+from finn.platform.shells import ZYNQ_STATIC_REGION
 from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -63,6 +77,8 @@ def contract(tdata: int, beats: int, memory: int, call: int, frames: int = 1) ->
         call_cycles=call,
         frames_per_call=frames,
         control_buses=1,
+        memory_ports=1,
+        resources=Resources(),
     )
 
 
@@ -88,6 +104,34 @@ def test_the_iodma_offer_states_its_measured_call_constants() -> None:
         iodma_hls(12)
     with pytest.raises(ValueError, match="frames a call is none"):
         iodma_hls(64, frames_per_call=0)
+
+
+def test_an_iodma_places_its_converters_as_its_hls_source_does() -> None:
+    assert converter_kind(128, 128) == NO_CONVERTER
+    assert converter_kind(128, 32) == converter_kind(64, 128) == DIVISIBLE
+    assert converter_kind(128, 80) == LCM
+    assert contract(32, 196, 128, 4).converter_kind == DIVISIBLE
+
+
+def test_an_iodma_states_its_resources_by_its_widths() -> None:
+    """Out of context on xczu3eg: TFC's input end (128-bit port, 32-bit stream)
+    measured 1 266 LUT, 2 226 FF and 2 RAMB36; the statement is within 7 %."""
+    tfc_input = iodma_hls_resources(direction="in", intf_width=128, stream_width=32)
+    assert tfc_input == Resources(lut=1305, ff=2279, bram18=4)
+    # The memory port dominates: about 2.5 LUT a bit, and the input end's read buffer
+    # a RAMB18 a 36 bits (7.5 RAMB36 at 512); the output end has none.
+    wide = iodma_hls_resources(direction="in", intf_width=512, stream_width=32)
+    assert (wide.lut, wide.bram18) == (2264, 15)
+    out = iodma_hls_resources(direction="out", intf_width=512, stream_width=32)
+    assert (out.lut, out.bram18) == (2590, 0)
+    # A stream that neither divides nor is divided by the port goes through their
+    # least common multiple: 4 853 LUT measured at 512 and 80 bits, 2.2 times 32 bits'.
+    assert iodma_hls_resources(direction="in", intf_width=512, stream_width=80).lut == 4845
+    # A port narrower than 64 bits is stated at 64.
+    narrow = iodma_hls_resources(direction="out", intf_width=16, stream_width=8)
+    assert narrow == iodma_hls_resources(direction="out", intf_width=64, stream_width=8)
+    with pytest.raises(ValueError, match="in or out"):
+        iodma_hls_resources(direction="both", intf_width=64, stream_width=8)
 
 
 # -- on the Chain --------------------------------------------------------------------------
@@ -120,6 +164,38 @@ def test_an_offer_places_a_forced_end_on_each_free_side() -> None:
     # The end's cycles are the channel's, beside its stages': y has none of its own.
     assert point.y.cycles == y.cycles == 6 + 4
     assert point.x.cycles == max(12, x.cycles)
+
+
+def test_the_shell_root_s_resources_are_its_partition_s_its_ends_and_its_static_region_s() -> None:
+    """The Chain's two ends on pynq, each stated by its widths: two memory ports into
+    the SmartConnect, two AXI-Lite buses (the ends') from the interconnect. On ip:
+    neither ends nor a static region."""
+    model = kernel_model()
+    configure_partition(model)
+    point = chain_root(model=model).point
+    split = shell_resources(point)
+    assert isinstance(split, ShellResources)
+    x, y = point.x.end_contract, point.y.end_contract
+    assert split.ends == (
+        ("x", iodma_hls_resources(direction="in", intf_width=16, stream_width=8)),
+        ("y", iodma_hls_resources(direction="out", intf_width=32, stream_width=y.tdata)),
+    )
+    assert (x.memory_width, x.tdata, y.memory_width) == (16, 8, 32)
+    assert split.static_region == ZYNQ_STATIC_REGION.resources(masters=2, slaves=2)
+    assert split.partition == total(item.value for item in point.member_resources)
+    assert (
+        point.resources
+        == split.total
+        == total((split.partition, *(used for _, used in split.ends + split.static_region)))
+    )
+    ip = chain_root(TARGET, model=model).point
+    assert shell_resources(ip) == ShellResources(split.partition, (), ())
+    assert ip.resources == split.partition
+
+
+def test_a_shell_root_waits_for_its_members_resources() -> None:
+    waiting = shell_resources(chain_root().point)
+    assert isinstance(waiting, str) and waiting.startswith("waits on ")
 
 
 def test_the_ip_shell_offers_no_end() -> None:
@@ -247,9 +323,11 @@ def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrappe
         "memory_width": 128,
         "words": 49,
         "converter": True,
+        "converter_kind": "divisible",
         "call_cycles": 4,
         "frames_per_call": 1,
         "control_buses": 1,
+        "memory_ports": 1,
         "cycles": 200,
         "cycles_16_frames_a_call": 197,
     }
@@ -349,6 +427,25 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
     assert cycles == {**in_shell, **{name: cycles[name] for name in ended}}
     assert ip["bottleneck"]["cycles"] == 196 and zynq["bottleneck"]["cycles"] == 200
     assert ip["fifos"] == zynq["fifos"]
+    # The shell's resources: on ip its partition's alone; the Zynq shell adds its two
+    # ends and its static region to the same partition.
+    on_ip, on_zynq = ip["resources"], zynq["resources"]
+    assert on_ip["shell"] == {"partition": on_ip["used"], "ends": {}, "static_region": {}}
+    in_zynq_shell = on_zynq["shell"]
+    assert in_zynq_shell["partition"] == on_ip["used"]
+    assert list(in_zynq_shell["ends"]) == ["Reshape_0_out0", "MatMul_3_out0"]
+    assert list(in_zynq_shell["static_region"]) == [
+        "zynq_ultra_ps_e",
+        "proc_sys_reset",
+        "smartconnect",
+        "axi_interconnect",
+    ]
+    summed = [
+        in_zynq_shell["partition"],
+        *in_zynq_shell["ends"].values(),
+        *in_zynq_shell["static_region"].values(),
+    ]
+    assert on_zynq["used"] == {key: sum(each[key] for each in summed) for key in on_ip["used"]}
     # The module TFC in the Zynq shell was packaged as before the shells had rows.
     assert module_of(ip_model, tmp_path / "ip") == "finn_partition__481b9e45abc00364"
     assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__481b9e45abc00364"

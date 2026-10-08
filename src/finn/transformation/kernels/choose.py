@@ -30,14 +30,18 @@ from the point the one before returned, and then:
   by owner, with who completed it; the required choices it leaves open, which
   hardware generation refuses; whether FIFOs were sized; the dropped choices with
   why, per member cycles, buffering and resources, the bottleneck, and the
-  resources used against the platform's, ``resources``), so an outer search can
+  shell's resources against the platform's, ``resources``), so an outer search can
   compare.
 
-The resources are the members' own statements (``finn.kernels.base.RESOURCES``):
-the partition's kernels and its channels, boundary channels included, and nothing
-of the shell (its ends, its static region), which the report says. The platform's
-are its part's totals (``Platform.resources``), nothing subtracted: what the
-platform has, not a budget; ``share`` is the fraction of each a design uses.
+The resources are the shell root's (``shell_resources``), each member its own
+statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
+and its channels, boundary channels included), each end and its static region, and
+their sum, ``used``. The ends' and the static region's are out of context, which the
+report says with how far that overstates the placed shell; the ``ip`` shell has
+neither, so its sum is its partition's. The platform's are its part's totals
+(``Platform.resources``), nothing subtracted: what the platform has, not a budget;
+``share`` is the fraction of each the shell uses. The report ranks and refuses
+nothing.
 
 The shell is the model's target's (``shell_root``): its row offers the boundary
 channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
@@ -66,7 +70,13 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
-from finn.custom_op.kernels.shell import admission_refusal, persist, shell_root
+from finn.custom_op.kernels.shell import (
+    ShellResources,
+    admission_refusal,
+    persist,
+    shell_resources,
+    shell_root,
+)
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     Baseline,
@@ -83,6 +93,7 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.target import Platform
+from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
@@ -143,22 +154,31 @@ class Explored:
 
 
 RESOURCES_COUNTED = (
-    "the partition's kernels and channels, each its own statement; not the shell's ends "
-    "or static region"
+    "the shell: its partition (the partition's kernels and channels, boundary channels "
+    "included), each end and its static region, each its own statement"
 )
 """What the report's resources count, as it states it."""
 
 RESOURCES_EXACT = (
-    "DSP slices, and block RAM and UltraRAM where a memory's style is explicit, are the "
-    "RTL's; LUTs, FFs and auto memories are models (about 10 % on LUT and FF)"
+    "the partition's DSP slices, and block RAM and UltraRAM where a memory's style is "
+    "explicit, are the RTL's; its LUTs, FFs and auto memories are models (about 10 % on "
+    "LUT and FF); the ends and the static region are models, " + SHELL_CHARACTERISED + ", "
+    "which overstate the placed shell (by about 28 % of its LUTs, TFC on Ultra96)"
 )
 """Which of the report's resources are exact and which are models, as it states it."""
 
 
-def _resources_report(cost: Cost, platform: Platform | None) -> dict[str, object]:
-    """The resources used (``None`` until every member states its own, and then which
-    do not, with why) against the platform's part totals."""
-    used = cost.used
+def _resources_report(
+    cost: Cost, split: ShellResources | str, platform: Platform | None
+) -> dict[str, object]:
+    """The shell's resources by member and their sum (``None`` until every member
+    states its own, and then which do not, with why) against the platform's part
+    totals."""
+    unstated = dict(cost.unstated)
+    if isinstance(split, str) and not unstated:
+        unstated["shell"] = split
+    stated = None if isinstance(split, str) or unstated else split
+    used = None if stated is None else stated.total
     totals = None if platform is None else platform.resources
     share = None
     if used is not None and totals is not None:
@@ -170,7 +190,14 @@ def _resources_report(cost: Cost, platform: Platform | None) -> dict[str, object
         }
     return {
         "used": None if used is None else asdict(used),
-        "unstated": dict(cost.unstated),
+        "shell": None
+        if stated is None
+        else {
+            "partition": asdict(stated.partition),
+            "ends": {name: asdict(each) for name, each in stated.ends},
+            "static_region": {name: asdict(each) for name, each in stated.static_region},
+        },
+        "unstated": unstated,
         "platform": None if totals is None else asdict(totals),
         "share": share,
         "counted": RESOURCES_COUNTED,
@@ -178,7 +205,7 @@ def _resources_report(cost: Cost, platform: Platform | None) -> dict[str, object
     }
 
 
-def _cost_report(seam: Seam, cost: Cost) -> dict[str, object]:
+def _cost_report(seam: Seam, cost: Cost, split: ShellResources | str) -> dict[str, object]:
     bottleneck = cost.bottleneck
     return {
         "members": {
@@ -193,7 +220,7 @@ def _cost_report(seam: Seam, cost: Cost) -> dict[str, object]:
         if bottleneck is None
         else {"members": list(bottleneck.members), "cycles": bottleneck.cycles},
         "buffering": sum(cost.buffering.values()),
-        "resources": _resources_report(cost, seam.platform),
+        "resources": _resources_report(cost, split, seam.platform),
     }
 
 
@@ -271,9 +298,11 @@ def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
             "memory_width": contract.memory_width,
             "words": contract.words,
             "converter": contract.converter,
+            "converter_kind": contract.converter_kind,
             "call_cycles": contract.call_cycles,
             "frames_per_call": contract.frames_per_call,
             "control_buses": contract.control_buses,
+            "memory_ports": contract.memory_ports,
             "cycles": contract.cycles,
             "cycles_16_frames_a_call": contract.cycles_at(16),
         }
@@ -360,7 +389,7 @@ def explore_kernel_choices(
         "fifos": _fifos(strategies, explorers, completed, seam.completion),
         "fresh": fresh,
         "dropped": dict(root.dropped),
-        **_cost_report(seam, cost),
+        **_cost_report(seam, cost, shell_resources(costed)),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }

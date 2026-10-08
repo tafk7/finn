@@ -159,6 +159,29 @@ def test_the_pynq_row_states_its_ends_budgets_integration_and_static_region() ->
     assert (target.shell, target.board, target.platform.clk2x) == ("pynq", "Ultra96", False)
 
 
+def test_the_zynq_static_region_states_its_resources_by_masters_and_slaves() -> None:
+    """Out of context on xczu3eg and xczu7ev: the PS 264 LUT and its reset 19; the
+    SmartConnect 5 346 LUT at 2 masters and about 2 200 a master more; the AXI
+    interconnect 1 277 LUT, and its crossbar none at 1 slave, then 131, 184 and 361 at
+    2, 4 and 9."""
+    region = dict(ZYNQ_STATIC_REGION.resources(masters=2, slaves=1))
+    assert list(region) == ["zynq_ultra_ps_e", "proc_sys_reset", "smartconnect", "axi_interconnect"]
+    assert (region["zynq_ultra_ps_e"].lut, region["proc_sys_reset"].lut) == (264, 19)
+    assert (region["smartconnect"].lut, region["axi_interconnect"].lut) == (5364, 1277)
+    smartconnect = [
+        dict(ZYNQ_STATIC_REGION.resources(masters=masters, slaves=1))["smartconnect"].lut
+        for masters in (2, 3, 4)
+    ]
+    assert smartconnect == [5364, 7579, 9795]
+    crossbar = [
+        dict(ZYNQ_STATIC_REGION.resources(masters=2, slaves=slaves))["axi_interconnect"].lut - 1277
+        for slaves in (1, 2, 4, 9)
+    ]
+    assert crossbar == [0, 125, 192, 359]
+    with pytest.raises(ValueError, match="at least one memory port"):
+        ZYNQ_STATIC_REGION.resources(masters=0, slaves=1)
+
+
 @pytest.mark.parametrize(
     "request_, refused",
     [

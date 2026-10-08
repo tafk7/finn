@@ -32,13 +32,24 @@ stream side, the free side's contract:
 - its beat times over a frame (``EndContract.times``), one a cycle, or once the memory
   word that completes the beat arrived where the memory is the narrower; FIFO sizing
   reads them, and its cycles as its span, as a kernel's port's pace
-  (``finn.kernels.fifo_sizing.ends``).
+  (``finn.kernels.fifo_sizing.ends``);
+- it initiates one AXI memory port into the shell's memory interconnect
+  (``EndContract.memory_ports``), which the shell's static region scales by;
+- its resources (``iodma_hls_resources``), by its widths: its memory port
+  (``intfWidth``), its stream (``streamWidth``, the free side's ``tdata``) and the
+  converters between them (``converter_kind``: none where the two are equal, one
+  where either divides the other, two through their least common multiple
+  otherwise). They are the shell's, not the channel's (``Channel.resource_use``):
+  out of context (``SHELL_CHARACTERISED``), which overstates the placed end.
+
+A boundary channel exports its end's contract under ``END`` (none without an end),
+which the shell root sums with its static region (``finn.custom_op.kernels.shell``).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, gcd
+from math import ceil, gcd, lcm
 
 from finn.core.space import (
     ConstraintGroup,
@@ -54,6 +65,7 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.transport import StreamContract
+from finn.kernels.utilization import Fit, Resources
 
 IODMA_HLS = "iodma_hls"
 """The kind of the ``IODMA_hls`` end."""
@@ -64,6 +76,71 @@ MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 END_CONTROL = ViewKey("end_control", default_semantics(int))
 """The AXI-Lite buses a boundary channel's end presents to the shell (none without an
 end), which the shell root's admission counts."""
+
+END = ViewKey("end", default_semantics(tuple))
+"""A boundary channel's end, as its contract (``EndContract``): one, or none without an
+end. The shell root sums their resources and counts their memory ports."""
+
+NO_CONVERTER, DIVISIBLE, LCM = "none", "divisible", "lcm"
+"""The converters between an end's memory port and its stream (``converter_kind``)."""
+
+
+def converter_kind(memory_width: int, stream_width: int) -> str:
+    """The converters ``IODMA_hls`` places between a memory port and a stream of these
+    widths: none where they are equal; one where either divides the other; otherwise
+    two, through their least common multiple."""
+    if memory_width == stream_width:
+        return NO_CONVERTER
+    wide, narrow = max(memory_width, stream_width), min(memory_width, stream_width)
+    return DIVISIBLE if wide % narrow == 0 else LCM
+
+
+# ``IODMA_hls`` out of context (``SHELL_CHARACTERISED``; xczu3eg-sbva484-1-e at 5 ns,
+# memory ports of 64 to 512 bits, streams of 8, 32, 80 and 128 bits). With no converter
+# or one: features the memory port and the converter's wider side (none without one);
+# within 7.3 % of every configuration. Through the least common multiple: features the
+# memory port and that multiple, which dominates (up to 2.2 times the cost of a
+# divisible stream); within 3.1 %, characterised on 80-bit streams only.
+IODMA_LEAST_PORT = 64
+"""The narrowest memory port characterised; a narrower one is stated at it (a 16-bit
+output end measured above the 64-bit one)."""
+IODMA_IN_LUT = Fit(985.5, (0.854, 1.644))
+IODMA_IN_FF = Fit(1376.4, (4.191, 2.860))
+IODMA_IN_LCM_LUT = Fit(1247.9, (0.270, 1.351))
+IODMA_IN_LCM_FF = Fit(1671.2, (0.963, 4.814))
+IODMA_OUT_LUT = Fit(1218.4, (0.451, 2.227))
+IODMA_OUT_FF = Fit(1606.8, (4.047, 3.179))
+IODMA_OUT_LCM_LUT = Fit(1433.3, (0.296, 1.481))
+IODMA_OUT_LCM_FF = Fit(1879.5, (1.010, 5.048))
+IODMA_IN_BUFFER_BITS = 36
+"""The input end's read buffer: a RAMB18 for each 36 bits of its memory port (1, 2, 4
+and 7.5 RAMB36 at 64, 128, 256 and 512 bits, at every stream width); the output end
+has none."""
+
+
+def iodma_hls_resources(*, direction: str, intf_width: int, stream_width: int) -> Resources:
+    """What ``IODMA_hls`` uses, moving memory to a stream (``direction`` ``in``) or a
+    stream to memory (``out``), by its memory port (``intf_width``) and its stream
+    (``stream_width``), bits: out of context (``SHELL_CHARACTERISED``); a model, its
+    converters' kind (``converter_kind``) chosen as the HLS source chooses them."""
+    if direction not in ("in", "out"):
+        raise ValueError(f"an IODMA moves in or out, not {direction!r}")
+    kind = converter_kind(intf_width, stream_width)
+    port = max(intf_width, IODMA_LEAST_PORT)
+    if kind == LCM:
+        lut, ff = (
+            (IODMA_IN_LCM_LUT, IODMA_IN_LCM_FF)
+            if direction == "in"
+            else (IODMA_OUT_LCM_LUT, IODMA_OUT_LCM_FF)
+        )
+        features = (port, lcm(intf_width, stream_width))
+    else:
+        lut, ff = (
+            (IODMA_IN_LUT, IODMA_IN_FF) if direction == "in" else (IODMA_OUT_LUT, IODMA_OUT_FF)
+        )
+        features = (port, 0 if kind == NO_CONVERTER else max(port, stream_width))
+    buffer = ceil(port / IODMA_IN_BUFFER_BITS) if direction == "in" else 0
+    return Resources(lut=lut.at(*features), ff=ff.at(*features), bram18=buffer)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -112,7 +189,9 @@ class EndContract:
       ``converter`` sits between the two;
     - the rate: ``call_cycles`` (the constant each call adds), ``frames_per_call`` and
       ``cycles`` a frame, the memory latency excluded (``MEMORY_LATENCY``);
-    - ``control_buses``: the AXI-Lite buses it presents to the shell's processor."""
+    - ``control_buses``: the AXI-Lite buses it presents to the shell's processor;
+    - ``memory_ports``: the AXI memory ports it initiates into the shell's memory;
+    - ``resources``: what it uses of the device, the shell's (``SHELL_CHARACTERISED``)."""
 
     kind: str
     direction: str
@@ -127,6 +206,13 @@ class EndContract:
     call_cycles: int
     frames_per_call: int
     control_buses: int
+    memory_ports: int
+    resources: Resources
+
+    @property
+    def converter_kind(self) -> str:
+        """The converters between its memory port and its stream (``converter_kind``)."""
+        return converter_kind(self.memory_width, self.tdata)
 
     def cycles_at(self, frames_per_call: int) -> int:
         """Its cycles a frame were each call to move ``frames_per_call`` frames."""
@@ -169,10 +255,11 @@ class IodmaEnd(Space):
         tdata, beats = side.transport.data_width, side.form.beats
         memory = gcd(tdata * beats, offer.width_cap)
         converter = memory != tdata
+        # Seen from inside the root, its input is the AXIS target.
+        direction = "in" if side.transport.endpoint is Endpoint.TARGET else "out"
         return EndContract(
             kind=IODMA_HLS,
-            # Seen from inside the root, its input is the AXIS target.
-            direction="in" if side.transport.endpoint is Endpoint.TARGET else "out",
+            direction=direction,
             port=side.transport.name,
             tdata=tdata,
             beats=beats,
@@ -184,6 +271,10 @@ class IodmaEnd(Space):
             call_cycles=offer.call_converted if converter else offer.call_direct,
             frames_per_call=offer.frames_per_call,
             control_buses=1,
+            memory_ports=1,
+            resources=iodma_hls_resources(
+                direction=direction, intf_width=memory, stream_width=tdata
+            ),
         )
 
 
@@ -192,12 +283,19 @@ ENDS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaEnd}
 
 
 __all__ = [
+    "DIVISIBLE",
+    "END",
     "ENDS",
     "END_CONTROL",
     "IODMA_HLS",
+    "IODMA_LEAST_PORT",
+    "LCM",
     "MEMORY_LATENCY",
+    "NO_CONVERTER",
     "EndContract",
     "EndOffer",
     "IodmaEnd",
+    "converter_kind",
     "iodma_hls",
+    "iodma_hls_resources",
 ]

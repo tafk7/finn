@@ -124,8 +124,9 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
     levels = report["members"]["partition.levels"]
     assert (levels["cycles"], levels["buffering"]) == (12, 8 * 2 * 2)
-    # Every member states its resources; the total is their sum, against the part's
-    # totals, and says that the shell is not counted.
+    # Every member states its resources; on the ip shell, which has no ends and no
+    # static region, the total is their sum, the partition's, against the part's
+    # totals.
     resources = report["resources"]
     assert resources["unstated"] == {}
     assert resources["used"] == {
@@ -138,7 +139,8 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     platform = read_target(model).platform.resources
     assert platform is not None and resources["platform"] == asdict(platform)
     assert resources["share"]["dsp"] == round(4 / platform.dsp, 4)
-    assert "not the shell" in resources["counted"]
+    assert resources["shell"] == {"partition": resources["used"], "ends": {}, "static_region": {}}
+    assert "each end and its static region" in resources["counted"]
     (ranked,) = report["strategies"]
     assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0
     # Nothing was left to complete.

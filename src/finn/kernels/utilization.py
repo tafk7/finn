@@ -32,7 +32,11 @@ from math import ceil
 from finn.core.space import ValueSemantics, default_semantics
 
 CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
-"""Where every ``Fit`` was characterised: the part, the tool and the clock."""
+"""Where every leaf kernel's ``Fit`` was characterised: the part, the tool and the clock."""
+
+SHELL_CHARACTERISED = "out of context, Vivado 2025.2, xczu3eg/xczu7ev"
+"""Where the shell's statements (its ends' and its static region's) were characterised:
+each IP synthesized on its own, which overstates what the placed shell uses."""
 
 #: RAMB18 simple dual port aspects (width, rows), widest first; a RAMB36 is two RAMB18
 #: of the same aspect, so it needs no entry of its own.
@@ -107,10 +111,11 @@ def total(items: Iterable[Resources]) -> Resources:
 
 @dataclass(frozen=True)
 class Fit:
-    """A count characterised against out-of-context synthesis (``CHARACTERISED``), by
-    least squares over measured leaf instances: ``constant`` plus a slope a structural
-    feature of the RTL, in the order the leaf's statement names them. A model, about
-    ten per cent from synthesis where it was characterised, not an exact count."""
+    """A count characterised against out-of-context synthesis (``CHARACTERISED`` for a
+    leaf, ``SHELL_CHARACTERISED`` for the shell's members), by least squares over
+    measured instances: ``constant`` plus a slope a structural feature of the RTL, in
+    the order the statement names them. A model, about ten per cent from synthesis
+    where it was characterised, not an exact count."""
 
     constant: float
     slopes: tuple[float, ...]
@@ -188,6 +193,7 @@ __all__ = [
     "RAMB18_SDP",
     "RESOURCES_SEMANTICS",
     "Resources",
+    "SHELL_CHARACTERISED",
     "URAM_SDP",
     "bram18",
     "lutram",

@@ -97,7 +97,9 @@ user: it reads the free side the channel's one user determines, binds no RTL
 (the root's pins stay its pins), and exports its facts (``end_contract``). Its
 cycles a frame (``end_cycles``) are the channel's, beside its stages', and under
 ``END_CONTROL`` it exports the AXI-Lite buses its end presents to the shell (none
-without an end), which the shell root's admission counts.
+without an end), which the shell root's admission counts; under ``END``, its end's
+contract (none without an end), whose resources and memory ports the shell root
+counts with its static region.
 
 The Space class refers to itself (``index``) and, through its source's port, is
 referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
@@ -144,7 +146,7 @@ from finn.kernels.base import (
     RESET,
     RESOURCES,
 )
-from finn.kernels.ends import END_CONTROL, ENDS, EndContract, EndOffer, IodmaEnd
+from finn.kernels.ends import END, END_CONTROL, ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
@@ -451,6 +453,14 @@ class Channel(Space):
         return contract.control_buses
 
     @derived
+    def placed_end(self) -> tuple[EndContract, ...]:
+        """Its end's contract, or none without an end."""
+        if not self.ended:
+            return ()
+        contract: EndContract = self.end_contract
+        return (contract,)
+
+    @derived
     def ends(self) -> Ends:
         """The logical part of the two contracts: element and beat sequence."""
         found = self.endpoints
@@ -699,6 +709,7 @@ class Channel(Space):
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
     end_control = View(end_control_buses)
+    end_export = View(placed_end)
 
     exports = {
         NETLIST: netlist,
@@ -707,6 +718,7 @@ class Channel(Space):
         BUFFERING: buffering,
         RESOURCES: resources,
         END_CONTROL: end_control,
+        END: end_export,
     }
 
 
