@@ -81,7 +81,7 @@ from finn.transformation.kernels.integration import Address, Connection, integra
 from finn.transformation.kernels.package import configured_root
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import chain_source, configure_partition, kernel_model, matmul_model
-from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, io_shape_dict
+from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
 from kernel_ops.tfc import SHAPE, ULTRA96, partition, streamlined
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -1021,6 +1021,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     description = json.loads((report / "driver.json").read_text())
     assert description == {
         "host_runtime": "zynq-iodma",
+        "bitfile": "bitfile/finn-accel.bit",
         "fclk_mhz": 187.512,
         "takes": [
             {"name": "Reshape_0_out0", "element": "UINT8", "shape": [1, 784], "dma": "idma0"}
@@ -1037,6 +1038,12 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         "model",
     ]
     assert json.loads((deploy / "driver.json").read_text()) == description
+    # driver.py and validate.py run the bitfile shipped beside driver/, wherever the
+    # deployment is and from whatever directory they are run.
+    for script in ("driver.py", "validate.py"):
+        assert bitfile_default(deploy / "driver" / script, tmp_path) == str(
+            deploy / "bitfile" / "finn-accel.bit"
+        )
     shipped = ModelWrapper(str(deploy / "model" / "parent.onnx"))
     (node,) = [node for node in shipped.graph.node if node.name == "partition"]
     assert getCustomOp(node).get_nodeattr("model") == "partition.onnx"
@@ -1051,9 +1058,10 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     assert np.array_equal(labels[shipped.graph.output[0].name], expected)
 
 
-def test_a_driver_without_its_bitfiles_clock_is_refused(tmp_path: Path) -> None:
-    """The driver sets the clock its bitfile delivers: a parent graph that states no
-    delivered clock is refused, and so is one whose routed design states no PL clock."""
+def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) -> None:
+    """The driver sets the clock its bitfile delivers and runs the bitfile the build
+    ships: a parent graph that states no delivered clock is refused, so is one whose
+    routed design states no PL clock, and so is one that states no bitfile."""
     model = kernel_model(second_weights=False)
     write_target(model, ULTRA96)
     configure_partition(model)
@@ -1065,5 +1073,8 @@ def test_a_driver_without_its_bitfiles_clock_is_refused(tmp_path: Path) -> None:
     report.write_text(json.dumps({"target_period_ns": 5.0, "warning": "no PL clock in it"}))
     parent.set(OUTPUT_REPORTS, {"delivered_clock": str(report)})
     with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
+        step_kernel_driver(parent, cfg)
+    report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
+    with pytest.raises(ValueError, match="the model states no bitfile"):
         step_kernel_driver(parent, cfg)
     assert not (Path(cfg.output_dir) / "driver").exists()

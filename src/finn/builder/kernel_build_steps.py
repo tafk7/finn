@@ -364,8 +364,9 @@ def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
         "out_of_context": report_dir / "out_of_context",
         "delivered_clock": report_dir / "delivered_clock.json",
     }
-    shutil.copy(built.bitfile, bitfile_dir / "finn-accel.bit")
-    shutil.copy(built.hwh, bitfile_dir / "finn-accel.hwh")
+    bitfile, hwh = bitfile_dir / "finn-accel.bit", bitfile_dir / "finn-accel.hwh"
+    shutil.copy(built.bitfile, bitfile)
+    shutil.copy(built.hwh, hwh)
     shutil.copy(built.timing, reports["timing"])
     shutil.copy(built.placed, reports["placed"])
     reports["out_of_context"].mkdir(exist_ok=True)
@@ -382,8 +383,8 @@ def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
         print("WARNING: " + clock["warning"])
     print(f"Bitfile written into {bitfile_dir}")
     model.set(OUTPUT_PROJECT, built.project)
-    model.set(OUTPUT_BITFILE, str(bitfile_dir / "finn-accel.bit"))
-    model.set(OUTPUT_HWH, str(bitfile_dir / "finn-accel.hwh"))
+    model.set(OUTPUT_BITFILE, str(bitfile))
+    model.set(OUTPUT_HWH, str(hwh))
     stated = {name: str(path) for name, path in reports.items()}
     model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), **stated})
     if export.host_runtime is not None:
@@ -427,13 +428,26 @@ def _delivered_mhz(model: ModelWrapper) -> float:
     return float(clock["delivered_mhz"])
 
 
+def _shipped_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> Path:
+    """The bitfile the parent graph states (finn.outputs), relative to the output
+    directory, which the deployment package mirrors (bitfile/ beside driver/)."""
+    bitfile = model.get(OUTPUT_BITFILE)
+    if bitfile is None:
+        raise ValueError(
+            "pynq_driver: the model states no bitfile (finn.outputs): the driver runs the "
+            "bitfile the build ships; build the bitfile first (bitfile)"
+        )
+    return Path(bitfile).relative_to(Path(cfg.output_dir))
+
+
 def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
     pynq_runner.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
     partition's integration export's ends, PL0 set to the clock the bitfile delivers
-    (report/delivered_clock.json). report/driver.json states what it takes and returns,
-    by name, element and shape, and the host's nodes before and after it
-    (driver_description); the parent graph states it among its reports."""
+    (report/delivered_clock.json), and the bitfile the build ships (finn.outputs) its
+    default, relative to driver/. report/driver.json states that bitfile, what the
+    driver takes and returns, by name, element and shape, and the host's nodes before
+    and after it (driver_description); the parent graph states it among its reports."""
     if KernelOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_kernel_driver.")
         return model
@@ -441,13 +455,16 @@ def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     if row.integration != VIVADO_BLOCK_DESIGN:
         raise ValueError(f"pynq_driver: no driver for the {row.integration!r} integration")
     fclk_mhz = _delivered_mhz(model)
+    bitfile = _shipped_bitfile(model, cfg)
     export = integration(model, completion(cfg.kernel_completion))
     driver_dir = os.path.join(cfg.output_dir, "driver")
-    write_driver(export, driver_dir, fclk_mhz)
+    write_driver(export, driver_dir, fclk_mhz, os.path.relpath(bitfile, "driver"))
     node, _, _ = partition_body(model)
     names = [each.name for each in model.graph.node]
     index = names.index(node.name)
-    description = driver_description(export, fclk_mhz, names[:index], names[index + 1 :])
+    description = driver_description(
+        export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
+    )
     report = Path(cfg.output_dir) / "report" / "driver.json"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps(description, indent=2))

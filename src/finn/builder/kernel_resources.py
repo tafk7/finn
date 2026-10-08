@@ -21,7 +21,10 @@ total, up to three columns:
 A column the build did not make is ``null`` for every member, and ``absent`` says why.
 A member a column does not list (the placed design lists no row for the processor and
 its reset) is ``null`` there. ``unattributed`` is each column's total less its members'
-sum: what the report lists outside the members, or what no member's row holds.
+sum: what the report lists outside the members, or what no member's row holds. The
+placed column's can be negative: Vivado's hierarchical report can count its children
+above its top row (TFC on Ultra96: the members' LUTs 3 above it), and the difference is
+stated as it falls, not clipped.
 
 When the partition was synthesized out of context (OOC_SYNTH), ``partition_members``
 is its split by member of the shell root (``package.ooc_member_resources``):
