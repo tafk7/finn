@@ -8,6 +8,7 @@ type through the one ``build_dataflow`` entry."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -31,7 +32,7 @@ from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.fpgadataflow.pynq_runner import PynqOptions
 from finn.transformation.kernels import kernel_choices_config
 from finn.util.toolchain import Selection
-from kernel_ops.tfc import ULTRA96, streamlined
+from kernel_ops.tfc import ULTRA96
 
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
@@ -174,14 +175,16 @@ def test_a_build_directory_states_one_configuration_its_file_naming_its_type(
 
 
 @pytest.mark.slow
-def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path) -> None:
+def test_tfc_builds_on_ip_through_the_directory_entry(
+    tmp_path: Path, tfc_streamlined: Path
+) -> None:
     """build_dataflow_directory (the ``build_dataflow`` command's entry) builds a
     directory's KernelBuildConfig through the kernel path in its build process: TFC on
     the default ip shell, named by its board, explored as its Zynq build is, to its
     verified partition, whose target is the part's on ip."""
     directory = tmp_path / "build"
     directory.mkdir()
-    streamlined(directory).save(str(directory / "model.onnx"))
+    shutil.copyfile(tfc_streamlined, directory / "model.onnx")
     cfg = KernelBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),

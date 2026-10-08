@@ -49,7 +49,7 @@ from finn.transformation.kernels.package import (
 from finn.util.toolchain import Toolchain, machine_toolchain
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import PackagedByStub, read_back
-from kernel_ops.tfc import SHAPE, streamlined
+from kernel_ops.tfc import SHAPE
 
 
 def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
@@ -151,16 +151,14 @@ def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
 @requires_xsim
 @pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
 def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
-    tmp_path: Path,
+    tmp_path: Path, tfc_streamlined: Path
 ) -> None:
     """TFC_W2A2 through the builder on ``ip`` (Ultra96's part at 5 ns, the Z0 baseline's
     exploration), STITCHED_IP asked: the IP packages, its description reads back against
     the module's pins, and the testbench written beside it, on the first image of
     verify_input_npy, prints PASS when run by its own script."""
-    (tmp_path / "tfc").mkdir()
-    source = streamlined(tmp_path / "tfc")
     source_file = tmp_path / "streamlined.onnx"
-    source.save(str(source_file))
+    shutil.copyfile(tfc_streamlined, source_file)
     images = np.random.default_rng(3).integers(0, 256, size=(2, *SHAPE[1:])).astype(np.float32)
     np.save(tmp_path / "input.npy", images)
     output = tmp_path / "output"

@@ -50,14 +50,12 @@ from finn.platform.shells import ZYNQ_STATIC_REGION
 from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
 from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels import (
-    InferKernelTensors,
-    ToKernelOps,
     explore_kernel_choices,
     kernel_choices_config,
 )
 from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, configure_partition, kernel_model
-from kernel_ops.tfc import ULTRA96, streamlined
+from kernel_ops.tfc import ULTRA96
 
 # -- an end's arithmetic -------------------------------------------------------------------
 
@@ -260,10 +258,9 @@ ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period
 
 
 @pytest.fixture(scope="module")
-def tfc(tmp_path_factory: pytest.TempPathFactory) -> ModelWrapper:
-    """TFC_W2A2 as KernelOps for Ultra96 at 5 ns in the Zynq shell (half a minute)."""
-    source = streamlined(tmp_path_factory.mktemp("tfc"))
-    return source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
+def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
+    """TFC_W2A2 as KernelOps for Ultra96 at 5 ns in the Zynq shell."""
+    return ModelWrapper(str(tfc_kernel_ops))
 
 
 def explored(
