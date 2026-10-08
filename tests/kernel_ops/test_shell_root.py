@@ -5,8 +5,8 @@
 
 Each node's choices are saved on it; the root's adapter memories, open (several
 viable), are the flow's to choose and are saved on their consumers; each
-edge's adapter is forced. The root's members are its boundary channels and its
-Partition's channels and kernels, below ``partition``. The rebuilt root's module is
+edge's adapter is forced. The root's members are its channels, the boundary's among
+them, and its kernels, named as the graph. The rebuilt root's module is
 the Chain's (``kernels.chain``), configured the same way: the same flat netlist and
 pins, and in XSim what ``execute_onnx`` computes on the source.
 """
@@ -75,7 +75,7 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     # The levels edge now converts widths before its transport; its replay after it is
     # the same input_gen, whose memory choice still applies.
     assert not root.dropped
-    assert [stage.label for stage in root.point.partition.levels.stages] == [
+    assert [stage.label for stage in root.point.levels.stages] == [
         "output_adapter.vpc.vpc",
         "adapter.input_gen.input_gen",
     ]
@@ -88,11 +88,11 @@ def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None
     # A memory of a chain the levels edge does not take.
     second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
     root = shell_root(model, model.graph.node, name="chain")
-    stale = "partition.levels.adapter.input_gen_vpc.input_gen.ram_style"
+    stale = "levels.adapter.input_gen_vpc.input_gen.ram_style"
     assert list(root.dropped) == [stale]
     assert root.dropped[stale] == "inapplicable"
     point, _ = open_memories(root)
-    levels = point.partition.levels
+    levels = point.levels
     assert levels.query(type(levels).adapter).value == "input_gen"
 
 
@@ -123,7 +123,7 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
 def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
     model = kernel_model()
     root = shell_root(model, model.graph.node, name="chain")
-    # hidden and levels run between its nodes: channels of the Partition, no port.
+    # hidden and levels run between its nodes: channels with no port.
     assert root.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
     point, styles = open_memories(root)
     point = commit(point, dict.fromkeys(styles, "auto"))
@@ -158,71 +158,62 @@ def test_the_owner_map() -> None:
     model = kernel_model()
     root = shell_root(model, model.graph.node, name="chain")
     assert dict(root.owners) == {
-        "partition.first": ("first", ""),
+        "first": ("first", ""),
         "x": ("first", "x."),
-        "partition.w1": ("first", "w."),
-        "partition.activate": ("activate", ""),
-        "partition.hidden": ("activate", "x."),
-        "partition.second": ("second", ""),
-        "partition.levels": ("second", "x."),
-        "partition.w2": ("second", "w."),
+        "w1": ("first", "w."),
+        "activate": ("activate", ""),
+        "hidden": ("activate", "x."),
+        "second": ("second", ""),
+        "levels": ("second", "x."),
+        "w2": ("second", "w."),
         "y": ("second", "y."),
     }
     # A key's owner is its longest owned member path's: the edge's, then the kernel's.
-    assert root.owner("partition.levels.adapter.input_gen.input_gen.ram_style") == (
+    assert root.owner("levels.adapter.input_gen.input_gen.ram_style") == (
         "second",
         "x.adapter.input_gen.input_gen.ram_style",
     )
-    assert root.owner("partition.second.compute.packed.pe") == ("second", "compute.packed.pe")
+    assert root.owner("second.compute.packed.pe") == ("second", "compute.packed.pe")
     assert root.owner("y.transport") == ("second", "y.transport")
-    assert root.owner("partition.levelsx.transport") is None
+    assert root.owner("levelsx.transport") is None
     assert root.members == (
         "x",
-        "partition.w1",
-        "partition.hidden",
-        "partition.levels",
-        "partition.w2",
+        "w1",
+        "hidden",
+        "levels",
+        "w2",
         "y",
-        "partition.first",
-        "partition.activate",
-        "partition.second",
+        "first",
+        "activate",
+        "second",
     )
 
 
 def test_a_choice_in_the_root_persists_on_the_weight_streams_owner() -> None:
     model = kernel_model()
     root = shell_root(model, model.graph.node, name="chain")
-    written = persist(
-        model, root, commit(root.point, {"partition.w2.source.memstream.ram_style": "block"})
-    )
+    written = persist(model, root, commit(root.point, {"w2.source.memstream.ram_style": "block"}))
     assert written["second"]["w.source.memstream.ram_style"] == "block"
     second = kernel_op(model, model.graph.node[2])
     assert second.choices()["w.source.memstream.ram_style"] == "block"
     rebuilt = shell_root(model, model.graph.node, name="chain")
-    assert rebuilt.point.partition.w2.source.ram_style == "block" and not rebuilt.dropped
+    assert rebuilt.point.w2.source.ram_style == "block" and not rebuilt.dropped
 
 
 def test_an_explored_point_persists_and_replays_as_itself() -> None:
-    """Every choice an exploration commits, a boundary channel's and the Partition's,
+    """Every choice an exploration commits, a boundary channel's and the others',
     goes back to its owner by path and replays onto the same point."""
     model = kernel_model()
     explored = explore_kernel_choices(model, [Ranked(Lanes(2)), SizeFifos()])
     made = chosen(explored.point)
-    assert {"x.transport", "y.transport", "partition.levels.transport"} <= set(made)
-    assert "partition.first.compute.packed.pe" in made
+    assert {"x.transport", "y.transport", "levels.transport"} <= set(made)
+    assert "first.compute.packed.pe" in made
     rebuilt = shell_root(model, model.graph.node)
     assert not rebuilt.dropped and chosen(rebuilt.point) == made
     # Written again from the replayed point, every node holds what it held.
     held = {node.name: kernel_op(model, node).choices() for node in model.graph.node}
     persist(model, rebuilt, rebuilt.point)
     assert {node.name: kernel_op(model, node).choices() for node in model.graph.node} == held
-
-
-def test_a_boundary_tensor_named_as_the_shell_s_partition_is_refused() -> None:
-    model = kernel_model()
-    model.rename_tensor("x", "partition")
-    with pytest.raises(KernelOpError, match="a boundary tensor is named partition"):
-        shell_root(model, model.graph.node)
 
 
 def test_a_node_named_like_a_tensor_is_refused() -> None:
@@ -247,11 +238,11 @@ def test_a_kernel_choice_the_root_refuses_is_dropped_named_and_cleared_by_persis
     first.set_nodeattr("compute.packed.simd", 2)
     first.set_nodeattr("compute.packed.pe", 3)
     root = shell_root(model, model.graph.node, name="chain")
-    assert list(root.dropped) == ["partition.first.compute.packed.pe"]
-    assert "domain-membership" in root.dropped["partition.first.compute.packed.pe"]
-    assert root.point.partition.first.compute.simd == 2
+    assert list(root.dropped) == ["first.compute.packed.pe"]
+    assert "domain-membership" in root.dropped["first.compute.packed.pe"]
+    assert root.point.first.compute.simd == 2
     # Its pe is open again; once chosen, the node holds the new value, nothing stale.
-    persist(model, root, commit(root.point, {"partition.first.compute.packed.pe": 2}))
+    persist(model, root, commit(root.point, {"first.compute.packed.pe": 2}))
     assert first.choices()["compute.packed.pe"] == 2
     assert not shell_root(model, model.graph.node, name="chain").dropped
 
@@ -262,7 +253,7 @@ def test_persist_clears_what_the_point_does_not_commit() -> None:
     second = kernel_op(model, model.graph.node[2])
     second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
     stale = shell_root(model, model.graph.node, name="chain")
-    assert list(stale.dropped) == ["partition.levels.adapter.input_gen_vpc.input_gen.ram_style"]
+    assert list(stale.dropped) == ["levels.adapter.input_gen_vpc.input_gen.ram_style"]
     persist(model, stale, stale.point)
     assert "x.adapter.input_gen_vpc.input_gen.ram_style" not in second.choices()
     owned = {key: root.owner(key) for key in chosen(root.point)}

@@ -10,9 +10,9 @@ own and supplies no doubled clock; the ``ip`` shell bounds neither count and sup
 the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavailable``.
 
 No KernelOp places a control bus, so a partition of KernelOps presents no AXI-Lite bus:
-the buses are counted here on a shell root whose Partition is built from the kernels
-directly, AXI-Lite thresholdings each on its ``ControlBus``, through the same ``Shell``
-class and rows the shell root reads. No kernel initiates a memory port (no bus protocol
+the buses are counted here on a shell root built from the kernels directly, AXI-Lite
+thresholdings each on its ``ControlBus``, through the same ``Shell`` class and rows the
+shell root reads. No kernel initiates a memory port (no bus protocol
 states one), so that count is always zero.
 """
 
@@ -26,11 +26,10 @@ from kernels.helpers import with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
 import finn.custom_op.kernels.shell as shell
-from finn.core.space import Param, composite, design_space
+from finn.core.space import composite, design_space
 from finn.core.space.errors import ValueUnavailableError
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.partition import Partition
-from finn.custom_op.kernels.shell import PARTITION, Shell, admission_refusal, shell_root
+from finn.custom_op.kernels.shell import Shell, admission_refusal, shell_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe
@@ -52,19 +51,18 @@ TABLE = (((0, 1, 2), (0, 1, 2)),)
 
 
 def thresholdings(count: int, row: ShellRow) -> Any:
-    """A shell root for ``row`` whose Partition is ``count`` AXI-Lite thresholdings in a
-    row, each presenting its bus (``t<i>_s_axilite``), configured: every thresholding
+    """A shell root for ``row`` of ``count`` AXI-Lite thresholdings in a row, each
+    presenting its bus (``t<i>_s_axilite``), configured: every thresholding
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
-    # The boundary channels are the Partition's reference inputs, the shell root's.
-    x_side: Any = Param()
-    y_side: Any = Param()
-    members: dict[str, object] = {"x": x_side, "y": y_side}
+    offered: dict[str, Any] = {"end_offer": row.ends} if row.ends else {}
+    x = Channel(tensor=TENSOR, platform=platform, port="s_axis_0", **offered)
+    y = Channel(tensor=TENSOR, platform=platform, port="m_axis_0", **offered)
     inner = [Channel(tensor=TENSOR, platform=platform) for _ in range(count - 1)]
-    sides = [x_side, *inner, y_side]
+    sides = [x, *inner, y]
+    members: dict[str, object] = {"x": x, **{f"c{index}": each for index, each in enumerate(inner)}}
     for index in range(count):
         bus = ControlBus(port=f"t{index}_s_axilite")
-        members[f"c{index}"] = inner[index] if index < count - 1 else None
         members[f"bus{index}"] = bus
         members[f"t{index}"] = ThresholdingAxiKernel(
             input_dtype=UINT2,
@@ -76,21 +74,12 @@ def thresholdings(count: int, row: ShellRow) -> Any:
             control=bus,
             platform=platform,
         )
-    members = {name: each for name, each in members.items() if each is not None}
-    lifted: Any = composite(
-        f"thresholds{count}", members, base=Partition, annotations={"x": Channel, "y": Channel}
-    )
-    offered: dict[str, Any] = {"end_offer": row.ends} if row.ends else {}
-    x = Channel(tensor=TENSOR, platform=platform, port="s_axis_0", **offered)
-    y = Channel(tensor=TENSOR, platform=platform, port="m_axis_0", **offered)
-    root: Any = composite(
-        f"shell{count}", {"x": x, PARTITION: lifted(x=x, y=y), "y": y}, base=Shell
-    )
+    root: Any = composite(f"shell{count}", {**members, "y": y}, base=Shell)
     choices: dict[str, object] = {}
     for index in range(count):
         held = {"use_axilite": True, "pe": 1, "deep_pipeline": False, "ram_style": "auto"}
-        choices |= {f"{PARTITION}.t{index}.{key}": value for key, value in held.items()}
-        choices[f"{PARTITION}.t{index}.ultra_stages"] = 0
+        choices |= {f"t{index}.{key}": value for key, value in held.items()}
+        choices[f"t{index}.ultra_stages"] = 0
     point = commit(with_direct_transports(design_space(root(row=row))), choices)
     return with_adapter_memories(point)
 
@@ -161,13 +150,12 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         configured_root(model, "chain")
 
 
-def test_the_shells_fragment_is_a_kernels_with_its_partition_inlined() -> None:
-    """The shell root's netlist is ``Kernel``'s composition with the Partition in place,
-    each bus it presents with the writes its thresholding's table takes."""
+def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
+    """The shell root's netlist is ``Kernel``'s composition of its members, each bus it
+    presents with the writes its thresholding's table takes."""
     point = thresholdings(2, IP_ROW)
-    assert point.fragment == point.composed_fragment().inlined(PARTITION)
-    partition = getattr(point, PARTITION)
+    assert point.fragment == point.composed_fragment()
     assert [(item.port, item.registers) for item in point.fragment.exports] == [
-        (f"t{index}_s_axilite", getattr(partition, f"t{index}").register_map) for index in range(2)
+        (f"t{index}_s_axilite", getattr(point, f"t{index}").register_map) for index in range(2)
     ]
     assert all(len(item.registers.writes) == 6 for item in point.fragment.exports)

@@ -1,11 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition's class is reused by value: the same facts hit, any fact changed misses.
+"""A shell root's class is reused by value: the same facts hit, any fact changed misses.
 
-``partition`` keeps the Partition's composite class by ``PartitionKey``, and
-``shell_root`` its shell root's class with it (``ShellKey``), and so the compiled
-model; the choices are replayed on a fresh design space every call.
+``shell_root`` keeps the shell root's class by ``ShellKey`` (``SHELLS``), and so the
+compiled model; the choices are replayed on a fresh design space every call.
 """
 
 from __future__ import annotations
@@ -22,11 +21,17 @@ from finn.custom_op.kernels import MatMul, Thresholding
 from finn.custom_op.kernels import matmul as matmul_op
 from finn.custom_op.kernels.base import integer_tensor, write_target
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
-from finn.custom_op.kernels.partition import PARTITIONS, Declared, PartitionKey
-from finn.custom_op.kernels.shell import SHELLS, ShellRoot, persist, shell_root
+from finn.custom_op.kernels.shell import (
+    SHELLS,
+    Declared,
+    ShellKey,
+    ShellRoot,
+    persist,
+    shell_root,
+)
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
-from finn.platform import resolve_target
+from finn.platform import resolve_target, shell_row
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import (
     INT3,
@@ -39,16 +44,15 @@ from kernel_ops.models import (
 
 
 def root(model: ModelWrapper, name: str = "partition") -> tuple[ShellRoot, bool]:
-    """The shell root of all of ``model``'s nodes, and whether its Partition's class and
-    its own were reused."""
-    hits, shells = PARTITIONS.hits, SHELLS.hits
+    """The shell root of all of ``model``'s nodes, and whether its class was reused."""
+    hits = SHELLS.hits
     found = shell_root(model, model.graph.node, name=name)
-    return found, PARTITIONS.hits > hits and SHELLS.hits > shells
+    return found, SHELLS.hits > hits
 
 
 def last_key() -> Any:
-    """The Partition's key ``shell_root`` used last."""
-    return next(reversed(PARTITIONS.entries))
+    """The key ``shell_root`` used last."""
+    return next(reversed(SHELLS.entries))
 
 
 def test_the_same_facts_reuse_the_class_never_a_point() -> None:
@@ -57,7 +61,6 @@ def test_the_same_facts_reuse_the_class_never_a_point() -> None:
     # Another model of the same facts reuses the class: a fresh design space of it.
     again, reused = root(kernel_model(), "chain")
     assert reused and type(again.point) is type(first.point)
-    assert type(again.point.partition) is type(first.point.partition)
     assert again.point is not first.point
 
     # Choices are replayed on the fresh space, never shared: saving the open memories
@@ -135,9 +138,9 @@ def test_a_fact_changed_misses(change: str) -> None:
 
 def test_the_weights_values_change_the_facts_key_alone() -> None:
     first, _ = root(matmul_model())
-    before: PartitionKey = last_key()
+    before: ShellKey = last_key()
     again, _ = root(changed_weights())
-    after: PartitionKey = last_key()
+    after: ShellKey = last_key()
     (placement,) = after.kernels
     assert type(again.point) is not type(first.point)
     assert placement.facts != before.kernels[0].facts
@@ -155,8 +158,8 @@ def test_an_owned_weight_channel_is_declared_from_the_graph_its_value_read_to_bu
     declared = dict(last_key().channels)["w"]
     assert declared.tensor.element.value_range == (int(WEIGHTS.min()), int(WEIGHTS.max()))
     assert declared.port is None  # owned: never a boundary
-    assert first.point.partition.w.contents == integer_tensor(WEIGHTS)
-    assert first.point.partition.w.valued
+    assert first.point.w.contents == integer_tensor(WEIGHTS)
+    assert first.point.w.valued
     reads: list[int] = []
 
     def counted(values: Any) -> Any:
@@ -170,7 +173,7 @@ def test_an_owned_weight_channel_is_declared_from_the_graph_its_value_read_to_bu
     assert not reused and reads == [1]
 
 
-def test_the_partitions_name_misses() -> None:
+def test_the_roots_name_misses() -> None:
     first, _ = root(matmul_model(), "one")
     again, _ = root(matmul_model(), "another")
     assert type(again.point) is not type(first.point)
@@ -178,16 +181,16 @@ def test_the_partitions_name_misses() -> None:
 
 
 def test_a_boundary_port_changed_alone_misses() -> None:
-    """``hidden`` also leaves the graph: it is a boundary of the partition (and ``y`` the
-    next one); nothing else of the key changes."""
+    """``hidden`` also leaves the graph: it is a boundary of the root (and ``y`` the next
+    one); nothing else of the key changes."""
     first, _ = root(kernel_model(), "chain")
-    before: PartitionKey = last_key()
+    before: ShellKey = last_key()
     model = kernel_model()
     hidden = model.get_tensor_valueinfo("hidden")
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
     again, _ = root(model, "chain")
-    after: PartitionKey = last_key()
+    after: ShellKey = last_key()
     assert ("hidden", "m_axis_0") in again.boundary
     assert dict(after.channels)["hidden"].port == "m_axis_0"
     assert replace(after, channels=before.channels) == before
@@ -198,7 +201,7 @@ def test_every_component_of_the_key_is_compared() -> None:
     """Each field of the key, of a placement and of a declared channel, changed alone, is
     another key: it misses."""
     root(kernel_model(), "chain")
-    key: PartitionKey = last_key()
+    key: ShellKey = last_key()
     placement, (tensor, declared) = key.kernels[0], key.channels[0]
     assert placement.op is MatMul
     platform = replace(key.platform, period_ns=key.platform.period_ns + 1)
@@ -207,6 +210,7 @@ def test_every_component_of_the_key_is_compared() -> None:
         "platform": platform,
         "channels": key.channels[1:],
         "kernels": key.kernels[1:],
+        "offers": shell_row("pynq", "Ultra96").ends,
     }
     variants = [replace(key, **{field.name: other[field.name]}) for field in fields(key)]
     changed_placement: dict[str, Any] = {
@@ -254,10 +258,10 @@ def test_every_component_of_the_key_is_compared() -> None:
     assert cache.hits == 1
 
 
-def test_partitions_are_bounded() -> None:
+def test_shell_roots_are_bounded() -> None:
     """The least recently used class goes past the bound; a call on its facts builds it
     again."""
-    assert PARTITIONS.size == 16
+    assert SHELLS.size == 16
     cache: LeastRecentlyUsed[object] = LeastRecentlyUsed(2)
     first = cache.get("a", object)
     cache.get("b", object)
@@ -267,10 +271,10 @@ def test_partitions_are_bounded() -> None:
     assert cache.get("b", object) is not None and cache.misses == 4
 
 
-def test_a_refused_partition_caches_nothing() -> None:
+def test_a_refused_root_caches_nothing() -> None:
     model = kernel_model()
     model.graph.node[2].name = "first"
-    misses = PARTITIONS.misses, SHELLS.misses
+    misses = SHELLS.misses
     with pytest.raises(ValueError, match="both named first"):
         shell_root(model, model.graph.node)
-    assert (PARTITIONS.misses, SHELLS.misses) == misses
+    assert SHELLS.misses == misses

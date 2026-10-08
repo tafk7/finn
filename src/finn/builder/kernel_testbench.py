@@ -46,7 +46,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.core.onnx_exec import execute_onnx as execute_parent_graph
-from finn.custom_op.kernels.partition import member
+from finn.custom_op.kernels.shell import member
 from finn.harness.rtl import SimulationFailed, Words, pack, stream_bench
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header

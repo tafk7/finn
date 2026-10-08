@@ -76,7 +76,7 @@ from finn.transformation.kernels import (
     completion,
     explore_kernel_choices,
     kernel_choices_config,
-    partition_bottleneck,
+    shell_bottleneck,
 )
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts, configured_root
@@ -542,15 +542,15 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert (completed.count("baseline"), completed.count("size_fifos")) == (28, 13)
     assert report["fifos"] == "sized at completion by baseline: 13 channels"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
-    # frame a call), within the budget of 200; the Partition's slowest members, the
+    # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
     assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
-    partition = {name: row["cycles"] for name, row in report["members"].items()}
-    assert [name for name, cycles in partition.items() if cycles == 196] == [
-        "partition.MultiThreshold_0_out0",
-        "partition.MatMul_0_param0",
-        "partition.MultiThreshold_0",
-        "partition.MatMul_0",
+    members = {name: row["cycles"] for name, row in report["members"].items()}
+    assert [name for name, cycles in members.items() if cycles == 196] == [
+        "MultiThreshold_0_out0",
+        "MatMul_0_param0",
+        "MultiThreshold_0",
+        "MatMul_0",
     ]
     assert set(report["ends"]) == {"Reshape_0_out0", "MatMul_3_out0"}
 
@@ -605,13 +605,13 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     whys = {name: row["why"] for name, row in rows.items()}
     # Each boundary is read through its end.
     assert whys["Reshape_0_out0"] == whys["MatMul_3_out0"] == "direct absorbs it"
-    assert {whys[f"partition.MatMul_{index}_param0"] for index in range(4)} == {
+    assert {whys[f"MatMul_{index}_param0"] for index in range(4)} == {
         "a memory source: paced by its consumer"
     }
     # Every activation between two layers: the consumer, or its input_gen's buffer of
     # frames, takes each word no later than the producer's idle time allows.
-    inner = [f"partition.MultiThreshold_{index}_out0" for index in range(4)]
-    inner += [f"partition.MatMul_{index}_out0" for index in range(3)]
+    inner = [f"MultiThreshold_{index}_out0" for index in range(4)]
+    inner += [f"MatMul_{index}_out0" for index in range(3)]
     assert {whys[name] for name in inner} == {"direct absorbs it"}
     assert len(rows) == 2 + 4 + len(inner)
     # The partition's buffering: the input_gens' buffers as the RTL allocates them
@@ -675,11 +675,11 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     model = kernel_model()
     explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
-    assert partition_bottleneck(model) == explored.cost.bottleneck
-    assert partition_bottleneck(model) is not None
+    assert shell_bottleneck(model) == explored.cost.bottleneck
+    assert shell_bottleneck(model) is not None
     # Saved choices or none, it is the bottleneck of the point as it is built.
     fresh = kernel_model()
-    assert partition_bottleneck(fresh) == explore_kernel_choices(fresh, []).cost.bottleneck
+    assert shell_bottleneck(fresh) == explore_kernel_choices(fresh, []).cost.bottleneck
 
 
 #: Z0's chain: the Zynq landing's baseline build explored TFC so.
@@ -1047,7 +1047,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     # The delivered clock against the one asked, the bottleneck the shell root's, its
     # ends included: the input end.
     clock = json.loads((report / "delivered_clock.json").read_text())
-    bottleneck = partition_bottleneck(body, completion("baseline"))
+    bottleneck = shell_bottleneck(body, completion("baseline"))
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)

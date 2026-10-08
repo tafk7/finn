@@ -66,34 +66,34 @@ def seam_of(model: ModelWrapper) -> tuple[Seam, Any]:
 def test_a_choice_names_the_node_and_attribute_that_persist_it() -> None:
     explorer, point = seam_of(kernel_model())
     offered = {choice.key: choice for choice in explorer.choices(point)}
-    assert offered["partition.first.compute.packed.pe"].owner == ("first", "compute.packed.pe")
-    # An edge's choice is its consumer's, a boundary channel's at the shell root's level.
-    assert offered["partition.levels.transport"].owner == ("second", "x.transport")
+    assert offered["first.compute.packed.pe"].owner == ("first", "compute.packed.pe")
+    # An edge's choice is its consumer's, a graph output's its producer's.
+    assert offered["levels.transport"].owner == ("second", "x.transport")
     assert offered["y.transport"].owner == ("second", "y.transport")
-    assert explorer.key("second", "x.transport") == "partition.levels.transport"
-    assert explorer.key("second", "compute.packed.pe") == "partition.second.compute.packed.pe"
+    assert explorer.key("second", "x.transport") == "levels.transport"
+    assert explorer.key("second", "compute.packed.pe") == "second.compute.packed.pe"
     assert explorer.key("second", "y.transport") == "y.transport"
     # A key's member is the longest member path that prefixes it, at a segment.
-    assert explorer.member_of("partition.levels.transport") == "partition.levels"
+    assert explorer.member_of("levels.transport") == "levels"
     assert explorer.member_of("y.transport.fifo.buffer.depth") == "y"
-    assert explorer.member_of("partition.levelsx.transport") is None
+    assert explorer.member_of("levelsx.transport") is None
     assert explorer.member_of("partition") is None
 
 
 def test_the_seam_reads_each_member_at_its_path() -> None:
-    """Cost and refusals read members below the Partition by path, and an attempt checks
-    the members its keys belong to."""
+    """Cost and refusals read the root's members by path, and an attempt checks the
+    members its keys belong to."""
     explorer, point = seam_of(kernel_model())
     cost = explorer.cost(point)
     assert set(cost.waiting) | set(cost.cycles) == set(explorer.members)
-    assert "partition.first" in cost.waiting
-    hidden = explorer.cost(point, ("partition.hidden",))
-    assert {*hidden.cycles, *hidden.waiting} == {"partition.hidden"}
+    assert "first" in cost.waiting
+    hidden = explorer.cost(point, ("hidden",))
+    assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
     assert explorer.refusals(point) == {}
-    outcome = explorer.attempt(point, {"partition.first.compute.packed.pe": 1})
+    outcome = explorer.attempt(point, {"first.compute.packed.pe": 1})
     assert isinstance(outcome, Accepted)
-    folded = explorer.cost(outcome.point, ("partition.first",))
-    assert "partition.first" in folded.cycles or "partition.first" in folded.waiting
+    folded = explorer.cost(outcome.point, ("first",))
+    assert "first" in folded.cycles or "first" in folded.waiting
 
 
 def test_a_spec_names_its_strategy_and_its_parameters() -> None:
@@ -128,12 +128,12 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     assert saved["first"]["compute.packed.pe"] == 2 and saved["second"]["x.transport"] == "direct"
     report = explored.report
     assert report["bottleneck"] == {
-        "members": ["x", "partition.levels", "partition.first", "partition.second"],
+        "members": ["x", "levels", "first", "second"],
         "cycles": 12,
     }
     # levels: the replay of a frame of two beats of two 2-bit levels, in input_gen's
     # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
-    levels = report["members"]["partition.levels"]
+    levels = report["members"]["levels"]
     assert (levels["cycles"], levels["buffering"]) == (12, 8 * 2 * 2)
     # Every member states its resources; on the ip shell, which has no ends and no
     # static region, the total is their sum, the partition's, against the part's
@@ -190,7 +190,7 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     cost = seam.cost(point)
     assert cost.used is None and cost.resources == {}
     assert cost.unstated["x"] == "waits on x.transport"
-    assert cost.unstated["partition.activate"] == "waits on partition.activate.ram_style"
+    assert cost.unstated["activate"] == "waits on activate.ram_style"
     completed = seam.cost(seam.complete(point).point)
     assert completed.unstated == {}
     assert completed.used == sum(completed.resources.values(), Resources())
@@ -358,10 +358,10 @@ def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() ->
     write_target(model, VCK190)
     model = model.transform(InferKernelTensors())
     root = shell_root(model, model.graph.node)
-    assert "partition.first.compute.packed.pe" in root.dropped
-    assert "partition.first.compute" in {item.key for item in inspection.viable(root.point)}
+    assert "first.compute.packed.pe" in root.dropped
+    assert "first.compute" in {item.key for item in inspection.viable(root.point)}
     explored = explore_kernel_choices(model, [Ranked(Lanes())])
-    assert "partition.first.compute.packed.pe" in explored.report["dropped"]
+    assert "first.compute.packed.pe" in explored.report["dropped"]
     held = kernel_op(model, model.graph.node[0]).choices()
     assert "compute" in held
     again = shell_root(model, model.graph.node)
@@ -387,9 +387,9 @@ def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
     assert target["bottleneck"]["cycles"] <= 200 and target["bottleneck_of"] == "folded"
     assert report["bottleneck"]["cycles"] <= 200
     cases = target["cases"]
-    assert set(cases) == {f"partition.MatMul_{index}.compute" for index in range(4)}
+    assert set(cases) == {f"MatMul_{index}.compute" for index in range(4)}
     for key, row in cases.items():
-        node = key.split(".")[1]
+        node = key.split(".")[0]
         assert row["taken"] in ("packed", "int8_dsp58") and row["why"]
         assert set(row["folded"]) == {"packed", "int8_dsp58"}
         assert report["choices"][node]["compute"] == "target_throughput"

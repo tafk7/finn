@@ -78,8 +78,7 @@ from qonnx.transformation.base import Transformation
 
 from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, read_target, shape
-from finn.custom_op.kernels.partition import member
-from finn.custom_op.kernels.shell import PARTITION, admission_refusal, shell_root
+from finn.custom_op.kernels.shell import admission_refusal, member, shell_root
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
@@ -298,8 +297,8 @@ def ooc_member_resources(
     ``project``, per member of its shell root: the top's ``total``, and each member's
     instances summed (``members``, by member path). The instances are the module's that
     PackagePartition packaged (``configured_root`` under ``completion``). An instance is
-    its member's by its label (``instance_name``), as the shell root names the
-    Partition's keys; an instance no member claims is stated under its netlist name.
+    its member's by its label (``instance_name``), named as the shell root's members;
+    an instance no member claims is stated under its netlist name.
     Synthesis flattens small instances into the top: what no reported instance holds is
     ``unattributed`` (the total less the members'), and the module's instances with no
     row are ``unreported_instances``. Every count is Vivado's synthesis estimate out of
@@ -320,9 +319,7 @@ def ooc_member_resources(
             continue
         reported.add(instance)
         label = labels.get(instance)
-        path = None
-        if label is not None:
-            path = member_of(paths, label) or member_of(paths, f"{PARTITION}.{label}")
+        path = None if label is None else member_of(paths, label)
         key = path or instance
         members[key] = members[key] + counted if key in members else counted
     total = vars(rows[0][2])

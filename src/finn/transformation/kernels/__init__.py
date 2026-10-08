@@ -12,12 +12,13 @@ DSE seam (``finn.kernels.explore``) by a list of strategies
 (``strategy``: one from its spec) and saves them, and a completion policy
 (``completion``: one by its name) completes what they leave open wherever a
 partition is costed or built, never saved;
-``partition_bottleneck`` reads a partition's slowest members from its saved
-choices, completed; ``kernel_choices_config`` exports the nodes' choices, sparse, for
-``ApplyConfig``; ``PackagePartition`` packages a partition of KernelOps as the
-IP the shells read, and ``ElaboratePartition`` compiles and elaborates its RTL
-in XSim, a check before a shell builds it; ``integration.integration`` exports
-what a shell's integration builds around the partition, from its ends.
+``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
+included, from its saved choices, completed; ``kernel_choices_config`` exports the
+nodes' choices, sparse, for ``ApplyConfig``; ``PackagePartition`` packages a
+partition of KernelOps as the IP the shells read, and ``ElaboratePartition`` compiles
+and elaborates its RTL in XSim, a check before a shell builds it;
+``integration.integration`` exports what a shell's integration builds around the
+partition, from its ends.
 """
 
 from finn.transformation.kernels.choose import (
@@ -27,7 +28,7 @@ from finn.transformation.kernels.choose import (
     ExploreKernelChoices,
     completion,
     explore_kernel_choices,
-    partition_bottleneck,
+    shell_bottleneck,
     strategy,
 )
 from finn.transformation.kernels.config import kernel_choices_config
@@ -47,6 +48,6 @@ __all__ = [
     "completion",
     "explore_kernel_choices",
     "kernel_choices_config",
-    "partition_bottleneck",
+    "shell_bottleneck",
     "strategy",
 ]

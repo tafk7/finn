@@ -9,7 +9,7 @@ from the model's ``finn.platform`` metadata. An initializer the node owns is a
 value its channel carries (``Facts.values``), and the channel's tensor states
 its range. It states its placement once, as data (``kernel``, ``formals``,
 ``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
-root is generated from it, and a Partition places the same kernel. It
+root is generated from it, and a shell root places the same kernel. It
 binds its node root through the bind cache, on its inputs for inference and
 whole for its choices, replays the choices its node holds, and answers the
 compiler's queries from the result.
@@ -542,7 +542,7 @@ class KernelOp(CustomOp):
         for name, value in sorted(merged.items()):
             self.set_nodeattr(name, int(value) if isinstance(value, bool) else value)
 
-    # -- in a Partition -------------------------------------------------------------------
+    # -- in a shell root ------------------------------------------------------------------
 
     def inputs(self) -> dict[str, str]:
         """The tensor of each of this node's input channels, by port."""
@@ -555,7 +555,7 @@ class KernelOp(CustomOp):
         return {port: self.onnx_node.input[self.ports.index(port)] for port in facts.owned}
 
     def place(self, facts: Facts, channels: Mapping[str, Channel]) -> Kernel:
-        """This node's kernel, from its ``facts``, on a partition's ``channels`` (by
+        """This node's kernel, from its ``facts``, on a shell root's ``channels`` (by
         tensor), its formals literals: the placement its node root is generated from."""
         tensors = self.inputs() | dict(zip(self.outputs, self.onnx_node.output))
         on = {port: channels[tensor] for port, tensor in tensors.items()}

@@ -220,11 +220,6 @@ def _beside(prefix: str, label: str) -> str:
     return f"{prefix}.{label}" if label else prefix
 
 
-def _inlined(node: str, label: str) -> str:
-    """``label`` with ``node``'s level removed: ``node.x`` is ``x``; any other unchanged."""
-    return label[len(node) + 1 :] if label.startswith(f"{node}.") else label
-
-
 @dataclass(frozen=True)
 class LinkEnd:
     """One end of a link: an instance's ready/valid pins, or the root's own when
@@ -247,11 +242,6 @@ class LinkEnd:
             self
             if self.instance is None
             else replace(self, instance=_beside(prefix, self.instance))
-        )
-
-    def inlined(self, node: str) -> LinkEnd:
-        return (
-            self if self.instance is None else replace(self, instance=_inlined(node, self.instance))
         )
 
 
@@ -289,9 +279,6 @@ class Link:
 
     def under(self, prefix: str) -> Link:
         return replace(self, source=self.source.under(prefix), sink=self.sink.under(prefix))
-
-    def inlined(self, node: str) -> Link:
-        return replace(self, source=self.source.inlined(node), sink=self.sink.inlined(node))
 
 
 @dataclass(frozen=True)
@@ -364,22 +351,6 @@ class Fragment:
             tuple(link.under(prefix) for link in self.links),
             tuple(
                 replace(item, instance=_beside(prefix, item.instance), port=f"{port}_{item.port}")
-                for item in self.exports
-            ),
-        )
-
-    def inlined(self, node: str) -> Fragment:
-        """This fragment with node ``node``'s level removed, the inverse of ``under(node)``
-        for what lies below it: labels and link ends ``node.x`` are ``x``, and a bus it
-        presents at ``<node>_<port>`` is presented at ``<port>``."""
-        port = node.replace(".", "_") + "_"
-        return Fragment(
-            tuple((_inlined(node, label), leaf) for label, leaf in self.instances),
-            tuple(link.inlined(node) for link in self.links),
-            tuple(
-                replace(item, instance=_inlined(node, item.instance), port=item.port[len(port) :])
-                if item.instance.startswith(f"{node}.") and item.port.startswith(port)
-                else item
                 for item in self.exports
             ),
         )

@@ -20,7 +20,7 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 channels its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
 weights) and ``y_channel`` (the results). Each channel, its adapter, its FIFO
 and its source are its parent's: the parent (a test harness, a KernelOp's node
-root, a Partition or its shell root) declares each channel and either binds its tensor to
+root, or a shell root) declares each channel and either binds its tensor to
 MatMul's view of it (``activation_tensor``, ``weight_tensor``,
 ``result_tensor``), which reads only MatMul's facts and ``realization``, never
 a port, or states it; ``carried`` refuses a stated tensor of another shape, or

@@ -4,9 +4,9 @@
 """The DSE seam: what a design space exploration asks of a configured root, and strategies.
 
 A ``Seam`` answers three questions about a point, an immutable configuration of
-one root (a shell root, its members the channels and kernels below it, each at
-its path: ``partition.MatMul_0``; a key belongs to the longest member path that
-prefixes it, ``member_of``):
+one root (a shell root, its members its channels and kernels, each at its path:
+``MatMul_0``; a key belongs to the longest member path that prefixes it,
+``member_of``):
 
 - ``choices(point)``: each open Decision as a ``Choice``: its key, who persists it
   (``owner``: the node and attribute), the Space class that declares it, its
@@ -1614,7 +1614,7 @@ def _awaited(answer: Unresolved) -> tuple[str, ...]:
 
 
 def _member(point: object, path: str) -> Any:
-    """The member at a dotted ``path`` below ``point`` (``partition.MatMul_0``)."""
+    """The member at a dotted ``path`` below ``point`` (``MatMul_0``, ``x.adapter``)."""
     found = point
     for name in path.split("."):
         found = getattr(found, name)
