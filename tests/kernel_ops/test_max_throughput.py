@@ -239,15 +239,15 @@ def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound(tmp_path
     model = ModelWrapper(kernel_model().model.__deepcopy__())
     write_target(model, TARGET)
     specs = [{"strategy": "pinned", "path": str(pinned)}, *within(0.005)]
-    with pytest.warns(UnstatedResourcesWarning, match=r"partition\.first .*compressor"):
+    with pytest.warns(UnstatedResourcesWarning, match=r"\bfirst .*compressor"):
         report = explore_kernel_choices(
             model, [strategy(spec) for spec in specs], fresh=True
         ).report
     searched = report["strategies"][1]
-    assert searched["lower_bound"] is True and list(searched["unstated"]) == ["partition.first"]
+    assert searched["lower_bound"] is True and list(searched["unstated"]) == ["first"]
     resources = report["resources"]
     assert resources["lower_bound"] is True and resources["shell"] is None
-    assert list(resources["unstated"]) == ["partition.first"]
+    assert list(resources["unstated"]) == ["first"]
     assert resources["counted"].startswith("a lower bound")
     stated = total(
         Resources(**row["resources"])
@@ -255,4 +255,4 @@ def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound(tmp_path
         if row["resources"] is not None
     )
     assert resources["used"] == {name: getattr(stated, name) for name in resources["used"]}
-    assert report["members"]["partition.first"]["resources"] is None
+    assert report["members"]["first"]["resources"] is None

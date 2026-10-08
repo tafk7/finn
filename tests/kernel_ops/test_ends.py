@@ -416,7 +416,7 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     end = wide["ends"]["Reshape_0_out0"]
     assert (end["memory_width"], end["words"], end["cycles"]) == (128, 49, 60)
     bottleneck = wide["bottleneck"]
-    assert bottleneck["cycles"] == 64 and "partition.MatMul_3" in bottleneck["members"]
+    assert bottleneck["cycles"] == 64 and "MatMul_3" in bottleneck["members"]
     assert "Reshape_0_out0" not in bottleneck["members"]
 
 

@@ -42,8 +42,7 @@ from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.kernel_testbench import boundary_words
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.partition import member
-from finn.custom_op.kernels.shell import ShellRoot, shell_root
+from finn.custom_op.kernels.shell import ShellRoot, member, shell_root
 from finn.harness.rtl import link_stream, measure
 from finn.harness.toolchain import print_identity
 
@@ -73,7 +72,7 @@ class Layer:
 
 
 def schedule_of(root: ShellRoot, node: NodeProto) -> Any:
-    kernel = getattr(root.point.partition, member(node.name))
+    kernel = getattr(root.point, member(node.name))
     return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
 
 

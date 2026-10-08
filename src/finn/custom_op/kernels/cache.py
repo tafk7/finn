@@ -24,8 +24,8 @@ Points are immutable (replay returns successors), so sharing one across op
 instances and models is sound, and keys are values, so nothing is ever
 invalidated: changed facts are another key. The bound is memory: a
 least-recently-used cache of entries, base and replayed points alike
-(``LeastRecentlyUsed``, which also keeps the composite classes of the Partitions,
-``finn.custom_op.kernels.partition``, and of the shell roots, ``shell``).
+(``LeastRecentlyUsed``, which also keeps the shell roots' composite classes,
+``finn.custom_op.kernels.shell``).
 """
 
 from __future__ import annotations

@@ -61,7 +61,7 @@ from finn.transformation.kernels import (
     completion,
     explore_kernel_choices,
     kernel_choices_config,
-    partition_bottleneck,
+    shell_bottleneck,
     strategy,
 )
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN, integration
@@ -339,7 +339,7 @@ def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     shell root's bottleneck, ends included (report/delivered_clock.json)."""
     kernel_completion = completion(cfg.kernel_completion)
     _, body, _ = partition_body(model)
-    bottleneck = partition_bottleneck(body, kernel_completion)
+    bottleneck = shell_bottleneck(body, kernel_completion)
     export = integration(model, kernel_completion)
     output = Path(cfg.output_dir)
     report_dir, bitfile_dir = output / "report", output / "bitfile"

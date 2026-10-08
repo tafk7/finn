@@ -27,9 +27,9 @@ things are built with it:
   a kernel's cores bind their extents from the ports on its channels
   (``kernel-extents``), so a node alone can commit its own choices only on
   channels;
-- the **Partition** (``finn.custom_op.kernels.partition``), in its shell root: the same
-  placement with literal formals, on channels the partition declares once per
-  ONNX tensor and shares between nodes.
+- the **shell root** (``finn.custom_op.kernels.shell``): the same placement with
+  literal formals, on channels the root declares once per ONNX tensor and shares
+  between nodes.
 
 What the graph decides is a declaration here, never a choice. The platform is a
 fact too: the target's capabilities and its clock period (``read_target``),

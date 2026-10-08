@@ -7,9 +7,9 @@
 model of KernelOps the kernel path's cut made (``CutKernelPartition``; the build opens
 it through the parent graph's node, ``partition_body``), so which KernelOps go together
 is the cut's alone: a model holding any other node is refused. It builds the body's
-shell root once (``shell_root``: their Partition, its kernels and the channels between
-them, and the channels on its boundary; the nodes' saved choices replayed, a stale one
-dropped with why; members named by path, ``partition.MatMul_0``),
+shell root once (``shell_root``: their kernels, the channels between them and the
+channels on its boundary; the nodes' saved choices replayed, a stale one dropped with
+why; members named as the graph, ``MatMul_0``),
 runs the strategies in order through one ``Seam`` (``finn.kernels.explore``), each
 from the point the one before returned, and then:
 
@@ -452,13 +452,13 @@ def explore_kernel_choices(
     return Explored(point, completed, cost, report)
 
 
-def partition_bottleneck(
+def shell_bottleneck(
     model: ModelWrapper, completion: Completion | None = None
 ) -> Bottleneck | None:
-    """The slowest members of a partition model of KernelOps and their cycles a frame, on
-    its shell root (members by path), its saved choices replayed and completed as
-    hardware generation completes them, by ``completion`` (``Baseline()`` by default;
-    None where a member's cycles wait on a choice the policy leaves open)."""
+    """The slowest members of a partition model of KernelOps' shell root, ends included,
+    and their cycles a frame, its saved choices replayed and completed as hardware
+    generation completes them, by ``completion`` (``Baseline()`` by default; None where
+    a member's cycles wait on a choice the policy leaves open)."""
     root = shell_root(model, model.graph.node)
     seam = Seam(root.members, root.owners, read_target(model).platform, completion)
     return seam.cost(seam.completion.complete(seam, root.point, sizing=True).point).bottleneck
@@ -499,6 +499,6 @@ __all__ = [
     "Explored",
     "completion",
     "explore_kernel_choices",
-    "partition_bottleneck",
+    "shell_bottleneck",
     "strategy",
 ]

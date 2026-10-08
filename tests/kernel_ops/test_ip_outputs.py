@@ -164,11 +164,11 @@ def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
     # weight's memory its channel's, a kernel's compute the kernel's.
     assert {path: counted["ff"] for path, counted in found["members"].items()} == {
         "x": 0,
-        "partition.w1": 1,
-        "partition.levels": 2,
-        "partition.w2": 3,
-        "partition.first": 4,
-        "partition.activate": 5,
+        "w1": 1,
+        "levels": 2,
+        "w2": 3,
+        "first": 4,
+        "activate": 5,
     }
     assert set(found["members"]) <= set(shell_root(model, model.graph.node).members)
     # The flattened instance's resources are the top's, attributed to no member.

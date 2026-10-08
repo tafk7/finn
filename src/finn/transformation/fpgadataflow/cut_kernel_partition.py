@@ -9,9 +9,10 @@ cuts a model of KernelOps and host nodes once (``CreateDataflowPartition``, whos
 segmentation is the one rule of which KernelOps go together: all of them, contiguous):
 the KernelOps become one StreamingDataflowPartition and the nodes before and after it
 stay on the host. The result is the parent graph, which the build keeps as its model.
-The partition has one name, ``PARTITION`` (the shell root's member, ``partition``), for
-its node, its body's file (``<directory>/partition.onnx``), the IP it is packaged as and
-the block design's instance; its body carries the parent's target. Nothing of the space
+The partition has one name, ``PARTITION`` (``partition``), for its node, its body's file
+(``<directory>/partition.onnx``), the IP it is packaged as (the shell root's module,
+``finn_partition``) and the block design's instance; its body carries the parent's
+target. Nothing of the space
 is read or stored: everything after the cut, exploration first, opens the body through
 the node (``kernel_partitions.partition_body``).
 

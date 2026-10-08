@@ -24,8 +24,7 @@ from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.custom_op.kernels.partition import member
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import member, shell_root
 from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import commit, undecided
 from finn.transformation.fpgadataflow.kernel_partitions import (

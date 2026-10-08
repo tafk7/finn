@@ -50,8 +50,7 @@ from typing import Any
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels.base import read_target
-from finn.custom_op.kernels.partition import member
-from finn.custom_op.kernels.shell import ShellResources, shell_resources
+from finn.custom_op.kernels.shell import ShellResources, member, shell_resources
 from finn.kernels.explore import Completion
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
