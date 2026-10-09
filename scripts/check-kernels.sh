@@ -23,21 +23,16 @@ gate_pytest tests/xsim_sweep
 # Graph preparation's front end (the preparation layer: finn.transformation.qonnx
 # and .streamline, which the kernel path's graph-preparation phase runs; tests/
 # kernel_ops tests the phase itself) and the Brevitas export it reads, under
-# tests/conftest.py. Not the legacy ops' preparation, which their ports adapt
-# (KT21): MLO's loop rolling, PWPolyF's export. One thread per worker: each of the
-# workers would otherwise run torch over every CPU. About 1 700 tests, 7 minutes
-# alone.
+# tests/conftest.py. One thread per worker: each of the workers would otherwise run
+# torch over every CPU. About 1 700 tests, 7 minutes alone.
 OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
-    --ignore tests/transformation/test_loop_rolling.py \
-    --ignore tests/brevitas/test_brevitas_pwpolyf.py \
     tests/transformation tests/brevitas xsim vivado
 # finn.util and the rest of FINN's support code (toolchain, resources,
-# installation, containers, CI tooling, the builder's CPU-only flows). Its tests
-# use tests/conftest.py (the seeded RNG). The slow tests (wheel
-# and editable-environment builds, a build child; tens of seconds each) and the
-# builds to IP or bitfile (end2end) are deselected in either mode, so this step
-# stays at a few minutes.
-gate_pytest --conftest-root tests tests/util xsim vivado end2end slow
+# installation, containers, the build entry). Its tests use tests/conftest.py (the
+# seeded RNG). The slow tests (wheel and editable-environment builds, a build child;
+# tens of seconds each) are deselected in either mode, so this step stays at a few
+# minutes.
+gate_pytest --conftest-root tests tests/util xsim vivado slow
 gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/executors \
     src/finn/core/containers.py src/finn/core/onnx_exec.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \

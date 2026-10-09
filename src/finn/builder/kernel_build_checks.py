@@ -4,9 +4,8 @@
 """The kernel path's configuration checks: what a KernelBuildConfig's build refuses or
 warns of before its first step (``kernel_path_checks``).
 
-``run_all_config_checks`` (``finn.builder.build_dataflow_checks``) dispatches a
-KernelBuildConfig here and adds the Vivado release checks both flows share. A check is a
-``Check`` of a ``Severity``; the HWCustomOp flow's checks are the same values.
+``run_all_config_checks`` (``finn.builder.build_dataflow_checks``) runs these and adds
+the Vivado release checks. A check is a ``Check`` of a ``Severity``.
 """
 
 from __future__ import annotations

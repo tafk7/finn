@@ -38,7 +38,6 @@ from numpy.typing import NDArray
 from onnx import NodeProto
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_node
-from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import (
     get_preferred_qonnx_opset,
     get_sanitize_quant_tensors,
@@ -104,8 +103,7 @@ def execute_onnx(
     including) those nodes is executed.
     executors (finn.core.executors) run the nodes: for each node, the first
     executor that claims it runs it, and qonnx's execute_node runs a node none
-    claims. A partition node's body runs under the same executors. The model's
-    exec_mode metadata "rtlsim" (a stitched IP) bypasses them.
+    claims. A partition node's body runs under the same executors.
 
     require_hardware: every hardware node (a KernelOp, a partition node) must be run
     by a hardware executor (``Executor.hardware``, such as XSim); one that no hardware
@@ -133,38 +131,20 @@ def execute_onnx(
                 f"Valid graph inputs are: {graph_input_names}"
             )
 
-    # check if model has an execution mode set
-    # if None, execute model node by node with the executors
-    # if set to "rtlsim" execute model using xsi
-    model_exec_mode = model.get_metadata_prop("exec_mode")
-    if (model_exec_mode is None) or (model_exec_mode == ""):
-        execution_context = _execution_context(model, input_dict)
-        token = _executing.set(tuple(executors))
-        try:
-            _execute_nodes(
-                model,
-                execution_context,
-                start_node,
-                end_node,
-                tuple(executors),
-                require_hardware,
-                provenance,
-            )
-        finally:
-            _executing.reset(token)
-    elif model_exec_mode == "rtlsim":
-        # use stitched IP for rtlsim
-        # The legacy stitched-IP executor, loaded only when the model selects it.
-        from finn.core.rtlsim_exec import rtlsim_exec  # noqa: PLC0415
-
-        execution_context = _execution_context(model, input_dict)
-        # qonnx/legacy untyped
-        rtlsim_exec(model, execution_context)  # type: ignore[no-untyped-call]
-    else:
-        raise ValueError(
-            """Metadata property "exec_mode" is set to an unknown value. Can be left
-            unset or has to be set to "rtlsim" for execution using xsi!"""
+    execution_context = _execution_context(model, input_dict)
+    token = _executing.set(tuple(executors))
+    try:
+        _execute_nodes(
+            model,
+            execution_context,
+            start_node,
+            end_node,
+            tuple(executors),
+            require_hardware,
+            provenance,
         )
+    finally:
+        _executing.reset(token)
 
     if return_full_exec_context:
         return execution_context
@@ -306,29 +286,6 @@ def _inside(node: NodeProto, inside: NodeProto, executor: Executor | None, role:
         f"one of its nodes is not supported. Give the partition node {node.name}, or run "
         f"its body (its model attribute) {point} {inside.name}"
     )
-
-
-def execute_parent(
-    parent_path: str,
-    child_path: str,
-    input_tensor_npy: NDArray[Any],
-    return_full_ctx: bool = False,
-) -> Any:
-    """Execute parent model containing a single StreamingDataflowPartition by
-    replacing it with the model at child_path and return result."""
-
-    parent_model = ModelWrapper(parent_path)
-    iname = parent_model.get_first_global_in()
-    oname = parent_model.get_first_global_out()
-    sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-    sdp_op = getCustomOp(sdp_node)
-    sdp_op.set_nodeattr("model", child_path)
-    sdp_op.set_nodeattr("return_full_exec_context", 1 if return_full_ctx else 0)
-    ret = execute_onnx(parent_model, {iname: input_tensor_npy}, True)
-    if return_full_ctx:
-        return ret
-    else:
-        return ret[oname]
 
 
 def compare_execution(

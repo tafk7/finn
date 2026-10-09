@@ -712,12 +712,12 @@ def test_github_archive_urls():
 def test_finn_sources_are_resources_a_directory_can_replace(project, tmp_path, monkeypatch):
     from finn.util.resources import resource_path  # noqa: PLC0415
 
-    assert resources.status("rtllib").state == "package"
-    assert Path(resource_path("rtllib", "mvu")).is_dir()
-    write(tmp_path / "my-rtllib", {"mvu/mvu.sv": "module mvu; endmodule\n"})
-    monkeypatch.setenv("FINN_RESOURCES_RTLLIB", str(tmp_path / "my-rtllib"))
-    assert resource_path("rtllib", "mvu/mvu.sv") == str(tmp_path / "my-rtllib/mvu/mvu.sv")
-    assert resource_path("custom_hls") == resources.path("custom-hls")
+    assert resources.status("xsi").state == "package"
+    assert Path(resource_path("xsi", "xsi_finn.cpp")).is_file()
+    write(tmp_path / "my-xsi", {"xsi_finn.cpp": "// mine\n"})
+    monkeypatch.setenv("FINN_RESOURCES_XSI", str(tmp_path / "my-xsi"))
+    assert resource_path("xsi", "xsi_finn.cpp") == str(tmp_path / "my-xsi/xsi_finn.cpp")
+    assert resource_path("xsi") == resources.path("xsi")
 
 
 def test_the_build_directory_is_a_machine_setting_beside_home(tmp_path, monkeypatch):

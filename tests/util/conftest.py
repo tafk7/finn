@@ -6,26 +6,10 @@ import pytest
 import sys
 from pathlib import Path
 
-from finn.util.toolchain import machine_toolchain
-
-
-@pytest.fixture(scope="session")
-def hls_toolchain():
-    """The machine's toolchain, as HLS C++ simulation takes it by default; the
-    test is skipped when it names no HLS installation."""
-    toolchain = machine_toolchain()
-    try:
-        toolchain.hls_installation()
-    except LookupError as exc:
-        pytest.skip(str(exc))
-    return toolchain
-
-
-#: Vivado, xelab, g++, Vitis HLS and vitis-run in one script: each notes its
-#: name in the calls.log beside it and leaves what its caller checks for. Vivado
-#: a stitched IP's wrapper and source list; xelab a simulation library; g++ an
-#: executable that reports a finished XSI run and its loader path; the HLS
-#: frontends a node's IP and Verilog.
+#: Vivado, xelab, Vitis HLS and vitis-run in one script: each notes its name in
+#: the calls.log beside it and leaves what its caller checks for. Vivado answers
+#: its version probe; xelab leaves a simulation library; the HLS frontends an IP
+#: and its Verilog.
 FAKE_TOOL = """
 import os, sys
 tool = os.path.basename(sys.argv[0])
@@ -36,25 +20,10 @@ if args[:1] in (["-version"], ["--version"]):
     print(tool + (" v2025.2" if tool == "vitis-run" else " v2024.2") + " (64-bit)")
 elif args[:1] == ["--help"]:
     print("--mode hls")
-elif tool == "vivado":
-    wrapper = "finn_vivado_stitch_proj.srcs/sources_1/bd/finn_design/hdl/finn_design_wrapper.v"
-    os.makedirs(os.path.dirname(wrapper))
-    with open(wrapper, "w") as f:
-        f.write("module finn_design_wrapper(); endmodule")
-    with open("all_verilog_srcs.txt", "w") as f:
-        f.write(os.path.abspath(wrapper))
 elif tool == "xelab":
     top = args[args.index("-s") + 1]
     os.makedirs(f"xsim.dir/{top}")
     open(f"xsim.dir/{top}/xsimk.so", "w").close()
-elif tool == "g++":
-    out = args[args.index("-o") + 1]
-    with open(out, "w") as executable:
-        executable.write(
-            "#!/bin/sh\\nprintf 'cycles\\\\t100\\\\nlatency_cycles\\\\t60\\\\nTIMEOUT\\\\t0\\\\n'"
-            " > results.txt\\necho \\"$LD_LIBRARY_PATH\\" > loader_path.txt\\n"
-        )
-    os.chmod(out, 0o755)
 elif tool in ("vitis_hls", "vitis-run"):
     script = args[args.index("--tcl") + 1] if "--tcl" in args else args[1]
     name = os.path.basename(script)[len("hls_syn_") : -len(".tcl")]
@@ -67,7 +36,7 @@ elif tool in ("vitis_hls", "vitis-run"):
 class FakeTools:
     """A command directory of fake vendor tools (FAKE_TOOL)."""
 
-    TOOLS = ("vivado", "xelab", "g++", "vitis_hls", "vitis-run")
+    TOOLS = ("vivado", "xelab", "vitis_hls", "vitis-run")
 
     def __init__(self, directory: Path):
         self.directory = directory

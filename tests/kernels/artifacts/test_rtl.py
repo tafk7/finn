@@ -44,7 +44,6 @@ from finn.kernels.artifacts.rtl import (
     extract,
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.util.resources import resource_path
 
 REPLAY_PARAMETERS = (("LEN", "2"), ("REP", "3"), ("W", "16"))
 DOTP_PARAMETERS = (
@@ -734,13 +733,13 @@ def test_the_parse_rate_over_everything_we_compile_is_recorded(
     declaration supplies, so this bounds it from below: a file slang cannot
     parse can never be checked at all.
 
-    The four template files are excluded by name and counted separately.  They
+    Template files are excluded by name and counted separately.  They
     are ``$KEY$`` scaffolding rather than SystemVerilog, so counting them as
     parse failures would understate the real coverage -- and leaving them in
     silently would overstate what was examined.
     """
 
-    roots = [finnlib_root() / "rtl", Path(resource_path("rtllib"))]
+    roots = [finnlib_root() / "rtl"]
 
     files = sorted(
         path for root in roots for path in root.rglob("*.sv") if not path.name.endswith("_tb.sv")

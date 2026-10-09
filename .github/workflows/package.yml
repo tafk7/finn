@@ -83,8 +83,8 @@ jobs:
       - name: Unit tests
         run: |
           export FINN_ROOT="$PWD" FINN_BUILD_DIR=/tmp/finn_build
-          /tmp/finn311/bin/python -m pytest -q -n auto -m "not vivado and not slow" \
-            tests/util tests/transformation tests/core/space tests/dataflow
+          /tmp/finn311/bin/python -m pytest -q -n auto -m "not vivado and not xsim and not slow" \
+            tests/util tests/transformation tests/brevitas tests/core/space tests/dataflow
 
   lowest:
     name: Lowest allowed dependency versions

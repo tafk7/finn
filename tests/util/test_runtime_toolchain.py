@@ -13,9 +13,7 @@ import threading
 import time
 from pathlib import Path
 
-from finn import resources
 from finn.util.hls import CallHLS
-from finn.util.resources import tcl_quote
 from finn.util.toolchain import Selection, Toolchain, run_process
 
 
@@ -23,111 +21,6 @@ def executable(path, body):
     path.write_text("#!" + sys.executable + "\n" + body)
     path.chmod(0o755)
     return path
-
-
-def test_cpp_builder_argv_and_failures(tmp_path):
-    from finn.util.basic import CppBuilder  # noqa: PLC0415
-
-    tools = tmp_path / "tool dir"
-    tools.mkdir()
-    log = tmp_path / "compiler.json"
-    executable(
-        tools / "g++",
-        "import json,sys\n" + f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n",
-    )
-    tc = Selection(command_dir=str(tools)).prepare()
-    builder = CppBuilder(toolchain=tc)
-    source = tmp_path / "source $ (literal).cpp"
-    source.write_text("int main() { return 0; }\n")
-    builder.append_sources(source)
-    builder.append_includes(["-I" + str(tmp_path / "headers $ [1]"), "-O3"])
-    builder.set_executable_path(tmp_path / "result program")
-    builder.build(tmp_path)
-    assert json.loads(log.read_text()) == [
-        "-o",
-        str(tmp_path / "result program"),
-        str(source),
-        "-I" + str(tmp_path / "headers $ [1]"),
-        "-O3",
-    ]
-    executable(tools / "g++", 'import sys; print("compile failed"); sys.exit(17)\n')
-    with pytest.raises(subprocess.CalledProcessError) as exc:
-        builder.build(tmp_path)
-    assert exc.value.returncode == 17
-    assert "compile failed" in (tmp_path / "compile.sh.stdout.log").read_text()
-
-
-def test_zynq_and_vitis_direct_operations_preserve_scope(tmp_path, monkeypatch):
-    import onnx.helper as oh  # noqa: PLC0415
-    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
-
-    from finn.transformation.fpgadataflow import (  # noqa: PLC0415
-        alveo_build,
-        make_zynq_proj,
-    )
-
-    project = tmp_path / "project $ [1]"
-    project.mkdir()
-    tools = tmp_path / "tools"
-    tools.mkdir()
-    log = tmp_path / "calls.jsonl"
-    body = (
-        "import sys,json; from pathlib import Path\n"
-        f"with open({str(log)!r}, 'a') as f: f.write(json.dumps(sys.argv[1:])+'\\n')\n"
-        "if '-version' in sys.argv: print('AMD Vivado v2024.2'); sys.exit(0)\n"
-        "for name in ['finn_zynq_link.runs/impl_1/top_wrapper.bit', "
-        "'finn_zynq_link.gen/sources_1/bd/top/hw_handoff/top.hwh', "
-        "'kernel.xo', 'a.xclbin', 'synth_report.xml']:\n"
-        " p=Path(name); p.parent.mkdir(parents=True,exist_ok=True); p.write_text('artifact')\n"
-    )
-    executable(tools / "vivado", body)
-    executable(tools / "v++", body)
-    wrapper = tmp_path / "site wrapper"
-    wrapper.write_text('#!/bin/bash\nexec "$@"\n')
-    wrapper.chmod(0o755)
-    tc = Selection(command_dir=str(tools), launcher=(str(wrapper),)).prepare(
-        {
-            "PATH": os.defpath,
-            "XILINX_VITIS": "/selected/vitis",
-            "XILINX_XRT": "/selected/xrt",
-            "PLATFORM_REPO_PATHS": "/selected/platforms",
-        }
-    )
-    monkeypatch.setattr(make_zynq_proj, "make_build_dir", lambda **_: str(project))
-    monkeypatch.setattr(alveo_build, "make_build_dir", lambda **_: str(project))
-    boards = []
-    for number, resource in enumerate(
-        r for r in resources.declarations().values() if "vivado-boards" in r.kind
-    ):
-        boards.append(tmp_path / f"boards {number} $[%]")
-        boards[-1].mkdir()
-        monkeypatch.setenv(resource.env, str(boards[-1]))
-    before = dict(os.environ), os.getcwd()
-    model = ModelWrapper(oh.make_model(oh.make_graph([], "empty", [], [])))
-    make_zynq_proj.MakeZYNQProject("Pynq-Z1", 10, toolchain=tc).apply(model)
-    # Every board repository is a Vivado board path, each a quoted Tcl word.
-    config = (project / "ip_config.tcl").read_text()
-    assert f"lappend paths_prop {' '.join(tcl_quote(b) for b in boards)}\n" in config
-    model.set_metadata_prop("vivado_stitch_proj", str(project))
-    model.set_metadata_prop(
-        "vivado_stitch_ifnames",
-        json.dumps(
-            {
-                "axilite": [],
-                "aximm": [],
-                "s_axis": [],
-                "m_axis": [],
-            }
-        ),
-    )
-    alveo_build.CreateVitisXO("kernel", toolchain=tc).apply(model)
-    alveo_build.VitisLink("platform $ literal", 10, toolchain=tc).apply(model)
-    calls = [json.loads(line) for line in log.read_text().splitlines()]
-    link = next(call for call in calls if "--link" in call)
-    assert link[link.index("--platform") + 1] == "platform $ literal"
-    assert (dict(os.environ), os.getcwd()) == before
-    for script in ("synth_project.sh", "gen_xo.sh", "run_vitis_link.sh", "gen_report_xml.sh"):
-        assert shlex.quote(str(wrapper)) in (project / script).read_text()
 
 
 def test_xelab_compiles_without_native_import(tmp_path):
@@ -153,32 +46,6 @@ def test_xelab_compiles_without_native_import(tmp_path):
     assert Path(directory, relative).is_file()
     assert Path(directory, relative + ".finn.json").is_file()
     assert "xsi" not in set(sys.modules) - modules
-
-
-def test_xclbin_inspection_uses_selected_route(tmp_path, monkeypatch):
-    import onnx.helper as oh  # noqa: PLC0415
-    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
-
-    from finn.transformation.fpgadataflow import make_driver  # noqa: PLC0415
-
-    tool = executable(
-        tmp_path / "xclbinutil",
-        "import json,sys; from pathlib import Path\n"
-        "Path('argv.json').write_text(json.dumps(sys.argv[1:]))\n"
-        "Path('ip_layout.json').write_text(json.dumps({'ip_layout':{'m_ip_data':[]}}))\n",
-    )
-    tc = Selection(command_dir=str(tool.parent)).prepare()
-    model = ModelWrapper(oh.make_model(oh.make_graph([], "empty", [], [])))
-    bitfile = tmp_path / "kernel $ [1].xclbin"
-    bitfile.write_bytes(b"synthetic")
-    model.set_metadata_prop("bitfile", str(bitfile))
-    monkeypatch.setattr(
-        make_driver, "get_driver_shapes", lambda _: {"idma_names": [], "odma_names": []}
-    )
-    before = dict(os.environ), os.getcwd()
-    make_driver.MakeCPPDriver("vitis-xrt", "HEAD", toolchain=tc)._build_vitis_config(model)
-    assert json.loads((tmp_path / "argv.json").read_text())[1] == str(bitfile)
-    assert (dict(os.environ), os.getcwd()) == before
 
 
 def test_settings_are_scoped_and_disable_bash_startup(tmp_path, monkeypatch):
@@ -273,11 +140,9 @@ def machine_file_with(tmp_path, monkeypatch, licensed):
 
 @pytest.mark.parametrize("licensed", (True, False))
 def test_the_machine_files_licence_reaches_every_launch(tmp_path, monkeypatch, capfd, licensed):
-    """A process that never sourced activate.sh: every prepared environment, and
-    launch_process_helper's default one, carries the machine file's licence
-    server; without licence lines the variable stays unset and nothing is said."""
-    from finn.util.basic import launch_process_helper  # noqa: PLC0415
-
+    """A process that never sourced activate.sh: every prepared environment carries
+    the machine file's licence server, and so does a process launched in it; without
+    licence lines the variable stays unset and nothing is said."""
     machine_file_with(tmp_path, monkeypatch, licensed)
     settings = tmp_path / "settings64.sh"
     settings.write_text("export CHOICE=selected\n")
@@ -288,10 +153,11 @@ def test_the_machine_files_licence_reaches_every_launch(tmp_path, monkeypatch, c
         Selection().prepare({"PATH": os.defpath}),
     ):
         assert toolchain.environment.get("XILINXD_LICENSE_FILE") == expected
-    out, _ = launch_process_helper(
-        [sys.executable, "-c", 'import os; print(os.environ.get("XILINXD_LICENSE_FILE"))']
+    launched = run_process(
+        [sys.executable, "-c", 'import os; print(os.environ.get("XILINXD_LICENSE_FILE"))'],
+        env=Selection().prepare().environment,
     )
-    assert out.strip() == str(expected)
+    assert launched.stdout.decode().strip() == str(expected)
     assert "XILINXD_LICENSE_FILE" not in os.environ
     # A site route owns its activation, licence included.
     route = Selection(launcher=("site",)).prepare({})
@@ -491,64 +357,6 @@ def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
         Selection().prepare({"PATH": os.defpath}).hls_installation()
 
 
-def test_stitched_vivado_operation_uses_selected_route(tmp_path, monkeypatch):
-    import onnx.helper as oh  # noqa: PLC0415
-    from onnx import TensorProto  # noqa: PLC0415
-    from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
-
-    from finn.custom_op.fpgadataflow.rtl.streamingfifo_rtl import (  # noqa: PLC0415
-        StreamingFIFO_rtl,
-    )
-    from finn.transformation.fpgadataflow.create_stitched_ip import (  # noqa: PLC0415
-        CreateStitchedIP,
-    )
-
-    executable(
-        tmp_path / "vivado",
-        "import pathlib,sys\n"
-        'if "-version" in sys.argv: print("Vivado v2024.2")\n'
-        "else:\n"
-        ' p=pathlib.Path("finn_vivado_stitch_proj.srcs/sources_1/bd/finn_design/hdl/")\n'
-        ' p=p / "finn_design_wrapper.v"\n'
-        ' p.parent.mkdir(parents=True); p.write_text("module finn_design_wrapper(); endmodule")\n',
-    )
-    tc = Selection(command_dir=str(tmp_path)).prepare({})
-    output = tmp_path / "rtl"
-    output.mkdir()
-    node = oh.make_node(
-        "StreamingFIFO_rtl",
-        ["inp"],
-        ["out"],
-        name="fifo",
-        domain="finn.custom_op.fpgadataflow.rtl",
-        backend="fpgadataflow",
-        depth=4,
-        folded_shape=[1, 4],
-        dataType="INT8",
-        impl_style="rtl",
-        code_gen_dir_ipgen=str(output),
-    )
-    model = ModelWrapper(
-        oh.make_model(
-            oh.make_graph(
-                [node],
-                "fifo",
-                [oh.make_tensor_value_info("inp", TensorProto.FLOAT, [1, 4])],
-                [oh.make_tensor_value_info("out", TensorProto.FLOAT, [1, 4])],
-            )
-        )
-    )
-    StreamingFIFO_rtl(model.graph.node[0]).generate_hdl(model, "xc7z020clg400-1", 10)
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "scratch"))
-    before = dict(os.environ)
-    model, _ = CreateStitchedIP("xc7z020clg400-1", 10, toolchain=tc).apply(model)
-    assert dict(os.environ) == before
-    assert Path(model.get_metadata_prop("wrapper_filename")).is_file()
-    tcl = Path(model.get_metadata_prop("vivado_stitch_proj"), "make_project.tcl").read_text()
-    assert "FINN_ROOT" not in tcl
-    assert "sim_ctrl.v" in tcl
-
-
 @pytest.mark.slow
 def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
     import onnx  # noqa: PLC0415
@@ -561,18 +369,17 @@ def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), project / "model.onnx")
     config = {
         "output_dir": "output",
-        "synth_clk_period_ns": 10,
-        "generate_outputs": [],
+        "target": {"period_ns": 10.0, "part": "xczu3eg-sbva484-1-e"},
         "steps": [],
         "enable_build_pdb_debug": False,
     }
-    (project / "dataflow_build_config.json").write_text(json.dumps(config))
+    (project / "kernel_build_config.json").write_text(json.dumps(config))
     cwd, env = os.getcwd(), dict(os.environ)
     assert build_dataflow_directory(str(project)) == 0
     assert (project / "output/time_per_step.json").is_file()
     assert os.getcwd() == cwd and dict(os.environ) == env
     config["steps"] = ["not_a_step"]
-    (project / "dataflow_build_config.json").write_text(json.dumps(config))
+    (project / "kernel_build_config.json").write_text(json.dumps(config))
     proc = subprocess.run(
         [str(Path(sys.executable).parent / "build_dataflow"), str(project)],
         cwd=tmp_path,
@@ -582,12 +389,21 @@ def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
     assert os.getcwd() == cwd and dict(os.environ) == env
 
 
+def step_first(model, cfg):
+    return model
+
+
+def step_second(model, cfg):
+    return model
+
+
 def test_checkpoint_reuse_requires_original_intermediate_path(tmp_path):
     import onnx  # noqa: PLC0415
     from onnx import TensorProto, helper  # noqa: PLC0415
 
     from finn.builder.build_dataflow import build_dataflow_cfg  # noqa: PLC0415
-    from finn.builder.build_dataflow_config import DataflowBuildConfig  # noqa: PLC0415
+    from finn.builder.kernel_build_config import KernelBuildConfig  # noqa: PLC0415
+    from finn.platform import TargetRequest  # noqa: PLC0415
 
     model = helper.make_model(
         helper.make_graph(
@@ -600,19 +416,18 @@ def test_checkpoint_reuse_requires_original_intermediate_path(tmp_path):
     )
     source = tmp_path / "model.onnx"
     onnx.save(model, source)
-    cfg = DataflowBuildConfig(
+    cfg = KernelBuildConfig(
         output_dir=str(tmp_path / "output"),
-        synth_clk_period_ns=10,
-        generate_outputs=[],
-        steps=["step_qonnx_to_finn", "step_tidy_up"],
-        stop_step="step_qonnx_to_finn",
+        target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
+        steps=[step_first, step_second],
+        stop_step="step_first",
         enable_build_pdb_debug=False,
     )
     assert build_dataflow_cfg(str(source), cfg) == 0
-    cfg.start_step, cfg.stop_step = "step_tidy_up", None
+    cfg.start_step, cfg.stop_step = "step_second", None
     assert build_dataflow_cfg(str(source), cfg) == 0
     intermediates = Path(cfg.output_dir) / "intermediate_models"
-    assert (intermediates / "step_tidy_up.onnx").is_file()
-    (intermediates / "step_qonnx_to_finn.onnx").unlink()
+    assert (intermediates / "step_second.onnx").is_file()
+    (intermediates / "step_first.onnx").unlink()
     with pytest.raises((FileNotFoundError, AssertionError)):
         build_dataflow_cfg(str(source), cfg)

@@ -28,8 +28,8 @@
 
 # flake8: noqa
 
-"""The pynq shell's text templates, copied from the HWCustomOp flow as the shell's frozen
-extraction (the HWCustomOp flow keeps its own until it is deleted):
+"""The pynq shell's text templates, copied from the HWCustomOp flow (deleted; its last
+commit is 1b02563de) as the shell's frozen extraction:
 
 - ``custom_zynq_shell_template``: the Zynq block design's project
   (finn.transformation.fpgadataflow.templates), filled by ``runner.project_script``;

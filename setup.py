@@ -121,12 +121,8 @@ if __name__ == "__main__":
             "finn.qnn-data",
             "finn.qnn-data.*",
             # Data directories inside packages, not packages of their own.
-            "finn.rtllib.*",
-            "finn.custom_hls.*",
             "finn.xsi.src",
             "finn.xsi.src.*",
-            "finn.deploy.data",
-            "finn.deploy.data.*",
             "finn.shells.pynq.data",
             "finn.shells.pynq.data.*",
             "finn.platform.data",
@@ -139,10 +135,7 @@ if __name__ == "__main__":
         package_dir={"": "src"},
         package_data={
             "finn": ["resources.toml"],
-            "finn.rtllib": resource_files("src/finn/rtllib"),
-            "finn.custom_hls": resource_files("src/finn/custom_hls"),
             "finn.xsi": resource_files("src/finn/xsi/src", prefix="src/"),
-            "finn.deploy": resource_files("src/finn/deploy/data", prefix="data/", extra=(".py",)),
             "finn.shells.pynq": resource_files(
                 "src/finn/shells/pynq/data", prefix="data/", extra=(".py",)
             ),

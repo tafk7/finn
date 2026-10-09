@@ -6,7 +6,8 @@
 The stress cases come from baseline FINN: the tiled MVU's two internal
 ``input_gen`` adapters and the Shuffle op's inner/outer decomposition. Their
 parameters are derived here from traversals alone and compared with the
-hard-coded values in ``finn-rtllib`` and ``transpose_decomposition``.
+hard-coded values in ``finn-rtllib`` and baseline FINN's ``transpose_decomposition``
+(``shuffle_perfect_loopnest_coeffs``, copied here).
 """
 
 import operator
@@ -49,9 +50,6 @@ from finn.kernels.transport import (
     StreamMarker,
     compatibility,
     marker_pairs,
-)
-from finn.transformation.fpgadataflow.transpose_decomposition import (
-    shuffle_perfect_loopnest_coeffs,
 )
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root, with_direct_transports
 from kernels.xsim import requires_xsim
@@ -292,6 +290,15 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
     produced = source.output.contract
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
+
+
+def shuffle_perfect_loopnest_coeffs(shape, perm):
+    """Baseline FINN's coefficients of the perfect loop nest of a permutation (its
+    ``transpose_decomposition``, the HWCustomOp flow's, deleted): the input's strides
+    in the output's order."""
+    adjusted_shape = list(shape) + [1]
+    input_coeffs = [np.prod(adjusted_shape[i + 1 :]) for i in range(len(shape))]
+    return tuple(input_coeffs[i] for i in perm)
 
 
 def test_outer_shuffle_coefficients_match_finn():

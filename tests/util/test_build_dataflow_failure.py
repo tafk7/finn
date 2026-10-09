@@ -8,14 +8,14 @@ reports its own error and fails, rather than pdb's failed read."""
 import pytest
 
 import io
+import onnx
+import onnx.helper as oh
 import sys
-from pathlib import Path
 
 import finn.builder.build_dataflow as build
+from finn.builder.kernel_build_config import KernelBuildConfig
+from finn.platform import TargetRequest
 from finn.util.basic import make_build_dir
-
-# finn.qnn-data's fixtures are not in the wheel: read them from this checkout.
-QNN_DATA = Path(__file__).resolve().parents[2] / "src" / "finn" / "qnn-data"
 
 
 class Stdin(io.StringIO):
@@ -43,15 +43,16 @@ def failed_build(monkeypatch, terminal: bool) -> tuple[int, list]:
     debugged = []
     monkeypatch.setattr(sys, "stdin", Stdin(terminal))
     monkeypatch.setattr(build.pdb, "post_mortem", debugged.append)
-    cfg = build.DataflowBuildConfig(
-        output_dir=make_build_dir("test_build_failure_"),
-        synth_clk_period_ns=10.0,
-        fpga_part="xc7z020clg400-1",
+    output = make_build_dir("test_build_failure_")
+    model = f"{output}/model.onnx"
+    onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
+    cfg = KernelBuildConfig(
+        output_dir=output,
+        target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
         steps=[step_fails],
-        generate_outputs=[],
     )
     assert cfg.enable_build_pdb_debug
-    return build.build_dataflow_cfg(str(QNN_DATA / "build_dataflow" / "model.onnx"), cfg), debugged
+    return build.build_dataflow_cfg(model, cfg), debugged
 
 
 @pytest.mark.util

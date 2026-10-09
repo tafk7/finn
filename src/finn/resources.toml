@@ -79,18 +79,7 @@ digest = "sha256:a14a0213c0df8bef64d9918930ce025f703777ac5ae89e35eabe4c2e7a8b797
 
 # FINN's own sources, shipped in the wheel and used in place. Declared so that
 # other code finds them by name rather than location, and so that each can be
-# replaced with a directory of your own, e.g. FINN_RESOURCES_RTLLIB=/path/to/rtllib.
-# rtllib and custom-hls are expected to give way to FinnLib.
-[resources.rtllib]
-description = "FINN's RTL library"
-redistributable = true
-package = "finn.rtllib"
-
-[resources.custom-hls]
-description = "FINN's custom HLS sources and the NumPy I/O of HLS C++ simulation"
-redistributable = true
-package = "finn.custom_hls"
-
+# replaced with a directory of your own, e.g. FINN_RESOURCES_XSI=/path/to/src.
 [resources.xsi]
 description = "Sources of the finn_xsi simulation bridge"
 redistributable = true

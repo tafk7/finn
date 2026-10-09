@@ -1,4 +1,4 @@
-"""Stable, read-only paths to FINN's own sources: rtllib, custom_hls and xsi.
+"""Stable, read-only paths to FINN's own sources: the xsi bridge's.
 
 Wheels must be unpacked (as pip normally installs them). Generated projects may
 retain these absolute paths: keep this installation in place for their lifetime.
@@ -9,11 +9,11 @@ from pathlib import Path
 from finn import resources
 
 # Families of FINN's own sources, by the name of the resource that supplies each.
-_FAMILIES = {"rtllib": "rtllib", "custom_hls": "custom-hls", "xsi": "xsi"}
+_FAMILIES = {"xsi": "xsi"}
 
 
 def resource_path(family: str, *parts: str) -> str:
-    """Return an existing path in rtllib, custom_hls or xsi.
+    """Return an existing path in a family of FINN's own sources (xsi).
 
     Each family is a FINN resource (finn/resources.toml), so
     FINN_RESOURCES_<NAME> or a project declaration can replace it.

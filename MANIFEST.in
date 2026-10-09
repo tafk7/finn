@@ -7,18 +7,5 @@ prune dist
 global-exclude *.pyc *.so
 global-exclude *_tb.v *_tb.sv
 
-# Keep source archives free of resource test fixtures as well.
-prune src/finn/rtllib/axi/sim
-prune src/finn/rtllib/dwc/sim
-prune src/finn/rtllib/layernorm/tb
-prune src/finn/rtllib/memstream/sim
-prune src/finn/rtllib/mvu/tb
-prune src/finn/rtllib/mvu_tiled/tb
-prune src/finn/rtllib/requant/sim
-prune src/finn/rtllib/stream_tap/tb
-prune src/finn/rtllib/thresholding/sim
-prune src/finn/qnn-data/build_dataflow
+# Keep source archives free of the test fixtures' data.
 prune src/finn/qnn-data/cifar10
-prune src/finn/qnn-data/cybsec-mlp
-prune src/finn/qnn-data/test_ext_weights
-prune src/finn/qnn-data/testcase

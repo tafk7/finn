@@ -18,9 +18,7 @@ from typing import Any
 
 import pytest
 from kernels.artifacts.test_ipxact import AXILITE
-from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.util.basic import qonnx_make_model
 
 import finn.custom_op.kernels as kernel_ops_package
 from finn.custom_op.kernels.base import (
@@ -39,10 +37,6 @@ from finn.custom_op.partition.kernel_partitions import (
     partition_body,
 )
 from finn.platform import resolve_target
-from finn.transformation.fpgadataflow.create_dataflow_partition import (
-    CreateDataflowPartition,
-)
-from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import (
@@ -336,25 +330,6 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
     }
     # Typed metadata is the graph's; a flat key would be the model's.
     assert list(packaged.model.metadata_props) == []
-
-
-def test_iodma_insertion_refuses_a_node_outside_the_dataflow_by_name() -> None:
-    model = ModelWrapper(
-        qonnx_make_model(
-            helper.make_graph(
-                [helper.make_node("Relu", ["x"], ["y"], name="relu_0")],
-                "foreign",
-                [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])],
-                [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])],
-            )
-        )
-    )
-    with pytest.raises(ValueError, match="fpgadataflow nodes; not: relu_0"):
-        model.transform(InsertIODMA(32))
-    # A partition of KernelOps is no fpgadataflow node: its IODMAs are its export's.
-    parent = chain("pynq").transform(CreateDataflowPartition())
-    with pytest.raises(ValueError, match="fpgadataflow nodes; not: GenericPartition_kernels"):
-        parent.transform(InsertIODMA(32))
 
 
 def test_the_kernel_ops_domain_is_the_registering_package() -> None:

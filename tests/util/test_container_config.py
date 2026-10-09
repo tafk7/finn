@@ -824,8 +824,8 @@ git = "git@example.invalid:finnlib.git"
 commit = "{"2" * 40}"
 digest = "sha256:{finnlib * 64}"
 
-[resources.rtllib]
-package = "finn.rtllib"
+[resources.xsi]
+package = "finn.xsi"
 """
         )
         return _provenance(root)[0]

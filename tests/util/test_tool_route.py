@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The site tool route (docs/environment.md, "Running tools on LSF"): a transformation
-called without a toolchain, as FINN's CI tests call them, runs each tool by the
+called without a toolchain, as the tests call them, runs each tool by the
 machine's toolchain, under the command directory FINN_TOOL_DIR_OVERRIDE names.
 The tools are fakes that record their calls (tests/util/conftest.py); no
 Vivado, no HLS. That a stated selection wins over the machine's is
@@ -12,31 +12,11 @@ from __future__ import annotations
 
 import pytest
 
-import numpy as np
-import onnx.helper as oh
-import os
-from onnx import TensorProto
-from pathlib import Path
-from qonnx.core.datatype import DataType
-from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.util.basic import qonnx_make_model
-
-from finn.custom_op.fpgadataflow.rtl.streamingfifo_rtl import StreamingFIFO_rtl
-from finn.transformation.fpgadataflow.compile_cppsim import CompileCppSim
-from finn.transformation.fpgadataflow.create_stitched_ip import CreateStitchedIP
-from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
-from finn.transformation.fpgadataflow.prepare_cppsim import PrepareCppSim
-from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
-from finn.transformation.fpgadataflow.prepare_rtlsim import PrepareRTLSim
-from finn.transformation.fpgadataflow.set_fifo_depths import xsi_fifosim
-from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
+from finn.util.hls import CallHLS
 from finn.util.toolchain import Selection, machine_selection, machine_toolchain
 from finn.xsi.compile import compile_sim_obj
 
 pytestmark = pytest.mark.util
-
-PART = "xcu250-figd2104-2L-e"
-
 
 #: No machine file: the environment alone states the machine's settings.
 NO_FILE = {"FINN_XILINX_ENV": ""}
@@ -82,97 +62,14 @@ def test_a_machine_release_that_is_no_release_is_refused():
         machine_selection({**NO_FILE, "FINN_XILINX_VERSION": "latest"})
 
 
-def fifo_model(tmp_path):
-    """One RTL FIFO, its HDL generated (no vendor tool)."""
-    node = oh.make_node(
-        "StreamingFIFO_rtl",
-        ["inp"],
-        ["outp"],
-        name="fifo",
-        domain="finn.custom_op.fpgadataflow.rtl",
-        backend="fpgadataflow",
-        depth=4,
-        folded_shape=[1, 4],
-        normal_shape=[1, 4],
-        dataType="INT8",
-        impl_style="rtl",
-        code_gen_dir_ipgen=str(tmp_path / "fifo"),
-    )
-    (tmp_path / "fifo").mkdir()
-    model = ModelWrapper(
-        qonnx_make_model(
-            oh.make_graph(
-                [node],
-                "fifo",
-                [oh.make_tensor_value_info("inp", TensorProto.FLOAT, [1, 4])],
-                [oh.make_tensor_value_info("outp", TensorProto.FLOAT, [1, 4])],
-            )
-        )
-    )
-    model.set_tensor_datatype("inp", DataType["INT8"])
-    model.set_tensor_datatype("outp", DataType["INT8"])
-    StreamingFIFO_rtl(model.graph.node[0]).generate_hdl(model, PART, 5.0)
-    return model
-
-
-def test_bare_simulation_and_stitching_run_under_the_site_directory(fake_tools, tmp_path):
-    """compile_sim_obj, PrepareRTLSim, CreateStitchedIP and xsi_fifosim (its
-    library and its C++ driver), each called without a toolchain."""
+def test_bare_simulation_compiles_under_the_site_directory(fake_tools, tmp_path):
+    """compile_sim_obj, called without a toolchain."""
     site = fake_tools("site", machine=True)
     source = tmp_path / "top.v"
     source.write_text("module top(); endmodule")
     (tmp_path / "sim").mkdir()
     compile_sim_obj("top", [source], tmp_path / "sim")
     assert site.calls == ["vivado", "xelab"]  # the identity probe, then the compile
-    model = fifo_model(tmp_path).transform(PrepareRTLSim())
-    assert site.calls[2:] == ["xelab"]
-    model = model.transform(CreateStitchedIP(PART, 5.0))
-    assert site.calls[3:] == ["vivado"]
-    assert xsi_fifosim(model, 1)["cycles"] == 100
-    assert site.calls[4:] == ["xelab", "g++"]
-    # The C++ driver ran with the simulation kernel on its loader path.
-    driver = Path(model.get_metadata_prop("rtlsim_so").split("xsim.dir")[0])
-    kernel = Path(os.environ["XILINX_VIVADO"]) / "lib/lnx64.o"
-    assert (driver / "loader_path.txt").read_text().split(":")[0].strip() == str(kernel)
-
-
-def mvau_model():
-    """One MVAU, 8 inputs to 4 outputs, INT2 weights and inputs, no activation."""
-    inp = oh.make_tensor_value_info("inp", TensorProto.FLOAT, [1, 8])
-    outp = oh.make_tensor_value_info("outp", TensorProto.FLOAT, [1, 4])
-    node = oh.make_node(
-        "MVAU",
-        ["inp", "weights"],
-        ["outp"],
-        name="MVAU_0",
-        domain="finn.custom_op.fpgadataflow",
-        backend="fpgadataflow",
-        MW=8,
-        MH=4,
-        SIMD=2,
-        PE=2,
-        inputDataType="INT2",
-        weightDataType="INT2",
-        outputDataType="INT32",
-        ActVal=0,
-        binaryXnorMode=0,
-        noActivation=1,
-        preferred_impl_style="hls",
-        mem_mode="internal_embedded",
-    )
-    model = ModelWrapper(qonnx_make_model(oh.make_graph([node], "mvau", [inp], [outp])))
-    model.set_tensor_datatype("inp", DataType["INT2"])
-    model.set_tensor_datatype("outp", DataType["INT32"])
-    model.set_initializer("weights", np.ones((8, 4), dtype=np.float32))
-    model.set_tensor_datatype("weights", DataType["INT2"])
-    return model
-
-
-def test_bare_cppsim_compiles_under_the_site_directory(fake_tools):
-    site = fake_tools("site", machine=True)
-    model = mvau_model().transform(SpecializeLayers(PART)).transform(PrepareCppSim())
-    model.transform(CompileCppSim())
-    assert site.calls == ["g++"]
 
 
 #: A machine's release, and the calls its HLS synthesis makes: the version probe,
@@ -182,13 +79,17 @@ HLS_CALLS = {"2024.2": ["vitis_hls"] * 2, "2025.2": ["vitis-run"] * 3}
 
 @pytest.mark.parametrize("version", sorted(HLS_CALLS))
 def test_bare_hls_synthesis_runs_the_machine_releases_frontend_under_the_site_directory(
-    fake_tools, monkeypatch, version
+    fake_tools, monkeypatch, tmp_path, version
 ):
-    """HLSSynthIP called without a toolchain, as the CI's tests call it: the
+    """CallHLS called without a toolchain, as the pynq shell's IODMA calls it: the
     frontend the machine's release names, from the site directory."""
     site = fake_tools("site", machine=True)
     monkeypatch.setenv("FINN_XILINX_ENV", "")
     monkeypatch.setenv("FINN_XILINX_VERSION", version)
-    model = mvau_model().transform(SpecializeLayers(PART)).transform(PrepareIP(PART, 5.0))
-    model.transform(HLSSynthIP())
+    build = tmp_path / "iodma"
+    build.mkdir()
+    (build / "hls_syn_idma0.tcl").write_text("exit\n")
+    caller = CallHLS()
+    caller.append_tcl(str(build / "hls_syn_idma0.tcl"))
+    caller.build(str(build))
     assert site.calls == HLS_CALLS[version]

@@ -59,7 +59,6 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
-        ("finn.util.torch_hw_modules", "flow"),
         ("finn.harness.ops", "harness"),
         ("finn.core.executors.xsim.rtl", "xsim"),
         ("finn.core.executors.xsim", "xsim"),
@@ -97,11 +96,8 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("util", "finn.builder.kernel_build_steps.step_kernel_bitfile"),
         # The shells below the flow: the builder runs them, never the other way.
         ("shells", "finn.builder.kernel_build_steps"),
-        ("shells", "finn.custom_op.fpgadataflow.hls.iodma_hls.IODMA_hls"),
-        ("shells", "finn.transformation.fpgadataflow.prepare_ip.PrepareIP"),
         ("transformation.kernels", "finn.shells.pynq.runner"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
-        ("util", "finn.util.torch_hw_modules"),
         # What is read of a partition reads qonnx only, below the kernel stack, the
         # executors and the flow; the partition node runs its body with the executors,
         # which never import the node.

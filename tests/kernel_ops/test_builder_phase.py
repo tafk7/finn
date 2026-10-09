@@ -25,7 +25,6 @@ from typing import Any, cast
 import numpy as np
 import pytest
 from kernels.helpers import Lanes
-from onnx import helper
 from oracle import capture
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -36,7 +35,6 @@ from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
 from finn.builder.build_dataflow_checks import run_all_config_checks
-from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
 from finn.builder.kernel_build_checks import Severity
 from finn.builder.kernel_build_config import (
     SHELL_OUTPUTS,
@@ -77,7 +75,6 @@ from finn.shells.pynq.runner import (
     iodma_model,
     project_script,
 )
-from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.kernels import (
     completion,
     explore_kernel_choices,
@@ -87,7 +84,6 @@ from finn.transformation.kernels import (
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
-from finn.util.resources import resource_path, tcl_quote
 from finn.util.toolchain import Toolchain
 from finn.util.vivado import delivered_clock
 from kernel_ops.models import (
@@ -339,10 +335,10 @@ def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: P
         step_kernel_ops(chain_source(), config(tmp_path, target=xrt))
 
 
-def failed_checks(cfg: Any, model: ModelWrapper | None = None) -> dict[str, list[str]]:
-    """The configuration errors of a build of ``model``, their messages by name."""
+def failed_checks(cfg: Any) -> dict[str, list[str]]:
+    """The configuration errors of a build, their messages by name."""
     failed: dict[str, list[str]] = {}
-    for check in run_all_config_checks(cfg, model).checks:
+    for check in run_all_config_checks(cfg).checks:
         if not check.passed and check.severity == Severity.ERROR:
             failed.setdefault(check.name, []).append(check.message)
     return failed
@@ -490,22 +486,6 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     assert failed_checks(asked) == {}
 
 
-def test_a_dataflow_build_of_kernel_ops_is_refused(tmp_path: Path) -> None:
-    """The HWCustomOp flow's configuration does not build KernelOps: a model that holds
-    them is refused, naming the kernel path's configuration; one without them is
-    checked as before."""
-    cfg = DataflowBuildConfig(
-        output_dir=str(tmp_path / "output"),
-        synth_clk_period_ns=5.0,
-        generate_outputs=[DataflowOutputType.STITCHED_IP],
-        steps=["phase_generate_outputs"],
-    )
-    failed = failed_checks(cfg, kernel_model())
-    assert list(failed) == ["kernel_ops_model"]
-    assert "KernelBuildConfig" in failed["kernel_ops_model"][0]
-    assert "kernel_ops_model" not in failed_checks(cfg, chain_source())
-
-
 def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -526,21 +506,11 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     ]
 
 
-def test_a_kernel_path_step_is_not_a_dataflow_builds(tmp_path: Path) -> None:
-    """Each configuration's steps are its flow's: the kernel path's names are refused
-    in a DataflowBuildConfig's steps, and the HWCustomOp flow's in a KernelBuildConfig's."""
-    dataflow = DataflowBuildConfig(
-        output_dir=str(tmp_path / "output"),
-        synth_clk_period_ns=5.0,
-        generate_outputs=[],
-        steps=["phase_kernel_path"],
-    )
-    with pytest.raises(ValueError, match="Unknown step or phase: phase_kernel_path"):
-        resolve_build_steps(dataflow)
-    # The front end's legacy steps too: graph preparation lifts their recipe.
-    for legacy in ("phase_generate_outputs", "step_qonnx_to_finn", "step_streamline"):
-        with pytest.raises(ValueError, match=f"Unknown step or phase: {legacy}"):
-            resolve_build_steps(config(tmp_path, steps=[legacy]))
+def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None:
+    """A build's steps are the kernel path's: another name is refused, and the default
+    steps are its three phases."""
+    with pytest.raises(ValueError, match="Unknown step or phase: step_streamline"):
+        resolve_build_steps(config(tmp_path, steps=["step_streamline"]))
     assert [step.__name__ for step in resolve_build_steps(config(tmp_path))] == [
         "phase_graph_preparation",
         "phase_kernel_path",
@@ -1005,43 +975,6 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
         (node,) = model.graph.node
         code = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")))
         assert (code / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[end.instance]
-
-
-@pytest.mark.slow
-def test_the_iodmas_code_is_the_hwcustomop_flows_copied(
-    z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The shell's IODMA is a frozen copy of the HWCustomOp flow's IODMA_hls: for each of
-    TFC's ends, the HLS top it generates is the original's, byte for byte, and so is its
-    Vitis HLS script but for the custom HLS directory the original names and no IODMA
-    includes from. The check goes with the original when the HWCustomOp flow is
-    deleted."""
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
-    export = integration(z0_tfc, completion("baseline"))
-    for end in export.ends:
-        copied = prepare_ip(iodma_model(end), export.part, export.period_ns)
-        original = iodma_model(end)
-        (node,) = original.graph.node
-        node.domain = "finn.custom_op.fpgadataflow.hls"
-        node.attribute.append(helper.make_attribute("backend", "fpgadataflow"))
-        original.model.opset_import.append(helper.make_opsetid(node.domain, 1))
-        prepare = PrepareIP(export.part, export.period_ns)  # type: ignore[no-untyped-call]
-        original = original.transform(prepare)
-
-        def code(model: ModelWrapper, name: str) -> str:
-            (node,) = model.graph.node
-            directory = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")))
-            return (directory / name.format(node.name)).read_text().replace(str(directory), "")
-
-        assert code(copied, "top_{}.cpp") == code(original, "top_{}.cpp")
-        custom_hls = (
-            'set config_customhlsdir "{0}"\nputs "custom HLS dir: $config_customhlsdir"\n'.format(
-                tcl_quote(resource_path("custom_hls"))[1:-1]
-            )
-        )
-        script = code(original, "hls_syn_{}.tcl").replace(custom_hls, "")
-        script = script.replace(" -I$config_customhlsdir", "")
-        assert code(copied, "hls_syn_{}.tcl") == script
 
 
 #: TFC's bottleneck at Z0's choices on its shell root, ends included: the input end's 196

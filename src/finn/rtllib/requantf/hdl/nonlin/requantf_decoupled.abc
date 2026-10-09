@@ -1,9 +1,0 @@
-#############################################################################
-# Copyright Advanced Micro Devices, Inc.
-# SPDX-License-Identifier: MIT
-#############################################################################
-
-import	@arith/fmaf
-read_sv  requantf_decoupled.sv
-setup_tb  requantf_decoupled_tb
-setup_top requantf_decoupled_top

@@ -256,12 +256,11 @@ where.
 
 ## Package data and external resources
 
-FINN's own RTL and HLS sources are packages in the wheel: `finn/rtllib` and
-`finn/custom_hls` (both expected to give way to FinnLib), and the XSI bridge
-sources in `finn/xsi/src`. Look them up by resource name, not location:
-`finn.resources.path("rtllib")`, `"custom-hls"` or `"xsi"`; inside FINN,
-`finn.util.resources.resource_path(family, *parts)` does the same. Deployment
-data (the Vitis driver descriptor, PYNQ driver templates) is in `finn/deploy/data`.
+FINN's own sources in the wheel are the XSI bridge's, in `finn/xsi/src`; the kernels'
+RTL and HLS are FinnLib's (the `finnlib` resource). Look them up by resource name,
+not location: `finn.resources.path("xsi")`; inside FINN,
+`finn.util.resources.resource_path(family, *parts)` does the same. The pynq shell's
+data (its PYNQ driver files and design description) is in `finn/shells/pynq/data`.
 The Python XSI driver lives at `src/finn_xsi/`.
 Editable installations observe changes to these directly. Generated RTL, driver
 files and compiled XSI extensions belong in writable build storage, never in the
@@ -434,9 +433,8 @@ path = "../my-rtl"
 Kinds are free-form. FINN itself uses `hls-include` and `vivado-boards`; other
 kinds are for your own code to look up.
 
-FINN's own sources (`rtllib`, `custom-hls`, `xsi`) are declared the same way, as
-`package` resources, so `FINN_RESOURCES_RTLLIB=/path/to/rtllib` or a project
-declaration replaces one.
+FINN's own sources (`xsi`) are declared the same way, as `package` resources, so
+`FINN_RESOURCES_XSI=/path/to/src` or a project declaration replaces one.
 
 A Python package can ship declarations too: put a `resources.toml` with
 `[resources.NAME]` tables in one of its modules and name that module in the
@@ -477,8 +475,7 @@ the build directory resolved and the simulator libraries on the loader path
 environment. The API `build_dataflow_directory` uses the same boundary.
 `build_dataflow_cfg` remains in-process for custom Python callbacks: callers using
 XSI there must supply its loader environment before interpreter startup. Concurrent
-in-process builds still share legacy configuration, stdout and logger state; use
-separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
+in-process builds still share stdout and logger state; use separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
 `finn.util.toolchain.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a
@@ -489,8 +486,7 @@ which Vivado's licence library crashes in `udev_enumerate_scan_devices`). To acc
 FINN does not attempt to unsource a previously activated installation. Bash startup
 hooks and exported functions are removed in children. A prepared environment that
 names no licence gets the machine file's (`XILINXD_LICENSE_FILE=PORT@HOST`), except
-on a launcher route, whose site owns it; `launch_process_helper` without an
-environment launches in `Selection().prepare()`'s.
+on a launcher route, whose site owns it.
 
 Vendor commands execute with argv, child env and cwd. Probes use the identical
 route and a bounded timeout. Every transformation that runs a tool takes a
@@ -499,13 +495,12 @@ prepared toolchain (`toolchain=`); called without one, it runs by the machine's,
 settings script is sourced), under the site command directory
 `FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the machine
 file's `FINN_XILINX_VERSION` (`vitis-run` from 2025.1, else `vitis_hls`). A
-dataflow build prepares one toolchain (the selection its configuration names,
-`DataflowBuildConfig.toolchain`, or the machine's when it names none, on the
-first step that runs a tool) and passes it to every HLS synthesis, simulation,
-stitching, FIFO-sizing, shell-build, link and driver step;
+build prepares one toolchain (the selection its configuration names,
+`KernelBuildConfig.toolchain`, or the machine's when it names none, on the
+first step that runs a tool) and passes it to every step that runs a tool
+(HLS synthesis, packaging, simulation, the shell's build);
 `build_dataflow_directory` prepares its build process's environment from the same
-selection; `ZynqBuild`, `PrepareForLinking` and `InsertAndSetFIFODepths` likewise
-pass theirs to the tool steps they run. A stated selection is laid over the
+selection. A stated selection is laid over the
 machine's (`machine_selection(stated=...)`): each field it states wins, and a field
 it leaves `null` (`command_dir`, `hls_frontend`, `vivado_jobs`) is the machine's, so
 stating one field drops none of the others. How many runs Vivado launches at once is
@@ -518,9 +513,8 @@ A build configuration may name its toolchain, the HLS frontend included; the
 frontend is never guessed from the executables found: it is the one stated, or the
 machine file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build has a configuration of its own,
 `finn.builder.kernel_build_config.KernelBuildConfig`, written as
-`kernel_build_config.json` beside `model.onnx` (a build directory states one
-configuration: `dataflow_build_config.json` for the HWCustomOp flow, or this one;
-`build_dataflow` builds either). A kernel-path build of TFC for Ultra96 in the
+`kernel_build_config.json` beside `model.onnx`, which `build_dataflow` builds. A
+kernel-path build of TFC for Ultra96 in the
 Zynq shell (the environment as configured, so `settings` stays empty):
 
 ```json
@@ -553,9 +547,7 @@ packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); wit
 `unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
 need a shell that integrates the partition, so they are refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
 choices, the partition and its verification) and `phase_kernel_outputs` (what the
-shell makes). None of the HWCustomOp flow's fields (`synth_clk_period_ns`,
-`board`, `shell_flow_type`, `target_fps`, `folding_config_file`, ...) is read:
-stated, it is refused by name.
+shell makes). A key the configuration does not declare is refused by name.
 
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:
@@ -591,7 +583,7 @@ bottleneck, and the shell's resources against the part's, of the point as it is
 built) to `report/kernel_exploration.json`. A point that uses more of a resource
 than the part has is a warning naming that resource, never a refusal.
 
-Explicit selections, and a dataflow build's configuration, name the frontend
+Explicit selections, and a build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the
 machine file's release. Compatibility checks retain the old-HLS (through 2020.1),
 standalone Vitis HLS (2020.1–2024.2), and unified HLS (2025.1+) code-generation
@@ -606,33 +598,7 @@ cancellation to their remote jobs. Logs include command, route, selected setting
 probed identity, cwd, elapsed time and status; environment snapshots are not logged
 or persisted. Replay shell files require the selected environment to be prepared.
 
-## Native simulation sessions and remaining gates
-
-The internal `finn.xsi._session.run_session` accepts a concrete `SessionRequest`,
-packed input streams, a selected child environment, an existing output root and a
-required wall-clock limit. It executes a fresh Python image, loads the selected
-bridge/kernel/design inside that process and exchanges pickle-free NumPy arrays
-of hexadecimal words (including streams wider than 64 bits). Each session has
-independent logs, outputs, optional waveforms and an atomic success record.
-The initial built-in testbench uses FINN's `ap_clk`/optional `ap_clk2x` and active-low
-`ap_rst_n` interface, a configurable reset duration, stream suffix and output
-watchdogs. Custom testbenches are explicit Python files defining
-`run(sim, io, request) -> metrics`, with JSON arguments; parent closures and native
-handles never cross the process boundary.
-
-The `finn_xsi` bridge is built against the selected Vivado on first use (see
-above). Bridge/design compilation writes adjacent `.finn.json` records of tool identity,
-source/header hashes, ABI where applicable and compile arguments. Sessions reject
-changed or incompatible artifacts and recheck after exec. Older artifacts need a
-rebuild to supply these records. Site execution requires an explicit site Python
-command and shared absolute paths; the wrapper owns remote cancellation.
-
-This is a directly testable mechanism, not yet integrated with the private build
-engine. Actual AMD output/cycle/trace equivalence, AXI initialization/readback,
-external memory, MLO, characterization, native concurrent reuse and performance
-measurements remain open. Keep the current C++ harness and native execution paths
-until those gates pass. Forced termination can leave partial waveforms; timeout and
-cancellation retain partial stdout/stderr beside replay/session artifacts.
+## Native integration
 
 Only the sbx image variant reads native persistent Bash environment configuration.
 Generic images have no FINN Bash startup hook. Bare vendor shims and global libudev

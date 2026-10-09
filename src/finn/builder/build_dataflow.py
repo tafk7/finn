@@ -43,15 +43,6 @@ from finn.builder.build_dataflow_checks import (
     run_all_config_checks,
     save_report,
 )
-from finn.builder.build_dataflow_config import (
-    DataflowBuildConfig,
-    default_build_dataflow_steps,
-)
-from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
-from finn.builder.build_dataflow_steps import (
-    _maybe_enable_verify_behavioral,
-    build_dataflow_step_lookup,
-)
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     default_kernel_build_steps,
@@ -59,15 +50,9 @@ from finn.builder.kernel_build_config import (
 from finn.builder.kernel_build_runner import recorded_step_times
 from finn.builder.kernel_build_steps import kernel_build_step_lookup
 
-#: A build's configuration: the HWCustomOp flow's, or the kernel path's.
-BuildConfig = DataflowBuildConfig | KernelBuildConfig
-
-#: The file a build directory states its configuration in, by the configuration's type
-#: (build_dataflow_directory): one of them, beside model.onnx.
-CONFIG_FILES = {
-    "dataflow_build_config.json": DataflowBuildConfig,
-    "kernel_build_config.json": KernelBuildConfig,
-}
+#: The file a build directory states its configuration in (build_dataflow_directory),
+#: beside model.onnx.
+CONFIG_FILE = "kernel_build_config.json"
 
 
 # adapted from https://stackoverflow.com/a/39215961
@@ -89,31 +74,19 @@ class StreamToLogger(object):
         pass
 
 
-def _step_lookup(cfg: BuildConfig) -> tuple[list, dict]:
-    """The default steps and the steps and phases by name of the build ``cfg``
-    configures: the kernel path's for a KernelBuildConfig, the HWCustomOp flow's for
-    a DataflowBuildConfig."""
-    if isinstance(cfg, KernelBuildConfig):
-        return default_kernel_build_steps, kernel_build_step_lookup
-    return default_build_dataflow_steps, {
-        **build_dataflow_step_lookup,
-        **build_dataflow_phase_lookup,
-    }
-
-
-def resolve_build_steps(cfg: BuildConfig, partial: bool = True):
-    """Resolve build steps from config, supporting both phases and fine-grained steps:
-    those of the configuration's flow (a KernelBuildConfig's or a DataflowBuildConfig's).
+def resolve_build_steps(cfg: KernelBuildConfig, partial: bool = True):
+    """Resolve build steps from config, supporting both phases and fine-grained steps
+    of the kernel path (finn.builder.kernel_build_steps).
 
     Note: When using phase-based builds with start_step/stop_step, specify phase names
-    (e.g., start_step="phase_build_hardware") rather than fine-grained step names.
-    Phases save intermediate models for each internal step, so checkpoints like
-    step_hw_ipgen.onnx will exist, but the build loop operates at the phase level.
+    (e.g., start_step="phase_kernel_outputs") rather than fine-grained step names.
+    Phases save intermediate models for each internal step, but the build loop
+    operates at the phase level.
     """
-    default_steps, all_steps = _step_lookup(cfg)
+    all_steps = kernel_build_step_lookup
     steps = cfg.steps
     if steps is None:
-        steps = default_steps
+        steps = default_kernel_build_steps
 
     steps_as_fxns = []
     for transform_step in steps:
@@ -160,7 +133,7 @@ def resolve_build_steps(cfg: BuildConfig, partial: bool = True):
     return steps_as_fxns
 
 
-def resolve_step_filename(step_name: str, cfg: BuildConfig, step_delta: int = 0):
+def resolve_step_filename(step_name: str, cfg: KernelBuildConfig, step_delta: int = 0):
     step_names = list(map(lambda x: x.__name__, resolve_build_steps(cfg, partial=False)))
     assert step_name in step_names, "start_step %s not found" + step_name
     step_no = step_names.index(step_name) + step_delta
@@ -237,10 +210,9 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
     return 0
 
 
-def build_dataflow_cfg(model_filename, cfg: BuildConfig):
-    """Best-effort build a dataflow accelerator using the given configuration, by its
-    type: a DataflowBuildConfig through the HWCustomOp flow's steps, a
-    KernelBuildConfig through the kernel path's (finn.builder.kernel_build_steps).
+def build_dataflow_cfg(model_filename, cfg: KernelBuildConfig):
+    """Best-effort build a dataflow accelerator using the given configuration, through
+    the kernel path's steps (finn.builder.kernel_build_steps).
 
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
@@ -266,29 +238,16 @@ def build_dataflow_cfg(model_filename, cfg: BuildConfig):
     if not os.path.exists(cfg.output_dir):
         os.makedirs(cfg.output_dir)
 
-    if isinstance(cfg, DataflowBuildConfig):
-        _maybe_enable_verify_behavioral(cfg)
-
     # Run configuration checks
-    config_report = run_all_config_checks(cfg, model)
+    config_report = run_all_config_checks(cfg)
     print(format_report(config_report))
     report_path = save_report(config_report, cfg.output_dir)
     print(f"Configuration check report saved to: {report_path}")
 
     if config_report.has_errors():
-        # The kernel path's configuration mutes nothing: its errors stop the build.
-        if isinstance(cfg, DataflowBuildConfig) and cfg.mute_config_assertions is True:
-            print("WARNING: Configuration errors detected but muted by mute_config_assertions=True")
-            print("Build may fail or produce unexpected results.")
-        else:
-            muting = (
-                " or set mute_config_assertions=True"
-                if isinstance(cfg, DataflowBuildConfig)
-                else ""
-            )
-            raise AssertionError(
-                f"Configuration check failed with errors. Fix the issues above{muting} to proceed."
-            )
+        raise AssertionError(
+            "Configuration check failed with errors. Fix the issues above to proceed."
+        )
 
     build_dataflow_steps = resolve_build_steps(cfg)
     # set up logger
@@ -319,19 +278,14 @@ def build_dataflow_cfg(model_filename, cfg: BuildConfig):
         log_file_handler.close()
 
 
-def read_build_config(path_to_cfg_dir: str) -> BuildConfig:
-    """The build configuration a build directory states: its one configuration file
-    (CONFIG_FILES), read as the type the file's name gives. A directory with none, or
-    with more than one, is refused, naming the files."""
-    stated = [name for name in CONFIG_FILES if os.path.isfile(os.path.join(path_to_cfg_dir, name))]
-    if len(stated) != 1:
-        raise FileNotFoundError(
-            f"{path_to_cfg_dir}: a build directory states one build configuration, one of "
-            f"{sorted(CONFIG_FILES)}; it has {stated or 'none'}"
-        )
-    (name,) = stated
-    with open(os.path.join(path_to_cfg_dir, name)) as f:
-        return CONFIG_FILES[name].from_json(f.read())
+def read_build_config(path_to_cfg_dir: str) -> KernelBuildConfig:
+    """The build configuration a build directory states: its CONFIG_FILE. A directory
+    without one is refused, naming the file."""
+    path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
+    with open(path) as f:
+        return KernelBuildConfig.from_json(f.read())
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):
@@ -342,9 +296,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     The specified directory path_to_cfg_dir must contain the following files:
 
     * model.onnx : ONNX model to be converted to dataflow accelerator
-    * one build configuration (read_build_config), whose file name gives its type:
-      dataflow_build_config.json, a DataflowBuildConfig (the HWCustomOp flow), or
-      kernel_build_config.json, a KernelBuildConfig (the kernel path)
+    * kernel_build_config.json : its KernelBuildConfig (read_build_config)
 
     """
     # get absolute path

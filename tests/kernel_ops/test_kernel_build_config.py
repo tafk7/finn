@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's build configuration (``KernelBuildConfig``): read from and written to
-JSON as DataflowBuildConfig is, refusing what it does not declare, and dispatched by its
-type through the one ``build_dataflow`` entry."""
+JSON, refusing what it does not declare, and built through the one ``build_dataflow``
+entry."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from finn.builder.build_dataflow import (
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import run_all_config_checks
-from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.kernel_build_checks import Severity
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
@@ -126,19 +125,14 @@ def test_a_configuration_holds_through_json() -> None:
 @pytest.mark.parametrize(
     "key",
     [
-        "synth_clk_period_ns",
+        # The board is the target's; the toolchain's selection states Vivado's jobs
+        # (SZ7); debug cores are the pynq shell's build's option (shell_options).
         "board",
-        "shell_flow_type",
-        "target_fps",
-        "fpga_part",
-        # SZ7: the toolchain's selection states Vivado's jobs; nothing mutes the checks;
-        # debug cores are the pynq shell's build's option (shell_options).
         "vivado_jobs",
-        "mute_config_assertions",
         "enable_hw_debug",
     ],
 )
-def test_a_dataflow_build_config_field_is_refused_naming_it(key: str) -> None:
+def test_an_undeclared_key_is_refused_naming_it(key: str) -> None:
     with pytest.raises(UndefinedParameterError, match=key):
         KernelBuildConfig.from_json(json.dumps({**STATED, key: None}))
 
@@ -207,20 +201,11 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
     ]
 
 
-def test_a_build_directory_states_one_configuration_its_file_naming_its_type(
-    tmp_path: Path,
-) -> None:
+def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="states kernel_build_config.json"):
+        read_build_config(str(tmp_path))
     (tmp_path / "kernel_build_config.json").write_text(json.dumps(STATED))
     assert isinstance(read_build_config(str(tmp_path)), KernelBuildConfig)
-    dataflow = {"output_dir": "out", "synth_clk_period_ns": 5.0, "generate_outputs": []}
-    (tmp_path / "dataflow_build_config.json").write_text(json.dumps(dataflow))
-    with pytest.raises(FileNotFoundError, match="states one build configuration"):
-        read_build_config(str(tmp_path))
-    (tmp_path / "kernel_build_config.json").unlink()
-    assert isinstance(read_build_config(str(tmp_path)), DataflowBuildConfig)
-    (tmp_path / "dataflow_build_config.json").unlink()
-    with pytest.raises(FileNotFoundError, match="it has none"):
-        read_build_config(str(tmp_path))
 
 
 @pytest.mark.slow

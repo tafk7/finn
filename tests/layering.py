@@ -198,16 +198,14 @@ LAYERS: tuple[Layer, ...] = (
     # The executors and the execution that runs a model with them (finn.core.onnx_exec):
     # what runs a model's nodes, chosen by the caller. They run the KernelOps (by their
     # domain) and a partition's hardware (XSim: configured_root, the testbench).
-    # finn.core.rtlsim_exec is the legacy executor the model's exec_mode metadata
-    # selects, here until the legacy executors are deleted. Nothing below the flow
-    # imports them but the partition node, which executes its body with them.
+    # Nothing below the flow imports them but the partition node, which executes its
+    # body with them.
     Layer(
         "executors",
         (
             "finn.core.executors",
             "finn.core.executors.xsim.executor",
             "finn.core.onnx_exec",
-            "finn.core.rtlsim_exec",
         ),
         (
             *_KERNEL_STACK,
@@ -258,9 +256,8 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
     # design, its ends' IODMAs, its driver), from the integration export. Below the
-    # flow: the builder runs them, and nothing here imports the HWCustomOp flow. The
-    # board's driver files (finn.shells.pynq.data) import pynq, each other and, to
-    # validate, dataset_loading.
+    # flow: the builder runs them. The board's driver files (finn.shells.pynq.data)
+    # import pynq, each other and, to validate, dataset_loading.
     Layer(
         "shells",
         ("finn.shells",),
@@ -275,13 +272,10 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx", "pynq", "driver", "driver_base", "dataset_loading"),
         "tests/kernel_ops",
     ),
-    # The flow: every FINN module no other layer claims. finn.util.torch_hw_modules
-    # is here by its imports: the PyTorch twin of the PWPolyF custom op, it reads
-    # that op's constants (finn.custom_op.general). Upstream FINN documents it at
-    # its util path, so it stays there.
+    # The flow: every FINN module no other layer claims (the builder, ApplyConfig).
     Layer(
         "flow",
-        ("finn", "finn.util.torch_hw_modules"),
+        ("finn",),
         (
             *_KERNEL_STACK,
             "platform",
@@ -327,9 +321,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The kernel tests need no graph either: the kernel stack, the harness, the XSim
     # testbench, util for the XSI runtime and the resource store, the space tests'
-    # helpers and the oracle's captures. The one flow module is a live oracle: the
-    # stream contracts are compared with the shuffle decomposition that baseline FINN
-    # hard-codes.
+    # helpers and the oracle's captures.
     Layer(
         "tests.kernels",
         ("kernels",),
@@ -345,7 +337,6 @@ LAYERS: tuple[Layer, ...] = (
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype"),
         "tests/kernels",
-        also=("finn.transformation.fpgadataflow.transpose_decomposition",),
     ),
 )
 

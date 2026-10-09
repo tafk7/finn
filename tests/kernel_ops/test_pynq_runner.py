@@ -32,7 +32,6 @@ from finn.custom_op.partition.kernel_partitions import (
     partition_body,
 )
 from finn.platform import resolve_target
-from finn.shells.pynq import driver as pynq_driver
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.driver import driver_description, driver_shapes, write_driver
 from finn.shells.pynq.runner import (
@@ -44,7 +43,6 @@ from finn.shells.pynq.runner import (
     project_script,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
-from finn.transformation.fpgadataflow import make_driver
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from finn.util import hls
@@ -493,42 +491,6 @@ def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(
         "qonnx",
         "finn",
     }
-
-
-def test_the_legacy_driver_runs_resizer_bit_in_the_working_directory(tmp_path: Path) -> None:
-    """The HWCustomOp flow's driver, given no bitfile, keeps its default (ON8):
-    resizer.bit, relative to the directory driver.py and validate.py are run from."""
-    driver = tmp_path / "driver"
-    driver.mkdir()
-    make_driver.write_pynq_driver_support(str(driver))
-    shapes = driver_shapes(integration(zynq_model(tmp_path)))
-    (driver / "driver.py").write_text(make_driver.pynq_driver_text("zynq-iodma", shapes, 100.0))
-    for script in ("driver.py", "validate.py"):
-        assert bitfile_default(driver / script, tmp_path) == "resizer.bit"
-
-
-def test_the_driver_is_the_hwcustomop_flows_copied(tmp_path: Path) -> None:
-    """The shell's driver is a frozen copy of the HWCustomOp flow's (make_driver): its text
-    and every file it runs with, byte for byte, for the same I/O, clock and bitfile. The
-    check goes with the original when the HWCustomOp flow is deleted."""
-    shapes = driver_shapes(integration(zynq_model(tmp_path)))
-    bitfile = "../bitfile/finn-accel.bit"
-    copied = pynq_driver.pynq_driver_text("zynq-iodma", shapes, 187.512, bitfile)
-    original = make_driver.pynq_driver_text("zynq-iodma", shapes, 187.512, bitfile=bitfile)
-    assert copied == original
-
-    def written(directory: Path) -> dict[str, bytes]:
-        return {
-            str(path.relative_to(directory)): path.read_bytes()
-            for path in sorted(directory.rglob("*"))
-            if path.is_file()
-        }
-
-    (tmp_path / "copy").mkdir()
-    (tmp_path / "original").mkdir()
-    pynq_driver.write_pynq_driver_support(str(tmp_path / "copy"))
-    make_driver.write_pynq_driver_support(str(tmp_path / "original"))
-    assert written(tmp_path / "copy") == written(tmp_path / "original")
 
 
 def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path) -> None:
