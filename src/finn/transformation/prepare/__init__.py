@@ -24,7 +24,6 @@ The phase reads no target: nothing here imports ``finn.platform`` or the KernelO
 from finn.transformation.prepare.checkpoint import (
     BOUND_RULES,
     DEVIATIONS,
-    VALUE_DEVIATIONS,
     PreparationRefused,
     checkpoint,
     summary,
@@ -43,7 +42,6 @@ __all__ = [
     "DEVIATIONS",
     "RECIPE_TRANSFORMS",
     "SUB_PHASES",
-    "VALUE_DEVIATIONS",
     "GraphPreparation",
     "PreparationRefused",
     "census",

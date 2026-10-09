@@ -78,8 +78,8 @@ from finn.transformation.kernels.package import (
     partition_utilization_report,
 )
 from finn.transformation.prepare import (
+    DEVIATIONS,
     SUB_PHASES,
-    VALUE_DEVIATIONS,
     PreparationRefused,
     census,
     checkpoint,
@@ -197,9 +197,9 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
     (finn.harness.preparation.check_equivalence), which the build has no deviation's
     predicate for: every difference is a finding. That check is a verification, as
     PARTITION_PYTHON is: its findings go to the report's equivalence, the log prints
-    FAIL, one line per finding code and the declared value deviations that might
-    explain them, and the build continues. But a drawn value outside its tensor's
-    annotation (annotation-unsound) is no difference from the export: the graph's own
+    FAIL, one line per finding code and the declared deviations that might explain
+    them, and the build continues. But a drawn value outside its tensor's annotation
+    (annotation-unsound) is no difference from the export: the graph's own
     annotation is wrong, and the kernels' widths trust it, so it refuses the graph
     beside the checkpoint's blockers, named. Where the export itself rounds (its
     integers otherwise in float32 than in float64), the report's equivalence names each
@@ -251,7 +251,7 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
             + ("FAIL" if equivalence.findings else "SUCCESS")
         )
         if equivalence.findings:
-            declared = ", ".join(VALUE_DEVIATIONS)
+            declared = ", ".join(DEVIATIONS)
             refused = "annotation-unsound refuses the graph, the rest " if unsound else ""
             print(
                 f"Graph preparation: equivalence: {len(equivalence.findings)} findings on "
