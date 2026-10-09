@@ -85,9 +85,12 @@ _URAM_INIT = {
     Fabric.SERIES7: "The 7 series has no UltraRAM: the probe reads no URAM site.",
     Fabric.ULTRASCALE: "An UltraRAM given initial contents was built as block RAM on "
     "xczu7ev by Vivado 2025.2 synthesis: UltraScale+ does not initialise it.",
-    Fabric.VERSAL: "Versal's URAM288 initial contents through place and route are "
-    "not yet shown, so FINN gives an UltraRAM no initial contents there.",
+    Fabric.VERSAL: "Vivado 2025.2 kept URAM288E5 initial contents through synthesis, "
+    "opt, place and route out of context on xcvc1902-vsva2197-2MP-e-S: the routed "
+    "netlist's INIT_* properties of two initialised UltraRAM memories, of one and four "
+    "cells, held every data bit of every word; not read back from hardware.",
 }
+_URAM_INITIALISED = {Fabric.SERIES7: False, Fabric.ULTRASCALE: False, Fabric.VERSAL: True}
 
 
 def _rules(
@@ -105,7 +108,7 @@ def _rules(
             series=series,
             fabric=fabric,
             dsp=dsp,
-            uram_init=False,
+            uram_init=_URAM_INITIALISED[fabric],
             sample=sample,
             evidence={
                 "fabric": _FABRIC[fabric].format(sample=sample),
