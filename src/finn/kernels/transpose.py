@@ -3,7 +3,7 @@
 
 """FinnLib ``inner_shuffle`` as a node between two channels: a banked matrix transpose.
 
-A row-major ``(I, J)`` matrix, SIMD elements of a row a beat, becomes its
+A row-major ``(I, J)`` matrix, SIMD elements of it a beat, becomes its
 columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
 candidate of a channel's ``adapter`` Decision (``finn.kernels.adapters``): a
 kernel with children places it explicitly, and a channel realizes lane regroups
@@ -13,7 +13,6 @@ through the common lane count instead.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import gcd
 
 from finn.core.space import (
     ConstraintGroup,
@@ -62,16 +61,24 @@ class TransposeKernel(Kernel):
     """FinnLib ``inner_shuffle``: an (I, J) matrix's rows in, its columns out.
 
     The input is the last two axes of its tensor in row-major order, SIMD
-    elements of a row a beat; any outer axes are a sequence of matrices. The
+    consecutive elements a beat; any outer axes are a sequence of matrices. The
     output presents each matrix column by column, SIMD elements of a column a
-    beat. SIMD, a Decision, divides I and J; I and J are bound from the ports.
+    beat. SIMD, a Decision, divides I, the RTL's one constraint
+    (``inner_shuffle.sv``: ``I % SIMD == 0``); I and J are the input's last axes.
+
+    The RTL writes its input to consecutive bank addresses, so a beat may span
+    two rows when SIMD does not divide J (it rotates its write banks by
+    ``gcd(J, SIMD)``). The input reads its matrix through a row-major ``(J, I)``
+    view: the same flat order, walked by the output's schedule, ``I / SIMD``
+    beats of SIMD lanes for each of J. A beat never spans two matrices.
 
     The RTL writes matrices alternately into two pages, and reads a page only
     once all of it is written, its last beat included (FinnLib ``99d75e8`` and
     later; the pin includes it). Without that guard an output draining faster
     than the input arrives (stalled or bursty input, as behind a ``vpc``) reads
-    lanes not yet written. ``tests/kernels/test_conformance.py``'s transpose
-    case runs stalled and behind a ``vpc``, so it checks the guard.
+    lanes not yet written. ``tests/kernels/specs/transpose.py``'s ``transpose``
+    case runs stalled (and a ``vpc`` feeds its adapter sample), so it checks the
+    guard.
 
     The pages' ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
     UltraRAM (the pages start empty, so no initial contents are asked of it).
@@ -93,15 +100,16 @@ class TransposeKernel(Kernel):
         ),
     )
 
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent: the input reads its tensor through a view, which binds
+        none, so the kernel gives its axes' extents; the output's read must agree."""
+        return self._bound(dict(zip(self.indices, self.input_channel.tensor.shape)))
+
     rows = extent_of(i)  # I
     cols = extent_of(j)  # J
 
-    @derived
-    def sides(self) -> int:
-        """The common divisors of I and J are SIMD's domain."""
-        return gcd(self.rows, self.cols)
-
-    simd: int = Decision(domain=divisors_of(sides))
+    simd: int = Decision(domain=divisors_of(rows))
 
     @constraint
     def pages_supported(self) -> bool | Rejected:
@@ -119,15 +127,16 @@ class TransposeKernel(Kernel):
         return (*(Index(f"a{axis}") for axis in range(rank - 2)), i, j)
 
     @derived
-    def rows_in(self) -> Schedule | Rejected:
-        """Each matrix's rows in turn, SIMD elements of a row a beat."""
-        return self.bound_schedule(self.indices, {j: self.simd})
+    def columns(self) -> tuple[Index, ...]:
+        """The output's walk: any outer axes, then ``j``, then ``i``."""
+        *outer, _, _ = self.indices
+        return (*outer, j, i)
 
     @derived
     def columns_out(self) -> Schedule | Rejected:
-        """Each matrix's columns in turn, SIMD elements of a column a beat."""
-        *outer, _, _ = self.indices
-        return self.bound_schedule((*outer, j, i), {i: self.simd})
+        """Each matrix's columns in turn, SIMD elements of a column a beat. The input,
+        read as each matrix's ``(J, I)`` view, walks it too: its rows, flat."""
+        return self.bound_schedule(self.columns, {i: self.simd})
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def dtype(self) -> QONNXDataType:
@@ -138,9 +147,10 @@ class TransposeKernel(Kernel):
         name="input",
         endpoint=Endpoint.TARGET,
         channel=input_channel,
-        schedule=rows_in,
-        index=indices,
-        lanes=(j,),
+        schedule=columns_out,
+        index=columns,
+        lanes=(i,),
+        reshaped=True,
         dtype=dtype,
         signals=("idat", "ivld", "irdy"),
         clock=NATIVE_CLOCKING.clock,

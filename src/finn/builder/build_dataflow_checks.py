@@ -131,7 +131,8 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
     it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
     ``ip``), and each output those it is made from (OUTPUT_NEEDS); the shell's build
     takes its shell_options; the verification input exists, the testbench a
-    verification runs is asked for, and the step that runs each verification runs."""
+    verification runs is asked for, and the steps each verification needs run
+    (VERIFIED_BY)."""
     checks = []
     try:
         target = cfg._resolve_target()
@@ -216,18 +217,20 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
     resolved_names = _resolved_step_names(cfg)
     for vstep in cfg.verify_steps if resolved_names is not None else ():
         vstep = KernelVerificationStepType(vstep)
-        steps = VERIFIED_BY[vstep]
-        if not resolved_names & set(steps):
+        missing = [
+            " or ".join(either) for either in VERIFIED_BY[vstep] if not resolved_names & set(either)
+        ]
+        if missing:
             checks.append(
                 _check(
                     "verify_step_prereq",
                     Severity.WARNING,
                     False,
-                    f"verify_steps includes {vstep.value}, but neither {' nor '.join(steps)} "
-                    "is in the resolved build steps (steps/start_step/stop_step). That "
+                    f"verify_steps includes {vstep.value}, which needs {'; '.join(missing)} "
+                    "in the resolved build steps (steps/start_step/stop_step). That "
                     "verification would silently never run",
-                    f"Include {steps[0]} (or {steps[1]}) in steps, adjust "
-                    "start_step/stop_step so it runs, or remove it from verify_steps",
+                    "Include those steps in steps, adjust start_step/stop_step so they run, "
+                    "or remove it from verify_steps",
                 )
             )
     return checks

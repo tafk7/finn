@@ -478,6 +478,7 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
         *in_zynq_shell["static_region"].values(),
     ]
     assert on_zynq["used"] == {key: sum(each[key] for each in summed) for key in on_ip["used"]}
-    # The module TFC in the Zynq shell was packaged as before the shells had rows.
-    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__481b9e45abc00364"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__481b9e45abc00364"
+    # The module TFC in the Zynq shell was packaged as before the shells had rows (its
+    # thresholds a data file, THRESHOLDS_FILE).
+    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__900cc2e354c19644"
+    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__900cc2e354c19644"

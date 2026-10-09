@@ -19,9 +19,9 @@ from pathlib import Path
 import numpy as np
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
+from finn.core.executors.xsim.rtl import materialize
 from finn.dataflow.gemm import Form
-from finn.harness.pacing import FREE, STALLED, Pacing
-from finn.harness.rtl import materialize
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.abi import abi_pins
 from finn.kernels.target import DspBlock

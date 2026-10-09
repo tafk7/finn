@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's build configuration: a build of KernelOps (finn.custom_op.kernels)
-from a streamlined model, through ``build_dataflow`` as a DataflowBuildConfig's build is.
+from a Brevitas export, through ``build_dataflow`` as a DataflowBuildConfig's build is.
 
-It is composed of what the kernel path reads: its target (a board or a part, the clock
+It is composed of what the kernel path reads: how the export is prepared
+(``finn.transformation.prepare.GraphPreparation``), its target (a board or a part, the clock
 and the shell, stated once: ``finn.platform.TargetRequest``), its toolchain
 (``finn.util.toolchain.Selection``), the outputs it makes, the strategies that explore
 its choices and the policy that completes the rest. Nothing of the HWCustomOp flow's
@@ -22,6 +23,7 @@ from finn.kernels.target import Target
 from finn.platform import TargetRequest, shell_row
 from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN
+from finn.transformation.prepare import GraphPreparation
 from finn.util.toolchain import Selection, Toolchain, machine_selection
 
 
@@ -65,11 +67,21 @@ OUTPUT_NEEDS = {
 
 
 class KernelVerificationStepType(str, Enum):
-    """The checks a build runs, as asked: none by default, since no build re-verifies
-    the partition's computation (its KernelOps' ``execute_node`` is the reference, and
-    the harness checks the hardware against it). step_verify_kernel_partition runs the
-    partition's; step_kernel_stitched_ip runs its testbench's. A check that fails stops
-    the build."""
+    """The checks a build runs beside those it always runs, as asked: none by
+    default, since no build re-verifies the partition's computation (its KernelOps'
+    ``execute_node`` is the reference, and the harness checks the hardware against
+    it). step_prepare_checkpoint runs the prepared graph's; step_verify_kernel_partition
+    the partition's; step_kernel_stitched_ip its testbench's. The Python checks
+    (GRAPH_PREPARATION_PYTHON, PARTITION_PYTHON) report a failure as FAIL and the
+    build continues, but for a prepared annotation a drawn value breaks, which
+    refuses the graph; the RTL checks (PARTITION_ELABORATION, STITCHED_IP_TESTBENCH)
+    stop it."""
+
+    #: the prepared graph's outputs against the export's, its inputs and outputs as
+    #: the preparation states them, on seeded draws from the prepared input's
+    #: annotation (finn.harness.preparation), and its integer annotations' soundness
+    #: on what it computes there
+    GRAPH_PREPARATION_PYTHON = "graph_preparation_python"
 
     #: the partition's own outputs, the parent graph with the partition of KernelOps
     #: executed in Python, against the model the build started from, on each
@@ -84,20 +96,22 @@ class KernelVerificationStepType(str, Enum):
     STITCHED_IP_TESTBENCH = "stitched_ip_testbench"
 
 
-#: The steps that run each verification, any of which the build's steps must include
-#: for it to run: the phase, or the step itself.
+#: The steps each verification needs to run, each a step or its phase: the one that
+#: keeps its reference, and the one that checks.
 VERIFIED_BY = {
+    KernelVerificationStepType.GRAPH_PREPARATION_PYTHON: (
+        ("phase_graph_preparation", "step_prepare_import"),
+        ("phase_graph_preparation", "step_prepare_checkpoint"),
+    ),
     KernelVerificationStepType.PARTITION_PYTHON: (
-        "phase_kernel_path",
-        "step_verify_kernel_partition",
+        ("phase_kernel_path", "step_kernel_ops"),
+        ("phase_kernel_path", "step_verify_kernel_partition"),
     ),
     KernelVerificationStepType.PARTITION_ELABORATION: (
-        "phase_kernel_path",
-        "step_verify_kernel_partition",
+        ("phase_kernel_path", "step_verify_kernel_partition"),
     ),
     KernelVerificationStepType.STITCHED_IP_TESTBENCH: (
-        "phase_kernel_outputs",
-        "step_kernel_stitched_ip",
+        ("phase_kernel_outputs", "step_kernel_stitched_ip"),
     ),
 }
 
@@ -120,10 +134,15 @@ def declared(cls: type, name: str) -> Callable[[Any], Any]:
     return decode
 
 
-#: The steps of a kernel-path build, from a streamlined model: the kernel-path phase
-#: (the target, KernelOps, their choices, the partition, its verification), then the
+#: The steps of a kernel-path build, from a Brevitas export: the graph-preparation
+#: phase (the export to a streamlined graph, checked), the kernel-path phase (the
+#: target, KernelOps, their choices, the partition, its verification), then the
 #: outputs its shell makes.
-default_kernel_build_steps = ["phase_kernel_path", "phase_kernel_outputs"]
+default_kernel_build_steps = [
+    "phase_graph_preparation",
+    "phase_kernel_path",
+    "phase_kernel_outputs",
+]
 
 
 # undefined=RAISE: a key the configuration does not declare is refused, named, when a
@@ -148,6 +167,18 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: the Zynq block design for a board). In JSON:
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest = field(metadata=config(decoder=declared(TargetRequest, "target")))
+
+    #: How the export is prepared (phase_graph_preparation), a
+    #: finn.transformation.prepare.GraphPreparation: P0's ``override_inpsize``, P2's
+    #: ``max_multithreshold_bit_width``, P1's ``preprocessing`` (an ONNX model merged
+    #: ahead of the network), ``input_datatype`` and ``topk``, the ``streamlining`` and
+    #: ``topology`` recipes. In JSON, for TFC: {"preprocessing": "preproc.onnx",
+    #: "input_datatype": "UINT8", "topk": 1}. By default the export's own inputs and
+    #: outputs, the default recipes.
+    preparation: GraphPreparation = field(
+        default_factory=GraphPreparation,
+        metadata=config(decoder=declared(GraphPreparation, "preparation")),
+    )
 
     #: What the build makes beside the partition and its reports (KernelOutputType):
     #: the partition's IP and its out-of-context resources on any shell; the bitfile,
@@ -182,7 +213,8 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: value completed.
     kernel_completion: str = "baseline"
 
-    #: The checks the build runs (KernelVerificationStepType), none by default:
+    #: The checks the build runs beside those it always runs
+    #: (KernelVerificationStepType), none by default: step_prepare_checkpoint's,
     #: step_verify_kernel_partition's, and step_kernel_stitched_ip's testbench.
     verify_steps: List[KernelVerificationStepType] = field(default_factory=list)
 
@@ -225,7 +257,8 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: Whether each step's model is saved under intermediate_models.
     save_intermediate_models: bool = True
 
-    #: Whether pdb postmortem debugging is launched when the build fails.
+    #: Whether pdb postmortem debugging is launched when the build fails and stdin is
+    #: a terminal.
     enable_build_pdb_debug: bool = True
 
     #: Whether every step's output is printed to stdout, not only to the build log.

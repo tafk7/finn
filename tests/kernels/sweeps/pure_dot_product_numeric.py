@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.harness.pacing import FREE, STALLED, Pace, Pacing
+from finn.core.executors.xsim.pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
@@ -69,6 +69,12 @@ CASES = (
     Configuration(
         "int8_segmented", DspBlock.DSP58, 12, 2, 6, "INT8", "INT8", False, 1.2, int8=True
     ),
+    # One-bit activations: the INT8 core pads them to its 9-bit lanes.
+    Configuration("int8_binary", DspBlock.DSP58, 6, 2, 3, "BINARY", "INT8", int8=True),
+    # Accumulators wider than P, in a single lane: each SIMD lane's P register wraps
+    # (64 products of up to 2**42 on DSP48E2, 1024 of up to 2**48 on DSP58).
+    Configuration("wide_e2", DspBlock.DSP48E2, 128, 2, 2, "UINT17", "INT26", reducer="compressor"),
+    Configuration("wide_dsp58", DspBlock.DSP58, 1024, 2, 1, "UINT23", "INT26"),
 )
 
 

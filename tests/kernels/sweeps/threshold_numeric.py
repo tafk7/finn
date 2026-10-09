@@ -14,7 +14,8 @@ reached the lanes reading it: for a shared row, one write reaches every lane.
 With one threshold (N = 1) the wrapper's configuration address is the AXI-Lite
 word select alone (no address bit of its own). The expected words come from the
 table each case leaves in the memories, packed here in the boundaries' row-major
-order, PE lanes a beat. Run with Vivado selected (FinnLib is the ``finnlib``
+order, PE lanes a beat; words that differ are decoded as an order
+(``finn.harness.orders``). Run with Vivado selected (FinnLib is the ``finnlib``
 resource); each simulation runs in a fresh process.
 """
 
@@ -29,11 +30,12 @@ from typing import Any
 import numpy as np
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.pacing import FREE, STALLED
+from finn.core.executors.xsim.rtl import materialize
 from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, vector_major
-from finn.harness.pacing import FREE, STALLED
-from finn.harness.rtl import materialize
+from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.module import declared_registers
 from finn.kernels.channels import Channel
@@ -147,7 +149,16 @@ def run(case: Case, evidence: Path) -> None:
             registers=configuration,
         )
         actual = [word & mask for word in measured["outputs"]["m_axis_0"]]
-        assert actual == expected, (case.label, stalled, actual, expected)
+        if actual != expected:
+            decoded = decode(
+                {"m_axis_0": Stream(form, result_bits)},
+                {"m_axis_0": actual},
+                inputs={"s_axis_0": Stream(form, ELEMENT.bitwidth())},
+                values={"s_axis_0": VALUES},
+                reference=lambda read: {"m_axis_0": (read["s_axis_0"][..., None] >= table).sum(-1)},
+            )
+            found = decoded.message if decoded else f"{actual} != {expected}"
+            raise AssertionError(f"{case.label} stalled={stalled}: {found}")
         print(f"PASS {case.label} stalled={stalled}", flush=True)
 
 

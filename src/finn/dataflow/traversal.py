@@ -21,6 +21,10 @@ carries: its traversal per pass, whether the pass repeats (``Repetition``), and
 the marker rules it offers or requires. ``unreplayed`` is the boundary rule: the
 receiver of a channel realizes its own replay, while whole-pass repetition stays
 part of the interface; ``period`` strips the whole-pass repetition.
+
+Words and tensors: ``pack`` presents an integer operand as one raw word per beat,
+and ``unpack``, its inverse, reads the operand back from the words; both at the
+flat offsets ``offsets`` gives.
 """
 
 from __future__ import annotations
@@ -489,6 +493,68 @@ def pack(
     )
 
 
+def offsets(form: Traversal) -> npt.NDArray[np.int64]:
+    """The flat row-major offset of every element ``form`` presents, beat by beat, lane
+    zero first: where ``pack`` reads the operand, and ``unpack`` writes it."""
+    return (_offset_array(form.beat_loops)[:, None] + _offset_array(form.lane_loops)).ravel()
+
+
+def unpack(
+    form: Traversal, words: Sequence[int], bits: int, *, signed: bool
+) -> npt.NDArray[np.int64]:
+    """The integer operand of ``form.shape`` that ``words`` present, one raw word per beat
+    as ``pack`` makes them: each lane the low ``bits`` bits of its word, lane zero lowest,
+    sign-extended when ``signed``.
+
+    ``pack``'s inverse on every operand of ``bits``-bit integers:
+    ``pack(form, unpack(form, words, bits, signed=s).ravel(), bits) == words`` whenever
+    ``unpack`` accepts ``words``. It refuses (``ValueError``) words that are no such
+    operand's: another count than ``form.beats``, a word wider than its lanes, an element
+    ``form`` never presents, and an element presented twice (a replay) with two values.
+    Lanes of up to 63 bits, or 64 signed: an int64 holds them.
+    """
+    require_positive(bits, "bits")
+    if bits > 64 or (bits == 64 and not signed):
+        raise ValueError(f"{bits}-bit {'signed' if signed else 'unsigned'} lanes exceed an int64")
+    if len(words) != form.beats:
+        raise ValueError(f"{form.beats} beats, not {len(words)} words")
+    width = form.lanes * bits
+    nbytes = (width + 7) // 8
+    for beat, word in enumerate(words):
+        if word < 0 or word >> width:
+            raise ValueError(f"word {beat}, {word:#x}, is wider than its {width} bits")
+    raw = np.frombuffer(b"".join(int(word).to_bytes(nbytes, "little") for word in words), np.uint8)
+    planes = np.unpackbits(raw.reshape(len(words), nbytes), axis=1, bitorder="little")
+    lanes = planes[:, :width].reshape(len(words) * form.lanes, bits).astype(np.uint64)
+    unsigned = (lanes << np.arange(bits, dtype=np.uint64)).sum(axis=1, dtype=np.uint64)
+    values = unsigned.view(np.int64)  # two's complement at 64 bits; below, extended here
+    if signed and bits < 64:
+        values = values - ((values >> (bits - 1)) << bits)
+    at = offsets(form)
+    size = prod(form.shape)
+    order = np.argsort(at, kind="stable")
+    again = np.flatnonzero(
+        (at[order][1:] == at[order][:-1]) & (values[order][1:] != values[order][:-1])
+    )
+    if again.size:
+        first, second = order[again[0]], order[again[0] + 1]
+        position = tuple(int(i) for i in np.unravel_index(at[first], form.shape))
+        raise ValueError(
+            f"element {position} is presented twice with two values: "
+            f"{values[first]} at beat {first // form.lanes} lane {first % form.lanes}, "
+            f"{values[second]} at beat {second // form.lanes} lane {second % form.lanes}"
+        )
+    operand = np.zeros(size, dtype=np.int64)
+    seen = np.zeros(size, dtype=bool)
+    operand[at] = values
+    seen[at] = True
+    if not seen.all():
+        missing = int(np.flatnonzero(~seen)[0])
+        position = tuple(int(i) for i in np.unravel_index(missing, form.shape))
+        raise ValueError(f"the traversal presents no value of element {position}")
+    return operand.reshape(form.shape)
+
+
 def _offset_array(loops: Sequence[Loop]) -> npt.NDArray[np.int64]:
     """``_offsets`` as an array."""
     found = np.zeros(1, dtype=np.int64)
@@ -526,12 +592,14 @@ __all__ = [
     "Traversal",
     "axis_strides",
     "classify",
+    "offsets",
     "pack",
     "passes",
     "period",
     "regrouped",
     "require_positive",
     "tile",
+    "unpack",
     "unreplayed",
     "vector_major",
 ]

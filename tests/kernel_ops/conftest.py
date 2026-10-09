@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
-from kernel_ops.tfc import built, kernel_ops, streamlined
+from kernel_ops.tfc import EXPORT, built, exported, kernel_ops, prepared
 
 
 @pytest.fixture(scope="session")
@@ -24,9 +24,18 @@ def tfc_cache(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture(scope="session")
-def tfc_streamlined(tfc_cache: Path) -> Path:
-    """TFC_W2A2 after finn-dev's end-to-end steps to streamlining (``streamlined``)."""
-    return built(tfc_cache / "streamlined.onnx", streamlined)
+def tfc_export(tfc_cache: Path) -> Path:
+    """TFC_W2A2 as Brevitas exports it, its preprocessing model beside it (``exported``)."""
+    return built(tfc_cache / "export" / EXPORT, exported)
+
+
+@pytest.fixture(scope="session")
+def tfc_streamlined(tfc_cache: Path, tfc_export: Path) -> Path:
+    """TFC_W2A2 through the builder's graph-preparation phase (``prepared``)."""
+    return built(
+        tfc_cache / "streamlined.onnx",
+        lambda _: prepared(ModelWrapper(str(tfc_export)), tfc_export.parent),
+    )
 
 
 @pytest.fixture(scope="session")

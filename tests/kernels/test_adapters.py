@@ -10,7 +10,7 @@ adapter candidate a side carries it out: nothing for the same order, a ``vpc``
 before the transport for other lanes, an ``input_gen`` after it for another
 beat order, and both. A FIFO sits between the two sides. A channel that admits no adapter
 refuses a non-empty plan. FinnLib's ``inner_shuffle`` is not a candidate; a
-kernel with children places it explicitly (``TransposeKernel``).
+kernel with children places it explicitly (``TransposeKernel``, ``test_transpose.py``).
 """
 
 from __future__ import annotations
@@ -20,12 +20,13 @@ from dataclasses import replace
 import pytest
 
 from finn.core.space import Rejected, design_space, inspection
-from finn.dataflow.plan import Step
+from finn.dataflow.plan import Step, plan
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
+from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo
 from finn.kernels.configure import commit
-from finn.kernels.transpose import TransposeKernel
+from finn.kernels.vpc import VpcKernel
 from kernels.adapted import (
     CHANNELS,
     ELEMENT,
@@ -63,6 +64,19 @@ def test_other_lanes_are_a_vpc(before, after, vector):
     assert name == "vpc" and (vpc["PI"], vpc["PO"], vpc["N"]) == (before, after, vector)
     # The stage sits below the channel, at its place in the root's netlist.
     assert labels(point.module) == ["x.output_adapter.vpc.vpc", "producer", "activate"]
+
+
+def test_a_vpc_converts_whole_vectors_that_span_rows():
+    """Both sides of a width conversion carry the same elements in whole beats, so the
+    stream is whole lcm vectors, wherever rows end: 4 lanes into a transpose taking 3
+    of its (6, 4) matrices' flat order converts vectors of 12, three rows each."""
+    consumer = transposed(6, 4, 3).shuffle.input.presented
+    steps = plan(BeatSequence(vector_major((2, 6, 4), 4)), consumer)
+    assert steps.steps == (Step.WIDTH,)
+    (stage,) = realize(steps)
+    assert stage.module == Convert(4, 3)
+    vpc = VpcKernel(element_bits=4, lanes_in=4, lanes_out=3)
+    assert dict(design_space(vpc).module.parameters)["N"] == 12
 
 
 def test_another_beat_order_is_an_input_gen():
@@ -132,39 +146,6 @@ def test_a_stream_admitting_no_adapter_refuses_its_plan():
     assert plan and "width_conversion" in plan[0].message
     # Its adapter Decision does not apply.
     assert not point.x.adapting
-
-
-def test_a_transpose_turns_rows_into_columns():
-    point = transposed(4, 6, 2)
-    shuffle = dict(point.shuffle.module.parameters)
-    assert (shuffle["I"], shuffle["J"], shuffle["SIMD"]) == (4, 6, 2)
-    assert point.shuffle.input.presented.form == vector_major((2, 4, 6), 2)
-    first = next(point.shuffle.output.presented.form.positions())
-    assert first == ((0, 0, 0), (0, 1, 0))  # column 0, rows 0 and 1
-    _ = point.module
-
-
-def test_a_transposes_simd_divides_both_sides():
-    """SIMD is a Decision over the common divisors of I and J (both bound from the ports)."""
-    assert transposed(4, 6, 1).shuffle.field(TransposeKernel.simd).candidates().value == (1, 2)
-    with pytest.raises(ValueError, match="domain-membership"):
-        transposed(4, 6, 3)  # divides J, not I
-
-
-def test_a_transposes_ultra_pages_need_the_platforms_ultraram():
-    with pytest.raises(ValueError, match="shuffle.ram_style: uram-absent"):
-        transposed(4, 6, 2, ram_style="ultra", platform=replace(FULL_DSP48E2, uram=False))
-    # The pages start empty: UltraRAM that takes no initial contents is enough.
-    point = transposed(4, 6, 2, ram_style="ultra", platform=replace(FULL_DSP48E2, uram_init=False))
-    assert dict(point.shuffle.module.parameters)["RAM_STYLE"] == '"ultra"'
-
-
-def test_a_transpose_admits_two_pages_its_rtl_counts():
-    point = transposed(1 << 15, 1 << 16, 1, batches=1)
-    refusal = inspection.admission(point.shuffle)
-    assert isinstance(refusal, Rejected)
-    assert [finding.code for finding in refusal.findings] == ["transpose-depth"]
-    assert not isinstance(inspection.admission(transposed(4, 6, 2).shuffle), Rejected)
 
 
 def test_a_fifo_sits_between_the_two_sides():

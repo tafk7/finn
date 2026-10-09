@@ -29,7 +29,7 @@
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.base import CustomOp
 
-from finn.core.onnx_exec import execute_onnx
+from finn.core.onnx_exec import execute_onnx, executing
 
 # TODO move StreamingDataflowPartition to HLSCustomOp base class
 
@@ -71,7 +71,8 @@ class StreamingDataflowPartition(CustomOp):
             if old_iname != new_iname:
                 inp_ctx[new_iname] = inp_ctx[old_iname]
                 del inp_ctx[old_iname]
-        ret = execute_onnx(model, inp_ctx, return_full_exec_context)
+        # the body runs under the executors of the run that reached this node
+        ret = execute_onnx(model, inp_ctx, return_full_exec_context, executors=executing())
         # outputs may have been renamed in partition
         for i, node_oname in enumerate(node.output):
             model_oname = model.graph.output[i].name

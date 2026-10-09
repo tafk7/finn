@@ -23,7 +23,13 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, kernel_op, read_target
+from finn.custom_op.kernels.base import (
+    PLATFORM_KEYS,
+    FactUnstated,
+    KernelOpError,
+    kernel_op,
+    read_target,
+)
 from finn.kernels.matmul import exact_result_dtype
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
@@ -66,17 +72,29 @@ def test_conversion_rewrites_the_nodes_and_states_the_target() -> None:
     assert again.transform(ToKernelOps(TARGET)).get_opset_imports()[DOMAIN] == 2
 
 
-def test_a_multithreshold_over_another_axis_is_left_alone() -> None:
-    source = chain_source()  # hidden's shape is not known: its channel axis neither
-    nodes = source.transform(ToKernelOps(TARGET)).graph.node
-    assert [node.op_type for node in nodes] == ["MatMul", "MultiThreshold", "MatMul"]
+@pytest.mark.parametrize("second_weights", (True, False))
+def test_every_converted_node_verifies_with_its_choices_open(second_weights: bool) -> None:
+    model = inferred(second_weights=second_weights)
+    assert [kernel_op(model, node).verify_node() for node in model.graph.node] == [[], [], []]
+
+
+def test_conversion_infers_as_it_goes() -> None:
+    """A fresh graph, only x's shape known: each node's inputs are stated when it is
+    visited, so the MultiThreshold's channel axis is known, and the converted graph's
+    tensors are already the ordered pass's."""
+    model = chain_source().transform(ToKernelOps(TARGET))
+    assert [node.op_type for node in model.graph.node] == ["MatMul", "Thresholding", "MatMul"]
+    assert tensors(model) == tensors(inferred())
 
 
 def test_qonnx_inference_refuses_before_the_ordered_pass() -> None:
+    model = converted()
+    model.set_tensor_datatype("hidden", None)  # a KernelOp's input not stated yet
     with pytest.raises(
         KernelOpError, match="hidden has no datatype annotation.*InferKernelTensors"
     ):
-        converted().transform(InferShapes())
+        model.transform(InferShapes())
+    assert tensors(model.transform(InferKernelTensors())) == tensors(inferred())
 
 
 def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
@@ -93,8 +111,10 @@ def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
 
 
 def test_an_input_that_conflicts_is_refused_an_output_is_stated_again() -> None:
-    with pytest.raises(KernelOpError, match="first: x has no datatype annotation"):
-        converted(annotate_input=False).transform(InferKernelTensors())
+    unstated = converted()
+    unstated.set_tensor_datatype("x", None)
+    with pytest.raises(FactUnstated, match="first: x has no datatype annotation"):
+        unstated.transform(InferKernelTensors())
     conflicting = converted()
     conflicting.set_tensor_datatype("w1", DataType["INT2"])
     with pytest.raises(KernelOpError, match="w1 is annotated INT2 and holds values over"):

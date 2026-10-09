@@ -4,11 +4,13 @@
 """TFC_W2A2 for the kernel path's tests, from the trained network to a partition of KernelOps.
 
 The BNN-PYNQ TFC at two bits (``brevitas_examples``, its weights from the torch
-hub cache) through finn-dev's own end-to-end steps to the streamlined graph
-(``tests/end2end/test_end2end_bnn_pynq.py``: export, tidy, pre- and
-post-processing, streamline), then ``ToKernelOps``, ``InferKernelTensors`` and
-``partition_kernel_ops``: the input flatten (a Reshape) before the partition
-and the label select (TopK) after it, both on the host.
+hub cache), exported by Brevitas with its preprocessing beside it
+(``finn.util.pytorch.ToTensor``, ``exported``), through the builder's
+graph-preparation phase as TFC's build states it (``preparation``: the
+preprocessing merged, the input UINT8, the label select appended) to the
+streamlined graph (``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
+and ``partition_kernel_ops``: the input flatten (a Reshape) before the
+partition and the label select (TopK) after it, both on the host.
 
 Every open kernel choice (folding, memories, transports) is committed on the
 partition's body after the cut, as the build explores it, ranked by hand
@@ -25,100 +27,88 @@ from __future__ import annotations
 import fcntl
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from kernels.helpers import Lanes
-from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
-from qonnx.transformation.fold_constants import FoldConstants
-from qonnx.transformation.general import (
-    GiveReadableTensorNames,
-    GiveUniqueNodeNames,
-    RemoveStaticGraphInputs,
-)
-from qonnx.transformation.infer_datatypes import InferDataTypes
-from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.builder.kernel_build_config import KernelBuildConfig
+from finn.builder.kernel_build_steps import phase_graph_preparation
 from finn.kernels.explore import Ranked
-from finn.platform import resolve_target
+from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
 )
 from finn.transformation.kernels.cut import partition_kernel_ops
+from finn.transformation.prepare import GraphPreparation
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
 """The fixture's chain: every choice ranked by hand, at 16 lanes."""
 ULTRA96 = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 """TFC's target: Ultra96 in the Zynq shell (no UltraRAM, no doubled clock)."""
+EXPORT = "tfc_w2a2.onnx"
+"""The export's file name, in the directory ``exported`` writes."""
+PREPROCESSING = "preproc.onnx"
+"""The preprocessing model's file name, beside the export."""
 
 
-def _tidy(model: ModelWrapper) -> ModelWrapper:
-    for step in (
-        InferShapes(),
-        FoldConstants(),
-        GiveUniqueNodeNames(),
-        GiveReadableTensorNames(),
-        InferDataTypes(),
-        RemoveStaticGraphInputs(),
-    ):
-        model = model.transform(step)
-    return model
-
-
-def streamlined(directory: Path) -> ModelWrapper:
-    """TFC_W2A2 after finn-dev's end-to-end steps up to and including streamlining."""
-    # Imported here: torch, brevitas and the baseline flow are only for building it.
+def exported(directory: Path) -> ModelWrapper:
+    """TFC_W2A2 as Brevitas exports it (QONNX, opset 13) into ``directory``, and beside it
+    its preprocessing (``PREPROCESSING``: ``ToTensor``, its inputs' scaling to [0, 1]),
+    exported alike."""
+    # Imported here: torch and brevitas are only for exporting it.
     import torch  # noqa: PLC0415
     from brevitas.export import export_qonnx  # noqa: PLC0415
-    from qonnx.core.datatype import DataType  # noqa: PLC0415
-    from qonnx.transformation.bipolar_to_xnor import (  # noqa: PLC0415
-        ConvertBipolarMatMulToXnorPopcount,
-    )
-    from qonnx.transformation.general import RemoveUnusedTensors  # noqa: PLC0415
-    from qonnx.transformation.infer_data_layouts import InferDataLayouts  # noqa: PLC0415
-    from qonnx.transformation.insert_topk import InsertTopK  # noqa: PLC0415
-    from qonnx.transformation.merge_onnx_models import MergeONNXModels  # noqa: PLC0415
-    from qonnx.util.cleanup import cleanup as qonnx_cleanup  # noqa: PLC0415
 
-    import finn.transformation.streamline.absorb as absorb  # noqa: PLC0415
-    from finn.transformation.qonnx.convert_qonnx_to_finn import (  # noqa: PLC0415
-        ConvertQONNXtoFINN,
-    )
-    from finn.transformation.streamline import Streamline  # noqa: PLC0415
-    from finn.transformation.streamline.reorder import (  # noqa: PLC0415
-        MoveScalarLinearPastInvariants,
-    )
     from finn.util.pytorch import ToTensor  # noqa: PLC0415
     from finn.util.test import get_test_model_trained  # noqa: PLC0415
 
-    network = directory / "tfc_w2a2.onnx"
+    network = directory / EXPORT
+    directory.mkdir(parents=True, exist_ok=True)
     export_qonnx(get_test_model_trained("TFC", 2, 2), torch.randn(SHAPE), network, opset_version=13)
-    qonnx_cleanup(str(network), out_file=str(network))
-    model = _tidy(ModelWrapper(str(network)).transform(ConvertQONNXtoFINN()))
-    pre = directory / "preproc.onnx"
-    export_qonnx(ToTensor(), torch.randn(SHAPE), pre, opset_version=13)
-    qonnx_cleanup(str(pre), out_file=str(pre))
-    pre_model = ModelWrapper(str(pre)).transform(ConvertQONNXtoFINN())
-    pre_model = pre_model.transform(InferShapes()).transform(FoldConstants())
-    model = model.transform(MergeONNXModels(pre_model))
-    # MergeONNXModels imports the standard domain only: the custom ops' domains are
-    # stated again, so that reading their nodes warns of no fallback version.
-    imported = {opset.domain for opset in model.model.opset_import}
-    for domain in sorted({node.domain for node in model.graph.node} - imported):
-        model.model.opset_import.append(helper.make_opsetid(domain, 1))
-    model.set_tensor_datatype(model.get_first_global_in(), DataType["UINT8"])
-    model = _tidy(model.transform(InsertTopK(k=1)))
-    model = model.transform(absorb.AbsorbScalarBiasIntoMultiThreshold())
-    model = model.transform(MoveScalarLinearPastInvariants())
-    model = model.transform(Streamline())
-    model = model.transform(ConvertBipolarMatMulToXnorPopcount())
-    model = model.transform(Streamline())
-    model = model.transform(absorb.AbsorbScalarMulAddIntoTopK())
-    model = model.transform(InferDataLayouts())
-    return model.transform(RemoveUnusedTensors())
+    export_qonnx(ToTensor(), torch.randn(SHAPE), directory / PREPROCESSING, opset_version=13)
+    return ModelWrapper(str(network))
+
+
+def preparation(directory: Path) -> GraphPreparation:
+    """TFC's graph preparation, its preprocessing model in ``directory``: the images'
+    scaling merged ahead, the input UINT8 (a pixel), the top label selected; the
+    default recipes."""
+    return GraphPreparation(
+        preprocessing=str(directory / PREPROCESSING), input_datatype="UINT8", topk=1
+    )
+
+
+def preparation_config(directory: Path, **settings: Any) -> KernelBuildConfig:
+    """A build of TFC from its export in ``directory`` (``preparation``), its outputs
+    under ``directory / "output"``, for Ultra96 in the Zynq shell at 5 ns, no debugger
+    and no intermediate models."""
+    return KernelBuildConfig(
+        **{
+            "output_dir": str(directory / "output"),
+            "target": TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
+            "preparation": preparation(directory),
+            "enable_build_pdb_debug": False,
+            "save_intermediate_models": False,
+            **settings,
+        }
+    )
+
+
+def prepared(export: ModelWrapper, directory: Path) -> ModelWrapper:
+    """``export``, TFC exported into ``directory`` (``exported``), through the builder's
+    graph-preparation phase (``phase_graph_preparation``) as its build states it: the
+    streamlined graph, checked. The phase's report goes under ``directory / "output"``."""
+    return phase_graph_preparation(export, preparation_config(directory))
+
+
+def streamlined(directory: Path) -> ModelWrapper:
+    """TFC_W2A2 exported into ``directory`` and prepared: the streamlined graph."""
+    return prepared(exported(directory), directory)
 
 
 def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper, str]:

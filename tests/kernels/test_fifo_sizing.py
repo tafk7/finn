@@ -19,8 +19,8 @@ import pytest
 
 import finn.kernels.explore as explore_module
 from finn import resources
+from finn.core.executors.xsim.rtl import simulate as simulate_rtl
 from finn.core.space import design_space
-from finn.harness.rtl import simulate as simulate_rtl
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate

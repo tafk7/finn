@@ -28,7 +28,8 @@ it merges into the same module, whose ``olst[d]`` bits close the levels
 Marker synthesis alone is an ``input_gen`` that passes its frames in order. A
 marker closing every beat is no step: the connection ties it high. A
 width conversion is a ``vpc`` over vectors of the two lane counts' least common
-multiple, which the channel must hold whole. Each candidate places its modules
+multiple: its two sides carry the same elements in whole beats, a common multiple
+of both lane counts, so the vectors are whole. Each candidate places its modules
 as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
 and each becomes a ``Stage``: the child's module and the contracts of its two
 ports, which the channel checks like any other end. Its cost reads the
@@ -50,7 +51,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import lcm, prod
+from math import prod
 from typing import Annotated, ClassVar
 
 from finn.core.space import (
@@ -188,10 +189,6 @@ def realize(plan: Plan) -> tuple[RealizedStage, ...]:
         index += 1
         if hop.step is Step.WIDTH:
             source, sink = hop.source, hop.sink
-            elements = source.form.beats * source.form.lanes
-            vector = lcm(source.form.lanes, sink.form.lanes)
-            if elements % vector:
-                raise Unrealizable(f"{elements} elements make no whole {vector}-element vectors")
             stages.append(RealizedStage(Convert(source.form.lanes, sink.form.lanes), source, sink))
             continue
         marked = None

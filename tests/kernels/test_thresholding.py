@@ -65,10 +65,14 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
     point = threshold()
     requirements = point.module
     assert point.result_dtype.name == "INT3"
-    assert (
-        dict(requirements.parameters)["THRESHOLDS"]
-        == "'{'{'{5'h1e, 5'h0, 5'h3}, '{5'h1f, 5'h1, 5'h4}}}"
-    )
+    # The table is THRESHOLDS_FILE, named by its contents: per row fold (C / PE = 2),
+    # the row's thresholds padded to a power of two, WT = 5 bits each.
+    initial = point.thresholds_file
+    assert initial.data == b"1e\n00\n03\n00\n1f\n01\n04\n00\n"
+    assert initial.path.startswith("thresholds_") and initial.path.endswith(".dat")
+    assert dict(requirements.parameters)["THRESHOLDS_FILE"] == f'"{initial.path}"'
+    assert dict(requirements.parameters)["THRESHOLDS"] == "'{default: '0}"
+    assert initial in requirements.data
     assert threshold(bias=0).result_dtype.name == "UINT2"
     assert threshold(bias=-4).result_dtype.name == "INT3"
     narrow_negative = threshold(bias=-5)
@@ -211,3 +215,57 @@ def test_a_threshold_wider_than_a_word_is_written_in_words_low_first() -> None:
         (8, high & 0xFFFFFFFF),
         (12, high >> 32),
     )
+
+
+def _clog2(value: int) -> int:
+    return (value - 1).bit_length()
+
+
+@pytest.mark.parametrize(
+    "sets,rows,count,pe",
+    [(1, 1, 3, 4), (1, 6, 3, 2), (1, 4, 4, 4), (2, 6, 5, 2), (3, 2, 7, 1), (2, 2, 1, 4)],
+)
+def test_the_thresholds_file_holds_each_threshold_where_the_rtl_reads_it(
+    sets: int, rows: int, count: int, pe: int
+) -> None:
+    """``thresholding.sv`` reads memory word ``a`` of stage ``s`` and PE lane ``p`` at a
+    file address (``genInitFile``); without a file it takes ``THRESHOLDS[set][c][t]``
+    (``genInitParam``). Both, transcribed here, agree for every threshold the RTL loads."""
+    table = tuple(
+        tuple(tuple(16 * g + 4 * r + t - 30 for t in range(count)) for r in range(rows))
+        for g in range(sets)
+    )
+    point = threshold(table=table, pe=pe, threshold_dtype="INT8")
+    words = [int(word, 16) for word in point.thresholds_file.data.split()]
+    folds, lanes = (1, rows) if pe >= rows else (rows // pe, pe)
+    group = 2 ** _clog2(folds) if sets > 1 else folds
+    assert len(words) == sets * group * 2 ** _clog2(lanes) * 2 ** _clog2(count)
+    stages = count.bit_length()
+    for stage in range(stages):
+        below = stages - 1 - stage
+        for lane in range(pe):
+            for address in range(group * 2**stage):
+                upper, index = address % 2**stage, address // 2**stage
+                position = upper * 2 ** (below + 1) + 2**below - 1
+                fold, chosen = index % 2 ** _clog2(folds), index // 2 ** _clog2(folds)
+                if position >= count or fold >= folds:
+                    continue  # never loaded from the table: the RTL masks it
+                read = (
+                    index * 2 ** _clog2(lanes) * 2 ** _clog2(count)
+                    + (lane % lanes) * 2 ** _clog2(count)
+                    + position
+                )
+                expected = table[chosen][fold * lanes + lane % lanes][position]
+                assert words[read] == expected & 0xFF
+
+
+def test_a_table_over_a_million_bits_is_no_parameter() -> None:
+    """Vivado stops on a parameter over 10**6 bits (issue thresholds-parameter-limit):
+    the table is the file's, and no parameter grows with it."""
+    rows, count = 512, 255
+    table = (tuple(tuple(range(-128, 127)) for _ in range(rows)),)
+    point = threshold(table=table, pe=8, input_dtype="INT8", threshold_dtype="INT8")
+    assert rows * count * 8 > 10**6
+    parameters = dict(point.module.parameters)
+    assert max(len(str(value)) for value in parameters.values()) < 40
+    assert len(point.thresholds_file.data.split()) == (rows // 8) * 8 * 256

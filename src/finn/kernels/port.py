@@ -25,7 +25,8 @@ outputs unused.
   (its channel refuses another; a producer must give it) and otherwise its
   channel's; ``admits`` is the
   integer policy its hardware takes. It is an AXIS bus named ``name``, with a
-  ``TLAST`` when what it presents carries a marker; or, given ``signals``
+  ``TLAST`` when what it presents carries a marker, its member pins spelled as
+  its module spells them (``spelling``); or, given ``signals``
   (data, valid, ready), those ready/valid pins, without a marker. Placed with
   a schedule, it exports its read of the tensor under ``ACCESS``, from which
   its kernel binds its indices' extents, and its contract states its ``pace``
@@ -67,7 +68,13 @@ from finn.kernels.base import (
     PORT,
     RESET,
 )
-from finn.kernels.transport import AxisBeat, ReadyValidStream, StreamContract, StreamMarker
+from finn.kernels.transport import (
+    AxisBeat,
+    AxisSpelling,
+    ReadyValidStream,
+    StreamContract,
+    StreamMarker,
+)
 from finn.kernels.values.domains import Integer, admit_element
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
@@ -219,6 +226,8 @@ class AxiStreamPort(Port):
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     # Ready/valid pins (data, valid, ready) carrying the words instead of an AXIS bus.
     signals: tuple[str, ...] = Param(default=())
+    # How the module spells the AXIS bus's member pins (HLS's are upper case).
+    spelling: AxisSpelling = Param(default=AxisSpelling.LOWER)
     staged: bool = Param(default=False)
 
     @derived
@@ -312,6 +321,7 @@ class AxiStreamPort(Port):
                 self.lane_count,
                 endpoint=self.endpoint,
                 last=bool(self.marker_count),
+                spelling=self.spelling,
             )
         except ValueError as error:
             return reject("port-lanes", f"{self.name}: {error}")

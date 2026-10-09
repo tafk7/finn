@@ -7,7 +7,7 @@
 
 Every sweep drives its design through this one transport -- the marshalling,
 the paced drivers and the watchdog handling -- and compares the results
-itself. Its streams are paced by the harness's one spec (``finn.harness.pacing``),
+itself. Its streams are paced by the harness's one spec (``finn.core.executors.xsim.pacing``),
 as the stream testbench paces its own: a ``Pacing`` gives each input and output
 its ``Pace`` by position.  A second copy of the transport would be a second place for the
 one-simulation-per-process rule to be got wrong.
@@ -41,7 +41,7 @@ from typing import IO, Any, cast
 
 import numpy as np
 
-from finn.harness.pacing import Pace, Pacing
+from finn.core.executors.xsim.pacing import Pace, Pacing
 from finn.kernels.artifacts.module import RegisterMap
 from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
 
@@ -70,8 +70,8 @@ def random_word(generator: np.random.RandomState, bits: int) -> int:
 
 class _PacedInput:
     """Present ``values`` on an input stream in order, paced by ``pace`` as the stream
-    testbench paces it (``finn.harness.pacing``): after every ``burst`` handshakes, valid
-    low for ``pause`` cycles.
+    testbench paces it (``finn.core.executors.xsim.pacing``): after every ``burst``
+    handshakes, valid low for ``pause`` cycles.
 
     Called before each rising edge with the pins as they are during the cycle (a
     handshake completes at that edge); what it returns is driven after the edge."""
@@ -241,7 +241,7 @@ def drive_observed(
     read-only data/valid/ready pins and optionally last; absent pins refuse.
     data_files (name -> text) are placed where the simulation resolves relative
     file names, such as an INIT_FILE. ``registers`` (bus -> its writes, as a
-    module declares them: ``finn.harness.rtl.declared_registers``) are carried
+    module declares them: ``finn.core.executors.xsim.rtl.declared_registers``) are carried
     out, in order, after reset and before any stream starts.
     """
     directory.mkdir(parents=True, exist_ok=False)
@@ -452,7 +452,7 @@ def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> di
                         )
                     if len(self.outputs[name]) == expected[name]:
                         sim.remove_watchdog(watchdogs[name])
-                    else:  # after every burst, a pause (finn.harness.pacing)
+                    else:  # after every burst, a pause (finn.core.executors.xsim.pacing)
                         self.burst[name] += 1
                         if self.burst[name] == paces[name].burst:
                             self.burst[name], self.stall[name] = 0, paces[name].pause

@@ -12,16 +12,15 @@ import pytest
 from pyslang import ast, syntax
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.rtl import simulate
 from finn.core.space import (
     DefinitionError,
     Rejected,
     design_space,
 )
-from finn.harness.rtl import simulate
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
@@ -113,8 +112,7 @@ def native_ports(requirements, tmp_path):
     options.topModules = {"probe"}
     options.flags = ast.CompilationFlags.IgnoreUnknownModules
     compilation = ast.Compilation(pyslang.Bag([options]))
-    for contribution in (*requirements.sources, *requirements.data):
-        assert isinstance(contribution, CopiedSource)
+    for contribution in requirements.sources:
         compilation.addSyntaxTree(
             syntax.SyntaxTree.fromFile(str(SOURCE_ROOTS[contribution.root] / contribution.path))
         )
@@ -274,7 +272,8 @@ def test_rounding_of_scale_is_explicit_and_precedes_native_support_checks():
 def test_threshold_initialization_is_owned_and_changes_the_module():
     a = threshold().module
     b = threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).module
-    assert dict(a.parameters)["THRESHOLDS"] == "'{'{'{5'h1e, 5'h0, 5'h3}, '{5'h1f, 5'h1, 5'h4}}}"
+    assert a.data[0].data == b"1e\n00\n03\n00\n1f\n01\n04\n00\n"
+    assert dict(a.parameters)["THRESHOLDS_FILE"] != dict(b.parameters)["THRESHOLDS_FILE"]
     assert a != b
     assert threshold().result_dtype == DataType["INT3"]
     assert threshold(bias=0).result_dtype == DataType["UINT2"]
@@ -298,6 +297,9 @@ def run(requirements, body, tmp_path):
     parameters = ", ".join(f".{key}({raw})" for key, raw in requirements.abi.parameters)
     dut = requirements.name + " #(" + parameters + ")"
     sources = [SOURCE_ROOTS[source.root] / source.path for source in requirements.sources]
+    # The RTL reads its generated data (a THRESHOLDS_FILE) by name, where xsim runs.
+    for item in requirements.data:
+        (tmp_path / item.path).write_bytes(item.data)
     simulate(sources, body.replace("@DUT@", dut), tmp_path)
 
 

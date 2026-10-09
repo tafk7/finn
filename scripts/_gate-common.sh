@@ -60,29 +60,35 @@ printf 'mode     %s\n' "$GATE_MODE"
 "$RUFF_BIN" --version
 "$MYPY_BIN" --version
 
-# gate_pytest [--conftest-root <root>] <dir> [marker...]: the tests under <dir>,
-# the conftest in <root> (default <dir>) the outermost, less those carrying any
-# of the markers, and in fast mode less the slow ones. A marker .pytest.ini does
+# gate_pytest [--conftest-root <root>] [--ignore <path>]... <path>... [marker...]:
+# the tests under each <path> (a directory or file) but those --ignore names, the
+# conftest in <root> (default the first <path>) the outermost, less those carrying
+# any of the markers, and in fast mode less the slow ones. A marker .pytest.ini does
 # not declare is an error (--strict-markers): a misspelt marker would otherwise
 # escape its deselection. The tests run in parallel, one worker per CPU
-# (pytest-xdist); each test owns its temporary paths, so the result is the
-# serial run's.
+# (pytest-xdist); each test owns its temporary paths, so the result is the serial
+# run's.
 gate_pytest() {
-    local root= dir marker expression= selection=()
-    if [ "$1" = --conftest-root ]; then
-        root=$2
-        shift 2
-    fi
-    dir=$1
-    shift
+    local root= marker expression= selection=() ignored=() paths=()
+    while [ "$#" -gt 0 ]; do
+        case $1 in
+        --conftest-root) root=$2; shift 2 ;;
+        --ignore) ignored+=("--ignore=$2"); shift 2 ;;
+        *) break ;;
+        esac
+    done
+    while [ "$#" -gt 0 ] && [ -e "$1" ]; do
+        paths+=("$1")
+        shift
+    done
     local deselected=("$@")
     [ "$GATE_MODE" = default ] || deselected+=(slow)
     for marker in "${deselected[@]}"; do
         expression+="${expression:+ and }not $marker"
     done
     [ -z "$expression" ] || selection=(-m "$expression")
-    "$PYTHON_BIN" -m pytest -q --strict-markers -n auto --confcutdir="${root:-$dir}" "$dir" \
-        "${selection[@]}"
+    "$PYTHON_BIN" -m pytest -q --strict-markers -n auto --confcutdir="${root:-${paths[0]}}" \
+        "${ignored[@]}" "${paths[@]}" "${selection[@]}"
 }
 
 # gate_ruff <path...>: formatting, and the lint selection every gate uses

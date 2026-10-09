@@ -38,9 +38,10 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 class RoundAndClipThresholds(Transformation):
     """For MultiThreshold, Thresholding, MVAU, and VVAU nodes operating on integer inp/accumulators,
     round up (ceil) threshold values to the nearest integer and clip to valid range.
-    Type-casts thresholds (back) to the float32 container type (this is separate from the
-    quantization annotation). Runs InferDataTypes() afterward to propagate any changes to the
-    quantization data types."""
+    Stores the thresholds in a float64 container (this is separate from the quantization
+    annotation): ONNX gives thresholds no type, and float64 holds every integer threshold
+    up to 2**53 exactly, where float32 rounds past 2**24. Runs InferDataTypes() afterward
+    to propagate any changes to the quantization data types."""
 
     def apply(self, model: ModelWrapper):  # noqa
         graph = model.graph
@@ -58,14 +59,10 @@ class RoundAndClipThresholds(Transformation):
                     continue
                 if dtype.is_integer():
                     # Round thresholds up to nearest integer and clip thresholds
-                    # outside the input range
-                    #   Note: This might promote the thresholds to float64 and
-                    #   introduce extra inaccuracies due to large integers not being
-                    #   exactly representable in floating-point representation.
-                    #   See for example: np.ceil(np.float32(16777217)) == 16777216
-                    new_thresholds = np.clip(np.ceil(thresholds), dtype.min(), dtype.max() + 1)
-                    # Convert back to the preferred float32 container type
-                    new_thresholds = new_thresholds.astype(np.float32)
+                    # outside the input range, in float64, which holds them exactly
+                    new_thresholds = np.clip(
+                        np.ceil(thresholds.astype(np.float64)), dtype.min(), dtype.max() + 1
+                    )
                     # Insert the rounded and clipped thresholds back into the model
                     model.set_initializer(node.input[1], new_thresholds)
                     # The rounded and clipped thresholds now fit into a data type
@@ -80,11 +77,11 @@ class RoundAndClipThresholds(Transformation):
                     # Round thresholds up to nearest representable value
                     # of the input datatype
                     new_thresholds = np.clip(
-                        np.ceil(thresholds / dtype.scale_factor()) * dtype.scale_factor(),
+                        np.ceil(thresholds.astype(np.float64) / dtype.scale_factor())
+                        * dtype.scale_factor(),
                         dtype.min(),
                         dtype.max() + dtype.scale_factor(),
                     )
-                    new_thresholds = new_thresholds.astype(np.float32)
                     model.set_initializer(node.input[1], new_thresholds)
                     # find smallest underlying integer representation for the thresholds
                     max_val = dtype.max() / dtype.scale_factor() + 1
@@ -125,9 +122,9 @@ class RoundAndClipThresholds(Transformation):
                         continue
 
                     # Round thresholds up to nearest integer and clip to accumulator range
-                    new_thresholds = np.clip(np.ceil(thresholds), acc_dt.min(), acc_dt.max() + 1)
-                    # Convert back to the preferred float32 container type
-                    new_thresholds = new_thresholds.astype(np.float32)
+                    new_thresholds = np.clip(
+                        np.ceil(thresholds.astype(np.float64)), acc_dt.min(), acc_dt.max() + 1
+                    )
                     # Insert the rounded and clipped thresholds back into the model
                     model.set_initializer(node.input[2], new_thresholds)
                     # The rounded and clipped thresholds now fit into a data type

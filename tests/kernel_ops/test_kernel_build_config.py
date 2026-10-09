@@ -25,14 +25,16 @@ from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     KernelOutputType,
     KernelVerificationStepType,
+    default_kernel_build_steps,
 )
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
 from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.kernels import kernel_choices_config
+from finn.transformation.prepare import GraphPreparation
 from finn.util.toolchain import Selection
-from kernel_ops.tfc import ULTRA96
+from kernel_ops.tfc import PREPROCESSING, ULTRA96, preparation
 
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
@@ -43,12 +45,25 @@ def test_the_kernel_path_builds_on_ip_explores_nothing_and_completes_by_baseline
     assert cfg.generate_outputs == [] and cfg.verify_steps == []
     assert cfg.kernel_exploration == [] and cfg.kernel_completion == "baseline"
     assert cfg.steps is None and cfg.toolchain is None
+    # Prepared from the export as exported: its own inputs and outputs, the default
+    # recipes.
+    assert cfg.preparation == GraphPreparation()
+    assert default_kernel_build_steps[0] == "phase_graph_preparation"
 
 
 def test_a_configuration_holds_through_json() -> None:
     cfg = KernelBuildConfig(
         output_dir="out",
         target=TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq"),
+        preparation=GraphPreparation(
+            override_inpsize=[1, 1, 28, 28],
+            max_multithreshold_bit_width=4,
+            preprocessing="preproc.onnx",
+            input_datatype="UINT8",
+            topk=1,
+            streamlining=["Streamline"],
+            topology=[],
+        ),
         generate_outputs=list(KernelOutputType),
         kernel_exploration=[
             {"strategy": "target_throughput", "fps": 1_000_000},
@@ -86,10 +101,20 @@ def test_a_configuration_holds_through_json() -> None:
         "deployment_package",
     ]
     assert stated["verify_steps"] == [
+        "graph_preparation_python",
         "kernel_partition_python",
         "kernel_partition_elaboration",
         "stitched_ip_testbench",
     ]
+    assert stated["preparation"] == {
+        "override_inpsize": [1, 1, 28, 28],
+        "max_multithreshold_bit_width": 4,
+        "preprocessing": "preproc.onnx",
+        "input_datatype": "UINT8",
+        "topk": 1,
+        "streamlining": ["Streamline"],
+        "topology": [],
+    }
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
     assert stated["toolchain"]["vivado_jobs"] == 4
     # Debug cores are an option of the pynq shell's build (SZ7).
@@ -124,6 +149,25 @@ def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
     toolchain = {"hls_frontned": "vitis-run"}
     with pytest.raises(UndefinedParameterError, match="toolchain: .*hls_frontned"):
         KernelBuildConfig.from_json(json.dumps({**STATED, "toolchain": toolchain}))
+    preparation = {"max_multithreshold_bitwidth": 8}
+    with pytest.raises(UndefinedParameterError, match="preparation: .*max_multithreshold_bitwidth"):
+        KernelBuildConfig.from_json(json.dumps({**STATED, "preparation": preparation}))
+
+
+@pytest.mark.parametrize(
+    "preparation, refused",
+    [
+        ({"streamlining": ["Streamline", "Streamlining"]}, "no transform named Streamlining"),
+        ({"topology": ["MakeMaxPoolNCHW"]}, "no transform named MakeMaxPoolNCHW"),
+        ({"input_datatype": "UINT33x"}, "'UINT33x' is no qonnx datatype"),
+        ({"topk": 0}, "preparation.topk: 0"),
+    ],
+)
+def test_a_preparation_the_phase_cannot_run_is_refused_naming_it(
+    preparation: dict[str, object], refused: str
+) -> None:
+    with pytest.raises(ValueError, match=refused):
+        KernelBuildConfig.from_json(json.dumps({**STATED, "preparation": preparation}))
 
 
 @pytest.mark.parametrize(
@@ -179,19 +223,20 @@ def test_a_build_directory_states_one_configuration_its_file_naming_its_type(
 
 
 @pytest.mark.slow
-def test_tfc_builds_on_ip_through_the_directory_entry(
-    tmp_path: Path, tfc_streamlined: Path
-) -> None:
+def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export: Path) -> None:
     """build_dataflow_directory (the ``build_dataflow`` command's entry) builds a
-    directory's KernelBuildConfig through the kernel path in its build process: TFC on
-    the default ip shell, named by its board, explored as its Zynq build is, to its
-    verified partition, whose target is the part's on ip."""
+    directory's KernelBuildConfig through the kernel path in its build process: TFC
+    from its export, prepared as the configuration's JSON states, on the default ip
+    shell, named by its board, explored as its Zynq build is, to its verified
+    partition, whose target is the part's on ip."""
     directory = tmp_path / "build"
     directory.mkdir()
-    shutil.copyfile(tfc_streamlined, directory / "model.onnx")
+    shutil.copyfile(tfc_export, directory / "model.onnx")
+    shutil.copyfile(tfc_export.parent / PREPROCESSING, directory / PREPROCESSING)
     cfg = KernelBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),
+        preparation=preparation(directory),
         kernel_exploration=[{"strategy": "target_throughput", "fps": 1_000_000}],
         enable_build_pdb_debug=False,
     )

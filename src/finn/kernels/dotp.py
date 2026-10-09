@@ -65,7 +65,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
 from finn.kernels.target import DspBlock, Platform, dsp_widths
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources
 from finn.kernels.values.domains import Integer, range_dtype
@@ -209,11 +209,20 @@ class DotpAxiKernel(Kernel):
         """dotp_axi's activation lanes: SIMD alone, or ``s * PE + p`` depthwise."""
         return (k, n) if self.form is Form.DEPTHWISE else (k,)
 
+    @derived(semantics=INTEGER_POLICY)
+    def activation_policy(self) -> Integer:
+        """The activation encodings the core takes (``_activations``)."""
+        return self._activations()
+
+    def _activations(self) -> Integer:
+        # dotp_axi itself has no floor on ACTIVATION_WIDTH; a core states its own.
+        return Integer()
+
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
         channel=x_channel,
-        admits=Integer(min_bits=2),
+        admits=activation_policy,
         schedule=schedule,
         index=x_index,
         lanes=x_lanes,
@@ -252,7 +261,7 @@ class DotpAxiKernel(Kernel):
 
     @constraint
     def core_supported(self) -> bool | Rejected:
-        # The ports admit the encodings (integer family, signedness, two bits);
+        # The ports admit the encodings (integer family, signedness, each core's floor);
         # these are the core's own bounds on them and on the form.
         try:
             ordinary_integer_bounds(self.x.element.dtype)
@@ -266,14 +275,11 @@ class DotpAxiKernel(Kernel):
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        bits, maximum = self.y.element.bits, dsp_widths(self.dsp)[2]
-        if not 1 <= bits <= maximum:
-            return reject(
-                "dotp-accumulator-width",
-                "the required result width exceeds the target accumulator capacity",
-                values={"actual_bits": bits, "maximum_bits": maximum},
-            )
-        return True
+        refused = self._accumulator_refusal(self.y.element.bits)
+        return True if refused is None else refused
+
+    def _accumulator_refusal(self, bits: int) -> Rejected | None:
+        return reject("dotp-core", "dotp_axi is placed through one of its core kernels")
 
     @constraint
     def stream_widths_supported(self) -> bool | Rejected:
@@ -414,12 +420,16 @@ class PackedDotpKernel(DotpAxiKernel):
     which packs more lanes per DSP and admits weights as wide as the DSP's A
     input. FinnLib stops simulation on a weight that breaks it.
 
+    Activations take at least two bits (``dotp.sv`` refuses ``ACTIVATION_WIDTH < 2``).
+
     Its accumulator is the range's own encoding: FinnLib's packed lanes resolve the sum
     modulo ``2**ACCU_WIDTH``, exact when the sum and every partial sum fit, which
     the range bounds (FinnLib ``229b35f``: ``ACCU_WIDTH >= 1``), so one product's width
-    is no floor. It refuses an accumulator wider than the DSP's P path (48 bits, 58 on
-    DSP58): FinnLib counts the top lane's wraps past P, but a single lane wider than
-    P is not verified.
+    is no floor, and the DSP's P path (48 bits, 58 on DSP58) no ceiling: the top lane
+    takes its low bits from P and counts P's wraps in a high sideband sized from
+    ``ACCU_WIDTH`` (``dotp.sv``'s ``sliceLanes`` and ``hi_width``), so an accumulator
+    wider than P is exact, a single lane's included (the ``wide_*`` cases of
+    ``tests/kernels/sweeps/pure_dot_product_numeric.py``).
     """
 
     id = "finnlib.dotp_axi.dotp"
@@ -454,8 +464,14 @@ class PackedDotpKernel(DotpAxiKernel):
             )
         return None
 
+    def _activations(self) -> Integer:
+        return Integer(min_bits=2)
+
     def _accumulator(self, least: int, greatest: int) -> QONNXDataType | Rejected:
         return range_dtype(least, greatest)
+
+    def _accumulator_refusal(self, bits: int) -> Rejected | None:
+        return None
 
     def _narrow_weights(self) -> bool:
         return self.narrow_weights
@@ -494,7 +510,8 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     """FinnLib ``dotp_8sx9_dsp58``: three 9x8 signed products per DSP58 in INT8 mode.
 
     It takes signed weights of at most 8 bits and activations that fit 9 signed
-    bits, broadcast (``DENSE``) or one channel per lane (``DEPTHWISE``).
+    bits, of any width down to one (BINARY): it pads each to the 9-bit lane,
+    broadcast (``DENSE``) or one channel per lane (``DEPTHWISE``).
 
     Its accumulator is the range's own encoding: it sums in the DSP58's 58 bits and
     presents the low ``ACCU_WIDTH``, exact when the sum fits, in either signedness:
@@ -526,6 +543,16 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
 
     def _accumulator(self, least: int, greatest: int) -> QONNXDataType | Rejected:
         return range_dtype(least, greatest)
+
+    def _accumulator_refusal(self, bits: int) -> Rejected | None:
+        if bits > 58:
+            return reject(
+                "dotp-accumulator-width",
+                "the INT8 core presents the low ACCU_WIDTH bits of its 58-bit DSP58 "
+                "accumulation: at most 58 (FinnLib dotp_8sx9_dsp58.sv)",
+                values={"actual_bits": bits, "maximum_bits": 58},
+            )
+        return None
 
     def _core_resources(self, simd: int) -> Resources | Rejected:
         return int8_dsp58_dotp_resources(pe=self.pe, simd=simd)

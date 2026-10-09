@@ -21,13 +21,13 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.pacing import FREE, STALLED
+from finn.core.executors.xsim.rtl import pack, stream_through
 from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.harness.pacing import FREE, STALLED
-from finn.harness.rtl import pack, stream_through
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
@@ -193,8 +193,9 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
         for r in range(ROWS)
     ]
     a_bits, y_bits = A.bitwidth(), Y.bitwidth()
+    design = layered()
     stream_through(
-        layered().module,
+        design.module,
         tmp_path,
         inputs={
             "in0_V": (
@@ -217,4 +218,5 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
             )
         },
         pacing=STALLED if stalled else FREE,
+        cycles=design.cycles,
     )

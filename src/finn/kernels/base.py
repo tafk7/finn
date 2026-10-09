@@ -8,7 +8,10 @@ FinnLib module (a leaf) or places kernel children and the channels between
 them; never both. On the protocol a leaf declares only what is its own:
 
 - ``rtl_module``: the RTL module it instantiates, and ``sources()``, the
-  source files that provide it and any data they read;
+  source files that provide it and any data they read. An HLS kernel's one
+  source is its build request (``HlsSource``), and its ``rtl_module`` the stem
+  of the request's top: the module it instantiates is that top,
+  ``<rtl_module>_<key16>``;
 - one ``Port`` node per interface (``finn.kernels.port``): each exports its
   pins, its clock, and what it holds while idle;
 - ``parameters()``: the module's parameters, from its choices;
@@ -92,7 +95,13 @@ from finn.kernels.artifacts.abi import (
     Signal,
     abi_pins,
 )
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import (
+    Contribution,
+    CopiedSource,
+    GeneratedData,
+    HlsSource,
+    request_stem,
+)
 from finn.kernels.artifacts.module import (
     Abi,
     BuildError,
@@ -222,6 +231,17 @@ NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
 """FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
 
+def _module_name(stem: str, contributions: tuple[Contribution, ...]) -> str:
+    """``stem``, or the top of the HLS request among ``contributions``, named from it."""
+    requests = [item for item in contributions if isinstance(item, HlsSource)]
+    if not requests:
+        return stem
+    function = requests[0].function
+    if request_stem(function) != stem:
+        raise BuildError(f"{function} is not the top of the HLS module {stem}")
+    return function
+
+
 def _inputs(pin: Pin) -> tuple[str, ...]:
     if isinstance(pin, Signal):
         return (pin.name,) if pin.direction is Direction.IN else ()
@@ -348,14 +368,14 @@ class Kernel(Space):
         return Leaf(
             space_type.id,
             str(space_type.version),
-            space_type.rtl_module,
+            _module_name(space_type.rtl_module, contributions),
             parameters,
             Abi(
                 (*clocking.signals(), *self.other_pins(), *pins),
                 tuple((name, str(value)) for name, value in parameters),
                 clocking.alignments(),
             ),
-            tuple(item for item in contributions if isinstance(item, CopiedSource)),
+            tuple(item for item in contributions if isinstance(item, (CopiedSource, HlsSource))),
             tuple(item for item in contributions if isinstance(item, GeneratedData)),
             self.holds,
         )

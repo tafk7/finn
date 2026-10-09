@@ -144,13 +144,22 @@ class ReadyValidStream:
 # -- AXIS ----------------------------------------------------------------------------------
 
 
+class AxisSpelling(Enum):
+    """How a module spells its AXIS member pins after the bus's name: FinnLib's RTL in
+    lower case (``s_axis_tdata``), HLS's exported RTL in upper case (``s_axis_TDATA``)."""
+
+    LOWER = "lower"
+    UPPER = "upper"
+
+
 @dataclass(frozen=True, init=False)
 class AxisBeat:
     """A homogeneous beat with lane zero in the least-significant bits.
 
     ``last`` declares the pin. Its workload-dependent meaning is supplied when
     binding to a logical port. ``dtype`` is the datatype value itself (qonnx's
-    are interned and frozen), not reduced to a bit width.
+    are interned and frozen), not reduced to a bit width. ``spelling`` is how its
+    module spells the member pins.
     """
 
     name: str
@@ -158,6 +167,7 @@ class AxisBeat:
     elements_per_beat: int
     endpoint: Endpoint
     last: bool
+    spelling: AxisSpelling
 
     def __init__(
         self,
@@ -167,6 +177,7 @@ class AxisBeat:
         *,
         endpoint: Endpoint,
         last: bool = False,
+        spelling: AxisSpelling = AxisSpelling.LOWER,
     ) -> None:
         dtype = canonical_qonnx_datatype(dtype)
         if not isinstance(name, str) or not name:
@@ -175,6 +186,8 @@ class AxisBeat:
             raise ValueError("elements per beat must be a positive integer")
         if not isinstance(endpoint, Endpoint) or type(last) is not bool:
             raise ValueError("AXIS requires an Endpoint and a boolean last flag")
+        if not isinstance(spelling, AxisSpelling):
+            raise ValueError("AXIS member pins are spelled by an AxisSpelling")
         if qonnx_datatype_width(dtype) <= 0:
             raise ValueError("AXIS scalar encodings must have positive width")
         object.__setattr__(self, "name", name)
@@ -182,6 +195,7 @@ class AxisBeat:
         object.__setattr__(self, "elements_per_beat", elements_per_beat)
         object.__setattr__(self, "endpoint", endpoint)
         object.__setattr__(self, "last", last)
+        object.__setattr__(self, "spelling", spelling)
 
     @property
     def element_bits(self) -> int:
@@ -205,16 +219,21 @@ class AxisBeat:
 
     def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidStream:
         """The native transport underlying this typed, padded AXI profile."""
+
+        def pin(member: str) -> str:
+            spelled = member.upper() if self.spelling is AxisSpelling.UPPER else member
+            return f"{self.name}_{spelled}"
+
         return ReadyValidStream(
             self.name,
             self.data_width,
             self.endpoint,
-            f"{self.name}_tdata",
-            f"{self.name}_tvalid",
-            f"{self.name}_tready",
+            pin("tdata"),
+            pin("tvalid"),
+            pin("tready"),
             clock,
             reset,
-            (StreamMarker(f"{self.name}_tlast", MarkerKind.LAST),) if self.last else (),
+            (StreamMarker(pin("tlast"), MarkerKind.LAST),) if self.last else (),
         )
 
 
@@ -423,6 +442,7 @@ def marker_pairs(
 
 
 __all__ = [
+    "AxisSpelling",
     "AxisBeat",
     "Level",
     "MarkerKind",

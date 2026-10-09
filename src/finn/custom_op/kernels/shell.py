@@ -16,7 +16,11 @@ and budgets.
   values' range, and its contents the node's value of it (``Facts.values``), which its
   source stores; every channel's platform is the model's target's. Only the nodes'
   ONNX inputs and outputs are boundaries, named by the shell's convention
-  ``s_axis_<i>`` and ``m_axis_<j>``;
+  ``s_axis_<i>`` and ``m_axis_<j>``. A channel has one consumer, so a tensor read
+  more than once is refused by name before any owner is chosen (``tensor-fan-out``):
+  read by two of the nodes (an edge, or a parameter both own), or read by one and an
+  output boundary too (a graph output, or read outside the nodes). Fan-out waits for
+  a channel that forks;
 - **kernels**, one per node: its op's placement (``KernelOp.place``, the one its node
   root is generated from) with literal formals, on these channels;
 - **members**, named as the graph: channels by tensor and kernels by node (``\\W`` as
@@ -94,6 +98,8 @@ from onnx import NodeProto
 from finn.core.space import (
     Available,
     ConstraintGroup,
+    Finding,
+    FindingKind,
     Members,
     Param,
     Rejected,
@@ -338,6 +344,33 @@ def _second_partition(model: ModelWrapper, nodes: list[NodeProto]) -> list[str]:
     ]
 
 
+def _fan_out(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    owned: list[dict[str, str]],
+    ports: Mapping[str, str],
+) -> list[Finding]:
+    """Each tensor whose channel would have more than one consumer, in node order: read
+    by two of ``nodes`` (an input that is not an initializer, or a parameter a node owns),
+    or by one and at its output port too (``m_axis_<j>``)."""
+    readers: dict[str, list[str]] = {}
+    for node, tensors in zip(nodes, owned):
+        for tensor in node.input:
+            if tensor in tensors.values() or model.get_initializer(tensor) is None:
+                readers.setdefault(tensor, []).append(node.name)
+    found = []
+    for tensor, names in readers.items():
+        port = ports.get(tensor, "")
+        if port.startswith("m_axis_"):
+            message = f"read by {', '.join(names)} and leaves the partition at {port}"
+        elif len(names) > 1:
+            message = f"read by {', '.join(names)}"
+        else:
+            continue
+        found.append(Finding(FindingKind.LIMITATION, "tensor-fan-out", tensor, message))
+    return found
+
+
 def _channels(
     model: ModelWrapper,
     nodes: list[NodeProto],
@@ -509,7 +542,7 @@ def shell_root(
     """The shell root of ``nodes``, every KernelOp node of ``model``, its module the
     partition ``name``'s IP, in the shell of the model's target: its row's ends offered
     on the boundary channels, its budgets admitting the point; see the module
-    docstring."""
+    docstring. A tensor read more than once is refused (``tensor-fan-out``)."""
     nodes = list(nodes)
     outside = _second_partition(model, nodes)
     if outside:
@@ -522,6 +555,13 @@ def shell_root(
     facts = [op.facts() for op in ops]
     owned = [op.owned(each) for op, each in zip(ops, facts)]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
+    fanned = _fan_out(model, nodes, owned, ports)
+    if fanned:
+        raise KernelOpError(
+            f"{name}: a channel has one consumer, and fan-out is not designed yet (a channel "
+            "that forks): "
+            + "; ".join(f"{each.owner}: {each.code}: {each.message}" for each in fanned)
+        )
     declared = _channels(model, nodes, ops, owned, ports)
     outputs = {tensor for node in nodes for tensor in node.output if tensor in ports}
     found = _owners(nodes, ops, declared, outputs)

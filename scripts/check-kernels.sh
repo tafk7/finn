@@ -13,12 +13,24 @@ bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 # XSim and other Vivado tests (markers xsim, vivado) are deselected even when
 # Vivado is selected (a FINN checkout's .envrc selects it): they take minutes
 # each, and scripts/xsim-sweep.sh runs them. --fast deselects the slow tests too:
-# the TFC platform binding and the wheel build.
-gate_pytest tests/kernels xsim vivado
+# the TFC platform binding and the wheel build. An HLS top's C simulation (marker
+# vitis) is a check to run by hand, which no gate decides on.
+gate_pytest tests/kernels xsim vivado vitis
 # The KernelOps and their transformations, the layer above finn.kernels.
 gate_pytest tests/kernel_ops xsim vivado
 # The XSim sweep's tooling: the emitted text and each job's key (no Vivado).
 gate_pytest tests/xsim_sweep
+# Graph preparation's front end (the preparation layer: finn.transformation.qonnx
+# and .streamline, which the kernel path's graph-preparation phase runs; tests/
+# kernel_ops tests the phase itself) and the Brevitas export it reads, under
+# tests/conftest.py. Not the legacy ops' preparation, which their ports adapt
+# (KT21): MLO's loop rolling, PWPolyF's export. One thread per worker: each of the
+# workers would otherwise run torch over every CPU. About 1 700 tests, 7 minutes
+# alone.
+OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
+    --ignore tests/transformation/test_loop_rolling.py \
+    --ignore tests/brevitas/test_brevitas_pwpolyf.py \
+    tests/transformation tests/brevitas xsim vivado
 # finn.util and the rest of FINN's support code (toolchain, resources,
 # installation, containers, CI tooling, the builder's CPU-only flows). Its tests
 # use tests/conftest.py (the seeded RNG, ci/ on sys.path). The slow tests (wheel
@@ -26,8 +38,10 @@ gate_pytest tests/xsim_sweep
 # builds to IP or bitfile (end2end) are deselected in either mode, so this step
 # stays at a few minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado end2end slow
-gate_ruff src/finn/kernels tests/kernels src/finn/platform \
+gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/executors \
+    src/finn/core/containers.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
+    src/finn/transformation/prepare \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
     src/finn/builder/kernel_testbench.py src/finn/builder/kernel_resources.py \
     scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep tests/oracle
@@ -37,8 +51,9 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
 # finn.builder.kernel_testbench and kernel_resources: the ip shell's testbench and the
 # resources per shell member, the builder modules typed.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
-    -p finn.transformation.kernels -p finn.harness -m finn.shells.pynq.runner \
-    -m finn.shells.pynq.driver -m finn.util.toolchain \
+    -p finn.transformation.kernels -p finn.transformation.prepare -p finn.harness \
+    -p finn.core.executors -m finn.core.containers \
+    -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.util.toolchain \
     -m finn.builder.kernel_testbench -m finn.builder.kernel_resources
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle

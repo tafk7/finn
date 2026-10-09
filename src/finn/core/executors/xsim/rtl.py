@@ -1,11 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The RTL harness: build a module's sources, run a testbench in XSim, stream words
-through a module, and measure its cycles.
+"""The XSim testbench: build a module's sources, run a testbench in XSim, stream words
+through a module, and measure its cycles. The XSim executor
+(``finn.core.executors.xsim.executor``) runs a partition's hardware with it.
 
 ``materialize`` builds a ``module`` into a directory and places each
-memory's INIT_FILE where ``$readmemh`` reads it. ``simulate`` elaborates a
+memory's INIT_FILE where ``$readmemh`` reads it; an HLS leaf's request is
+synthesized first, for ``HLS_PART``, or taken from the HLS cache
+(``finn.transformation.kernels.hls.built_hls``). ``simulate`` elaborates a
 testbench module ``check`` against sources, with the tools of FINN's toolchain
 (the machine's unless one is given), and requires it to display ``PASS``;
 otherwise it raises ``SimulationFailed``.
@@ -31,7 +34,8 @@ never by hand per test:
 - **held inputs** of a leaf module (``Leaf.held``) at their declared values;
 - **each AXIS stream** given words: an input's words presented in order, an
   output's ready, each paced by its ``Pace`` in ``pacing``
-  (``finn.harness.pacing``: by default ``STALLED``, ``FREE`` never stalls).
+  (``finn.core.executors.xsim.pacing``: by default ``STALLED``, ``FREE`` never
+  stalls).
 
 Any other input is refused before anything is written (``Undriven``, naming
 every one), as is a port name the module does not present on that side (a
@@ -39,6 +43,20 @@ every one), as is a port name the module does not present on that side (a
 real port idle until the watchdog. A ``repeating`` design (fed by a cyclic
 source) never stops producing: each output then takes exactly its words and
 holds its ready low after them; otherwise an output word beyond its words fails.
+
+An output word that differs from its expected word does not stop the run: the
+first is displayed, and once every output has presented its words the run fails
+(``WORDS_DIFFER``) with each output's words as they arrived written beside the
+testbench (``<port>.received.mem``), which ``stream_through`` raises as
+``WordsDiffer.received``. A caller that knows the model decodes them as an order
+(``finn.harness.orders``): a declared order the RTL does not walk is reported as
+which beat carries which index tuple, not as a word that differs.
+
+``stream_out`` streams words through a module and returns each output's words as
+they arrived, none expected (``Receive``: how many, of how many bits): what an
+executor that only executes takes. The testbench then writes every such output's
+words beside it (``<port>.received.mem``) once all have arrived, and compares
+nothing.
 
 The stimulus and the expected words, and each bus's writes, are ``$readmemh``
 files beside the testbench (``<port>.input.mem``, ``<port>.output.mem``,
@@ -76,8 +94,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from finn.harness.pacing import FREE, STALLED, Pacing
-from finn.harness.toolchain import finnlib_root
+from finn import resources
+from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -100,10 +118,20 @@ from finn.kernels.artifacts.module import (
     declared_registers,
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.util.toolchain import Toolchain, machine_toolchain
+from finn.transformation.kernels.hls import built_hls
+from finn.util.toolchain import Toolchain, machine_toolchain, xelab_threads
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
+
+
+@dataclass(frozen=True)
+class Receive:
+    """An output's words taken as they arrive, none expected: how many, and the payload
+    bits of each (``stream_out``)."""
+
+    count: int
+    bits: int
 
 
 def pack(values: Sequence[int], bits: int) -> int:
@@ -112,12 +140,30 @@ def pack(values: Sequence[int], bits: int) -> int:
     return sum((value & mask) << (index * bits) for index, value in enumerate(values))
 
 
-def materialize(module: Module, directory: Path) -> tuple[str, list[str], dict[str, str]]:
+#: The part an HLS leaf is synthesized for to be simulated: the one FinnLib's own HLS
+#: recipe synthesizes for (``hls/hbc.tcl``), an UltraScale+ device, the fabric the
+#: bare-kernel tests' platforms state. The testbench itself reads no part.
+HLS_PART = "xczu3eg-sbva484-1-i"
+
+
+def materialize(
+    module: Module,
+    directory: Path,
+    *,
+    part: str = HLS_PART,
+    toolchain: Toolchain | None = None,
+    cache: Path | None = None,
+) -> tuple[str, list[str], dict[str, str]]:
     """The top module, its HDL sources, and each INIT_FILE's name and contents.
 
-    FinnLib is the ``finnlib`` resource (``FINN_RESOURCES_FINNLIB`` overrides it).
+    FinnLib is the ``finnlib`` resource (``FINN_RESOURCES_FINNLIB`` overrides it). An HLS
+    leaf's request is synthesized for ``part`` first by ``toolchain`` (the machine's by
+    default), unless the HLS cache holds it (``built_hls``: ``cache``, ``$FINN_HOME/hls``
+    by default).
     """
-    emitted = emit_module(module, directory / "module", roots={"finnlib": finnlib_root()})
+    root = Path(resources.path("finnlib"))
+    built = built_hls(module, part, toolchain=toolchain, cache=cache, roots={"finnlib": root})
+    emitted = emit_module(module, directory / "module", roots={"finnlib": root}, built=built)
     sources = [str(emitted.directory / path) for path in emitted.sources]
     data = {path: (emitted.directory / path).read_text() for path in emitted.data}
     return emitted.entry_point, sources, data
@@ -127,6 +173,16 @@ class SimulationFailed(AssertionError):
     """A simulator tool exited with an error, or the testbench did not display PASS;
     the message is what the simulator printed. An ``AssertionError``: a check that the
     hardware does what its testbench expects failed."""
+
+
+class WordsDiffer(SimulationFailed):
+    """Every output presented all its words, and some differ from the expected ones:
+    ``received`` holds each output's words as they arrived (payload bits), for a caller
+    that knows the model to decode (``finn.harness.orders``)."""
+
+    def __init__(self, printed: str, received: Mapping[str, Sequence[int]]) -> None:
+        super().__init__(printed)
+        self.received = {port: tuple(words) for port, words in received.items()}
 
 
 def simulate(
@@ -166,7 +222,7 @@ def simulate(
                 "work.check",
                 "work.glbl",
                 "--mt",
-                "2",
+                xelab_threads(toolchain.environment),
                 "-L",
                 "unisims_ver",
                 "-L",
@@ -203,7 +259,9 @@ def stream_through(
     registers: Mapping[str, RegisterMap] | None = None,
 ) -> None:
     """Stream ``inputs`` through ``module``, paced by ``pacing``, and check that each output
-    presents its words; see the module docstring for every pin it drives.
+    presents its words; see the module docstring for every pin it drives. Raises
+    ``WordsDiffer`` when every output presented its words and some differ,
+    ``SimulationFailed`` on any other failure.
 
     ``cycles`` is what the model states the run takes beyond its boundary's beats (a root
     kernel's ``cycles``, when its members' work exceeds its streams'), for the watchdog.
@@ -219,6 +277,40 @@ def stream_through(
         cycles=cycles,
         registers=registers,
     )
+
+
+def stream_out(
+    module: Module,
+    directory: Path,
+    *,
+    inputs: Mapping[str, Words],
+    outputs: Mapping[str, Receive],
+    pacing: Pacing = STALLED,
+    cycles: int = 0,
+    toolchain: Toolchain | None = None,
+    cache: Path | None = None,
+) -> dict[str, tuple[int, ...]]:
+    """Stream ``inputs`` through ``module``, paced by ``pacing``, and return each output's
+    words as they arrived (payload bits), as many as its ``Receive`` states; see the module
+    docstring for every pin it drives. Nothing is compared: an output word beyond its count,
+    the watchdog or a tool's error raises ``SimulationFailed``.
+
+    ``cycles`` as ``stream_through`` takes them. ``toolchain`` runs the simulator and HLS
+    (the machine's by default); ``cache`` is the HLS cache (``materialize``)."""
+    bench = stream_bench(
+        module,
+        directory,
+        inputs=inputs,
+        outputs=outputs,
+        pacing=pacing,
+        cycles=cycles,
+        toolchain=toolchain,
+        cache=cache,
+    )
+    for port in outputs:
+        (directory / f"{port}.{RECEIVED}").unlink(missing_ok=True)
+    simulate(bench.sources, bench.text, directory, toolchain=toolchain)
+    return {port: tuple(_read_memory(directory / f"{port}.{RECEIVED}")) for port in outputs}
 
 
 def measure(
@@ -303,6 +395,11 @@ WRITE_CYCLES = 8
 #: The testbench's clock period, in ns (its ``timescale`` is 1ns/1ps).
 PERIOD_NS = 10
 
+#: What the testbench reports when outputs presented all their words and some differ, and
+#: the file beside it each output's received words are written to then (``<port>.``).
+WORDS_DIFFER = "output words differ"
+RECEIVED = "received.mem"
+
 
 class Undriven(ValueError):
     """The module has inputs the testbench has no declared value for; it names them."""
@@ -360,7 +457,7 @@ def _streams(module: Module) -> dict[str, Bus]:
 
 
 def _check_streams(
-    module: Module, inputs: Mapping[str, Words], outputs: Mapping[str, Words]
+    module: Module, inputs: Mapping[str, object], outputs: Mapping[str, object]
 ) -> None:
     buses = _streams(module).values()
     for side, names, endpoint in (
@@ -461,16 +558,21 @@ def stream_bench(
     directory: Path,
     *,
     inputs: Mapping[str, Words],
-    outputs: Mapping[str, Words],
+    outputs: Mapping[str, Words | Receive],
     pacing: Pacing = STALLED,
     repeating: bool = False,
     cycles: int = 0,
     registers: Mapping[str, RegisterMap] | None = None,
     observed: Mapping[str, tuple[str, str]] | None = None,
+    toolchain: Toolchain | None = None,
+    cache: Path | None = None,
 ) -> StreamBench:
     """Write the module's sources, its data files and the stimulus and expected words into
     ``directory``, and the testbench that drives every pin of the module from what it
-    declares (the module docstring); nothing simulates.
+    declares (the module docstring); nothing simulates. An output given as ``Receive``
+    is compared with nothing: its words are written beside the testbench once every
+    output has presented its words. ``toolchain`` and ``cache`` as ``materialize`` takes
+    them.
 
     Refuses, before writing anything, a stream the module does not present
     (``ValueError``) and an input the testbench has no value for (``Undriven``).
@@ -499,7 +601,7 @@ def stream_bench(
         if any(at >> widths["awaddr"] for at, _ in found.writes):
             raise ValueError(f"{bus_name}: a write's address exceeds its {widths['awaddr']} bits")
 
-    top, sources, data = materialize(module, directory)
+    top, sources, data = materialize(module, directory, toolchain=toolchain, cache=cache)
     taken = set(data)
     for name, text in data.items():  # $readmemh reads an INIT_FILE from the simulator's directory
         (directory / name).write_text(text)
@@ -510,6 +612,8 @@ def stream_bench(
     drive: list[str] = []  # just after each rising edge
     done: list[str] = []
     stopped: list[str] = []  # the watchdog's report
+    received: list[str] = []  # each output's words, written out when any differs
+    returned: list[str] = []  # each Receive output's words, written out at the end
     covered = {clock, *(name for name, _ in clocks.resets)}
     if clocks.doubled is not None:
         covered.add(clocks.doubled)
@@ -587,20 +691,29 @@ def stream_bench(
 
     paced = 0
     for side, given in (("input", inputs), ("output", outputs)):
-        for index, (port, (words, bits)) in enumerate(given.items()):
+        for index, (port, spec) in enumerate(given.items()):
+            words: Sequence[int] | None = None  # none expected: a Receive output's
+            if isinstance(spec, Receive):
+                total, bits = spec.count, spec.bits
+            else:
+                words, bits = spec
+                total = len(words)
             pace = pacing.input(index) if side == "input" else pacing.output(index)
-            paced += pace.cycles(len(words))
+            paced += pace.cycles(total)
             member = _members(streams[port])
             data_pin, valid, ready = member["tdata"], member["tvalid"], member["tready"]
-            carrier, total = pins[data_pin].width, len(words)
+            carrier = pins[data_pin].width
             covered |= {data_pin, valid, ready}
             table_bits = carrier if side == "input" else bits
-            table = _memory(directory, f"{port}.{side}.mem", table_bits, words, taken)
-            lines += [
-                f"logic [{table_bits - 1}:0] {port}_words [{total}];",
-                f'initial $readmemh("{table}", {port}_words);',
-                f"int {port}_beats = 0, {port}_burst = 0, {port}_idle = 0, {port}_last = -1;",
-            ]
+            if words is not None:
+                table = _memory(directory, f"{port}.{side}.mem", table_bits, words, taken)
+                lines += [
+                    f"logic [{table_bits - 1}:0] {port}_words [{total}];",
+                    f'initial $readmemh("{table}", {port}_words);',
+                ]
+            lines.append(
+                f"int {port}_beats = 0, {port}_burst = 0, {port}_idle = 0, {port}_last = -1;"
+            )
             handshake = f"{valid} && {ready}"
             paced_count = f"""{port}_beats <= {port}_beats + 1;
                 {port}_last <= cycle;
@@ -622,14 +735,26 @@ def stream_bench(
                     f"{data_pin} = {port}_words[{port}_beats < {total} ? {port}_beats : 0];",
                 ]
             else:
-                lines.append(f"wire [{carrier - 1}:0] {data_pin}; wire {valid}; logic {ready} = 0;")
+                lines += [
+                    f"wire [{carrier - 1}:0] {data_pin}; wire {valid}; logic {ready} = 0;",
+                    f"logic [{bits - 1}:0] {port}_got [{total}];",
+                ]
+                compare = ""  # a Receive output's words: written out at the end, compared never
+                if words is None:
+                    returned.append(f'$writememh("{port}.{RECEIVED}", {port}_got);')
+                else:
+                    received.append(f'$writememh("{port}.{RECEIVED}", {port}_got);')
+                    compare = f"""
+                if ({data_pin}[{bits - 1}:0] !== {port}_words[{port}_beats]) begin
+                    if (!differing) $display("{port} word %0d: %h != %h", {port}_beats,
+                        {data_pin}, {port}_words[{port}_beats]);
+                    differing <= differing + 1;
+                end"""
                 count.append(
                     f"""if ({handshake}) begin
                 if ({port}_beats >= {total})
                     $fatal(1, "{port} word %0d: beyond its {total} words", {port}_beats);
-                if ({data_pin}[{bits - 1}:0] !== {port}_words[{port}_beats])
-                    $fatal(1, "{port} word %0d: %h != %h", {port}_beats,
-                        {data_pin}, {port}_words[{port}_beats]);
+                {port}_got[{port}_beats] <= {data_pin}[{bits - 1}:0];{compare}
                 {paced_count}
             end else if ({port}_idle) {port}_idle <= {port}_idle - 1;"""
                 )
@@ -678,6 +803,7 @@ def stream_bench(
     {clocking}
     {resets}
     logic running = 0;
+    int differing = 0;  // output words that differ from the expected
     {newline.join(lines)}
     wire configured = {configured_now or "1"};
     wire streaming = running && configured;
@@ -704,7 +830,11 @@ def stream_bench(
         running = 1;
         wait ({" && ".join(done) or "1"});
         repeat (4) @(posedge {clock});
-        $display("STREAM_PASS");
+        if (differing) begin
+            {(newline + "        ").join(received)}
+            $fatal(1, "{WORDS_DIFFER}: %0d output words", differing);
+        end
+        {"".join(line + newline + "    " for line in returned)}$display("STREAM_PASS");
         $finish;
     end
 endmodule
@@ -719,9 +849,27 @@ def _stream(
     outputs: Mapping[str, Words],
     **options: Any,
 ) -> str:
-    """Stream ``inputs`` through ``module`` checking ``outputs``; the simulator's output."""
+    """Stream ``inputs`` through ``module`` checking ``outputs``; the simulator's output.
+    Raises ``WordsDiffer`` with the words each output presented when some differ."""
     bench = stream_bench(module, directory, inputs=inputs, outputs=outputs, **options)
-    return simulate(bench.sources, bench.text, directory)
+    for port in outputs:
+        (directory / f"{port}.{RECEIVED}").unlink(missing_ok=True)
+    try:
+        return simulate(bench.sources, bench.text, directory)
+    except SimulationFailed as failed:
+        if WORDS_DIFFER not in str(failed):
+            raise
+        received = {port: _read_memory(directory / f"{port}.{RECEIVED}") for port in outputs}
+        raise WordsDiffer(str(failed), received) from None
+
+
+def _read_memory(path: Path) -> list[int]:
+    """The words of a ``$writememh`` file, its comments and addresses skipped."""
+    words = []
+    for line in path.read_text().splitlines():
+        line = line.split("//", 1)[0].strip()
+        words += [int(token, 16) for token in line.split() if not token.startswith("@")]
+    return words
 
 
 # -- measurement ------------------------------------------------------------------------

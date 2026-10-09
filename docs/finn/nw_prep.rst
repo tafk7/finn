@@ -1,102 +1,155 @@
 .. _nw_prep:
 
-*******************
-Network Preparation
-*******************
+*****************
+Graph Preparation
+*****************
 
-.. image:: img/nw-prep.png
-   :scale: 70%
-   :align: center
+Graph preparation takes the network as :ref:`brevitas_export` leaves it to the
+streamlined graph the kernel path converts to KernelOps. It is the first phase of a
+kernel-path build, ``phase_graph_preparation``
+(:py:mod:`finn.builder.kernel_build_steps`), and its configuration is the build's
+``preparation`` (:py:class:`finn.transformation.prepare.GraphPreparation`). It reads
+no target: what preparation makes of a network does not depend on the board, part or
+clock it is built for.
 
-The main principle of FINN are analysis and transformation passes. For more information about these, see :ref:`analysis_pass` and :ref:`transformation_pass` in the :ref:`concepts` documentation, or the tutorial notebooks in :ref:`tutorials`.
+The phase is a sequence of sub-phases, each a builder step that a build's ``steps``,
+``start_step`` and ``stop_step`` can name. The transforms that do the work stay where
+they are (:py:mod:`finn.transformation.qonnx`, :py:mod:`finn.transformation.streamline`
+and QONNX's); :py:mod:`finn.transformation.prepare.phase` states the order and the
+options. The sub-phases run in this order:
 
-This page describes the network preparation flow step that comes after :ref:`brevitas_export`. The main idea is to optimize the network and convert nodes to hardware layers that correspond to `finn-hlslib <https://github.com/Xilinx/finn-hlslib>`_ or `finn-rtllib <https://github.com/Xilinx/finn-rtllib>`_ implementations. This prepares the network for hardware generation with Vitis HLS and RTL code generation. Network preparation applies several transformations to the ONNX model, which is wrapped in a :ref:`modelwrapper`.
+``step_prepare_import`` (P0, import)
+    QONNX's cleanup: shapes inferred, constants folded with the Quant nodes kept,
+    parameters made unique, nodes and tensors named. ``override_inpsize`` sets the
+    batch size (an integer) or the input's shape (a list).
 
-Various transformations are involved in the network preparation. The following is a short overview of these.
+``step_prepare_quantization`` (P2, quantization lowering)
+    :py:mod:`finn.transformation.qonnx.convert_qonnx_to_finn`: quantized weights folded
+    to integers, Quant activations of up to ``max_multithreshold_bit_width`` bits
+    (8 by default) to MultiThreshold nodes; then the tidy-up, which ends in
+    QONNX's datatype inference.
 
-Tidy-up transformations
-=======================
+``step_prepare_io`` (P1, the network's inputs and outputs)
+    The ``preprocessing`` model merged ahead of the network (an ONNX file, for
+    instance :py:class:`finn.util.pytorch.ToTensor` exported by Brevitas, which scales
+    8-bit pixels to [0, 1]); the graph input's ``input_datatype`` stated (``UINT8`` for
+    pixels), the domain the network is prepared for; the ``topk`` largest outputs'
+    indices selected by a TopK node appended to the graph. It follows P2: the
+    preprocessing model is lowered on its own and merged into the lowered network.
 
-These transformations do not appear in the diagram above, but are applied in many steps in the FINN flow to postprocess the model after a transformation and/or prepare it for the next transformation. They ensure that all information is set and behave like a "tidy-up". These transformations are located in the `QONNX repository <https://github.com/fastmachinelearning/qonnx>`_ and can be imported:
+``step_prepare_streamlining`` (P3, streamlining)
+    The ``streamlining`` recipe, a list of transforms by name
+    (:py:data:`finn.transformation.prepare.RECIPE_TRANSFORMS`) run in order. The
+    default absorbs scalar scales and biases into the thresholds that follow them
+    (``Streamline``, see `this paper <https://arxiv.org/pdf/1709.04060.pdf>`_), lowers
+    convolutions to ``Im2Col`` and ``MatMul``, rewrites bipolar MatMuls as
+    ``XnorPopcountMatMul``, and folds the last scale and bias into the label select.
 
-* :py:mod:`qonnx.transformation.general.GiveReadableTensorNames` and :py:mod:`qonnx.transformation.general.GiveUniqueNodeNames`
+``step_prepare_topology`` (P4, topology)
+    The ``topology`` recipe: by default MaxPool made NHWC, transposes absorbed into
+    MultiThresholds and consecutive transposes collapsed. Then the graph is tidied,
+    every tensor's layout inferred, and unused tensors removed.
 
-* :py:mod:`qonnx.transformation.infer_datatypes.InferDataTypes` and :py:mod:`qonnx.transformation.infer_shapes.InferShapes`
+``step_prepare_containers`` (P6, containers)
+    Every integer tensor held exactly by its container: an export holds its tensors in
+    float32, exact for integers up to 2**24. Where a tensor's producer reaches past that
+    (a wide layer's partial sums), the integer region ONNX's type constraints tie it to
+    is widened to float64, exact up to 2**53, with a Cast where an integer enters float
+    arithmetic or a quantizer's output enters the region; float arithmetic, the graph's
+    inputs and its outputs keep their containers. Past 2**53 the checkpoint refuses the
+    graph, naming the tensor.
 
-* :py:mod:`qonnx.transformation.fold_constants.FoldConstants`
+``step_prepare_checkpoint`` (P7, checkpoint)
+    The prepared graph checked before anything converts it
+    (:py:mod:`finn.transformation.prepare.checkpoint`), described below.
 
-Streamlining Transformations
-============================
+A build from a model that is already prepared names its steps from
+``phase_kernel_path`` on, or starts there (``start_step``).
 
-The idea behind streamlining is to eliminate floating point operations in a model by moving them around, collapsing them into one operation and transforming them into multithresholding nodes. Several transformations are involved in this step. For details have a look at the module :py:mod:`finn.transformation.streamline` and for more information on the theoretical background of this, see `this paper <https://arxiv.org/pdf/1709.04060.pdf>`_.
+For TFC, whose images are 8-bit and whose output is the top label:
 
-After this transformation the ONNX model is streamlined and contains now custom nodes in addition to the standard nodes. At this point we can use the :ref:`verification` to simulate the model using Python and in the next step some of the nodes can be converted into HLS layers that correspond to finn_hlslib functions.
+.. code-block:: python
 
-Convert to HW Layers
-=====================
+    from finn.builder.build_dataflow import build_dataflow_cfg
+    from finn.builder.kernel_build_config import KernelBuildConfig, KernelVerificationStepType
+    from finn.platform import TargetRequest
+    from finn.transformation.prepare import GraphPreparation
 
-In this step standard or custom layers are converted to HW layers. HW abstraction layers are abstract (placeholder) layers that can be either implemented in HLS or as an RTL module using FINN. These layers are abstraction layers that do not directly correspond to an HLS or Verilog implementation but they will be converted in either one later in the flow.
+    cfg = KernelBuildConfig(
+        output_dir="output",
+        target=TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
+        preparation=GraphPreparation(
+            preprocessing="preproc.onnx", input_datatype="UINT8", topk=1
+        ),
+        verify_steps=[KernelVerificationStepType.GRAPH_PREPARATION_PYTHON],
+    )
+    build_dataflow_cfg("tfc_w2a2.onnx", cfg)
 
-The result is a model consisting of a mixture of HW and non-HW layers. For more details, see :py:mod:`finn.transformation.fpgadataflow.convert_to_hw_layers`.
+In ``kernel_build_config.json`` the same preparation reads
+``"preparation": {"preprocessing": "preproc.onnx", "input_datatype": "UINT8", "topk": 1}``;
+a key the phase does not have, or a transform no recipe may name, is refused when the
+configuration is read.
 
-Dataflow Partitioning
-=====================
+The checkpoint
+==============
 
-In the next step the graph is split and the part consisting of HW layers is further processed in the FINN flow. The parent graph containing the non-HW layers remains.
+What the kernel path relies on, checked on every build without executing the graph;
+a violation stops the build, each named:
 
-Specialize Layers
-=====================
+* **Structure.** Every tensor has a known shape (``shape-unknown``), and every tensor a
+  node at a KernelOp's anchor reads or writes carries a datatype annotation
+  (``annotation-absent``): an absent annotation is never read as FLOAT32. An
+  initializer is exempt; its values are its statement.
+* **Soundness, by bound.** Each node's integer output annotation holds the range its
+  op computes from its inputs' annotations and its initializers' values
+  (``annotation-unsound``). An op without a rule
+  (:py:data:`finn.transformation.prepare.BOUND_RULES`) is counted as unbounded in the
+  report, never assumed sound.
+* **Exactness.** Each integer tensor's container holds every value its producer
+  computes on the way, a MatMul's partial sums included, exactly
+  (``container-inexact``): float32 up to 2**24, float64 (a region P6 widened) up to
+  2**53.
 
-After converting to HW abstraction layers and excluding non-HW layers, the next step is backend selection. HW abstraction layers are base classes (e.g., ``LayerNorm``, ``MatrixVectorActivation``) that can be implemented in either HLS or RTL.
+What the phase could not settle is reported, not refused: nodes with a float output
+(``float-remains``), Transposes (``transpose-remains``), and nodes no KernelOp anchors
+on between nodes that one does (``host-between-predicted``).
 
-The ``SpecializeLayers`` transformation converts each base layer to a backend-specific variant (e.g., ``LayerNorm_hls`` or ``LayerNorm_rtl``). This transformation is implemented in :py:mod:`finn.transformation.fpgadataflow.specialize_layers.SpecializeLayers`.
+With ``GRAPH_PREPARATION_PYTHON`` in ``verify_steps``, the prepared graph is also
+executed against the export with P0 and P1 alone applied, on seeded draws from the
+input's annotation (its extremes, random values, and corners): every output must be
+equal, element for element, and every integer annotation must hold the values computed
+there (:py:mod:`finn.harness.preparation`). The phase computes otherwise than the
+export only where it declares it
+(:py:data:`finn.transformation.prepare.DEVIATIONS`): ``topk-affine`` (the label
+select's values lose the scale folded into it; its indices are the export's),
+``sign-at-zero`` (a Sign turned threshold gives +1 at exactly 0) and
+``threshold-float32`` (the export computes the scales and biases absorbed into
+thresholds in float32, the phase computes and stores the thresholds in float64). The
+predicates that tell where a deviation explains a difference belong to the test
+harness, so a build reports every difference (``equivalence-unexplained``); the
+kernel gate checks TFC against its export with them, and fails on a difference none
+explains.
 
-HLS vs RTL Selection
---------------------
+The check also runs the export with its float32 tensors held in float64: an integer
+the export computes otherwise in float32 is where the trained network itself rounds and
+the prepared graph, its containers exact, does not. Each such tensor is named
+(``export-rounds``, a limitation): it may explain a difference, and fails nothing.
 
-The backend selection follows this logic:
+In a build this check is a verification, as ``PARTITION_PYTHON`` is: its differences
+from the export are reported, not refused. The log prints ``Verification for
+graph_preparation_python : FAIL``, one line per finding code and the declared value
+deviations that might explain them, ``report/graph_preparation.json`` keeps them under
+its equivalence, and the build continues. A value drawn outside its tensor's integer
+annotation (``annotation-unsound``) is no difference from the export but the prepared
+graph's own annotation proved wrong, and the kernels' widths and accumulators trust
+it: it is reported and logged as the others are, and refuses the graph beside the
+checkpoint's blockers, named.
 
-1. **Check user preference**: If the ``preferred_impl_style`` node attribute is set to ``"hls"`` or ``"rtl"``, use that backend if available and constraints are satisfied
-2. **Apply constraints**: Some RTL implementations have restrictions (e.g., Versal-only, specific datatypes)
-3. **Use default**: If no preference is set and RTL is available and constraints are met, RTL is preferred; otherwise HLS is used
+The report
+==========
 
-**Common RTL constraints:**
-
-- **LayerNorm**: Versal only, FLOAT32 only
-- **ElementwiseBinary**: Versal only, FLOAT32 only
-- **MVAU**: 2-8 bit signed weights/activations, no embedded threshold
-- **VVAU**: Versal only, ≤8 bit signed weights
-- **StreamingDataWidthConverter**: Integer width ratio only
-
-Setting Backend Preference
----------------------------
-
-You can set the backend preference per layer using a ``specialize_layers_config.json`` file. The FINN build flow automatically creates a template file after the ``step_create_dataflow_partition`` step at ``<output_dir>/template_specialize_layers_config.json``.
-
-Edit this template to set your preferences:
-
-.. code-block:: json
-
-    {
-        "LayerNorm_0": {
-            "preferred_impl_style": "rtl"
-        },
-        "MatrixVectorActivation_1": {
-            "preferred_impl_style": "hls"
-        }
-    }
-
-Then pass this configuration file to the build flow using ``DataflowBuildConfig.specialize_layers_config_file``.
-
-If the preferred backend is not available or constraints are not met, FINN will fall back to the available backend and issue a warning.
-
-For implementation details on adding new HLS or RTL variants, see :doc:`/implementation/specialization-rules`.
-
-Folding
-=========
-
-The PE and SIMD are set to 1 by default, so the result is a network of only HLS/RTL layers with maximum folding. The HLS layers of the model can be verified using the *cppsim* simulation. It is a simulation using C++ and is described in more detail in chapter :ref:`verification`.
-
-To adjust the folding, the values for PE and SIMD can be increased to achieve also an increase in the performance. The result can be verified using the same simulation flow as for the network with maximum folding (*cppsim* using C++), for details please have a look at chapter :ref:`verification`.
-
-The result is a network of HLS/RTL layers with desired folding and it can be passed to :ref:`hw_build`.
+``report/graph_preparation.json`` records each sub-phase's nodes removed and added by
+op type and the annotations and containers it changed, the checkpoint's findings (each
+with its kind, code, owner, message and details, as ``report/kernel_ops.json`` records
+conversion's) and how many integer outputs it bounded, and the equivalence's draws,
+findings and ``export_rounds`` when asked. The build's log has one line per sub-phase and one per finding code.

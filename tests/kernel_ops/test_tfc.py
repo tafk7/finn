@@ -3,12 +3,13 @@
 
 """TFC_W2A2 through the kernel path: streamlined graph, KernelOps, the ordered inference, a
 partition of KernelOps between the host's flatten and label select, its root in XSim
-against ``execute_onnx`` of the source, and its packaging.
+against ``execute_onnx`` of the source, the parent graph run with the XSim executor
+against its default run, and its packaging.
 
 The choices are ranked by hand at 16 lanes (``kernel_ops.tfc``), for Ultra96 in
-the Zynq shell. Every test builds the network from the trained weights (half a
-minute): the one in XSim is marked ``xsim``, the packaging one ``vivado``; the
-fast gate runs the platform's.
+the Zynq shell. The slow tests read the run's one build (``tfc_streamlined``,
+``conftest.py``); the others build the network from the trained weights (half a
+minute): the one in XSim is marked ``xsim``, the packaging one ``vivado``.
 """
 
 from __future__ import annotations
@@ -21,21 +22,31 @@ from pathlib import Path
 import numpy as np
 import pytest
 from kernels.xsim import requires_xsim
+from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
+import finn.core.onnx_exec as onnx_exec
+from finn.core.executors.xsim.executor import XSim
+from finn.core.executors.xsim.pacing import FREE, STALLED
+from finn.core.executors.xsim.rtl import pack, stream_through
+from finn.core.onnx_exec import Provenance
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import member, shell_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_VLNV,
 )
-from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import commit, undecided
-from finn.transformation.kernels import PackagePartition
+from finn.kernels.explore import Ranked
+from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
 from finn.transformation.kernels.package import boundary_facts, configured_root
+from kernel_ops.models import DOMAIN
 from kernel_ops.packaging import reaches_vivado, read_back
-from kernel_ops.tfc import SHAPE, ULTRA96, partitioned
+from kernel_ops.tfc import LANES, SHAPE, ULTRA96, cut, partition, partitioned, streamlined
 
 LOGITS = "MatMul_3_out0"
+FRAMES = 2
+"""Images streamed through the partition in XSim, back to back."""
 # The partition's boundary, the ends' facts in the Zynq shell:
 # 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
 # with no width converter; ten INT8 logits (the last MatMul's columns, K7) in one beat of
@@ -85,8 +96,22 @@ FACTS = (
 )
 
 
+def test_tfc_w2a2s_kernel_ops_verify_open_and_explored(tmp_path: Path) -> None:
+    """Every KernelOp TFC converts to verifies with its choices open, as the cut
+    leaves its partition's body, and with them committed, as exploration leaves it."""
+    _, body, _ = cut(streamlined(tmp_path), tmp_path)
+    for stage in (body, body.transform(ExploreKernelChoices([Ranked(LANES)]))):
+        kernel_ops = [kernel_op(stage, node) for node in stage.graph.node if node.domain == DOMAIN]
+        assert len(kernel_ops) == 8
+        assert {op.label: op.verify_node() for op in kernel_ops} == {
+            op.label: [] for op in kernel_ops
+        }
+
+
 @requires_xsim
 def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
+    """Two images back to back, with no reset between them, each against the source's
+    logits; free running and stalled."""
     source, parent, body = partitioned(tmp_path)
     assert [node.op_type for node in parent.graph.node] == [
         "Reshape",
@@ -94,12 +119,19 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
         "TopK",
     ]
     assert [node.op_type for node in body.graph.node] == ["Thresholding", "MatMul"] * 4
-    image = np.random.default_rng(3).integers(0, 256, size=SHAPE).astype(np.float32)
-    feed = {source.graph.input[0].name: image}
-    expected = execute_onnx(source, feed, return_full_exec_context=True)
-    produced = execute_onnx(parent, {parent.graph.input[0].name: image}, True)
-    for name in (LOGITS, source.graph.output[0].name):
-        assert np.array_equal(produced[name], expected[name])
+    rng = np.random.default_rng(3)
+    images = [rng.integers(0, 256, size=SHAPE).astype(np.float32) for _ in range(FRAMES)]
+    expected = []
+    for image in images:
+        feed = {source.graph.input[0].name: image}
+        found = execute_onnx(source, feed, return_full_exec_context=True)
+        produced = execute_onnx(parent, {parent.graph.input[0].name: image}, True)
+        for name in (LOGITS, source.graph.output[0].name):
+            assert np.array_equal(produced[name], found[name])
+        expected.append(found[LOGITS])
+    # A second frame that repeated the first's logits would not show the first one left
+    # nothing behind.
+    assert not np.array_equal(*expected)
     root = shell_root(body, body.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
@@ -109,26 +141,50 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     assert body.get_initializer(first.input[1]).shape == (1, 2)
     leaves = dict(root.point.module.fragment.instances)
     parameters = dict(leaves[first.name].parameters)
-    assert parameters["C"] == 1 and len(parameters["THRESHOLDS"]) < 32
+    assert parameters["C"] == 1
+    (table,) = [item for item in leaves[first.name].data if item.path.startswith("thresholds_")]
+    assert len(table.data.split()) == 2
     point, boundary = configured_root(body, "partition")
     assert boundary_facts(body, point, boundary, "partition") == FACTS
     # Python ints: the packed words are wider than numpy's integers.
-    pixels = [int(value) for value in image.reshape(-1)]  # the host's flatten
-    logits = [int(value) for value in expected[LOGITS].reshape(-1)]
+    pixels = [int(value) for image in images for value in image.reshape(-1)]  # the host's flatten
     bits = body.get_tensor_datatype(LOGITS).bitwidth()
+    words = [pack([int(value) for value in logits.reshape(-1)], bits) for logits in expected]
     lanes = 16
-    stream_through(
-        root.point.module,
-        tmp_path / "xsim",
-        inputs={
-            "s_axis_0": (
-                [pack(pixels[i : i + lanes], 8) for i in range(0, len(pixels), lanes)],
-                8 * lanes,
-            )
-        },
-        outputs={"m_axis_0": ([pack(logits, bits)], bits * len(logits))},
-        cycles=root.point.cycles,  # its layers' work, beyond its boundary's beats
+    for mode, pacing in {"free": FREE, "stalled": STALLED}.items():
+        stream_through(
+            root.point.module,
+            tmp_path / "xsim" / mode,
+            inputs={
+                "s_axis_0": (
+                    [pack(pixels[i : i + lanes], 8) for i in range(0, len(pixels), lanes)],
+                    8 * lanes,
+                )
+            },
+            outputs={"m_axis_0": (words, bits * expected[0].size)},
+            pacing=pacing,
+            cycles=FRAMES * root.point.cycles,  # its layers' work, beyond its boundary's beats
+        )
+
+
+@requires_xsim
+def test_tfc_w2a2_runs_in_xsim_as_in_python(tmp_path: Path) -> None:
+    """The parent graph run with the XSim executor alone, the run requiring hardware: the
+    host's flatten and label select in qonnx, the partition of eight KernelOps in XSim
+    (stalled), its logits and the label equal to the default (Python) run's."""
+    _, parent, _ = partitioned(tmp_path)
+    image = np.random.default_rng(4).integers(0, 256, size=SHAPE).astype(np.float32)
+    feed = {parent.graph.input[0].name: image}
+    simulator = XSim(directory=tmp_path / "xsim")
+    ran: Provenance = {}
+    found = onnx_exec.execute_onnx(
+        parent, feed, True, executors=(simulator,), require_hardware=True, provenance=ran
     )
+    expected = onnx_exec.execute_onnx(parent, feed, True)
+    sdp = parent.graph.node[1]
+    assert ran == {node.name: None for node in parent.graph.node} | {sdp.name: simulator}
+    for name in (LOGITS, parent.graph.output[0].name):
+        assert np.array_equal(found[name], expected[name]), name
 
 
 @pytest.mark.vivado
@@ -160,20 +216,22 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert [stream["beats"] for stream in described["streams"]] == [49, 1]
 
 
-# Builds and partitions the whole network, about 20 s.
+# Partitions the whole network, a few seconds.
 @pytest.mark.slow
-def test_tfc_w2a2s_emitted_top_elaborates_before_vivado(tmp_path: Path) -> None:
-    _, parent, body = partitioned(tmp_path)
+def test_tfc_w2a2s_emitted_top_elaborates_before_vivado(
+    tfc_streamlined: Path, tmp_path: Path
+) -> None:
+    parent, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     reaches_vivado(body, parent.graph.node[1].name, tmp_path / "vivado_stitch_proj")
 
 
-# Builds and partitions the whole network, about 20 s.
+# Partitions the whole network, a few seconds.
 @pytest.mark.slow
-def test_tfc_w2a2_binds_the_ultra96_platform(tmp_path: Path) -> None:
+def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Path) -> None:
     """Every KernelOp and channel of the partition reads Ultra96's capabilities from the
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
     shell drives no 2x clock)."""
-    _, _, body = partitioned(tmp_path)
+    _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     root = shell_root(body, body.graph.node)
     paths = {path.rpartition(".")[2]: path for path in root.members}
     weights = [

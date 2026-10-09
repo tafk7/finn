@@ -1,9 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The RTL harness (``finn.harness.rtl``): the stream testbench drives every pin from what
-the module declares, refusing a stream the module does not present and an input it
-declares no value for before anything is built; its stimulus and expectations are
+"""The XSim testbench (``finn.core.executors.xsim.rtl``): the stream testbench drives
+every pin from what the module declares, refusing a stream the module does not present
+and an input it declares no value for before anything is built; its stimulus and
+expectations are
 ``$readmemh`` files; its watchdog is derived from the run's beats and names the stream
 that stopped; it runs the simulator through FINN's toolchain.
 
@@ -26,22 +27,24 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.dataflow.gemm import Form
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import pack as pack_beats
-from finn.dataflow.traversal import vector_major
-from finn.harness.pacing import FREE, STALLED, Pacing
-from finn.harness.rtl import (
+from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
+from finn.core.executors.xsim.rtl import (
     LATENCY_ALLOWANCE,
     RESET_CYCLES,
     WATCHDOG_MARGIN,
+    WORDS_DIFFER,
     SimulationFailed,
     Undriven,
     Words,
+    WordsDiffer,
     simulate,
     stream_bench,
     stream_through,
 )
+from finn.dataflow.gemm import Form
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import pack as pack_beats
+from finn.dataflow.traversal import vector_major
 from finn.harness.toolchain import SIMULATOR_TOOLS, vivado_simulator
 from finn.kernels.artifacts.abi import ClockAlignment
 from finn.kernels.artifacts.module import Held, RegisterMap, declared_registers
@@ -139,6 +142,16 @@ def test_stimulus_and_expectations_are_files_beside_the_stream_bench(tmp_path: P
     assert (tmp_path / "m_axis_0.output.mem").read_text().split() == ["0004", "0005"]
     assert '$readmemh("s_axis_0.input.mem", s_axis_0_words)' in bench.text
     assert "3e7" not in bench.text  # no word inlined: the text does not grow with them
+
+
+def test_the_stream_bench_keeps_each_outputs_words_for_a_decoding(tmp_path: Path) -> None:
+    """A word that differs is displayed and counted, not fatal at once: the run fails when
+    every output has presented its words, which it writes out first."""
+    bench = stream_bench(chain().module, tmp_path, inputs=CHAIN_IN, outputs=CHAIN_OUT)
+    assert "m_axis_0_got[m_axis_0_beats] <= m_axis_0_tdata[15:0];" in bench.text
+    assert '$writememh("m_axis_0.received.mem", m_axis_0_got);' in bench.text
+    assert f'$fatal(1, "{WORDS_DIFFER}: %0d output words", differing);' in bench.text
+    assert 'if (!differing) $display("m_axis_0 word %0d: %h != %h"' in bench.text
 
 
 @pytest.mark.parametrize("pacing", [FREE, STALLED])
@@ -291,6 +304,34 @@ def test_a_stopped_stream_fires_the_watchdog_naming_it_and_its_beat(tmp_path: Pa
 
 
 @requires_xsim
+def test_words_that_differ_are_raised_as_they_arrived(tmp_path: Path) -> None:
+    """Thresholds on one shared row, one expected word altered: the run fails naming that
+    word, and every word the hardware presented is returned, the altered one as computed."""
+    case = Case("shared", ((-3, 0, 2),))
+    point = placed(case)
+    form = vector_major((PIXELS, CHANNELS), case.pe)
+    bits = point.activate.result_dtype.bitwidth()
+    levels = (VALUES[..., None] >= np.array(case.initial[0])).sum(axis=-1)
+    words = pack_beats(form, levels.ravel().tolist(), bits)
+    wrong = [*words[:1], words[1] ^ 1, *words[2:]]
+    with pytest.raises(WordsDiffer) as differ:
+        stream_through(
+            point.module,
+            tmp_path,
+            inputs={
+                "s_axis_0": (
+                    list(pack_beats(form, VALUES.ravel().tolist(), ELEMENT.bitwidth())),
+                    ELEMENT.bitwidth() * case.pe,
+                )
+            },
+            outputs={"m_axis_0": (wrong, bits * case.pe)},
+            pacing=FREE,
+        )
+    assert differ.value.received == {"m_axis_0": tuple(words)}
+    assert "m_axis_0 word 1: " in str(differ.value)
+
+
+@requires_xsim
 @pytest.mark.parametrize("pacing", [FREE, STALLED], ids=["free", "stalled"])
 def test_writes_its_kernel_does_not_declare_reach_the_memories(
     tmp_path: Path, pacing: Pacing
@@ -317,5 +358,6 @@ def test_writes_its_kernel_does_not_declare_reach_the_memories(
         },
         pacing=pacing,
         registers=registers,
+        cycles=point.cycles,
     )
     assert ELEMENT.bitwidth() == 4

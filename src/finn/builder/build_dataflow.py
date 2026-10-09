@@ -231,11 +231,15 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
             # print exception info and traceback
             extype, value, tb = sys.exc_info()
             traceback.print_exc()
-            # start postmortem debug if configured
-            if cfg.enable_build_pdb_debug:
-                pdb.post_mortem(tb)
-            else:
+            # start postmortem debug if configured, and only where someone can answer it:
+            # with stdin not a terminal (pytest, a batch job) pdb's read would fail and
+            # report itself instead of the error above
+            if not cfg.enable_build_pdb_debug:
                 print("enable_build_pdb_debug not set in build config, exiting...")
+            elif sys.stdin is None or not sys.stdin.isatty():
+                print("enable_build_pdb_debug set, but stdin is not a terminal, exiting...")
+            else:
+                pdb.post_mortem(tb)
             print("Build failed")
             return -1
 

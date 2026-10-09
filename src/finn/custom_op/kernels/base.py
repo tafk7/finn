@@ -14,6 +14,38 @@ binds its node root through the bind cache, on its inputs for inference and
 whole for its choices, replays the choices its node holds, and answers the
 compiler's queries from the result.
 
+Each node is asked three questions, each with one owner (KT18):
+
+- **identity**, the op's pattern: the node it starts from (``anchor``: a domain and
+  an op type) and ``match``, which reads the graph around that node by its structure
+  only (the op types and connectivity, which inputs are facts, the semantic
+  attributes, what fixes the axes; never a datatype, a value, a container or the
+  platform) and answers with the nodes the op covers and its semantic attributes
+  (``Match``), or the Space's ``Rejected`` with the pattern's findings: a refusal by
+  its code, or a structural fact it needs that the graph does not state
+  (``fact-unstated``). ``match`` never changes the model; ``ToKernelOps`` applies a
+  match;
+- **domain**, the op's reference: ``exact``, on the node once its inputs are
+  normalized, refuses a node whose facts (its datatypes, values and containers) let
+  the ONNX it covers compute other values than the reference, each refusal by its
+  code;
+- **realizability**, the kernels': ``admission`` asks them on the node's inputs
+  (``refusals``: the kernel's admission and each Decision with no viable case, by
+  why each of its cases is refused), which ``verify_node`` also reports on the
+  node's point.
+
+A fact binding reads that the graph does not state raises ``FactUnstated``, which
+conversion reports; any other refusal of the facts is a contradiction
+(``KernelOpError``).
+
+An op's ``execute_node`` is the computational reference for what its pattern covers
+(PRINCIPLES 8), with ``normalize_inputs`` before it, defined for every input domain
+the ONNX it covers is, and equal to the ONNX semantics of the covered nodes on every
+node the op converts: a rewrite ``normalize_inputs`` makes keeps those values, and a
+node where they would differ is refused by ``exact``. The harness checks the
+reference against ONNX, every value equal (``finn.harness.reference``); no build
+re-checks it.
+
 Two kinds of attribute:
 
 - **semantic**: part of the operation, stated by the graph (Thresholding's
@@ -39,12 +71,13 @@ from __future__ import annotations
 
 from array import array
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, fields
+from dataclasses import asdict, dataclass, fields
 from math import prod
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, TypeVar
 
 import numpy as np
 import numpy.typing as npt
+from onnx import helper
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
@@ -53,7 +86,15 @@ from qonnx.core.metadata import JSON, Key, MetadataError, Namespace
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
 
-from finn.core.space import Available, Inapplicable, Rejected, Space, inspection
+from finn.core.space import (
+    Available,
+    Finding,
+    FindingKind,
+    Inapplicable,
+    Rejected,
+    Space,
+    inspection,
+)
 from finn.custom_op.kernels.cache import BIND_CACHE, Facts
 from finn.custom_op.kernels.roots import node_root, placed
 from finn.dataflow.datatypes import (
@@ -137,6 +178,44 @@ class KernelOpError(ValueError):
         self.keys = keys
 
 
+class FactUnstated(KernelOpError):
+    """A fact binding reads that the graph does not state (``tensor``'s shape or its
+    datatype annotation): not a contradiction, so conversion leaves the node on the
+    host with a ``fact-unstated`` finding instead of stopping the build."""
+
+    def __init__(self, message: str, tensor: str) -> None:
+        super().__init__(message)
+        self.tensor = tensor
+
+
+# -- patterns ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Match:
+    """What a KernelOp's pattern covers: the ONNX ``nodes``, its anchor first, and the
+    op's semantic ``attributes`` (``KernelOp.semantic``) as the covered nodes state
+    them."""
+
+    nodes: tuple[NodeProto, ...]
+    attributes: Mapping[str, object]
+
+
+def node_attributes(node: NodeProto) -> dict[str, Any]:
+    """A node's attributes, by name, as values."""
+    return {attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute}
+
+
+def unstated(owner: str, message: str, **details: object) -> Finding:
+    """A pattern's finding for a fact it needs that the graph does not state."""
+    return Finding(FindingKind.LIMITATION, "fact-unstated", owner, message, tuple(details.items()))
+
+
+def refused(owner: str, code: str, message: str, **details: object) -> Finding:
+    """A pattern's refusal, by its code."""
+    return Finding(FindingKind.REJECTION, code, owner, message, tuple(details.items()))
+
+
 # -- facts -------------------------------------------------------------------------------
 
 
@@ -145,19 +224,29 @@ def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
     as its container type, FLOAT32, which is not a statement)."""
     if not model.has_tensor_datatype(tensor):
         produced = model.find_producer(tensor) is not None
-        raise KernelOpError(
+        raise FactUnstated(
             f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32"
-            + ("; InferKernelTensors states each node's outputs in order)" if produced else ")")
+            + ("; InferKernelTensors states each node's outputs in order)" if produced else ")"),
+            tensor,
         )
     return canonical_qonnx_datatype(model.get_tensor_datatype(tensor))
 
 
-def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
-    """The shape of ``tensor``; one not known yet is refused."""
+def known_shape(model: ModelWrapper, tensor: str) -> tuple[int, ...] | None:
+    """The shape of ``tensor`` if the graph states it: None for none, or for one with an
+    extent it does not state (qonnx reads both as a list, the first as empty)."""
     found = model.get_tensor_shape(tensor)
     if not found or any(type(dim) is not int or dim < 1 for dim in found):
-        raise KernelOpError(f"{label}: {tensor} has no shape yet (run InferKernelTensors)")
+        return None
     return tuple(found)
+
+
+def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
+    """The shape of ``tensor``; one not known yet is refused."""
+    found = known_shape(model, tensor)
+    if found is None:
+        raise FactUnstated(f"{label}: {tensor} has no shape yet (run InferKernelTensors)", tensor)
+    return found
 
 
 def rows(dims: tuple[int, ...]) -> tuple[int, int]:
@@ -240,14 +329,15 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         raise KernelOpError(f"{label}: {tensor}: {error}") from error
     if summary is None:
         raise KernelOpError(f"{label}: {tensor} is not an initializer")
+    try:
+        low, high = ordinary_integer_bounds(dtype)
+    except DatatypeError:
+        # Not an ordinary integer (FLOAT32 holds 0.5): no contradiction, the kernel refuses it.
+        return str(summary.content_digest)
     if not summary.is_integral:
         raise KernelOpError(f"{label}: {tensor} holds values that are not integers")
     if summary.minimum is None or summary.maximum is None:  # integral with no range: empty
         raise KernelOpError(f"{label}: {tensor} is empty: it holds no values")
-    try:
-        low, high = ordinary_integer_bounds(dtype)
-    except DatatypeError:
-        return str(summary.content_digest)  # not an ordinary integer: the kernel refuses it
     observed = (int(summary.minimum), int(summary.maximum))
     if not low <= observed[0] <= observed[1] <= high:
         raise KernelOpError(
@@ -346,6 +436,9 @@ class KernelOp(CustomOp):
     - ``references``, the kernel's reference input each port's channel binds;
     - ``parameters``, the ports whose channel may carry a value the node owns (an
       initializer): the channel's ``contents``, which its source stores.
+
+    And its pattern (the module docstring): ``anchor``, the ``(domain, op_type)`` of the
+    ONNX node it starts from, and ``match``; and its domain step, ``exact``.
     """
 
     wants_model = True
@@ -359,6 +452,7 @@ class KernelOp(CustomOp):
     references: ClassVar[Mapping[str, str]]
     parameters: ClassVar[tuple[str, ...]] = ()
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
+    anchor: ClassVar[tuple[str, str]]
     _roots: ClassVar[dict[type[KernelOp], type[Kernel]]] = {}
     _schemas: ClassVar[dict[type[KernelOp], dict[str, tuple[str, tuple[str, ...]]]]] = {}
 
@@ -369,11 +463,35 @@ class KernelOp(CustomOp):
         version = cls.__dict__.get("op_version")
         if type(version) is not int or version < 1:
             raise TypeError(f"{cls.__qualname__} must state a positive int op_version")
+        anchor = getattr(cls, "anchor", None)
+        if not (
+            isinstance(anchor, tuple)
+            and len(anchor) == 2
+            and all(isinstance(part, str) for part in anchor)
+        ):
+            raise TypeError(f"{cls.__qualname__} must state its anchor, (domain, op_type)")
 
     @property
     def label(self) -> str:
         name: str = self.onnx_node.name or self.onnx_node.op_type
         return name
+
+    # -- pattern --------------------------------------------------------------------------
+
+    @classmethod
+    def match(cls, model: ModelWrapper, node: NodeProto) -> Match | Rejected:
+        """What this op covers from ``node``, a node at its ``anchor``, or the pattern's
+        findings; by the graph's structure only, never a datatype or a value, ``model``
+        unchanged (module docstring)."""
+        raise NotImplementedError
+
+    def exact(self) -> tuple[Finding, ...]:
+        """The domain step: the refusals of this node where, on its facts once its inputs
+        are normalized, the ONNX it covers executed in its containers could compute other
+        values than its reference, each by its code (``refused``). Empty where they
+        agree; by default, an op whose reference agrees on every node it converts. A
+        fact it reads that the graph does not state raises ``FactUnstated``."""
+        return ()
 
     # -- schema ---------------------------------------------------------------------------
 
@@ -585,15 +703,48 @@ class KernelOp(CustomOp):
         for name, (_, dtype) in self.infer_output_tensors(model).items():
             model.set_tensor_datatype(name, dtype)
 
+    def refusals(self, point: Kernel) -> tuple[Finding, ...]:
+        """What refuses ``point``, a binding of this node's root, whatever its open choices
+        are: the kernel's ``admission`` as far as it is decided (a constraint that refuses
+        on the facts alone, while another waits on a choice), and each open Decision of the
+        root with no viable case (``decision-no-viable-case``), the refusal of each of its
+        candidates as the finding's causes. Empty when nothing refuses it."""
+        found: list[Finding] = []
+        admitted = inspection.admission(getattr(point, self.member))
+        if isinstance(admitted, Rejected):
+            found.extend(admitted.findings)
+        for item in inspection.viable(point):
+            if not item.cases:
+                detail = "; ".join(f"{case}: {why}" for case, why in item.refused.items())
+                found.append(
+                    Finding(
+                        FindingKind.REJECTION,
+                        "decision-no-viable-case",
+                        item.key,
+                        f"no case is viable: {detail}",
+                        causes=candidate_refusals(point, item.key, tuple(item.refused)),
+                    )
+                )
+        return tuple(found)
+
+    def admission(self) -> tuple[Finding, ...]:
+        """The kernels' refusals of this node on its inputs (``refusals`` of its root bound
+        on them), before any output is known: what conversion asks of a candidate. A fact
+        the graph does not state raises ``FactUnstated``, a contradiction
+        ``KernelOpError``."""
+        return self.refusals(BIND_CACHE.inputs(self.facts()))
+
     def verify_node(self) -> list[str]:
-        """Replay's refusal, or the kernel's own (its ``admission``); none when accepted."""
+        """Replay's refusal, or each of ``refusals`` of the node's point, with its owner
+        and code. None when accepted."""
         try:
             point = self.point()
         except KernelOpError as error:
             return [str(error)]
-        kernel = getattr(point, self.member)
-        result = kernel.inspect(type(kernel).admission).result
-        return [f"{self.label}: {describe([result])}"] if isinstance(result, Rejected) else []
+        return [
+            f"{self.label}: {finding.owner}: {finding.code}: {finding.message}"
+            for finding in self.refusals(point)
+        ]
 
     def view(self, name: str) -> Any:
         """A fact-level view of the op's kernel in its node root bound on its inputs
@@ -605,6 +756,37 @@ class KernelOp(CustomOp):
         if not isinstance(answer, Available):
             raise KernelOpError(f"{self.label}: {describe([answer])}")
         return answer.value
+
+
+def candidate_refusals(point: Space, key: str, cases: tuple[str, ...]) -> tuple[Finding, ...]:
+    """Why each of ``cases`` of the Decision over nodes ``key`` is refused on ``point``:
+    its candidate's admission once the case is committed, each finding once. A Decision
+    over values (its cases are values, not candidates) gives none: its own finding says
+    why."""
+    decisions = {item.key: item for item in inspection.decisions(point)}
+    if not decisions[key].selector:
+        return ()
+    selectors = {name for name, item in decisions.items() if item.selector}
+    found: list[Finding] = []
+    for case in cases:
+        report = point.try_with_choices({decisions[key].reference: case})
+        if not report.accepted:
+            for outcome in report.outcomes:
+                if isinstance(outcome.result, Rejected):
+                    found.extend(outcome.result.findings)
+            continue
+        candidate: Any = report.instance
+        walked: list[str] = []
+        for part in key.split("."):
+            # A key names a case after its selector (compute.packed.pe): the selector's
+            # member is already that case's candidate.
+            if ".".join(walked) not in selectors:
+                candidate = getattr(candidate, part)
+            walked.append(part)
+        admitted = inspection.admission(candidate)
+        if isinstance(admitted, Rejected):
+            found.extend(admitted.findings)
+    return tuple(dict.fromkeys(found))
 
 
 def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
@@ -621,8 +803,10 @@ __all__ = [
     "PLATFORM_FIELDS",
     "PLATFORM_KEYS",
     "KernelOp",
+    "FactUnstated",
     "KernelOpError",
     "admitted",
+    "candidate_refusals",
     "committed",
     "datatype",
     "edge_tensor",

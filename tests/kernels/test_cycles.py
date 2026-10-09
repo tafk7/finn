@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The cycle arithmetic of a measurement (``finn.harness.rtl.Measured``), on recorded handshakes."""
+"""The cycle arithmetic of a measurement (``finn.core.executors.xsim.rtl.Measured``), on
+recorded handshakes."""
 
 from __future__ import annotations
 
 import pytest
 
-from finn.harness.rtl import Measured
+from finn.core.executors.xsim.rtl import Measured
 
 # Three frames of a design taking two beats in and presenting one beat out per frame:
 # frames enter at cycles 10, 14 and 18, back to back at one frame per four cycles after

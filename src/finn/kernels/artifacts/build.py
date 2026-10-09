@@ -6,10 +6,14 @@
 The one step that touches the filesystem, in two parts:
 
 - **Codegen.** Every leaf's copied sources are read from named roots
-  (``finnlib``), so a module never carries a checkout path. Each path is
-  staged once and providers come first (``sources.ordered``); two different
-  files claiming one path or one symbol are refused. Each data file is written
-  once.
+  (``finnlib``), so a module never carries a checkout path, and an HLS leaf's
+  request is taken as its product: the Verilog its synthesis exported, from the
+  directory ``built`` names for the request's top (``finn.util.hls``, through
+  ``finn.transformation.kernels.hls.built_hls``), staged below a directory named
+  by the top, its top file providing the module, and the memory images beside it
+  (``*.dat``) written as data files. Each path is staged once and providers come
+  first (``sources.ordered``); two different files claiming one path or one
+  symbol are refused. Each data file is written once.
 - **Netlist.** A ``Composed`` module adds one SystemVerilog module, named
   ``<stem>__<fingerprint>`` (``module.module_name``) and written here from its
   value: its ports from its pins; one net per instance input and per output
@@ -42,6 +46,7 @@ from finn.kernels.artifacts.abi import (
     Signal,
     abi_pins,
 )
+from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import (
     BuildError,
     Composed,
@@ -79,15 +84,68 @@ def _leaves(module: Module) -> tuple[Leaf, ...]:
     return tuple(leaf for _, leaf in module.fragment.instances)
 
 
-def emit_module(module: Module, directory: Path, *, roots: Mapping[str, Path]) -> EmittedModule:
+#: The files of an HLS product that are sources, and those that are its memories' images.
+HLS_SOURCE_SUFFIXES = (".v",)
+HLS_DATA_SUFFIXES = (".dat",)
+
+
+def _hls_product(
+    request: HlsSource, built: Mapping[str, Path]
+) -> tuple[list[tuple[SourceFile, bytes]], dict[str, bytes]]:
+    """An HLS request's exported Verilog, below a directory named by its top, and the
+    images its memories read, beside the module's sources."""
+    function = request.function
+    product = built.get(function)
+    if product is None:
+        raise BuildError(f"no HLS product is given for {function}: synthesize it first")
+    names = sorted(path.name for path in Path(product).iterdir() if path.is_file())
+    if f"{function}.v" not in names:
+        raise BuildError(f"the HLS product {product} has no top {function}.v")
+    unknown = [
+        name for name in names if not name.endswith((*HLS_SOURCE_SUFFIXES, *HLS_DATA_SUFFIXES))
+    ]
+    if unknown:
+        raise BuildError(
+            f"the HLS product {product} holds files emission does not stage: {unknown}"
+        )
+    files: list[tuple[SourceFile, bytes]] = []
+    data: dict[str, bytes] = {}
+    for name in names:
+        content = _read(Path(product) / name, "HLS product file")
+        if name.endswith(HLS_DATA_SUFFIXES):
+            data[name] = content
+            continue
+        provides = (f"module:{function}",) if name == f"{function}.v" else ()
+        files.append((SourceFile(f"{function}/{name}", content_digest(content), provides), content))
+    return files, data
+
+
+def emit_module(
+    module: Module,
+    directory: Path,
+    *,
+    roots: Mapping[str, Path],
+    built: Mapping[str, Path] | None = None,
+) -> EmittedModule:
     """Write the module's sources and data files into ``directory``; ``roots`` resolves
-    each copied source's root."""
+    each copied source's root, ``built`` each HLS request's product by its top's name."""
 
     drafts: list[tuple[SourceFile, bytes]] = []
     data: dict[str, bytes] = {}
     read: dict[tuple[str, str], bytes] = {}
+
+    def add_data(path: str, content: bytes) -> None:
+        if data.setdefault(path, content) != content:
+            raise BuildError(f"two different data files are named {path}")
+
     for leaf in _leaves(module):
         for item in leaf.sources:
+            if isinstance(item, HlsSource):
+                files, images = _hls_product(item, built or {})
+                drafts += files
+                for path, content in images.items():
+                    add_data(path, content)
+                continue
             key = (item.root, item.path)
             if key not in read:
                 root = roots.get(item.root)
@@ -98,8 +156,7 @@ def emit_module(module: Module, directory: Path, *, roots: Mapping[str, Path]) -
             file = SourceFile(item.path, content_digest(content), item.provides, item.requires)
             drafts.append((file, content))
         for datum in leaf.data:
-            if data.setdefault(datum.path, datum.data) != datum.data:
-                raise BuildError(f"two different data files are named {datum.path}")
+            add_data(datum.path, datum.data)
     name = module_name(module)
     if isinstance(module, Composed):
         text = netlist(module, name).encode()
@@ -328,4 +385,12 @@ def netlist(module: Composed, name: str) -> str:
     return _Netlist(module).text(name)
 
 
-__all__ = ["EmittedModule", "emit_module", "instance_name", "instance_net", "netlist"]
+__all__ = [
+    "EmittedModule",
+    "HLS_DATA_SUFFIXES",
+    "HLS_SOURCE_SUFFIXES",
+    "emit_module",
+    "instance_name",
+    "instance_net",
+    "netlist",
+]

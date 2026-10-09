@@ -504,3 +504,15 @@ def machine_toolchain() -> Toolchain:
     """``machine_selection()`` prepared over this process's environment: the
     toolchain of a transformation called without one."""
     return machine_selection().prepare()
+
+
+def xelab_threads(environment: Mapping[str, str]) -> str:
+    """The value of ``xelab --mt`` in ``environment``: ``FINN_XELAB_MT``, else
+    ``NUM_DEFAULT_WORKERS``, else 8; one thread is ``off``.
+
+    Xelab's own default, ``auto``, can expand to hundreds of workers on a shared
+    server, and large stitched FINNLoop designs have shown intermittent elaborator
+    SIGABRTs in that mode, so the default stays bounded.
+    """
+    threads = environment.get("FINN_XELAB_MT", environment.get("NUM_DEFAULT_WORKERS", "8"))
+    return "off" if threads == "1" else threads

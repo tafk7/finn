@@ -38,10 +38,10 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
+from finn.core.executors.xsim.rtl import pack, stream_through
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import shell_root
 from finn.dataflow.tensor import ScalarEncoding
-from finn.harness.rtl import pack, stream_through
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Ranked
 from finn.kernels.matmul import column_range
@@ -256,6 +256,7 @@ def _computes(case: Case, directory: Path, **options: Any) -> None:
         directory,
         inputs={port_in: words[port_in]},
         outputs={port_out: words[port_out]},
+        cycles=root.point.cycles,
     )
 
 

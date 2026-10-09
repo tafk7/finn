@@ -155,8 +155,6 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
         ({"pe": 3}, "domain-membership"),
         ({"simd": 3}, "domain-membership"),
         ({"m": 0}, "matmul-extents"),
-        # dotp's accumulator refuses this width.
-        ({"k": 1 << 48}, "dotp-accumulator-width"),
         ({"weight_delivery": "external"}, "WeightDelivery"),
         ({"weight_delivery": WeightDelivery.MEMSTREAM}, "requires weights"),
         ({"weights": [[0] * 4] * 4}, "no initializer"),

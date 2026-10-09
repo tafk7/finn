@@ -22,9 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
+from finn.core.executors.xsim.pacing import FREE, STALLED
+from finn.core.executors.xsim.rtl import materialize
 from finn.dataflow.traversal import Traversal, vector_major
-from finn.harness.pacing import FREE, STALLED
-from finn.harness.rtl import materialize
 from finn.harness.toolchain import print_identity
 from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
 from kernels.sweeps.rtl_transport import drive

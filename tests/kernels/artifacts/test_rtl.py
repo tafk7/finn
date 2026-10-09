@@ -373,6 +373,34 @@ def test_a_value_that_is_not_an_integer_or_string_is_never_supplied(tmp_path: Pa
     assert {port.name: port.width for port in module.ports} == {"a": 8, "y": 8}
 
 
+def test_an_untyped_string_parameter_is_its_string(tmp_path: Path) -> None:
+    """``RAM_STYLE = "auto"`` and ``THRESHOLDS_FILE = ""``, by default and bound: the strings,
+    not the literals' bits (1635087471 and 0). A range states bits: ``P`` stays an integer."""
+
+    source = tmp_path / "styled.sv"
+    source.write_text(
+        "module styled #(\n"
+        '  parameter RAM_STYLE = "auto",\n'
+        '  parameter THRESHOLDS_FILE = "",\n'
+        "  parameter W = 8'd5,\n"
+        '  parameter [15:0] P = "ab"\n'
+        ") (input logic [W-1:0] a);\n"
+        "endmodule\n"
+    )
+    module = _module(extract((source,), "styled"))
+    assert module.parameters == (
+        ("RAM_STYLE", "auto"),
+        ("THRESHOLDS_FILE", ""),
+        ("W", 5),
+        ("P", 0x6162),
+    )
+    bound = _module(
+        extract((source,), "styled", (("RAM_STYLE", '"block"'), ("THRESHOLDS_FILE", '"t.dat"')))
+    )
+    assert dict(bound.parameters)["RAM_STYLE"] == "block"
+    assert dict(bound.parameters)["THRESHOLDS_FILE"] == "t.dat"
+
+
 def _thresholding_abi(data: str, width: int) -> tuple[Pin, ...]:
     """``thresholding_axi``'s pins at C = PE = 2, WI = WT = 4, N = 3; the input bus as given.
 
@@ -525,6 +553,7 @@ def test_inner_shuffle_elaborates_without_an_error() -> None:
     module = _module(extract(files, "inner_shuffle", INNER_SHUFFLE_PARAMETERS))
     assert {port.name: port.width for port in module.ports}["idat"] == 12
     assert [name for name, _ in module.parameters] == ["BITS", "I", "J", "SIMD", "RAM_STYLE"]
+    assert dict(module.parameters)["RAM_STYLE"] == "auto"  # untyped, its default a string
 
 
 GENERATE_LOCAL = """

@@ -40,7 +40,10 @@ if [ -d "$target" ]; then
   sed -n 's/^[0-9:]* SWEEP //p' "$events" | head -1
   started=$(grep -c ' START ' "$events" || true)
   done_=$(grep -c ' DONE ' "$events" || true)
-  echo "jobs      $done_/$started done"
+  # Under the sweep's --jobs cap, a listed job that has not started (nor been skipped) waits.
+  listed=$(grep -c . "$target/jobs.tsv" 2> /dev/null || true)
+  skipped=$(grep -c ' SKIP ' "$events" || true)
+  echo "jobs      $done_/$started done, $((${listed:-0} - started - skipped)) waiting, $skipped skipped"
   if grep -q ' END overall' "$events"; then
     echo "finished  $(sed -n 's/^\([0-9:]*\) END overall \(.*\)/\2 at \1/p' "$events")"
   else

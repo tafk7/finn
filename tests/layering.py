@@ -5,13 +5,32 @@
 
 ```text
 finn.core.space  <-  finn.kernels  <-  finn.platform  <-  finn.custom_op.kernels
-finn.dataflow    <-                <-  finn.transformation.kernels  <-  finn.shells
-                                   <-  finn.harness
-                                   <-  the flow (all other finn)
-finn.custom_op.partition  <-  finn.transformation.kernels, finn.shells, the flow
-finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, finn.harness,
+finn.dataflow    <-                                   <-  finn.transformation.kernels
+                                                          <-  finn.shells
+                                                      <-  the XSim testbench
+                                                      <-  the executors
+                                                      <-  the partition node
+                                                      <-  finn.harness
+                                                      <-  the flow (all other finn)
+finn.custom_op.partition.kernel_partitions  <-  finn.transformation.kernels, the
+                                                executors, the partition node,
+                                                finn.harness, finn.shells, the flow
+finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, the XSim
+                                               testbench, the executors, finn.harness,
                                                finn.shells, the flow
+finn.core.space, finn.util  <-  preparation (finn.transformation.qonnx, .streamline,
+                                .prepare)  <-  finn.harness, the flow
+finn.core.containers  <-  finn.custom_op.kernels, preparation, finn.harness, the flow
 ```
+
+Each row imports every row to its left: the XSim testbench
+(finn.core.executors.xsim, less its executor) builds and simulates a kernel
+module, the executors (finn.core.executors, the XSim executor among them, and
+finn.core.onnx_exec, which runs a model with them) run the KernelOps and a
+partition's hardware with it, the partition node (finn.custom_op.partition, less
+kernel_partitions) runs its body with the executors of the run that reached it,
+the harness (the hardware against the KernelOps' oracle, two runs of the
+executors) imports the testbench and the executors, and the flow imports all.
 
 ``LAYERS`` is the one statement of that order. A module belongs to the layer
 with the longest module prefix that names it, so the flow (prefix ``finn``)
@@ -87,6 +106,12 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernels",
         also=("finn.resources",),
     ),
+    # Containers: the ONNX element types execution holds a tensor's values in, and the
+    # integers each holds exactly. The KernelOps' domain step, graph preparation's
+    # container pass and checkpoint, and the harness's draws read the one table.
+    Layer(
+        "containers", ("finn.core.containers",), (), ("numpy", "onnx", "qonnx"), "tests/kernel_ops"
+    ),
     # The platform registry: parts, boards and shell rows, resolved to the capabilities
     # kernels read. The shell root reads its shell's row.
     Layer("platform", ("finn.platform",), ("kernels",), (), "tests/kernel_ops"),
@@ -94,16 +119,21 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "custom_op.kernels",
         ("finn.custom_op.kernels",),
-        (*_KERNEL_STACK, "platform"),
+        (*_KERNEL_STACK, "platform", "containers"),
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel path's partition node (its ONNX domain) and what is read and built of
-    # a partition (kernel_partitions): below both their writers (the cut,
-    # PackagePartition) and their readers (the builder, the integration export, the
-    # shell's build). qonnx only, so the builder reads it without loading the kernel
-    # stack.
-    Layer("partition", ("finn.custom_op.partition",), (), ("qonnx",), "tests/kernel_ops"),
+    # What is read and built of a partition (kernel_partitions): below both its writers
+    # (the cut, PackagePartition) and its readers (the builder, the integration export,
+    # the shell's build, the executors). qonnx only, so the builder reads it without
+    # loading the kernel stack.
+    Layer(
+        "partition",
+        ("finn.custom_op.partition.kernel_partitions",),
+        (),
+        ("qonnx",),
+        "tests/kernel_ops",
+    ),
     # What the flow and the kernel tests build on: helpers, the resource store and
     # the XSI binding (finn.util and finn.xsi import each other). Below the flow:
     # no module here imports a flow module. One kernel module: the HWCustomOp flow's
@@ -116,6 +146,21 @@ LAYERS: tuple[Layer, ...] = (
         ANY,
         "tests/kernel_ops",
         also=("finn.kernels.utilization",),
+    ),
+    # Graph preparation: the front end that takes an export to the graph the kernel
+    # path converts (Quant lowering, streamlining) and the phase over it, with its
+    # checkpoint's findings. It reads no target: neither the platform registry nor
+    # the KernelOps, whose anchors the checkpoint is given.
+    Layer(
+        "preparation",
+        (
+            "finn.transformation.qonnx",
+            "finn.transformation.streamline",
+            "finn.transformation.prepare",
+        ),
+        ("space", "util", "containers"),
+        ("numpy", "onnx", "qonnx"),
+        "tests/kernel_ops",
     ),
     # The part catalog's generator: a tool above the registry, which runs Vivado
     # through util's toolchain. Nothing imports it but its tests.
@@ -135,14 +180,76 @@ LAYERS: tuple[Layer, ...] = (
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel harness: what checks a kernel's hardware (the RTL testbench writer and
-    # its simulation, through util's toolchain). It reads no test tree and no pytest;
+    # The XSim testbench: a module's sources built (an HLS leaf's product from
+    # transformation.kernels' HLS cache), the stream testbench written and simulated
+    # through util's toolchain, cycles measured; and how a simulation paces its streams.
+    # The XSim executor's package, less the executor: it reads no graph, so the kernel
+    # tests simulate with it.
+    Layer(
+        "xsim",
+        ("finn.core.executors.xsim",),
+        (*_KERNEL_STACK, "util", "transformation.kernels"),
+        (),
+        "tests/kernel_ops",
+    ),
+    # The executors and the execution that runs a model with them (finn.core.onnx_exec):
+    # what runs a model's nodes, chosen by the caller. They run the KernelOps (by their
+    # domain) and a partition's hardware (XSim: configured_root, the testbench).
+    # finn.core.rtlsim_exec is the legacy executor the model's exec_mode metadata
+    # selects, here until the legacy executors are deleted. Nothing below the flow
+    # imports them but the partition node, which executes its body with them.
+    Layer(
+        "executors",
+        (
+            "finn.core.executors",
+            "finn.core.executors.xsim.executor",
+            "finn.core.onnx_exec",
+            "finn.core.rtlsim_exec",
+        ),
+        (
+            *_KERNEL_STACK,
+            "platform",
+            "custom_op.kernels",
+            "partition",
+            "util",
+            "transformation.kernels",
+            "xsim",
+        ),
+        ("numpy", "onnx", "qonnx"),
+        "tests/kernel_ops",
+    ),
+    # The kernel path's partition node, its ONNX domain (finn.custom_op.partition, less
+    # kernel_partitions): it runs its body with the executors of the run that reached it
+    # (finn.core.onnx_exec.executing), imported when it runs, since the executors read
+    # kernel_partitions, under this package.
+    Layer(
+        "custom_op.partition",
+        ("finn.custom_op.partition",),
+        ("partition", "executors"),
+        ("qonnx",),
+        "tests/kernel_ops",
+    ),
+    # The kernel harness: what checks a kernel's hardware (the hardware against its
+    # KernelOps' oracle, execute_node, on a model of them: two runs of the executors), a
+    # KernelOp's reference against qonnx's execution of the ONNX it covers, and the
+    # prepared graph against the export. It reads no test tree and no pytest;
     # the tests that use it stay in tests/. Nothing below the flow imports it.
     Layer(
         "harness",
         ("finn.harness",),
-        (*_KERNEL_STACK, "util", "transformation.kernels"),
-        (),
+        (
+            *_KERNEL_STACK,
+            "platform",
+            "custom_op.kernels",
+            "partition",
+            "util",
+            "transformation.kernels",
+            "preparation",
+            "containers",
+            "xsim",
+            "executors",
+        ),
+        ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
@@ -179,7 +286,12 @@ LAYERS: tuple[Layer, ...] = (
             "util",
             "platform.generate",
             "transformation.kernels",
+            "preparation",
             "harness",
+            "xsim",
+            "executors",
+            "custom_op.partition",
+            "containers",
             "shells",
         ),
         ANY,
@@ -209,10 +321,11 @@ LAYERS: tuple[Layer, ...] = (
         ("pytest", "qonnx.core.datatype"),
         "tests/dataflow",
     ),
-    # The kernel tests need no graph either: the kernel stack, the harness, util for
-    # the XSI runtime and the resource store, the space tests' helpers and the oracle's
-    # captures. The one flow module is a live oracle: the stream contracts are compared
-    # with the shuffle decomposition that baseline FINN hard-codes.
+    # The kernel tests need no graph either: the kernel stack, the harness, the XSim
+    # testbench, util for the XSI runtime and the resource store, the space tests'
+    # helpers and the oracle's captures. The one flow module is a live oracle: the
+    # stream contracts are compared with the shuffle decomposition that baseline FINN
+    # hard-codes.
     Layer(
         "tests.kernels",
         ("kernels",),
@@ -220,6 +333,7 @@ LAYERS: tuple[Layer, ...] = (
             *_KERNEL_STACK,
             "util",
             "harness",
+            "xsim",
             "tests.layering",
             "tests.value_classes",
             "tests.core.space",

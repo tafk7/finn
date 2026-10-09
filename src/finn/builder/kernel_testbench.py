@@ -4,7 +4,7 @@
 """The packaged partition's XSim testbench: one frame streamed through the partition's
 module, its outputs checked against the partition's body executed in Python.
 
-``write_testbench`` writes it with ``finn.harness.rtl``'s stream-testbench writer
+``write_testbench`` writes it with ``finn.core.executors.xsim.rtl``'s stream-testbench writer
 (``stream_bench``: inputs and outputs stalled, every pin the module declares driven:
 ``ap_clk2x`` aligned to ``ap_clk``, each AXI-Lite bus's declared register writes made
 before any stream, held ports at their values; each output word compared on its
@@ -21,7 +21,7 @@ holds what it needs and nothing of the machine:
 re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
 its ``run.sh`` as its user would, in a toolchain's environment: the build's
 verification step ``stitched_ip_testbench``, which the user asks for, and which fails
-on a mismatch. ``run.sh`` repeats ``finn.harness.rtl.simulate``'s commands with the
+on a mismatch. ``run.sh`` repeats ``finn.core.executors.xsim.rtl.simulate``'s commands with the
 directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
@@ -45,10 +45,11 @@ from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
+from finn.core.containers import container, held, numpy_type
+from finn.core.executors.xsim.rtl import SimulationFailed, Words, pack, stream_bench
 from finn.core.onnx_exec import execute_onnx as execute_parent_graph
 from finn.custom_op.kernels.shell import member
 from finn.custom_op.partition.kernel_partitions import partition_body
-from finn.harness.rtl import SimulationFailed, Words, pack, stream_bench
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
@@ -62,7 +63,7 @@ TESTBENCH_DIR = "testbench"
 RUN_SCRIPT = "run.sh"
 
 #: How long ``run_testbench`` lets the script run: three tool runs of at most five
-#: minutes each, as ``finn.harness.rtl.simulate`` allows each.
+#: minutes each, as ``finn.core.executors.xsim.rtl.simulate`` allows each.
 RUN_TIMEOUT = 900
 
 
@@ -103,7 +104,8 @@ def _inputs(body: ModelWrapper) -> list[str]:
 
 def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]]:
     """One frame of the partition's inputs, each drawn uniformly from its datatype's
-    integers (seeded)."""
+    integers (seeded), held by the input's container (finn.core.containers: the
+    export's float32, or float64 where graph preparation widened the region)."""
     rng = np.random.default_rng(seed)
     frame: dict[str, NDArray[Any]] = {}
     for name in _inputs(body):
@@ -112,7 +114,11 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
             raise ValueError(f"{name}: a {datatype.name} input; the testbench streams integers")
         shape = body.get_tensor_shape(name)
         low, high = int(datatype.min()), int(datatype.max())
-        frame[name] = rng.integers(low, high + 1, size=shape).astype(np.float32)
+        element_type = container(body, name)
+        if element_type is None:
+            raise ValueError(f"{name}: the partition's input states no container")
+        drawn = rng.integers(low, high + 1, size=shape, dtype=np.int64)
+        frame[name] = held(drawn, element_type).astype(numpy_type(element_type))
     return frame
 
 
@@ -125,14 +131,14 @@ def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[st
     if shape is None:
         raise ValueError(f"{node.name}: the parent graph's input states no shape")
     frame = source_input.reshape(shape)
-    context = execute_parent_graph(  # type: ignore[no-untyped-call]
+    context = execute_parent_graph(
         parent, {parent.graph.input[0].name: frame}, return_full_exec_context=True
     )
     return {name: context[name] for name in _inputs(body)}
 
 
 def _run_script(top: str, sources: Sequence[str]) -> str:
-    """``run.sh``: the harness's simulator commands (``finn.harness.rtl.simulate``) with
+    """``run.sh``: the harness's simulator commands (``finn.core.executors.xsim.rtl.simulate``) with
     the testbench directory's own paths."""
     compiled = [source for source in sources if not is_header(source)]
     xvlog = [
@@ -212,7 +218,7 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
     ``toolchain``'s environment (the machine's by default), a command directory it
     selects first on ``PATH``. Returns what it printed, which ends in ``PASS``; a
-    mismatch, a tool's error or a timeout raises ``finn.harness.rtl.SimulationFailed``
+    mismatch, a tool's error or a timeout raises ``finn.core.executors.xsim.rtl.SimulationFailed``
     with what it printed. A launcher route, which runs a tool elsewhere, runs no local
     script: refused (``ValueError``)."""
     toolchain = toolchain or machine_toolchain()

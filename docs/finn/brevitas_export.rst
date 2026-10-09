@@ -8,14 +8,28 @@ Brevitas Export
    :scale: 70%
    :align: center
 
-FINN expects an ONNX model as input. This can be a model trained with `Brevitas <https://github.com/Xilinx/brevitas>`_. Brevitas is a PyTorch library for quantization-aware training and the FINN Docker image comes with several `example Brevitas networks <https://github.com/Xilinx/brevitas/tree/master/src/brevitas_examples/bnn_pynq>`_.
-Brevitas provides an export of a quantized network in QONNX representation, which is the format that can be ingested by FINN.
-In a QONNX graph, all quantization is represented using Quant, BinaryQuant or Trunc nodes.
-QONNX must be converted into FINN-ONNX by :py:mod:`finn.transformation.qonnx.convert_qonnx_to_finn`. FINN-ONNX is the intermediate representation (IR) FINN uses internally.
-In this IR, quantized weights are indicated through tensors with additional attributes to mark low-precision datatypes and quantized activations are expressed as MultiThreshold nodes.
+A kernel-path build starts from a network trained with `Brevitas <https://github.com/Xilinx/brevitas>`_,
+the PyTorch library for quantization-aware training, and exported as QONNX:
 
-To work with either type of ONNX model, it is loaded into a :ref:`modelwrapper` provided by FINN.
+.. code-block:: python
 
-At this stage we can already use the functional verification flow to simulate the model using Python. For more details please have look at :ref:`verification`.
+    import torch
+    from brevitas.export import export_qonnx
+    from finn.util.pytorch import ToTensor
 
-The model can now be further processed in FINN, the next flow step is :ref:`nw_prep`.
+    export_qonnx(network, torch.randn(1, 1, 28, 28), "network.onnx", opset_version=13)
+    export_qonnx(ToTensor(), torch.randn(1, 1, 28, 28), "preproc.onnx", opset_version=13)
+
+In a QONNX graph all quantization is stated by Quant, BipolarQuant or Trunc nodes on
+float32 tensors, and no tensor carries a datatype annotation yet. The second export
+is the network's preprocessing, which the build merges ahead of it; the FINN image
+comes with `example Brevitas networks
+<https://github.com/Xilinx/brevitas/tree/master/src/brevitas_examples/bnn_pynq>`_, which
+``finn.util.test.get_test_model_trained`` loads with their trained weights.
+
+The export is the build's input: :ref:`nw_prep` (``phase_graph_preparation``, the first
+phase of a kernel-path build) lowers its Quant nodes to integer weights and
+MultiThresholds, the FINN-ONNX dialect, merges its preprocessing, and streamlines it.
+Either form of the graph can be loaded into a :ref:`modelwrapper` and executed with
+:py:func:`qonnx.core.onnx_exec.execute_onnx`: the graph-preparation checkpoint compares
+the prepared graph with the export this way.

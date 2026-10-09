@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from finn.util.toolchain import machine_toolchain
+from finn.util.toolchain import machine_toolchain, xelab_threads
 from finn.xsi._artifacts import tool_identity, write_record
 from finn_xsi.srcutil import order_pkg_first
 
@@ -105,16 +105,7 @@ def compile_sim_obj(
         "-s",
         top_module_name,
     ]
-    # Xelab defaults to "auto" threading, which can expand to hundreds of
-    # workers on shared servers. Large stitched FINNLoop designs have shown
-    # intermittent elaborator SIGABRTs in that mode, so keep the default
-    # bounded while still allowing explicit override.
-    xelab_mt = toolchain.environment.get(
-        "FINN_XELAB_MT", toolchain.environment.get("NUM_DEFAULT_WORKERS", "8")
-    )
-    if xelab_mt == "1":
-        xelab_mt = "off"
-    cmd_xelab.extend(["--mt", xelab_mt])
+    cmd_xelab.extend(["--mt", xelab_threads(toolchain.environment)])
     if debug:
         cmd_xelab.append("-debug")
         cmd_xelab.append("all")

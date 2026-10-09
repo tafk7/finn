@@ -4,15 +4,16 @@
 #
 # Every XSim check of the kernel layer, run from this checkout in parallel:
 #   - each conformance XSim test in its own pytest process,
-#   - the rest of the kernel suite, the KernelOps' XSim tests and their Vivado tests
-#     (packaging; marker vivado), with Vivado selected,
+#   - the other XSim tests of the kernel suite, the KernelOps' XSim tests and their
+#     Vivado tests (packaging; marker vivado), with Vivado selected (the fast gate
+#     runs every unmarked test),
 #   - the numeric XSI sweeps (MatMul, dotp, adapters, thresholds), one simulation per process.
 #
 # For "XSim from a commit", run it in a worktree or clone at that commit: natively
 # with its own .venv (uv sync), or in a sandbox with the image's environment.
 # FinnLib is the `finnlib` resource, as in every run.
 #
-#   bash scripts/xsim-sweep.sh [--smoke | --changed-since BASELINE] [OUT [TMP]]
+#   bash scripts/xsim-sweep.sh [--smoke | --changed-since BASELINE] [--jobs N] [OUT [TMP]]
 #                                                       exit 0 only if every job passed
 #
 # --smoke runs one conformance XSim test and one MatMul case: a few minutes, and
@@ -28,6 +29,16 @@
 # skipped (unchanged since the baseline's commit) with their keys. Its exit is 0
 # only if every job it ran passed and the baseline itself passed (overall exit=0,
 # not smoke); such a sweep can be a baseline in turn.
+#
+# --jobs N runs at most N jobs at once; the rest wait and start, longest kinds
+# first, as jobs end. By default N is what this machine has free when the sweep
+# starts: its CPUs less the load average (one minute), over the threads each job
+# elaborates with (FINN_XELAB_MT, default 2), and its available memory over
+# 2 GiB per job, whichever is fewer, and at least 1.
+#
+# The environment is the code gates' (scripts/_gate-common.sh): PYTHONPATH is
+# this checkout's src and tests only, FINN_ROOT is unset (nothing reads it), a
+# caller's PYTEST_ADDOPTS is cleared, and every pytest run passes --strict-markers.
 #
 # OUT keeps the evidence:
 #   events.log    one line as each job starts and ends; read it for progress
@@ -50,9 +61,17 @@
 set -u
 SMOKE=0
 BASELINE=
+CAP=
 while [ $# -gt 0 ]; do
     case $1 in
         --smoke) SMOKE=1; shift ;;
+        --jobs)
+            CAP=${2:-}
+            if ! [[ $CAP =~ ^[1-9][0-9]*$ ]]; then
+                echo "--jobs needs a positive number of jobs" >&2
+                exit 2
+            fi
+            shift 2 ;;
         --changed-since)
             BASELINE=$(readlink -f "${2:-}")
             if [ ! -f "$BASELINE" ]; then
@@ -108,9 +127,22 @@ fi
 # The checkout's own environment natively; the image's active one in a container or sandbox.
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY=$(command -v python3)
-export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src:$ROOT/tests" FINN_ROOT="$ROOT"
+export PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT/src:$ROOT/tests"
 export FINN_XELAB_MT="${FINN_XELAB_MT:-2}"
-unset FORCE_COLOR
+# activate.sh exports FINN_ROOT for docker/config.py; nothing the jobs run reads it.
+unset FINN_ROOT FORCE_COLOR
+if [ -n "${PYTEST_ADDOPTS:-}" ]; then
+    echo "xsim-sweep.sh: ignoring PYTEST_ADDOPTS=$PYTEST_ADDOPTS" | tee -a "$OUT/activate.log" >&2
+fi
+unset PYTEST_ADDOPTS
+if [ -z "$CAP" ]; then
+    threads=$FINN_XELAB_MT
+    [[ $threads =~ ^[1-9][0-9]*$ ]] || threads=1
+    idle=$(awk -v cpus="$(nproc)" '{ printf "%d", cpus - $1 }' /proc/loadavg)
+    memory=$(awk '/^MemAvailable:/ { printf "%d", $2 / (2 * 1024 * 1024) }' /proc/meminfo)
+    CAP=$((idle / threads < memory ? idle / threads : memory))
+    [ "$CAP" -ge 1 ] || CAP=1
+fi
 
 FINNLIB=$("$PY" -c 'from finn import resources; print(resources.path("finnlib"))' 2> /dev/null)
 # A working clone by its commit; the cached pin, not a repository, by its verified digest.
@@ -139,7 +171,8 @@ job() {  # <log name> <command...>: run one job, its log ending in exit=N
 }
 pytest_run() {  # <log name> <pytest args...>
     local name=$1; shift
-    job "$name" "$PY" -m pytest -v -p no:cacheprovider --basetemp="$TMP/$name" "$@"
+    job "$name" "$PY" -m pytest -v --strict-markers -p no:cacheprovider \
+        --basetemp="$TMP/$name" "$@"
 }
 
 # Writes summary.log and summary.json (scripts/emitted_text.py summarize), ends
@@ -155,7 +188,7 @@ finish() {
     exit "$status"
 }
 
-event "SWEEP $IDENTITY smoke=$SMOKE${BASELINE:+ changed-since=$BASELINE}"
+event "SWEEP $IDENTITY smoke=$SMOKE jobs=$CAP${BASELINE:+ changed-since=$BASELINE}"
 # The jobs: one per conformance XSim test id (collected; a collection that fails
 # or finds nothing ends the sweep, as an empty list could still pass), the pytest
 # groups and the numeric sweeps.
@@ -183,6 +216,15 @@ else
     keys &  # beside the jobs: only the summary reads them
 fi
 
+# The jobs started and not yet reaped: their shells' pids (the keys' is not one).
+RUNNING=()
+reap() {  # drops the jobs that have ended from RUNNING
+    local pid alive=()
+    for pid in "${RUNNING[@]}"; do
+        kill -0 "$pid" 2> /dev/null && alive+=("$pid")
+    done
+    RUNNING=("${alive[@]}")
+}
 # The list on descriptor 3: a job reading its standard input must not consume it.
 while IFS=$'\t' read -r -u 3 -a fields; do
     name=${fields[0]} kind=${fields[1]} args=("${fields[@]:2}")
@@ -190,10 +232,16 @@ while IFS=$'\t' read -r -u 3 -a fields; do
         event "SKIP $name"
         continue
     fi
+    reap
+    while [ "${#RUNNING[@]}" -ge "$CAP" ]; do
+        wait -n
+        reap
+    done
     case $kind in
         sweep) job "$name" "$PY" -m "${args[@]}" --output "$OUT/sim-${name#sweep-}" & ;;
         *) pytest_run "$name" "${args[@]}" & ;;
     esac
+    RUNNING+=($!)
 done 3< "$OUT/jobs.tsv"
 wait
 finish 0

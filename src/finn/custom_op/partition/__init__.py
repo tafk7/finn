@@ -10,9 +10,13 @@ no placement, no estimates. What the flow reads of a partition and what a build 
 it are ``kernel_partitions``'s.
 
 qonnx resolves this domain by importing it and reads its op classes from ``__all__``, so
-this module exports op classes only. It imports qonnx only.
+this module exports op classes only. It imports qonnx only; the executors it runs its
+body with (``finn.core.onnx_exec``), when it runs.
 """
 
+from typing import Any
+
+from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.general.genericpartition import GenericPartition
 
 opset_version = 1
@@ -21,7 +25,32 @@ opset_version = 1
 class StreamingDataflowPartition(GenericPartition):
     """The parent graph's node of a partition of KernelOps: ``model``, the body's file,
     which the node executes on its inputs (qonnx's ``GenericPartition``, the inputs and
-    outputs renamed to the body's)."""
+    outputs renamed to the body's) under the executors of the run that reached it
+    (``finn.core.onnx_exec.executing``), so the caller's choice reaches the body's
+    nodes."""
+
+    def execute_node(self, context: dict[str, Any], graph: Any) -> None:
+        # Imported here: the executors read kernel_partitions, under this package.
+        from finn.core.onnx_exec import execute_onnx, executing  # noqa: PLC0415
+
+        node = self.onnx_node
+        path = self.get_nodeattr("model")
+        if not isinstance(path, str):
+            raise TypeError(f"{node.name}: its model attribute is {path!r}, not a path")
+        body = ModelWrapper(path)
+        full = self.get_nodeattr("return_full_exec_context") == 1
+        inputs = {
+            body_input.name: context[name]
+            for name, body_input in zip(node.input, body.graph.input, strict=True)
+        }
+        ran = execute_onnx(body, inputs, full, executors=executing())
+        for name, body_output in zip(node.output, body.graph.output, strict=True):
+            context[name] = ran[body_output.name]
+        if full:
+            outputs = {body_output.name for body_output in body.graph.output}
+            for name, value in ran.items():
+                if name not in outputs:
+                    context[f"{node.name}_{name}"] = value
 
 
 __all__ = ["StreamingDataflowPartition"]

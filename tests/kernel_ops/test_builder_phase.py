@@ -3,8 +3,9 @@
 
 """The builder's kernel-path phase (``phase_kernel_path``) on TFC_W2A2, up to its partition.
 
-``build_dataflow_cfg`` runs a KernelBuildConfig's default steps from the streamlined
-network for Ultra96 in the Zynq shell, stopping after the phase: no Vivado. Each step's
+``build_dataflow_cfg`` runs a KernelBuildConfig's default steps from the exported
+network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
+phase: no Vivado. Each step's
 output is recorded as it runs (``inject_steps_after``), and the partition is compared
 with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phase
 (``phase_kernel_outputs``) is not a test.
@@ -15,6 +16,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -30,6 +32,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
+from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
 from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
@@ -42,7 +45,6 @@ from finn.builder.kernel_build_config import (
 )
 from finn.builder.kernel_build_steps import (
     delivered_clock,
-    step_infer_kernel_tensors,
     step_kernel_bitfile,
     step_kernel_choices,
     step_kernel_deployment_package,
@@ -52,7 +54,7 @@ from finn.builder.kernel_build_steps import (
     step_kernel_resources,
     step_verify_kernel_partition,
 )
-from finn.custom_op.kernels.base import read_target, write_target
+from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_BITFILE,
@@ -86,9 +88,15 @@ from finn.transformation.kernels.integration import Address, Connection, integra
 from finn.transformation.kernels.package import boundary_facts, configured_root
 from finn.util.resources import resource_path, tcl_quote
 from finn.util.toolchain import Toolchain
-from kernel_ops.models import chain_source, configure_partition, kernel_model, matmul_model
+from kernel_ops.models import (
+    chain_source,
+    configure_partition,
+    host_between_source,
+    kernel_model,
+    matmul_model,
+)
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
-from kernel_ops.tfc import SHAPE, ULTRA96, built, partition
+from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, partition, preparation
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phase's steps on it takes about ten seconds more.
@@ -96,7 +104,6 @@ from kernel_ops.tfc import SHAPE, ULTRA96, built, partition
 #: The phase's steps, in the order they run.
 STEPS = (
     "step_kernel_ops",
-    "step_infer_kernel_tensors",
     "step_kernel_partition",
     "step_kernel_choices",
     "step_verify_kernel_partition",
@@ -109,7 +116,6 @@ def explore(source: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     model = source
     for step in (
         step_kernel_ops,
-        step_infer_kernel_tensors,
         step_kernel_partition,
         step_kernel_choices,
     ):
@@ -143,7 +149,7 @@ def config(directory: Path, **settings: Any) -> KernelBuildConfig:
 
 @pytest.mark.slow
 def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
-    source: ModelWrapper, tmp_path: Path
+    source: ModelWrapper, tfc_export: Path, tmp_path: Path
 ) -> None:
     seen: dict[str, ModelWrapper] = {}
 
@@ -155,8 +161,10 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
         record.__name__ = f"seen_{name}"
         return record
 
-    source_file = tmp_path / "streamlined.onnx"
-    source.save(str(source_file))
+    shutil.copytree(
+        tfc_export.parent, tmp_path / "export", ignore=shutil.ignore_patterns("output", "*.lock")
+    )
+    source_file = tmp_path / "export" / EXPORT
     images = np.random.default_rng(3).integers(0, 256, size=(3, *SHAPE[1:])).astype(np.float32)
     labels = [
         execute_onnx(source, {source.graph.input[0].name: image[None]})[source.graph.output[0].name]
@@ -166,21 +174,51 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
+        preparation=preparation(tmp_path / "export"),
         stop_step="phase_kernel_path",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
-        verify_steps=[KernelVerificationStepType.PARTITION_PYTHON],
+        verify_steps=[
+            KernelVerificationStepType.GRAPH_PREPARATION_PYTHON,
+            KernelVerificationStepType.PARTITION_PYTHON,
+        ],
         verify_input_npy=str(tmp_path / "input.npy"),
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
     assert list(seen) == list(STEPS)
+    # The export prepared first, to the streamlined graph the fixture's phase makes, and
+    # checked against the export.
+    prepared = ModelWrapper(
+        str(Path(cfg.output_dir) / "intermediate_models" / "step_prepare_checkpoint.onnx")
+    )
+    assert prepared.model.SerializeToString() == source.model.SerializeToString()
+    assert (
+        "Verification for graph_preparation_python : SUCCESS"
+        in (Path(cfg.output_dir) / "build_dataflow.log").read_text()
+    )
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
     converted = seen["step_kernel_ops"]
     assert read_target(converted) == ULTRA96
     kernel_ops = [node.op_type for node in converted.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     assert kernel_ops == ["Thresholding", "MatMul"] * 4
-    # Inference states every tensor's datatype; no choice is saved yet.
-    assert kernel_choices_config(seen["step_infer_kernel_tensors"]) == {}
+    # Every node's outcome, reported and summarised in the log: the input flatten and
+    # the label select stay on the host, at the partition's edges.
+    output = Path(cfg.output_dir)
+    outcomes = json.loads((output / "report" / "kernel_ops.json").read_text())
+    assert outcomes["converted"] == {"Thresholding": 4, "MatMul": 4}
+    assert outcomes["on_host"] == ["Reshape_0", "TopK_0"]
+    assert outcomes["between_kernel_ops"] == []
+    assert {
+        finding["code"]
+        for outcome in outcomes["outcomes"]
+        if outcome["op"] is None
+        for finding in outcome["findings"]
+    } == {"no-kernel-op"}
+    log = (output / "build_dataflow.log").read_text()
+    assert "ToKernelOps: 8 converted (MatMul 4, Thresholding 4); 2 on the host" in log
+    assert "ToKernelOps:   no-kernel-op (limitation) 2: Reshape 1, TopK 1" in log
+    # No choice is saved yet.
+    assert kernel_choices_config(converted) == {}
     # Cut once, before the exploration: the build's model is the parent graph, the input
     # flatten and the label select on the host around one partition, named partition,
     # whose body is its file; the exploration reads and saves the body.
@@ -213,7 +251,6 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
         ("Reshape_0_out0", "iodma_hls"),
         ("MatMul_3_out0", "iodma_hls"),
     ]
-    output = Path(cfg.output_dir)
     assert json.loads((output / "kernel_choices.json").read_text()) == {}
     # Every folding at its first viable case, one lane.
     report = json.loads((output / "report" / "kernel_exploration.json").read_text())
@@ -285,7 +322,9 @@ def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: P
     """The configuration's target, resolved, is the one step_kernel_ops states in the
     model: the shell it names, ``ip`` unless one is; on ``ip`` a board names its part
     and the target states none, so naming the board or its part is the same target."""
-    converted = step_kernel_ops(chain_source(), config(tmp_path))
+    # The Chain's shapes inferred, as a streamlined graph's are: else its
+    # MultiThreshold stays, between the MatMuls.
+    converted = step_kernel_ops(chain_source().transform(InferShapes()), config(tmp_path))
     assert read_target(converted) == ULTRA96
     on_ip = config(tmp_path, target=TargetRequest(board="Ultra96", period_ns=5.0))
     assert on_ip._resolve_target() == resolve_target(part=ULTRA96.part, period_ns=5.0)
@@ -408,6 +447,23 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     assert "kernel_partition_elaboration" in warning.message
     cfg = config(tmp_path, verify_steps=verify)
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
+    # The preparation's equivalence needs the export kept, and the checkpoint: a build
+    # from a prepared model, or from the checkpoint alone, never checks it.
+    preparation = [KernelVerificationStepType.GRAPH_PREPARATION_PYTHON]
+    for steps in (
+        {"steps": ["phase_kernel_path"]},
+        {"steps": ["step_prepare_checkpoint", "phase_kernel_path"]},
+    ):
+        (warning,) = [
+            check
+            for check in run_all_config_checks(
+                config(tmp_path, verify_steps=preparation, **steps)
+            ).checks
+            if check.name == "verify_step_prereq"
+        ]
+        assert "graph_preparation_python, which needs" in warning.message
+    cfg = config(tmp_path, verify_steps=preparation, stop_step="phase_graph_preparation")
+    assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
     python = config(tmp_path, verify_steps=[KernelVerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
@@ -416,7 +472,10 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
     ]
-    assert "neither phase_kernel_outputs nor step_kernel_stitched_ip" in warning.message
+    assert (
+        "stitched_ip_testbench, which needs phase_kernel_outputs or step_kernel_stitched_ip"
+        in warning.message
+    )
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
         "kernel_testbench_output": [
             "verify_steps includes stitched_ip_testbench, which runs the testbench "
@@ -445,6 +504,26 @@ def test_a_dataflow_build_of_kernel_ops_is_refused(tmp_path: Path) -> None:
     assert "kernel_ops_model" not in failed_checks(cfg, chain_source())
 
 
+def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A host node on a path from a KernelOp to a KernelOp is refused where the build
+    converts, named with its findings, after the report is written: not at
+    partitioning, which would find the partition depending on itself."""
+    with pytest.raises(KernelOpError) as refused:
+        step_kernel_ops(host_between_source(), config(tmp_path))
+    assert str(refused.value) == (
+        "1 host nodes sit between KernelOps, so a partition of the KernelOps would depend "
+        "on itself: flip (ToKernelOps: no-kernel-op: no KernelOp binds onnx.Transpose)"
+    )
+    report = json.loads((tmp_path / "output" / "report" / "kernel_ops.json").read_text())
+    assert report["between_kernel_ops"] == ["flip"]
+    assert capsys.readouterr().out.splitlines() == [
+        "ToKernelOps: 2 converted (MatMul 2); 1 on the host; report/kernel_ops.json",
+        "ToKernelOps:   no-kernel-op (limitation) 1: Transpose 1",
+    ]
+
+
 def test_a_kernel_path_step_is_not_a_dataflow_builds(tmp_path: Path) -> None:
     """Each configuration's steps are its flow's: the kernel path's names are refused
     in a DataflowBuildConfig's steps, and the HWCustomOp flow's in a KernelBuildConfig's."""
@@ -456,10 +535,12 @@ def test_a_kernel_path_step_is_not_a_dataflow_builds(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="Unknown step or phase: phase_kernel_path"):
         resolve_build_steps(dataflow)
-    kernel = config(tmp_path, steps=["phase_generate_outputs"])
-    with pytest.raises(ValueError, match="Unknown step or phase: phase_generate_outputs"):
-        resolve_build_steps(kernel)
+    # The front end's legacy steps too: graph preparation lifts their recipe.
+    for legacy in ("phase_generate_outputs", "step_qonnx_to_finn", "step_streamline"):
+        with pytest.raises(ValueError, match=f"Unknown step or phase: {legacy}"):
+            resolve_build_steps(config(tmp_path, steps=[legacy]))
     assert [step.__name__ for step in resolve_build_steps(config(tmp_path))] == [
+        "phase_graph_preparation",
         "phase_kernel_path",
         "phase_kernel_outputs",
     ]
@@ -783,10 +864,10 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
         Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
     )
     assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:partition:1.0")
-    # Z0's module and choices.
+    # Z0's module and choices, its thresholds a data file (THRESHOLDS_FILE).
     node, body, _ = partition_body(parent)
     point, _ = configured_root(body, node.name, completion("baseline"))
-    assert module_name(point.module) == "finn_partition__481b9e45abc00364"
+    assert module_name(point.module) == "finn_partition__900cc2e354c19644"
     persisted = json.loads((output / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     report = json.loads((output / "report" / "kernel_exploration.json").read_text())

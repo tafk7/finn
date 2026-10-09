@@ -19,7 +19,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels import MatMul, Thresholding
 from finn.custom_op.kernels import matmul as matmul_op
-from finn.custom_op.kernels.base import integer_tensor, write_target
+from finn.custom_op.kernels.base import KernelOpError, integer_tensor, write_target
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
 from finn.custom_op.kernels.shell import (
     SHELLS,
@@ -180,21 +180,20 @@ def test_the_roots_name_misses() -> None:
     assert type(again.point).__name__ == "another"
 
 
-def test_a_boundary_port_changed_alone_misses() -> None:
-    """``hidden`` also leaves the graph: it is a boundary of the root (and ``y`` the next
-    one); nothing else of the key changes."""
-    first, _ = root(kernel_model(), "chain")
-    before: ShellKey = last_key()
+def test_a_tensor_read_more_than_once_is_refused_before_any_class() -> None:
+    """``hidden`` also leaves the graph while ``activate`` reads it: a channel of two
+    consumers, refused before the key is looked up, so no class is built or reused. (A
+    boundary port changed alone is another key: ``test_every_component_of_the_key_is_
+    compared``; no graph changes it alone, since an edge that also leaves is this.)"""
+    root(kernel_model(), "chain")
     model = kernel_model()
     hidden = model.get_tensor_valueinfo("hidden")
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
-    again, _ = root(model, "chain")
-    after: ShellKey = last_key()
-    assert ("hidden", "m_axis_0") in again.boundary
-    assert dict(after.channels)["hidden"].port == "m_axis_0"
-    assert replace(after, channels=before.channels) == before
-    assert type(again.point) is not type(first.point)
+    hits, misses = SHELLS.hits, SHELLS.misses
+    with pytest.raises(KernelOpError, match="hidden: tensor-fan-out: read by activate"):
+        root(model, "chain")
+    assert (SHELLS.hits, SHELLS.misses) == (hits, misses)
 
 
 def test_every_component_of_the_key_is_compared() -> None:

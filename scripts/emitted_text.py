@@ -7,11 +7,15 @@ Nothing here runs Vivado. Each simulation the sweep would run is materialized
 by the job's own code with the simulator replaced by a capture:
 
 - a conformance job (one pytest id of tests/kernels/test_conformance.py) runs
-  under pytest with ``finn.harness.rtl.simulate`` capturing the simulation
+  under pytest with the testbench's ``simulate`` (``finn.core.executors.xsim.rtl``;
+  ``finn.harness.rtl`` in an older checkout) capturing the simulation
   directory: the staged module sources (FinnLib's included, copied by
   content), each memory's INIT_FILE, the testbench ``check.sv`` and the
   ``$readmemh`` files beside it that carry the stimulus, the expected words and
-  each control bus's writes;
+  each control bus's writes. An HLS leaf's product is not made: the harness's
+  ``built_hls`` is replaced too, and each HLS build request is captured instead,
+  staged (its top, its FinnLib headers by content, its script) under
+  ``designs/hls/<top>/`` with the part it is built for, its product a placeholder;
 - a numeric sweep (``python -m kernels.sweeps.<module> ARGS``) runs its
   ``main`` with ``rtl_transport._run_worker`` capturing the request it would
   hand the simulation process: its sources by content (with every file of a
@@ -38,16 +42,36 @@ with ``#``, in file names and contents, so that two commits' outputs compare
 by ``diff -r`` on what changed beside the hash.
 
 A job's key is a digest of everything its simulation consumes: the captured
-designs, the files of the harness (``finn.harness``) and of the test tree the job
+designs, the files of the harness (``finn.harness``), of the XSim testbench
+(``finn.core.executors.xsim``) and of the test tree the job
 imports (stimulus and reference code) except construction modules, a numeric sweep's construction
 results, the simulator runtime (``finn.xsi``, ``finn_xsi`` and the modules they
 load) when the job drives XSI, the sweep's own scripts, the pytest
-configuration, the Python environment, the selected Vivado and this tool. The
-three pytest groups (``kernels-rest``, ``kernel-ops-xsim``,
-``kernel-ops-vivado``) simulate from inside test bodies that no single stub
-reaches, and ``kernels-rest`` also runs Python-only tests: their key is the
-digest of every tracked file under src/, tests/ and scripts/ and of the whole
-FinnLib tree, so any change to FINN's code or tests runs them.
+configuration, the Python environment, the selected Vivado and this tool; and a
+job whose designs hold an HLS request, the parts its requests are built for and the
+selected HLS installation (``hls_identity``), which no other job's key holds. Only
+what the checkout states counts: of its files, those git tracks under src/ and
+tests/ (``checkout_files``: never a ``.venv`` inside the checkout, nor a bridge
+compiled there), and Vivado by its release and version, not where it is installed.
+
+A sweep's summary states, for each job, the commit where it last ran (``ran_at``):
+this sweep's for a job it ran, the baseline row's for one it skipped. A skip under
+``--changed-since`` cites that commit, so a chain of skipped sweeps still names the
+run that passed the job; a skipped row that names no run vouches for nothing.
+
+The pytest groups (``kernels-rest``, ``kernel-ops-xsim``, ``kernel-ops-vivado``,
+``util-vivado``: the tests marked xsim or vivado) are not keyed by
+captured designs: their verdicts compare simulated cycles with FINN's models in
+Python (and a test stops at the first simulation a capture stubs), and the
+packaging tests run Vivado through the toolchain, which no simulation stub
+reaches. Their key is the code they can run instead: the files of the tests the
+group selects and the conftest modules pytest loads for them (from a
+collection), with every file of the checkout those import, transitively and
+statically (an import inside a function counts, and so does a string literal
+that names a module of the checkout: a custom-op domain, which qonnx's registry
+imports), by code digest; the files of those modules' packages that
+are not Python (``package_data``); and the whole FinnLib tree. A module reached
+only through a name computed at run time is not an input.
 
 A construction module (one that declares ``XSIM_KEY = "construction"``, as
 tests/kernels/helpers.py does) builds kernels, configurations and samples. Its
@@ -79,7 +103,7 @@ import sys
 import tempfile
 import threading
 import tomllib
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,18 +140,34 @@ SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-dotp-stress", "kernels.sweeps.pure_dot_product_numeric", ("--stress",)),
     ("sweep-adapters", "kernels.sweeps.adapter_numeric", ()),
     ("sweep-thresholds", "kernels.sweeps.threshold_numeric", ()),
+    ("sweep-eltwise", "kernels.sweeps.eltwise_numeric", ()),
 )
 SMOKE_SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-packed", "kernels.sweeps.matmul_numeric", ("--case", "packed")),
 )
-# The pytest groups: (job name, pytest arguments), run with Vivado selected.
+# The pytest groups: (job name, pytest arguments), run with Vivado selected. Each
+# selects only the tests that need Vivado (markers xsim, vivado): the fast gate runs
+# the rest.
 PYTEST_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "kernels-rest",
-        ("--confcutdir=tests/kernels", "tests/kernels", "--ignore=" + CONFORMANCE),
+        (
+            "--confcutdir=tests/kernels",
+            "tests/kernels",
+            "--ignore=" + CONFORMANCE,
+            "-m",
+            "xsim or vivado",
+        ),
     ),
     ("kernel-ops-xsim", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "xsim")),
     ("kernel-ops-vivado", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "vivado")),
+    # finn.util's tests that compile against the HLS headers (data packing, HLS
+    # vectors). The end2end builds (a bitfile; the FPGA-flow tutorial, about 20
+    # minutes) are longer than a sweep job.
+    (
+        "util-vivado",
+        ("--confcutdir=tests", "tests/util", "-m", "(xsim or vivado) and not end2end"),
+    ),
 )
 # What every job's run reads besides its own inputs: the sweep, the environment it
 # applies, the pytest configuration and the locked Python environment.
@@ -138,13 +178,14 @@ SWEEP_FILES = (
     ".pytest.ini",
     "uv.lock",
 )
-# The code a captured job is keyed by when it imports it: the harness package and the
-# test tree (less its construction modules), whose effect on a simulation the
-# captured designs do not show.
-HARNESS = ("src/finn/harness/", "tests/")
-# The tracked trees a pytest group's key covers, beside SWEEP_FILES.
-TREES = ("src", "tests", "scripts", "pyproject.toml")
+# The code a captured job is keyed by when it imports it: the harness package, the XSim
+# testbench's package and the test tree (less its construction modules), whose effect on
+# a simulation the captured designs do not show.
+HARNESS = ("src/finn/harness/", "src/finn/core/executors/xsim/", "tests/")
+# Where the jobs' code imports from (the PYTHONPATH of ``_environment``), in order.
+IMPORT_ROOTS = ("src", "tests")
 HASH = re.compile(r"(?<=_)[0-9a-f]{16}(?![0-9A-Za-z])")
+DOTTED = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 
 
 @dataclass(frozen=True)
@@ -176,8 +217,10 @@ def _environment(root: Path, finnlib: Path | None = None) -> dict[str, str]:
     env = dict(os.environ)
     env["PYTHONPATH"] = f"{root / 'src'}:{root / 'tests'}"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["FINN_ROOT"] = str(root)
-    env.pop("FORCE_COLOR", None)
+    # As in the code gates (scripts/_gate-common.sh): nothing reads FINN_ROOT, and a
+    # caller's PYTEST_ADDOPTS could deselect or re-mark tests.
+    for name in ("FINN_ROOT", "PYTEST_ADDOPTS", "FORCE_COLOR"):
+        env.pop(name, None)
     if finnlib is not None:
         env["FINN_RESOURCES_FINNLIB"] = str(finnlib)
     return env
@@ -199,6 +242,7 @@ def conformance_ids(root: Path, log: Path | None = None, finnlib: Path | None = 
             "addopts=",
             "-q",
             "--collect-only",
+            "--strict-markers",
             "-p",
             "no:cacheprovider",
             "--confcutdir=tests/kernels",
@@ -230,16 +274,20 @@ def conformance_job(test_id: str) -> Job:
 def jobs(
     root: Path, smoke: bool = False, log: Path | None = None, finnlib: Path | None = None
 ) -> list[Job]:
-    """The sweep's jobs at ``root``, in the order it starts them."""
+    """The sweep's jobs at ``root``, in the order it starts them: the longest kinds
+    first (a numeric sweep takes up to 15 minutes, a pytest group up to 10, a
+    conformance case 3 to 9), so that under a concurrency cap the last to start
+    are short."""
     ids = conformance_ids(root, log, finnlib)
     if smoke:
-        return [conformance_job(ids[0])] + [
-            Job(name, "sweep", (module, *args)) for name, module, args in SMOKE_SWEEPS
+        return [
+            *(Job(name, "sweep", (module, *args)) for name, module, args in SMOKE_SWEEPS),
+            conformance_job(ids[0]),
         ]
     return [
-        *map(conformance_job, ids),
-        *(Job(name, "pytest", args) for name, args in PYTEST_GROUPS),
         *(Job(name, "sweep", (module, *args)) for name, module, args in SWEEPS),
+        *(Job(name, "pytest", args) for name, args in PYTEST_GROUPS),
+        *map(conformance_job, ids),
     ]
 
 
@@ -322,24 +370,131 @@ def tree_digest(directory: Path) -> str:
     return digest.hexdigest()
 
 
-def tracked_digest(root: Path, paths: Sequence[str]) -> str:
-    """A digest of the tracked files under ``paths`` at ``root``, as they are on disk."""
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", *paths], cwd=root, capture_output=True, check=True
-    ).stdout.decode()
-    digest = hashlib.sha256()
-    for name in sorted(filter(None, listed.split("\0"))):
-        digest.update(f"{name}\0{file_digest(root / name)}\n".encode())
-    return digest.hexdigest()
+def _module_files(root: Path, name: str) -> list[Path]:
+    """The files importing module ``name`` runs, from the first of IMPORT_ROOTS that
+    has its top package: each package's ``__init__.py`` and the module's own file.
+    None for a module outside the checkout (the environment's)."""
+    parts = name.split(".")
+    for base in (root / folder for folder in IMPORT_ROOTS):
+        if not ((base / parts[0]).is_dir() or (base / parts[0]).with_suffix(".py").is_file()):
+            continue
+        found = []
+        for depth in range(1, len(parts) + 1):
+            stem = base.joinpath(*parts[:depth])
+            if (stem / "__init__.py").is_file():
+                found.append(stem / "__init__.py")
+            elif depth == len(parts) and stem.with_suffix(".py").is_file():
+                found.append(stem.with_suffix(".py"))
+            elif not stem.is_dir():  # a name inside a module, not a module
+                break
+        return found
+    return []
+
+
+def _imports(root: Path, path: Path) -> set[str]:
+    """The modules a Python file names anywhere in its body: its imports (in functions
+    too; a relative one resolved against its package), and every string literal that
+    is a dotted name, which a registry may import (``importlib.import_module``; an
+    ONNX node's domain, which qonnx's custom-op registry imports). ``from P import n``
+    names P and P.n. A name that is no module of the checkout resolves to nothing."""
+    try:
+        tree = ast.parse(path.read_bytes())
+    except SyntaxError:
+        return set()
+    package: list[str] = []  # a module's package, or an __init__.py's own
+    for folder in IMPORT_ROOTS:
+        if path.is_relative_to(root / folder):
+            package = list(path.relative_to(root / folder).parts[:-1])
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module.split(".") if node.module else []
+            if node.level:
+                base = package[: len(package) - (node.level - 1)] + base
+            names.add(".".join(base))
+            names |= {".".join([*base, alias.name]) for alias in node.names}
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and DOTTED.fullmatch(node.value)
+        ):
+            names.add(node.value)
+    return {name for name in names if name}
+
+
+def import_closure(root: Path, files: Sequence[str]) -> list[str]:
+    """``files`` (relative to ``root``) and every file of the checkout they import,
+    transitively, relative to ``root``: a static superset of what running them imports."""
+    found: set[Path] = set()
+    pending = [root / name for name in files]
+    while pending:
+        path = pending.pop()
+        if path in found:
+            continue
+        found.add(path)
+        if path.suffix == ".py":
+            for name in _imports(root, path):
+                pending.extend(_module_files(root, name))
+    return sorted(str(path.relative_to(root)) for path in found)
+
+
+def package_data(root: Path, files: Sequence[str]) -> list[str]:
+    """The files of the packages of ``files`` that are not Python, relative to ``root``.
+
+    A package is each directory from a file's up to its import root (namespace
+    packages too: ``src/finn`` holds ``resources.toml``); its files are those in the
+    directory and, below it, in every directory that is not a package (HDL,
+    templates, tables)."""
+    folders = set()
+    for name in files:
+        path = root / name
+        top = next((root / f for f in IMPORT_ROOTS if path.is_relative_to(root / f)), None)
+        if top is not None:
+            folders |= {folder for folder in path.parents if folder.is_relative_to(top)} - {top}
+    found = set()
+    for folder in folders:
+        for path in folder.iterdir():
+            if path.is_file() and path.suffix != ".py":
+                found.add(path)
+            elif path.is_dir() and not (path / "__init__.py").is_file():
+                found |= {item for item in _files(path) if item.suffix != ".py"}
+    return sorted(str(path.relative_to(root)) for path in found)
 
 
 def vivado_identity() -> str:
-    """The selected Vivado: its installation and its version file's digest; ``none``."""
+    """The selected Vivado by what it is, never where it is installed: its release (the
+    ``XILINX_VERSION_DEFAULT`` its ``data/version.sh`` states, ``unstated`` without one)
+    and its version file's digest; ``none``."""
     selected = os.environ.get("XILINX_VIVADO")
     if not selected:
         return "none"
-    vivado = Path(selected).resolve()
-    return f"{vivado} {file_digest(vivado / 'data' / 'version.dat')[:16]}"
+    data = Path(selected) / "data"
+    release = "unstated"
+    if (data / "version.sh").is_file():
+        stated = re.search(
+            r"^XILINX_VERSION_DEFAULT=(\S+)$", (data / "version.sh").read_text(), re.MULTILINE
+        )
+        release = stated.group(1) if stated else release
+    return f"{release} {file_digest(data / 'version.dat')[:16]}"
+
+
+def hls_identity() -> str:
+    """The selected HLS installation by what it is, never where it is installed, as
+    ``vivado_identity`` identifies Vivado: XILINX_HLS, else XILINX_VITIS (whose
+    installation carries HLS from 2025.1), as FINN's toolchain selects it; ``none``."""
+    selected = os.environ.get("XILINX_HLS") or os.environ.get("XILINX_VITIS")
+    if not selected:
+        return "none"
+    data = Path(selected) / "data"
+    release = "unstated"
+    if (data / "version.sh").is_file():
+        stated = re.search(
+            r"^XILINX_VERSION_DEFAULT=(\S+)$", (data / "version.sh").read_text(), re.MULTILINE
+        )
+        release = stated.group(1) if stated else release
+    return f"{release} {file_digest(data / 'version.dat')[:16]}"
 
 
 def key_of(inputs: Mapping[str, str]) -> str:
@@ -366,21 +521,48 @@ CONSTRUCTION = "construction"
 """A module's ``XSIM_KEY`` when it only constructs (see the module docstring)."""
 
 
-def _imported(root: Path, construction: bool = False) -> list[str]:
-    """The files under ``root`` the process imported, relative to it; with
-    ``construction``, only the construction modules'."""
+def checkout_files(root: Path, paths: Iterable[Path]) -> list[str]:
+    """Of ``paths``, the files the checkout tracks under its import roots (IMPORT_ROOTS),
+    relative to ``root``. A key holds what the checkout states, never what a machine put
+    beside it: a ``.venv`` inside the checkout, a bridge compiled on first use."""
+    tracked = _tracked(root)
     found = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved.is_relative_to(root) and str(resolved.relative_to(root)) in tracked:
+            found.add(str(resolved.relative_to(root)))
+    return sorted(found)
+
+
+_TRACKED: dict[Path, frozenset[str]] = {}
+
+
+def _tracked(root: Path) -> frozenset[str]:
+    """The files git tracks under the import roots of the checkout at ``root``."""
+    if root not in _TRACKED:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", *IMPORT_ROOTS],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        if listed.returncode != 0:
+            raise RuntimeError(f"{root} is no git checkout: {listed.stderr.strip()}")
+        _TRACKED[root] = frozenset(name for name in listed.stdout.split("\0") if name)
+    return _TRACKED[root]
+
+
+def _imported(root: Path, construction: bool = False) -> list[str]:
+    """The checkout's files the process imported (``checkout_files``), relative to
+    ``root``; with ``construction``, only the construction modules'."""
+    found = []
     for module in list(sys.modules.values()):
         name = getattr(module, "__file__", None)
-        if (
-            not name
-            or Path(name).resolve() == TOOL
-            or not Path(name).resolve().is_relative_to(root)
-        ):
+        if not name or Path(name).resolve() == TOOL:
             continue
         if not construction or getattr(module, "XSIM_KEY", None) == CONSTRUCTION:
-            found.add(str(Path(name).resolve().relative_to(root)))
-    return sorted(found)
+            found.append(Path(name))
+    return checkout_files(root, found)
 
 
 _OPAQUE = object()
@@ -472,9 +654,11 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
     import pytest  # noqa: PLC0415
 
     # finn is a namespace package: an older checkout's would also import the installed
-    # checkout's finn.harness, so the checkout's own files say which harness it runs.
-    if (root / "src/finn/harness/rtl.py").is_file():
-        import finn.harness.rtl as rtl  # noqa: PLC0415
+    # checkout's testbench, so the checkout's own files say which testbench it runs.
+    if (root / "src/finn/core/executors/xsim/rtl.py").is_file():
+        import finn.core.executors.xsim.rtl as rtl  # noqa: PLC0415
+    elif (root / "src/finn/harness/rtl.py").is_file():  # before the executors
+        rtl = importlib.import_module("finn.harness.rtl")
     else:  # a checkout from before finn.harness: kernels.xsim simulated
         rtl = xsim
 
@@ -506,8 +690,32 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
 
         return run
 
+    hls: dict[str, set[str]] = {}
+
+    def built_hls(module: Any, part: str, **_: Any) -> dict[str, Path]:
+        """Each HLS request staged under ``designs/hls/<top>``, its part recorded, and a
+        placeholder for its product: nothing here synthesizes."""
+        from finn.harness.toolchain import finnlib_root  # noqa: PLC0415 - the checkout's
+        from finn.kernels.artifacts.hls import stage_hls  # noqa: PLC0415
+        from finn.transformation.kernels.hls import hls_requests  # noqa: PLC0415
+
+        found = {}
+        for _, request in hls_requests(module):
+            function = request.function
+            stage_hls(request, designs / "hls" / function, roots={"finnlib": finnlib_root()})
+            hls.setdefault(function, set()).add(part)
+            product = dest / "hls-placeholders" / function
+            product.mkdir(parents=True, exist_ok=True)
+            (product / f"{function}.v").write_text(
+                f"// The product of the HLS request {function}: captured, not synthesized.\n"
+            )
+            found[function] = product
+        return found
+
     xsim.vivado_simulator = lambda: True  # selected or not: nothing here simulates
     rtl.simulate = simulate
+    if hasattr(rtl, "built_hls"):  # a checkout from before HLS leaves has none
+        rtl.built_hls = built_hls
     conformance.conformance = counted(conformance.conformance)
     if ipxact is not None:
         streamed = conformance.stream_through
@@ -526,7 +734,14 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
             yield
 
     code = pytest.main(
-        ["-q", "-p", "no:cacheprovider", f"--basetemp={dest / 'tmp'}", *pytest_args],
+        [
+            "-q",
+            "--strict-markers",
+            "-p",
+            "no:cacheprovider",
+            f"--basetemp={dest / 'tmp'}",
+            *pytest_args,
+        ],
         plugins=[Plugin()],
     )
     # The test's verdict is not the question (a wrong-order test fails when nothing
@@ -537,6 +752,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
         "conformance_calls": [state["started"], state["completed"]],
         "imported": _imported(root),
         "construction": _imported(root, construction=True),
+        "hls": {function: sorted(parts) for function, parts in sorted(hls.items())},
     }
     (dest / "meta.json").write_text(json.dumps(meta, indent=1) + "\n")
     complete = state["started"] == state["completed"] >= 1 and state["simulations"] >= 1
@@ -632,9 +848,38 @@ def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str])
     return 0 if captured else 1
 
 
+def collect_group(dest: Path, root: Path, pytest_args: Sequence[str]) -> int:
+    """Collect a pytest group: the files of the tests it selects and the conftest
+    modules pytest loaded for them, into ``dest/meta.json``."""
+    import pytest  # noqa: PLC0415 - the checkout's environment (Target.run)
+
+    found: dict[str, Any] = {}
+
+    class Plugin:
+        def pytest_collection_finish(self, session: Any) -> None:
+            files = {Path(item.path).resolve() for item in session.items}
+            for plugin in session.config.pluginmanager.get_plugins():
+                name = getattr(plugin, "__file__", None)
+                if name and Path(name).name == "conftest.py":
+                    files.add(Path(name).resolve())
+            found["tests"] = len(session.items)
+            found["files"] = sorted(
+                str(path.relative_to(root)) for path in files if path.is_relative_to(root)
+            )
+
+    code = pytest.main(
+        ["-q", "--collect-only", "--strict-markers", "-p", "no:cacheprovider", *pytest_args],
+        plugins=[Plugin()],
+    )
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "meta.json").write_text(json.dumps(found, indent=1) + "\n")
+    return 0 if code == 0 and found.get("tests") else 1
+
+
 def simulator_closure(root: Path) -> list[str]:
-    """The files the XSI runtime loads: finn.xsi's and finn_xsi's packages and their imports."""
-    found = set()
+    """The checkout's files the XSI runtime loads (``checkout_files``): finn.xsi's and
+    finn_xsi's packages and their imports."""
+    found: list[Path] = []
     for name in ("finn.xsi", "finn_xsi"):
         package = importlib.import_module(name)
         for info in pkgutil.walk_packages(package.__path__, name + "."):
@@ -643,9 +888,8 @@ def simulator_closure(root: Path) -> list[str]:
             except ImportError:  # the compiled bridge (xsi) is built on first use
                 pass
         for folder in package.__path__:
-            found |= {str(path.relative_to(root)) for path in _files(Path(folder).resolve())}
-    found |= set(_imported(root))
-    return sorted(found)
+            found.extend(_files(Path(folder)))
+    return sorted(set(checkout_files(root, found)) | set(_imported(root)))
 
 
 def packaged_ip(model: Any, work: Path) -> dict[str, str]:
@@ -749,6 +993,8 @@ def _capture(target: Target, job: Job, dest: Path, ipxact: Path | None) -> str |
     if job.kind == "conformance":
         extra = ("--ipxact", ipxact / job.name) if ipxact is not None else ()
         code = target.run("_capture-test", dest, *extra, "--", *job.args, log=log)
+    elif job.kind == "pytest":
+        code = target.run("_collect-group", dest, "--", *job.args, log=log)
     else:
         code = target.run("_capture-sweep", dest, "--", *job.args, log=log)
     if code != 0:
@@ -784,15 +1030,19 @@ def compute_keys(
 
     def key(job: Job) -> dict[str, Any]:
         inputs = {**common, "job": " ".join((job.kind, *job.args))}
-        if job.kind == "pytest":
-            inputs["tree"] = tracked_digest(root, TREES)
-            inputs["finnlib"] = tree_digest(finnlib)
-            return {"key": key_of(inputs), "inputs": inputs}
         dest = work / job.name
         error = _capture(target, job, dest, ipxact)
         if error is not None:
             return {"key": None, "error": error}
         meta = json.loads((dest / "meta.json").read_text())
+        if job.kind == "pytest":
+            code = import_closure(root, meta["files"])
+            inputs |= {f"code:{name}": code_digest(root / name) for name in code}
+            inputs |= {
+                f"data:{name}": file_digest(root / name) for name in package_data(root, code)
+            }
+            inputs["finnlib"] = tree_digest(finnlib)
+            return {"key": key_of(inputs), "inputs": inputs, "tests": meta["tests"]}
         inputs["designs"] = tree_digest(dest / "designs")
         imported = meta["imported"]
         construction = set(meta["construction"])
@@ -804,6 +1054,12 @@ def compute_keys(
         if any(name.startswith(("src/finn/xsi/", "src/finn_xsi/")) for name in imported):
             for name in simulator_files():
                 inputs[f"simulator:{name}"] = code_digest(root / name)
+        # HLS requests: their text is in the designs; what they are built for and by, here.
+        requests = meta.get("hls") or {}
+        if requests:
+            inputs["hls"] = hls_identity()
+            for function, parts in requests.items():
+                inputs[f"hls-part:{function}"] = " ".join(parts)
         return {"key": key_of(inputs), "inputs": inputs, "simulations": meta["simulations"]}
 
     with ThreadPoolExecutor(max_workers=workers or min(16, os.cpu_count() or 4)) as pool:
@@ -839,9 +1095,20 @@ def baseline_passed(baseline: Mapping[str, Any]) -> bool:
     return baseline.get("exit") == 0 and baseline.get("smoke") is False
 
 
+def ran_at(baseline: Mapping[str, Any], row: Mapping[str, Any]) -> str | None:
+    """The commit where a baseline row's job last ran and passed: the baseline's own for
+    a row it ran and passed; the one a skipped row carries (``ran_at``) for a row it
+    skipped; None for a row that did not pass, or a skipped one that names no run."""
+    if row.get("skipped"):
+        return row.get("ran_at")
+    if row.get("exit") != 0:
+        return None
+    return row.get("ran_at") or baseline.get("commit")
+
+
 def select(baseline: Mapping[str, Any], keys: Mapping[str, Any]) -> list[Decision]:
-    """Run each job whose key differs from the baseline's, or that the baseline did not pass."""
-    commit = str(baseline.get("commit") or "unknown")[:12]
+    """Run each job whose key differs from the baseline's, or that no run under the
+    baseline's key passed; a skip cites the commit where that run was (``ran_at``)."""
     rows = {row["job"]: row for row in baseline.get("jobs", [])}
     decisions = []
     for name, current in keys["jobs"].items():
@@ -852,15 +1119,18 @@ def select(baseline: Mapping[str, Any], keys: Mapping[str, Any]) -> list[Decisio
             decisions.append(Decision(name, True, "not in the baseline"))
         elif not row.get("key"):
             decisions.append(Decision(name, True, "the baseline has no key for it"))
-        elif not (row.get("exit") == 0 or row.get("skipped")):
-            decisions.append(
-                Decision(name, True, f"the baseline did not pass it (exit={row.get('exit')})")
+        elif (passed := ran_at(baseline, row)) is None:
+            reason = (
+                "the baseline skipped it and names no run that passed it"
+                if row.get("skipped")
+                else f"the baseline did not pass it (exit={row.get('exit')})"
             )
+            decisions.append(Decision(name, True, reason))
         elif row["key"] != current["key"]:
             reason = _differences(row.get("inputs") or {}, current["inputs"])
             decisions.append(Decision(name, True, reason))
         else:
-            decisions.append(Decision(name, False, f"unchanged since {commit}"))
+            decisions.append(Decision(name, False, f"unchanged since {passed[:12]}"))
     return decisions
 
 
@@ -884,7 +1154,9 @@ def summarize(
     """Write summary.log and summary.json from OUT's jobs, logs, keys and selection.
 
     A failed job fails the sweep; so does a baseline that did not pass. A job the
-    selection skipped is reported with the key it was skipped under.
+    selection skipped is reported with the key it was skipped under. Each row states
+    where its job last ran (``ran_at``): this commit for a job run here, the baseline
+    row's for a skipped one (``ran_at``), so a later sweep's skip cites the run itself.
     """
     listed = [Job.parse(line) for line in _lines(out / "jobs.tsv")]
     keys = _json(out / "keys.json") or {"jobs": {}}
@@ -900,8 +1172,9 @@ def summarize(
     ]
     conformance = len(collected)
     lines.append(f"conformance collected={conformance} collection exit={collect_code}")
+    record = (_json(baseline) or {}) if baseline is not None else {}
+    before = {row["job"]: row for row in record.get("jobs", [])}
     if baseline is not None:
-        record = _json(baseline) or {}
         lines.append(f"changed since {record.get('commit')} ({baseline})")
         if not baseline_passed(record):
             lines.append(
@@ -915,7 +1188,8 @@ def summarize(
         current = keys["jobs"].get(job.name, {})
         row: dict[str, Any] = {"job": job.name, "key": current.get("key")}
         if job.name in skipped:
-            row |= {"exit": None, "skipped": skipped[job.name]}
+            ran = ran_at(record, before.get(job.name, {}))
+            row |= {"exit": None, "skipped": skipped[job.name], "ran_at": ran}
             lines.append(f"{job.name} skipped ({skipped[job.name]}) key={str(row['key'])[:12]}")
         else:
             log = out / "logs" / f"{job.name}.log"
@@ -925,6 +1199,7 @@ def summarize(
             status = status or (0 if code == 0 else 1)
             row |= {
                 "exit": code,
+                "ran_at": head,
                 "passes": _count(r"^PASS|PASSED", text),
                 "fails": _count(r"^FAIL|FAILED|^Traceback", text),
                 "skips": _count(r"SKIPPED", text),
@@ -1170,6 +1445,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     sweep.add_argument("dest", type=Path)
     sweep.add_argument("module")
     sweep.add_argument("args", nargs="*")
+    group = commands.add_parser("_collect-group")
+    group.add_argument("dest", type=Path)
+    group.add_argument("args", nargs="+")
     closure = commands.add_parser("_simulator-closure")
     closure.add_argument("out", type=Path)
     package = commands.add_parser("_emit-package")
@@ -1219,6 +1497,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return capture_test(args.dest.resolve(), here, args.args, args.ipxact)
     elif args.command == "_capture-sweep":
         return capture_sweep(args.dest.resolve(), here, args.module, args.args)
+    elif args.command == "_collect-group":
+        return collect_group(args.dest.resolve(), here, args.args)
     elif args.command == "_simulator-closure":
         args.out.write_text(json.dumps(simulator_closure(here)) + "\n")
     elif args.command == "_emit-package":

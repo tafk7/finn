@@ -9,7 +9,9 @@ which it applies round-robin over the flat input stream. A table has one row for
 each channel, or one row shared by every channel (C = 1: each PE lane keeps one
 copy of it, and a runtime write reaches every lane). The input is sign/zero
 extended or saturated to the threshold dtype before comparison, as the native
-RTL specifies. Output is the threshold count plus bias. Runtime writes must
+RTL specifies; so a threshold at the threshold dtype's minimum is refused with an
+input wider below it, which saturates to that minimum and would count it
+(``threshold-saturation``). Output is the threshold count plus bias. Runtime writes must
 preserve sorted rows. With multiple sets, each input beat requires a matching
 set-selector beat.
 
@@ -33,8 +35,9 @@ in UltraRAM none is left, and ``ram_style`` does not apply. Counted in stages,
 not depths, the choices do not move with PE; ``parameters`` maps them to the
 triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage requires the
 ``platform``'s UltraRAM that takes initial contents (the table is the
-memories' initial contents), and runtime-writable thresholds a ``control`` bus
-to be placed on, each a named refusal of the case.
+memories' initial contents, a data file the RTL reads: ``thresholds_file``), and
+runtime-writable thresholds a ``control`` bus to be placed on, each a named
+refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it sits
@@ -53,6 +56,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -81,7 +85,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
-from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
 from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
 from finn.kernels.channels import Channel
@@ -352,6 +356,24 @@ class ThresholdingAxiKernel(Kernel):
         return True
 
     @constraint
+    def saturation_supported(self) -> bool | Rejected:
+        """thresholding_axi saturates an input wider than its thresholds to their type
+        (``genNarrow``): an input below the type's minimum compares as that minimum,
+        which a threshold equal to it counts, though the input is below it."""
+        try:
+            least = ordinary_integer_bounds(self.input_dtype)[0]
+            floor = ordinary_integer_bounds(self.threshold_dtype)[0]
+        except DatatypeError:
+            return True  # not integers: types_supported refuses them
+        if least < floor and any(floor in row for group in self.thresholds for row in group):
+            return reject(
+                "threshold-saturation",
+                f"a threshold at {self.threshold_dtype.name}'s minimum {floor} counts every "
+                f"{self.input_dtype.name} input below it, which the RTL saturates to it",
+            )
+        return True
+
+    @constraint
     def memory_supported(self) -> bool | Rejected:
         if not all(0 <= value <= 0xFFFFFFFF for value in self.depth_triggers):
             return reject("threshold-memory", "memory triggers must fit native unsigned int")
@@ -381,6 +403,7 @@ class ThresholdingAxiKernel(Kernel):
     admission = ConstraintGroup(
         types_supported,
         table_supported,
+        saturation_supported,
         memory_supported,
         bias_supported,
         configuration_supported,
@@ -511,23 +534,39 @@ class ThresholdingAxiKernel(Kernel):
         dtype=selector_dtype,
     )
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def thresholds_file(self) -> GeneratedData:
+        """The table as ``THRESHOLDS_FILE``, ``$readmemh`` words of WT bits, named by its
+        contents: a parameter literal over 10**6 bits stops Vivado.
+
+        Its layout is the one ``thresholding.sv`` reads (``genInitFile``): per set and
+        row fold (folds rounded up to a power of two with several sets), per PE lane
+        of CPE (rounded up likewise), the row's N thresholds, rounded up likewise.
+        Padding words are 0: the RTL masks every comparison beyond N.
+        """
         table, (sets, rows, count) = self.thresholds, self.shape
+        pe, bits = self.pe, self.threshold_dtype.bitwidth()
+        folds, lanes = max(1, rows // pe), min(rows, pe)
+
+        def padded(value: int) -> int:
+            return 1 << (value - 1).bit_length()
+
+        group = padded(folds) if sets > 1 else folds
+        mask, digits = (1 << bits) - 1, (bits + 3) // 4
+        words = []
+        for index in range(sets * group):
+            chosen, fold = divmod(index, group)
+            for lane in range(padded(lanes)):
+                row = fold * lanes + lane
+                for position in range(padded(count)):
+                    inside = fold < folds and lane < lanes and position < count
+                    words.append(table[chosen][row][position] & mask if inside else 0)
+        data = "".join(f"{word:0{digits}x}\n" for word in words).encode()
+        return GeneratedData(f"thresholds_{hashlib.sha256(data).hexdigest()[:16]}.dat", data)
+
+    def parameters(self) -> Mapping[str, int | str]:
+        sets, rows, count = self.shape
         a, bits = self.input_dtype, self.threshold_dtype.bitwidth()
-        mask = (1 << bits) - 1
-        image = (
-            "'{"
-            + ", ".join(
-                "'{"
-                + ", ".join(
-                    "'{" + ", ".join(f"{bits}'h{item & mask:x}" for item in row) + "}"
-                    for row in group
-                )
-                + "}"
-                for group in table
-            )
-            + "}"
-        )
         return {
             "WI": a.bitwidth(),
             "WT": bits,
@@ -538,15 +577,16 @@ class ThresholdingAxiKernel(Kernel):
             "FPARG": 0,
             "BIAS": self.bias,
             "SETS": sets,
-            "THRESHOLDS": image,
-            "THRESHOLDS_FILE": '""',
+            # The file takes precedence; the array's own default is no pattern slang takes.
+            "THRESHOLDS": "'{default: '0}",
+            "THRESHOLDS_FILE": f'"{self.thresholds_file.path}"',
             "USE_AXILITE": int(self.use_axilite),
             "DEPTH_TRIGGER_BRAM": self.depth_triggers[0],
             "DEPTH_TRIGGER_URAM": self.depth_triggers[1],
             "DEEP_PIPELINE": int(self.deep_pipeline),
         }
 
-    def sources(self) -> tuple[CopiedSource, ...]:
+    def sources(self) -> tuple[Contribution, ...]:
         return (
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource(
@@ -558,6 +598,7 @@ class ThresholdingAxiKernel(Kernel):
                 provides=("module:thresholding_axi",),
                 requires=("module:axilite", "module:thresholding"),
             ),
+            self.thresholds_file,
         )
 
     def other_pins(self) -> tuple[Pin, ...]:

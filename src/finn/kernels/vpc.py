@@ -6,6 +6,14 @@
 It regroups ``lanes_in`` elements a beat into ``lanes_out``, through vectors of
 their least common multiple. Words are opaque on FinnLib's native pins. On a
 channel, ``vpc`` is a stage of the channel's adapter (``finn.kernels.adapters``).
+
+FinnLib's ``N`` is the vector the RTL converts independently, padding its last
+beats when ``N`` is no multiple of a lane count (``vpc.sv``: ``1 + (N-1)/PI``
+input beats a vector). Both ends of a width conversion present whole beats of
+the same elements, so the stream is whole least-common-multiple vectors and no
+beat is padded: ``N`` is their least common multiple, which the RTL normalizes to
+the same converter as any multiple of it (``N0``). Padded vectors would serve an
+end presenting padded beats, which no beat sequence (``finn.dataflow``) states.
 """
 
 from __future__ import annotations

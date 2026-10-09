@@ -24,21 +24,26 @@ from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.core.executors.xsim.rtl import pack, stream_through
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op
 from finn.custom_op.kernels.shell import persist, shell_root
-from finn.harness.rtl import pack, stream_through
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.configure import chosen, commit
 from finn.kernels.explore import Ranked, SizeFifos
-from finn.transformation.kernels import InferKernelTensors, explore_kernel_choices
+from finn.transformation.kernels import InferKernelTensors, ToKernelOps, explore_kernel_choices
+from finn.transformation.kernels.cut import CutKernelPartition
 from kernel_ops.models import (
     INT3,
+    TARGET,
     chain_source,
     configure_partition,
+    fan_out_source,
     kernel_model,
     lift,
     matmul_model,
     open_memories,
+    shared_weights_source,
 )
 
 
@@ -230,6 +235,47 @@ def test_two_nodes_of_one_member_name_are_refused() -> None:
         shell_root(model, model.graph.node)
 
 
+FAN_OUT = {
+    "two KernelOps": (None, "hidden: tensor-fan-out: read by a, b"),
+    "a graph output listed last": ("last", "hidden: tensor-fan-out: read by a and leaves"),
+    "a graph output listed first": ("first", "hidden: tensor-fan-out: read by a and leaves"),
+}
+
+
+@pytest.mark.parametrize("case", FAN_OUT)
+def test_a_tensor_read_more_than_once_is_refused_by_name(case: str) -> None:
+    """A channel has one consumer: hidden read by two KernelOps, or by one and as a graph
+    output (in either order of the graph's outputs), is refused before any owner is
+    chosen, not given to its last reader nor left without a port."""
+    output, named = FAN_OUT[case]
+    model = fan_out_source(output=output).transform(ToKernelOps(TARGET))
+    assert all(node.domain == "finn.custom_op.kernels" for node in model.graph.node)
+    with pytest.raises(KernelOpError, match=f"fan: .*{named}"):
+        shell_root(model, model.graph.node, name="fan")
+
+
+@pytest.mark.parametrize("case", FAN_OUT)
+def test_a_build_stops_at_its_first_shell_root_naming_the_tensor(case: str, tmp_path: Path) -> None:
+    """The cut accepts the KernelOps (their partition's body keeps hidden read more than
+    once), and the build's first shell root, exploration's, refuses it by name."""
+    output, named = FAN_OUT[case]
+    model = fan_out_source(output=output).transform(ToKernelOps(TARGET))
+    _, body, _ = partition_body(model.transform(CutKernelPartition(tmp_path)))
+    with pytest.raises(KernelOpError, match=f"partition: .*{named}"):
+        explore_kernel_choices(body, [])
+
+
+def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
+    """One initializer, two MatMuls' weights: each would own its channel. Conversion
+    gives each node its own copy, so the second is pointed back at the first's."""
+    model = shared_weights_source().transform(ToKernelOps(TARGET))
+    a, b = model.graph.node
+    assert b.input[1] != "w"
+    b.input[1] = a.input[1]
+    with pytest.raises(KernelOpError, match="w: tensor-fan-out: read by a, b"):
+        shell_root(model, model.graph.node)
+
+
 def test_a_kernel_choice_the_root_refuses_is_dropped_named_and_cleared_by_persist() -> None:
     """A choice written past ``save`` reaches the root's replay, which drops it as stale
     with why; the rest replays, and persisting the point clears the stale attribute."""
@@ -294,4 +340,5 @@ def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
                 chain.PE * y_bits,
             )
         },
+        cycles=point.cycles,
     )

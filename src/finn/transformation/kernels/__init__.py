@@ -3,10 +3,17 @@
 
 """Graph transformations of the KernelOps (``finn.custom_op.kernels``).
 
-``ToKernelOps`` rewrites the nodes a KernelOp binds and states the build
-target it is given (``finn.platform.resolve_target``);
+``ToKernelOps`` rewrites the nodes a KernelOp's pattern matches and the kernels
+admit (the domain's KernelOps by their anchor, ``kernel_ops_by_anchor``),
+inferring every tensor as it goes, and states the build target it is given
+(``finn.platform.resolve_target``), and keeps an ``Outcome`` for every node it
+visits, with the findings that say why a node stays on the host
+(``kernel_ops_report``, ``kernel_ops_summary``); ``refuse_host_between`` refuses
+host nodes between KernelOps (``between_kernel_ops``), which no partition can
+leave out;
 ``InferKernelTensors`` infers every tensor in graph order, the KernelOps
-answering from their kernels; ``cut.CutKernelPartition`` cuts the KernelOps once into
+answering from their kernels (``infer_node``, the step on one node, which
+``ToKernelOps`` shares); ``cut.CutKernelPartition`` cuts the KernelOps once into
 the partition, the parent graph's one ``StreamingDataflowPartition``
 (``finn.custom_op.partition``); ``ExploreKernelChoices`` explores the open
 choices of a partition's body (the KernelOps the cut put together) through the
@@ -34,8 +41,16 @@ from finn.transformation.kernels.choose import (
     strategy,
 )
 from finn.transformation.kernels.config import kernel_choices_config
-from finn.transformation.kernels.convert import ToKernelOps
-from finn.transformation.kernels.infer import InferKernelTensors
+from finn.transformation.kernels.convert import (
+    Outcome,
+    ToKernelOps,
+    between_kernel_ops,
+    kernel_ops_by_anchor,
+    kernel_ops_report,
+    kernel_ops_summary,
+    refuse_host_between,
+)
+from finn.transformation.kernels.infer import InferKernelTensors, infer_node
 from finn.transformation.kernels.package import ElaboratePartition, PackagePartition
 
 __all__ = [
@@ -45,11 +60,18 @@ __all__ = [
     "ExploreKernelChoices",
     "Explored",
     "InferKernelTensors",
+    "Outcome",
     "PackagePartition",
     "ToKernelOps",
+    "between_kernel_ops",
     "completion",
     "explore_kernel_choices",
+    "infer_node",
     "kernel_choices_config",
+    "kernel_ops_by_anchor",
+    "kernel_ops_report",
+    "kernel_ops_summary",
+    "refuse_host_between",
     "shell_bottleneck",
     "strategy",
 ]

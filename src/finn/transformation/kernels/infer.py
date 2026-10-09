@@ -9,7 +9,9 @@ yet: they ask every node at once. ``InferKernelTensors`` visits the nodes in
 graph order instead:
 
 - a KernelOp first normalizes its value inputs against its inputs' exact types
-  (``normalize_inputs``: a Thresholding's thresholds as integers), then answers
+  (``normalize_inputs``: a Thresholding's thresholds as integers), then takes its
+  domain step (``exact``: its reference exact against ONNX on the node's facts and
+  containers; a node it is not exact for is a contradiction here), then answers
   its outputs from its kernel's fact-level views, in its node root bound on its
   inputs (the facts, the input channels' tensors and an owned initializer's
   value: MatMul's result range is its weights' columns'; the whole root reads the
@@ -27,6 +29,11 @@ graph order instead:
 
 The KernelOps' own qonnx hooks answer from the same views, so qonnx's passes
 agree once this one has run.
+
+The step on one node is ``infer_node``, which ``ToKernelOps`` shares: it infers as
+it converts, so a candidate's admission reads its inputs as the nodes before it
+state them. After ``ToKernelOps`` every tensor is already inferred; this pass
+re-runs the step where a later change of the facts needs it.
 """
 
 from __future__ import annotations
@@ -43,6 +50,8 @@ from finn.custom_op.kernels.base import KernelOp, KernelOpError
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
+
+    from finn.core.space import Finding
 
 
 def _standard(model: ModelWrapper, node: NodeProto) -> None:
@@ -75,26 +84,53 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
             model.set_tensor_shape(name, dims)
 
 
+def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tuple[Finding, ...]:
+    """The per-node step (module docstring): ``node``'s outputs stated from its inputs.
+
+    A KernelOp's inputs are normalized and its domain step taken (``KernelOp.exact``).
+    With ``admit``, a node its reference is not exact for is refused by the domain
+    step's findings, and one it is exact for is asked the kernels' admission on its
+    inputs (``KernelOp.admission``): when either refuses it, its outputs are not
+    stated and the refusals are returned. ``ToKernelOps`` tries a candidate so, as it
+    converts. Without ``admit`` (``InferKernelTensors``, re-running the step on a
+    converted graph) the domain step's findings are a contradiction, raised.
+    """
+    if not is_custom_op(node.domain):
+        _standard(model, node)
+        infer_node_datatype(model, node, False)
+        return ()
+    op = model.get_customop_wrapper(node)
+    if not isinstance(op, KernelOp):
+        standin = op.make_shape_compatible_op(model)
+        _standard(model, standin)
+        op.infer_node_datatype(model)
+        return ()
+    op.normalize_inputs()
+    outside = op.exact()
+    if outside and not admit:
+        raise KernelOpError(
+            f"{op.label}: its reference is not exact for its facts: "
+            + "; ".join(f"{finding.code}: {finding.message}" for finding in outside)
+        )
+    if outside:
+        return outside
+    if admit:
+        refused = op.admission()
+        if refused:
+            return refused
+    for name, (dims, dtype) in op.infer_output_tensors(model).items():
+        model.set_tensor_shape(name, list(dims))
+        model.set_tensor_datatype(name, dtype)
+    return ()
+
+
 class InferKernelTensors(Transformation):
-    """One pass in graph order; see the module docstring."""
+    """One pass in graph order, ``infer_node`` on each node; see the module docstring."""
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         for node in model.graph.node:
-            if not is_custom_op(node.domain):
-                _standard(model, node)
-                infer_node_datatype(model, node, False)
-                continue
-            op = model.get_customop_wrapper(node)
-            if not isinstance(op, KernelOp):
-                standin = op.make_shape_compatible_op(model)
-                _standard(model, standin)
-                op.infer_node_datatype(model)
-                continue
-            op.normalize_inputs()
-            for name, (dims, dtype) in op.infer_output_tensors(model).items():
-                model.set_tensor_shape(name, list(dims))
-                model.set_tensor_datatype(name, dtype)
+            infer_node(model, node)
         return model, False
 
 
-__all__ = ["InferKernelTensors"]
+__all__ = ["InferKernelTensors", "infer_node"]

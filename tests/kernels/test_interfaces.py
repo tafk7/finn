@@ -14,10 +14,10 @@ selector of a single threshold set.
 import pytest
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.rtl import stream_through
 from finn.core.space import Available, Rejected, Space, design_space, inspection
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.harness.rtl import stream_through
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
 from finn.kernels.channels import Channel
@@ -159,7 +159,7 @@ def test_writable_thresholds_without_a_control_bus_are_not_offered():
 def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writable):
     # Writable, the exported AXI-Lite bus is written the table its kernel declares (the
     # initial one) before the streams start: the levels are the initial table's.
-    module = activated(writable=writable).module
+    design = activated(writable=writable)
     x = [[(3 * r + 5 * k) % 8 - 4 for k in range(WIDTH)] for r in range(REPETITIONS)]
     w = [[(7 * h + 3 * k) % 8 - 4 for k in range(WIDTH)] for h in range(HEIGHT)]
     levels = [
@@ -182,10 +182,11 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
         for f in range(FOLDS)
     ]
     stream_through(
-        module,
+        design.module,
         tmp_path,
         inputs={"in0_V": (activation_words, 3 * SIMD), "in1_V": (weight_words, 3 * SIMD)},
         outputs={"out0_V": (levels, 2)},
+        cycles=design.cycles,
     )
 
 

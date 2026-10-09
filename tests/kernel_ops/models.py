@@ -23,6 +23,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
 from finn.custom_op.kernels.shell import ShellRoot, persist, shell_root
 from finn.kernels.configure import commit, undecided
+from finn.kernels.target import Target
 from finn.platform import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
@@ -83,9 +84,10 @@ def thresholding_model(
     bias: int = 0,
     annotate: tuple[str, ...] = ("x", "t"),
     infer: bool = True,
+    target: Target = TARGET,
 ) -> ModelWrapper:
-    """x (3, 4) INT8 -> Thresholding ``activate`` with t (C, N) -> y; ``infer`` as for
-    ``matmul_model``."""
+    """x (3, 4) INT8 -> Thresholding ``activate`` with t (C, N) -> y, built for ``target``;
+    ``infer`` as for ``matmul_model``."""
     thresholds = np.asarray(thresholds, dtype=np.float32)
     x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [ROWS, N])
     t = helper.make_tensor_value_info("t", TensorProto.FLOAT, list(thresholds.shape))
@@ -105,7 +107,7 @@ def thresholding_model(
         model.set_initializer("t", thresholds)
     for name in annotate:
         model.set_tensor_datatype(name, H)
-    write_target(model, TARGET)
+    write_target(model, target)
     return model.transform(InferKernelTensors()) if infer else model
 
 
@@ -155,6 +157,92 @@ def chain_source(
         model.set_tensor_datatype(name, chain.W)
     model.set_tensor_datatype("thresholds", chain.H)
     return model
+
+
+def host_between_source() -> ModelWrapper:
+    """x (4, 4) INT3 -> MatMul ``a`` (w) -> h -> Transpose ``flip`` -> t -> MatMul ``b``
+    (w) -> y: a host node between two nodes a KernelOp binds."""
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [4, 4])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, None)
+    nodes = [
+        helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+        helper.make_node("Transpose", ["h"], ["t"], name="flip"),
+        helper.make_node("MatMul", ["t", "w"], ["y"], name="b"),
+    ]
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(nodes, "between", [x], [y]),
+            producer_name="kernel-ops-test",
+            opset_imports=[helper.make_opsetid("", 13)],
+        )
+    )
+    model.set_initializer("w", np.eye(4, dtype=np.float32))
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, INT3)
+    return model
+
+
+def fan_out_source(*, output: str | None = None) -> ModelWrapper:
+    """x -> MatMul ``first`` (w1) -> hidden, read more than once: by MultiThreshold ``a``
+    -> ya and ``b`` -> yb; or, with ``output`` (``"first"`` or ``"last"``), by ``a`` only
+    and a graph output too, listed before or after ya."""
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [chain.ROWS, chain.INPUTS])
+    nodes = [helper.make_node("MatMul", ["x", "w1"], ["hidden"], name="first")]
+    outputs = []
+    for reader in ("a",) if output else ("a", "b"):
+        nodes.append(
+            helper.make_node(
+                "MultiThreshold",
+                ["hidden", "thresholds"],
+                [f"y{reader}"],
+                name=reader,
+                domain="qonnx.custom_op.general",
+                out_dtype="UINT2",
+                out_bias=0.0,
+            )
+        )
+        outputs.append(helper.make_tensor_value_info(f"y{reader}", TensorProto.FLOAT, None))
+    if output:
+        hidden = helper.make_tensor_value_info("hidden", TensorProto.FLOAT, None)
+        outputs.insert(0 if output == "first" else len(outputs), hidden)
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(nodes, "fan", [x], outputs),
+            producer_name="kernel-ops-test",
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid("qonnx.custom_op.general", 1),
+            ],
+        )
+    )
+    model.set_initializer("w1", np.array(chain.W1, dtype=np.float32))
+    model.set_initializer("thresholds", np.array(chain.THRESHOLDS[0], dtype=np.float32))
+    model.set_tensor_datatype("x", chain.A)
+    model.set_tensor_datatype("w1", chain.W)
+    model.set_tensor_datatype("thresholds", chain.H)
+    return model.transform(InferShapes())
+
+
+def shared_weights_source() -> ModelWrapper:
+    """x (4, 4) INT3 -> MatMul ``a`` (w) -> h -> MatMul ``b`` (w) -> y: one initializer,
+    each MatMul's own weights."""
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [4, 4])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, None)
+    nodes = [
+        helper.make_node("MatMul", ["x", "w"], ["h"], name="a"),
+        helper.make_node("MatMul", ["h", "w"], ["y"], name="b"),
+    ]
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(nodes, "shared", [x], [y]),
+            producer_name="kernel-ops-test",
+            opset_imports=[helper.make_opsetid("", 13)],
+        )
+    )
+    model.set_initializer("w", np.eye(4, dtype=np.float32))
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, INT3)
+    return model.transform(InferShapes())
 
 
 def lift(model: ModelWrapper, tensor: str) -> None:

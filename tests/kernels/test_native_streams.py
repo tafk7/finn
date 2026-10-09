@@ -4,8 +4,8 @@
 
 import pytest
 
+from finn.core.executors.xsim.rtl import simulate
 from finn.core.space import Available, Rejected, design_space
-from finn.harness.rtl import simulate
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel

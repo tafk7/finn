@@ -10,7 +10,7 @@ position: the i-th input in the order the run names them takes ``inputs[i]``,
 cycling, and the outputs likewise, so streams side by side arrive out of step.
 
 Both drivers realize it the same way, counting handshakes, not cycles: the
-stream testbench (``finn.harness.rtl``) and the XSI numeric transport
+stream testbench (``finn.core.executors.xsim.rtl``) and the XSI numeric transport
 (``tests/kernels/sweeps/rtl_transport.py``). ``FREE`` never stalls; ``STALLED``
 stalls both sides, each input in bursts of two or three, each output after
 every beat for five cycles.

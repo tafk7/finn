@@ -99,15 +99,19 @@ def _body_file(node: Any) -> str:
     return path
 
 
+def kernel_partition_body(node: Any) -> ModelWrapper | None:
+    """The body of a StreamingDataflowPartition node whose body is a partition of
+    KernelOps, opened through the node; None for any other node."""
+    if node.op_type != PARTITION_OP or node.domain != PARTITION_DOMAIN:
+        return None
+    body = ModelWrapper(_body_file(node))
+    return body if is_kernel_partition(body) else None
+
+
 def kernel_partition_nodes(model: Any) -> list[Any]:
     """The model's partition nodes (``PARTITION_DOMAIN``'s StreamingDataflowPartition)
     whose body is a partition of KernelOps."""
-    return [
-        node
-        for node in model.graph.node
-        if (node.domain, node.op_type) == (PARTITION_DOMAIN, PARTITION_OP)
-        and is_kernel_partition(ModelWrapper(_body_file(node)))
-    ]
+    return [node for node in model.graph.node if kernel_partition_body(node) is not None]
 
 
 def partition_body(model: Any) -> tuple[Any, ModelWrapper, str]:
@@ -139,6 +143,7 @@ __all__ = [
     "PARTITION_DOMAIN",
     "PARTITION_OP",
     "is_kernel_partition",
+    "kernel_partition_body",
     "kernel_partition_nodes",
     "partition_body",
 ]

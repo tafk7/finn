@@ -8,6 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from onnx import TensorProto, helper
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.util.basic import qonnx_make_model
@@ -15,6 +16,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import THRESHOLDS, schema_digest, thresholding_model
 
 MEMORY = {"ram_style": "distributed", "block_stages": 1, "ultra_stages": 0}
@@ -39,7 +41,7 @@ def test_facts_and_the_output() -> None:
 
 
 def test_the_thresholds_must_be_an_initializer_with_one_row_or_a_row_per_channel() -> None:
-    with pytest.raises(KernelOpError, match="must be an initializer"):
+    with pytest.raises(KernelOpError, match="are not an initializer: not a Thresholding"):
         op(thresholding_model(stored=False, infer=False)).facts()
     with pytest.raises(KernelOpError, match=r"\(2, 3\), neither one row .* its 4 channels"):
         op(thresholding_model(thresholds=THRESHOLDS[:2], infer=False)).facts()
@@ -55,7 +57,8 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     activate = op(model).point().activate
     parameters = dict(activate.module.parameters)
     assert (parameters["C"], parameters["PE"]) == (1, 4)
-    assert parameters["THRESHOLDS"] == "'{'{'{5'h17, 5'h1, 5'h8}}}"  # INT5, as normalized
+    # One row, INT5 as normalized, padded to four words.
+    assert activate.thresholds_file.data == b"17\n01\n08\n00\n"
     # One row a lane: stage 1 holds two words, whatever the channels.
     assert parameters["DEPTH_TRIGGER_BRAM"] == 2
     with pytest.raises(KernelOpError) as error:
@@ -65,6 +68,33 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     produced = execute_onnx(model, {"x": values})["y"]
     expected = execute_onnx(multithreshold(model), {"x": values})["y"]
     assert np.array_equal(produced, expected)
+
+
+def test_the_thresholds_type_holds_a_value_below_the_least_an_input_can_miss() -> None:
+    """thresholding_axi saturates an INT8 input to the thresholds' type: with the least
+    threshold at INT5's minimum, an input below it would count it. Normalized, the type
+    holds one value below it (INT6), and the kernel admits the node; a least threshold
+    at the input's own minimum, which every input meets, needs none."""
+    table = np.array([[-16, -3, 2], [-9, 0, 15], [-4, -4, 7], [-1, 6, 14]])
+    model = thresholding_model(thresholds=table)
+    assert model.get_tensor_datatype("t").name == "INT6"
+    assert not op(model).verify_node()
+    floor = table.copy()
+    floor[0, 0] = -128
+    assert thresholding_model(thresholds=floor).get_tensor_datatype("t").name == "INT8"
+
+
+def test_a_float_thresholding_is_refused_while_its_choices_are_open() -> None:
+    """The kernel's admission refuses FLOAT32 on the facts alone, though its folding and
+    memories are still open."""
+    model = thresholding_model(annotate=(), infer=False)
+    for name in ("x", "t"):
+        model.set_tensor_datatype(name, DataType["FLOAT32"])
+    problems = op(model.transform(InferKernelTensors())).verify_node()
+    assert [problem.split(": ")[:3] for problem in problems] == [
+        ["activate", "activate.table_supported", "threshold-type"],
+        ["activate", "activate.types_supported", "dtype-family"],
+    ]
 
 
 def test_an_empty_threshold_table_is_refused_by_name() -> None:

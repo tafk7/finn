@@ -7,7 +7,7 @@
 (from ``tests``, FinnLib
 and Vivado selected) builds each partition as the kernel path builds it (the
 Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
-``kernel_ops.tfc``) and measures, with ``finn.harness.rtl.measure``,
+``kernel_ops.tfc``) and measures, with ``finn.core.executors.xsim.rtl.measure``,
 ``N`` frames streamed back to back, never stalled:
 
 - the **stitched** partition, its root's latency, interval and total, and each
@@ -42,9 +42,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.builder.kernel_testbench import boundary_words
+from finn.core.executors.xsim.rtl import link_stream, measure
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import ShellRoot, member, shell_root
-from finn.harness.rtl import link_stream, measure
 from finn.harness.toolchain import print_identity
 
 
@@ -161,7 +161,12 @@ def measure_partition(
     inputs, outputs = boundary_words(model, root.point, root.boundary, context, label)
     print(f"== {label}: stitched", flush=True)
     stitched = measure(
-        root.point.module, directory / "stitched", inputs=inputs, outputs=outputs, frames=frames
+        root.point.module,
+        directory / "stitched",
+        inputs=inputs,
+        outputs=outputs,
+        frames=frames,
+        cycles=root.point.cycles,
     )
     # The hop out of each layer, by the layer's leaves: its member and what lies under it.
     links = root.point.module.fragment.links
@@ -196,6 +201,7 @@ def measure_partition(
             inputs=alone_in,
             outputs=alone_out,
             frames=frames,
+            cycles=alone_root.point.cycles,
         )
         recorded[node.name] = dict(alone.beats)
         layers.append(

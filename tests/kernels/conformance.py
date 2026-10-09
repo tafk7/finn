@@ -15,7 +15,9 @@ each sample it
    comparison ``check_abi`` makes, on the one extraction): a refusal fails; a
    decline is a warning (``RtlDeclined``). A parameter whose value the checker
    does not establish (an array, a real) does not decline: its name is still
-   established;
+   established. An HLS leaf's RTL is its synthesis's product, so it is checked
+   so only with ``xsim`` (synthesized for the harness's part, or taken from the
+   HLS cache); offline its request is staged, its includes checked;
 3. checks the model: every port's traversal covers its tensor, a scheduled
    port presents the schedule's beats less the ones it drops, each boundary
    presents its port's traversal (an input's ``unreplayed``), and
@@ -23,12 +25,16 @@ each sample it
    outputs unplaced the kernel still states every output element (a
    producer's element never reads its own output channel);
 4. given an ``xsim`` directory, streams random integers in each input's range
-   through the design, free and stalled (``finn.harness.pacing``'s ``FREE`` and
+   through the design, free and stalled (``finn.core.executors.xsim.pacing``'s ``FREE`` and
    ``STALLED``; the watchdog counts the root's ``cycles`` too), every pin driven
-   from what the module declares (``finn.harness.rtl``), and compares every output with
+   from what the module declares (``finn.core.executors.xsim.rtl``), and compares every output with
    ``reference``: each input packed in the order its boundary presents, each
    output in its port's order. Fed by a cyclic source, the design repeats,
-   and each output is compared over its first pass.
+   and each output is compared over its first pass. Words that differ are
+   decoded as an order (``finn.harness.orders``, with ``reference``): when the
+   RTL walks the declared loops in another order, the failure names the beat
+   that carries another index tuple and both loop nests, in the port's index
+   names.
 
 The adapter sample feeds the first input from a read-only ``MemStreamKernel``
 presenting ``vector_major`` at another lane count, so that input's channel
@@ -80,6 +86,8 @@ from typing import Any
 
 import numpy as np
 
+from finn.core.executors.xsim.pacing import FREE, STALLED
+from finn.core.executors.xsim.rtl import WordsDiffer, materialize, stream_through
 from finn.core.space import (
     Available,
     DefinitionError,
@@ -101,9 +109,11 @@ from finn.dataflow.traversal import (
     unreplayed,
     vector_major,
 )
-from finn.harness.pacing import FREE, STALLED
-from finn.harness.rtl import materialize, stream_through
+from finn.harness.orders import Stream, decode
+from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import check_against_rtl
+from finn.kernels.artifacts.contributions import HlsSource
+from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
@@ -180,7 +190,7 @@ def conformance(
         module = _value(point.query(type(point).module), space_type, sample)
         with tempfile.TemporaryDirectory() as scratch:
             for label, leaf in _kernel_leaves(module):
-                _check_rtl(space_type, sample, label, leaf, Path(scratch) / label)
+                _check_rtl(space_type, sample, label, leaf, Path(scratch) / label, xsim is not None)
         _check_model(point, space_type, sample, inputs, outputs)
         _check_unplaced_outputs(point, space_type, sample, inputs, outputs, choices, facts)
         if xsim is not None:
@@ -451,6 +461,28 @@ def _committed(
     return with_direct_transports(commit(point, keys))
 
 
+def unchosen(
+    space_type: type[Kernel],
+    *,
+    inputs: Mapping[str, Tensor],
+    outputs: Outputs,
+    factors: Factors = SAMPLED,
+    facts: Mapping[str, object] = EMPTY,
+    **_: object,
+) -> Any:
+    """The kernel placed between its boundary channels with nothing chosen: no Decision
+    committed but the transports (``direct``), the Params of the first explicit
+    configuration given (a channel stage's geometry). Takes a case's arguments; the
+    point a kernel's spec draws its covering points and its refused side from."""
+    first = factors[0] if not isinstance(factors, str) and factors else EMPTY
+    given = {
+        key: value
+        for key, value in first.items()
+        if isinstance(getattr(space_type, key, None), Param)
+    }
+    return _committed(space_type, given, inputs, outputs, EMPTY, facts)
+
+
 def _nested(values: object) -> object:
     return tuple(map(_nested, values)) if isinstance(values, list) else values
 
@@ -523,11 +555,22 @@ def _kernel_leaves(module: Composed) -> tuple[tuple[str, Leaf], ...]:
 
 
 def _check_rtl(
-    space_type: type[Kernel], sample: Sample, label: str, leaf: Leaf, directory: Path
+    space_type: type[Kernel],
+    sample: Sample,
+    label: str,
+    leaf: Leaf,
+    directory: Path,
+    synthesize: bool,
 ) -> None:
     """Refuse a leaf its sources contradict, and a ``parameters()`` that does not name
-    exactly its module's parameters, unless the RTL checker declines."""
+    exactly its module's parameters, unless the RTL checker declines. An HLS leaf has RTL
+    only once synthesized: offline, its request is staged (refused when a header it
+    includes is undeclared) and nothing more."""
     where = f"{_where(space_type, sample)} {label}"
+    requests = [item for item in leaf.sources if isinstance(item, HlsSource)]
+    if requests and not synthesize:
+        stage_hls(requests[0], directory, roots={"finnlib": finnlib_root()})
+        return
     top, sources, _ = materialize(leaf, directory)
     abi = leaf.abi
     extracted = extract([Path(source) for source in sources], top, abi.parameters)
@@ -699,9 +742,30 @@ def _simulate(
                 repeating=repeating,
                 cycles=cycles.value if isinstance(cycles, Available) else 0,
             )
+        except WordsDiffer as error:
+            decoded = decode(
+                {name: _stream(point, name, ends[name].form, ends[name]) for name in produced},
+                error.received,
+                inputs={
+                    name: _stream(point, name, unreplayed(ends[name].form), ends[name])
+                    for name in inputs
+                },
+                values=values,
+                reference=lambda read: reference(**read),
+            )
+            found = decoded.message if decoded else "no order of the declared loops explains them"
+            failures.append((sample, mode, f"{found} | {_brief(str(error))}"))
         except AssertionError as error:
             failures.append((sample, mode, _brief(str(error))))
     return failures
+
+
+def _stream(point: Any, name: str, form: Traversal, end: StreamContract) -> Stream:
+    """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
+    by the port's index expressions where it reads one per axis."""
+    index = getattr(_node(getattr(point, KERNEL), _user(point, name)), "index", ())
+    axes = tuple(map(repr, index)) if len(index) == len(form.shape) else ()
+    return Stream(form, end.element.bits, axes)
 
 
 __all__ = [
@@ -714,4 +778,5 @@ __all__ = [
     "conformance",
     "place",
     "samples",
+    "unchosen",
 ]

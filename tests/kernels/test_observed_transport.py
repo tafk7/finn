@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The observed scoreboard rejects a correct prefix followed by an extra beat; the XSI
-drivers pace their streams as ``finn.harness.pacing`` states."""
+drivers pace their streams as ``finn.core.executors.xsim.pacing`` states."""
 
 import pytest
 
-from finn.harness.pacing import FREE, Pace
+from finn.core.executors.xsim.pacing import FREE, Pace
 from kernels.sweeps import rtl_transport
 
 
@@ -144,7 +144,7 @@ def _levels(driver, pin, cycles):
 
 def test_the_xsi_input_driver_paces_by_handshakes_as_the_testbench_does():
     """Pace(2, 1), the consumer always ready: two beats, one idle cycle, and so on, as the
-    stream testbench's counters drive valid (``finn.harness.rtl``)."""
+    stream testbench's counters drive valid (``finn.core.executors.xsim.rtl``)."""
     top = Top("in0_V", {"tready": 1})
     driver = rtl_transport._PacedInput(top, "in0_V", [1, 2, 3, 4, 5], Pace(2, 1))
     assert _levels(driver, top.pins["in0_V_tvalid"], 12) == [1, 1, 0, 1, 1, 0, 1, 0]

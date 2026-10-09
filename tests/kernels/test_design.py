@@ -17,10 +17,10 @@ from pathlib import Path
 
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.rtl import pack, stream_through
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.harness.rtl import pack, stream_through
 from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel, exact_result_dtype
 from kernels.chain import (
@@ -172,8 +172,9 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
         for r in range(ROWS)
     ]
     a_bits, y_bits = A.bitwidth(), Y.bitwidth()
+    design = chain()
     stream_through(
-        chain().module,
+        design.module,
         tmp_path,
         inputs={
             "s_axis_0": (
@@ -195,4 +196,5 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
                 PE * y_bits,
             )
         },
+        cycles=design.cycles,
     )

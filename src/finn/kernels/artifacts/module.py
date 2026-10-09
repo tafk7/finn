@@ -6,7 +6,9 @@
 A ``Leaf`` is a FinnLib module bound to a configuration: its name, parameters
 and ABI (``Abi``: its pins, parameters as RTL spells them and aligned clocks),
 the files that provide it, the data it reads, and what it holds while part of
-it is idle (``Held``). A ``Composed`` module is a ``Fragment`` with an ABI:
+it is idle (``Held``). An HLS leaf's one source is its build request
+(``HlsSource``): it is named by the request's top, and has no parameters, its
+values compiled into the top. A ``Composed`` module is a ``Fragment`` with an ABI:
 leaf instances, the ``Link`` of each channel hop between their pins and the
 control buses it presents (``BusExport``), each with the writes its kernel's
 configuration takes (``RegisterMap``: what a host, or a testbench, writes before
@@ -40,7 +42,7 @@ from finn.kernels.artifacts.abi import (
     abi_pins,
     validate_pins,
 )
-from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, HlsSource
 from finn.kernels.artifacts.projection import digest
 
 #: A module parameter.
@@ -164,14 +166,15 @@ class Held:
 @dataclass(frozen=True)
 class Leaf:
     """One FinnLib module bound to a configuration: everything needed to instantiate and
-    build it, and nothing about the Space that derived it."""
+    build it, and nothing about the Space that derived it. Its sources are copied files,
+    or one HLS request, whose top it is named by."""
 
     implementation_id: str
     implementation_version: str
     name: str
     parameters: ScalarTable
     abi: Abi
-    sources: tuple[CopiedSource, ...] = ()
+    sources: tuple[CopiedSource | HlsSource, ...] = ()
     data: tuple[GeneratedData, ...] = ()
     held: Held = Held()
 
@@ -188,8 +191,18 @@ class Leaf:
                 "typed module parameter table"
             )
         sources, data = tuple(self.sources), tuple(self.data)
-        if any(not isinstance(item, CopiedSource) for item in sources):
-            raise BuildError("a module's sources are copied sources")
+        if any(not isinstance(item, (CopiedSource, HlsSource)) for item in sources):
+            raise BuildError("a module's sources are copied sources or an HLS request")
+        requests = [item for item in sources if isinstance(item, HlsSource)]
+        if requests:
+            if len(sources) != 1:
+                raise BuildError(f"{self.name}: an HLS request is its module's only source")
+            if self.name != requests[0].function:
+                raise BuildError(
+                    f"{self.name} is not its HLS request's top, {requests[0].function}"
+                )
+            if parameters:
+                raise BuildError(f"{self.name}: an HLS module's values are compiled into its top")
         if any(not isinstance(item, GeneratedData) for item in data):
             raise BuildError("a module's data files are generated data")
         pins = abi_pins(self.abi.pins)

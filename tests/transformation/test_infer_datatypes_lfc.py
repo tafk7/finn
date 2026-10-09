@@ -58,10 +58,12 @@ def test_infer_datatypes_lfc():
         model = model.transform(GiveUniqueNodeNames())
         model = model.transform(GiveReadableTensorNames())
         model = model.transform(InferDataTypes())
-        assert model.get_tensor_datatype("MatMul_0_out0") == DataType["INT32"]
-        assert model.get_tensor_datatype("MatMul_1_out0") == DataType["INT32"]
-        assert model.get_tensor_datatype("MatMul_2_out0") == DataType["INT32"]
-        assert model.get_tensor_datatype("MatMul_3_out0") == DataType["INT32"]
+        # Each MatMul's exact range (qonnx's interval rule, tafk7 b7bc357): BIPOLAR x BIPOLAR
+        # over 784 inputs spans [-784, 784], over 1024 inputs [-1024, 1024].
+        assert model.get_tensor_datatype("MatMul_0_out0") == DataType["INT11"]
+        assert model.get_tensor_datatype("MatMul_1_out0") == DataType["INT12"]
+        assert model.get_tensor_datatype("MatMul_2_out0") == DataType["INT12"]
+        assert model.get_tensor_datatype("MatMul_3_out0") == DataType["INT12"]
         assert model.get_tensor_datatype("MultiThreshold_0_out0") == DataType["BIPOLAR"]
         assert model.get_tensor_datatype("MultiThreshold_1_out0") == DataType["BIPOLAR"]
         assert model.get_tensor_datatype("MultiThreshold_2_out0") == DataType["BIPOLAR"]

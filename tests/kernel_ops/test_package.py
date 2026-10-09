@@ -165,7 +165,9 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert interfaces["s_axis_0"][2]["TDATA_NUM_BYTES"] == "1"
     assert interfaces["m_axis_0"][:2] == ("axis", "master")
     assert interfaces["m_axis_0"][2]["TDATA_NUM_BYTES"] == "2"
-    # Self-contained: the sources and the memories' contents are the IP's own.
+    # Self-contained: the sources and the memories' contents are the IP's own, the
+    # weights' and the thresholds' alike.
     files = {path.name for path in (project / "ip" / "src").iterdir()}
-    assert any(name.endswith(".dat") for name in files)
+    for memory in ("memstream_", "thresholds_"):
+        assert any(name.startswith(memory) and name.endswith(".dat") for name in files)
     assert any(name.startswith("finn_partition__") for name in files)

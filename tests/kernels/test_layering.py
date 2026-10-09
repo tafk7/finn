@@ -54,13 +54,17 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.kernels.artifacts.module.Leaf", "kernels.artifacts"),
         ("finn.kernels.dotp", "kernels"),
         ("finn.custom_op.partition.kernel_partitions.partition_body", "partition"),
-        ("finn.custom_op.partition.StreamingDataflowPartition", "partition"),
+        ("finn.custom_op.partition.StreamingDataflowPartition", "custom_op.partition"),
         ("finn.builder.kernel_build_steps", "flow"),
         ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
         ("finn.util.torch_hw_modules", "flow"),
-        ("finn.harness.rtl", "harness"),
+        ("finn.harness.ops", "harness"),
+        ("finn.core.executors.xsim.rtl", "xsim"),
+        ("finn.core.executors.xsim", "xsim"),
+        ("finn.core.executors.xsim.executor", "executors"),
+        ("finn.core.executors.python", "executors"),
         ("finn.builder.build_dataflow", "flow"),
         ("kernels.helpers", "tests.kernels"),
     ],
@@ -98,19 +102,38 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("transformation.kernels", "finn.shells.pynq.runner"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
         ("util", "finn.util.torch_hw_modules"),
-        # The partition node runs its body by qonnx, below the kernel stack and the flow.
+        # What is read of a partition reads qonnx only, below the kernel stack, the
+        # executors and the flow; the partition node runs its body with the executors,
+        # which never import the node.
         ("partition", "finn.core.onnx_exec.execute_onnx"),
         ("partition", "finn.custom_op.kernels.shell.PARTITION"),
+        ("custom_op.partition", "finn.custom_op.kernels.shell.PARTITION"),
+        ("executors", "finn.custom_op.partition.StreamingDataflowPartition"),
         ("tests.kernels", "finn.custom_op.kernels.base"),
         ("tests.kernels", "finn.core.onnx_exec"),
-        # The harness: above the kernels and their transformations, below the flow,
-        # beside the test tree and pytest, never under them.
-        ("kernels", "finn.harness.rtl.simulate"),
-        ("transformation.kernels", "finn.harness.rtl"),
+        # The XSim testbench: above the kernels and their transformations, below the
+        # executors; it reads no graph, so the kernel tests may import it but not the
+        # executor.
+        ("kernels", "finn.core.executors.xsim.rtl.simulate"),
+        ("transformation.kernels", "finn.core.executors.xsim.rtl"),
+        ("xsim", "finn.core.executors.xsim.executor.XSim"),
+        ("xsim", "finn.core.onnx_exec.execute_onnx"),
+        ("xsim", "finn.harness.orders"),
+        ("xsim", "finn.custom_op.kernels.base"),
+        ("tests.kernels", "finn.core.executors.xsim.executor.XSim"),
+        # The executors below the harness: core imports no finn.harness.
+        ("executors", "finn.harness.toolchain.finnlib_root"),
+        ("executors", "finn.harness.ops"),
+        # The harness: above the executors, below the flow, beside the test tree and
+        # pytest, never under them.
         ("util", "finn.harness.toolchain"),
         ("harness", "finn.builder.build_dataflow"),
         ("harness", "kernels.xsim.requires_xsim"),
+        ("harness", "kernel_ops.models.matmul_model"),
         ("harness", "pytest"),
+        ("harness", "onnx.helper"),
+        ("harness", "kernel_ops.specs.matmul.SPEC"),
+        ("custom_op.kernels", "finn.harness.ops.check_parity"),
     ],
 )
 def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> None:
@@ -133,11 +156,27 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("harness", "finn.kernels.artifacts.build.emit_module"),
         ("harness", "finn.util.toolchain.machine_toolchain"),
         ("harness", "finn.transformation.kernels.package.PackagePartition"),
-        ("flow", "finn.harness.rtl.simulate"),
+        # The KernelOps' oracle, read on a model of them.
+        ("harness", "finn.custom_op.kernels.base.kernel_op"),
+        ("harness", "qonnx.core.modelwrapper.ModelWrapper"),
+        ("harness", "numpy.typing"),
+        # The ONNX entry: the reference against qonnx's execution of the source graph.
+        ("harness", "qonnx.core.onnx_exec.execute_onnx"),
+        ("harness", "finn.transformation.kernels.convert.ToKernelOps"),
+        ("flow", "finn.core.executors.xsim.rtl.simulate"),
+        ("tests.kernels", "finn.core.executors.xsim.rtl.stream_through"),
+        ("tests.kernels", "finn.core.executors.xsim.pacing.STALLED"),
+        ("executors", "finn.core.executors.xsim.rtl.stream_out"),
+        ("executors", "finn.transformation.kernels.package.configured_root"),
+        # Parity: two runs of the executors.
+        ("harness", "finn.core.executors.xsim.executor.XSim"),
+        ("harness", "finn.core.onnx_exec.execute_onnx"),
+        # The partition node runs its body under the executors of the run that reached it.
+        ("custom_op.partition", "finn.core.onnx_exec.executing"),
+        ("executors", "finn.custom_op.partition.kernel_partitions.kernel_partition_body"),
         ("flow", "finn.shells.pynq.runner.build_pynq"),
         ("shells", "finn.transformation.kernels.integration.integration"),
         ("shells", "finn.custom_op.partition.kernel_partitions.partition_body"),
-        ("tests.kernels", "finn.harness.rtl.stream_through"),
     ],
 )
 def test_the_table_accepts_an_import_down_its_order(layer: str, name: str) -> None:

@@ -18,6 +18,8 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
+from finn.core.executors.xsim.rtl import pack as xsim_pack
+from finn.core.executors.xsim.rtl import stream_through
 from finn.core.space import Rejected, Unresolved, design_space
 from finn.dataflow import traversal
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -30,12 +32,12 @@ from finn.dataflow.traversal import (
     Traversal,
     axis_strides,
     classify,
+    offsets,
     pack,
     tile,
+    unpack,
     vector_major,
 )
-from finn.harness.rtl import pack as xsim_pack
-from finn.harness.rtl import stream_through
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel, wired
 from finn.kernels.configure import commit
@@ -182,6 +184,51 @@ def test_pack_uses_numpy_exactly_up_to_int64_and_python_ints_beyond(bits, monkey
         found = (*edges[:-1], beyond)
         assert pack(form, found, bits) == _packed_by_position(form, found, bits)
     assert len(taken) == 4
+
+
+def test_unpack_inverts_pack_at_every_width_signedness_and_lane_count():
+    """The operand read back from its words is the operand, for every traversal that
+    presents each element (replays among them), lanes of 1 to 64 bits, signed or not."""
+    rng = random.Random(11)
+    checked = 0
+    while checked < 400:
+        form = _random_form(rng)
+        if set(offsets(form).tolist()) != set(range(prod(form.shape))):
+            continue  # an element it never presents: no operand to read back
+        signed = rng.random() < 0.5
+        bits = rng.choice((1, 2, 3, 4, 7, 8, 9, 16, 31, 32, 33, 62, 63, *((64,) if signed else ())))
+        low, high = (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if signed else (0, (1 << bits) - 1)
+        operand = np.array([rng.randint(low, high) for _ in range(prod(form.shape))], np.int64)
+        words = pack(form, operand, bits)
+        found = unpack(form, words, bits, signed=signed)
+        assert found.shape == form.shape and np.array_equal(found.ravel(), operand), (form, bits)
+        assert pack(form, found.ravel(), bits) == words
+        checked += 1
+
+
+def test_unpack_refuses_words_that_are_no_operand():
+    vector = vector_major((4,), 2)
+    assert unpack(vector, (0x1F, 0x23), 4, signed=True).tolist() == [-1, 1, 3, 2]
+    assert unpack(vector, (0x1F, 0x23), 4, signed=False).tolist() == [15, 1, 3, 2]
+    with pytest.raises(ValueError, match="2 beats, not 3 words"):
+        unpack(vector, (0, 0, 0), 4, signed=False)
+    with pytest.raises(ValueError, match="wider than its 8 bits"):
+        unpack(vector, (0x100, 0), 4, signed=False)
+    with pytest.raises(ValueError, match="exceed an int64"):
+        unpack(vector, (0, 0), 64, signed=False)
+    # A replayed element read twice with two values.
+    with pytest.raises(
+        ValueError, match=r"element \(1,\) is presented twice .* beat 0 lane 1, .* beat 2 lane 1"
+    ):
+        unpack(vector.repeated(2), (0x10, 0x00, 0x20, 0x00), 4, signed=False)
+    assert unpack(vector.repeated(2), (0x10, 0x32, 0x10, 0x32), 4, signed=False).tolist() == [
+        0,
+        1,
+        2,
+        3,
+    ]
+    with pytest.raises(ValueError, match=r"presents no value of element \(2,\)"):
+        unpack(Traversal((4,), (Loop(2, 0),), (Loop(2, 1),)), (0, 0), 4, signed=False)
 
 
 def _random_traversal(rng):
@@ -478,9 +525,11 @@ def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
     expected = [value + PARAMETERS[index % CHANNELS] for index, value in enumerate(inputs)]
     words_in = [xsim_pack(inputs[i : i + PE], 4) for i in range(0, len(inputs), PE)]
     words_out = [xsim_pack(expected[i : i + PE], 5) for i in range(0, len(expected), PE)]
+    design = eltwise_with_constant()
     stream_through(
-        eltwise_with_constant().module,
+        design.module,
         tmp_path,
         inputs={"in0_V": (words_in, 4 * PE)},
         outputs={"out0_V": (words_out, 5 * PE)},
+        cycles=design.cycles,
     )

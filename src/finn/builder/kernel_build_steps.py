@@ -5,7 +5,10 @@
 function, registered by name in ``kernel_build_step_lookup`` for a KernelBuildConfig's
 ``steps`` (finn.builder.kernel_build_config).
 
-``phase_kernel_path`` takes a streamlined model to a partition of KernelOps
+``phase_graph_preparation`` takes a Brevitas export to the streamlined graph the kernel
+path converts, by the sub-phases of finn.transformation.prepare, and checks what it
+leaves before anything converts it (its checkpoint, P7). ``phase_kernel_path`` takes
+that graph to a partition of KernelOps
 (finn.custom_op.kernels): the KernelOps bind kernels to RTL from the model's facts and
 the build's target, so there is no specialization, folding config or per-node IP
 generation. ``phase_kernel_outputs`` then makes the outputs the configuration asks:
@@ -48,15 +51,19 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_REPORTS,
     partition_body,
 )
+from finn.harness.preparation import check_equivalence
 from finn.platform import refuse_drift, shell_row
 from finn.shells.pynq.driver import driver_description, write_driver
 from finn.shells.pynq.runner import build_pynq
 from finn.transformation.kernels import (
-    InferKernelTensors,
     ToKernelOps,
     completion,
     explore_kernel_choices,
     kernel_choices_config,
+    kernel_ops_by_anchor,
+    kernel_ops_report,
+    kernel_ops_summary,
+    refuse_host_between,
     shell_bottleneck,
     strategy,
 )
@@ -67,7 +74,191 @@ from finn.transformation.kernels.package import (
     PackagePartition,
     configured_root,
 )
+from finn.transformation.prepare import (
+    DEVIATIONS,
+    SUB_PHASES,
+    PreparationRefused,
+    census,
+    checkpoint,
+    finding_record,
+    reference,
+    summary,
+)
+from finn.transformation.prepare.phase import (
+    containers_exact,
+    imported,
+    io_explicit,
+    quantization_lowered,
+    streamlined,
+    topology_settled,
+)
 from finn.util.vivado import parse_clock_summary
+
+#: The graph-preparation phase's report, under the output directory.
+PREPARATION_REPORT = "report/graph_preparation.json"
+
+
+def _preparation_source(cfg: KernelBuildConfig) -> str:
+    """Where step_prepare_import keeps the export, the reference of the phase's
+    equivalence check."""
+    return cfg.output_dir + "/intermediate_models/graph_preparation_source.onnx"
+
+
+def _preparation_report(cfg: KernelBuildConfig, fresh: bool = False) -> dict:
+    """The phase's report so far, as written; an empty one when ``fresh`` or none is."""
+    path = Path(cfg.output_dir) / PREPARATION_REPORT
+    if fresh or not path.is_file():
+        return {"sub_phases": [], "checkpoint": None, "equivalence": None}
+    return json.loads(path.read_text())
+
+
+def _write_preparation_report(cfg: KernelBuildConfig, report: dict) -> None:
+    path = Path(cfg.output_dir) / PREPARATION_REPORT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2))
+
+
+def _sub_phase(run, model: ModelWrapper, cfg: KernelBuildConfig, fresh=False):
+    """``model`` through the sub-phase ``run``, what it changed recorded in the phase's
+    report under the sub-phase's name (finn.transformation.prepare: SUB_PHASES, census)
+    and logged."""
+    name = next(name for name, sub_phase in SUB_PHASES if sub_phase is run)
+    before = copy.deepcopy(model)
+    model = run(model, cfg.preparation)
+    changed = census(before, model)
+    report = _preparation_report(cfg, fresh)
+    report["sub_phases"].append({"sub_phase": name, **changed})
+    _write_preparation_report(cfg, report)
+    counts = ", ".join(
+        f"{sign}{count} {op}"
+        for sign, side in (("-", "removed"), ("+", "added"))
+        for op, count in changed[side].items()
+    )
+    print(f"Graph preparation: {name}: {counts or 'no node changed'}")
+    return model
+
+
+def step_prepare_import(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P0: the export through qonnx's cleanup (finn.transformation.prepare.phase.imported).
+    Starts report/graph_preparation.json afresh. When GRAPH_PREPARATION_PYTHON is
+    asked, the export is kept as that check's reference (graph_preparation_source.onnx)."""
+    if KernelVerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
+        os.makedirs(os.path.dirname(_preparation_source(cfg)), exist_ok=True)
+        model.save(_preparation_source(cfg))
+    return _sub_phase(imported, model, cfg, fresh=True)
+
+
+def step_prepare_quantization(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P2: Quant activations to MultiThresholds and weights to integers, as finn-dev's
+    step_qonnx_to_finn and step_tidy_up
+    (finn.transformation.prepare.phase.quantization_lowered)."""
+    return _sub_phase(quantization_lowered, model, cfg)
+
+
+def step_prepare_io(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P1: the network's inputs and outputs as ``cfg.preparation`` states them: its
+    preprocessing model merged ahead, its input datatype, its label select
+    (finn.transformation.prepare.phase.io_explicit)."""
+    return _sub_phase(io_explicit, model, cfg)
+
+
+def step_prepare_streamlining(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P3: the streamlining recipe (``cfg.preparation.streamlining``)."""
+    return _sub_phase(streamlined, model, cfg)
+
+
+def step_prepare_topology(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P4: the topology recipe (``cfg.preparation.topology``), layouts inferred."""
+    return _sub_phase(topology_settled, model, cfg)
+
+
+def step_prepare_containers(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P6: every integer tensor held exactly by its container, the integer regions that
+    need it widened to float64, Casts at their edges, the graph's inputs and outputs
+    unchanged (finn.transformation.prepare.containers)."""
+    return _sub_phase(containers_exact, model, cfg)
+
+
+def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig):
+    """P7: the prepared graph checked before the kernel path converts it
+    (finn.transformation.prepare.checkpoint): its structure, its integer annotations'
+    soundness and its containers' exactness, by bound, against the KernelOps' anchors;
+    what it leaves (float nodes, Transposes, host nodes predicted between KernelOps).
+    Writes the report's checkpoint, logs one line per finding code, and refuses the
+    graph on a checkpoint blocker, each named.
+
+    With GRAPH_PREPARATION_PYTHON, also its equivalence with the export on seeded draws
+    (finn.harness.preparation.check_equivalence), which the build has no deviation's
+    predicate for: every difference is a finding. That check is a verification, as
+    PARTITION_PYTHON is: its findings go to the report's equivalence, the log prints
+    FAIL, one line per finding code and the declared value deviations that might
+    explain them, and the build continues. But a drawn value outside its tensor's
+    annotation (annotation-unsound) is no difference from the export: the graph's own
+    annotation is wrong, and the kernels' widths trust it, so it refuses the graph
+    beside the checkpoint's blockers, named. Where the export itself rounds (its
+    integers otherwise in float32 than in float64), the report's equivalence names each
+    tensor (export_rounds, limitations)."""
+    checked = checkpoint(model, set(kernel_ops_by_anchor()))
+    blockers = list(checked.blockers)
+    report = _preparation_report(cfg)
+    report["checkpoint"] = {
+        "bounded": checked.bounded,
+        "unbounded": dict(checked.unbounded),
+        "findings": [finding_record(finding) for finding in checked.findings],
+    }
+    if KernelVerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
+        source_file = _preparation_source(cfg)
+        if not os.path.isfile(source_file):
+            raise FileNotFoundError(
+                f"{source_file}: the export, which step_prepare_import keeps when "
+                "GRAPH_PREPARATION_PYTHON is asked, is not there (did the build start after it?)"
+            )
+        input_name = model.graph.input[0].name
+        if not (
+            model.has_tensor_datatype(input_name)
+            and model.get_tensor_datatype(input_name).is_integer()
+        ):
+            raise ValueError(
+                f"graph_preparation_python draws from the prepared input's annotation, and "
+                f"{input_name} states no integer one: state preparation.input_datatype"
+            )
+        equivalence = check_equivalence(
+            reference(ModelWrapper(source_file), cfg.preparation), model
+        )
+        report["equivalence"] = {
+            "draws": equivalence.draws,
+            "findings": [finding_record(finding) for finding in equivalence.findings],
+            "export_rounds": [finding_record(finding) for finding in equivalence.rounds],
+        }
+        unsound = [f for f in equivalence.findings if f.code == "annotation-unsound"]
+        blockers += unsound
+    _write_preparation_report(cfg, report)
+    print(
+        f"Graph preparation: checkpoint: {len(checked.findings)} findings, {checked.bounded} "
+        f"integer outputs bounded; {PREPARATION_REPORT}"
+    )
+    for line in summary(checked.findings):
+        print(line)
+    if KernelVerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
+        print(
+            "Verification for graph_preparation_python : "
+            + ("FAIL" if equivalence.findings else "SUCCESS")
+        )
+        if equivalence.findings:
+            declared = ", ".join(code for code, each in DEVIATIONS.items() if each.values)
+            refused = "annotation-unsound refuses the graph, the rest " if unsound else ""
+            print(
+                f"Graph preparation: equivalence: {len(equivalence.findings)} findings on "
+                f"{equivalence.draws} draws, {refused}reported, not refused; a build runs no "
+                f"deviation's predicate, and the phase declares {declared}"
+            )
+            for line in summary(equivalence.findings):
+                print(line)
+        for line in summary(equivalence.rounds):
+            print(line)
+    if blockers:
+        raise PreparationRefused(blockers)
+    return model
 
 
 def _kernel_path_source(cfg: KernelBuildConfig) -> str:
@@ -78,18 +269,26 @@ def _kernel_path_source(cfg: KernelBuildConfig) -> str:
 
 def step_kernel_ops(model: ModelWrapper, cfg: KernelBuildConfig):
     """State the build's target in the model (``cfg.target``, resolved) and rewrite
-    each node a KernelOp binds (MatMul, MultiThreshold) as one: ToKernelOps. When
-    PARTITION_PYTHON is asked, the model it converts is kept as that check's
-    reference (kernel_path_source.onnx)."""
+    each node a KernelOp binds (MatMul, MultiThreshold) and the kernels admit as one,
+    every tensor inferred as it goes: ToKernelOps. When PARTITION_PYTHON is asked, the
+    model it converts is kept as that check's reference (kernel_path_source.onnx).
+    Writes report/kernel_ops.json (every node's outcome: the KernelOp it became, or
+    why it stays on the host) and logs its summary; refuses host nodes between
+    KernelOps, each named with its findings (refuse_host_between), which partitioning
+    could not leave out."""
     if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         os.makedirs(os.path.dirname(_kernel_path_source(cfg)), exist_ok=True)
         model.save(_kernel_path_source(cfg))
-    return model.transform(ToKernelOps(cfg._resolve_target()))
-
-
-def step_infer_kernel_tensors(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Infer every tensor in graph order, the KernelOps answering from their kernels."""
-    return model.transform(InferKernelTensors())
+    conversion = ToKernelOps(cfg._resolve_target())
+    model = model.transform(conversion)
+    report = kernel_ops_report(model, conversion.outcomes)
+    os.makedirs(cfg.output_dir + "/report", exist_ok=True)
+    with open(cfg.output_dir + "/report/kernel_ops.json", "w") as f:
+        json.dump(report, f, indent=2)
+    for line in kernel_ops_summary(report):
+        print(line)
+    refuse_host_between(model, conversion.outcomes)
+    return model
 
 
 def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig):
@@ -367,8 +566,7 @@ def delivered_clock(
     # The report states periods to the picosecond.
     if abs(delivered - period_ns) >= 0.0005:
         warning = (
-            f"the shell delivers {name} at {delivered} ns ({mhz} MHz), "
-            f"not the {period_ns} ns asked"
+            f"the shell delivers {name} at {delivered} ns ({mhz} MHz), not the {period_ns} ns asked"
         )
         if cycles is not None:
             warning += (
@@ -609,12 +807,41 @@ def step_kernel_resources(model: ModelWrapper, cfg: KernelBuildConfig):
     return model
 
 
+def phase_graph_preparation(model: ModelWrapper, cfg: KernelBuildConfig):
+    """Phase: graph preparation, from a Brevitas export to the streamlined graph the
+    kernel path converts, as ``cfg.preparation`` states it. It reads no target.
+
+    Internal steps, in the order they run (the sub-phases of
+    finn.transformation.prepare.phase):
+    - step_prepare_import: P0, qonnx's cleanup
+    - step_prepare_quantization: P2, Quant to MultiThreshold, weights to integers
+    - step_prepare_io: P1, preprocessing merged, input datatype, label select
+    - step_prepare_streamlining: P3, the streamlining recipe
+    - step_prepare_topology: P4, the topology recipe
+    - step_prepare_containers: P6, integer regions widened where float32 is not exact
+    - step_prepare_checkpoint: P7, the prepared graph checked (and its equivalence
+      with the export, as verify_steps asks)
+
+    Writes report/graph_preparation.json."""
+    for step in (
+        step_prepare_import,
+        step_prepare_quantization,
+        step_prepare_io,
+        step_prepare_streamlining,
+        step_prepare_topology,
+        step_prepare_containers,
+        step_prepare_checkpoint,
+    ):
+        model = execute_step(step, model, cfg)
+    return model
+
+
 def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
-    """Phase: the kernel path, from a streamlined model to a partition of KernelOps.
+    """Phase: the kernel path, from a prepared model to a partition of KernelOps.
 
     Internal steps:
-    - step_kernel_ops: State the build target in the model, rewrite to KernelOps
-    - step_infer_kernel_tensors: Infer every tensor from the kernels
+    - step_kernel_ops: State the build target in the model, rewrite to KernelOps,
+      every tensor inferred as it goes
     - step_kernel_partition: The KernelOps cut once into one partition, the rest on the host
     - step_kernel_choices: Commit the partition's open choices by the configured strategies
     - step_verify_kernel_partition: Check the partition (and what verify_steps asks)
@@ -622,7 +849,6 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
     Returns the parent graph: the host's nodes and the partition node, whose body
     holds the KernelOps, their choices committed."""
     model = execute_step(step_kernel_ops, model, cfg)
-    model = execute_step(step_infer_kernel_tensors, model, cfg)
     model = execute_step(step_kernel_partition, model, cfg)
     model = execute_step(step_kernel_choices, model, cfg)
     model = execute_step(step_verify_kernel_partition, model, cfg)
@@ -650,8 +876,14 @@ def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig):
 kernel_build_step_lookup = {
     step.__name__: step
     for step in (
+        step_prepare_import,
+        step_prepare_quantization,
+        step_prepare_io,
+        step_prepare_streamlining,
+        step_prepare_topology,
+        step_prepare_containers,
+        step_prepare_checkpoint,
         step_kernel_ops,
-        step_infer_kernel_tensors,
         step_kernel_partition,
         step_kernel_choices,
         step_verify_kernel_partition,
@@ -660,6 +892,7 @@ kernel_build_step_lookup = {
         step_kernel_driver,
         step_kernel_resources,
         step_kernel_deployment_package,
+        phase_graph_preparation,
         phase_kernel_path,
         phase_kernel_outputs,
     )

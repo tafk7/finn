@@ -36,7 +36,8 @@ silently ignored**.  So the override set is checked against the declared
 parameters here, or a typo'd binding would pass as a match.
 
 **A name is established before its value is.**  Every declared parameter is
-reported by name, but its value only when it is an integer or a string; an
+reported by name, but its value only when it is an integer or a string (an
+untyped parameter given a string literal is a string, not the literal's bits); an
 unpacked array (``thresholding_axi``'s ``THRESHOLDS``) or a real
 (``eltwise``'s ``B_SCALE``) is reported with the value ``None``, *not
 established*.  The module is not declined for it: the ports and their widths
@@ -149,11 +150,30 @@ class Declined:
 Extraction = Union[ExtractedModule, Declined]
 
 
-def _constant(value: pyslang.ConstantValue) -> int | str | None:
+def _string_literal(member: ast.ParameterSymbol) -> str | None:
+    """The string an untyped parameter holds (``parameter RAM_STYLE = "auto"``): its
+    value, the default or the binding's, is a string literal and its declaration states
+    no type, sign or range. SystemVerilog types such a parameter as the literal's bits,
+    so its constant is an integer (``"auto"``: 1635087471), which is not what it says."""
+    declared = member.declaredType.typeSyntax
+    if declared is None or declared.kind != syntax.SyntaxKind.ImplicitType or str(declared).strip():
+        return None
+    expression = member.initializer
+    while expression is not None and expression.kind == ast.ExpressionKind.Conversion:
+        expression = expression.operand
+    if expression is None or expression.kind != ast.ExpressionKind.StringLiteral:
+        return None
+    return str(expression.value)
+
+
+def _constant(member: ast.ParameterSymbol) -> int | str | None:
     """An integer or string parameter value; anything else is not established."""
-    inner = value.value
+    inner = member.value.value
     if isinstance(inner, str):
         return inner
+    literal = _string_literal(member)
+    if literal is not None:
+        return literal
     if not isinstance(inner, pyslang.SVInt) or inner.hasUnknown:
         return None
     return int(inner)
@@ -331,7 +351,7 @@ def extract(
         kind = type(member).__name__
         if kind == "ParameterSymbol":
             # Not an integer or a string: the name is established, the value is not.
-            value = _constant(member.value)
+            value = _constant(member)
         elif kind == "TypeParameterSymbol":
             value = None
         else:

@@ -4,7 +4,7 @@
 """What a simulation runs on: FinnLib as FINN resolves it, Vivado as FINN's toolchain
 selects it, and the revisions a run prints first in its log.
 
-Apart from ``finn.harness.rtl`` so that a job importing only these (a numeric sweep
+Apart from ``finn.core.executors.xsim.rtl`` so that a job importing only these (a numeric sweep
 driving XSI, an artifact test reading FinnLib) is not keyed by the testbench writer's
 code (``scripts/emitted_text.py`` keys a job by the harness files it imports).
 """

@@ -295,8 +295,9 @@ class AbsorbAddIntoMultiThreshold(Transformation):
                     # granularity
                     if is_scalar or A.shape[cdim] == A.size:
                         # Reshape addition parameters to have the elements/PE
-                        # dimension first, aligned with the thresholds.
-                        Tnew = T - A.reshape(-1, 1)
+                        # dimension first, aligned with the thresholds. In float64:
+                        # ONNX gives thresholds no type, and float32 would round them.
+                        Tnew = T.astype(np.float64) - A.reshape(-1, 1).astype(np.float64)
                         # compute new thresholds and set initializer
                         model.set_initializer(threshold_name, Tnew)
                         # wire add input directly to MultiThreshold
@@ -332,8 +333,9 @@ class AbsorbMulIntoMultiThreshold(Transformation):
                         T = model.get_initializer(threshold_name)
                         assert T is not None, "Initializer for thresholds is not set."
                         start_name = n.input[0]
-                        # compute new thresholds and set initializer
-                        Tnew = T / A.reshape(-1, 1)
+                        # compute new thresholds and set initializer, in float64:
+                        # ONNX gives thresholds no type, and float32 would round them
+                        Tnew = T.astype(np.float64) / A.reshape(-1, 1).astype(np.float64)
                         # TODO: need to handle negative A values correctly; produce
                         # mul sign mask and merge into preceding matmul?
                         model.set_initializer(threshold_name, Tnew)

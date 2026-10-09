@@ -22,6 +22,8 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
 The Tcl, the VLNV and the interface names are emitted by
 ``finn.kernels.artifacts.ipxact`` from the module's pins; this module supplies
 the partition: its module, part, clock and name, and the toolchain Vivado runs in.
+An HLS leaf's request is synthesized for the partition's part before the module is
+emitted (``finn.transformation.kernels.hls.built_hls``, cached).
 
 The partition's boundary, the ends' facts, is not stored on the model: it is read
 from the configured root's boundary channels, each the stream at its free side and
@@ -95,6 +97,7 @@ from finn.kernels.configure import member_of, undecided
 from finn.kernels.ends import EndContract
 from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
 from finn.kernels.utilization import Resources
+from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
 from finn.util.toolchain import Toolchain, machine_toolchain
 
@@ -403,8 +406,12 @@ class PackagePartition(Transformation):
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
         ).resolve()
         project.mkdir(parents=True, exist_ok=True)
+        toolchain = self.toolchain or machine_toolchain()
         emitted = emit_module(
-            module, project / "src", roots={"finnlib": Path(resources.path("finnlib"))}
+            module,
+            project / "src",
+            roots={"finnlib": Path(resources.path("finnlib"))},
+            built=built_hls(module, built.part, toolchain=toolchain),
         )
         check_elaborates(emitted, module.abi, self.ip_name)
         pins = module.abi.pins
@@ -419,7 +426,6 @@ class PackagePartition(Transformation):
                 run_synth=self.run_synth,
             )
         )
-        toolchain = self.toolchain or machine_toolchain()
         toolchain.run(
             "vivado",
             ["-mode", "batch", "-nojournal", "-log", "package.log", "-source", "package.tcl"],
@@ -466,10 +472,13 @@ class ElaboratePartition(Transformation):
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()
         directory.mkdir(parents=True, exist_ok=True)
-        emitted = emit_module(
-            point.module, directory / "src", roots={"finnlib": Path(resources.path("finnlib"))}
-        )
         toolchain = self.toolchain or machine_toolchain()
+        emitted = emit_module(
+            point.module,
+            directory / "src",
+            roots={"finnlib": Path(resources.path("finnlib"))},
+            built=built_hls(point.module, read_target(model).part, toolchain=toolchain),
+        )
         vivado = toolchain.environment.get("XILINX_VIVADO")
         if not vivado:
             raise KernelOpError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")

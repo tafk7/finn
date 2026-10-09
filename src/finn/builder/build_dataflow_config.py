@@ -364,7 +364,8 @@ class DataflowBuildConfig:
     #: Currently only supported by the SLASH_VRT shell flow.
     enable_hw_sim: Optional[bool] = False
 
-    #: Whether pdb postmortem debuggig will be launched when the build fails
+    #: Whether pdb postmortem debugging will be launched when the build fails and
+    #: stdin is a terminal
     enable_build_pdb_debug: Optional[bool] = True
 
     #: When True, all warnings and compiler output will be printed in stdout.

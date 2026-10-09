@@ -174,9 +174,8 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
             "dotp-activation-width",
         ),
         ({"weights_dtype": DataType["INT27"]}, "dotp-weight-width"),
-        ({"result_dtype": DataType["INT59"]}, "dotp-accumulator-width"),
         (
-            {"result_dtype": DataType["INT49"], "platform": FULL_DSP48E2},
+            {"space_type": Int8Dsp58DotpKernel, "result_dtype": DataType["INT59"]},
             "dotp-accumulator-width",
         ),
         ({"platform": replace(FULL_DSP58, dsp=None)}, "dotp-dsp"),
@@ -222,7 +221,7 @@ def test_a_folding_factor_must_divide_its_extent(factor):
 
 
 def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
-    point = kernel(result_dtype=DataType["INT59"], compute_pumping=True)
+    point = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"], compute_pumping=True)
     physical = point.inspect(DotpAxiKernel.module)
     assert isinstance(physical.output_result, Available)
     assert point.query(DotpAxiKernel.codegen) == physical.output_result
@@ -319,6 +318,45 @@ def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
     assert point.y.element.dtype == DataType[f"INT{bits}"]
     assert dict(point.module.parameters)["ACCU_WIDTH"] == bits
+
+
+@pytest.mark.parametrize(
+    "platform,activation,weight,accumulator",
+    [
+        # One lane (INT26 weights fill the A input): its low bits are P, its wraps counted.
+        (FULL_DSP48E2, "UINT17", "INT26", "INT49"),
+        (FULL_DSP58, "UINT23", "INT26", "INT64"),
+        # Several lanes: the top one extends past P.
+        (FULL_DSP58, "INT3", "INT3", "INT96"),
+    ],
+)
+def test_the_packed_core_takes_accumulators_wider_than_p(platform, activation, weight, accumulator):
+    """FinnLib dotp sets no ceiling on ACCU_WIDTH (``dotp.sv`` refuses only 0): the top
+    lane counts its P register's wraps in a high sideband as wide as ACCU_WIDTH needs.
+    The INT8 core presents the low bits of its 58-bit accumulation, so 58 is its own."""
+    point = kernel(
+        platform=platform,
+        activation_dtype=DataType[activation],
+        weights_dtype=DataType[weight],
+        result_dtype=DataType[accumulator],
+    )
+    assert point.inspect(DotpAxiKernel.accumulator_width_supported).result == Available(True)
+    assert dict(point.module.parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
+    int8 = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"])
+    refused = int8.inspect(DotpAxiKernel.accumulator_width_supported).result
+    assert codes(refused) == {"dotp-accumulator-width"}
+    assert kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT58"]).module
+
+
+def test_only_the_packed_core_needs_two_bit_activations():
+    """``dotp.sv`` refuses ACTIVATION_WIDTH below 2; ``dotp_8sx9_dsp58`` pads any width to
+    its 9-bit lanes, so the INT8 core takes BINARY activations."""
+    binary = {"activation_dtype": DataType["BINARY"], "result_dtype": DataType["INT6"]}
+    packed = kernel(**binary).inspect(DotpAxiKernel.module).accepted_result
+    assert codes(packed) == {"dtype-minimum-bits"}
+    int8 = kernel(Int8Dsp58DotpKernel, **binary)
+    assert dict(int8.module.parameters)["ACTIVATION_WIDTH"] == 1
+    assert dict(int8.module.parameters)["SIGNED_ACTIVATIONS"] == 0
 
 
 @pytest.mark.parametrize("space_type", (PackedDotpKernel, Int8Dsp58DotpKernel))
