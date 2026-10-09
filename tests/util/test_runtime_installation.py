@@ -146,6 +146,7 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
     assert "finn/shells/pynq/data/sim_ctrl.v" in data
     assert "finn/shells/pynq/data/mdd/finn_design.mdd" in data
     assert "finn/shells/pynq/data/pynq_driver/driver_base.py" in data
+    assert "finn/platform/data/parts.jsonl" in data and "finn/platform/catalog.tcl" in data
     assert "finn/resources.toml" in data and "finn/resources/_cli.py" in data
     assert not any(
         "/testcase/" in name or "_tb." in name or "/build_dataflow/" in name for name in data

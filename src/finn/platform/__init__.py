@@ -4,7 +4,13 @@
 """The platform registry: what parts, boards and shells are, and the one resolution of
 a build's target from them.
 
-- ``finn.platform.parts``: a part's fabric, DSP block, UltraRAM and resource totals;
+- ``finn.platform.catalog``: every part of the supported series, generated from
+  Vivado's part database (``finn.platform.generate``): its device, the device's
+  resources per SLR and totals, and the devices that share them, with an overlay
+  for parts FINN does not ship (``FINN_PLATFORM_CATALOG``);
+- ``finn.platform.architectures``: what FINN builds for each of Vivado's
+  architectures (fabric, DSP block, UltraRAM initialisation), each rule checked by
+  the generator's site probe;
 - ``finn.platform.boards``: a board's part and Vivado preset;
 - ``finn.platform.shells``: a shell's row for a board: its ends, budgets, doubled
   clock, integration, host runtime and static region;
@@ -23,7 +29,7 @@ admits. Every refusal is named (``TargetRefused``).
 """
 
 from finn.platform.boards import BOARDS, Board
-from finn.platform.parts import FAMILIES, PARTS, PartFacts, part_facts
+from finn.platform.catalog import Device, Part, device, part, parts
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
@@ -42,22 +48,23 @@ from finn.platform.shells import (
 
 __all__ = [
     "BOARDS",
-    "FAMILIES",
     "IP",
     "IP_ROW",
-    "PARTS",
     "PYNQ",
     "ROWS",
     "SHELL_NAMES",
     "SLASH",
     "XRT",
     "Board",
-    "PartFacts",
+    "Device",
+    "Part",
     "ShellRow",
     "StaticRegion",
     "TargetRefused",
     "TargetRequest",
-    "part_facts",
+    "device",
+    "part",
+    "parts",
     "refuse_drift",
     "resolve_target",
     "shell_row",

@@ -1,0 +1,68 @@
+{
+  "tool": {
+    "version": "2025.2",
+    "build": "SW Build 6299465 on Fri Nov 14 12:34:56 MST 2025"
+  },
+  "series": {
+    "Zynq-7000": [
+      "azynq",
+      "qzynq",
+      "zynq"
+    ],
+    "UltraScale": [
+      "kintexu",
+      "qkintexu",
+      "qrkintexu",
+      "virtexu"
+    ],
+    "UltraScale+": [
+      "aartixuplus",
+      "artixuplus",
+      "azynquplus",
+      "kintexuplus",
+      "qkintexuplus",
+      "qvirtexuplus",
+      "qvirtexuplusHBM",
+      "qzynquplus",
+      "qzynquplusRFSOC",
+      "spartanuplus",
+      "virtexuplus",
+      "virtexuplus58g",
+      "virtexuplusHBM",
+      "zynquplus",
+      "zynquplusRFSOC"
+    ],
+    "Versal": [
+      "aversalaiedge",
+      "qrversalaicore",
+      "qrversalaiedge",
+      "qversalaicore",
+      "qversalaiedge",
+      "qversalpremium",
+      "qversalprime",
+      "versalaicore",
+      "versalaiedge",
+      "versalaiedge2",
+      "versalhbm",
+      "versalpremium",
+      "versalprime",
+      "versalprime2"
+    ]
+  },
+  "counts": {
+    "parts": 4725,
+    "devices": 261,
+    "resources": 92,
+    "pairs": 36,
+    "reduced": 50,
+    "reduced_without_slrs": 7
+  },
+  "checks": [
+    "every part of a device states its device's ARCHITECTURE, FAMILY and totals",
+    "each device's per-SLR resources, from its SLRs' sites, sum to its LUT_ELEMENTS, FLIPFLOPS, 2 x BLOCK_RAMS, ULTRA_RAMS (absent: none) and DSP, over SLRS SLRs; on a reduced die (sites covering the totals in every resource, more in one) the record states the device's totals, and over one SLR that SLR's",
+    "each supported rule's fabric and DSP block are confirmed on every device of its pair by the site probe"
+  ],
+  "generator": "sha256:dfa7a7c9390dbe62007cfa02cca1b1ced649a10917b5b30884fb52d8020f1222",
+  "rules": "sha256:1616a50380354caa05f8a4d756c17cc7b3d5b0d8ccd211291c246dcc12ccc0f8",
+  "facts": "sha256:0670f571600486e52b5728f404683478de2fbf8050e1863f6221e174b6441363"
+}
