@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.kernels.utilization import Resources
+from finn.kernels.utilization import Fabric, Resources
 
 
 class DspBlock(str, Enum):
@@ -25,15 +25,6 @@ class DspBlock(str, Enum):
     DSP48E1 = "DSP48E1"
     DSP48E2 = "DSP48E2"
     DSP58 = "DSP58"
-
-
-class Fabric(str, Enum):
-    """The programmable fabric's architecture generation, independent of its DSP block:
-    7 series, UltraScale (and UltraScale+), Versal."""
-
-    SERIES7 = "series7"
-    ULTRASCALE = "ultrascale"
-    VERSAL = "versal"
 
 
 _DSP_WIDTHS = {
@@ -61,7 +52,8 @@ class Platform:
 
     - ``period_ns``: the clock period the kernels must meet (``ap_clk``);
     - ``dsp``: the DSP block (``None``: none stated, which a DSP core refuses);
-    - ``fabric``: the fabric's architecture generation;
+    - ``fabric``: the fabric's architecture generation, whose memory primitives a
+      kernel's resources are stated in (``finn.kernels.utilization.PRIMITIVES``);
     - ``uram``: the device has UltraRAM;
     - ``uram_init``: an UltraRAM takes initial contents (UltraScale+ ignores its
       INIT and builds block RAM);

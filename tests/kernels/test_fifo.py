@@ -15,6 +15,7 @@ from finn.core.space import Available, QueryResult, Rejected, Unresolved, design
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
+from finn.kernels.utilization import Fabric
 from kernels.helpers import FULL_DSP48E2
 
 T = TypeVar("T")
@@ -110,17 +111,23 @@ def legacy_luts(depth: int, width: int) -> int:
     return int(LEGACY_FIFOS[depth, width]["lut"])
 
 
+def luts(depth: int, width: int) -> int:
+    """This model's LUTs on UltraScale, in the style the RTL resolves for ``auto``."""
+    return fifo_resources(depth, width, "auto", fabric=Fabric.ULTRASCALE).lut
+
+
 def test_the_fifo_model_duplicates_the_legacy_one_less_the_terms_it_names() -> None:
     """``fifo_resources`` takes its control from the HWCustomOp flow's model and names the
     terms it does not carry over; neither model's numbers move. A shift FIFO's are the
     same; the others part by the named terms, at the comment's examples."""
     for depth in (2, 5, 17, 33):
         for width in (1, 8, 32, 100):
-            assert fifo_resources(depth, width, "auto").lut == legacy_luts(depth, width)
-    # LUTRAM: RAM64M8 banks against RAM32X2 with a mux from 128 rows.
-    assert (fifo_resources(257, 32, "auto").lut, legacy_luts(257, 32)) == (213, 257)
+            assert luts(depth, width) == legacy_luts(depth, width)
+    # LUTRAM: RAM64M8 banks, their decode and read multiplexer, against RAM32X2 with a
+    # mux from 128 rows.
+    assert (luts(257, 32), legacy_luts(257, 32)) == (261, 257)
     # Block RAM: no cascade decode here (one space), nor the lo/hi select (two).
-    assert (fifo_resources(2028, 32, "auto").lut, legacy_luts(2028, 32)) == (54, 67)
-    assert (fifo_resources(1500, 32, "auto").lut, legacy_luts(1500, 32)) == (54, 92)
+    assert (luts(2028, 32), legacy_luts(2028, 32)) == (54, 67)
+    assert (luts(1500, 32), legacy_luts(1500, 32)) == (54, 92)
     # UltraRAM: the output queue W at any depth, not the read pipeline's growth.
-    assert (fifo_resources(100_000, 72, "auto").lut, legacy_luts(100_000, 72)) == (180, 540)
+    assert (luts(100_000, 72), legacy_luts(100_000, 72)) == (180, 540)

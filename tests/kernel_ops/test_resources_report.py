@@ -101,6 +101,9 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     write_target(model, resolve_target(board=board, period_ns=5.0, shell="pynq"))
     configure_partition(model)
     exact = explore_kernel_choices(model, []).report["resources"]["exact"]
+    # The memories are counted in the target's fabric's table; auto is UltraScale+'s.
+    assert "in the ultrascale primitive table" in exact
+    assert "auto placement is Vivado's as observed on UltraScale+" in exact
     stated = shell_resources_report(model.transform(CutKernelPartition(tmp_path)))
     assert stated["caveat"] == row.caveat
     assert SHELL_CHARACTERISED in stated["columns"]["model"]

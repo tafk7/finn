@@ -65,7 +65,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Fit, Resources, memory
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
@@ -85,17 +85,17 @@ _MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
 
 def memstream_resources(
-    *, sets: int, depth: int, width: int, ram_style: str, pumped_memory: bool
+    *, sets: int, depth: int, width: int, ram_style: str, pumped_memory: bool, fabric: Fabric
 ) -> Resources:
     """FinnLib ``memstream`` inside ``memstream_axi``: its table, SETS * DEPTH words of
-    WIDTH bits in RAM_STYLE, one port (the configuration port shares the read address);
-    pumped, twice the words of half the bits (``DEPTH_EFF``, ``WIDTH_EFF``). Its output
-    stream (a seven-deep shift register and the output register) is a ``Fit`` over
-    WIDTH, plus the read register a bit where LUTRAM leaves it in the fabric (block RAM
-    and UltraRAM absorb it); characterised unpumped, a pumped memory's gearbox is not
-    in it."""
+    WIDTH bits in RAM_STYLE on ``fabric``, one port (the configuration port shares the
+    read address) and never written (the kernel holds its configuration port); pumped,
+    twice the words of half the bits (``DEPTH_EFF``, ``WIDTH_EFF``). Its output stream
+    (a seven-deep shift register and the output register) is a ``Fit`` over WIDTH, plus
+    the read register a bit where LUTRAM leaves it in the fabric (block RAM and UltraRAM
+    absorb it); characterised unpumped, a pumped memory's gearbox is not in it."""
     words, bits = (2 * depth, (width + 1) // 2) if pumped_memory else (depth, width)
-    table = memory(sets * words, bits, ram_style, single_port=True)
+    table = memory(sets * words, bits, ram_style, fabric=fabric, single_port=True, written=False)
     read_register = 0 if table.bram18 or table.uram else bits
     return table + Resources(
         lut=_MEMSTREAM_LUT.at(width), ff=_MEMSTREAM_FF.at(width) + read_register
@@ -288,6 +288,7 @@ class MemStreamKernel(Kernel):
             width=self.word_bits,
             ram_style=self.ram_style,
             pumped_memory=self.pumped_memory,
+            fabric=self.platform.fabric,
         )
 
     @derived

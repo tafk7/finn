@@ -383,8 +383,8 @@ def test_a_strategy_reads_a_completed_copy_and_the_seam_records_it() -> None:
 # -- the most throughput within resources -----------------------------------------------------
 
 #: The Chain's part: its totals, of which a budget is a fraction. At each budget of cycles
-#: the Chain folds to (``TargetCycles``), completed: 6 cycles, 478 LUT and 8 DSP; 12,
-#: 375 and 8; 24, 330 and 4; 48 (the least parallelism), 325 and 2.
+#: the Chain folds to (``TargetCycles``), completed: 6 cycles, 482 LUT and 8 DSP; 12,
+#: 379 and 8; 24, 331 and 4; 48 (the least parallelism), 328 and 2.
 PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, uram=0, dsp=10))
 
 
@@ -418,7 +418,7 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
     assert report["budget"] == {"dsp": 5} and report["kept_budget"] is not None
     assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
     assert (report["lower_bound"], report["unstated"]) == (False, {})
-    assert report["used"] == asdict(Resources(lut=330, ff=380, dsp=4))
+    assert report["used"] == asdict(Resources(lut=331, ff=380, dsp=4))
     assert report["ratio"] == {"dsp": 0.8} and report["binding"] == "dsp" and report["fits"]
     tried = report["tried"]
     assert isinstance(tried, list)
@@ -456,7 +456,7 @@ def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> 
     both = MaxThroughput({"lut": 0.5, "dsp": 1.0})
     both.explore(explorer, point)
     report = both.report()
-    assert report["ratio"] == {"lut": 0.956, "dsp": 0.8} and report["binding"] == "lut"
+    assert report["ratio"] == {"lut": 0.964, "dsp": 0.8} and report["binding"] == "lut"
     assert [tried.cycles for tried in both.tried] == [1]
 
 
@@ -496,7 +496,7 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     assert [row["bottleneck"] for row in tried if row["cycles"] == 13] == [48]
     assert report["kept_budget"] == 27
     assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
-    assert report["used"] == asdict(Resources(lut=330, ff=380, dsp=4)) and report["fits"]
+    assert report["used"] == asdict(Resources(lut=331, ff=380, dsp=4)) and report["fits"]
     assert not report["monotone"]
     departures = report["departures"]
     assert isinstance(departures, list)

@@ -182,14 +182,25 @@ RESOURCES_LOWER_BOUND = (
 )
 """What the report's resources count where members state none, as it states it."""
 
-RESOURCES_EXACT = (
-    "the partition's DSP slices, and block RAM and UltraRAM where a memory's style is "
-    "explicit, are the RTL's; its LUTs, FFs and auto memories are models (about 10 % on "
-    "LUT and FF); the ends and the static region are models, " + SHELL_CHARACTERISED + ", "
-    "which overstate the placed shell (by about 28 % of its LUTs, TFC on Ultra96)"
-)
-"""Which of the report's resources are exact and which are models, as it states it; on
-a board the shell was not built and timed on, followed by its row's ``caveat``."""
+
+def resources_exact(platform: Platform | None) -> str:
+    """Which of the report's resources are exact and which are models, as it states it,
+    naming the primitive table the memories are counted in (the platform's fabric's,
+    ``finn.kernels.utilization.PRIMITIVES``); on a board the shell was not built and
+    timed on, the report follows it with its row's ``caveat``."""
+    table = (
+        "no fabric's primitive table, the platform not stated"
+        if platform is None
+        else f"the {platform.fabric.value} primitive table (finn.kernels.utilization.PRIMITIVES)"
+    )
+    return (
+        "the partition's DSP slices, and block RAM and UltraRAM where a memory's style is "
+        f"explicit, are the RTL's, in {table}; its LUTs, FFs and auto memories are models "
+        "(about 10 % on LUT and FF; auto placement is Vivado's as observed on UltraScale+, "
+        "on any fabric); the ends and the static region are models, "
+        + SHELL_CHARACTERISED
+        + ", which overstate the placed shell (by about 28 % of its LUTs, TFC on Ultra96)"
+    )
 
 
 def part_report(name: str) -> dict[str, object]:
@@ -234,6 +245,7 @@ def _resources_report(
     if lower_bound:
         used = total(cost.resources.values())
     totals = None if platform is None else platform.resources
+    exact = resources_exact(platform)
     share = None
     most = None
     exceeded: dict[str, dict[str, int]] = {}
@@ -267,7 +279,7 @@ def _resources_report(
         "over": exceeded,
         "warning": _over_warning(most, exceeded),
         "counted": RESOURCES_LOWER_BOUND if lower_bound else RESOURCES_COUNTED,
-        "exact": RESOURCES_EXACT if caveat is None else f"{RESOURCES_EXACT}; {caveat}",
+        "exact": exact if caveat is None else f"{exact}; {caveat}",
     }
 
 

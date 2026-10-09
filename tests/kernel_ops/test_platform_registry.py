@@ -10,9 +10,14 @@ import re
 from dataclasses import replace
 
 import pytest
+from qonnx.core.datatype import DataType
 
+from finn.core.space import Rejected, design_space
+from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
-from finn.kernels.target import DspBlock, Fabric, Target
+from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.target import DspBlock, Fabric, Platform, Target
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import Resources
 from finn.platform import (
     BOARDS,
@@ -24,6 +29,7 @@ from finn.platform import (
     resolve_target,
     shell_row,
 )
+from finn.platform.architectures import rule
 from finn.platform.shells import PYNQ_CONTROL_BUDGET, ZYNQ_STATIC_REGION
 from finn.shells.pynq.templates import custom_zynq_shell_template
 from finn.util.basic import get_dsp_block as untyped_dsp_block
@@ -151,11 +157,54 @@ def test_every_grade_of_a_device_has_its_totals() -> None:
         Fabric.VERSAL,
         DspBlock.DSP58,
         True,
-        False,
+        True,
     )
     assert vck190.resources == Resources(
         lut=899_840, ff=1_799_680, bram18=1_934, uram=463, dsp=1_968
     )
+
+
+def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_build() -> None:
+    """Versal keeps an UltraRAM's initial contents through place and route, UltraScale+
+    builds block RAM for it: memstream's ``ultra`` and thresholding's ``ultra_stages``
+    are offered on xcvc1902 and refused by name on xczu7ev, whose UltraRAM is there."""
+    versal = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0).platform
+    zynq = resolve_target(board="ZCU104", period_ns=5.0).platform
+    assert versal.uram and versal.uram_init and zynq.uram and not zynq.uram_init
+    found = rule("versal", "versalaicore")
+    assert found is not None and "opt, place and route" in found.evidence["uram_init"]
+
+    def memstream(platform: Platform) -> MemStreamKernel:
+        return design_space(
+            MemStreamKernel(
+                dtype=DataType["INT3"],
+                form=tile(4, 4, 2, 2),
+                contents=((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4)),
+                platform=platform,
+            )
+        )
+
+    def thresholding(platform: Platform) -> ThresholdingAxiKernel:
+        return design_space(
+            ThresholdingAxiKernel(
+                input_dtype=DataType["INT8"],
+                threshold_dtype=DataType["INT8"],
+                thresholds=(((-2, 0, 3),),),
+                bias=0,
+                platform=platform,
+            )
+        )
+
+    assert memstream(versal).try_with_choices(ram_style="ultra").accepted
+    assert thresholding(versal).try_with_choices(ultra_stages=1).accepted
+    for refused in (
+        memstream(zynq).try_with_choices(ram_style="ultra"),
+        thresholding(zynq).try_with_choices(ultra_stages=1),
+    ):
+        assert not refused.accepted
+        result = refused.outcomes[0].result
+        assert isinstance(result, Rejected)
+        assert {finding.code for finding in result.findings} == {"uram-init"}
 
 
 def test_a_name_the_catalog_lacks_is_refused_with_close_names_none_chosen() -> None:

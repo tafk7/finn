@@ -20,6 +20,8 @@ import math
 from collections import namedtuple
 from functools import lru_cache
 
+from finn.kernels.utilization import PRIMITIVES, Fabric
+
 # fifo.sv's own RAM_STYLE_EFF threshold, not a cost comparison. Change it there first.
 URAM_DEPTH_THRESHOLD = 2028
 
@@ -36,14 +38,15 @@ HI_URAM_RATIO = 7
 # Fitted flat cost of the Versal URAM read path, which UltraScale+ does not pay.
 VERSAL_URAM_LUTS = 20
 
-# SDP configurations as (width, rows), widest first. RAMB36 needs no entry: two RAMB18
-# worth of bits at coarser depth granularity. Versal's RAMB18E5 stops at 9 bits.
-RAMB18_SDP = ((36, 512), (18, 1024), (9, 2048), (4, 4096), (2, 8192), (1, 16384))
-RAMB18E5_SDP = ((36, 512), (18, 1024), (9, 2048))
+# SDP configurations as (width, rows), widest first, from the kernels' per-fabric
+# primitive table. RAMB36 needs no entry: two RAMB18 worth of bits at coarser depth
+# granularity. Versal's RAMB18E5 stops at 9 bits.
+RAMB18_SDP = PRIMITIVES[Fabric.ULTRASCALE].bram18_sdp
+RAMB18E5_SDP = PRIMITIVES[Fabric.VERSAL].bram18_sdp
 
 # UltraScale+'s URAM288E2 offers only the first entry, Versal's URAM288E5 all four. Vivado
 # never splits a word across URAM configurations, so a 37 bit word costs a 72.
-URAM288_SDP = ((72, 4096), (36, 8192), (18, 16384), (9, 32768))
+URAM288_SDP = PRIMITIVES[Fabric.VERSAL].uram_sdp
 
 FifoCost = namedtuple("FifoCost", "bram uram lut")
 

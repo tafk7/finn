@@ -35,24 +35,26 @@ from finn.kernels.channels import Channel
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, memory
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Resources, memory
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 i, j = Index("i"), Index("j")
 
 
-def inner_shuffle_resources(*, bits: int, i: int, j: int, simd: int, ram_style: str) -> Resources:
+def inner_shuffle_resources(
+    *, bits: int, i: int, j: int, simd: int, ram_style: str, fabric: Fabric
+) -> Resources:
     """FinnLib ``inner_shuffle``, from its RTL's structure (not characterised): SIMD
     banks of two pages, BANK_DEPTH = 2 I J / SIMD elements each, simple dual port, in
-    RAM_STYLE; the rotators on both sides, a SIMD-way multiplexer a lane bit, and a
-    register a lane bit at each; its two skid FIFOs of depth two (FinnLib ``fifo``), the
-    output's and the read pattern's."""
+    RAM_STYLE on ``fabric``; the rotators on both sides, a SIMD-way multiplexer a lane
+    bit, and a register a lane bit at each; its two skid FIFOs of depth two (FinnLib
+    ``fifo``), the output's and the read pattern's."""
     index_bits = max(simd - 1, 0).bit_length()
-    banks = memory(2 * i * j // simd, bits, ram_style).times(simd)
+    banks = memory(2 * i * j // simd, bits, ram_style, fabric=fabric).times(simd)
     rotators = Resources(lut=2 * simd * bits * index_bits, ff=2 * simd * bits)
-    skids = fifo_resources(2, simd * bits, "auto")
+    skids = fifo_resources(2, simd * bits, "auto", fabric=fabric)
     if index_bits:
-        skids = skids + fifo_resources(2, simd * index_bits, "auto")
+        skids = skids + fifo_resources(2, simd * index_bits, "auto", fabric=fabric)
     return banks + rotators + skids
 
 
@@ -169,6 +171,7 @@ class TransposeKernel(Kernel):
             j=self.cols,
             simd=self.simd,
             ram_style=self.ram_style,
+            fabric=self.platform.fabric,
         )
 
     def parameters(self) -> Mapping[str, int | str]:
