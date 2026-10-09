@@ -1118,7 +1118,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         return {"lut": lut, "ff": ff, "bram18": bram18, "uram": 0, "dsp": dsp}
 
     assert {key: row["model"] for key, row in rows.items()} == {
-        "partition": counts(5202, 7081, 22, 100),
+        "partition": counts(5232, 7081, 22, 100),
         "ends.Reshape_0_out0": counts(1305, 2279, 4),
         "ends.MatMul_3_out0": counts(1390, 2069),
         "static_region.zynq_ultra_ps_e": counts(264, 0),
@@ -1142,7 +1142,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         "static_region.axi_interconnect": counts(100, 200),
     }
     assert stated["total"] == {
-        "model": counts(14946, 21534, 26, 100),
+        "model": counts(14976, 21534, 26, 100),
         "out_of_context": counts(600, 30, 15, 9),
         "placed": counts(1000, 2000, 5, 4),
     }

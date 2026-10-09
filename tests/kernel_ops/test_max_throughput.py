@@ -13,12 +13,12 @@ end-to-end check (bisection over 17 or 18 folds by ``TargetCycles``, minutes eac
 The search on the Chain without the KernelOps is ``tests/kernels/test_explore.py``'s.
 
 Folded by ``TargetCycles`` and completed, the Chain on ip reaches 3 cycles a frame at
-669 LUT (its fastest), 12 at 355, 24 at 320 and 48 (its least parallelism) at 295. In
+669 LUT (its fastest), 12 at 359, 24 at 321 and 48 (its least parallelism) at 298. In
 the Zynq shell its ends hold it at 16 cycles at the fastest, and its shell's total is
 about 9 500 LUT more: the ends' and the static region's.
 
-TFC's least parallelism (no budget) reaches 50 176 cycles a frame at 1 034 LUT on ip,
-10 778 in the Zynq shell; at 3 136 cycles it uses 1 143 and 10 887. Each end-to-end
+TFC's least parallelism (no budget) reaches 50 176 cycles a frame at 1 131 LUT on ip,
+10 875 in the Zynq shell; at 3 136 cycles it uses 1 196 and 10 940. Each end-to-end
 search budgets between the two: of the budgets measured, the cheapest search that
 still bisects both ways to a point that fits, its folds all at budgets of thousands
 of cycles. R3's budgets (``{lut: 0.5}``, ``0.07`` and ``0.2``) are its record's probe's.
@@ -80,14 +80,14 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
     brackets = [(row["cycles"], row["relaxed_to"], row["bottleneck"], row["fits"]) for row in tried]
     assert brackets[:2] == [(1, 3, 3, False), (None, None, 48, True)]
     assert searched["fastest"] == 3
-    # Budgets 15, 21 and 23 fold to 12 cycles at 355 LUT, over; 24 and 26 to 24 at 320.
+    # Budgets 15, 21 and 23 fold to 12 cycles at 359 LUT, over; 24 and 26 to 24 at 321.
     assert min(row["cycles"] for row in tried[2:] if row["fits"]) == 24
     assert searched["bottleneck"] == report["bottleneck"] and report["bottleneck"]["cycles"] == 24
     used = report["resources"]["used"]
-    assert searched["used"] == used and used["lut"] == 320 and searched["fits"]
+    assert searched["used"] == used and used["lut"] == 321 and searched["fits"]
     # On ip, the shell's total is its partition's.
     assert used == report["resources"]["shell"]["partition"]
-    assert searched["binding"] == "lut" and searched["ratio"] == {"lut": round(320 / 352, 4)}
+    assert searched["binding"] == "lut" and searched["ratio"] == {"lut": round(321 / 352, 4)}
     assert searched["monotone"] and searched["departures"] == []
     assert searched["read_completed"].startswith("read completed choices: ")
     assert sized["strategy"] == "size_fifos" and sized["fifo_bits"] == 0
@@ -137,13 +137,13 @@ def searched_tfc(
 
 @pytest.mark.slow
 def test_tfc_on_ip_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
-    """1.6 % of the part's LUTs (1 128), between the least parallelism's 1 034 and the
-    1 143 of 3 136 cycles: 3 584 cycles at 1 114, the shell's total its partition's."""
-    searched, report = searched_tfc(tfc, "ip", 0.016, 1128, 3584)
+    """1.66 % of the part's LUTs (1 171), between the least parallelism's 1 131 and the
+    1 196 of 3 136 cycles: 3 584 cycles at 1 159, the shell's total its partition's."""
+    searched, report = searched_tfc(tfc, "ip", 0.0166, 1171, 3584)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 1114 and resources["used"] == resources["shell"]["partition"]
+    assert resources["used"]["lut"] == 1159 and resources["used"] == resources["shell"]["partition"]
     # TargetCycles folds by cycles alone: a looser budget can pick a costlier shape.
-    assert "no budget uses more than budget 25089: lut 1034 > 1027" in searched["departures"]
+    assert "no budget uses more than budget 25089: lut 1131 > 1124" in searched["departures"]
 
 
 # -- in the Zynq shell ----------------------------------------------------------------------
@@ -181,27 +181,27 @@ def test_where_nothing_fits_the_search_warns_and_keeps_the_least_parallelism() -
     model = kernel_model()
     write_target(model, ULTRA96)
     strategies = [strategy(spec) for spec in within(0.1)]
-    with pytest.warns(ResourceBudgetWarning, match="most of lut: lut 9879 of 7056"):
+    with pytest.warns(ResourceBudgetWarning, match="most of lut: lut 9882 of 7056"):
         report = explore_kernel_choices(model, strategies, fresh=True).report
     searched, sized = report["strategies"]
     assert [row["cycles"] for row in searched["tried"]] == [1, None]
     assert searched["fits"] is False and searched["binding"] == "lut"
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48
     assert not searched["monotone"]
-    assert searched["departures"] == ["no budget uses more than budget 1: lut 9879 > 9834"]
+    assert searched["departures"] == ["no budget uses more than budget 1: lut 9882 > 9838"]
     assert kernel_choices_config(model) and searched["committed"] > 0
     assert sized["fifo_bits"] > 0
-    assert report["resources"]["used"]["lut"] > searched["used"]["lut"] == 9879
+    assert report["resources"]["used"]["lut"] > searched["used"]["lut"] == 9882
 
 
 @pytest.mark.slow
 def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
-    """15.5 % of the part's LUTs (10 936), between the least parallelism's shell total,
-    10 778, and the 11 011 of 2 048 cycles: 3 136 cycles at 10 887, the ends and the
+    """15.51 % of the part's LUTs (10 943), between the least parallelism's shell total,
+    10 875, and the 11 039 of 2 048 cycles: 3 136 cycles at 10 940, the ends and the
     static region beside the partition."""
-    searched, report = searched_tfc(tfc, "pynq", 0.155, 10936, 3136)
+    searched, report = searched_tfc(tfc, "pynq", 0.1551, 10943, 3136)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 10887 > resources["shell"]["partition"]["lut"] + 9000
+    assert resources["used"]["lut"] == 10940 > resources["shell"]["partition"]["lut"] + 9000
     # The input end bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
     # the end (SZ6), a departure stated and not corrected.
     tried = searched["tried"]

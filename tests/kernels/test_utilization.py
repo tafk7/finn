@@ -1,15 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The resource export: memory primitives, the counts read off the RTL, and refusals.
+"""The resource export: memory primitives per fabric, the counts read off the RTL, and
+refusals.
 
-The measured numbers are out-of-context synthesis on xczu3eg-sbva484-1-i (Vivado
-2025.2): what a correct rewrite of the statements must still state. The fitted LUT
-and FF coefficients are not pinned here; the counts the RTL fixes are.
+The measured numbers are Vivado 2025.2 out-of-context synthesis on xczu3eg-sbva484-1-i,
+xczu7ev-ffvc1156-2-e, xc7z020clg400-1 and xcvc1902-vsva2197-2MP-e-S, each named where
+it is pinned: what a correct rewrite of the statements must still state, and what a
+change to the primitive table (``PRIMITIVES``) must change here with its numbers. The
+fitted LUT and FF coefficients are not pinned here; the counts the RTL fixes are.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -26,7 +30,19 @@ from finn.kernels.dotp import (
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import stage_style, thresholding_resources
-from finn.kernels.utilization import Fit, Resources, bram18, lutram, memory, total
+from finn.kernels.utilization import (
+    PRIMITIVES,
+    Fabric,
+    Fit,
+    Resources,
+    bram18,
+    lutram,
+    lutram_storage,
+    memory,
+    read_mux,
+    total,
+    uram,
+)
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, eltwise, placed_dotp, threshold_base
 
 INT2, INT4, INT8 = (resolve_qonnx_datatype_name(name) for name in ("INT2", "INT4", "INT8"))
@@ -39,44 +55,170 @@ def stated(point: Any) -> Resources:
     return used
 
 
+S7, US, V = Fabric.SERIES7, Fabric.ULTRASCALE, Fabric.VERSAL
+
+
 @pytest.mark.parametrize(
-    ("words", "bits", "measured"),
+    ("fabric", "words", "bits", "measured"),
     [
-        (196, 512, 15),  # TFC MatMul_0's weights: 7 RAMB36 + 1 RAMB18
-        (128, 64, 2),  # TFC MatMul_1's weights: 1 RAMB36
-        (4096, 128, 29),  # 14 RAMB36 + 1 RAMB18: the word split over two aspects
-        (256, 2048, 57),  # 28 RAMB36 + 1 RAMB18
-        (512, 16, 1),
+        (US, 196, 512, 15),  # TFC MatMul_0's weights on xczu3eg: 7 RAMB36 + 1 RAMB18
+        (US, 128, 64, 2),  # TFC MatMul_1's weights on xczu3eg: 1 RAMB36
+        (US, 4096, 128, 29),  # 14 RAMB36 + 1 RAMB18: the word split over two aspects
+        (US, 256, 2048, 57),  # 28 RAMB36 + 1 RAMB18
+        (US, 512, 16, 1),
+        (US, 4096, 64, 15),  # a memstream on xczu7ev and on xcku040: 4- and 1-bit aspects
+        (S7, 4096, 64, 15),  # the same memstream on xc7z020: the same aspects
+        (S7, 256, 1024, 29),
+        (V, 4096, 64, 16),  # on xcvc1902: RAMB18E5 has nothing narrower than 9 bits
+        (V, 8192, 32, 16),
+        (V, 1024, 256, 15),
+        (V, 256, 64, 2),
     ],
 )
-def test_block_ram_is_counted_as_synthesis_maps_it(words: int, bits: int, measured: int) -> None:
-    assert bram18(words, bits) == measured
-    assert memory(words, bits, "block") == Resources(bram18=measured)
+def test_block_ram_is_counted_as_synthesis_maps_it_on_each_fabric(
+    fabric: Fabric, words: int, bits: int, measured: int
+) -> None:
+    assert bram18(words, bits, fabric=fabric) == measured
+    assert memory(words, bits, "block", fabric=fabric) == Resources(bram18=measured)
 
 
-def test_lutram_follows_the_port_mode() -> None:
-    # One port (memstream's table): 64 x 1 a LUT; TFC MatMul_3's 160 x 8 weights.
-    assert lutram(160, 8, single_port=True) == 24
-    # Simple dual port (input_gen's buffer): 32 x 14 in eight LUTs; measured 76 and 296.
-    assert lutram(16, 128) == 74
-    assert lutram(4, 512) == 293
-    # Deeper: eight LUTs a RAM64M8 of 64 x 7, and a remainder's bits a LUT each beside
-    # their write address; a whole number of RAM64M8 has no remainder (no phantom LUT).
-    assert lutram(64, 7) == 8 and lutram(64, 14) == 16 and lutram(128, 7) == 16
-    assert lutram(64, 8) == 8 + 2
+def test_ultraram_is_counted_in_the_fabric_s_aspects() -> None:
+    # xczu7ev: one aspect, 72 x 4096; xcvc1902: four, a word never split across them
+    # (8192 x 8 is one URAM288E5 at 9 x 32768, a transpose's 32 banks of 2048 x 8 eight).
+    assert uram(4096, 64, fabric=US) == 1 and uram(8192, 8, fabric=US) == 2
+    assert uram(8192, 8, fabric=V) == 1 and uram(4096, 64, fabric=V) == 1
+    assert uram(1024, 256, fabric=V) == 4
+    assert memory(2048, 8, "ultra", fabric=V).times(32) == Resources(uram=32)
+    assert memory(2048, 8, "ultra", fabric=US).times(32) == Resources(uram=32)
+    with pytest.raises(ValueError, match="no UltraRAM"):
+        uram(4096, 72, fabric=S7)
+
+
+@pytest.mark.parametrize(
+    ("fabric", "words", "bits", "measured"),
+    [
+        # xc7z020, the LUTRAMs column: RAM64M (64 x 3 in four) and RAM64X1D (64 x 1 in
+        # two) a bank, RAM32M (32 x 6 in four) to 32 rows.
+        (S7, 1024, 256, 5472),  # a FIFO's buffer: 16 banks of 85 RAM64M and a RAM64X1D
+        (S7, 256, 256, 1368),
+        (S7, 4, 64, 44),  # input_gen's buffers
+        (S7, 4, 32, 24),
+        (S7, 32, 16, 12),
+        (S7, 256, 2, 16),
+        # xczu3eg: RAM64M8 (64 x 7 in eight) a bank, the remainder in RAM64X1D (1 bit),
+        # RAM64M (2 bits) or RAM64M8 (4 bits); RAM32M16 (32 x 14) to 32 rows, the
+        # remainder in RAM32M (2 and 4 bits) or RAM32M16 (8 and 12 bits).
+        (US, 1024, 256, 4736),
+        (US, 64, 8, 10),
+        (US, 256, 2, 16),
+        (US, 128, 4, 16),
+        (US, 4, 256, 148),
+        (US, 4, 64, 40),
+        (US, 16, 128, 76),
+        (US, 4, 512, 296),
+        (US, 4, 96, 56),
+        (US, 32, 196, 112),
+        (US, 1024, 32, 640),  # xczu7ev, E1(c): 40 LUTs a bank at 32 bits, not 37
+        (V, 1024, 32, 640),  # xcvc1902: the same LUTRAMs
+        (V, 4096, 64, 4736),
+    ],
+)
+def test_lutram_storage_is_the_fabric_s_primitives(
+    fabric: Fabric, words: int, bits: int, measured: int
+) -> None:
+    assert lutram_storage(words, bits, fabric=fabric) == measured
+
+
+@pytest.mark.parametrize(
+    ("fabric", "words", "bits", "measured"),
+    [
+        # E1(c), the whole memory's LUTs: storage, a LUT a bank for the write decode, and
+        # the read multiplexer. xczu7ev: MUXF7 and MUXF8 combine four LUT6s; the first
+        # four banks are not free.
+        (US, 128, 8, 26),
+        (US, 256, 32, 196),
+        (US, 512, 64, 728),
+        (US, 1024, 32, 784),
+        (US, 2048, 64, 2976),  # the 2:1 between two MUXF8s a LUT
+        (US, 4096, 64, 5893 - 5),  # five LUTs under at 64 banks
+        # xcvc1902: no wide multiplexer, LUT6s alone; one port the same as two.
+        (V, 128, 64, 182),
+        (V, 512, 8, 108),
+        (V, 1024, 32, 816),
+        (V, 2048, 32, 1648),
+        (V, 4096, 32, 3300 - 4),  # four LUTs under at 64 banks
+    ],
+)
+def test_a_lutram_s_decode_and_read_multiplexer_are_the_fabric_s(
+    fabric: Fabric, words: int, bits: int, measured: int
+) -> None:
+    assert lutram(words, bits, fabric=fabric) == measured
+    assert memory(words, bits, "distributed", fabric=fabric) == Resources(lut=measured)
+
+
+def test_the_read_multiplexer_differs_by_fabric_from_eight_banks() -> None:
+    # 2 and 4 banks: half a LUT and a LUT a bit on both; from 8, F7/F8 save on UltraScale.
+    assert [read_mux(banks, 1, fabric=US) for banks in (2, 4, 8, 16, 32, 64)] == [
+        1,
+        1,
+        2,
+        4,
+        9,
+        17,
+    ]
+    assert [read_mux(banks, 2, fabric=V) for banks in (2, 4, 8, 16, 32, 64)] == [
+        1,
+        2,
+        5,
+        10,
+        21,
+        42,
+    ]
+    assert read_mux(1, 64, fabric=V) == 0
+    # A one-port bank is a slice's primitive with its multiplexer inside: 512 rows on
+    # UltraScale (RAM512X1S, MUXF9), 256 on the 7 series, 64 on Versal.
+    assert lutram(1024, 32, fabric=V, single_port=True) == 688  # E1(c), written
+    assert lutram(4096, 64, fabric=US, single_port=True, written=False) == 4096 + 128
+
+
+def test_a_one_port_table_s_lutram_and_multiplexer_as_measured() -> None:
+    """memstream's 4,096 x 64 table, never written, measured as the whole leaf (its
+    output stream besides): xczu7ev 4,096 LUTRAM and 138 logic LUTs (4,096 RAMS64E1, 512
+    MUXF9; two LUT6s a bit over eight 512-row banks); xcvc1902 4,096 and 1,363 (21 LUT6s
+    a bit over 64 banks); xc7z020 4,096 and 266 (four a bit over sixteen 256-row
+    banks)."""
+    table = {
+        fabric: memory(4096, 64, "distributed", fabric=fabric, single_port=True, written=False)
+        for fabric in (S7, US, V)
+    }
+    assert table == {
+        S7: Resources(lut=4096 + 256),
+        US: Resources(lut=4096 + 128),
+        V: Resources(lut=4096 + 1344),
+    }
+    # TFC MatMul_3's 160 x 8 weights: three LUTs a bit, in one bank.
+    assert memory(160, 8, "distributed", fabric=US, single_port=True) == Resources(lut=24)
 
 
 def test_auto_places_by_size_and_depth_as_measured() -> None:
-    assert memory(128, 32, "auto").bram18 == 0  # 4096 bits: LUTRAM
-    assert memory(128, 64, "auto").bram18 == 2  # 8192 bits: block RAM
-    assert memory(64, 128, "auto").bram18 == 0  # 8192 bits, 64 deep: LUTRAM
+    assert memory(128, 32, "auto", fabric=US).bram18 == 0  # 4096 bits: LUTRAM
+    assert memory(128, 64, "auto", fabric=US).bram18 == 2  # 8192 bits: block RAM
+    assert memory(64, 128, "auto", fabric=US).bram18 == 0  # 8192 bits, 64 deep: LUTRAM
     # TFC MatMul_0 at 3e6 fps: block RAM; measured 21 RAMB36 with the last 56 bits elsewhere.
-    assert memory(64, 1568, "auto").bram18 == 44
+    assert memory(64, 1568, "auto", fabric=US).bram18 == 44
     # A read-only memory: block RAM from 128 words (conservative), LUT logic below.
-    assert memory(2048, 8, "auto", rom=True).bram18 == 1
-    assert memory(8, 8, "auto", rom=True) == Resources(lut=4)
-    assert memory(0, 8, "block") == Resources()
-    assert memory(4096, 72, "ultra") == Resources(uram=1)
+    assert memory(2048, 8, "auto", fabric=US, rom=True).bram18 == 1
+    assert memory(8, 8, "auto", fabric=US, rom=True) == Resources(lut=4)
+    assert memory(0, 8, "block", fabric=US) == Resources()
+    assert memory(4096, 72, "ultra", fabric=US) == Resources(uram=1)
+
+
+def test_every_fabric_s_primitives_state_their_evidence() -> None:
+    assert set(PRIMITIVES) == set(Fabric)
+    for primitives in PRIMITIVES.values():
+        assert all(sentence.endswith(".") for _, sentence in primitives.evidence)
+    with pytest.raises(ValueError, match="evidence for each"):
+        replace(PRIMITIVES[US], evidence=(("bram18_sdp", "measured."),))
 
 
 @pytest.mark.parametrize(
@@ -160,12 +302,15 @@ def test_the_compressor_reducer_is_refused_by_name() -> None:
 def test_a_block_fifo_states_its_two_memory_spaces() -> None:
     """DEPTH 1100: the RTL keeps 1024 words in block RAM and its 128-word hi space
     ``auto`` (shallower than a RAMB18), which a 1 kbit memory leaves in LUTRAM."""
-    used = fifo_resources(1100, 8, "block")
+    used = fifo_resources(1100, 8, "block", fabric=US)
     assert used.bram18 == 1
-    assert used.lut > fifo_resources(1025, 8, "block").lut  # the hi space's LUTRAM
+    assert used.lut > fifo_resources(1025, 8, "block", fabric=US).lut  # the hi's LUTRAM
     # Shallow FIFOs are shift registers whatever the style: a LUT a bit for 32 words.
-    assert fifo_resources(33, 8, "block").bram18 == 0
-    assert fifo_resources(1024, 32, "ultra").uram == 1
+    assert fifo_resources(33, 8, "block", fabric=US).bram18 == 0
+    assert fifo_resources(1024, 32, "ultra", fabric=US).uram == 1
+    # DEPTH 4096 x 64 in block RAM: 15 RAMB18 on xczu7ev, 16 on xcvc1902 (RAMB18E5).
+    assert fifo_resources(4096, 64, "block", fabric=US).bram18 == 15
+    assert fifo_resources(4096, 64, "block", fabric=V).bram18 == 16
 
 
 def test_thresholds_read_only_and_shared_cost_no_memory() -> None:
@@ -182,6 +327,7 @@ def test_thresholds_read_only_and_shared_cost_no_memory() -> None:
             depth_trigger_uram=0,
             use_axilite=writable,
             shared_row=True,
+            fabric=US,
         )
 
     shared, writable = table(False), table(True)

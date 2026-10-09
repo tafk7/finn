@@ -34,7 +34,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, lutram, memory
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Resources, lutram, memory
 
 
 @dataclass(frozen=True)
@@ -91,9 +91,9 @@ def _decomposition(depth: int, ultra: bool) -> tuple[int, int]:
     return lo, hi
 
 
-def fifo_resources(depth: int, data_width: int, ram_style: str) -> Resources:
+def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabric) -> Resources:
     """FinnLib ``fifo`` for DEPTH, DATA_WIDTH and the RAM_STYLE it is given, in the
-    storage it selects (``_selected``). The storage is the RTL's: a shift register of
+    storage it selects (``_selected``), on ``fabric``. The storage is the RTL's: a shift register of
     ``DEPTH - 1`` words (four at least), a LUT a bit for 32 of them; a LUTRAM of
     ``DEPTH - 1`` words rounded up to a power of two; or block RAM or UltraRAM, its
     ``lo`` space and its ``hi`` one (``_decomposition``), a ``hi`` space shallower than
@@ -106,16 +106,16 @@ def fifo_resources(depth: int, data_width: int, ram_style: str) -> Resources:
     # flow's model of the same RTL; one goes when that flow retires. Where the two
     # differ, by what this one does not carry over (FinnLib's ``rtl/infra/fifo.sv``):
     # - the storage is stated by ``finn.kernels.utilization`` from the arrays the RTL
-    #   declares, not by the legacy model's fitted packing. A LUTRAM is RAM64M8s
-    #   (``lutram``), as fifo.sv's header sizes its ``distributed`` path ("1 LUT/bit
-    #   via RAM64M8"; DEPTH 257, "the natural capacity of 4x RAM64M8 per byte"), its
-    #   four banks selected by F7/F8 for free; the legacy model counts RAM32X2s with a
-    #   fitted 5/4 and a mux LUT for every two bits a further 128 rows. So the two part
-    #   at depth 129 and above: 257 x 32 bits is 213 LUTs here, 257 there.
+    #   declares, in the fabric's primitives, not by the legacy model's fitted packing. A
+    #   LUTRAM is RAM64M8s (``lutram``), as fifo.sv's header sizes its ``distributed``
+    #   path ("1 LUT/bit via RAM64M8"; DEPTH 257, "the natural capacity of 4x RAM64M8
+    #   per byte"), with a write decode and a read multiplexer over its banks; the legacy
+    #   model counts RAM32X2s with a fitted 5/4 and a mux LUT for every two bits a
+    #   further 128 rows. At 32 bits on UltraScale the two agree to depth 65 and are 2 to
+    #   4 LUTs apart above it (257 x 32 bits: 261 LUTs here, 257 there).
     # - the shift path's cascade mux over SRLC32Es, which the legacy model counts on
-    #   Versal only (UltraScale+'s F7/F8 absorb it), and the other Versal terms (its
-    #   RAMB18E5 and URAM288E5 plans, the URAM read pipeline's 20 LUTs): this model
-    #   states UltraScale+, where the kernels were characterised (``CHARACTERISED``).
+    #   Versal only (UltraScale+'s F7/F8 absorb it), and the URAM read pipeline's 20 LUTs
+    #   on Versal: measured on the legacy model's FIFO, not on this one.
     # - the block path's cascade decode (3 LUTs a level of the tile plan, 2 a 5 tiles):
     #   Vivado's decode of ``MemLo`` across tiles, which fifo.sv does not write and the
     #   legacy model fits; 2028 x 32 bits is 54 LUTs here, 67 there.
@@ -136,14 +136,16 @@ def fifo_resources(depth: int, data_width: int, ram_style: str) -> Resources:
         return Resources(lut=stages * bits + 5 * counter - 7, ff=bits + counter)
     if effective == "distributed":
         words = 1 << (depth - 2).bit_length()
-        return Resources(lut=lutram(words, bits) + 8 * counter - 15, ff=bits + 2 * counter)
+        return Resources(
+            lut=lutram(words, bits, fabric=fabric) + 8 * counter - 15, ff=bits + 2 * counter
+        )
     ultra = effective == "ultra"
     lo, hi = _decomposition(depth, ultra)
-    storage = memory(1 << lo, bits, effective)
+    storage = memory(1 << lo, bits, effective, fabric=fabric)
     if hi:
         # The RTL relaxes a hi space shallower than its primitive to ``auto``.
         storage = storage + memory(
-            1 << hi, bits, effective if hi >= (12 if ultra else 9) else "auto"
+            1 << hi, bits, effective if hi >= (12 if ultra else 9) else "auto", fabric=fabric
         )
     if ultra:
         return storage + Resources(lut=6 * counter + bits, ff=2 * bits)
@@ -223,7 +225,9 @@ class FifoKernel(Kernel):
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:
-        return fifo_resources(self.depth, self.word_bits, self.rtl_ram_style)
+        return fifo_resources(
+            self.depth, self.word_bits, self.rtl_ram_style, fabric=self.platform.fabric
+        )
 
     def parameters(self) -> Mapping[str, int | str]:
         return {

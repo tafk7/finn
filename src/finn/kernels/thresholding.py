@@ -88,7 +88,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Fit, Resources, memory
 from finn.kernels.values.domains import Integer, set_index_dtype
 from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -170,10 +170,11 @@ def thresholding_resources(
     depth_trigger_uram: int,
     use_axilite: bool,
     shared_row: bool,
+    fabric: Fabric,
 ) -> Resources:
     """FinnLib ``thresholding`` inside ``thresholding_axi``: per pipeline stage and PE
     lane, one memory of the stage's depth, WT bits wide, in the style the triggers give
-    it (``stage_style``), and a comparator. Without AXI-Lite the memories are never
+    it (``stage_style``) on ``fabric``, and a comparator. Without AXI-Lite the memories are never
     written, and synthesis folds them as constants: where every row is the same
     (``shared_row``, read from the table: one row, or C equal ones), to nothing. The
     comparators and the pipeline are a ``Fit`` over the bits it carries, PE * M * (WI +
@@ -182,7 +183,7 @@ def thresholding_resources(
     if use_axilite or not shared_row:
         for depth in stage_depths:
             style = stage_style(depth, depth_trigger_bram, depth_trigger_uram)
-            tables = tables + memory(depth, wt, style, rom=not use_axilite).times(pe)
+            tables = tables + memory(depth, wt, style, fabric=fabric, rom=not use_axilite).times(pe)
     stages = len(stage_depths)
     carried = pe * stages * (wi + stages)
     return tables + Resources(lut=_THRESHOLD_LUT.at(carried), ff=_THRESHOLD_FF.at(carried))
@@ -468,6 +469,7 @@ class ThresholdingAxiKernel(Kernel):
             depth_trigger_uram=uram,
             use_axilite=self.use_axilite,
             shared_row=all(row == first for group in table for row in group),
+            fabric=self.platform.fabric,
         )
 
     @derived

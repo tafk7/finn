@@ -56,7 +56,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
 from finn.kernels.transport import MarkerKind, StreamMarker
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources, memory
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Fit, Resources, memory
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 
 _INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
@@ -67,13 +67,15 @@ def _vector(values: IntegerVector) -> str:
     return "'{" + ", ".join(map(str, values)) + "}"
 
 
-def input_gen_resources(*, buf_size: int, data_width: int, d: int, ram_style: str) -> Resources:
+def input_gen_resources(
+    *, buf_size: int, data_width: int, d: int, ram_style: str, fabric: Fabric
+) -> Resources:
     """FinnLib ``input_gen``: its buffer, BUF_SIZE words of DATA_WIDTH bits, simple dual
-    port, in RAM_STYLE (``nest_geometry`` reads BUF_SIZE from the RTL), and its read and
-    output registers, two a bit. The nest's D counters and pointers are a ``Fit`` over
-    their address bits."""
+    port, in RAM_STYLE on ``fabric`` (``nest_geometry`` reads BUF_SIZE from the RTL), and
+    its read and output registers, two a bit. The nest's D counters and pointers are a
+    ``Fit`` over their address bits."""
     address = d * max(buf_size - 1, 1).bit_length()
-    return memory(buf_size, data_width, ram_style) + Resources(
+    return memory(buf_size, data_width, ram_style, fabric=fabric) + Resources(
         lut=_INPUT_GEN_LUT.at(address), ff=2 * data_width + _INPUT_GEN_FF.at(address)
     )
 
@@ -149,7 +151,11 @@ class InputGeneratorKernel(Kernel):
         except GeometryError as error:
             return reject("input-generator-geometry", str(error))
         return input_gen_resources(
-            buf_size=words, data_width=self.word_bits, d=len(self.dims), ram_style=self.ram_style
+            buf_size=words,
+            data_width=self.word_bits,
+            d=len(self.dims),
+            ram_style=self.ram_style,
+            fabric=self.platform.fabric,
         )
 
     def parameters(self) -> Mapping[str, int | str]:

@@ -106,8 +106,17 @@ LAYERS: tuple[Layer, ...] = (
     Layer("partition", ("finn.custom_op.partition",), (), ("qonnx",), "tests/kernel_ops"),
     # What the flow and the kernel tests build on: helpers, the resource store and
     # the XSI binding (finn.util and finn.xsi import each other). Below the flow:
-    # no module here imports a flow module.
-    Layer("util", ("finn.util", "finn.xsi", "finn.resources"), (), ANY, "tests/kernel_ops"),
+    # no module here imports a flow module. One kernel module: the HWCustomOp flow's
+    # FIFO model (finn.util.resource_models) reads its block RAM and UltraRAM aspects
+    # from the kernels' per-fabric primitive table until that flow retires.
+    Layer(
+        "util",
+        ("finn.util", "finn.xsi", "finn.resources"),
+        (),
+        ANY,
+        "tests/kernel_ops",
+        also=("finn.kernels.utilization",),
+    ),
     # The part catalog's generator: a tool above the registry, which runs Vivado
     # through util's toolchain. Nothing imports it but its tests.
     Layer(
