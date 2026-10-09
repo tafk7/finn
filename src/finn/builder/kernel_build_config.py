@@ -288,7 +288,7 @@ class KernelBuildConfig(DataClassJsonMixin):
         toolchain: Optional[Toolchain] = getattr(self, "_toolchain", None)
         if toolchain is None:
             toolchain = self._resolve_selection().prepare()
-            setattr(self, "_toolchain", toolchain)
+            self._toolchain = toolchain
         return toolchain
 
     def _resolve_target(self) -> Target:
