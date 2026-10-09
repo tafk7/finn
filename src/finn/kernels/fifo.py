@@ -121,11 +121,12 @@ def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabri
     the primitive left ``auto`` (a model, ``_hi_style``). The control (pointers, the
     output register, the UltraRAM output queue) is taken from the HWCustomOp flow's FIFO
     model (``finn.custom_op.fpgadataflow.resource_models._fifo_cost``, fitted against
-    finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor), which this one
-    duplicates until that flow retires; the terms it does not carry over are listed below."""
-    # A deliberate duplicate of ``finn.custom_op.fpgadataflow.resource_models._fifo_cost``,
-    # the HWCustomOp flow's model of the same RTL; one goes when that flow retires. Where the two
-    # differ, by what this one does not carry over (FinnLib's ``rtl/infra/fifo.sv``):
+    finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor; the flow is
+    deleted, and the finn-dev oracle's capture ``fifo_cost`` keeps its values); the terms
+    it does not carry over are listed below."""
+    # Carried over from ``finn.custom_op.fpgadataflow.resource_models._fifo_cost``, the
+    # HWCustomOp flow's model of the same RTL. Where the two differ, by what this one does
+    # not carry over (FinnLib's ``rtl/infra/fifo.sv``):
     # - the storage is stated by ``finn.kernels.utilization`` from the arrays the RTL
     #   declares, in the fabric's primitives, not by the legacy model's fitted packing. A
     #   LUTRAM is RAM64M8s (``lutram``), as fifo.sv's header sizes its ``distributed``

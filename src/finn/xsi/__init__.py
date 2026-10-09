@@ -16,7 +16,7 @@ through ``finn.core.executors.xsim`` and does not use this package.
 Usage:
     from finn import xsi
     if xsi.is_available():
-        sim = xsi.SimEngine(...)
+        sim = xsi.load_sim_obj(...)
 """
 
 import sys
@@ -34,14 +34,13 @@ def is_available() -> bool:
     return not check_prerequisites()
 
 
-# Cache for loaded modules
+# Cache for the loaded adapter
 _adapter_module: Optional[Any] = None
-_sim_engine_module: Optional[Any] = None
 
 
 def _load_modules() -> None:
     """Build finn_xsi if needed and import it; raise with the reason if impossible."""
-    global _adapter_module, _sim_engine_module
+    global _adapter_module
 
     if _adapter_module is not None:
         return
@@ -60,10 +59,9 @@ def _load_modules() -> None:
         import xsi  # noqa: F401, PLC0415
 
         import finn_xsi.adapter  # noqa: PLC0415
-        import finn_xsi.sim_engine  # noqa: PLC0415
+        import finn_xsi.sim_engine  # noqa: F401, PLC0415
 
         _adapter_module = finn_xsi.adapter
-        _sim_engine_module = finn_xsi.sim_engine
     finally:
         if added:
             sys.path.remove(str(xsi_so.parent))
@@ -74,7 +72,6 @@ _ADAPTER_FUNCTIONS = [
     "load_sim_obj",
     "reset_rtlsim",
     "close_rtlsim",
-    "rtlsim_multi_io",
 ]
 
 
@@ -94,15 +91,3 @@ def __getattr__(name: str) -> Any:
         wrapper.__doc__ = f"Wrapper for finn_xsi.adapter.{name}"
         return wrapper
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-
-
-# SimEngine class wrapper
-class SimEngine:
-    """Wrapper for finn_xsi.sim_engine.SimEngine."""
-
-    def __init__(self, *args, **kwargs):
-        _load_modules()
-        self._engine = _sim_engine_module.SimEngine(*args, **kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._engine, name)

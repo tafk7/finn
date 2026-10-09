@@ -160,6 +160,26 @@ part ahead of time.
 * **Redistribution:** each declaration says whether FINN may bake it into published
   images. The `python` stage fetches the redistributable ones, `dev` the rest.
 
+## Running tools on LSF
+
+FINN runs every Xilinx tool through a selected toolchain, whose command directory
+(`finn.util.toolchain.Selection.command_dir`) is an interception hook: the machine
+running FINN still drives the build and pytest, but each `vivado` / `v++` /
+`vitis_hls` / `vitis-run` / `xelab` / `g++` invocation is a deployment-specific shim
+in that directory, which may delegate the heavy subprocess to a compute farm (IBM
+LSF's `bsub`, or another HPC model). FINN itself knows nothing of the farm.
+
+The site states the shim directory once, as the machine setting
+`FINN_TOOL_DIR_OVERRIDE`: the machine's toolchain
+(`finn.util.toolchain.machine_selection`) takes it as its command directory, and
+every transformation called without a toolchain, as the tests call them, and every
+build whose configuration names none, runs by that toolchain. A build configuration
+that states its own `toolchain` is laid over the machine's: a `command_dir` it states
+(`{"command_dir": ...}`) wins over the setting, and one it does not state is the
+setting's. A site wrapper owns remote activation, path visibility and the
+cancellation of its remote jobs (`tests/util/test_tool_route.py` checks the route
+with fake tools).
+
 ## Guards
 
 * The image build fails on an inconsistent environment: `uv pip check`, an import

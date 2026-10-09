@@ -27,29 +27,18 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Pytest support modules live in the top-level ci/ directory, outside the
-# shipped finn package. Put ci/ on sys.path so tests can load them by bare name.
+# Each test runs with its random state seeded from its node id (rng_seed, beside
+# this file).
 import pytest
 
 import numpy as np
-import os
 import random
-import sys
+from rng_seed import seed_from_nodeid
 
 try:
     import torch
 except ImportError:
     torch = None
-
-_CI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ci")
-if _CI_DIR not in sys.path:
-    sys.path.insert(0, _CI_DIR)
-
-from finn_ci.rng_seed import (  # noqa: E402  # (needs to come after ci/ on sys.path)
-    seed_from_nodeid,
-)
-
-pytest_plugins = ["finn_ci.plugin"]
 
 
 @pytest.fixture

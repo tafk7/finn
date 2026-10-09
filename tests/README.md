@@ -35,9 +35,9 @@ def test_sim_behaviour(monkeypatch):
 
 ### 3. Parallel Scheduling (`xdist_group`)
 
-If you have a chain of tests where subsequent stages load the checkpoint from a previous step (using `load_test_checkpoint_or_skip`), they must run on the same worker process.
-
-Group related tests together using the `xdist_group` marker:
+If a chain of tests must run on the same worker process, group them with the
+`xdist_group` marker and run with `--dist loadgroup` when running with multiple
+workers (i.e. `-n <N>`):
 
 ```python
 @pytest.mark.xdist_group(name="my_feature_chain")
@@ -47,14 +47,10 @@ def test_step_1(): ...
 def test_step_2(): ...
 ```
 
-Run tests with `--dist loadgroup` if running with multiple workers (i.e. `-n <N>`) so that checkpoint chains stay on the same worker.
-
 
 ### 4. Markers
 
-Decorate tests with the existing markers. For example, `@pytest.mark.fpgadataflow`. The kernel trees' markers are in [6. Trees and gates](#6-trees-and-gates).
-
-*For more detailed marker, pipeline, sharding, and Jenkins configurations, see [ci/README.md](../ci/README.md).*
+Decorate tests with the existing markers (`.pytest.ini`). For example, `@pytest.mark.slow`. The kernel trees' markers are in [6. Trees and gates](#6-trees-and-gates).
 
 ### 5. Randomness
 
@@ -81,7 +77,7 @@ def test_my_op(finn_test_seed):
 
 ### 6. Trees and gates
 
-The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §5, `ci/` on `sys.path`) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
+The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §5, `rng_seed.py`) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
 
 | Tree | Gate | `--confcutdir` |
 |---|---|---|
@@ -93,12 +89,13 @@ The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_p
 | `tests/transformation`, `tests/brevitas` (less two files the script names) | `scripts/check-kernels.sh` | `tests` |
 | `tests/util` | `scripts/check-kernels.sh` | `tests` |
 
-No code gate runs the other trees (`tests/fpgadataflow`, `tests/end2end`, ...); they run under `tests/conftest.py`.
+`tests/container` (container runtimes and host toolchains, marker `container`) runs under `tests/conftest.py`; no code gate runs it.
 
 The trees under their own `--confcutdir` get no `finn_test_seed`: a test seeds the generators it uses itself (for example `np.random.default_rng(<seed>)`). They mark Vivado work with `requires_xsim`, `requires_hls` and `requires_vivado` (`tests/kernels/xsim.py`), which mark and skip, and the markers `xsim`, `vivado` and `slow`: `check-kernels.sh` deselects `xsim` and `vivado` (`scripts/xsim-sweep.sh` runs them), and a gate's `--fast` deselects `slow`.
 
 The gates put `tests` on `PYTHONPATH`, so its helpers import by bare name:
 
+- `rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §5).
 - `layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/core/space/test_layering.py` also tests the table and the walker.
 - `value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
-- `oracle/`: the finn-dev oracle's captures, values only the HWCustomOp flow computes, which the kernel tests compare with; the gates never run the oracle.
+- `oracle/`: the finn-dev oracle's captures, values only the HWCustomOp flow computed (it is deleted), which the kernel tests compare with; the gates never run the oracle.

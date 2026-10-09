@@ -824,8 +824,8 @@ git = "git@example.invalid:finnlib.git"
 commit = "{"2" * 40}"
 digest = "sha256:{finnlib * 64}"
 
-[resources.rtllib]
-package = "finn.rtllib"
+[resources.xsi]
+package = "finn.xsi"
 """
         )
         return _provenance(root)[0]
@@ -873,7 +873,6 @@ def test_image_input_manifest_covers_dockerfile_sources():
         "src/finn/resources/*.py",
         "docker/Dockerfile.finn",
         "docker/finn_entrypoint.sh",
-        "docker/quicktest.sh",
         "docker/toolchain-shim",
         "docker/finn-bashenv.sh",
         "docker/finn-toolchain.sh",
@@ -895,7 +894,7 @@ def test_image_input_manifest_covers_dockerfile_sources():
     # finn.resources is the exception: the image fetches its resources with it.
     resources = {"src/finn/resources/*.py"}
     assert not any(p.startswith("src/") and p not in resources for p in patterns)
-    for launcher in ("docker/config.py", "docker/run", "docs/finn/getting_started.rst"):
+    for launcher in ("docker/config.py", "docker/run", "docs/installation.md"):
         assert launcher not in patterns
 
 
@@ -992,9 +991,8 @@ def test_compose_rejects_runtime_content_without_a_resolved_image(tmp_path):
 def test_container_docs_do_not_reference_retired_interfaces():
     paths = [
         "README.md",
-        "docs/finn/getting_started.rst",
-        "docs/finn/developers.rst",
-        ".github/workflows/quicktest-local.yml",
+        "docs/installation.md",
+        "docker/README.md",
     ]
     chunks = []
     for rel in paths:
@@ -1013,13 +1011,6 @@ def test_container_docs_do_not_reference_retired_interfaces():
         "FINN_XRT_SHA256",
     ):
         assert retired not in body
-
-
-def test_sbx_docs_distinguish_provisioning_from_workload_egress():
-    with open(os.path.join(REPO, "docs/finn/getting_started.rst"), errors="replace") as handle:
-        body = handle.read()
-    assert "no network grants" in body
-    assert "package-repository access while provisioning" in body
 
 
 def test_python_dependency_pins_are_not_duplicated_in_installers():

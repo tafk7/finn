@@ -24,7 +24,7 @@ import sys
 class RejectGraphCode(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         forbidden = (
-            "qonnx.core.modelwrapper", "finn.core.onnx_exec", "finn.core.rtlsim_exec", "onnx",
+            "qonnx.core.modelwrapper", "finn.core.onnx_exec", "onnx",
         )
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
@@ -161,7 +161,7 @@ package_name = sys.argv[1]
 class RejectOtherLayers(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.startswith((
-            "qonnx", "onnx", "finn.dataflow", "finn.core.onnx_exec", "finn.core.rtlsim_exec",
+            "qonnx", "onnx", "finn.dataflow", "finn.core.onnx_exec",
         )) or (package_name == "finn.core.space" and fullname.startswith("finn.kernels")):
             raise AssertionError("unexpected dependency: " + fullname)
 

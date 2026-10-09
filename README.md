@@ -5,7 +5,6 @@
 <img align="left" src="https://raw.githubusercontent.com/Xilinx/finn/github-pages/docs/img/finn-stack.PNG" alt="drawing" style="margin-right: 20px" width="250"/>
 
 [![GitHub Discussions](https://img.shields.io/badge/discussions-join-green)](https://github.com/Xilinx/finn/discussions)
-[![ReadTheDocs](https://readthedocs.org/projects/finn/badge/?version=latest&style=plastic)](http://finn.readthedocs.io/)
 
 FINN is an experimental framework from Integrated Communications and AI Lab of AMD Research & Advanced Development to explore deep neural network inference on FPGAs.
 It specifically targets <a href="https://github.com/maltanar/qnn-inference-examples" target="_blank">quantized neural
@@ -22,9 +21,7 @@ For more general information about FINN, please visit the [project page](https:/
 FINN is a Python package: `pip install finn`. Hardware flows also need Vivado;
 FINN fetches finn-hlslib and board files on first use. For development, there are
 the two setup paths below; both use the same locked environment
-([installation and development](docs/installation.md)). See the
-[Getting Started](https://finn.readthedocs.io/en/latest/getting_started.html)
-page for the complete guide.
+([installation and development](docs/installation.md)).
 
 | Setup | Command | Use it when |
 |---|---|---|
@@ -42,7 +39,7 @@ source scripts/activate.sh
 Container examples:
 
 ```bash
-./docker/run -- quicktest.sh
+./docker/run -- bash scripts/check-kernels.sh
 ./docker/build --export-sif ./finn.sif
 ```
 
@@ -64,7 +61,7 @@ container-based methods.
 
 ## Documentation
 
-You can view the documentation on [readthedocs](https://finn.readthedocs.io). Additionally, there is a series of [Jupyter notebook tutorials](https://github.com/Xilinx/finn/tree/main/notebooks), which we recommend running from inside Docker for a better experience.
+The documentation is in [docs/](docs/README.md).
 
 ## Community
 

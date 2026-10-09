@@ -34,7 +34,7 @@ sys.dont_write_bytecode = True
 
 class RejectGraphDependencies(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        forbidden = ("onnx", "finn.core.onnx_exec", "finn.core.rtlsim_exec")
+        forbidden = ("onnx", "finn.core.onnx_exec")
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
         if fullname.startswith("qonnx") and fullname not in (

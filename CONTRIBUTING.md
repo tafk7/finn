@@ -6,8 +6,8 @@ Please follow the steps below and be sure that your contribution complies with o
 
 	We welcome submissions to:
 
-	1. The FINN flow like additional custom ONNX nodes, transformation and analysis passes.
-	2. Contributions to the documentation and Jupyter notebooks
+	1. The FINN flow: kernels, KernelOps and transformations.
+	2. Contributions to the documentation
 
 	To ensure clean separation of toolflow and examples, we do not keep example networks in this repo. If you want to add example networks, we ask you to make them into a separate repo and use FINN as a dependency -- we'll be happy to add it to the list of <a href="https://xilinx.github.io/finn/community">FINN community projects</a>.
 
@@ -21,7 +21,7 @@ Please follow the steps below and be sure that your contribution complies with o
 		- <a href="https://github.com/Xilinx/finn/blob/dev/PYTHON_STYLE_GUIDE.md" target="_blank">Python Style Guide</a> (Python code and FINN-specific patterns)
 		- <a href="https://github.com/Xilinx/finn/blob/dev/HDL_STYLE_GUIDE.md" target="_blank">HDL Style Guide</a> (HLS and SystemVerilog code)
 
-	4. Modify the Python source code, Jupyter notebooks and Sphinx documentation etc. as needed.
+	4. Modify the Python source code and documentation as needed.
 
 	5. Use *git add*, *git commit*, *git push* to add changes to your fork.
 

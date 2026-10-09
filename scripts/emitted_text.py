@@ -59,8 +59,8 @@ this sweep's for a job it ran, the baseline row's for one it skipped. A skip und
 ``--changed-since`` cites that commit, so a chain of skipped sweeps still names the
 run that passed the job; a skipped row that names no run vouches for nothing.
 
-The pytest groups (``kernels-rest``, ``kernel-ops-xsim``, ``kernel-ops-vivado``,
-``util-vivado``: the tests marked xsim or vivado) are not keyed by
+The pytest groups (``kernels-rest``, ``kernel-ops-xsim``, ``kernel-ops-vivado``: the
+tests marked xsim or vivado) are not keyed by
 captured designs: their verdicts compare simulated cycles with FINN's models in
 Python (and a test stops at the first simulation a capture stubs), and the
 packaging tests run Vivado through the toolchain, which no simulation stub
@@ -161,13 +161,6 @@ PYTEST_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("kernel-ops-xsim", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "xsim")),
     ("kernel-ops-vivado", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "vivado")),
-    # finn.util's tests that compile against the HLS headers (data packing, HLS
-    # vectors). The end2end builds (a bitfile; the FPGA-flow tutorial, about 20
-    # minutes) are longer than a sweep job.
-    (
-        "util-vivado",
-        ("--confcutdir=tests", "tests/util", "-m", "(xsim or vivado) and not end2end"),
-    ),
 )
 # What every job's run reads besides its own inputs: the sweep, the environment it
 # applies, the pytest configuration and the locked Python environment.

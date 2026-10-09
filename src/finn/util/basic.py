@@ -26,110 +26,19 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""Support code the kernel path, graph preparation and the tests share: build
+directories (``make_build_dir``, ``robust_rmtree``), the Vivado release the environment
+selects, and the Resize input a streamlining transform reads."""
+
 import errno
 import os
 import re
-import shlex
 import shutil
-import subprocess
-import sys
 import tempfile
 import time
-from qonnx.util.basic import roundup_to_integer_multiple
 from typing import Optional, Tuple
 
 from finn import resources
-from finn.util.resources import resource_path
-from finn.util.toolchain import Selection, machine_toolchain, run_process
-
-# mapping from PYNQ board names to FPGA part names
-pynq_part_map = dict()
-pynq_part_map["Ultra96"] = "xczu3eg-sbva484-1-e"
-pynq_part_map["Ultra96-V2"] = "xczu3eg-sbva484-1-i"
-pynq_part_map["Pynq-Z1"] = "xc7z020clg400-1"  # retired, see retired_pynq_boards
-pynq_part_map["Pynq-Z2"] = "xc7z020clg400-1"  # retired, see retired_pynq_boards
-pynq_part_map["ZCU102"] = "xczu9eg-ffvb1156-2-e"
-pynq_part_map["ZCU104"] = "xczu7ev-ffvc1156-2-e"
-pynq_part_map["ZCU111"] = "xczu28dr-ffvg1517-2-e"
-pynq_part_map["RFSoC2x2"] = "xczu28dr-ffvg1517-2-e"
-pynq_part_map["RFSoC4x2"] = "xczu48dr-ffvg1517-2-e"
-pynq_part_map["KV260_SOM"] = "xck26-sfvc784-2LV-c"
-pynq_part_map["AUP-ZU3_8GB"] = "xczu3eg-sfvc784-2-e"
-
-# Zynq-7000 boards (Pynq-Z1/Z2) retired from official support with the move to
-# Vivado 2024.2. The build flow itself is unchanged and Vivado 2024.2 still
-# supports the xc7z020 part, so these remain in the maps above and the builder
-# only blocks them at config-check time. To re-enable a build for one of these
-# boards, remove it from this set (see finn.builder.build_dataflow_checks).
-retired_pynq_boards = {"Pynq-Z1", "Pynq-Z2"}
-
-
-# native AXI HP port width (in bits) for PYNQ boards
-pynq_native_port_width = dict()
-pynq_native_port_width["Pynq-Z1"] = 64
-pynq_native_port_width["Pynq-Z2"] = 64
-pynq_native_port_width["Ultra96"] = 128
-pynq_native_port_width["Ultra96-V2"] = 128
-pynq_native_port_width["ZCU102"] = 128
-pynq_native_port_width["ZCU104"] = 128
-pynq_native_port_width["ZCU111"] = 128
-pynq_native_port_width["RFSoC2x2"] = 128
-pynq_native_port_width["RFSoC4x2"] = 128
-pynq_native_port_width["KV260_SOM"] = 128
-pynq_native_port_width["AUP-ZU3_8GB"] = 128
-
-# Vitis device and platform mappings
-vitis_part_map = dict()
-vitis_part_map["U50"] = "xcu50-fsvh2104-2L-e"
-vitis_part_map["U200"] = "xcu200-fsgd2104-2-e"
-vitis_part_map["U250"] = "xcu250-figd2104-2L-e"
-vitis_part_map["U55C"] = "xcu55c-fsvh2892-2L-e"
-
-vitis_default_platform = dict()
-vitis_default_platform["U50"] = "xilinx_u50_gen3x16_xdma_5_202210_1"
-vitis_default_platform["U200"] = "xilinx_u200_gen3x16_xdma_2_202110_1"
-# 2024.2 shell (bumped from 2_1_202010_1). The lfc BNN design hits a
-# [VPL 18-1000] routing crash (partially-conflicted nets) on this newer U250
-# shell, so the Alveo BNN CI tests run on U55C instead.
-vitis_default_platform["U250"] = "xilinx_u250_gen3x16_xdma_4_1_202210_1"
-vitis_default_platform["U55C"] = "xilinx_u55c_gen3x16_xdma_3_202210_1"
-
-# Slash device mappings
-slash_part_map = dict()
-slash_part_map["V80"] = "xcv80-lsva4737-2MHP-e-s"
-
-# Create a joint part map, encompassing other boards too
-part_map = {**pynq_part_map, **vitis_part_map, **slash_part_map}
-part_map["VEK280"] = "xcve2802-vsvh1760-2MP-e-S"
-part_map["VCK190"] = "xcvc1902-vsva2197-2MP-e-S"
-
-# Boards that expose HBM. Note that U50 has only HBM (no DDR), while the other
-# entries have HBM in addition to DDR. All boards not listed here are assumed to
-# be DDR-only (this includes U200/U250 and all Zynq/RFSoC boards).
-hbm_boards = {"U50", "U55C", "V80"}
-
-
-def fifo_rtl_files(abspath=True, gauge=False):
-    """Return the shared FIFO RTL sources, referenced in place so that the flat
-    elaboration namespace only ever sees one declaration of module fifo."""
-    names = (["fifo_gauge.sv"] if gauge else []) + ["fifo.sv"]
-    if not abspath:
-        return names
-    rtlsrc = resource_path("rtllib", "fifo/hdl")
-    return [os.path.join(rtlsrc, n) for n in names]
-
-
-def get_vivado_root():
-    "Return the root directory that Vivado is installed into."
-
-    try:
-        return os.environ["XILINX_VIVADO"]
-    except KeyError:
-        raise Exception(
-            """Environment variable XILINX_VIVADO must be set
-        correctly. Please ensure you have launched the Docker contaier correctly.
-        """
-        )
 
 
 def get_vivado_version() -> Optional[Tuple[int, int]]:
@@ -137,38 +46,6 @@ def get_vivado_version() -> Optional[Tuple[int, int]]:
     path = os.environ.get("XILINX_VIVADO", "")
     match = re.search(r"\b(20\d{2})\.(1|2)\b", path)
     return (int(match.group(1)), int(match.group(2))) if match else None
-
-
-def get_liveness_threshold_cycles():
-    """Return the ``LIVENESS_THRESHOLD`` environment override (in cycles) for the
-    rtlsim watchdog. Defaults to 10000 if unset."""
-
-    return int(os.getenv("LIVENESS_THRESHOLD", 10000))
-
-
-def get_watchdog_timeout_cycles(cycles_estimate=None):
-    """Return the effective number of no-output cycles rtlsim will wait before
-    assuming the simulation is not finishing and throwing an exception. This is
-    the derived cycle estimate raised to at least the ``LIVENESS_THRESHOLD``
-    override; with no estimate, the override alone is used."""
-
-    override = get_liveness_threshold_cycles()
-    if cycles_estimate is None:
-        return override
-    return max(int(cycles_estimate), override)
-
-
-def get_rtlsim_timeout_error_message(threshold, cycles_estimate=None):
-    """Return an actionable RTL simulation timeout error message."""
-
-    message = f"RTL simulation timed out after {int(threshold)} cycles"
-    if cycles_estimate is not None:
-        message += f" (derived estimate: {int(cycles_estimate)})"
-    return (
-        message
-        + ". If your model requires more cycles, set LIVENESS_THRESHOLD "
-        + "to a higher value."
-    )
 
 
 def make_build_dir(prefix=""):
@@ -201,185 +78,6 @@ def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
                 raise
             time.sleep(delay)
             delay *= backoff
-
-
-class CppBuilder:
-    """Builds the g++ compiler command to produces the executable of the c++ code
-    in code_gen_dir which is passed to the function build() of this class, and
-    runs it by ``toolchain`` (by default the machine's)."""
-
-    def __init__(self, toolchain=None):
-        self.toolchain = toolchain
-        self.include_paths = []
-        self.cpp_files = []
-        self.executable_path = ""
-        self.code_gen_dir = ""
-        self.compile_components = []
-        self.compile_script = ""
-
-    def append_includes(self, flags):
-        """Append argv flags, or a shell-quoted flag string for existing callers."""
-        self.include_paths.extend(shlex.split(flags) if isinstance(flags, str) else flags)
-
-    def append_sources(self, cpp_file):
-        """Append one literal source path; callers expand source globs explicitly."""
-        self.cpp_files.append(os.fspath(cpp_file))
-
-    def set_executable_path(self, path):
-        self.executable_path = os.fspath(path)
-
-    def build(self, code_gen_dir, *, timeout=None, cancel=None):
-        """Compile with argv, explicit cwd/environment, checked status and replay logs."""
-        self.code_gen_dir = os.fspath(code_gen_dir)
-        self.compile_script = os.path.join(self.code_gen_dir, "compile.sh")
-        toolchain = self.toolchain or machine_toolchain()
-        args = ["-o", self.executable_path, *self.cpp_files, *self.include_paths]
-        self.compile_components = toolchain.command("g++", *args)
-        return toolchain.run(
-            "g++",
-            args,
-            cwd=self.code_gen_dir,
-            replay=self.compile_script,
-            timeout=timeout,
-            cancel=cancel,
-        )
-
-
-def launch_process_helper(args, proc_env=None, cwd=None, check=False, timeout=None, cancel=None):
-    """Launch a process and capture its output for logging with Python loggers.
-
-    Returns ``(cmd_out, cmd_err)`` as UTF-8 strings, with undecodable bytes in
-    tool output replaced rather than raised. Both streams are also written
-    through to ``sys.stdout``/``sys.stderr``.
-
-    When ``check`` is True and the process exits non-zero, raises
-    ``subprocess.CalledProcessError`` with ``output`` and ``stderr`` set to the
-    captured strings. The write-through happens before the raise, so the tool
-    log is still visible on failure. That is why the return code is checked by
-    hand rather than relying on ``subprocess.run(check=True)``.
-
-    Without ``proc_env`` the process gets this process's environment as
-    ``Selection.prepare`` gives it: with the machine file's licence when the
-    environment names none.
-    """
-    if proc_env is None:
-        proc_env = Selection().prepare().environment
-    proc = run_process(args, env=proc_env, cwd=cwd, check=False, timeout=timeout, cancel=cancel)
-    proc.stdout = proc.stdout.decode("utf-8", errors="replace")
-    proc.stderr = proc.stderr.decode("utf-8", errors="replace")
-    cmd_out = proc.stdout
-    cmd_err = proc.stderr
-    sys.stdout.write(cmd_out)
-    sys.stderr.write(cmd_err)
-    if check and proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, args, cmd_out, cmd_err)
-    return (cmd_out, cmd_err)
-
-
-def which(program):
-    "Python equivalent of the shell cmd 'which'."
-
-    # source:
-    # https://stackoverflow.com/questions/377017/test-if-executable-exists-in-python
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
-
-    fpath, fname = os.path.split(program)
-    if fpath:
-        if is_exe(program):
-            return program
-    else:
-        for path in os.environ["PATH"].split(os.pathsep):
-            exe_file = os.path.join(path, program)
-            if is_exe(exe_file):
-                return exe_file
-
-    return None
-
-
-mem_primitives_versal = {
-    "URAM_72x4096": (72, 4096),
-    "URAM_36x8192": (36, 8192),
-    "URAM_18x16384": (18, 16384),
-    "URAM_9x32768": (9, 32768),
-    "BRAM18_36x512": (36, 512),
-    "BRAM18_18x1024": (18, 1024),
-    "BRAM18_9x2048": (9, 2048),
-    "LUTRAM": (1, 64),
-}
-
-
-def get_memutil_alternatives(
-    req_mem_spec, mem_primitives=mem_primitives_versal, sort_min_waste=True
-):
-    """Computes how many instances of a memory primitive are necessary to
-    implement a desired memory size, where req_mem_spec is the desired
-    size and the primitive_spec is the primitve size. The sizes are expressed
-    as tuples of (mem_width, mem_depth). Returns a list of tuples of the form
-    (primitive_name, (primitive_count, efficiency, waste)) where efficiency in
-    range [0,1] indicates how much of the total capacity is utilized, and waste
-    indicates how many bits of storage are wasted. If sort_min_waste is True,
-    the list is sorted by increasing waste.
-    """
-    ret = [
-        (primitive_name, memutil(req_mem_spec, primitive_spec))
-        for (primitive_name, primitive_spec) in mem_primitives.items()
-    ]
-    if sort_min_waste:
-        ret = sorted(ret, key=lambda x: x[1][2])
-    return ret
-
-
-def memutil(req_mem_spec, primitive_spec):
-    """Computes how many instances of a memory primitive are necessary to
-    implemented a desired memory size, where req_mem_spec is the desired
-    size and the primitive_spec is the primitve size. The sizes are expressed
-    as tuples of (mem_width, mem_depth). Returns (primitive_count, efficiency, waste)
-    where efficiency in range [0,1] indicates how much of the total capacity is
-    utilized, and waste indicates how many bits of storage are wasted."""
-
-    req_width, req_depth = req_mem_spec
-    prim_width, prim_depth = primitive_spec
-
-    match_width = roundup_to_integer_multiple(req_width, prim_width)
-    match_depth = roundup_to_integer_multiple(req_depth, prim_depth)
-    count_width = match_width // prim_width
-    count_depth = match_depth // prim_depth
-    count = count_depth * count_width
-    eff = (req_width * req_depth) / (count * prim_width * prim_depth)
-    waste = (count * prim_width * prim_depth) - (req_width * req_depth)
-    return (count, eff, waste)
-
-
-def is_versal(fpgapart):
-    """Returns whether board is part of the Versal family"""
-    return fpgapart[0:4] in ["xcvc", "xcve", "xcvp", "xcvm", "xqvc", "xqvm"] or fpgapart[0:5] in [
-        "xqrvc",
-        "xcv80",
-    ]
-
-
-def get_dsp_block(fpgapart):
-    if is_versal(fpgapart):
-        return "DSP58"
-    elif fpgapart[2] == "7":
-        return "DSP48E1"
-    else:
-        return "DSP48E2"
-
-
-def get_dsp_datapath_limits(dsp_block):
-    """Return the maximum (activation, weight, accumulator) operand widths in bits
-    that fit the datapath of the given DSP block. These correspond to the DSP B, A
-    and P ports respectively. Widths exceeding these limits would be silently
-    truncated (or fail synthesis) if mapped onto the DSP-based RTL MVU."""
-    if dsp_block == "DSP58":
-        max_act_width, max_weight_width, max_acc_width = 24, 27, 58
-    elif dsp_block == "DSP48E2":
-        max_act_width, max_weight_width, max_acc_width = 18, 27, 48
-    else:  # DSP48E1
-        max_act_width, max_weight_width, max_acc_width = 18, 25, 48
-    return max_act_width, max_weight_width, max_acc_width
 
 
 def resolve_resize_param_input(model, node):

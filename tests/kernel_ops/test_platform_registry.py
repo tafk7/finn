@@ -32,26 +32,39 @@ from finn.platform import (
 from finn.platform.architectures import rule
 from finn.platform.shells import PYNQ_CONTROL_BUDGET, ZYNQ_STATIC_REGION
 from finn.shells.pynq.templates import custom_zynq_shell_template
-from finn.util.basic import get_dsp_block as untyped_dsp_block
-from finn.util.basic import (
-    part_map,
-    pynq_native_port_width,
-    pynq_part_map,
-    retired_pynq_boards,
-)
 
+#: Each PYNQ board's part, DSP block and native AXI port width, as the deleted HWCustomOp
+#: flow stated them (``finn.util.basic``'s part maps at 1b02563de), less the retired
+#: Zynq-7000 boards (Pynq-Z1, Pynq-Z2).
+PYNQ_BOARD_FACTS = {
+    "Ultra96": ("xczu3eg-sbva484-1-e", "DSP48E2", 128),
+    "Ultra96-V2": ("xczu3eg-sbva484-1-i", "DSP48E2", 128),
+    "ZCU102": ("xczu9eg-ffvb1156-2-e", "DSP48E2", 128),
+    "ZCU104": ("xczu7ev-ffvc1156-2-e", "DSP48E2", 128),
+    "ZCU111": ("xczu28dr-ffvg1517-2-e", "DSP48E2", 128),
+    "RFSoC2x2": ("xczu28dr-ffvg1517-2-e", "DSP48E2", 128),
+    "RFSoC4x2": ("xczu48dr-ffvg1517-2-e", "DSP48E2", 128),
+    "KV260_SOM": ("xck26-sfvc784-2LV-c", "DSP48E2", 128),
+    "AUP-ZU3_8GB": ("xczu3eg-sfvc784-2-e", "DSP48E2", 128),
+}
 
-def get_dsp_block(part: str) -> str:
-    """The DSP block the HWCustomOp flow reads off a part's name."""
-    found: str = untyped_dsp_block(part)  # type: ignore[no-untyped-call]
-    return found
+#: The parts of the deleted flow's other boards (Alveo, Versal), and their DSP block.
+OTHER_PART_DSPS = {
+    "xcu50-fsvh2104-2L-e": "DSP48E2",
+    "xcu200-fsgd2104-2-e": "DSP48E2",
+    "xcu250-figd2104-2L-e": "DSP48E2",
+    "xcu55c-fsvh2892-2L-e": "DSP48E2",
+    "xcv80-lsva4737-2MHP-e-s": "DSP58",
+    "xcve2802-vsvh1760-2MP-e-S": "DSP58",
+    "xcvc1902-vsva2197-2MP-e-S": "DSP58",
+}
 
 
 # -- boards ------------------------------------------------------------------------------
 
 
-def test_the_boards_are_the_templates_less_the_retired() -> None:
-    assert set(BOARDS) == set(pynq_part_map) - retired_pynq_boards
+def test_the_boards_are_the_pynq_boards_less_the_retired() -> None:
+    assert set(BOARDS) == set(PYNQ_BOARD_FACTS)
 
 
 PYNQ_BOARDS = sorted(board for shell, board in ROWS if shell == "pynq" and board is not None)
@@ -59,12 +72,13 @@ PYNQ_BOARDS = sorted(board for shell, board in ROWS if shell == "pynq" and board
 
 @pytest.mark.parametrize("board", PYNQ_BOARDS)
 def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
+    part_name, dsp, width = PYNQ_BOARD_FACTS[board]
     target = resolve_target(board=board, period_ns=5.0, shell="pynq")
-    assert target.part == BOARDS[board].part == part_map[board]
-    assert target.platform.dsp is DspBlock(get_dsp_block(target.part))
+    assert target.part == BOARDS[board].part == part_name
+    assert target.platform.dsp is DspBlock(dsp)
     assert target.platform.resources is not None  # every board's part is in the table
     (end,) = shell_row("pynq", board).ends
-    assert end == iodma_hls(pynq_native_port_width[board])
+    assert end == iodma_hls(width)
 
 
 @pytest.mark.parametrize("board", sorted(BOARDS))
@@ -72,14 +86,14 @@ def test_on_ip_a_board_names_its_part(board: str) -> None:
     # On ip the board names its part, and the target states none: the part's target.
     on_ip = resolve_target(board=board, period_ns=5.0)
     assert on_ip == resolve_target(part=BOARDS[board].part, period_ns=5.0)
-    assert on_ip.part == part_map[board] and on_ip.platform.resources is not None
+    assert on_ip.part == PYNQ_BOARD_FACTS[board][0] and on_ip.platform.resources is not None
     assert (on_ip.shell, on_ip.board) == ("ip", None)
 
 
-@pytest.mark.parametrize("board", sorted(set(part_map) - set(pynq_part_map)))
-def test_every_other_boards_part_resolves_on_the_ip_shell(board: str) -> None:
-    platform = resolve_target(part=part_map[board], period_ns=5.0).platform
-    assert platform.dsp is DspBlock(get_dsp_block(part_map[board]))
+@pytest.mark.parametrize("part_name", sorted(OTHER_PART_DSPS))
+def test_every_other_boards_part_resolves_on_the_ip_shell(part_name: str) -> None:
+    platform = resolve_target(part=part_name, period_ns=5.0).platform
+    assert platform.dsp is DspBlock(OTHER_PART_DSPS[part_name])
 
 
 def zynq_template_branches() -> dict[str, tuple[str | None, str | None]]:

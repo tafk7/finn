@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """How a builder phase runs a step inside it (the kernel path's phases in
-finn.builder.kernel_build_steps, the HWCustomOp flow's in
-finn.builder.build_dataflow_phases): the steps a build configuration injects before and
+finn.builder.kernel_build_steps): the steps a build configuration injects before and
 after it, each step's model saved as an intermediate model, and each step's time
 recorded while build_dataflow records them (``recorded_step_times``)."""
 
@@ -20,8 +19,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 
 class _StepConfig(Protocol):
-    """What ``execute_step`` reads of a build configuration (a KernelBuildConfig or a
-    DataflowBuildConfig)."""
+    """What ``execute_step`` reads of a build configuration (a KernelBuildConfig)."""
 
     @property
     def output_dir(self) -> str: ...

@@ -226,7 +226,7 @@ def verify_installation() -> bool:
         print("✓ finn_xsi.adapter imports successfully")
 
         # Check for basic functionality
-        if hasattr(finn_xsi.adapter, "rtlsim_multi_io"):
+        if hasattr(finn_xsi.adapter, "load_sim_obj"):
             print("✓ RTL simulation functions available")
 
         return True

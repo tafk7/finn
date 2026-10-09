@@ -2,36 +2,52 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's build configuration: a build of KernelOps (finn.custom_op.kernels)
-from a Brevitas export, through ``build_dataflow`` as a DataflowBuildConfig's build is.
+from a Brevitas export, through ``build_dataflow``.
 
 It is composed of what the kernel path reads: how the export is prepared
 (``finn.transformation.prepare.GraphPreparation``), its target (a board or a part, the clock
 and the shell, stated once: ``finn.platform.TargetRequest``), its toolchain
 (``finn.util.toolchain.Selection``), the outputs it makes, the strategies that explore
-its choices and the policy that completes the rest. Nothing of the HWCustomOp flow's
-configuration (folding, FIFO sizing, specialization, the Vitis and SLASH shells) is a
-field of it: what the kernel path does not make, it cannot be asked for.
+its choices and the policy that completes the rest. What the kernel path does not make,
+it cannot be asked for.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from dataclasses_json import DataClassJsonMixin, Undefined, config
+from dataclasses_json.undefined import UndefinedParameterError
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.builder.config_common import ToolchainResolution, declared
 from finn.kernels.target import Target
 from finn.platform import VIVADO_BLOCK_DESIGN, TargetRequest, shell_row
 from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.prepare import GraphPreparation
-from finn.util.toolchain import Selection
+from finn.util.toolchain import Selection, Toolchain, machine_selection
+
+
+def declared(cls: type, name: str) -> Callable[[Any], Any]:
+    """The decoder of the nested dataclass ``cls`` a configuration states as ``name``,
+    refusing keys ``cls`` does not declare (dataclasses_json would drop them, as it
+    does a nested dataclass's), naming them."""
+
+    def decode(stated: Any) -> Any:
+        if stated is None or isinstance(stated, cls):
+            return stated
+        unknown = sorted(set(stated) - {item.name for item in fields(cls)})
+        if unknown:
+            raise UndefinedParameterError(
+                f"{name}: keys {cls.__name__} does not declare: {unknown}"
+            )
+        return cls(**stated)
+
+    return decode
 
 
 class KernelOutputType(str, Enum):
-    """What a kernel-path build makes beside its partition and reports. The names are
-    DataflowOutputType's; the values are the kernel path's own (``ooc_synth``), which
-    ``finn.outputs`` records.
+    """What a kernel-path build makes beside its partition and reports. The values are
+    what ``finn.outputs`` records.
 
     The partition's own, on every shell: ``stitched_ip``, the shell root's packaged IP
     with its interface description and its XSim testbench, written and not run (the
@@ -130,15 +146,14 @@ default_kernel_build_steps = [
 
 
 # undefined=RAISE: a key the configuration does not declare is refused, named, when a
-# configuration is read (from_json, from_dict), never dropped: a DataflowBuildConfig
-# field stated here (target_fps, shell_flow_type, ...) is refused, not ignored.
+# configuration is read (from_json, from_dict), never dropped.
 @dataclass
-class KernelBuildConfig(DataClassJsonMixin, ToolchainResolution):
+class KernelBuildConfig(DataClassJsonMixin):
     """The configuration of a kernel-path build, passed to build_dataflow_cfg, or
     written as ``kernel_build_config.json`` beside ``model.onnx`` for
     build_dataflow_directory and the ``build_dataflow`` command. Serialized to and
-    from JSON as DataflowBuildConfig is; reading one refuses a key it does not
-    declare (``UndefinedParameterError``, naming the keys)."""
+    from JSON; reading one refuses a key it does not declare
+    (``UndefinedParameterError``, naming the keys)."""
 
     # dataclasses_json types the hook None, the value its dataclass_json decorator sets.
     dataclass_json_config = config(undefined=Undefined.RAISE)["dataclasses_json"]  # type: ignore[assignment]
@@ -213,10 +228,9 @@ class KernelBuildConfig(DataClassJsonMixin, ToolchainResolution):
     #: The AMD tool installation every tool step of the build runs in, and the
     #: environment of build_dataflow_directory's build process: the machine's
     #: (finn.util.toolchain.machine_selection), with what this selection states laid
-    #: over it, each field it states winning. As DataflowBuildConfig.toolchain. How
-    #: many runs Vivado launches at once when it builds the shell's bitfile is the
-    #: selection's ``vivado_jobs``, a machine setting (``FINN_VIVADO_JOBS``) a build
-    #: may state over.
+    #: over it, each field it states winning. How many runs Vivado launches at once
+    #: when it builds the shell's bitfile is the selection's ``vivado_jobs``, a machine
+    #: setting (``FINN_VIVADO_JOBS``) a build may state over.
     toolchain: Optional[Selection] = field(
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
@@ -250,15 +264,32 @@ class KernelBuildConfig(DataClassJsonMixin, ToolchainResolution):
     #: Whether every step's output is printed to stdout, not only to the build log.
     verbose: bool = False
 
-    #: Functions to run after named steps or phases, as DataflowBuildConfig's.
+    #: Functions to run after named steps or phases.
     inject_steps_after: Dict[
         str, List[Callable[[ModelWrapper, "KernelBuildConfig"], ModelWrapper]]
     ] = field(default_factory=dict)
 
-    #: Functions to run before named steps or phases, as DataflowBuildConfig's.
+    #: Functions to run before named steps or phases.
     inject_steps_before: Dict[
         str, List[Callable[[ModelWrapper, "KernelBuildConfig"], ModelWrapper]]
     ] = field(default_factory=dict)
+
+    def _resolve_selection(self) -> Selection:
+        """The selection this build runs its tools by: ``toolchain`` laid over the
+        machine's (``machine_selection``), each field it states winning; unset, the
+        machine's."""
+        return machine_selection(stated=self.toolchain)
+
+    def _resolve_toolchain(self) -> Toolchain:
+        """The prepared toolchain every tool step of this build runs in: the resolved
+        selection, prepared by the first step that asks and then the same object for
+        every later step. Kept on the instance, not a field: it is prepared, not
+        configured, and is not serialized with the build configuration."""
+        toolchain: Optional[Toolchain] = getattr(self, "_toolchain", None)
+        if toolchain is None:
+            toolchain = self._resolve_selection().prepare()
+            self._toolchain = toolchain
+        return toolchain
 
     def _resolve_target(self) -> Target:
         """The build's target (finn.platform.resolve_target), every refusal named."""

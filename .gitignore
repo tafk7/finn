@@ -79,10 +79,6 @@ docs/_build/*
 cover/*
 MANIFEST
 
-# Jenkins workspace copy of the image provenance/digest that build-images.sh
-# emits, staged here so archiveArtifacts can see it before it is copied to NFS.
-/ci-image-metadata/
-
 # Per-project virtualenvs
 .venv*/
 
@@ -99,9 +95,6 @@ MANIFEST
 
 # Google Drive key for dashboard
 /gdrive-key/
-
-# generated files as part of end2end notebooks
-/notebooks/end2end_example/**/*.onnx
 
 # downloaded dep repos
 /deps/

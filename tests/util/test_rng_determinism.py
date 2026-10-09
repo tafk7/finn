@@ -5,7 +5,7 @@ import pytest
 
 import numpy as np
 import random
-from finn_ci.rng_seed import seed_from_nodeid
+from rng_seed import seed_from_nodeid
 
 pytestmark = pytest.mark.util
 

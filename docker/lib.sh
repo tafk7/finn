@@ -1,8 +1,7 @@
 # shellcheck shell=bash
-# Shared shell helpers for FINN's launchers and CI scripts. SOURCE this file.
+# Shared shell helpers for FINN's launchers. SOURCE this file.
 #
 #     . "$(dirname "$0")/lib.sh"          # from docker/
-#     . "$(dirname "$0")/../../docker/lib.sh"   # from ci/scripts/
 #
 # WHY THIS EXISTS
 # ---------------

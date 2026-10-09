@@ -27,9 +27,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-"""Running HLS: the legacy flow's ``CallHLS``, and the kernel system's ``synthesize``.
+"""Running HLS: the pynq shell's ``CallHLS``, and the kernel system's ``synthesize``.
 
-``CallHLS`` runs a node's generated Tcl script where the legacy HLS backend wrote it.
+``CallHLS`` runs an IODMA's generated Tcl script where the pynq shell's IP generation
+wrote it (``finn.shells.pynq.iodma``).
 
 ``synthesize`` builds a staged HLS request (``finn.kernels.artifacts.hls``: a
 directory holding ``script.tcl``, the top and its headers, by relative paths) for

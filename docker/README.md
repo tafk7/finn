@@ -18,8 +18,7 @@ docker/Dockerfile.finn
 ## Run
 
 ```bash
-./docker/run -- quicktest.sh
-./docker/run --name finn-test -- pytest -m util
+./docker/run --name finn-test -- bash scripts/check-kernels.sh
 ./docker/run --fpga -- vivado -version
 ./docker/run --fpga --runtime xrt -- build_dataflow project/
 ```
@@ -52,7 +51,7 @@ are explicit build outputs. Run a SIF with the standard tool, for example:
 
 ```bash
 apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
-  ./finn.sif python -c 'from finn.util.basic import fifo_rtl_files; print(fifo_rtl_files())'
+  ./finn.sif python -c 'from finn.util.resources import resource_path; print(resource_path("xsi"))'
 ```
 
 Image tags are ``img-<hash>`` of the files in ``docker/image-inputs.txt``, which
@@ -119,19 +118,16 @@ image                                      guest only
     -> Dockerfile tool list + toolchain-shim
     -> finn_entrypoint.sh / finn-bashenv.sh / finn-toolchain.sh
     -> installed FINN distribution and generated console entry points
-
-Jenkins common helper -> shared-image loader -> docker/run
 ```
 
 Host rendering code and sandbox defaults are not image inputs. Editing them
 does not change image identity. The Dockerfile declares the tool list and sbx
 contract inline. The image does not install the host resolver.
 
-CI loads and verifies shared images before invoking `docker/run --no-build`.
-Repository callers use the public interface; the old runtime scripts and Jenkins
-bridge have been removed. Use `--fpga` instead of legacy grant-tier selection,
+Repository callers use the public interface; the old runtime scripts have been
+removed. Use `--fpga` instead of legacy grant-tier selection,
 `--runtime xrt` to select XRT, and `docker/build --print-tag` for image references.
-Commands after `--` are passed verbatim: use `pytest` and `quicktest.sh` explicitly.
+Commands after `--` are passed verbatim: use `pytest` or a gate script explicitly.
 For external dataflow directories, supply an explicit mount through
 `FINN_DOCKER_EXTRA`; the launcher no longer interprets workload command names.
 
@@ -152,7 +148,7 @@ hooks because those paths bypass normal startup.
 | `docker/build --sbx`, `sbxenv.yaml`, `docker/sbx/*.sbxenv.yaml` | FINN's workload kit `finn.yaml` and the `docker/sbx/xilinx` kit |
 | `run-docker.sh` | Explicit CI image preparation, then `docker/run` |
 | `docker/export-sif PATH` | `docker/build --export-sif PATH` |
-| `test` / `quicktest` launch shortcuts | Explicit `pytest` / `quicktest.sh` commands |
+| `test` / `quicktest` launch shortcuts | Explicit `pytest` or gate (`scripts/check-*.sh`) commands |
 | `build_custom` shortcut | Explicit directory mount, working directory, and Python command |
 | `build-xrt` grant/image spelling | `--fpga --runtime xrt` |
 | Bake target `finn-xrt-slash` | `finn-slash-xrt` |

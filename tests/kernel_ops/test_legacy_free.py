@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path loads none of the HWCustomOp flow.
+"""The builder loads nothing of the deleted HWCustomOp flow.
 
-Importing the builder's kernel steps (and the KernelOps, ``finn.kernels``,
-``finn.platform``, the cut and the pynq shell's build), and resolving the kernel path's
-own nodes through qonnx's registry (the partition node, an end's IODMA), loads no module
-of the HWCustomOp flow's packages or of its builder. The modules a process loads are
-counted in a fresh interpreter: this one has loaded others.
+Importing the build entry (``finn.builder.build_dataflow``) and the kernel path's steps
+(and the KernelOps, ``finn.kernels``, ``finn.platform``, the cut and the pynq shell's
+build), and resolving the kernel path's own nodes through qonnx's registry (the
+partition node, an end's IODMA), loads no module of the HWCustomOp flow's packages,
+which are deleted. The modules a process loads are counted in a fresh interpreter: this
+one has loaded others.
 """
 
 from __future__ import annotations
@@ -15,23 +16,27 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from importlib.util import find_spec
 
 import pytest
 
-#: The HWCustomOp flow: its ops, analyses and transformations, its builder's steps,
-#: phases and configuration (DataflowBuildConfig), and its stitched-IP executor.
-LEGACY = (
+#: The HWCustomOp flow, deleted: its ops, analyses and transformations, its builder's
+#: steps, phases and configuration, and its stitched-IP executor.
+DELETED = (
     "finn.custom_op.fpgadataflow",
+    "finn.custom_op.general",
     "finn.analysis",
     "finn.transformation.fpgadataflow",
     "finn.builder.build_dataflow_steps",
     "finn.builder.build_dataflow_phases",
     "finn.builder.build_dataflow_config",
     "finn.core.rtlsim_exec",
+    "finn.deploy",
 )
 
 #: The kernel path, as a build imports it.
 KERNEL_PATH = (
+    "finn.builder.build_dataflow",
     "finn.builder.kernel_build_steps",
     "finn.builder.kernel_build_config",
     "finn.custom_op.kernels",
@@ -70,19 +75,13 @@ def loaded(*modules: str) -> list[str]:
     return names
 
 
-def legacy(names: list[str]) -> list[str]:
-    return [name for name in names if any(name == p or name.startswith(p + ".") for p in LEGACY)]
-
-
-def test_the_kernel_path_loads_no_module_of_the_hwcustomop_flow() -> None:
+def test_the_builder_loads_no_module_of_the_hwcustomop_flow() -> None:
     names = loaded(*KERNEL_PATH)
     assert set(KERNEL_PATH) <= set(names)
     assert {"finn.custom_op.partition", "finn.shells.pynq.iodma"} <= set(names)
-    assert legacy(names) == []
+    assert [n for n in names if any(n == p or n.startswith(p + ".") for p in DELETED)] == []
 
 
-@pytest.mark.parametrize("module", ["finn.builder.build_dataflow", "finn.custom_op.fpgadataflow"])
-def test_the_hwcustomop_flow_is_seen_where_it_is_loaded(module: str) -> None:
-    """The entry that builds either configuration, and the flow's ops, load the flow:
-    the probe sees it where it is."""
-    assert legacy(loaded(module))
+@pytest.mark.parametrize("module", DELETED)
+def test_the_hwcustomop_flow_is_deleted(module: str) -> None:
+    assert find_spec(module) is None
