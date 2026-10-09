@@ -51,7 +51,7 @@ are explicit build outputs. Run a SIF with the standard tool, for example:
 
 ```bash
 apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
-  ./finn.sif python -c 'from finn.util.basic import fifo_rtl_files; print(fifo_rtl_files())'
+  ./finn.sif python -c 'from finn.util.resources import resource_path; print(resource_path("xsi"))'
 ```
 
 Image tags are ``img-<hash>`` of the files in ``docker/image-inputs.txt``, which

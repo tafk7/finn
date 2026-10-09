@@ -4,7 +4,7 @@
 """The boards a build may name: each board's part and the Vivado board preset the
 Zynq shell's block design selects for it.
 
-The boards are FINN's PYNQ boards (``finn.util.basic.pynq_part_map``), less the retired
+The boards are FINN's PYNQ boards, less the retired
 Zynq 7000 boards (Pynq-Z1, Pynq-Z2). A board is a FINN name for one board revision; its
 part is the one part it carries. The Zynq template has a branch for each board with a
 preset; a board without one (ZCU111) is named for its part, on the ``ip`` shell, and

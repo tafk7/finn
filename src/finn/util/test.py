@@ -30,13 +30,8 @@
 import numpy as np
 import onnx
 import onnx.numpy_helper as nph
-import os
-import warnings
 from importlib import resources as importlib
 from pkgutil import get_data
-from qonnx.core.modelwrapper import ModelWrapper
-
-from finn.util.basic import make_build_dir, robust_rmtree
 
 
 def get_test_model(netname, wbits, abits, pretrained):
@@ -73,43 +68,6 @@ def get_test_model_trained(netname, wbits, abits):
 def get_test_model_untrained(netname, wbits, abits):
     "get_test_model with pretrained=False"
     return get_test_model(netname, wbits, abits, pretrained=False)
-
-
-def get_topk(vec, k):
-    "Return indices of the top-k values in given array vec (treated as 1D)."
-    return np.flip(vec.flatten().argsort())[:k]
-
-
-def soft_verify_topk(invec, idxvec, k):
-    """Check that the topK indices provided actually point to the topK largest
-    values in the input vector"""
-    np_topk = np.flip(invec.flatten().argsort())[:k]
-    soft_expected = invec.flatten()[np_topk.astype(np.int_).flatten()]
-    soft_produced = invec.flatten()[idxvec.astype(np.int_).flatten()]
-    return (soft_expected == soft_produced).all()
-
-
-def load_test_checkpoint_or_skip(filename):
-    "Try to load given .onnx and return ModelWrapper, else skip current test."
-    if os.path.isfile(filename):
-        model = ModelWrapper(filename)
-        return model
-    else:
-        warnings.warn(filename + " not found from previous test step, skipping")
-        import pytest  # noqa: PLC0415
-
-        pytest.skip(filename + " not found from previous test step, skipping")
-
-
-def make_runtime_weight_stream(op_inst, weights):
-    """Write runtime weights in FINN's standard format and return the parsed stream."""
-    weight_dir = make_build_dir("test_runtime_weights_")
-    weight_path = os.path.join(weight_dir, "weights.dat")
-    op_inst.make_weight_file(weights, "decoupled_runtime", weight_path)
-    with open(weight_path, "r") as f:
-        weight_stream = [int(x, 16) for x in f.read().strip().split("\n")]
-    robust_rmtree(weight_dir)
-    return weight_stream
 
 
 def get_example_input(topology):
