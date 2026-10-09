@@ -54,8 +54,6 @@ Run tests with `--dist loadgroup` if running with multiple workers (i.e. `-n <N>
 
 Decorate tests with the existing markers. For example, `@pytest.mark.fpgadataflow`. The kernel trees' markers are in [6. Trees and gates](#6-trees-and-gates).
 
-*For more detailed marker, pipeline, sharding, and Jenkins configurations, see [ci/README.md](../ci/README.md).*
-
 ### 5. Randomness
 
 Every test under `tests/conftest.py` gets a stable `finn_test_seed` through it (not the trees the code gates run with their own `--confcutdir`: [6. Trees and gates](#6-trees-and-gates)). An autouse fixture seeds Python `random`, `numpy.random`, and the PyTorch CPU generator when installed.
@@ -81,7 +79,7 @@ def test_my_op(finn_test_seed):
 
 ### 6. Trees and gates
 
-The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §5, `ci/` on `sys.path`) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
+The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §5, `rng_seed.py`) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
 
 | Tree | Gate | `--confcutdir` |
 |---|---|---|

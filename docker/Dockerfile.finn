@@ -206,8 +206,8 @@ RUN --mount=type=bind,source=src/finn/resources,target=/tmp/src/finn/resources \
     rm -f /opt/finn/resources/.*.lock
 ENV FINN_RESOURCES_SYSTEM_CACHE=/opt/finn/resources
 
-COPY docker/finn_entrypoint.sh docker/quicktest.sh /usr/local/bin/
-RUN chmod 755 /usr/local/bin/finn_entrypoint.sh /usr/local/bin/quicktest.sh
+COPY docker/finn_entrypoint.sh /usr/local/bin/
+RUN chmod 755 /usr/local/bin/finn_entrypoint.sh
 
 # tini reaps zombies as PID 1. sbx runs this ENTRYPOINT with its own keep-alive
 # command instead of CMD.

@@ -19,7 +19,7 @@ machine settings.
 | `FINN_XSI_BUILD_DIR`, `NUM_DEFAULT_WORKERS`, `FINN_XELAB_MT`, `LIVENESS_THRESHOLD` | The XSI build's directory, worker counts, xelab threads, the rtlsim watchdog. | `tests/util/test_xsi_build.py`, `tests/util/test_rtlsim_liveness.py` |
 
 `FINN_ROOT` is read by no source under `src/` (`test_no_source_reads_the_checkout_root`);
-shell setup, quicktest and the container entrypoint use it only to find the checkout.
+shell setup and the container entrypoint use it only to find the checkout.
 
 ## Native integration obligations (2026-10-07)
 

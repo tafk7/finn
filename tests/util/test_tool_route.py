@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The site tool route (ci/README.md, "Running tools on LSF"): a transformation
+"""The site tool route (docs/environment.md, "Running tools on LSF"): a transformation
 called without a toolchain, as FINN's CI tests call them, runs each tool by the
 machine's toolchain, under the command directory FINN_TOOL_DIR_OVERRIDE names.
 The tools are fakes that record their calls (tests/util/conftest.py); no

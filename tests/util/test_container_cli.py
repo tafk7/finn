@@ -148,9 +148,7 @@ def test_user_documentation_does_not_advertise_retired_launchers():
     user_docs = (
         "README.md",
         "docker/README.md",
-        "docs/finn/getting_started.rst",
-        "tutorials/fpga_flow/README.md",
-        "notebooks/end2end_example/cybersecurity/3-build-accelerator-with-finn.ipynb",
+        "docs/installation.md",
     )
     for rel in user_docs:
         body = (REPO / rel).read_text()

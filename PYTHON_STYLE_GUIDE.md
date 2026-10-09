@@ -3,8 +3,8 @@
 ## Purpose and Scope
 
 This guide covers coding standards for Python code in the FINN project:
-- **Python conventions** (FINN compiler, transformations, analysis)
-- **FINN-specific architectural patterns** (CustomOps, transformations, node attributes)
+- **Python conventions** (FINN compiler, transformations)
+- **FINN-specific patterns** (transformations, tests)
 
 Following these standards ensures consistency across the codebase and makes code easier to read, review, and maintain.
 
@@ -25,18 +25,13 @@ Following these standards ensures consistency across the codebase and makes code
 
 **Examples**:
 ```python
-StreamingConcat      # HWCustomOp subclass
-StreamingFIFO        # HWCustomOp subclass
-Pool_hls             # HLS implementation (note _hls suffix)
-FMPadding_rtl        # RTL implementation (note _rtl suffix)
-MakeZYNQProject      # Transformation class
-InsertDWC            # Transformation class
-AnnotateResources    # Analysis class
+MatMulKernel         # A kernel
+Thresholding         # A KernelOp
+CutKernelPartition   # Transformation class
+PackagePartition     # Transformation class
 ```
 
 **Convention**:
-- `*_hls` suffix indicates HLS backend implementation
-- `*_rtl` suffix indicates RTL backend implementation
 - Transformation classes use imperative names (verbs)
 
 #### Functions and Methods
@@ -109,9 +104,9 @@ from copy import deepcopy
 import numpy as np
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import Transformation
 
-from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
-from finn.transformation.base import Transformation
+from finn.custom_op.kernels.base import KernelOp
 ```
 
 ### Docstring Style
@@ -218,109 +213,6 @@ All Python source files should include the copyright header with SPDX identifier
 
 This section covers architectural patterns and design principles specific to the FINN compiler.
 
-### Node Attributes
-
-Node attributes persist layer configuration in the ONNX graph between compiler steps.
-
-**DO add node attributes for**:
-- Information that **cannot be easily computed** from other attributes or graph structure
-- Layer-specific configuration (PE, SIMD, NumChannels, DataTypes)
-- Parameters that **vary between layer instances**
-
-**DON'T add node attributes for**:
-- Values **computable from other attributes** (e.g., `TMEM = NumChannels / PE`)
-- **Global/model-wide settings** (FPGA part, clock period) → use `DataflowBuildConfig` instead
-- Temporary calculation results
-- Information already in the ONNX graph (tensor shapes, initializers)
-
-**Example** (from CustomOp `get_nodeattr_types`):
-```python
-# ✓ GOOD - required configuration that varies per layer
-my_attrs = {
-    "Channels": ("i", True, 0),           # Cannot be inferred
-    "PE": ("i", True, 1),                 # Parallelism factor
-    "InputDataType": ("s", True, ""),     # FINN DataType string
-    "preferred_impl_style": ("s", False, ""),  # Optional HLS vs RTL preference
-}
-
-# ✗ BAD - can compute as Channels / PE
-"TMEM": ("i", False, 0)
-
-# ✗ BAD - global setting, belongs in DataflowBuildConfig
-"fpga_part": ("s", False, "")
-
-# ✗ BAD - already in ONNX tensor metadata
-"weight_initializer": ("ints", False, [])
-```
-
-### CustomOp Class Hierarchy
-
-FINN hardware operators use a **4-class hierarchy**:
-
-**1. HWCustomOp Base Class**
-- All hardware operators inherit from `HWCustomOp`
-- Provides common infrastructure for hardware layer functionality
-
-**2. Backend Mixin Classes** (`HLSBackend`, `RTLBackend`)
-- Define backend-specific interface requirements
-- `HLSBackend`: Methods for HLS code generation (shared templates)
-- `RTLBackend`: Methods for RTL HDL generation (per-layer templates)
-
-**3. Base Layer** (`src/finn/custom_op/fpgadataflow/<layer>.py`)
-- Backend-agnostic functionality for a specific layer type
-- Defines layer semantics and node attributes via `get_nodeattr_types()`
-- Implements shape calculations, stream width calculations
-- Provides Python golden reference execution (`execute_node()`)
-- **Naming**: PascalCase (e.g., `Pool`, `MatrixVectorActivation`, `LayerNorm`)
-
-**4. Implementation Variants** (HLS or RTL)
-- **HLS Variant** (`src/finn/custom_op/fpgadataflow/hls/<layer>_hls.py`)
-  - Inherits from base layer + `HLSBackend`
-  - Implements HLS code generation using shared finn-hlslib templates
-  - **Naming**: Base name + `_hls` suffix (e.g., `Pool_hls`, `MVAU_hls`, `LayerNorm_hls`)
-
-- **RTL Variant** (`src/finn/custom_op/fpgadataflow/rtl/<layer>_rtl.py`)
-  - Inherits from base layer + `RTLBackend`
-  - Implements RTL HDL generation with per-layer finn-rtllib wrapper templates
-  - **Naming**: Base name + `_rtl` suffix (e.g., `FMPadding_rtl`, `LayerNorm_rtl`)
-
-**Design principle**: Shared logic goes in **base class**, backend-specific code in **HLS/RTL variants**.
-
-**Example structure**:
-```python
-# Base layer: src/finn/custom_op/fpgadataflow/layernorm.py
-class LayerNorm(HWCustomOp):
-    def get_nodeattr_types(self):
-        # Define attributes for all backends
-        ...
-
-    def get_folded_output_shape(self):
-        # Shared shape calculation logic
-        ...
-
-    def execute_node(self, context, graph):
-        # Python golden reference
-        ...
-
-# HLS variant: src/finn/custom_op/fpgadataflow/hls/layernorm_hls.py
-class LayerNorm_hls(LayerNorm, HLSBackend):
-    def generate_params(self, model, path):
-        # HLS-specific parameter generation
-        ...
-
-    def docompute(self):
-        # HLS compute template call (shared template)
-        return "layernorm<...>(...)"
-
-# RTL variant: src/finn/custom_op/fpgadataflow/rtl/layernorm_rtl.py
-class LayerNorm_rtl(LayerNorm, RTLBackend):
-    def generate_hdl(self, model, fpgapart, clk):
-        # RTL HDL generation (per-layer wrapper template)
-        ...
-```
-
-See `docs/finn/implementation/customop-pattern.rst` for detailed information on the CustomOp pattern.
-
 ### Transformation Pass Structure
 
 All transformation passes follow a consistent structure:
@@ -330,7 +222,7 @@ All transformation passes follow a consistent structure:
 - Implement `apply(model: ModelWrapper) -> Tuple[ModelWrapper, bool]`
 - Return tuple of `(modified_model, model_was_changed)`
 
-**Naming**: Imperative verbs (e.g., `InsertDWC`, `InferShapes`, `AbsorbAddIntoMultiThreshold`)
+**Naming**: Imperative verbs (e.g., `CutKernelPartition`, `InferShapes`, `AbsorbAddIntoMultiThreshold`)
 
 **Example**:
 ```python
@@ -359,34 +251,6 @@ class MyTransformation(Transformation):
         return (model, model_was_changed)
 ```
 
-### Analysis Pass Structure
-
-Analysis passes extract information from the model without modifying it.
-
-**Required**:
-- Return a **dictionary** of extracted properties
-- Do not modify the model
-- Use descriptive dictionary keys
-
-**Naming**: Descriptive nouns (e.g., `exp_cycles_per_layer`, `res_estimation`)
-
-**Example**:
-```python
-def my_analysis(model: ModelWrapper) -> Dict[str, Any]:
-    """Extract properties from model.
-
-    Returns:
-        Dictionary mapping property names to values
-    """
-    results = {}
-
-    for node in model.graph.node:
-        # Extract information
-        results[node.name + "_property"] = compute_property(node)
-
-    return results
-```
-
 ### Testing Organization
 
 **Test file naming**:
@@ -394,9 +258,9 @@ def my_analysis(model: ModelWrapper) -> Dict[str, Any]:
 - Group related tests in same file
 
 **Test locations**:
-- Unit tests for transformations: `tests/transformation/<category>/test_*.py`
-- HW layer tests: `tests/fpgadataflow/test_*.py`
-- End-to-end flows: `tests/end2end/test_*.py`
+- Graph preparation's front end: `tests/transformation/<category>/test_*.py`, `tests/brevitas/test_*.py`
+- Kernels: `tests/kernels/test_*.py`; the KernelOps and the builder: `tests/kernel_ops/test_*.py`
+- Support code (toolchain, resources, containers): `tests/util/test_*.py`
 
 **Test function naming**:
 - `test_<specific_behavior>()`
@@ -410,18 +274,18 @@ See `markers` in `.pytest.ini` for the complete list of available markers.
 ```python
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
-from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
+from finn.transformation.streamline.absorb import AbsorbAddIntoMultiThreshold
 
-def test_insert_dwc_basic():
-    """Test DWC insertion for basic stream width mismatch."""
+def test_absorb_add_into_multithreshold():
+    """An Add before a MultiThreshold is folded into its thresholds."""
     model = build_test_model()
-    model = model.transform(InsertDWC())
+    model = model.transform(AbsorbAddIntoMultiThreshold())
     # Assertions
     assert check_expected_behavior(model)
 
-@pytest.mark.vivado
-def test_pool_hls_synthesis():
-    """Test HLS synthesis of Pool layer."""
+@pytest.mark.xsim
+def test_matmul_simulates():
+    """A MatMul kernel's RTL under XSim."""
     # Test requiring Vivado
     ...
 ```
@@ -466,11 +330,6 @@ simd = 8  # Limit parallelism to match BRAM port constraints
 
 - [PEP 8 – Style Guide for Python Code](https://peps.python.org/pep-0008/)
 - [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html)
-- FINN Documentation:
-  - `docs/finn/implementation/customop-pattern.rst` – CustomOp class hierarchy
-  - `docs/finn/implementation/specialization-rules.rst` – HLS vs RTL selection
-  - `docs/finn/reference/mem-modes.rst` – Memory mode configuration
-  - `docs/finn/reference/folding-constraints.rst` – PE/SIMD constraints
 
 ---
 

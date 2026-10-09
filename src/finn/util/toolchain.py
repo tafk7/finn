@@ -450,8 +450,7 @@ class Toolchain:
 
 #: The machine setting that names a site command directory: wrappers for
 #: ``vivado``, ``xelab``, ``v++``, ``g++``, ... that may hand a tool to a compute
-#: farm (ci/README.md, "Running tools on LSF"). The name is the Jenkins site
-#: configuration's.
+#: farm (docs/environment.md, "Running tools on LSF").
 COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
 
 #: The machine setting that says how many runs Vivado launches at once

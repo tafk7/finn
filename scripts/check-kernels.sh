@@ -33,7 +33,7 @@ OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
     tests/transformation tests/brevitas xsim vivado
 # finn.util and the rest of FINN's support code (toolchain, resources,
 # installation, containers, CI tooling, the builder's CPU-only flows). Its tests
-# use tests/conftest.py (the seeded RNG, ci/ on sys.path). The slow tests (wheel
+# use tests/conftest.py (the seeded RNG). The slow tests (wheel
 # and editable-environment builds, a build child; tens of seconds each) and the
 # builds to IP or bitfile (end2end) are deselected in either mode, so this step
 # stays at a few minutes.

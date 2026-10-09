@@ -20,7 +20,6 @@ src/finn/resources/*.py
 # src/finn/resources.toml counts only through the pins of the resources
 # the image bakes in; see finn_image_revision in docker/lib.sh.
 docker/finn_entrypoint.sh
-docker/quicktest.sh
 docker/toolchain-shim
 docker/finn-bashenv.sh
 docker/finn-toolchain.sh
