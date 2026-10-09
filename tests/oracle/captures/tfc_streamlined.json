@@ -1,0 +1,89 @@
+{
+ "oracle": {
+  "commit": "b507fec5865f07013d590fc798ec9f73127354de",
+  "subject": "Merge pull request #1707 from Xilinx/feature/requantf"
+ },
+ "generator": "scripts/oracle/generate.py",
+ "versions": {
+  "python": "3.12.3",
+  "numpy": "1.26.4",
+  "onnx": "1.22.0",
+  "onnxruntime": "1.28.0",
+  "protobuf": "5.29.6",
+  "qonnx": "1.0.0.post1.dev4+g4c1f9b445 @ 4c1f9b4452bb",
+  "brevitas": "0.12.2.dev51+gaad4d5a29 @ aad4d5a293db",
+  "torch": "2.8.0"
+ },
+ "xilinx": "none: Vivado and Vitis HLS stubbed (scripts/oracle/tools)",
+ "probe": "tfc_streamlined",
+ "files": {
+  "tfc_w2a2_streamlined.onnx": "3238e37ab4a169411e06bc5fb0973e5d65370ca47d43cc0d76041437d007871c"
+ },
+ "values": {
+  "model": "tfc_w2a2_streamlined.onnx",
+  "nodes": [
+   [
+    "Reshape_0",
+    "Reshape"
+   ],
+   [
+    "MultiThreshold_0",
+    "MultiThreshold"
+   ],
+   [
+    "MatMul_0",
+    "MatMul"
+   ],
+   [
+    "MultiThreshold_1",
+    "MultiThreshold"
+   ],
+   [
+    "MatMul_1",
+    "MatMul"
+   ],
+   [
+    "MultiThreshold_2",
+    "MultiThreshold"
+   ],
+   [
+    "MatMul_2",
+    "MatMul"
+   ],
+   [
+    "MultiThreshold_3",
+    "MultiThreshold"
+   ],
+   [
+    "MatMul_3",
+    "MatMul"
+   ],
+   [
+    "TopK_0",
+    "TopK"
+   ]
+  ],
+  "inputs": [
+   {
+    "name": "global_in",
+    "shape": [
+     1,
+     1,
+     28,
+     28
+    ],
+    "datatype": "UINT8"
+   }
+  ],
+  "outputs": [
+   {
+    "name": "global_out",
+    "shape": [
+     1,
+     1
+    ],
+    "datatype": "UINT32"
+   }
+  ]
+ }
+}

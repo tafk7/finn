@@ -1,0 +1,83 @@
+{
+ "oracle": {
+  "commit": "b507fec5865f07013d590fc798ec9f73127354de",
+  "subject": "Merge pull request #1707 from Xilinx/feature/requantf"
+ },
+ "generator": "scripts/oracle/generate.py",
+ "versions": {
+  "python": "3.12.3",
+  "numpy": "1.26.4",
+  "onnx": "1.22.0",
+  "onnxruntime": "1.28.0",
+  "protobuf": "5.29.6",
+  "qonnx": "1.0.0.post1.dev4+g4c1f9b445 @ 4c1f9b4452bb",
+  "brevitas": "0.12.2.dev51+gaad4d5a29 @ aad4d5a293db",
+  "torch": "2.8.0"
+ },
+ "xilinx": "none: Vivado and Vitis HLS stubbed (scripts/oracle/tools)",
+ "probe": "tfc_set_folding",
+ "files": {},
+ "values": {
+  "target_cycles": 200,
+  "layers": [
+   {
+    "name": "Thresholding_rtl_0",
+    "op_type": "Thresholding_rtl",
+    "PE": 4,
+    "cycles": 196
+   },
+   {
+    "name": "MVAU_hls_0",
+    "op_type": "MVAU_hls",
+    "PE": 16,
+    "SIMD": 16,
+    "cycles": 196
+   },
+   {
+    "name": "Thresholding_rtl_1",
+    "op_type": "Thresholding_rtl",
+    "PE": 1,
+    "cycles": 64
+   },
+   {
+    "name": "MVAU_hls_1",
+    "op_type": "MVAU_hls",
+    "PE": 1,
+    "SIMD": 32,
+    "cycles": 128
+   },
+   {
+    "name": "Thresholding_rtl_2",
+    "op_type": "Thresholding_rtl",
+    "PE": 1,
+    "cycles": 64
+   },
+   {
+    "name": "MVAU_hls_2",
+    "op_type": "MVAU_hls",
+    "PE": 1,
+    "SIMD": 32,
+    "cycles": 128
+   },
+   {
+    "name": "Thresholding_rtl_3",
+    "op_type": "Thresholding_rtl",
+    "PE": 1,
+    "cycles": 64
+   },
+   {
+    "name": "MVAU_hls_3",
+    "op_type": "MVAU_hls",
+    "PE": 1,
+    "SIMD": 4,
+    "cycles": 160
+   },
+   {
+    "name": "LabelSelect_hls_0",
+    "op_type": "LabelSelect_hls",
+    "PE": 1,
+    "cycles": 10
+   }
+  ]
+ }
+}

@@ -1,0 +1,164 @@
+{
+ "oracle": {
+  "commit": "b507fec5865f07013d590fc798ec9f73127354de",
+  "subject": "Merge pull request #1707 from Xilinx/feature/requantf"
+ },
+ "generator": "scripts/oracle/generate.py",
+ "versions": {
+  "python": "3.12.3",
+  "numpy": "1.26.4",
+  "onnx": "1.22.0",
+  "onnxruntime": "1.28.0",
+  "protobuf": "5.29.6",
+  "qonnx": "1.0.0.post1.dev4+g4c1f9b445 @ 4c1f9b4452bb",
+  "brevitas": "0.12.2.dev51+gaad4d5a29 @ aad4d5a293db",
+  "torch": "2.8.0"
+ },
+ "xilinx": "none: Vivado and Vitis HLS stubbed (scripts/oracle/tools)",
+ "probe": "tfc_zynq_build",
+ "files": {
+  "tfc_zynq_build.ip_config.tcl": "1e3f28083e29f7b3b28e5e2d0506c847293ca45a27e71b38bfffb18526df417e"
+ },
+ "values": {
+  "dropped": [
+   "LabelSelect_hls_0",
+   "LabelSelect_hls"
+  ],
+  "partitions": [
+   {
+    "name": "StreamingDataflowPartition_0",
+    "instance": "idma0",
+    "nodes": [
+     [
+      "StreamingDataflowPartition_0_IODMA_hls_0",
+      "IODMA_hls"
+     ]
+    ]
+   },
+   {
+    "name": "StreamingDataflowPartition_1",
+    "instance": "StreamingDataflowPartition_1",
+    "nodes": [
+     [
+      "StreamingDataflowPartition_1_Thresholding_rtl_0",
+      "Thresholding_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_0",
+      "StreamingDataWidthConverter_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_MVAU_hls_0",
+      "MVAU_hls"
+     ],
+     [
+      "StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_1",
+      "StreamingDataWidthConverter_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_Thresholding_rtl_1",
+      "Thresholding_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_2",
+      "StreamingDataWidthConverter_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_MVAU_hls_1",
+      "MVAU_hls"
+     ],
+     [
+      "StreamingDataflowPartition_1_Thresholding_rtl_2",
+      "Thresholding_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_3",
+      "StreamingDataWidthConverter_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_MVAU_hls_2",
+      "MVAU_hls"
+     ],
+     [
+      "StreamingDataflowPartition_1_Thresholding_rtl_3",
+      "Thresholding_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_4",
+      "StreamingDataWidthConverter_rtl"
+     ],
+     [
+      "StreamingDataflowPartition_1_MVAU_hls_3",
+      "MVAU_hls"
+     ]
+    ]
+   },
+   {
+    "name": "StreamingDataflowPartition_2",
+    "instance": "odma0",
+    "nodes": [
+     [
+      "StreamingDataflowPartition_2_IODMA_hls_0",
+      "IODMA_hls"
+     ]
+    ]
+   }
+  ],
+  "iodmas": {
+   "in": {
+    "node": "StreamingDataflowPartition_0_IODMA_hls_0",
+    "numInputVectors": [
+     1,
+     196
+    ],
+    "NumChannels": 4,
+    "dataType": "UINT8",
+    "intfWidth": 128,
+    "streamWidth": 32,
+    "direction": "in"
+   },
+   "out": {
+    "node": "StreamingDataflowPartition_2_IODMA_hls_0",
+    "numInputVectors": [
+     1,
+     10
+    ],
+    "NumChannels": 1,
+    "dataType": "UINT8",
+    "intfWidth": 16,
+    "streamWidth": 8,
+    "direction": "out"
+   }
+  },
+  "iodma_code": {
+   "StreamingDataflowPartition_0_IODMA_hls_0": "\n#define AP_INT_MAX_W 128\n\n#include \"bnn-library.h\"\n\n#include \"dma.h\"\n#include \"streamtools.h\"\n\n#define NumBytes1 784\n#define DataWidth1 128\n\n\nvoid StreamingDataflowPartition_0_IODMA_hls_0(ap_uint<128> *in0_V, hls::stream<ap_uint<32> > &out0_V, unsigned int numReps)\n{\n#pragma HLS INTERFACE s_axilite port=numReps bundle=control\n#pragma HLS INTERFACE s_axilite port=return bundle=control\n#pragma HLS INTERFACE m_axi offset=slave port=in0_V\n#pragma HLS INTERFACE s_axilite port=in0_V bundle=control\n#pragma HLS INTERFACE axis port=out0_V\n#pragma HLS DATAFLOW\nhls::stream<ap_uint<128> > dma2dwc;\nMem2Stream_Batch<DataWidth1, NumBytes1>(in0_V, dma2dwc, numReps);\nStreamingDataWidthConverter_Batch<128, 32, 49>(dma2dwc, out0_V, numReps);\n}\n",
+   "StreamingDataflowPartition_2_IODMA_hls_0": "\n#define AP_INT_MAX_W 16\n\n#include \"bnn-library.h\"\n\n#include \"dma.h\"\n#include \"streamtools.h\"\n\n#define NumBytes1 10\n#define DataWidth1 16\n\n\nvoid StreamingDataflowPartition_2_IODMA_hls_0(hls::stream<ap_uint<8> > &in0_V, ap_uint<16> *out0_V, unsigned int numReps)\n{\n#pragma HLS INTERFACE s_axilite port=numReps bundle=control\n#pragma HLS INTERFACE s_axilite port=return bundle=control\n#pragma HLS INTERFACE axis port=in0_V\n#pragma HLS INTERFACE m_axi offset=slave port=out0_V\n#pragma HLS INTERFACE s_axilite port=out0_V bundle=control\n#pragma HLS DATAFLOW\nhls::stream<ap_uint<16> > dwc2dma;\nStreamingDataWidthConverter_Batch<8, 16, 10>(in0_V, dwc2dma, numReps);\nStream2Mem_Batch<DataWidth1, NumBytes1>(dwc2dma, out0_V, numReps);\n}\n"
+  },
+  "block_design": [
+   "set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list $BUILD/code_gen_ipgen_StreamingDataflowPartition_0_IODMA_hls_0_XXXXXXXX/project_StreamingDataflowPartition_0_IODMA_hls_0/sol1/impl/ip $BUILD/vivado_stitch_proj_XXXXXXXX/ip]] [current_project]",
+   "update_ip_catalog -rebuild -scan_changes",
+   "create_bd_cell -type ip -vlnv xilinx_finn:finn:StreamingDataflowPartition_0:1.0 idma0",
+   "connect_bd_intf_net [get_bd_intf_pins idma0/m_axi_gmem0] [get_bd_intf_pins smartconnect_0/S00_AXI]",
+   "connect_bd_intf_net [get_bd_intf_pins idma0/s_axi_control_0] [get_bd_intf_pins axi_interconnect_0/M00_AXI]",
+   "assign_axi_addr_proc idma0/s_axi_control_0",
+   "connect_bd_net [get_bd_pins idma0/ap_clk] [get_bd_pins smartconnect_0/aclk]",
+   "connect_bd_net [get_bd_pins idma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
+   "set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_Thresholding_rtl_0_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_0_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_MVAU_hls_0_XXXXXXXX/project_StreamingDataflowPartition_1_MVAU_hls_0/sol1/impl/ip $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_1_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_Thresholding_rtl_1_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_2_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_MVAU_hls_1_XXXXXXXX/project_StreamingDataflowPartition_1_MVAU_hls_1/sol1/impl/ip $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_Thresholding_rtl_2_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_3_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_MVAU_hls_2_XXXXXXXX/project_StreamingDataflowPartition_1_MVAU_hls_2/sol1/impl/ip $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_Thresholding_rtl_3_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_StreamingDataWidthConverter_rtl_4_XXXXXXXX $BUILD/code_gen_ipgen_StreamingDataflowPartition_1_MVAU_hls_3_XXXXXXXX/project_StreamingDataflowPartition_1_MVAU_hls_3/sol1/impl/ip $BUILD/vivado_stitch_proj_XXXXXXXX/ip $::env(FINN_ROOT)/finn-rtllib/memstream]] [current_project]",
+   "update_ip_catalog -rebuild -scan_changes",
+   "create_bd_cell -type ip -vlnv xilinx_finn:finn:StreamingDataflowPartition_1:1.0 StreamingDataflowPartition_1",
+   "connect_bd_net [get_bd_pins StreamingDataflowPartition_1/ap_clk] [get_bd_pins smartconnect_0/aclk]",
+   "connect_bd_net [get_bd_pins StreamingDataflowPartition_1/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
+   "connect_bd_intf_net [get_bd_intf_pins StreamingDataflowPartition_1/s_axis_0] [get_bd_intf_pins idma0/m_axis_0]",
+   "set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list $BUILD/code_gen_ipgen_StreamingDataflowPartition_2_IODMA_hls_0_XXXXXXXX/project_StreamingDataflowPartition_2_IODMA_hls_0/sol1/impl/ip $BUILD/vivado_stitch_proj_XXXXXXXX/ip]] [current_project]",
+   "update_ip_catalog -rebuild -scan_changes",
+   "create_bd_cell -type ip -vlnv xilinx_finn:finn:StreamingDataflowPartition_2:1.0 odma0",
+   "connect_bd_intf_net [get_bd_intf_pins odma0/m_axi_gmem0] [get_bd_intf_pins smartconnect_0/S01_AXI]",
+   "connect_bd_intf_net [get_bd_intf_pins odma0/s_axi_control_0] [get_bd_intf_pins axi_interconnect_0/M01_AXI]",
+   "assign_axi_addr_proc odma0/s_axi_control_0",
+   "connect_bd_net [get_bd_pins odma0/ap_clk] [get_bd_pins smartconnect_0/aclk]",
+   "connect_bd_net [get_bd_pins odma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]",
+   "connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins StreamingDataflowPartition_1/m_axis_0]"
+  ],
+  "ip_config": "tfc_zynq_build.ip_config.tcl"
+ }
+}
