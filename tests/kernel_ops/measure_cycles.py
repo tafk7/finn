@@ -17,7 +17,8 @@ Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
   so that its interval is its own and not its slowest neighbour's.
 
 Each layer's prediction is its schedule's ``beat_count`` (decision K10), beside
-FINN's ``get_exp_cycles`` for the same folding (``MVAU``, ``Thresholding``). The
+FINN's ``get_exp_cycles`` for the same folding (``MVAU``, ``Thresholding``), as the
+finn-dev oracle captured it (``tests/oracle``). The
 tables are printed, and written to ``OUT/cycles.json`` and ``OUT/cycles.md``.
 Every frame's outputs are checked against ``execute_onnx`` of the partition's
 nodes, as the XSim tests check them.
@@ -35,10 +36,10 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from onnx import NodeProto, helper
+from onnx import NodeProto
+from oracle import capture
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
-from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.kernel_testbench import boundary_words
 from finn.custom_op.kernels.base import kernel_op
@@ -101,41 +102,41 @@ def alone_body(model: ModelWrapper, node: NodeProto) -> ModelWrapper:
     return single
 
 
+#: FINN's ``get_exp_cycles`` of ``MVAU`` and ``Thresholding`` at each folding measured
+#: here, at the oracle (its ``exp_cycles`` probe), by op and attributes.
+FINN_CYCLES = {
+    (row["op"], json.dumps(row["attributes"], sort_keys=True)): row["cycles"]
+    for row in capture("exp_cycles")
+}
+
+
 def finn_cycles(node: NodeProto, schedule: Any) -> int:
-    """FINN's ``get_exp_cycles`` of its own op at this folding."""
-    domain = "finn.custom_op.fpgadataflow"
+    """FINN's ``get_exp_cycles`` of its own op at this folding, as the oracle captured it."""
     if node.op_type == "MatMul":
         m, n, k = schedule.order
-        finn = helper.make_node(
-            "MVAU",
-            ["x", "w"],
-            ["y"],
-            domain=domain,
-            MW=schedule.extent(k),
-            MH=schedule.extent(n),
-            SIMD=schedule.factor(k),
-            PE=schedule.factor(n),
-            numInputVectors=[schedule.extent(m)],
-            inputDataType="INT8",
-            weightDataType="INT8",
-            outputDataType="INT32",
-        )
+        op = "MVAU"
+        attributes = {
+            "MW": schedule.extent(k),
+            "MH": schedule.extent(n),
+            "SIMD": schedule.factor(k),
+            "PE": schedule.factor(n),
+            "numInputVectors": [schedule.extent(m)],
+        }
     else:
         *rows, c = schedule.order
-        finn = helper.make_node(
-            "Thresholding",
-            ["x", "t"],
-            ["y"],
-            domain=domain,
-            NumChannels=schedule.extent(c),
-            PE=schedule.factor(c),
-            numInputVectors=[schedule.extent(row) for row in rows],
-            inputDataType="INT8",
-            weightDataType="INT8",
-            outputDataType="INT8",
+        op = "Thresholding"
+        attributes = {
+            "NumChannels": schedule.extent(c),
+            "PE": schedule.factor(c),
+            "numInputVectors": [schedule.extent(row) for row in rows],
+        }
+    key = (op, json.dumps(attributes, sort_keys=True))
+    if key not in FINN_CYCLES:
+        raise KeyError(
+            f"{node.name}: no oracle capture of {op} {attributes}; add it to"
+            " scripts/oracle/probes/exp_cycles.py and generate its capture again"
         )
-    op: Any = getCustomOp(finn)
-    return int(op.get_exp_cycles())
+    return int(FINN_CYCLES[key])
 
 
 def folding(node: NodeProto, schedule: Any) -> str:

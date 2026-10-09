@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,7 @@ import numpy as np
 import pytest
 from kernels.helpers import Lanes
 from onnx import helper
+from oracle import capture
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
@@ -472,18 +474,30 @@ def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None
         step_kernel_choices(matmul_model(), cfg)
 
 
-#: FINN's SetFolding on TFC_W2A2 at 1,000,000 frames a second and 5 ns (200 cycles a
-#: frame): each layer's folding, which the target throughput strategy reaches by cost.
-SET_FOLDING = {
-    "MultiThreshold_0": {"pe": 4},
-    "MatMul_0": {"compute.packed.pe": 16, "compute.packed.simd": 16},
-    "MultiThreshold_1": {"pe": 1},
-    "MatMul_1": {"compute.packed.pe": 1, "compute.packed.simd": 32},
-    "MultiThreshold_2": {"pe": 1},
-    "MatMul_2": {"compute.packed.pe": 1, "compute.packed.simd": 32},
-    "MultiThreshold_3": {"pe": 1},
-    "MatMul_3": {"compute.packed.pe": 1, "compute.packed.simd": 4},
-}
+def set_folding() -> dict[str, dict[str, int]]:
+    """FINN's SetFolding on TFC_W2A2 at 1,000,000 frames a second and 5 ns (200 cycles a
+    frame), as the finn-dev oracle captured it (``tfc_set_folding``): each layer's folding,
+    by the kernel path's node (the oracle's i-th Thresholding is MultiThreshold_i, its i-th
+    MVAU MatMul_i; its label select is on the host here)."""
+    captured = capture("tfc_set_folding")
+    assert captured["target_cycles"] == 200
+    folding: dict[str, dict[str, int]] = {}
+    for layer in captured["layers"]:
+        family = layer["op_type"].partition("_")[0]
+        if family == "Thresholding":
+            index = sum(name.startswith("MultiThreshold") for name in folding)
+            folding[f"MultiThreshold_{index}"] = {"pe": layer["PE"]}
+        elif family == "MVAU":
+            index = sum(name.startswith("MatMul") for name in folding)
+            folding[f"MatMul_{index}"] = {
+                "compute.packed.pe": layer["PE"],
+                "compute.packed.simd": layer["SIMD"],
+            }
+    return folding
+
+
+#: Each layer's folding, which the target throughput strategy reaches by cost.
+SET_FOLDING = set_folding()
 
 
 #: Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
@@ -688,25 +702,30 @@ def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
 #: Z0's chain: the Zynq landing's baseline build explored TFC so.
 Z0_CHAIN = [{"strategy": "target_throughput", "fps": 1_000_000}, {"strategy": "size_fifos"}]
 
-#: The IODMA_hls nodes ZynqBuild inserted for TFC at Z0's choices before the export
-#: (InsertIODMA from the partition's facts, at ffecf382a), by direction.
+#: TFC's Zynq build in the HWCustomOp flow at the finn-dev oracle, Vivado and Vitis HLS
+#: stubbed (``tfc_zynq_build``): SetFolding's folding, the label select on the host.
+ZYNQ_BUILD = capture("tfc_zynq_build")
+
+#: The oracle's partition names, by the kernel path's instance names: its ends' instances,
+#: and ``partition`` for the partition between them.
+INSTANCES = {
+    partition["name"]: (
+        "partition" if partition["instance"] == partition["name"] else partition["instance"]
+    )
+    for partition in ZYNQ_BUILD["partitions"]
+}
+
+
+def renamed(text: str) -> str:
+    """``text`` with the oracle's partition names as the kernel path's instances."""
+    return re.sub(r"StreamingDataflowPartition_\d+", lambda name: INSTANCES[name[0]], text)
+
+
+#: The IODMA_hls nodes InsertIODMA inserts for TFC at Z0's choices, by direction: the
+#: oracle's. (Z0's build, at ffecf382a, inserted the same.)
 Z0_IODMAS = {
-    "in": {
-        "numInputVectors": [1, 196],
-        "NumChannels": 4,
-        "dataType": "UINT8",
-        "intfWidth": 128,
-        "streamWidth": 32,
-        "direction": "in",
-    },
-    "out": {
-        "numInputVectors": [1, 10],
-        "NumChannels": 1,
-        "dataType": "UINT8",
-        "intfWidth": 16,
-        "streamWidth": 8,
-        "direction": "out",
-    },
+    direction: {name: value for name, value in iodma.items() if name != "node"}
+    for direction, iodma in ZYNQ_BUILD["iodmas"].items()
 }
 
 
@@ -779,7 +798,8 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
 #: partition StreamingDataflowPartition_1 renamed), each build directory as normalized
-#: ($BUILD, a random suffix XXXXXXXX).
+#: ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but for the partition's
+#: IP and the quoting (``test_z0s_block_design_is_the_oracles_but_for_the_partitions_ip``).
 Z0_BLOCK_DESIGN = """\
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/code_gen_ipgen_idma0_IODMA_hls_0_XXXXXXXX/project_idma0_IODMA_hls_0/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
 update_ip_catalog -rebuild -scan_changes
@@ -806,60 +826,40 @@ connect_bd_net [get_bd_pins odma0/ap_rst_n] [get_bd_pins smartconnect_0/aresetn]
 connect_bd_intf_net [get_bd_intf_pins odma0/s_axis_0] [get_bd_intf_pins partition/m_axis_0]
 """  # noqa: E501
 
-#: The IODMAs' generated HLS code at Z0's choices (PrepareIP's top_<node>.cpp), as Z0's
-#: build generated it, its partitions renamed, by instance.
+#: The IODMAs' generated HLS code at Z0's choices (PrepareIP's top_<node>.cpp), by
+#: instance: the oracle's, its partitions renamed. (Z0's build generated the same.)
 Z0_IODMA_CODE = {
-    "idma0": """
-#define AP_INT_MAX_W 128
-
-#include "bnn-library.h"
-
-#include "dma.h"
-#include "streamtools.h"
-
-#define NumBytes1 784
-#define DataWidth1 128
-
-
-void idma0_IODMA_hls_0(ap_uint<128> *in0_V, hls::stream<ap_uint<32> > &out0_V, unsigned int numReps)
-{
-#pragma HLS INTERFACE s_axilite port=numReps bundle=control
-#pragma HLS INTERFACE s_axilite port=return bundle=control
-#pragma HLS INTERFACE m_axi offset=slave port=in0_V
-#pragma HLS INTERFACE s_axilite port=in0_V bundle=control
-#pragma HLS INTERFACE axis port=out0_V
-#pragma HLS DATAFLOW
-hls::stream<ap_uint<128> > dma2dwc;
-Mem2Stream_Batch<DataWidth1, NumBytes1>(in0_V, dma2dwc, numReps);
-StreamingDataWidthConverter_Batch<128, 32, 49>(dma2dwc, out0_V, numReps);
+    INSTANCES[partition["name"]]: renamed(ZYNQ_BUILD["iodma_code"][node])
+    for partition in ZYNQ_BUILD["partitions"]
+    for node, op_type in partition["nodes"]
+    if op_type == "IODMA_hls"
 }
-""",
-    "odma0": """
-#define AP_INT_MAX_W 16
-
-#include "bnn-library.h"
-
-#include "dma.h"
-#include "streamtools.h"
-
-#define NumBytes1 10
-#define DataWidth1 16
 
 
-void odma0_IODMA_hls_0(hls::stream<ap_uint<8> > &in0_V, ap_uint<16> *out0_V, unsigned int numReps)
-{
-#pragma HLS INTERFACE s_axilite port=numReps bundle=control
-#pragma HLS INTERFACE s_axilite port=return bundle=control
-#pragma HLS INTERFACE axis port=in0_V
-#pragma HLS INTERFACE m_axi offset=slave port=out0_V
-#pragma HLS INTERFACE s_axilite port=out0_V bundle=control
-#pragma HLS DATAFLOW
-hls::stream<ap_uint<16> > dwc2dma;
-StreamingDataWidthConverter_Batch<8, 16, 10>(in0_V, dwc2dma, numReps);
-Stream2Mem_Batch<DataWidth1, NumBytes1>(dwc2dma, out0_V, numReps);
-}
-""",
-}
+def test_z0s_block_design_is_the_oracles_but_for_the_partitions_ip() -> None:
+    """The oracle's block design for TFC, its partitions renamed, is Z0's line for line,
+    the HWCustomOp flow's paths unquoted, except the partition's IP repositories: the
+    flow's partition is its layers' IPs stitched, so it lists each layer's IP and
+    memstream beside the stitched one; the kernel path's partition is one packaged IP."""
+    z0 = Z0_BLOCK_DESIGN.replace('"', "").splitlines()
+    oracle = [renamed(line) for line in ZYNQ_BUILD["block_design"]]
+    assert len(oracle) == len(z0)
+    differing = [index for index, (ours, theirs) in enumerate(zip(z0, oracle)) if ours != theirs]
+    assert [z0[index + 2] for index in differing] == [
+        "create_bd_cell -type ip -vlnv xilinx_finn:finn:partition:1.0 partition"
+    ]
+    (index,) = differing
+
+    def repositories(line: str) -> list[str]:
+        match = re.search(r"\[list (.*?)\]\]", line)
+        assert match is not None
+        return match[1].split()
+
+    stitched = "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"
+    assert repositories(z0[index]) == [stitched]
+    *layers, memstream = repositories(oracle[index])
+    assert (layers[-1], memstream) == (stitched, "$::env(FINN_ROOT)/finn-rtllib/memstream")
+    assert len(layers[:-1]) == 13 and all("_partition_" in path for path in layers[:-1])
 
 
 @pytest.mark.slow

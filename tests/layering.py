@@ -181,6 +181,9 @@ LAYERS: tuple[Layer, ...] = (
     # The default snapshot's contract on value classes: the standard library only.
     # The engine, dataflow and kernel trees check their own classes with it.
     Layer("tests.value_classes", ("value_classes",), (), (), "tests/core/space"),
+    # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
+    # kernel tests compare with the HWCustomOp flow's values through it.
+    Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
@@ -198,9 +201,9 @@ LAYERS: tuple[Layer, ...] = (
         "tests/dataflow",
     ),
     # The kernel tests need no graph either: the kernel stack, the harness, util for
-    # the XSI runtime and the resource store, and the space tests' helpers. The one flow
-    # module is an oracle: the stream contracts are compared with the shuffle
-    # decomposition that baseline FINN hard-codes.
+    # the XSI runtime and the resource store, the space tests' helpers and the oracle's
+    # captures. The one flow module is a live oracle: the stream contracts are compared
+    # with the shuffle decomposition that baseline FINN hard-codes.
     Layer(
         "tests.kernels",
         ("kernels",),
@@ -211,6 +214,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.layering",
             "tests.value_classes",
             "tests.core.space",
+            "tests.oracle",
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype"),
         "tests/kernels",
