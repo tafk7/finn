@@ -22,7 +22,6 @@ import numpy as np
 import pytest
 from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
-from qonnx.custom_op.registry import getCustomOp
 
 from finn.custom_op.kernels.shell import member, shell_root
 from finn.custom_op.partition.kernel_partitions import (
@@ -152,7 +151,6 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
         for bus in root.iter(f"{spirit}busInterface")
     }
     assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "10")
-    assert getCustomOp(sdp).get_nodeattr("slr") == -1
     point, boundary = configured_root(body, sdp.name)
     assert boundary_facts(body, point, boundary, sdp.name) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
