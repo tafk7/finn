@@ -45,7 +45,9 @@ of context, which the report says with how far that overstates the placed shell;
 ``ip`` shell has neither, so its sum is its partition's. The platform's are its part's totals
 (``Platform.resources``), nothing subtracted: what the platform has, not a budget,
 and ``part`` states the part's facts as the part catalog has them (its device, the
-device's SLRs, the devices that share them) and where they come from (``source``);
+device's SLRs, on a reduced die of several SLRs each SLR's site capacity under the
+totals as a cap with which caps are proven or inferred, the devices that share them)
+and where they come from (``source``);
 ``share`` is the fraction of each the shell uses, ``binding`` the one it uses most of,
 and ``over`` each it uses more of than the part has. A point over the part is a warning
 (``ResourceBudgetWarning``, and the report's ``warning``) naming the binding resource,
@@ -109,6 +111,7 @@ from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform import TargetRefused
 from finn.platform import part as catalog_part
+from finn.platform.catalog import SLRS_CAPPED
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -205,21 +208,35 @@ def resources_exact(platform: Platform | None) -> str:
 
 def part_report(name: str) -> dict[str, object]:
     """The target's part as the part catalog states it (``finn.platform.catalog``):
-    its device, the device's resources per SLR (``None`` where Vivado states no split),
-    the devices that share them, and
-    where its facts come from (``source``); a part the catalog does not have says
-    why, with no source."""
+    its device, the device's resources per SLR (``None`` where an overlay states no
+    split), on a reduced die of several SLRs each SLR's site capacity under the
+    device's totals as a cap (``cap``: the totals, the resources they cap, which of
+    those caps a fill proved and which are inferred, and the evidence), the devices
+    that share them, and where its facts come from (``source``); a part the catalog
+    does not have says why, with no source."""
     try:
         found = catalog_part(name)
     except TargetRefused as refused:
         return {"name": name, "source": None, "refused": str(refused)}
     device = found.device
+    cap: dict[str, object] | None = None
+    if device.capped:
+        review = device.cap_evidence
+        proven = set() if review is None else review.proven
+        cap = {
+            "slrs": SLRS_CAPPED,
+            "totals": asdict(device.resources),
+            "proven": [each for each in device.capped if each in proven],
+            "inferred": [each for each in device.capped if each not in proven],
+            "evidence": found.source if review is None else review.evidence,
+        }
     return {
         "name": found.name,
         "device": device.name,
         "architecture": device.architecture,
         "family": device.family,
         "slrs": None if device.slrs is None else [asdict(slr) for slr in device.slrs],
+        "cap": cap,
         "shared_with": list(device.shared_with),
         "source": found.source,
     }

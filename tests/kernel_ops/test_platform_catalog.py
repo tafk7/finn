@@ -21,21 +21,33 @@ import pytest
 from finn.kernels.target import DspBlock, Fabric
 from finn.kernels.utilization import RESOURCE_NAMES, Resources
 from finn.platform import BOARDS, TargetRefused, resolve_target
-from finn.platform.architectures import RULES, rules_digest
+from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
 from finn.platform.catalog import (
     DATA,
     OVERLAY_SETTING,
-    SLRS_UNSTATED,
+    SLRS_CAPPED,
     Catalog,
     Record,
     catalog,
     load,
 )
-from finn.platform.generate import _vivado, _wait, confirm, parse_devices, slr_resources
+from finn.platform.generate import (
+    DeviceProbe,
+    GenerationError,
+    PartRow,
+    _vivado,
+    _wait,
+    confirm,
+    derive,
+    parse_devices,
+    slr_resources,
+)
 from finn.transformation.kernels.choose import part_report
 
 ZU3 = [Resources(lut=70_560, ff=141_120, bram18=432, uram=0, dsp=360)]
 ZU7 = [Resources(lut=230_400, ff=460_800, bram18=624, uram=96, dsp=1_728)]
+VU5P_SLR = Resources(lut=394_080, ff=788_160, bram18=1_440, uram=320, dsp=2_280)
+VU5P = Resources(lut=600_577, ff=1_201_154, bram18=2_048, uram=470, dsp=3_474)
 
 
 def counts(slrs: list[Resources]) -> list[dict[str, int]]:
@@ -129,6 +141,30 @@ def test_parts_are_listed_by_pattern_and_family(data: Path) -> None:
         "xczu3eg-sbva484-1-i",
     ]
     assert len(loaded.parts(family="zynquplus")) == 4 and loaded.parts(family="versal") == []
+
+
+# -- the records -------------------------------------------------------------------------
+
+
+def test_a_capped_records_slrs_exceed_its_totals_and_are_accepted() -> None:
+    """A reduced die of several SLRs states each SLR's site capacity: their sum covers
+    the totals and exceeds them, and the totals cap it; an uncapped record's SLRs
+    sum to its totals exactly."""
+    capped = Record(totals=VU5P, slr_count=2, slrs=(VU5P_SLR,) * 2, capped=True)
+    assert sum(capped.slrs or (), Resources()) == VU5P_SLR.times(2) != VU5P
+    assert capped.capped_resources() == RESOURCE_NAMES  # VU5P's sites exceed every total
+    assert capped.stored()["capped"] is True
+    assert "capped" not in record(ZU3).stored() and record(ZU3).capped_resources() == ()
+    with pytest.raises(ValueError, match="not the totals"):
+        Record(totals=VU5P, slr_count=2, slrs=(VU5P_SLR,) * 2)
+    with pytest.raises(ValueError, match="does not cover the totals"):
+        Record(totals=VU5P_SLR.times(3), slr_count=2, slrs=(VU5P_SLR,) * 2, capped=True)
+    with pytest.raises(ValueError, match="does not cover the totals"):  # nothing to cap
+        Record(totals=VU5P_SLR.times(2), slr_count=2, slrs=(VU5P_SLR,) * 2, capped=True)
+    with pytest.raises(ValueError, match="one SLR is the device"):
+        Record(totals=ZU3[0], slr_count=1, slrs=(ZU7[0],), capped=True)
+    with pytest.raises(ValueError, match="states each SLR's site capacity"):
+        Record(totals=VU5P, slr_count=2, slrs=None, capped=True)
 
 
 # -- the overlay -------------------------------------------------------------------------
@@ -318,6 +354,22 @@ def test_an_overlay_states_a_record_by_its_totals_and_slrs(data: Path, tmp_path:
         load(data, overlay(tmp_path, {"source": "s", "devices": [bad]}))
 
 
+def test_an_overlay_states_a_capped_record_with_its_own_source(data: Path, tmp_path: Path) -> None:
+    """An overlay's reduced die states each SLR's site capacity, its totals and
+    ``capped``; no reviewed row is its, so the report's cap cites the overlay."""
+    resources = {"totals": asdict(VU5P), "slrs": counts([VU5P_SLR] * 2), "capped": True}
+    device = {"name": "xcvu5p_es", "architecture": "virtexuplus", "family": "virtexuplus"}
+    loaded = load(
+        data, overlay(tmp_path, {"source": "s", "devices": [device | {"resources": resources}]})
+    )
+    found = loaded.device("xcvu5p_es")
+    assert (found.resources, found.slrs) == (VU5P, (VU5P_SLR,) * 2)
+    assert found.capped == RESOURCE_NAMES and found.cap_evidence is None
+    uncapped = device | {"resources": dict(resources, capped=False)}
+    with pytest.raises(TargetRefused, match="not the totals"):
+        load(data, overlay(tmp_path, {"source": "s", "devices": [uncapped]}))
+
+
 def test_a_part_of_an_unsupported_pair_is_catalogued_and_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -367,6 +419,7 @@ def test_the_committed_data_is_one_sorted_record_a_line(committed: Catalog) -> N
             slrs=None
             if stored["slrs"] is None
             else tuple(Resources(**slr) for slr in stored["slrs"]),
+            capped=stored.get("capped", False),
         )
         assert stored == found.stored()
 
@@ -410,32 +463,121 @@ def test_every_part_resolves_or_is_refused_by_name(committed: Catalog) -> None:
     assert refused == {}  # every pair of the installed series is confirmed by the probe
 
 
-def test_a_devices_totals_are_its_slrs_sum_except_a_reduced_dies_split(
+CAPPED = ["xcku085", "xcku085_CIV", "xcvu160", "xcvu160_CIV", "xcvu27p", "xcvu5p", "xcvu5p_CIV"]
+"""The reduced dies of several SLRs Vivado 2025.2 installs."""
+
+
+def test_a_devices_totals_are_its_slrs_sum_or_on_a_reduced_die_their_cap(
     committed: Catalog,
 ) -> None:
-    """Every device states its SLRs' resources, which sum to its totals, but a device
-    of several SLRs sold on a larger die: Vivado states its totals, not their split."""
-    unstated = []
+    """Every device states each SLR's resources, which sum to its totals, but a device
+    of several SLRs sold on a larger die: its SLRs state their site capacity, and its
+    totals cap their sum."""
+    capped = []
     for each in committed.devices.values():
-        if each.slrs is None:
-            unstated.append(each.name)
-            assert each.slr_count > 1
+        assert each.slrs is not None and len(each.slrs) == each.slr_count
+        summed = sum(each.slrs, Resources())
+        if each.capped:
+            capped.append(each.name)
+            assert each.slr_count > 1 and each.resources != summed
+            assert all(getattr(summed, n) >= getattr(each.resources, n) for n in RESOURCE_NAMES)
             continue
-        assert len(each.slrs) == each.slr_count
-        assert each.resources == sum(each.slrs, Resources())
-        assert all(name in RESOURCE_NAMES for name in asdict(each.resources))
-    assert sorted(unstated) == [
-        "xcku085",
-        "xcku085_CIV",
-        "xcvu160",
-        "xcvu160_CIV",
-        "xcvu27p",
+        assert each.resources == summed
+    assert sorted(capped) == CAPPED
+    assert committed.manifest["counts"]["capped"] == len(CAPPED)
+    assert "the device's totals cap their sum" in SLRS_CAPPED
+
+
+def test_xcvu5p_states_two_slrs_of_site_capacity_under_its_totals(committed: Catalog) -> None:
+    vu5p = committed.part("xcvu5p-flva2104-1-e").device
+    assert vu5p.slrs == (VU5P_SLR,) * 2
+    assert VU5P_SLR == Resources(lut=394_080, ff=788_160, bram18=1_440, uram=320, dsp=2_280)
+    assert vu5p.resources == VU5P  # Platform.resources: the device's totals
+    assert resolve_target(part="xcvu5p-flva2104-1-e", period_ns=5.0).platform.resources == VU5P
+    reported = part_report("xcvu5p-flva2104-1-e")
+    assert reported["slrs"] == [asdict(VU5P_SLR)] * 2
+    assert reported["cap"] == {
+        "slrs": SLRS_CAPPED,
+        "totals": asdict(VU5P),
+        "proven": ["bram18", "uram", "dsp"],
+        "inferred": ["lut", "ff"],
+        "evidence": CAP_EVIDENCE["xcvu5p"].evidence,
+    }
+    assert part_report("xcvu9p-flga2104-2L-e")["cap"] is None
+
+
+def test_the_cap_evidence_covers_every_capped_device(committed: Catalog) -> None:
+    """Each reduced die of several SLRs has a reviewed row: which caps a fill proved
+    (the rest inferred), in a sentence naming the device, the tool and the method."""
+    assert sorted(CAP_EVIDENCE) == CAPPED
+    proven = {name: sorted(each.proven) for name, each in CAP_EVIDENCE.items()}
+    assert proven == {
+        "xcku085": ["bram18", "dsp"],
+        "xcvu160": ["bram18", "dsp"],
+        "xcvu5p": ["bram18", "dsp", "uram"],
+        "xcvu27p": ["bram18", "uram"],
+        "xcku085_CIV": [],
+        "xcvu160_CIV": [],
+        "xcvu5p_CIV": [],
+    }
+    for name, each in CAP_EVIDENCE.items():
+        device = committed.device(name)
+        assert device.cap_evidence is each and each.proven <= set(device.capped)
+        assert {"lut", "ff"} <= set(device.capped) - each.proven  # never filled
+        assert name in each.evidence and "Vivado 2025.2" in each.evidence
+    assert "dsp" not in CAP_EVIDENCE["xcvu27p"].proven  # its DSP fills did not complete
+
+
+def reduced_vu5p() -> dict[str, Any]:
+    """An extraction of one reduced device of two SLRs, as the generator reads it."""
+    rule_pair = ("virtexuplus", "virtexuplus")
+    part_name = "xcvu5p-flva2104-1-e"
+    row = PartRow(
+        part_name,
         "xcvu5p",
-        "xcvu5p_CIV",
-    ]
-    vu5p = committed.device("xcvu5p")
-    assert (vu5p.slr_count, vu5p.resources.lut) == (2, 600_577)
-    assert "reduced die" in SLRS_UNSTATED
+        "flva2104",
+        "-1",
+        "E",
+        *rule_pair,
+        ("600577", "1201154", "1024", "470", "3474", "2"),
+    )
+    sites = {
+        "SLICEL": 30_000,
+        "SLICEM": 19_260,
+        "RAMB18_L": 720,
+        "RAMB18_U": 720,
+        "DSP48E2": 2_280,
+        "URAM288": 320,
+    }
+    bels = frozenset(
+        [f"{x}6LUT" for x in "ABCDEFGH"]
+        + [f"{x}FF" for x in "ABCDEFGH"]
+        + [f"{x}FF2" for x in "ABCDEFGH"]
+        + ["F7MUX_AB", "F7MUX_CD", "F7MUX_EF", "F7MUX_GH", "F8MUX_BOT", "F8MUX_TOP", "F9MUX"]
+        + ["CARRY8"]
+    )
+    probe = DeviceProbe("xcvu5p", part_name, (sites, sites), bels)
+    return {
+        "tool": {"version": "2025.2", "build": "SW Build 1"},
+        "parts": [row],
+        "probes": {"xcvu5p": probe},
+        "rules": {rule_pair: replace(RULES[rule_pair], sample=part_name)},
+    }
+
+
+def test_the_generator_keeps_a_reduced_dies_slrs_under_its_totals() -> None:
+    """Over several SLRs, a reduced die's record states each SLR's sites and
+    ``capped``; it needs a reviewed row, and a row needs a capped device."""
+    generated = derive(**reduced_vu5p(), caps={"xcvu5p": CAP_EVIDENCE["xcvu5p"]})
+    (stored,) = generated.resources
+    assert stored["capped"] is True and stored["slrs"] == [asdict(VU5P_SLR)] * 2
+    assert stored["totals"] == asdict(VU5P)
+    assert generated.manifest["counts"]["capped"] == 1  # type: ignore[index]
+    assert any(line.endswith("|CAPPED") for line in generated.probe_log)
+    with pytest.raises(GenerationError, match="unreviewed-cap: xcvu5p: no row"):
+        derive(**reduced_vu5p(), caps={})
+    with pytest.raises(GenerationError, match="rows for devices no capped record has"):
+        derive(**reduced_vu5p(), caps=CAP_EVIDENCE)
 
 
 def test_a_multi_slr_device_states_each_slr(committed: Catalog) -> None:
