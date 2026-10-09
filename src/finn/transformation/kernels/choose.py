@@ -29,7 +29,9 @@ from the point the one before returned, and then:
   committed, attempts and time, and the completed values it read, if any; every
   committed choice by its owner, with the strategy that made it, ``saved`` for
   one the model held before; the completion policy and every value it completed,
-  by owner, with who completed it; the required choices it leaves open, which
+  by owner, with who completed it; each FIFO's memory style beside the storage
+  FinnLib's selection gives it and what it uses (``fifo_storage``: its ``auto``
+  is FinnLib's, not Vivado's); the required choices it leaves open, which
   hardware generation refuses; whether FIFOs were sized; the dropped choices with
   why, per member cycles, buffering and resources, the bottleneck, and the
   shell's resources against the platform's, ``resources``), so an outer search can
@@ -38,7 +40,8 @@ from the point the one before returned, and then:
 The resources are the shell root's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
 and its channels, boundary channels included), each end and its static region, and
-their sum, ``used``; where members state none, ``used`` is the sum of those that
+their sum, ``used``; where members state none (a memory pinned ``auto``, which
+Vivado places), ``used`` is the sum of those that
 do, a lower bound (``lower_bound``), each other named with why (``unstated``), and the
 ends and the static region are not counted. The ends' and the static region's are out
 of context, which the report says with how far that overstates the placed shell; the
@@ -77,10 +80,12 @@ import time
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from functools import reduce
 from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
+from finn.core.space import Available
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
@@ -90,6 +95,7 @@ from finn.custom_op.kernels.shell import (
     shell_root,
 )
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     Baseline,
@@ -107,6 +113,7 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
+from finn.kernels.fifo import FifoKernel
 from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform import TargetRefused
@@ -197,10 +204,11 @@ def resources_exact(platform: Platform | None) -> str:
         else f"the {platform.fabric.value} primitive table (finn.kernels.utilization.PRIMITIVES)"
     )
     return (
-        "the partition's DSP slices, and block RAM and UltraRAM where a memory's style is "
-        f"explicit, are the RTL's, in {table}; its LUTs, FFs and auto memories are models "
-        "(about 10 % on LUT and FF; auto placement is Vivado's as observed on UltraScale+, "
-        "on any fabric); the ends and the static region are models, "
+        "the partition's DSP slices and every memory's block RAM, UltraRAM and LUTRAM "
+        f"storage are the RTL's, in {table}; a FIFO's shallow hi space, which Vivado "
+        "places, is a model; its other LUTs and FFs are models (about 10 %); a memory "
+        "in auto, other than a FIFO's, is placed by Vivado, not stated (unstated); the "
+        "ends and the static region are models, "
         + SHELL_CHARACTERISED
         + ", which overstate the placed shell (by about 28 % of its LUTs, TFC on Ultra96)"
     )
@@ -328,6 +336,30 @@ def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[s
         "buffering": sum(cost.buffering.values()),
         "resources": resources,
     }
+
+
+def _fifo_storage(seam: Seam, point: Any) -> dict[str, dict[str, object]]:
+    """Each FIFO's memory style on the completed ``point``, by the node and attribute that
+    would persist it, beside the storage the RTL selects for it (FinnLib's ``auto``:
+    shift, distributed, block or ultra) and what it uses."""
+    found: dict[str, dict[str, object]] = {}
+    declared = seam.declared(point)
+    for key, value in seam.chosen(point).items():
+        path, _, name = key.rpartition(".")
+        if declared.get(key) is not FifoKernel or name != "ram_style":
+            continue
+        # A selector's case names no attribute: the selector's value is the case's Space.
+        fifo = reduce(lambda found, name: getattr(found, name, found), path.split("."), point)
+        # A FIFO whose depth no strategy sized (required, left open) has neither yet.
+        storage = fifo.query(FifoKernel.storage)
+        used = fifo.query(FifoKernel.exports[RESOURCES])
+        node, attribute = seam.owner(key) or ("", key)
+        found.setdefault(node, {})[attribute] = {
+            "ram_style": value,
+            "storage": storage.value.effective_style if isinstance(storage, Available) else None,
+            "resources": asdict(used.value) if isinstance(used, Available) else None,
+        }
+    return found
 
 
 def _choices_by_owner(seam: Seam, made_by: Mapping[str, str]) -> dict[str, dict[str, str]]:
@@ -505,6 +537,7 @@ def explore_kernel_choices(
         "choices": _choices_by_owner(seam, made_by),
         "completion": completion_report,
         "completed": {} if completed is None else _completed_by_owner(seam, completed),
+        "fifo_storage": {} if completed is None else _fifo_storage(seam, completed.point),
         "fifos": _fifos(strategies, explorers, completed, seam.completion),
         "fresh": fresh,
         "dropped": dict(root.dropped),

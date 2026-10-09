@@ -206,7 +206,8 @@ class KernelBuildConfig(DataClassJsonMixin):
     #: The completion policy (finn.transformation.kernels.KERNEL_COMPLETIONS) that
     #: completes what no strategy chose, on a copy that is never saved, wherever the
     #: partition is costed or built: ``baseline``, every open choice at its kernel's
-    #: baseline (its first viable case: the least parallelism, ``auto`` memories) and,
+    #: baseline (its first viable case: the least parallelism, each memory in the
+    #: explicit style its size orders first, a FIFO in FinnLib's ``auto``) and,
     #: when the partition is built, its FIFOs sized at that folding; a required choice
     #: (a FIFO's depth) is refused, named. ``placeholder``, for debugging, also takes
     #: the first case of a required choice. report/kernel_exploration.json lists every

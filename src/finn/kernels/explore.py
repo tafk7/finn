@@ -28,7 +28,7 @@ one root (a shell root, its members its channels and kernels, each at its path:
   bottleneck, every member tied at the most cycles, once every member's cycles are
   known; and the resources used, once every member states its own. A member whose
   cycles wait on open choices names them, and a member that states no resources
-  says why (its memory style open, or no model of its leaf).
+  says why (its memory style open, a memory in ``auto``, or no model of its leaf).
 
 Beside them, ``resources(point)`` is what the root uses as far as it is stated: its
 own ``RESOURCES`` (on a shell root, its partition's, its ends' and its static region's
@@ -1157,7 +1157,7 @@ class MaxThroughput:
     the fastest bottleneck the folding reaches) and, if that does not fit, no budget
     (the least parallelism); then the least budget between their bottlenecks whose
     point fits. Each point is costed completed on a copy (``Seam.complete``: the
-    seam's policy, memories ``auto`` at the model's estimate, transports ``direct``),
+    seam's policy, memories in their kernels' first explicit style, transports ``direct``),
     by the root's resources as far as they are stated (``Seam.resources``: on a shell
     root its partition's, its ends' and its static region's). Of every point tried, it
     keeps the one that fits with the fewest cycles, ties to the least resources (the
@@ -1168,7 +1168,8 @@ class MaxThroughput:
     relaxed above itself: an end's converter, SZ6), the report states it, and the
     search goes on as bisection: a better point it reached on the way is still kept.
 
-    A member that states no resources (a compressor reducer, a kernel with no model) is
+    A member that states no resources (a compressor reducer, a memory pinned ``auto``, a
+    kernel with no model) is
     allowed: the budget is checked against what is stated, a lower bound, and it warns
     once (``UnstatedResourcesWarning``), naming each such member and why.
 
@@ -1436,11 +1437,13 @@ class SizeFifos:
     ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the producer
     within its idle time, FS1) and proposes, all in one batch, ``direct`` or the FIFO
     case with its depth (the least DEPTH whose storage holds the least words plus
-    ``margin``) and ``ram_style`` (``auto``:
-    FinnLib's own selection by depth and width, until resources are exported; FS4). A
-    channel the model does not read (a boundary without an end, a memory source) is
-    direct, with why. Where the seam refuses a channel's FIFO, that channel falls back
-    to direct, its refusal reported, and the batch is attempted again.
+    ``margin``, in ``ram_style``'s storage). ``ram_style`` ``None``, the default, leaves
+    the FIFO's style open, for the completion (its first case, ``auto``: FinnLib's own
+    selection by depth and width, which the depth is sized for) or a later strategy; a
+    style named is committed with the depth (SZ18). A channel the model does not read (a
+    boundary without an end, a memory source) is direct, with why. Where the seam refuses
+    a channel's FIFO, that channel falls back to direct, its refusal reported, and the
+    batch is attempted again.
 
     ``method`` is ``"analytical"`` (K12), the only one; ``frames`` the frames the
     model runs to reach its periodic state.
@@ -1452,7 +1455,7 @@ class SizeFifos:
         self,
         method: str = "analytical",
         margin: int = 0,
-        ram_style: str = "auto",
+        ram_style: str | None = None,
         frames: int = 16,
     ) -> None:
         if method != "analytical":
@@ -1490,7 +1493,7 @@ class SizeFifos:
                 _member(read, transport.channel),
                 bottleneck.cycles,
                 margin=self.margin,
-                ram_style=self.ram_style,
+                ram_style="auto" if self.ram_style is None else self.ram_style,
                 frames=self.frames,
             )
             # A FIFO case the channel refuses before any attempt is a refusal only where
@@ -1505,7 +1508,8 @@ class SizeFifos:
                 if proposals[transport.channel].placed:
                     batch[transport.choice.key] = transport.fifo
                     batch[transport.depth] = proposals[transport.channel].sized.depth
-                    batch[transport.ram_style] = self.ram_style
+                    if self.ram_style is not None:
+                        batch[transport.ram_style] = self.ram_style
                 else:
                     batch[transport.choice.key] = transport.direct
             outcome = seam.attempt(point, batch)

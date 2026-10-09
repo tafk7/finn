@@ -73,15 +73,19 @@ class Recording:
 
 
 class Last:
-    """Prefers each Decision's last viable case (of memories only, with ``memories``)."""
+    """Prefers each Decision's last viable case; with ``memories``, only a memory's, and
+    its last explicit style (UltraRAM where viable), ``auto`` aside."""
 
     def __init__(self, memories: bool = False) -> None:
         self.memories = memories
 
     def rank(self, choice: Choice) -> Sequence[object]:
-        if self.memories and not choice.key.endswith("ram_style"):
-            return choice.cases or ()
-        return tuple(reversed(choice.cases or ()))
+        cases = choice.cases or ()
+        if not self.memories:
+            return tuple(reversed(cases))
+        if not choice.key.endswith("ram_style"):
+            return cases
+        return tuple(reversed([case for case in cases if case != "auto"]))
 
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
@@ -90,8 +94,8 @@ def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
     odd = Choice("x.simd", None, None, (1, 3), True)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
-    memory = offer("w.source.memstream.ram_style", ("auto", "block"), {})
-    assert list(policy.rank(memory)) == ["auto", "block"]
+    memory = offer("w.source.memstream.ram_style", ("block", "auto"), {})
+    assert list(policy.rank(memory)) == ["block", "auto"]
 
 
 def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:

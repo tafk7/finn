@@ -565,16 +565,19 @@ part, and stating the bottleneck reached and whether `fps` is met),
 `max_throughput` the fewest cycles a frame, of every point it tried, whose resources
 (the shell's: its partition, ends and static region) stay within `"within"`, a
 required `{resource: fraction}` of the part's totals (`{"lut": 0.5}`); where a member
-states no resources, it budgets what is stated, a lower bound, and warns, naming
-it. `pinned` commits a `kernel_choices.json` (`"path"`), `size_fifos` sizes
-each channel's FIFO from both ends' beat patterns at the bottleneck (`direct`
-where none is needed; `"margin"` words added to a FIFO it places, default 0). The
+states no resources (a memory pinned `auto`: placed by Vivado, not stated), it
+budgets what is stated, a lower bound, and warns, naming it. `pinned` commits a
+`kernel_choices.json` (`"path"`), `size_fifos` sizes each channel's FIFO from both
+ends' beat patterns at the bottleneck (`direct` where none is needed; `"margin"`
+words added to a FIFO it places, default 0; its memory style left open unless
+`"ram_style"` names one). The
 default list is empty. What no strategy chose stays open, and the completion
 policy `kernel_completion` completes it wherever the partition is costed or
 built, on a copy that is never saved: `baseline` (the default) takes each open
 choice's first viable case, which every kernel lists as its baseline (the least
-parallelism, `auto` memories), and when the partition is built sizes its FIFOs at
-that folding; `placeholder`, for debugging, also completes a required choice, and
+parallelism; each memory in the explicit style the size of what it holds orders
+first, `auto` last, a FIFO in FinnLib's own `auto` selection), and when the
+partition is built sizes its FIFOs at that folding; `placeholder`, for debugging, also completes a required choice, and
 says `DEBUG: completed by placeholder` for every value it takes. A required choice
 left open (a FIFO's depth) is refused by name when the partition is built. The
 choices the strategies made are written to `kernel_choices.json`, and what the

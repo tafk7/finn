@@ -292,12 +292,23 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     chosen = explorer.chosen(found)
     assert chosen["hidden.transport"] == "fifo"
     assert chosen["hidden.transport.fifo.buffer.depth"] == 8
-    assert chosen["hidden.transport.fifo.buffer.ram_style"] == "auto"
+    # Its style is left open, for the completion (FinnLib's ``auto``) or a later strategy.
+    assert "hidden.transport.fifo.buffer.ram_style" not in chosen
+    assert strategy.report()["ram_style"] is None
     assert strategy.channels()["hidden"]["bits"] == 8 * 24
     assert strategy.report()["fifo_bits"] == 8 * 24
     # The rest of the chain explores to the end around it.
     done = explore(explorer, found, [Ranked(Lanes())])
     assert explorer.refusals(done) == {}
+
+
+def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPatch) -> None:
+    explorer, point = _folded()
+    monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
+    for style in ("auto", "distributed"):
+        chosen = explorer.chosen(SizeFifos(ram_style=style).explore(explorer, point))
+        assert chosen["hidden.transport.fifo.buffer.depth"] == 8
+        assert chosen["hidden.transport.fifo.buffer.ram_style"] == style
 
 
 def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.MonkeyPatch) -> None:

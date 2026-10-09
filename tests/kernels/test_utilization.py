@@ -18,9 +18,13 @@ from typing import Any
 
 import pytest
 
-from finn.core.space import Available, Rejected
+from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.tensor import Tensor
+from finn.dataflow.traversal import vector_major
 from finn.kernels.base import RESOURCES
+from finn.kernels.channels import Channel
+from finn.kernels.configure import commit
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
     PackedDotpKernel,
@@ -28,9 +32,17 @@ from finn.kernels.dotp import (
     packed_dotp_resources,
 )
 from finn.kernels.fifo import fifo_resources
+from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import DspBlock
-from finn.kernels.thresholding import stage_style, thresholding_resources
+from finn.kernels.thresholding import (
+    ThresholdingAxiKernel,
+    stage_style,
+    thresholding_resources,
+)
+from finn.kernels.transpose import TransposeKernel
 from finn.kernels.utilization import (
+    BLOCK_FIRST_BITS,
     PRIMITIVES,
     Fabric,
     Fit,
@@ -43,7 +55,16 @@ from finn.kernels.utilization import (
     total,
     uram,
 )
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, eltwise, placed_dotp, threshold_base
+from kernels.adapted import ELEMENT, transposed
+from kernels.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    Root,
+    eltwise,
+    placed_dotp,
+    threshold_base,
+    with_direct_transports,
+)
 
 INT2, INT4, INT8 = (resolve_qonnx_datatype_name(name) for name in ("INT2", "INT4", "INT8"))
 
@@ -200,17 +221,99 @@ def test_a_one_port_table_s_lutram_and_multiplexer_as_measured() -> None:
     assert memory(160, 8, "distributed", fabric=US, single_port=True) == Resources(lut=24)
 
 
-def test_auto_places_by_size_and_depth_as_measured() -> None:
-    assert memory(128, 32, "auto", fabric=US).bram18 == 0  # 4096 bits: LUTRAM
-    assert memory(128, 64, "auto", fabric=US).bram18 == 2  # 8192 bits: block RAM
-    assert memory(64, 128, "auto", fabric=US).bram18 == 0  # 8192 bits, 64 deep: LUTRAM
-    # TFC MatMul_0 at 3e6 fps: block RAM; measured 21 RAMB36 with the last 56 bits elsewhere.
-    assert memory(64, 1568, "auto", fabric=US).bram18 == 44
-    # A read-only memory: block RAM from 128 words (conservative), LUT logic below.
-    assert memory(2048, 8, "auto", fabric=US, rom=True).bram18 == 1
-    assert memory(8, 8, "auto", fabric=US, rom=True) == Resources(lut=4)
+def test_a_memory_is_stated_in_an_explicit_style_only() -> None:
+    # TFC MatMul_0 at 3e6 fps in block RAM: measured 21 RAMB36 with the last 56 bits
+    # elsewhere (Vivado's packing, two RAMB18 over the aspects' count).
+    assert memory(64, 1568, "block", fabric=US).bram18 == 44
     assert memory(0, 8, "block", fabric=US) == Resources()
     assert memory(4096, 72, "ultra", fabric=US) == Resources(uram=1)
+    # ``auto`` is Vivado's placement, which states nothing: no statement of it is made.
+    with pytest.raises(ValueError, match="'auto' is no explicit style"):
+        memory(128, 64, "auto", fabric=US)
+
+
+LUTRAM_FIRST = ("distributed", "block", "ultra", "auto")
+BLOCK_FIRST = ("block", "distributed", "ultra", "auto")
+
+
+def table(elements: int) -> Any:
+    """A memstream holding ``elements`` INT4 values, one a word, its style open."""
+    values = tuple(index % 8 for index in range(elements))
+    return design_space(
+        MemStreamKernel(
+            dtype=INT4,
+            form=vector_major((elements,), 1),
+            contents=values,
+            platform=FULL_DSP48E2,
+        )
+    )
+
+
+def buffer(frame_words: int) -> Any:
+    """An input generator streaming a frame of 32-bit words once, its style open."""
+    return design_space(
+        InputGeneratorKernel(
+            word_bits=32,
+            frame_words=frame_words,
+            dims=(frame_words,),
+            strides=(1,),
+            platform=FULL_DSP48E2,
+        )
+    )
+
+
+def pages(rows: int, cols: int) -> Any:
+    """A transpose of two ``rows x cols`` INT4 matrices, SIMD 4, its pages' style open."""
+    shape = (2, rows, cols)
+
+    class Transposed(Root):
+        a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
+        b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
+        shuffle = TransposeKernel(input_channel=a, output_channel=b, platform=FULL_DSP48E2)
+
+    return commit(with_direct_transports(design_space(Transposed())), {"shuffle.simd": 4})
+
+
+def cases(point: Any, decision: Any) -> tuple[str, ...]:
+    found = point.field(decision).candidates()
+    assert isinstance(found, Available), found
+    return tuple(found.value)
+
+
+def test_each_memory_offers_its_explicit_styles_by_size_then_auto() -> None:
+    """Block RAM first from ``BLOCK_FIRST_BITS`` held, LUTRAM first below, UltraRAM after
+    both, and ``auto`` last: a memstream's table (its contents, whatever the folding),
+    an input generator's buffer (a frame, the most it holds) and a transpose's pages."""
+    assert BLOCK_FIRST_BITS == 8192 == 2048 * 4 == 256 * 32 == 2 * 32 * 32 * 4
+    assert cases(table(2047), MemStreamKernel.ram_style) == LUTRAM_FIRST
+    assert cases(table(2048), MemStreamKernel.ram_style) == BLOCK_FIRST
+    assert cases(buffer(255), InputGeneratorKernel.ram_style) == LUTRAM_FIRST
+    assert cases(buffer(256), InputGeneratorKernel.ram_style) == BLOCK_FIRST
+    assert cases(pages(32, 32).shuffle, TransposeKernel.ram_style) == BLOCK_FIRST
+    assert cases(pages(16, 32).shuffle, TransposeKernel.ram_style) == LUTRAM_FIRST
+    # The thresholds' stages left above the UltraRAM ones: distributed first.
+    assert threshold_base().with_choices(ultra_stages=0).field(
+        ThresholdingAxiKernel.ram_style
+    ).candidates() == Available(("distributed", "auto"))
+
+
+@pytest.mark.parametrize(
+    "memory_point",
+    [
+        lambda: table(16).with_choices(ram_style="auto", pumped_memory=False),
+        lambda: buffer(16).with_choices(ram_style="auto"),
+        lambda: transposed(16, 32, 4, ram_style="auto"),
+    ],
+    ids=("memstream", "input_gen", "transpose"),
+)
+def test_a_memory_in_auto_states_no_resources(memory_point: Any) -> None:
+    """``auto`` is Vivado's placement: the memory names why it states none, so a total
+    over it is a lower bound naming it."""
+    point = memory_point()
+    answer = point.query(type(point).exports[RESOURCES])
+    assert isinstance(answer, Rejected)
+    assert [finding.code for finding in answer.findings] == ["memory-auto"]
+    assert answer.findings[0].message.endswith("ram_style auto, placed by Vivado, not stated")
 
 
 def test_every_fabric_s_primitives_state_their_evidence() -> None:
@@ -301,7 +404,8 @@ def test_the_compressor_reducer_is_refused_by_name() -> None:
 
 def test_a_block_fifo_states_its_two_memory_spaces() -> None:
     """DEPTH 1100: the RTL keeps 1024 words in block RAM and its 128-word hi space
-    ``auto`` (shallower than a RAMB18), which a 1 kbit memory leaves in LUTRAM."""
+    ``auto`` (shallower than a RAMB18), which the FIFO's model of Vivado's placement
+    leaves in LUTRAM at 1 kbit."""
     used = fifo_resources(1100, 8, "block", fabric=US)
     assert used.bram18 == 1
     assert used.lut > fifo_resources(1025, 8, "block", fabric=US).lut  # the hi's LUTRAM
@@ -339,13 +443,23 @@ def test_thresholds_read_only_and_shared_cost_no_memory() -> None:
 
 def test_a_thresholding_kernel_reads_its_table_for_shared_rows() -> None:
     choices = {"pe": 1, "use_axilite": False, "deep_pipeline": False, "ultra_stages": 0}
-    distinct = threshold_base().with_choices(**choices, ram_style="auto")
-    same = threshold_base(table=(((-2, 0, 3), (-2, 0, 3)),)).with_choices(
-        **choices, ram_style="auto"
-    )
+    left = {"ram_style": "distributed", "block_stages": 0}
+    distinct = threshold_base().with_choices(**choices, **left)
+    same = threshold_base(table=(((-2, 0, 3), (-2, 0, 3)),)).with_choices(**choices, **left)
     # Two rows of three thresholds: two stages, of depth 2 and 4, as LUT logic.
     assert stated(distinct).lut > stated(same).lut
     assert stated(distinct).bram18 == stated(same).bram18 == 0
+    # Left to ``auto``, Vivado places the stages: unstated, unless the table folds to
+    # nothing (shared rows, never written), which places no memory.
+    placed = threshold_base().with_choices(**choices, ram_style="auto")
+    answer = placed.query(type(placed).exports[RESOURCES])
+    assert isinstance(answer, Rejected)
+    assert [finding.code for finding in answer.findings] == ["memory-auto"]
+    assert "placed by Vivado, not stated" in answer.findings[0].message
+    folded = threshold_base(table=(((-2, 0, 3), (-2, 0, 3)),)).with_choices(
+        **choices, ram_style="auto"
+    )
+    assert stated(folded) == stated(same)
 
 
 def test_resources_add_and_a_fit_rounds() -> None:

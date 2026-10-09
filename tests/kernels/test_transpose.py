@@ -44,12 +44,13 @@ def _beats(form: Any) -> list[list[int]]:
 
 def test_its_simd_is_any_divisor_of_the_rows_and_its_pages_any_memory() -> None:
     """SIMD divides I alone, the RTL's one constraint; J (4) is free: SIMD 3 does not divide
-    it, and 4, which divides J and not I, is not a case."""
+    it, and 4, which divides J and not I, is not a case. The pages' explicit styles come first,
+    ordered by the bits they hold, then ``auto``."""
     base = unchosen(**transpose())
     viable = {item.key: item.cases for item in inspection.viable(base)}
     assert viable == {
         f"{KERNEL}.simd": (1, 2, 3, 6),
-        f"{KERNEL}.ram_style": ("auto", "distributed", "block", "ultra"),
+        f"{KERNEL}.ram_style": ("distributed", "block", "ultra", "auto"),
     }
     with pytest.raises(ValueError, match="domain-membership"):
         commit(base, {f"{KERNEL}.simd": 4})

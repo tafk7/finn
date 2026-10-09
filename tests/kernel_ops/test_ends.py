@@ -329,12 +329,12 @@ def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrappe
     model, report = explored(tfc, 1e6, sizing=True)
     # The ends change no choice: persisted alike, and completed alike, each MatMul's
     # pumping off on both (the doubled clock is the shell's, admitted by its root, and
-    # no kernel reads it off the platform); 53 values on 8 nodes.
+    # no kernel reads it off the platform); 57 values on 8 nodes.
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
     values = built(model, report)
     assert built(ip_model, ip) == values
     assert all(values[node].items() >= PUMPING.items() for node in values if "MatMul" in node)
-    assert (len(values), sum(map(len, values.values()))) == (8, 53)
+    assert (len(values), sum(map(len, values.values()))) == (8, 57)
     persisted = kernel_choices_config(model).values()
     assert not [key for held in persisted for key in held if "end" in key.split(".")]
     # The input end at max(196, 49) + 4 and the output end at max(10, 5) + 4, the
@@ -480,5 +480,5 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
     assert on_zynq["used"] == {key: sum(each[key] for each in summed) for key in on_ip["used"]}
     # The module TFC in the Zynq shell was packaged as before the shells had rows (its
     # thresholds a data file, THRESHOLDS_FILE).
-    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__900cc2e354c19644"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__900cc2e354c19644"
+    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__c909af9fb6b548ee"
+    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__c909af9fb6b548ee"

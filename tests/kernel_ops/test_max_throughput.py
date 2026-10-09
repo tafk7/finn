@@ -137,13 +137,13 @@ def searched_tfc(
 
 @pytest.mark.slow
 def test_tfc_on_ip_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
-    """1.66 % of the part's LUTs (1 171), between the least parallelism's 1 131 and the
-    1 196 of 3 136 cycles: 3 584 cycles at 1 159, the shell's total its partition's."""
-    searched, report = searched_tfc(tfc, "ip", 0.0166, 1171, 3584)
+    """1.70 % of the part's LUTs (1 199), between the least parallelism's 1 169 and the
+    1 234 of 3 136 cycles: 3 584 cycles at 1 197, the shell's total its partition's."""
+    searched, report = searched_tfc(tfc, "ip", 0.0170, 1199, 3584)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 1159 and resources["used"] == resources["shell"]["partition"]
+    assert resources["used"]["lut"] == 1197 and resources["used"] == resources["shell"]["partition"]
     # TargetCycles folds by cycles alone: a looser budget can pick a costlier shape.
-    assert "no budget uses more than budget 25089: lut 1131 > 1124" in searched["departures"]
+    assert "no budget uses more than budget 25089: lut 1169 > 1162" in searched["departures"]
 
 
 # -- in the Zynq shell ----------------------------------------------------------------------
@@ -196,12 +196,12 @@ def test_where_nothing_fits_the_search_warns_and_keeps_the_least_parallelism() -
 
 @pytest.mark.slow
 def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
-    """15.51 % of the part's LUTs (10 943), between the least parallelism's shell total,
-    10 875, and the 11 039 of 2 048 cycles: 3 136 cycles at 10 940, the ends and the
+    """15.57 % of the part's LUTs (10 986), between the least parallelism's shell total,
+    10 913, and the 11 077 of 2 048 cycles: 3 136 cycles at 10 978, the ends and the
     static region beside the partition."""
-    searched, report = searched_tfc(tfc, "pynq", 0.1551, 10943, 3136)
+    searched, report = searched_tfc(tfc, "pynq", 0.1557, 10986, 3136)
     resources = report["resources"]
-    assert resources["used"]["lut"] == 10940 > resources["shell"]["partition"]["lut"] + 9000
+    assert resources["used"]["lut"] == 10978 > resources["shell"]["partition"]["lut"] + 9000
     # The input end bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
     # the end (SZ6), a departure stated and not corrected.
     tried = searched["tried"]

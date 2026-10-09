@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 from kernels import chain
-from kernels.helpers import ADAPTER_RAM_STYLES
+from kernels.helpers import ADAPTER_RAM_STYLES, with_adapter_memories
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -22,7 +22,7 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
 from finn.custom_op.kernels.shell import ShellRoot, persist, shell_root
-from finn.kernels.configure import commit, undecided
+from finn.kernels.configure import undecided
 from finn.kernels.target import Target
 from finn.platform import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -269,7 +269,7 @@ MATMUL = {
     "compute.packed.simd": chain.SIMD,
     "compute.packed.compute_pumping": False,
     "compute.packed.reducer": "tree",
-    "w.source.memstream.ram_style": "auto",
+    "w.source.memstream.ram_style": "distributed",
     "w.source.memstream.pumped_memory": False,
     "w.transport": "direct",
     "x.transport": "direct",
@@ -278,7 +278,8 @@ THRESHOLDING = {
     "pe": chain.PE,
     "use_axilite": False,
     "deep_pipeline": False,
-    "ram_style": "auto",
+    "ram_style": "distributed",
+    "block_stages": 0,
     "ultra_stages": 0,
     "x.transport": "direct",
 }
@@ -333,10 +334,10 @@ def open_memories(root: ShellRoot) -> tuple[Any, list[str]]:
 
 
 def configure_partition(model: ModelWrapper) -> tuple[ShellRoot, Any]:
-    """The root, its open adapter memories chosen and saved on their owners, rebuilt."""
+    """The root, its open adapter memories chosen (each its baseline) and saved on their
+    owners, rebuilt."""
     root = shell_root(model, model.graph.node, name="chain")
-    _, styles = open_memories(root)
-    persist(model, root, commit(root.point, dict.fromkeys(styles, "auto")))
+    persist(model, root, with_adapter_memories(root.point))
     root = shell_root(model, model.graph.node, name="chain")
     point, open_styles = open_memories(root)
     assert open_styles == [] and not root.dropped

@@ -11,6 +11,11 @@ then UltraRAM. Reset is synchronous, active-high, and discards pending words.
 ``ultra`` requires the ``platform``'s UltraRAM; the FIFO starts empty, so no
 initial contents are asked of it. ``auto`` never takes UltraRAM the platform
 lacks: where the RTL's own selection would, the kernel gives it ``block``.
+
+The FIFO's ``auto`` is FinnLib's selection, not Vivado's: it is its first case, and its
+statement is the storage the RTL selects, exact. One part is Vivado's: a decomposed
+memory's ``hi`` space shallower than its primitive, which the RTL leaves ``auto``; it
+is stated by a model of Vivado's placement (``_hi_style``).
 """
 
 from __future__ import annotations
@@ -91,17 +96,34 @@ def _decomposition(depth: int, ultra: bool) -> tuple[int, int]:
     return lo, hi
 
 
+#: The model of Vivado's placement of a FIFO's shallow ``hi`` space (``_hi_style``), as
+#: observed on xczu3eg: a memory deeper than 64 words in block RAM from 8192 bits
+#: (LUTRAM up to 6272 bits, 128 x 32 and 32 x 196; between them, not observed), and one
+#: of at most 64 words from 65 536 (LUTRAM at 8192, block RAM at 100 352).
+_HI_BLOCK_BITS = 8192
+_HI_BLOCK_WIDE_BITS = 65536
+
+
+def _hi_style(words: int, bits: int) -> str:
+    """The style Vivado places a FIFO's shallow ``hi`` space of ``words x bits`` in, which
+    the RTL leaves ``auto``: a model, observed on UltraScale+ (xczu3eg) and taken on
+    every fabric."""
+    size = words * bits
+    block = (words > 64 and size >= _HI_BLOCK_BITS) or size >= _HI_BLOCK_WIDE_BITS
+    return "block" if block else "distributed"
+
+
 def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabric) -> Resources:
     """FinnLib ``fifo`` for DEPTH, DATA_WIDTH and the RAM_STYLE it is given, in the
     storage it selects (``_selected``), on ``fabric``. The storage is the RTL's: a shift register of
     ``DEPTH - 1`` words (four at least), a LUT a bit for 32 of them; a LUTRAM of
     ``DEPTH - 1`` words rounded up to a power of two; or block RAM or UltraRAM, its
     ``lo`` space and its ``hi`` one (``_decomposition``), a ``hi`` space shallower than
-    the primitive left ``auto``. The control (pointers, the output register, the
-    UltraRAM output queue) is taken from the HWCustomOp flow's FIFO model
-    (``finn.util.resource_models._fifo_cost``, fitted against finn-rtllib's ``fifo.sv``,
-    the same design with an occupancy monitor), which this one duplicates until that
-    flow retires; the terms it does not carry over are listed below."""
+    the primitive left ``auto`` (a model, ``_hi_style``). The control (pointers, the
+    output register, the UltraRAM output queue) is taken from the HWCustomOp flow's FIFO
+    model (``finn.util.resource_models._fifo_cost``, fitted against finn-rtllib's
+    ``fifo.sv``, the same design with an occupancy monitor), which this one duplicates
+    until that flow retires; the terms it does not carry over are listed below."""
     # A deliberate duplicate of ``finn.util.resource_models._fifo_cost``, the HWCustomOp
     # flow's model of the same RTL; one goes when that flow retires. Where the two
     # differ, by what this one does not carry over (FinnLib's ``rtl/infra/fifo.sv``):
@@ -143,10 +165,9 @@ def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabri
     lo, hi = _decomposition(depth, ultra)
     storage = memory(1 << lo, bits, effective, fabric=fabric)
     if hi:
-        # The RTL relaxes a hi space shallower than its primitive to ``auto``.
-        storage = storage + memory(
-            1 << hi, bits, effective if hi >= (12 if ultra else 9) else "auto", fabric=fabric
-        )
+        # The RTL relaxes a hi space shallower than its primitive to ``auto``: Vivado's.
+        style = effective if hi >= (12 if ultra else 9) else _hi_style(1 << hi, bits)
+        storage = storage + memory(1 << hi, bits, style, fabric=fabric)
     if ultra:
         return storage + Resources(lut=6 * counter + bits, ff=2 * bits)
     return storage + Resources(lut=54, ff=bits + 2 * counter)

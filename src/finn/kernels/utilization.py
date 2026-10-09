@@ -17,13 +17,14 @@ the platform's fabric, as Vivado infers them (``PRIMITIVES``, a ``Primitives`` r
 fabric, each field with its evidence): block RAM by the RAMB18 simple dual port
 aspects, the word split over them; UltraRAM by the URAM288 aspects, a word never split;
 LUTRAM by the fabric's LUTRAM primitives, with a read multiplexer over its banks and,
-where it is written, a write decode. An explicit style is exact up to Vivado's
-packing. ``auto`` is Vivado's choice, which this mirrors as observed on UltraScale+
-(xczu3eg), on every fabric: by size for a writable memory (``AUTO_BLOCK_BITS``,
-``AUTO_BLOCK_WIDE_BITS``), and by depth for a read-only one (``AUTO_BLOCK_ROM_WORDS``),
-where Vivado's own placement varies; there it is an estimate, which counts block RAM
-rather than none. Vivado places ``auto`` memories differently on the 7 series and on
-Versal.
+where it is written, a write decode. Each style is exact up to Vivado's packing.
+
+A memory's style is its kernel's choice (``memory_styles``): the explicit styles,
+ordered by the size of what the memory holds, then ``auto``, which hands the choice to
+Vivado. ``auto`` is placed by Vivado, not stated: Vivado places it by family, by tool
+version and, for a read-only table, by more than the memory, so no statement of it
+would be exact, and ``memory`` takes none (``auto_unstated``). A FIFO's ``auto`` is
+FinnLib's own selection, which its kernel states (``finn.kernels.fifo``).
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from enum import Enum
 from functools import lru_cache
 from math import ceil, inf
 
-from finn.core.space import ValueSemantics, default_semantics
+from finn.core.space import Domain, Rejected, ValueSemantics, default_semantics, domain, reject
 
 CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
 """Where every leaf kernel's ``Fit`` was characterised: the part, the tool and the clock."""
@@ -42,19 +43,6 @@ CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
 SHELL_CHARACTERISED = "out of context, Vivado 2025.2, xczu3eg/xczu7ev"
 """Where the shell's statements (its ends' and its static region's) were characterised:
 each IP synthesized on its own, which overstates what the placed shell uses."""
-
-#: The least bits of an ``auto`` memory deeper than 64 words placed in block RAM, as
-#: observed on xczu3eg: LUTRAM up to 6272 bits (128 x 32, 32 x 196), block RAM from
-#: 8192 (128 x 64, 512 x 16); between them, not observed.
-AUTO_BLOCK_BITS = 8192
-#: The least bits of an ``auto`` memory of at most 64 words placed in block RAM, as
-#: observed on xczu3eg: LUTRAM at 8192 (64 x 128, 16 x 512), block RAM at 100 352
-#: (64 x 1568); between them, not observed.
-AUTO_BLOCK_WIDE_BITS = 65536
-#: The least words of an ``auto`` read-only memory counted as block RAM: an estimate.
-#: Vivado placed tables of the same parameters in block RAM in one run and in logic in
-#: another; counting block RAM over-states it rather than under-states it.
-AUTO_BLOCK_ROM_WORDS = 128
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -407,19 +395,15 @@ def memory(
     rom: bool = False,
     written: bool = True,
 ) -> Resources:
-    """One ``words x bits`` array in ``style`` on ``fabric`` (``auto``: Vivado's choice,
-    module docstring); a LUTRAM's write decode where it is ``written`` (``lutram``). A
-    ``rom`` (no write port) in distributed style is LUT logic: a LUT6 holds 64 x 1, a
-    LUT6_2 32 x 2; deeper, a read multiplexer over the one-port banks."""
+    """One ``words x bits`` array in an explicit ``style`` (``distributed``, ``block`` or
+    ``ultra``) on ``fabric``; a LUTRAM's write decode where it is ``written``
+    (``lutram``). A ``rom`` (no write port) in distributed style is LUT logic: a LUT6
+    holds 64 x 1, a LUT6_2 32 x 2; deeper, a read multiplexer over the one-port banks.
+    ``auto`` is Vivado's placement, which states nothing (``auto_unstated``)."""
+    if style not in MEMORY_STYLES:
+        raise ValueError(f"memory: {style!r} is no explicit style (one of {MEMORY_STYLES})")
     if words < 1 or bits < 1:
         return Resources()
-    if style == "auto":
-        if rom:
-            block = words >= AUTO_BLOCK_ROM_WORDS
-        else:
-            size = words * bits
-            block = (words > 64 and size >= AUTO_BLOCK_BITS) or size >= AUTO_BLOCK_WIDE_BITS
-        style = "block" if block else "distributed"
     if style == "block":
         return Resources(bram18=bram18(words, bits, fabric=fabric))
     if style == "ultra":
@@ -434,11 +418,49 @@ def memory(
     )
 
 
+MEMORY_STYLES = ("distributed", "block", "ultra")
+"""The explicit memory styles: LUTRAM, block RAM, UltraRAM."""
+
+BLOCK_FIRST_BITS = 8192
+"""The least bits a memory holds for which its kernel offers block RAM first: half a
+RAMB18's 16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. A
+baseline, the kernel's preference, which a budget may move; not a placement rule."""
+
+AUTO_UNSTATED = "placed by Vivado, not stated"
+"""Why a memory in ``auto`` states no resources."""
+
+
+def memory_styles(size: object) -> Domain[str]:
+    """A memory's style: the explicit styles first, in its kernel's preference for the
+    ``size`` in bits the memory holds (block RAM first from ``BLOCK_FIRST_BITS``, LUTRAM
+    first below; UltraRAM after both), then ``auto``, last: Vivado's placement, which
+    states nothing (``auto_unstated``), so no completion takes it while an explicit style
+    is viable. Unordered: the order is a baseline, not a scale."""
+
+    def accepts(*, candidate: str, size: int) -> bool:
+        return candidate in MEMORY_STYLES or candidate == "auto"
+
+    def candidates(*, size: int) -> tuple[str, ...]:
+        if size >= BLOCK_FIRST_BITS:
+            return ("block", "distributed", "ultra", "auto")
+        return ("distributed", "block", "ultra", "auto")
+
+    return domain(
+        accepts=accepts, candidates=candidates, semantics=default_semantics(str), size=size
+    )
+
+
+def auto_unstated(memory: str) -> Rejected:
+    """What a kernel states for ``memory`` in ``auto``: no resources, with why
+    (``AUTO_UNSTATED``), so its total is a lower bound naming it."""
+    return reject("memory-auto", f"{memory}: ram_style auto, {AUTO_UNSTATED}")
+
+
 __all__ = [
-    "AUTO_BLOCK_BITS",
-    "AUTO_BLOCK_ROM_WORDS",
-    "AUTO_BLOCK_WIDE_BITS",
+    "AUTO_UNSTATED",
+    "BLOCK_FIRST_BITS",
     "CHARACTERISED",
+    "MEMORY_STYLES",
     "PRIMITIVES",
     "RESOURCES_SEMANTICS",
     "RESOURCE_NAMES",
@@ -447,11 +469,13 @@ __all__ = [
     "Fit",
     "Primitives",
     "Resources",
+    "auto_unstated",
     "binding",
     "bram18",
     "lutram",
     "lutram_storage",
     "memory",
+    "memory_styles",
     "over",
     "ratio",
     "read_mux",

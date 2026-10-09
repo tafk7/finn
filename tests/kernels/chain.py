@@ -123,17 +123,20 @@ def configure_chain(root: Root, **choices: object) -> Any:
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
             f"{layer}.compute.packed.reducer": "tree",
-            f"{stream}.source.memstream.ram_style": "auto",
+            f"{stream}.source.memstream.ram_style": "distributed",
             f"{stream}.source.memstream.pumped_memory": False,
         }
     return with_adapter_memories(commit(point, nested))
 
 
-# The thresholding's choices: no AXI-Lite, no deep pipeline, memories Vivado's.
+# The thresholding's choices: no AXI-Lite, no deep pipeline, its memories in their
+# baseline, LUTRAM (as the weights' and the adapters', each the first case its size
+# orders).
 ACTIVATE = {
     "activate.use_axilite": False,
     "activate.deep_pipeline": False,
-    "activate.ram_style": "auto",
+    "activate.ram_style": "distributed",
+    "activate.block_stages": 0,
     "activate.ultra_stages": 0,
 }
 

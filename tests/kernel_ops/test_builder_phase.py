@@ -292,8 +292,8 @@ def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
     assert {entry["by"] for entry in entries} == {"DEBUG: completed by placeholder", "size_fifos"}
     logged = capsys.readouterr().out
     debug = [line for line in logged.splitlines() if line.startswith("DEBUG: completed by")]
-    # The 12 foldings and 24 other values (the 13 transports are sized).
-    assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 36
+    # The 12 foldings and 28 other values (the 13 transports are sized).
+    assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 40
     assert "DEBUG: completed by placeholder: MatMul_0.compute.packed.pe = 1" in debug
     # The verification completes it the same way, and it passes.
     step_verify_kernel_partition(model, cfg)
@@ -582,10 +582,13 @@ SET_FOLDING = set_folding()
 
 
 #: Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
-#: completed, 53 on 8 nodes: the Zynq landing's baseline build's (Ultra96, 5 ns,
+#: completed, 57 on 8 nodes: the Zynq landing's baseline build's (Ultra96, 5 ns,
 #: [target_throughput, size_fifos]), whose choices were all persisted then, and each
 #: MatMul's pumping, completed off: the doubled clock is the shell's, which the kernels
-#: no longer read off the platform (SZ11 (e)), so the choice is open on pynq too.
+#: no longer read off the platform (SZ11 (e)), so the choice is open on pynq too. Every
+#: memory takes its baseline, an explicit style (SZ18): the first three layers' weights
+#: in block RAM (8 192 bits and more), the last layer's and every input buffer in LUTRAM,
+#: and each threshold table's stages in LUTRAM, no block stage.
 TFC_BUILT = {
     node: {
         **folding,
@@ -594,13 +597,18 @@ TFC_BUILT = {
                 "compute.packed.compute_pumping": False,
                 "compute.packed.reducer": "tree",
                 "w.source.memstream.pumped_memory": False,
-                "w.source.memstream.ram_style": "auto",
+                "w.source.memstream.ram_style": "distributed" if node == "MatMul_3" else "block",
                 "w.transport": "direct",
-                "x.adapter.input_gen.input_gen.ram_style": "auto",
+                "x.adapter.input_gen.input_gen.ram_style": "distributed",
                 "x.transport": "direct",
             }
             if node.startswith("MatMul")
-            else {"deep_pipeline": False, "ram_style": "auto", "x.transport": "direct"}
+            else {
+                "block_stages": 0,
+                "deep_pipeline": False,
+                "ram_style": "distributed",
+                "x.transport": "direct",
+            }
         ),
         **({"y.transport": "direct"} if node == "MatMul_3" else {}),
     }
@@ -630,14 +638,14 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # On Ultra96 (DSP48E2) every MatMul's core is forced: no case is tried, and the
     # target is met.
     assert (target["cases"], target["unfolded"], target["met"]) == ({}, {}, True)
-    # Of TFC's 53 choices, the target throughput commits the folding (12), the only ones
+    # Of TFC's 57 choices, the target throughput commits the folding (12), the only ones
     # saved; the baseline completion completes the rest where the partition is built,
     # the 13 transports sized on its copy. The report names who made each.
     assert target["committed"] == 12
     made_by = [name for held in report["choices"].values() for name in held.values()]
     assert made_by == ["target_throughput"] * 12
     completed = [entry["by"] for held in report["completed"].values() for entry in held.values()]
-    assert (completed.count("baseline"), completed.count("size_fifos")) == (28, 13)
+    assert (completed.count("baseline"), completed.count("size_fifos")) == (32, 13)
     assert report["fifos"] == "sized at completion by baseline: 13 channels"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
     # frame a call), within the budget of 200; the slowest of the other members, the
@@ -687,17 +695,17 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # At the period the input end sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It commits the 13 transports the completion sizes without it; the baseline
-    # completes the other 28.
+    # completes the other 32.
     assert [each["committed"] for each in report["strategies"]] == [12, 13]
-    assert len(sized) == 28 and len(plain) == 41
+    assert len(sized) == 32 and len(plain) == 45
     assert report["fifos"] == "sized by size_fifos: 13 channels"
     assert plain_report["completion"]["sizing"]["channels"] == sizing["channels"]
-    # The ends change no choice: TFC is built with the baseline build's 53 values.
+    # The ends change no choice: TFC is built with the baseline build's 57 values.
     persisted = json.loads((tmp_path / "sized" / "output" / "kernel_choices.json").read_text())
     for (node, attribute), value in sized.items():
         persisted.setdefault(node, {})[attribute] = value
     assert persisted == TFC_BUILT
-    assert sum(map(len, TFC_BUILT.values())) == 53
+    assert sum(map(len, TFC_BUILT.values())) == 57
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
@@ -864,10 +872,11 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
         Address("odma0/s_axi_control_0", 0xA000_1000, 4096),
     )
     assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:partition:1.0")
-    # Z0's module and choices, its thresholds a data file (THRESHOLDS_FILE).
+    # Z0's module, its memories in their explicit baseline styles (SZ18), its thresholds a data
+    # file (THRESHOLDS_FILE), and choices.
     node, body, _ = partition_body(parent)
     point, _ = configured_root(body, node.name, completion("baseline"))
-    assert module_name(point.module) == "finn_partition__900cc2e354c19644"
+    assert module_name(point.module) == "finn_partition__c909af9fb6b548ee"
     persisted = json.loads((output / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     report = json.loads((output / "report" / "kernel_exploration.json").read_text())
@@ -1199,7 +1208,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         return {"lut": lut, "ff": ff, "bram18": bram18, "uram": 0, "dsp": dsp}
 
     assert {key: row["model"] for key, row in rows.items()} == {
-        "partition": counts(5232, 7081, 22, 100),
+        "partition": counts(5270, 7081, 19, 100),
         "ends.Reshape_0_out0": counts(1305, 2279, 4),
         "ends.MatMul_3_out0": counts(1390, 2069),
         "static_region.zynq_ultra_ps_e": counts(264, 0),
@@ -1223,7 +1232,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         "static_region.axi_interconnect": counts(100, 200),
     }
     assert stated["total"] == {
-        "model": counts(14976, 21534, 26, 100),
+        "model": counts(15014, 21534, 23, 100),
         "out_of_context": counts(600, 30, 15, 9),
         "placed": counts(1000, 2000, 5, 4),
     }

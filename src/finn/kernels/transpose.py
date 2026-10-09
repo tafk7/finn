@@ -24,6 +24,7 @@ from finn.core.space import (
     divisors_of,
     reject,
     requires,
+    requiring,
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Index, Schedule
@@ -34,7 +35,14 @@ from finn.kernels.channels import Channel
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Resources, memory
+from finn.kernels.utilization import (
+    RESOURCES_SEMANTICS,
+    Fabric,
+    Resources,
+    auto_unstated,
+    memory,
+    memory_styles,
+)
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
 i, j = Index("i"), Index("j")
@@ -80,7 +88,9 @@ class TransposeKernel(Kernel):
     case runs stalled (and a ``vpc`` feeds its adapter sample), so it checks the
     guard.
 
-    The pages' ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
+    The pages' ``ram_style`` is its choice: the explicit styles, ordered by the bits both
+    pages hold (``pages_bits``), then ``auto``, which states no resources
+    (``finn.kernels.utilization.memory_styles``); ``ultra`` requires the ``platform``'s
     UltraRAM (the pages start empty, so no initial contents are asked of it).
     Admission is the RTL's own limit: it counts its banks' two pages, ``2 I J``
     elements, in 32 bits. A port reading fewer than two axes refuses itself.
@@ -93,12 +103,6 @@ class TransposeKernel(Kernel):
     input_channel: Channel = Param(required=False)
     output_channel: Channel = Param(required=False)
     platform: Platform = Param()
-    ram_style: str = Decision(
-        values=("auto", "distributed", "block", "ultra"),
-        requires=(
-            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
-        ),
-    )
 
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
@@ -108,6 +112,18 @@ class TransposeKernel(Kernel):
 
     rows = extent_of(i)  # I
     cols = extent_of(j)  # J
+
+    @derived
+    def pages_bits(self) -> int:
+        """The bits both pages hold: ``2 I J`` elements."""
+        return 2 * self.rows * self.cols * self.input_channel.tensor.element.bits
+
+    ram_style: str = Decision(
+        domain=requiring(
+            memory_styles(pages_bits),
+            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
+        )
+    )
 
     simd: int = Decision(domain=divisors_of(rows))
 
@@ -174,7 +190,9 @@ class TransposeKernel(Kernel):
         return NATIVE_CLOCKING
 
     @derived(semantics=RESOURCES_SEMANTICS)
-    def resource_use(self) -> Resources:
+    def resource_use(self) -> Resources | Rejected:
+        if self.ram_style == "auto":
+            return auto_unstated("the transpose's pages")
         return inner_shuffle_resources(
             bits=self.input_channel.tensor.element.bits,
             i=self.rows,

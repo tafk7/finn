@@ -12,7 +12,9 @@ multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
 On a channel, ``input_gen`` is a stage of the channel's adapter
 (``finn.kernels.adapters``), which derives these facts from the channel's plan.
-Its buffer's ``ram_style`` is its choice; ``ultra`` requires the ``platform``'s
+Its buffer's ``ram_style`` is its choice: the explicit styles, ordered by the most the
+buffer can hold (``frame_bits``, a frame), then ``auto``, which states no resources
+(``finn.kernels.utilization.memory_styles``); ``ultra`` requires the ``platform``'s
 UltraRAM. The buffer starts empty, so no initial contents are asked of it.
 
 What the buffer does is read from the RTL, not copied (decision FS6):
@@ -48,6 +50,7 @@ from finn.core.space import (
     derived,
     reject,
     requires,
+    requiring,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -56,10 +59,17 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
 from finn.kernels.target import Platform
 from finn.kernels.transport import MarkerKind, StreamMarker
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Fit, Resources, memory
+from finn.kernels.utilization import (
+    RESOURCES_SEMANTICS,
+    Fabric,
+    Fit,
+    Resources,
+    auto_unstated,
+    memory,
+    memory_styles,
+)
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 
-_INPUT_GEN_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",))
 
 
@@ -122,11 +132,18 @@ class InputGeneratorKernel(Kernel):
         return True
 
     admission = ConstraintGroup(traversal_supported)
+
+    @derived
+    def frame_bits(self) -> int:
+        """The most the buffer can hold: a frame's words. Its order reads no ``BUF_SIZE``,
+        which the RTL elaborates and which may be declined (its statement only)."""
+        return self.frame_words * self.word_bits
+
     ram_style: str = Decision(
-        values=_INPUT_GEN_RAM_STYLES,
-        requires=(
+        domain=requiring(
+            memory_styles(frame_bits),
             requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
-        ),
+        )
     )
 
     @derived
@@ -146,6 +163,8 @@ class InputGeneratorKernel(Kernel):
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
+        if self.ram_style == "auto":
+            return auto_unstated("the input_gen buffer")
         try:
             words = nest_geometry(self.frame_words, self.dims, self.strides).buffer_words
         except GeometryError as error:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -166,7 +167,10 @@ def test_a_point_over_the_part_s_resources_warns_naming_the_binding_resource() -
     """Whichever strategy chose it, a point whose shell uses more than the part has is a
     warning naming the binding resource (its highest share), never a refusal (RC5):
     the choices are saved and the report states each resource over."""
-    small = replace(TARGET.platform, resources=Resources(lut=100_000, ff=100_000, dsp=3))
+    # Block RAM for the thresholds' stages, which Lanes(2) puts two of in block RAM.
+    small = replace(
+        TARGET.platform, resources=Resources(lut=100_000, ff=100_000, bram18=1_000, dsp=3)
+    )
     model = kernel_model(replace(TARGET, platform=small))
     with pytest.warns(ResourceBudgetWarning, match="most of dsp: dsp 4 of 3"):
         explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
@@ -206,11 +210,14 @@ def test_what_no_strategy_chose_is_completed_on_a_copy_and_never_saved() -> None
     report = explored.report
     assert report["strategies"] == [] and report["choices"] == {}
     completed = report["completed"]
-    # The baseline: the least folding, the adder tree, auto memories.
+    # The baseline: the least folding, the adder tree, each memory in the explicit style
+    # its size orders first (the Chain's, all small: LUTRAM; never auto, last).
     assert completed["first"]["compute.packed.pe"] == {"value": 1, "by": "baseline"}
     assert completed["first"]["compute.packed.simd"] == {"value": 1, "by": "baseline"}
     assert completed["first"]["compute.packed.reducer"] == {"value": "tree", "by": "baseline"}
-    assert completed["first"]["w.source.memstream.ram_style"]["value"] == "auto"
+    assert completed["first"]["w.source.memstream.ram_style"]["value"] == "distributed"
+    assert completed["activate"]["ram_style"]["value"] == "distributed"
+    assert completed["activate"]["block_stages"]["value"] == 0
     assert report["completion"]["open"] == [] and report["bottleneck"] is not None
     # The transports are sized on the completed copy (at hardware generation, sizing
     # is the default completion's): a choice of size_fifos, never saved either.
@@ -289,6 +296,45 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
     pinned.write_text(json.dumps({"nobody": {"pe": 1}}))
     with pytest.raises(ExploreError, match="nobody.pe"):
         kernel_model().transform(ExploreKernelChoices([Pinned(pinned)]))
+
+
+#: A memory pinned ``auto``: the first MatMul's weights and the thresholds' stages.
+AUTO = {"first": {"w.source.memstream.ram_style": "auto"}, "activate": {"ram_style": "auto"}}
+
+
+def stated_auto(report: Mapping[str, Any]) -> None:
+    """The report names each memory pinned ``auto`` unstated, Vivado's, and its total a
+    lower bound; the completion takes every other memory explicit."""
+    resources = report["resources"]
+    assert resources["lower_bound"] and resources["counted"].startswith("a lower bound")
+    reasons = resources["unstated"]
+    assert len(reasons) == 2 and all(
+        why.endswith("ram_style auto, placed by Vivado, not stated") for why in reasons.values()
+    )
+    assert "activate" in reasons
+    assert report["completed"]["second"]["w.source.memstream.ram_style"]["value"] == "distributed"
+
+
+def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: Path) -> None:
+    """``auto`` stays a value of every memory, last (SZ18): a model saved with it replays
+    it, nothing dropped, and a kernel_choices.json pinning it commits it (the thresholds'
+    ``ram_style`` attribute too); either way the report names the memory unstated."""
+    model = kernel_model()
+    for node in model.graph.node:
+        if node.name in AUTO:
+            kernel_op(model, node).save(AUTO[node.name])
+    model.save(tmp_path / "saved.onnx")
+    saved = ModelWrapper(str(tmp_path / "saved.onnx"))
+    report = explore_kernel_choices(saved, []).report
+    assert report["dropped"] == {} and {node: choices(saved)[node] for node in AUTO} == AUTO
+    stated_auto(report)
+    pinned = tmp_path / "kernel_choices.json"
+    pinned.write_text(json.dumps(AUTO))
+    fresh = kernel_model()
+    report = explore_kernel_choices(fresh, [Pinned(pinned)]).report
+    assert {node: choices(fresh)[node] for node in AUTO} == AUTO
+    assert report["strategies"][0]["committed"] == 2
+    stated_auto(report)
 
 
 def test_saved_choices_are_pinned_and_fresh_explores_again() -> None:

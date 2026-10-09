@@ -165,10 +165,11 @@ def test_the_channel_owns_its_source_and_its_choices():
     # The choice belongs to the memory kernel the channel places as its source.
     assert local.scope == "w.source.memstream" and not local.selector
     assert not any(key.startswith("matmul.memory") for key in records)
-    # Its choices apply as soon as the source is forced.
+    # Its choices apply as soon as the source is forced: the explicit styles, LUTRAM first
+    # for a table of 64 bits, and ``auto`` last.
     chosen = base(weights=WEIGHTS).w.source
     assert chosen.field(MemStreamKernel.ram_style).candidates() == Available(
-        ("auto", "distributed", "block", "ultra")
+        ("distributed", "block", "ultra", "auto")
     )
     # Without a value the source is inapplicable, and so are its choices.
     unvalued = base().try_with_choices({handle(base(), "w.source.memstream.ram_style"): "block"})

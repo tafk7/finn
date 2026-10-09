@@ -22,10 +22,13 @@ reference to it, and its set port references the channel's ``index``.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
-driven by role, and tied low when unpumped. ``ultra`` states what it needs of
-the ``platform``: UltraRAM that takes initial contents (on Zynq UltraScale+ an
-initialized UltraRAM is built as block RAM). A pumped memory takes the doubled
-clock, which its module states and the shell root admits (``clock-unavailable``).
+driven by role, and tied low when unpumped. The style's cases are the explicit
+ones, ordered by the bits the table holds (``table_bits``, which no folding moves,
+so the style is chosen before, with or after the folding), then ``auto``, which
+states no resources (``finn.kernels.utilization.memory_styles``). ``ultra`` states
+what it needs of the ``platform``: UltraRAM that takes initial contents (on Zynq
+UltraScale+ an initialized UltraRAM is built as block RAM). A pumped memory takes the
+doubled clock, which its module states and the shell root admits (``clock-unavailable``).
 """
 
 from __future__ import annotations
@@ -44,10 +47,12 @@ from finn.core.space import (
     derived,
     reject,
     requires,
+    requiring,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
     ordinary_integer_bounds,
+    qonnx_datatype_width,
 )
 from finn.dataflow.schedule import Index
 from finn.dataflow.tensor import ScalarEncoding
@@ -65,7 +70,15 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Fit, Resources, memory
+from finn.kernels.utilization import (
+    RESOURCES_SEMANTICS,
+    Fabric,
+    Fit,
+    Resources,
+    auto_unstated,
+    memory,
+    memory_styles,
+)
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
@@ -80,8 +93,6 @@ from finn.kernels.values.semantics import (
 
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""
-
-_MEMSTREAM_RAM_STYLES = ("auto", "distributed", "block", "ultra")
 
 
 def memstream_resources(
@@ -124,16 +135,27 @@ class MemStreamKernel(Kernel):
     set_channel: channels.Channel = Param(required=False)
     staged: bool = Param(default=False)
     platform: Platform = Param()
+
+    @derived
+    def table_bits(self) -> int | Rejected:
+        """The bits the table holds, every set: its contents' elements at the datatype's
+        bits (the stored element's), whatever the folding (which shapes the words, not
+        their sum) and whether the contents are admitted (the image's to refuse)."""
+        shape = integer_shape(self.contents)
+        if shape is None:
+            return reject("memstream-values", "contents must be an integer tensor")
+        return prod(shape) * qonnx_datatype_width(self.dtype)
+
     ram_style: str = Decision(
-        values=_MEMSTREAM_RAM_STYLES,
-        requires=(
+        domain=requiring(
+            memory_styles(table_bits),
             requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
             requires(
                 platform.uram_init,
                 "uram-init: the platform's UltraRAM takes no initial contents",
                 cases=("ultra",),
             ),
-        ),
+        )
     )
     # A pumped memory takes a doubled clock, which the shell admits.
     pumped_memory: bool = Decision(values=(False, True))
@@ -281,7 +303,9 @@ class MemStreamKernel(Kernel):
         return BeatSequence(self.form, Repetition.CYCLIC)
 
     @derived(semantics=RESOURCES_SEMANTICS)
-    def resource_use(self) -> Resources:
+    def resource_use(self) -> Resources | Rejected:
+        if self.ram_style == "auto":
+            return auto_unstated("the memstream's table")
         return memstream_resources(
             sets=self.sets,
             depth=self.form.beats,

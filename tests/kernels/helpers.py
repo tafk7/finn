@@ -401,11 +401,17 @@ ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
 
 
-def with_adapter_memories(point: S, ram_style: str = "auto") -> S:
-    """Each open adapter input_gen's memory takes ``ram_style``: the flow's choice. Each
-    channel's adapter, its one viable chain, is forced."""
+def with_adapter_memories(point: S, ram_style: str | None = None) -> S:
+    """Each open adapter input_gen's memory takes ``ram_style``, or where None its
+    baseline, the first viable case (an explicit style, by the size the buffer holds),
+    as the completion takes it. Each channel's adapter, its one viable chain, is forced."""
     styles = undecided(point, ADAPTER_RAM_STYLES)
-    return commit(point, dict.fromkeys(styles, ram_style)) if styles else point
+    if not styles:
+        return point
+    if ram_style is None:
+        first = {item.key: item.cases[0] for item in inspection.viable(point) if item.cases}
+        return commit(point, {key: first[key] for key in styles})
+    return commit(point, dict.fromkeys(styles, ram_style))
 
 
 TRANSPORTS = "*.transport"
@@ -537,9 +543,12 @@ def matmul_assembly(
         facts["weights"] = _frozen(weights)
     buffered = weight_fifo_depth is not None
     choices: dict[str, object] = {"w.transport": "fifo" if buffered else "direct"}
+    # The memory's style is ordered by the bits its table holds, which a depthwise
+    # weight channel's realization sets: it is committed after the realization.
+    memory: dict[str, object] = {}
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        choices["w.source.memstream.ram_style"] = ram_style
-        choices["w.source.memstream.pumped_memory"] = pumped_memory
+        memory["w.source.memstream.ram_style"] = ram_style
+        memory["w.source.memstream.pumped_memory"] = pumped_memory
     if buffered:
         choices["w.transport.fifo.buffer.depth"] = weight_fifo_depth
         choices["w.transport.fifo.buffer.ram_style"] = "auto"
@@ -554,6 +563,7 @@ def matmul_assembly(
             named = ", ".join(viable) or "none"
             raise ValueError(f"realizations compatible with this configuration: {named}")
         point = commit(point, {"matmul.realization": viable[0]})
+    point = commit(point, memory)
     if core is None:
         forced = {item.key: item.value for item in inspection.forced(point)}
         if "matmul.compute" not in forced:

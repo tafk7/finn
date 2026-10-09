@@ -96,7 +96,7 @@ def test_the_input_gen_replays_each_row_and_closes_each_fold_group():
         "DATA_WIDTH": 6,
         "DIMS": "'{2, 2}",
         "FM_SIZE": 2,
-        "RAM_STYLE": '"auto"',
+        "RAM_STYLE": '"distributed"',  # the baseline: a frame of 12 bits, LUTRAM first
     }
     (into,) = [
         link
