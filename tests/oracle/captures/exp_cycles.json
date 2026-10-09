@@ -1,0 +1,107 @@
+{
+ "oracle": {
+  "commit": "b507fec5865f07013d590fc798ec9f73127354de",
+  "subject": "Merge pull request #1707 from Xilinx/feature/requantf"
+ },
+ "generator": "scripts/oracle/generate.py",
+ "versions": {
+  "python": "3.12.3",
+  "numpy": "1.26.4",
+  "onnx": "1.22.0",
+  "onnxruntime": "1.28.0",
+  "protobuf": "5.29.6",
+  "qonnx": "1.0.0.post1.dev4+g4c1f9b445 @ 4c1f9b4452bb",
+  "brevitas": "0.12.2.dev51+gaad4d5a29 @ aad4d5a293db",
+  "torch": "2.8.0"
+ },
+ "xilinx": "none: Vivado and Vitis HLS stubbed (scripts/oracle/tools)",
+ "probe": "exp_cycles",
+ "files": {},
+ "values": [
+  {
+   "op": "MVAU",
+   "attributes": {
+    "MW": 4,
+    "MH": 4,
+    "SIMD": 2,
+    "PE": 2,
+    "numInputVectors": [
+     3
+    ]
+   },
+   "cycles": 12
+  },
+  {
+   "op": "MVAU",
+   "attributes": {
+    "MW": 784,
+    "MH": 64,
+    "SIMD": 16,
+    "PE": 16,
+    "numInputVectors": [
+     1
+    ]
+   },
+   "cycles": 196
+  },
+  {
+   "op": "MVAU",
+   "attributes": {
+    "MW": 64,
+    "MH": 64,
+    "SIMD": 16,
+    "PE": 16,
+    "numInputVectors": [
+     1
+    ]
+   },
+   "cycles": 16
+  },
+  {
+   "op": "MVAU",
+   "attributes": {
+    "MW": 64,
+    "MH": 10,
+    "SIMD": 16,
+    "PE": 10,
+    "numInputVectors": [
+     1
+    ]
+   },
+   "cycles": 4
+  },
+  {
+   "op": "Thresholding",
+   "attributes": {
+    "NumChannels": 4,
+    "PE": 2,
+    "numInputVectors": [
+     3
+    ]
+   },
+   "cycles": 6
+  },
+  {
+   "op": "Thresholding",
+   "attributes": {
+    "NumChannels": 784,
+    "PE": 16,
+    "numInputVectors": [
+     1
+    ]
+   },
+   "cycles": 49
+  },
+  {
+   "op": "Thresholding",
+   "attributes": {
+    "NumChannels": 64,
+    "PE": 16,
+    "numInputVectors": [
+     1
+    ]
+   },
+   "cycles": 4
+  }
+ ]
+}

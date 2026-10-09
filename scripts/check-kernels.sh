@@ -30,7 +30,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
     src/finn/builder/kernel_testbench.py src/finn/builder/kernel_resources.py \
-    scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep
+    scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep tests/oracle
 # finn.util.toolchain: the toolchain packaging takes (PackagePartition's toolchain=).
 # finn.shells.pynq's runner and driver; its IODMA and IP generation are frozen
 # extractions of the HWCustomOp flow's, untyped as they were.
@@ -41,4 +41,4 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.cus
     -m finn.shells.pynq.driver -m finn.util.toolchain \
     -m finn.builder.kernel_testbench -m finn.builder.kernel_resources
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
-gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep
+gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle

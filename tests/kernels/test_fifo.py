@@ -9,12 +9,12 @@ from dataclasses import replace
 from typing import TypeVar
 
 import pytest
+from oracle import capture
 
 from finn.core.space import Available, QueryResult, Rejected, Unresolved, design_space
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
-from finn.util.resource_models import _fifo_cost, _resolve
 from kernels.helpers import FULL_DSP48E2
 
 T = TypeVar("T")
@@ -99,15 +99,19 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
     assert dict(point.module.parameters)["RAM_STYLE"] == rtl_style
 
 
+#: The HWCustomOp flow's FIFO model (``finn.util.resource_models``) at the oracle, by
+#: depth and width: the style it resolves for ``auto`` and that style's cost
+#: (UltraScale+; the oracle's ``fifo_cost`` probe).
+LEGACY_FIFOS = {(row["depth"], row["width"]): row for row in capture("fifo_cost")}
+
+
 def legacy_luts(depth: int, width: int) -> int:
-    """The HWCustomOp flow's FIFO model's LUTs, in the style it resolves (UltraScale+)."""
-    style = _resolve(depth, width, "auto")  # type: ignore[no-untyped-call]
-    cost = _fifo_cost(depth, width, style)  # type: ignore[no-untyped-call]
-    return int(cost.lut)
+    """The HWCustomOp flow's FIFO model's LUTs, in the style it resolves."""
+    return int(LEGACY_FIFOS[depth, width]["lut"])
 
 
 def test_the_fifo_model_duplicates_the_legacy_one_less_the_terms_it_names() -> None:
-    """``fifo_resources`` takes its control from ``finn.util.resource_models`` and names the
+    """``fifo_resources`` takes its control from the HWCustomOp flow's model and names the
     terms it does not carry over; neither model's numbers move. A shift FIFO's are the
     same; the others part by the named terms, at the comment's examples."""
     for depth in (2, 5, 17, 33):
