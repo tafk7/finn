@@ -12,7 +12,7 @@ from dataclasses import replace
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import design_space
+from finn.core.space import Rejected, design_space
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
 from finn.kernels.memstream import MemStreamKernel
@@ -202,7 +202,9 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
         thresholding(zynq).try_with_choices(ultra_stages=1),
     ):
         assert not refused.accepted
-        assert {f.code for f in refused.outcomes[0].result.findings} == {"uram-init"}
+        result = refused.outcomes[0].result
+        assert isinstance(result, Rejected)
+        assert {finding.code for finding in result.findings} == {"uram-init"}
 
 
 def test_a_name_the_catalog_lacks_is_refused_with_close_names_none_chosen() -> None:
