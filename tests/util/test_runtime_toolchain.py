@@ -402,7 +402,11 @@ def test_timeout_and_cancellation_kill_descendants(tmp_path, cancelled):
     pid = pidfile.read_text()
     status = Path("/proc") / pid / "stat"
     for _ in range(100):
-        if not status.exists() or status.read_text().split()[2] == "Z":
+        # The descendant may exit between opening and reading its status: gone.
+        try:
+            if status.read_text().split()[2] == "Z":
+                break
+        except (FileNotFoundError, ProcessLookupError):
             break
         time.sleep(0.01)
     else:
