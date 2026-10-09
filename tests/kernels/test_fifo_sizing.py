@@ -37,9 +37,9 @@ from finn.kernels.explore import (
 )
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.fifo_sizing import (
+    Buffered,
     NotModelled,
     Pattern,
-    Replay,
     Sized,
     converted,
     ends,
@@ -170,8 +170,8 @@ def test_idle_time_absorbs_the_throttle() -> None:
 def test_a_replay_buffer_of_frames_absorbs_a_bottleneck_producer() -> None:
     # TFC's first MatMul behind its input_gen at 16 lanes (PE and SIMD): 49 words in,
     # 196 beats read; the buffer takes the next frame while it replays this one.
-    replay = Replay(nest_buffer(49, (4, 49), (0, 1)), Pattern(tuple(range(196)), 196))
-    assert least_depth(Pattern(tuple(range(4, 200, 4)), 196), replay, 196) == 0
+    buffered = Buffered(nest_buffer(49, (4, 49), (0, 1)), Pattern(tuple(range(196)), 196))
+    assert least_depth(Pattern(tuple(range(4, 200, 4)), 196), buffered, 196) == 0
 
 
 def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
@@ -208,7 +208,7 @@ def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
     # input_gen, which second reads every beat.
     supply, accept = ends(point.levels)
     assert supply == Pattern((2, 4, 6), 6)
-    assert isinstance(accept, Replay)
+    assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
 
 
@@ -410,7 +410,7 @@ endmodule
     )
     measured = _cycles(log, "ACCEPT")
     supply = Pattern(tuple(range(frame)), frame)  # always valid: never ahead of the source
-    accept = Replay(nest_buffer(frame, dims, coefs), Pattern(tuple(range(beats)), beats))
+    accept = Buffered(nest_buffer(frame, dims, coefs), Pattern(tuple(range(beats)), beats))
     flow = simulate(supply, accept, frame, 0, frames)
     assert flow is not None
     model = list(flow.taken)

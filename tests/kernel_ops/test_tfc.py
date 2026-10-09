@@ -15,23 +15,22 @@ minute): the one in XSim is marked ``xsim``, the packaging one ``vivado``.
 from __future__ import annotations
 
 import json
-import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
 import pytest
-from kernels.xsim import requires_xsim
+from kernels.xsim import requires_vivado, requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 import finn.core.onnx_exec as onnx_exec
 from finn.core.executors.xsim.executor import XSim
 from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import pack, stream_through
-from finn.core.onnx_exec import Provenance
-from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import member, shell_root
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.onnx_exec import RanBy
+from finn.custom_op.kernels.base import CHANNEL, channel_choices, kernel_op
+from finn.custom_op.kernels.shell import configured_root, member, shell_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_VLNV,
@@ -39,7 +38,7 @@ from finn.custom_op.partition.kernel_partitions import (
 from finn.kernels.configure import commit, undecided
 from finn.kernels.explore import Ranked
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
-from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.transformation.kernels.package import boundary_facts
 from kernel_ops.models import DOMAIN
 from kernel_ops.packaging import reaches_vivado, read_back
 from kernel_ops.tfc import LANES, SHAPE, ULTRA96, cut, partition, partitioned, streamlined
@@ -149,7 +148,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     # Python ints: the packed words are wider than numpy's integers.
     pixels = [int(value) for image in images for value in image.reshape(-1)]  # the host's flatten
     bits = body.get_tensor_datatype(LOGITS).bitwidth()
-    words = [pack([int(value) for value in logits.reshape(-1)], bits) for logits in expected]
+    words = [pack_lanes([int(value) for value in logits.reshape(-1)], bits) for logits in expected]
     lanes = 16
     for mode, pacing in {"free": FREE, "stalled": STALLED}.items():
         stream_through(
@@ -157,7 +156,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
             tmp_path / "xsim" / mode,
             inputs={
                 "s_axis_0": (
-                    [pack(pixels[i : i + lanes], 8) for i in range(0, len(pixels), lanes)],
+                    [pack_lanes(pixels[i : i + lanes], 8) for i in range(0, len(pixels), lanes)],
                     8 * lanes,
                 )
             },
@@ -176,7 +175,7 @@ def test_tfc_w2a2_runs_in_xsim_as_in_python(tmp_path: Path) -> None:
     image = np.random.default_rng(4).integers(0, 256, size=SHAPE).astype(np.float32)
     feed = {parent.graph.input[0].name: image}
     simulator = XSim(directory=tmp_path / "xsim")
-    ran: Provenance = {}
+    ran: RanBy = {}
     found = onnx_exec.execute_onnx(
         parent, feed, True, executors=(simulator,), require_hardware=True, provenance=ran
     )
@@ -187,8 +186,7 @@ def test_tfc_w2a2_runs_in_xsim_as_in_python(tmp_path: Path) -> None:
         assert np.array_equal(found[name], expected[name]), name
 
 
-@pytest.mark.vivado
-@pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
+@requires_vivado
 def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     _, parent, body = partitioned(tmp_path)
     sdp = parent.graph.node[1]
@@ -212,7 +210,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
     # The interface description beside the IP: the module's pins, the boundary facts.
     described = json.loads((project / "interface.json").read_text())
-    read_back(described, PackagePartition(sdp.name).module(body).abi.pins, 5.0)
+    read_back(described, point.module.abi.pins, 5.0)
     assert [stream["beats"] for stream in described["streams"]] == [49, 1]
 
 
@@ -246,12 +244,12 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
         for name in paths[stream].split("."):
             channel = getattr(channel, name)
         assert channel.platform == ULTRA96.platform
-    # Each adapter memory the flow committed (``auto``), keyed under its edge.
+    # Each adapter memory the flow committed (``auto``), stated on its edge's tensor.
     adapters = [
-        f"{paths[member(node.input[0])]}.{attribute.removeprefix('x.')}"
-        for node in body.graph.node
-        for attribute in body.get_customop_wrapper(node).choices()
-        if attribute.startswith("x.adapter.") and attribute.endswith(".ram_style")
+        f"{paths[member(tensor)]}.{key}"
+        for tensor in body.tensors_stating(CHANNEL)
+        for key in channel_choices(body, tensor)
+        if key.startswith("adapter.") and key.endswith(".ram_style")
     ]
     assert len(adapters) == 4
     for key in adapters:

@@ -115,13 +115,6 @@ def datatype_range(
     return vector_length * min(products), vector_length * max(products)
 
 
-def exact_result_dtype(
-    vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
-) -> QONNXDataType:
-    """The smallest encoding of every full-range integer dot product (``range_dtype``)."""
-    return range_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
-
-
 def column_range(activation_dtype: QONNXDataType, weights: IntegerTensor) -> tuple[int, int]:
     """The least and greatest dot product of any column of ``weights`` (``(..., k, n)``,
     reduced over ``k``) with activations of ``activation_dtype``.
@@ -351,5 +344,4 @@ __all__ = [
     "block_diagonal",
     "column_range",
     "datatype_range",
-    "exact_result_dtype",
 ]

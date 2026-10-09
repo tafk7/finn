@@ -32,6 +32,13 @@ float32 alone); a tensor whose values are integers there and differ in float32, 
 producer's inputs agreeing, is where the export rounds and the prepared graph does
 not. Each is named (``export-rounds``, a limitation): it explains a difference, and
 fails nothing.
+
+That run needs every op of the widened export in float64, and ONNX Runtime has no
+float64 implementation of some (Conv). Each standard op that reads or writes a float64
+tensor there is tried first, as qonnx runs it, a session of the one node
+(``float64_refused``); if ONNX Runtime refuses one, the float64 run is skipped, not run
+narrower, and one limitation names the ops and why (``export-rounds-unchecked``):
+where the export rounds is not known. The rest of the check runs as before.
 """
 
 from __future__ import annotations
@@ -46,14 +53,19 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
+from onnxruntime import InferenceSession  # type: ignore[import-untyped]
+from onnxruntime.capi.onnxruntime_pybind11_state import (  # type: ignore[import-untyped]
+    NotImplemented as RuntimeHasNone,
+)
 from qonnx.core.onnx_exec import execute_onnx
+from qonnx.custom_op.registry import is_custom_op
 
 from finn.core.containers import container
 from finn.core.space import Finding, FindingKind
-from finn.harness.ops import Integers
+from finn.harness.orders import Integers
 from finn.harness.reference import as_held, drawn_inputs
-from finn.transformation.prepare import DEVIATIONS
-from finn.transformation.prepare.containers import NARROW_FLOATS, widened
+from finn.transformation.prepare import VALUE_DEVIATIONS
+from finn.transformation.prepare.containers import NARROW_FLOATS, WIDE, widened
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -138,7 +150,7 @@ def unexplained(draw: Draw, explains: Mapping[str, Explanation]) -> list[Finding
             differs &= ~np.broadcast_to(explanation(draw, index), differs.shape)
         if differs.any():
             first = tuple(int(i) for i in np.argwhere(differs)[0])
-            declared = ", ".join(code for code, each in DEVIATIONS.items() if each.values)
+            declared = ", ".join(VALUE_DEVIATIONS)
             found.append(
                 _finding(
                     "equivalence-unexplained",
@@ -183,6 +195,73 @@ def in_float64(model: ModelWrapper) -> ModelWrapper:
     named = {name for node in wide.graph.node for name in (*node.input, *node.output)}
     named |= {item.name for item in (*wide.graph.input, *wide.graph.output)}
     return widened(wide, {name for name in named if container(wide, name) in NARROW_FLOATS})
+
+
+def _alone(wide: ModelWrapper, node: Any) -> bytes | None:
+    """``node`` as qonnx runs a standard op: a model of the one node, its inputs and
+    outputs the graph's, each in its container and shape as ``wide`` states them; None
+    where a container is unstated."""
+    probe = copy.deepcopy(wide.model)
+    graph = probe.graph
+    for items in (graph.node, graph.initializer, graph.value_info, graph.input, graph.output):
+        del items[:]
+    graph.node.append(node)
+    for side, names in ((graph.input, node.input), (graph.output, node.output)):
+        for name in filter(None, names):
+            held = container(wide, name)
+            if held is None:
+                return None
+            info = side.add()
+            info.name = name
+            tensor = info.type.tensor_type
+            tensor.elem_type = held
+            shape = wide.get_tensor_shape(name)
+            if shape is not None:
+                tensor.shape.SetInParent()
+                for extent in shape:
+                    tensor.shape.dim.add().dim_value = extent
+    return bytes(probe.SerializeToString())
+
+
+def float64_refused(wide: ModelWrapper) -> dict[str, tuple[str, ...]]:
+    """The nodes of ``wide`` (``in_float64``'s) ONNX Runtime cannot run, by op type:
+    each standard op that reads or writes a float64 tensor, tried as qonnx runs it (a
+    session of the one node), that ONNX Runtime refuses as not implemented (Conv)."""
+    found: dict[str, list[str]] = {}
+    tried: dict[tuple[str, str, tuple[int | None, ...]], bool] = {}
+    for node in wide.graph.node:
+        if is_custom_op(node.domain, node.op_type):
+            continue
+        names = [name for name in (*node.input, *node.output) if name]
+        if not any(container(wide, name) == WIDE for name in names):
+            continue
+        key = (node.domain, node.op_type, tuple(container(wide, name) for name in names))
+        if key not in tried:
+            alone = _alone(wide, node)
+            tried[key] = False
+            if alone is not None:
+                try:
+                    InferenceSession(alone)
+                except RuntimeHasNone:
+                    tried[key] = True
+        if tried[key]:
+            found.setdefault(node.op_type, []).append(node.name)
+    return {op: tuple(nodes) for op, nodes in found.items()}
+
+
+def _unchecked(refused: Mapping[str, tuple[str, ...]]) -> Finding:
+    """The float64 run skipped: the ops ONNX Runtime cannot run in float64, named."""
+    ops = sorted(refused)
+    nodes = [node for op in ops for node in refused[op]]
+    return Finding(
+        FindingKind.LIMITATION,
+        "export-rounds-unchecked",
+        OWNER,
+        f"the export's float64 run is skipped: ONNX Runtime has no float64 implementation "
+        f"of {', '.join(ops)} ({', '.join(nodes)}), and the run is not made narrower; "
+        "where the export rounds its integers is not checked",
+        (("ops", tuple(ops)), ("nodes", tuple(nodes))),
+    )
 
 
 def export_rounds(reference: ModelWrapper, wide: ModelWrapper, draw: Draw) -> list[Finding]:
@@ -230,7 +309,8 @@ def export_rounds(reference: ModelWrapper, wide: ModelWrapper, draw: Draw) -> li
 class Equivalence:
     """The check's result: how many draws ran, the findings (none: equivalent up to the
     explained deviations, and sound, on every draw), and where the export itself rounds
-    (``rounds``: ``export-rounds`` limitations, each tensor once)."""
+    (``rounds``: ``export-rounds`` limitations, each tensor once; or, where the float64
+    run cannot run, the one ``export-rounds-unchecked`` limitation naming why)."""
 
     draws: int
     findings: tuple[Finding, ...]
@@ -246,14 +326,17 @@ def check_equivalence(
     """The prepared graph against the ``reference`` (the export, P1 applied) on each of
     ``seeds`` seeds' three draws from the prepared graph's input annotation: the
     outputs (``unexplained``) and the annotations' soundness (``unsound``), each
-    finding once, at its first draw. ``explains`` may name value deviations the phase
+    finding once, at its first draw; where the export rounds (``export_rounds``), unless
+    ONNX Runtime cannot run the export in float64 (``float64_refused``: the run is
+    skipped, and named). ``explains`` may name value deviations the phase
     declares only."""
-    undeclared = sorted(set(explains) - {c for c, each in DEVIATIONS.items() if each.values})
+    undeclared = sorted(set(explains) - set(VALUE_DEVIATIONS))
     if undeclared:
         raise ValueError(f"no value deviation of the phase is named {', '.join(undeclared)}")
     found: dict[tuple[str, Any], Finding] = {}
     rounds: dict[str, Finding] = {}
     wide = in_float64(reference)
+    refused = float64_refused(wide)
     draws = 0
     for seed in range(seeds):
         for inputs in drawn_inputs(prepared, seed):
@@ -265,9 +348,12 @@ def check_equivalence(
                     dict(finding.details).get("output", dict(finding.details).get("tensor")),
                 )
                 found.setdefault(key, finding)
+            if refused:
+                continue
             for finding in export_rounds(reference, wide, draw):
                 rounds.setdefault(str(dict(finding.details)["tensor"]), finding)
-    return Equivalence(draws, tuple(found.values()), tuple(rounds.values()))
+    skipped = (_unchecked(refused),) if refused else ()
+    return Equivalence(draws, tuple(found.values()), (*rounds.values(), *skipped))
 
 
 __all__ = [
@@ -278,8 +364,7 @@ __all__ = [
     "Explanation",
     "check_equivalence",
     "export_rounds",
-    "in_float64",
-    "observe",
+    "float64_refused",
     "unexplained",
     "unsound",
 ]

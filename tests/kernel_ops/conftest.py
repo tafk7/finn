@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """TFC_W2A2 (``kernel_ops.tfc``) for the tests that only read it, built once a run and
-saved: a test loads its own copy (``ModelWrapper(str(path))``)."""
+saved: a test loads its own copy (``ModelWrapper(str(path))``), a module its own (``tfc``)."""
 
 from __future__ import annotations
 
@@ -48,3 +48,9 @@ def tfc_kernel_ops(tfc_cache: Path, tfc_streamlined: Path) -> Path:
             ModelWrapper(str(tfc_streamlined)), directory / "kernel_ops_cut"
         ),
     )
+
+
+@pytest.fixture(scope="module")
+def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
+    """TFC_W2A2's partition body: its KernelOps for Ultra96 at 5 ns in the Zynq shell."""
+    return ModelWrapper(str(tfc_kernel_ops))

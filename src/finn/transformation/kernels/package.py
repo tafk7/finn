@@ -33,8 +33,9 @@ interface description, the testbench).
 The part and the clock period are the model's build target (``read_target(model)``,
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
-The partition's choices are its nodes': the root is replayed from them (a
-stale choice refuses, named), a Decision with one viable case is forced, and
+The partition's choices are its nodes' and its channels' (each on its tensor,
+``finn.channel``): the root is replayed from them (a stale choice refuses, named),
+a Decision with one viable case is forced, and
 what is open is completed on a copy by the build's completion policy
 (``finn.kernels.explore.Completion``, ``Baseline()`` by default: every open
 choice at its kernel's baseline, the open transports sized on the completed
@@ -72,15 +73,14 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, read_target, shape
-from finn.custom_op.kernels.shell import admission_refusal, member, shell_root
+from finn.custom_op.kernels.shell import configured_root, member, shell_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
@@ -93,65 +93,17 @@ from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
 from finn.kernels.artifacts.module import Abi, declared_registers, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.kernels.configure import member_of, undecided
+from finn.kernels.configure import member_of
 from finn.kernels.ends import EndContract
-from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
+from finn.kernels.explore import Completion
 from finn.kernels.utilization import Resources
+from finn.resources import finnlib_root
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
 from finn.util.toolchain import Toolchain, machine_toolchain
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-
-def configured_root(
-    model: ModelWrapper, label: str, completion: Completion | None = None
-) -> tuple[Any, tuple[tuple[str, str], ...]]:
-    """A partition model's shell root point (``shell_root``, in the shell of its
-    target), replayed from its nodes (a Decision with one viable case is forced,
-    nothing to commit) and completed by ``completion`` (``Baseline()`` by default) on a
-    copy, as hardware generation builds it (the shell's ends, if it offers any, sizing
-    the boundary transports as the exploration did), and its boundary (tensor, port).
-    A stale choice, a choice the completion leaves open (a required one), a point the
-    shell does not admit (``admission_refusal``), or graph inputs and outputs out of
-    port order refuse, named."""
-    root = shell_root(model, model.graph.node)
-    if root.dropped:
-        raise KernelOpError(
-            f"{label}: stale choices, refused by the partition: "
-            + "; ".join(f"{key}: {why}" for key, why in root.dropped.items()),
-            tuple(root.dropped),
-        )
-    policy = Baseline() if completion is None else completion
-    seam = Seam(root.members, root.owners, read_target(model).platform, policy)
-    try:
-        completed = policy.complete(seam, root.point, sizing=True)
-    except ExploreError as error:
-        raise KernelOpError(f"{label}: the {policy.name} completion refuses: {error}") from error
-    point = completed.point
-    open_keys = undecided(point, "*")
-    if open_keys:
-        required = {choice.key for choice in completed.open if choice.required}
-        named = [key + (" (required)" if key in required else "") for key in open_keys]
-        raise KernelOpError(
-            f"{label}: open Decisions, to choose before packaging: " + ", ".join(named),
-            tuple(open_keys),
-        )
-    unadmitted = admission_refusal(point)
-    if unadmitted is not None:
-        raise KernelOpError(f"{label}: refused by the {root.row.shell!r} shell: {unadmitted}")
-    ports = dict(root.boundary)
-    initializers = {tensor.name for tensor in model.graph.initializer}
-    inputs = [item.name for item in model.graph.input if item.name not in initializers]
-    expected = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
-    expected |= {item.name: f"m_axis_{index}" for index, item in enumerate(model.graph.output)}
-    if ports != expected:
-        raise KernelOpError(
-            f"{label}: the partition's ports {ports} are not its graph's inputs and"
-            f" outputs in order {expected}"
-        )
-    return point, root.boundary
 
 
 def end_facts(contract: EndContract) -> dict[str, Any]:
@@ -171,9 +123,9 @@ def end_facts(contract: EndContract) -> dict[str, Any]:
 
 def free_side(point: Any, tensor: str) -> Any:
     """The stream at the free side of the boundary channel carrying ``tensor``: the
-    channel's end no kernel of the partition owns (a ``StreamContract``)."""
-    ends = getattr(point, member(tensor)).endpoints
-    return ends.source if ends.source_owner is None else ends.sink
+    channel's end no kernel of the partition owns (a ``StreamContract``), as the channel
+    derives it (``Channel.free_side``)."""
+    return getattr(point, member(tensor)).free_side
 
 
 def stream_order(form: Traversal) -> dict[str, Any]:
@@ -251,14 +203,33 @@ def interface_description(
 
 
 #: A hierarchical utilization report's column, by the resource it counts
-#: (``Resources``); RAMB36 counts two RAMB18 halves.
-_REPORT_COLUMNS = {
+#: (``Resources``); RAMB36 counts two RAMB18 halves (``resources_of``).
+REPORT_COLUMNS = {
     "Total LUTs": "lut",
     "FFs": "ff",
     "RAMB36": "bram36",
     "RAMB18": "bram18",
     "URAM": "uram",
 }
+
+
+def resources_of(counts: Mapping[str, int]) -> Resources:
+    """The resources a utilization report counts, by resource (``REPORT_COLUMNS``'s
+    names): a RAMB36 (``bram36``) is two RAMB18 halves."""
+    found = dict(counts)
+    bram18 = 2 * found.pop("bram36", 0) + found.pop("bram18", 0)
+    return Resources(**found, bram18=bram18)
+
+
+def partition_utilization_report(project: Path) -> Path:
+    """The hierarchical utilization report of a partition packaged with ``run_synth`` in
+    ``project``; refused unless there is exactly one."""
+    reports = sorted(project.glob("*_partition_util.rpt"))
+    if len(reports) != 1:
+        raise KernelOpError(
+            f"{project}: one hierarchical utilization report (run_synth), not {len(reports)}"
+        )
+    return reports[0]
 
 
 def hierarchical_utilization(text: str) -> list[tuple[int, str, Resources]]:
@@ -279,15 +250,14 @@ def hierarchical_utilization(text: str) -> list[tuple[int, str, Resources]]:
             continue
         counts: dict[str, int] = {}
         for column, cell in zip(header, names, strict=True):
-            key = "dsp" if column.startswith("DSP") else _REPORT_COLUMNS.get(column)
+            key = "dsp" if column.startswith("DSP") else REPORT_COLUMNS.get(column)
             if key is not None:
                 counts[key] = counts.get(key, 0) + int(cell)
-        bram18 = 2 * counts.pop("bram36", 0) + counts.pop("bram18", 0)
         name = cells[0]
         depth = len(name) - len(name.lstrip())
         if not rows:
             indent = depth
-        rows.append(((depth - indent) // 2, names[0], Resources(**counts, bram18=bram18)))
+        rows.append(((depth - indent) // 2, names[0], resources_of(counts)))
     if not rows:
         raise KernelOpError("no hierarchical utilization table in the report")
     return rows
@@ -306,15 +276,11 @@ def ooc_member_resources(
     ``unattributed`` (the total less the members'), and the module's instances with no
     row are ``unreported_instances``. Every count is Vivado's synthesis estimate out of
     context, not placed."""
-    reports = sorted(project.glob("*_partition_util.rpt"))
-    if len(reports) != 1:
-        raise KernelOpError(
-            f"{project}: one hierarchical utilization report (run_synth), not {len(reports)}"
-        )
+    report = partition_utilization_report(project)
     paths = shell_root(model, model.graph.node).members
     point, _ = configured_root(model, "the packaged partition", completion)
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
-    rows = hierarchical_utilization(reports[0].read_text())
+    rows = hierarchical_utilization(report.read_text())
     members: dict[str, Resources] = {}
     reported = set()
     for depth, instance, counted in rows[1:]:
@@ -328,7 +294,7 @@ def ooc_member_resources(
     total = vars(rows[0][2])
     claimed = sum(members.values(), Resources())
     return {
-        "report": reports[0].name,
+        "report": report.name,
         "estimate": "out-of-context synthesis",
         "total": total,
         "members": {path: vars(counted) for path, counted in members.items()},
@@ -393,11 +359,6 @@ class PackagePartition(Transformation):
         self.toolchain = toolchain
         self.completion = completion
 
-    def module(self, model: ModelWrapper) -> Any:
-        """The partition's module: its root replayed from the nodes and completed."""
-        point, _ = configured_root(model, self.ip_name, self.completion)
-        return point.module
-
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         built = read_target(model)
         point, boundary = configured_root(model, self.ip_name, self.completion)
@@ -410,7 +371,7 @@ class PackagePartition(Transformation):
         emitted = emit_module(
             module,
             project / "src",
-            roots={"finnlib": Path(resources.path("finnlib"))},
+            roots={"finnlib": finnlib_root()},
             built=built_hls(module, built.part, toolchain=toolchain),
         )
         check_elaborates(emitted, module.abi, self.ip_name)
@@ -476,7 +437,7 @@ class ElaboratePartition(Transformation):
         emitted = emit_module(
             point.module,
             directory / "src",
-            roots={"finnlib": Path(resources.path("finnlib"))},
+            roots={"finnlib": finnlib_root()},
             built=built_hls(point.module, read_target(model).part, toolchain=toolchain),
         )
         vivado = toolchain.environment.get("XILINX_VIVADO")
@@ -515,13 +476,12 @@ class ElaboratePartition(Transformation):
 
 
 __all__ = [
+    "REPORT_COLUMNS",
     "ElaboratePartition",
     "PackagePartition",
     "boundary_facts",
-    "end_facts",
-    "check_elaborates",
-    "configured_root",
     "hierarchical_utilization",
-    "interface_description",
     "ooc_member_resources",
+    "partition_utilization_report",
+    "resources_of",
 ]

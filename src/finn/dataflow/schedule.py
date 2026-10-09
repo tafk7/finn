@@ -184,19 +184,23 @@ class Schedule:
         """The beat order: the indices, outer to inner."""
         return tuple(index for index, _ in self.extents)
 
+    def _known(self, *indices: Index) -> None:
+        """``Refused`` naming the first of ``indices`` that is not an index of the schedule."""
+        known = set(self.order)
+        for index in indices:
+            if index not in known:
+                raise Refused(f"{index!r} is not an index of the schedule")
+
     def extent(self, index: Index) -> int:
         """``index``'s extent; ``Refused`` when it is not an index of the schedule."""
-        extents = dict(self.extents)
-        if index not in extents:
-            raise Refused(f"{index!r} is not an index of the schedule")
-        return extents[index]
+        self._known(index)
+        return dict(self.extents)[index]
 
     def factor(self, index: Index) -> int:
         """The lanes ``index`` spreads over each beat, its folding factor; one when it has none.
 
         ``Refused`` when ``index`` is not an index of the schedule."""
-        if index not in dict(self.extents):
-            raise Refused(f"{index!r} is not an index of the schedule")
+        self._known(index)
         return dict(self.factors).get(index, 1)
 
     def steps(self, index: Index) -> int:
@@ -231,14 +235,7 @@ class Schedule:
         axes = tuple(Affine.of(axis) for axis in index)
         if len(axes) != len(viewed):
             raise Refused(f"{len(axes)} expressions for a rank-{len(viewed)} tensor")
-        known = set(self.order)
-        for axis in axes:
-            for used in axis.indices:
-                if used not in known:
-                    raise Refused(f"{used!r} is not an index of the schedule")
-        for named in (*lanes, *reduces, *holds):
-            if named not in known:
-                raise Refused(f"{named!r} is not an index of the schedule")
+        self._known(*(used for axis in axes for used in axis.indices), *lanes, *reduces, *holds)
         strides = axis_strides(viewed)
 
         def stride(i: Index) -> int:
@@ -275,10 +272,7 @@ class Schedule:
         frame's first: one a clock cycle when the kernel runs at its rate (K10),
         before its pipeline's constant latency.
         """
-        known = set(self.order)
-        for named in (*reduces, *holds):
-            if named not in known:
-                raise Refused(f"{named!r} is not an index of the schedule")
+        self._known(*reduces, *holds)
         if set(reduces) & set(holds):
             raise Refused("an index is reduced or held, not both")
         # Each index's weight in the beat count: the beats of every index inside it.
@@ -355,8 +349,9 @@ class Access:
         object.__setattr__(self, "index", index)
 
 
-def _plain(axis: Index | Affine) -> Index | None:
-    """The index an axis is addressed by alone (coefficient one), if any."""
+def plain_index(axis: Index | Affine) -> Index | None:
+    """The index an axis is addressed by alone (coefficient one: ``m`` or ``1 * m``), if
+    any: what a reshaped port's every axis is, and what binds an axis's extent."""
     terms = Affine.of(axis).terms
     return terms[0][0] if len(terms) == 1 and terms[0][1] == 1 else None
 
@@ -380,7 +375,7 @@ def bind_extents(
         bound[index], origin[index] = extent, "given"
     for access in accesses:
         if access.reshaped:
-            if any(_plain(axis) is None for axis in access.index):
+            if any(plain_index(axis) is None for axis in access.index):
                 raise Refused(f"{access.name}: a reshaped port reads plain indices")
         elif len(access.index) != len(access.shape):
             raise Refused(
@@ -391,7 +386,7 @@ def bind_extents(
         if access.reshaped:
             continue
         for axis, (extent, expression) in enumerate(zip(access.shape, access.index)):
-            plain = _plain(expression)
+            plain = plain_index(expression)
             if plain is None:
                 continue
             here = f"{access.name} axis {axis}"
@@ -414,7 +409,7 @@ def bind_extents(
                 raise Refused(f"{access.name}: a {access.shape} tensor cannot be viewed as {view}")
             continue
         for axis, (extent, expression) in enumerate(zip(access.shape, access.index)):
-            if _plain(expression) is None:
+            if plain_index(expression) is None:
                 terms = Affine.of(expression).terms
                 reach = sum(c * (bound[i] - 1) for i, c in terms)
                 if reach >= extent:
@@ -425,4 +420,13 @@ def bind_extents(
     return bound
 
 
-__all__ = ["Access", "Affine", "Index", "Pace", "Refused", "Schedule", "bind_extents"]
+__all__ = [
+    "Access",
+    "Affine",
+    "Index",
+    "Pace",
+    "Refused",
+    "Schedule",
+    "bind_extents",
+    "plain_index",
+]

@@ -150,7 +150,6 @@ class Integer:
 
 
 __all__ = [
-    "STORED_MIN_BITS",
     "Integer",
     "admit_element",
     "range_dtype",

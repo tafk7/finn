@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 
 from . import _execution
 from .errors import EvaluationError
+from .graph import Located
 from .ir import Argument, LinkedModel, Node, NodeKind
 from .results import (
     Available,
@@ -245,7 +246,7 @@ class _TrialSnapshot(Snapshot):
 
     def publish(self) -> Snapshot:
         if self._published:
-            raise RuntimeError("a admission trial can only be published once")
+            raise RuntimeError("an admission trial can only be published once")
         object.__setattr__(self, "_published", True)
         # Every candidate was admitted: the successor's assignments are the pending ones.
         successor = self.successor()
@@ -378,8 +379,6 @@ def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[obje
 
 
 def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    from .graph import Located  # noqa: PLC0415 - value type of the graph primitives
-
     if node.kind == "present":
         answers: list[QueryResult[object]] = []
         for _, target in node.alternatives:
@@ -640,9 +639,9 @@ def supplied_provenance(snapshot: Snapshot, evaluation: Evaluation, index: int) 
 
 
 def _self_point(snapshot: Snapshot, scope: int) -> Space:
-    from .occurrence import _attach  # noqa: PLC0415 - scoped callback receiver
+    from .occurrence import attach  # noqa: PLC0415 - scoped callback receiver
 
-    return _attach(snapshot, scope)
+    return attach(snapshot, scope)
 
 
 def evaluate(snapshot: Snapshot, node_index: int) -> Evaluation:

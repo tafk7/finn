@@ -231,7 +231,7 @@ class StreamAdapter(Space):
     """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
     Each candidate places its modules as kernel children named by stage
-    (``input_gen``, ``vpc``, then ``input_gen_1``, ``vpc_1``), their facts
+    (``input_gen``, ``vpc``, then ``input_gen_1``), their facts
     derived from the realization. An ``input_gen`` child owns its memory's
     ``ram_style``, on the channel's ``platform``.
     """
@@ -260,7 +260,7 @@ class StreamAdapter(Space):
             )
         return True
 
-    # The kernels' convention for a refusal (``finn.kernels.configure.admission``).
+    # The kernels' convention for a refusal (``finn.core.space.inspection.admission``).
     admission = ConstraintGroup(realizes)
 
     def _named(self, name: str) -> RealizedStage | Rejected:
@@ -335,10 +335,6 @@ class StreamAdapter(Space):
     @derived
     def vpc_facts(self) -> VpcFacts | Rejected:
         return self._converter("vpc")
-
-    @derived
-    def vpc_1_facts(self) -> VpcFacts | Rejected:
-        return self._converter("vpc_1")
 
     @view(requires=(realizes,))
     def stages(self) -> tuple[Stage, ...]:

@@ -23,8 +23,8 @@ import finn.custom_op.kernels as domain
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, KernelOpError, Match
 from finn.custom_op.kernels.thresholding import Thresholding
-from finn.transformation.kernels import Outcome, ToKernelOps, kernel_ops_by_anchor
-from kernel_ops.models import TARGET
+from finn.transformation.kernels import Outcome, kernel_ops_by_anchor
+from kernel_ops.models import convert
 
 GENERAL = "qonnx.custom_op.general"
 
@@ -137,11 +137,6 @@ POSITIVE: dict[str, tuple[Callable[[], ModelWrapper], str, dict[str, object]]] =
 
 def kernel_ops() -> list[type[KernelOp]]:
     return [getattr(domain, name) for name in domain.__all__]
-
-
-def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
-    conversion = ToKernelOps(TARGET)
-    return model.transform(conversion), conversion
 
 
 @pytest.mark.parametrize("case", sorted(NEGATIVE))

@@ -343,7 +343,6 @@ THRESHOLD_TABLE: ValueSemantics[ThresholdTable] = ValueSemantics(
 
 
 __all__ = [
-    "INTEGER_DIGEST",
     "INTEGER_TENSOR",
     "INTEGER_VECTOR",
     "IntegerTensor",

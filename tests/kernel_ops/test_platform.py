@@ -20,7 +20,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import DefinitionError, Rejected, design_space
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import save_channels, shell_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -51,12 +51,13 @@ def test_the_node_root_binds_the_models_platform_and_its_dsp_block() -> None:
 
 
 def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
-    ultra96 = op(matmul_model())  # TARGET: Ultra96, no UltraRAM
-    with pytest.raises(KernelOpError, match="w.source.memstream.ram_style.*uram-absent"):
-        ultra96.save({"w.source.memstream.ram_style": "ultra"})
-    uram = op(targeted(matmul_model(), URAM))
-    uram.save({"w.source.memstream.ram_style": "ultra"})
-    assert uram.point().w.source.ram_style == "ultra"
+    ultra = {"w": {"source.memstream.ram_style": "ultra"}}
+    ultra96 = matmul_model()  # TARGET: Ultra96, no UltraRAM
+    with pytest.raises(KernelOpError, match="w: .*source.memstream.ram_style.*uram-absent"):
+        save_channels(ultra96, ultra)
+    uram = targeted(matmul_model(), URAM)
+    save_channels(uram, ultra)
+    assert op(uram).point().w.source.ram_style == "ultra"
 
 
 def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
@@ -65,9 +66,9 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     included, whose root then refuses it (``test_shell_admission``)."""
     assert "clk2x" not in {item.name for item in fields(Platform)}
     for target in (TARGET, ZYNQ):
-        node = op(targeted(matmul_model(), target))
-        node.save({"w.source.memstream.pumped_memory": True})
-        assert node.point().w.source.pumped_memory is True
+        model = targeted(matmul_model(), target)
+        save_channels(model, {"w": {"source.memstream.pumped_memory": True}})
+        assert op(model).point().w.source.pumped_memory is True
 
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:
@@ -101,7 +102,10 @@ def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
     node = op(matmul_model())
     facts = node.facts()
     formals = {**facts.formals(), "platform": platform}
-    tensors = {f"{port}_tensor": tensor for port, tensor in node.edges().items()}
+    tensors = {
+        f"{port}_tensor": tensor
+        for port, tensor in (node.input_edges() | node.output_edges()).items()
+    }
     values = {f"{port}_contents": value for port, value in facts.values().items()}
     answer = design_space(node.root()(**formals, **tensors, **values)).matmul.query(
         MatMulKernel.compute

@@ -41,8 +41,6 @@ from ._nodes import (
 )
 from ._ordering import dependency_order
 from ._table import (
-    BOOL,
-    STRING,
     ChoiceDraft,
     MemberTask,
     ScopeDraft,
@@ -73,6 +71,7 @@ from .domains import Domain, finite
 from .errors import DefinitionError
 from .expressions import Expr
 from .ir import Argument, Layer, NodeKind, Provenance
+from .semantics import BOOL, STRING
 
 
 @dataclass(frozen=True)

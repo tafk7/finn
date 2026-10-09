@@ -10,7 +10,9 @@ its own element; ``End`` and ``Ends`` hold what the two ends present, and
 traverses the tensor's shape, the source's values fit the tensor's element,
 and the tensor's fit the sink's. What joins the two sequences is
 ``finn.dataflow.plan``. How the ends are found (the kernels' ports, the root's
-boundary) is the channel's, not this layer's.
+boundary) is the channel's, not this layer's. These ends are not
+``finn.kernels.ends``'s, which are where a shell root's boundary stream meets
+memory (``Channel.end``).
 """
 
 from __future__ import annotations

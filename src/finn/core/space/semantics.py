@@ -101,6 +101,10 @@ def default_semantics(value_type: type[T]) -> ValueSemantics[T]:
     )
 
 
+BOOL = cast(ValueSemantics[object], default_semantics(bool))
+STRING = cast(ValueSemantics[object], default_semantics(str))
+
+
 def _itself(value: T) -> T:
     return value
 

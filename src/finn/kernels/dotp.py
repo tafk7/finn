@@ -570,7 +570,6 @@ __all__ = [
     "DotpAxiKernel",
     "Int8Dsp58DotpKernel",
     "PackedDotpKernel",
-    "core_simd",
     "int8_dsp58_dotp_resources",
     "packed_dotp_resources",
 ]

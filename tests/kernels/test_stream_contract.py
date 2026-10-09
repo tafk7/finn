@@ -12,14 +12,12 @@ hard-coded values in ``finn-rtllib`` and ``transpose_decomposition``.
 import operator
 import random
 from math import prod
-from pathlib import Path
 
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import pack as xsim_pack
-from finn.core.executors.xsim.rtl import stream_through
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.core.space import Rejected, Unresolved, design_space
 from finn.dataflow import traversal
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -58,7 +56,6 @@ from finn.transformation.fpgadataflow.transpose_decomposition import (
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root, with_direct_transports
 from kernels.xsim import requires_xsim
 
-ROOT = Path(__file__).resolve().parents[2]
 INT3 = ScalarEncoding(DataType["INT3"])
 INT4 = ScalarEncoding(DataType["INT4"])
 
@@ -333,15 +330,27 @@ def test_equal_contracts_connect_and_cyclic_sources_repeat_into_consumer_passes(
 
 
 def test_mismatches_name_the_adapter_that_would_repair_them():
+    """The logical part is the channel's plan (``finn.dataflow.plan``): its steps name the
+    adapter, and what no chain repairs is refused as the plan says."""
+    wider = compatibility(
+        contract(vector_major((4,), 2), Endpoint.INITIATOR),
+        contract(vector_major((4,), 4), Endpoint.TARGET),
+        source_is_top=False,
+        sink_is_top=False,
+    )
+    assert mismatch_codes(wider) == {"channel-form"}
+    assert next(iter(wider)).message == "needs a width_conversion adapter"
     found = compatibility(
         contract(tile(4, 4, 1, 4), Endpoint.INITIATOR),
         contract(tile(4, 4, 4, 1), Endpoint.TARGET),
         source_is_top=False,
         sink_is_top=False,
     )
-    # Equal lanes and widths, different positions per beat.
+    # Equal lanes and widths, different positions per beat: a lane regroup, which no
+    # chain of adapters realizes.
     assert mismatch_codes(found) == {"channel-form"}
-    assert "lane_regroup" in next(iter(found)).message
+    message = next(iter(found)).message
+    assert message.startswith("no chain of adapters repairs it") and "lane axis" in message
 
 
 def test_repetition_direction_and_marker_rules_are_checked():
@@ -377,6 +386,32 @@ def test_repetition_direction_and_marker_rules_are_checked():
     assert compatibility(unmarked, every, source_is_top=False, sink_is_top=False) == ()
     assert marker_pairs(unmarked, every) == ((None, "s_m"),)
     assert marker_pairs(produced, every) == (("s_m", "s_m"),)
+
+
+def test_a_marker_after_an_adapter_is_one_the_adapter_must_make():
+    """A sequence step invalidates the markers before it (``finn.dataflow.plan``): a
+    consumer's marker past a width conversion is refused as one none survives."""
+    last = (StreamMarker("s_m", MarkerKind.LAST),)
+    produced = StreamContract(
+        native("s", 6, Endpoint.INITIATOR, markers=last),
+        INT3,
+        vector_major((8,), 2),
+        markers=(("s_m", LevelEnd(4)),),
+    )
+    required = StreamContract(
+        native("s", 12, Endpoint.TARGET, markers=last),
+        INT3,
+        vector_major((8,), 4),
+        markers=(("s_m", LevelEnd(2)),),
+    )
+    found = compatibility(produced, required, source_is_top=False, sink_is_top=False)
+    assert [(each.code, each.message) for each in found] == [
+        ("channel-form", "needs a width_conversion adapter"),
+        (
+            "channel-marker",
+            "s_m requires a marker every 2 beats; none survives the width_conversion adapter",
+        ),
+    ]
 
 
 def test_contracts_reject_lanes_wider_than_the_word_and_unknown_marker_rules():
@@ -523,8 +558,8 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
 def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
     inputs = [(-8 + 3 * index) % 16 - 8 for index in range(CHANNELS * PIXELS)]
     expected = [value + PARAMETERS[index % CHANNELS] for index, value in enumerate(inputs)]
-    words_in = [xsim_pack(inputs[i : i + PE], 4) for i in range(0, len(inputs), PE)]
-    words_out = [xsim_pack(expected[i : i + PE], 5) for i in range(0, len(expected), PE)]
+    words_in = [pack_lanes(inputs[i : i + PE], 4) for i in range(0, len(inputs), PE)]
+    words_out = [pack_lanes(expected[i : i + PE], 5) for i in range(0, len(expected), PE)]
     design = eltwise_with_constant()
     stream_through(
         design.module,

@@ -15,8 +15,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ._signatures import validate_argument
-from ._table import BOOL, STRING, Table
+from ._table import Table
 from .errors import DefinitionError
+from .semantics import BOOL, STRING
 
 
 def check(table: Table, order: tuple[int, ...]) -> None:

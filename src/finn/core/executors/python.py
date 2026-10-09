@@ -23,7 +23,7 @@ class Python:
     ``execute_node``.
 
     A KernelOp's ``execute_node`` is the op's reference, the oracle its hardware is
-    checked against. A partition node's executes its body with
+    checked against. A partition node's ``execute_node`` executes its body with
     ``finn.core.onnx_exec.execute_onnx`` under the executors of the run that reached it
     (``finn.core.onnx_exec.executing``), so the caller's choice reaches the body's nodes.
     It is no hardware: a run that requires hardware refuses it.

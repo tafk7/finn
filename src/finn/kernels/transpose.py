@@ -8,6 +8,7 @@ columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
 candidate of a channel's ``adapter`` Decision (``finn.kernels.adapters``): a
 kernel with children places it explicitly, and a channel realizes lane regroups
 through the common lane count instead.
+No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ from finn.core.space import (
     derived,
     divisors_of,
     reject,
-    requires,
     requiring,
 )
 from finn.dataflow.datatypes import QONNXDataType
@@ -34,7 +34,7 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
+from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     Fabric,
@@ -119,10 +119,7 @@ class TransposeKernel(Kernel):
         return 2 * self.rows * self.cols * self.input_channel.tensor.element.bits
 
     ram_style: str = Decision(
-        domain=requiring(
-            memory_styles(pages_bits),
-            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
-        )
+        domain=requiring(memory_styles(pages_bits), *uram_requirements(platform, ("ultra",)))
     )
 
     simd: int = Decision(domain=divisors_of(rows))

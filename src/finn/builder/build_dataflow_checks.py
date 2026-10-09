@@ -8,7 +8,6 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any, List, Optional, Tuple
 
 from finn.builder.build_dataflow_config import (
@@ -16,16 +15,10 @@ from finn.builder.build_dataflow_config import (
     ShellFlowType,
     verify_step_prereqs,
 )
-from finn.builder.kernel_build_config import (
-    OUTPUT_NEEDS,
-    SHELL_OUTPUTS,
-    VERIFIED_BY,
-    KernelBuildConfig,
-    KernelOutputType,
-    KernelVerificationStepType,
-)
+from finn.builder.kernel_build_checks import Check, Severity, kernel_path_checks
+from finn.builder.kernel_build_config import KernelBuildConfig
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
-from finn.platform import TargetRefused, shell_row
+from finn.platform import TargetRefused
 from finn.util.basic import (
     get_vivado_version,
     part_map,
@@ -33,21 +26,6 @@ from finn.util.basic import (
     retired_pynq_boards,
     vitis_part_map,
 )
-
-
-class Severity(Enum):
-    ERROR = "ERROR"
-    WARNING = "WARNING"
-    INFO = "INFO"
-
-
-@dataclass
-class Check:
-    name: str
-    severity: Severity
-    passed: bool
-    message: str
-    suggestion: Optional[str] = None
 
 
 @dataclass
@@ -112,133 +90,9 @@ def _vivado_checks(board: Optional[str], v: Optional[Tuple[int, int]]) -> List[C
     return checks
 
 
-def _resolved_step_names(cfg: Any) -> Optional[set]:
-    """The names of the steps the build runs (steps, start_step, stop_step), or None
-    when they cannot be resolved (the build then fails on its own when it starts)."""
-    try:
-        # imported lazily via importlib (rather than a top-level import) since
-        # build_dataflow imports this module, and a top-level import back
-        # would be circular
-        build_dataflow_mod = importlib.import_module("finn.builder.build_dataflow")
-        return {fn.__name__ for fn in build_dataflow_mod.resolve_build_steps(cfg, partial=True)}
-    except (ValueError, AttributeError):
-        return None
-
-
-def kernel_path_checks(cfg: KernelBuildConfig) -> List[Check]:
-    """The checks of a kernel-path build that its configuration's type does not make
-    impossible: its target resolves (finn.platform.resolve_target); the shell outputs
-    it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
-    ``ip``), and each output those it is made from (OUTPUT_NEEDS); the shell's build
-    takes its shell_options; the verification input exists, the testbench a
-    verification runs is asked for, and the steps each verification needs run
-    (VERIFIED_BY)."""
-    checks = []
-    try:
-        target = cfg._resolve_target()
-    except TargetRefused as refused:
-        return [
-            _check(
-                "kernel_target",
-                Severity.ERROR,
-                False,
-                str(refused),
-                "State a target the platform registry resolves (finn.platform)",
-            )
-        ]
-    row = shell_row(target.shell, target.board)
-    shell_outputs = [output for output in cfg.generate_outputs if output in SHELL_OUTPUTS]
-    if shell_outputs and row.integration is None:
-        asked = ", ".join(output.value for output in shell_outputs)
-        checks.append(
-            _check(
-                "kernel_path_shell",
-                Severity.ERROR,
-                False,
-                f"{asked}: the {target.shell!r} shell does not integrate the partition; "
-                "its outputs are the packaged IP's (stitched_ip, ooc_synth)",
-                "State a shell with ends that integrates it (pynq, for a board), or "
-                "remove them from generate_outputs",
-            )
-        )
-    asked = {KernelOutputType(output) for output in cfg.generate_outputs}
-    for output, needs in OUTPUT_NEEDS.items():
-        missing = [need.value for need in needs if output in asked and need not in asked]
-        if missing:
-            checks.append(
-                _check(
-                    "kernel_output_needs",
-                    Severity.ERROR,
-                    False,
-                    f"{output.value} needs {', '.join(missing)}: it is made from them, "
-                    "in the same build",
-                    f"Add {', '.join(missing)} to generate_outputs, or remove {output.value}",
-                )
-            )
-    try:
-        cfg._resolve_shell_options()
-    except ValueError as refused:
-        checks.append(
-            _check(
-                "kernel_shell_options",
-                Severity.ERROR,
-                False,
-                str(refused),
-                "State only the options the target's shell's build takes (pynq: "
-                "enable_hw_debug), or none",
-            )
-        )
-    if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(
-        cfg.verify_input_npy
-    ):
-        checks.append(
-            _check(
-                "verify_files",
-                Severity.ERROR,
-                False,
-                f"verify_input_npy not found: {cfg.verify_input_npy}",
-                "Provide a valid verification input .npy file or disable verification",
-            )
-        )
-    testbench = KernelVerificationStepType.STITCHED_IP_TESTBENCH
-    if testbench in cfg.verify_steps and KernelOutputType.STITCHED_IP not in asked:
-        checks.append(
-            _check(
-                "kernel_testbench_output",
-                Severity.ERROR,
-                False,
-                f"verify_steps includes {testbench.value}, which runs the testbench "
-                f"{KernelOutputType.STITCHED_IP.value} writes, and generate_outputs does "
-                "not ask for it",
-                f"Add {KernelOutputType.STITCHED_IP.value} to generate_outputs, or remove "
-                f"{testbench.value} from verify_steps",
-            )
-        )
-    resolved_names = _resolved_step_names(cfg)
-    for vstep in cfg.verify_steps if resolved_names is not None else ():
-        vstep = KernelVerificationStepType(vstep)
-        missing = [
-            " or ".join(either) for either in VERIFIED_BY[vstep] if not resolved_names & set(either)
-        ]
-        if missing:
-            checks.append(
-                _check(
-                    "verify_step_prereq",
-                    Severity.WARNING,
-                    False,
-                    f"verify_steps includes {vstep.value}, which needs {'; '.join(missing)} "
-                    "in the resolved build steps (steps/start_step/stop_step). That "
-                    "verification would silently never run",
-                    "Include those steps in steps, adjust start_step/stop_step so they run, "
-                    "or remove it from verify_steps",
-                )
-            )
-    return checks
-
-
 def run_all_config_checks(cfg: Any, model: Any = None) -> Report:
     """Run all configuration checks and return report. A KernelBuildConfig's build is
-    checked as the kernel path (kernel_path_checks); a DataflowBuildConfig's by this
+    checked as the kernel path (finn.builder.kernel_build_checks); a DataflowBuildConfig's by this
     flow's checks, ``model`` being the model it starts from: one that holds KernelOps
     is refused (a KernelBuildConfig builds it)."""
     v = get_vivado_version()

@@ -3,9 +3,7 @@
 
 """The rows of the layer table (``tests/layering.py``) that this tree checks.
 
-They are the layers above the kernels: the platform registry, the KernelOps,
-their transformations, the kernel-partition facts, util, the XSim testbench, the
-executors, the harness and the flow.
+They are every row whose ``tree`` is this directory.
 """
 
 from __future__ import annotations

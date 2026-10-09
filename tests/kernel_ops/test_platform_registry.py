@@ -16,9 +16,9 @@ from finn.core.space import Rejected, design_space
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Fabric, Platform, Target
+from finn.kernels.target import DspBlock, Platform, Target
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.utilization import Resources
+from finn.kernels.utilization import Fabric, Resources
 from finn.platform import (
     BOARDS,
     ROWS,

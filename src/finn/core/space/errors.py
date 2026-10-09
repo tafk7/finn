@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .edits import ConfigurationResult
     from .results import Finding, NonValue
 
 
@@ -16,19 +17,18 @@ class SpaceError(Exception):
     """Base class for failures at Space boundaries."""
 
 
-class _WithFindings(SpaceError, ValueError):
-    """A failure found before evaluation, with the findings that explain it."""
+class DefinitionError(SpaceError, ValueError):
+    """An authored definition cannot be compiled into a valid model.
+
+    It carries the findings that explain it.
+    """
 
     def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
         self.findings = tuple(findings)
         super().__init__(detail)
 
 
-class DefinitionError(_WithFindings):
-    """An authored definition cannot be compiled into a valid model."""
-
-
-class RequestError(_WithFindings):
+class RequestError(SpaceError, ValueError):
     """A binding or configuration request is malformed, before evaluation."""
 
 
@@ -65,7 +65,7 @@ class ReferenceUseError(SpaceError, TypeError):
 class ConfigurationError(SpaceError):
     """A well-formed configuration replacement could not be published."""
 
-    def __init__(self, report: object) -> None:
+    def __init__(self, report: ConfigurationResult[Any]) -> None:
         self.report = report
         super().__init__("configuration change refused; inspect the report")
 

@@ -15,21 +15,22 @@ the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 
 from __future__ import annotations
 
-import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import cast
 
 import pytest
+from kernels.xsim import requires_vivado
 
-from finn.custom_op.kernels.base import KernelOpError, kernel_op
+from finn.custom_op.kernels.base import KernelOpError
+from finn.custom_op.kernels.shell import configured_root, save_channels
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
 )
 from finn.kernels.artifacts import build
-from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels import PackagePartition, kernel_choices_config
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import NoVivado, reaches_vivado
@@ -37,7 +38,7 @@ from kernel_ops.packaging import NoVivado, reaches_vivado
 
 def test_the_partition_packages_its_nodes_choices() -> None:
     _, point = configure_partition(model := kernel_model())
-    module = PackagePartition("sdp_1").module(model)
+    module = configured_root(model, "sdp_1")[0].module
     assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
     assert module.stem == "finn_partition"
     assert [port.name for port in module.abi.pins] == [
@@ -52,31 +53,30 @@ def test_an_open_choice_is_completed_for_packaging_and_never_saved() -> None:
     # The adapters' memories are left open: the baseline completion takes their first
     # case, auto, as configure_partition commits them, on a copy.
     model = kernel_model()
-    held = {node.name: kernel_op(model, node).choices() for node in model.graph.node}
+    held = kernel_choices_config(model)
     _, point = configure_partition(kernel_model())
-    module = PackagePartition("sdp_1").module(model)
+    module = configured_root(model, "sdp_1")[0].module
     assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
-    assert {node.name: kernel_op(model, node).choices() for node in model.graph.node} == held
+    assert kernel_choices_config(model) == held
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     # A FIFO saved with no depth: the depth is required, so no completion takes one.
     model = kernel_model()
-    second = kernel_op(model, model.graph.node[2])
-    second.save({**second.choices(), "x.transport": "fifo"})
+    save_channels(model, {"levels": {"transport": "fifo"}})
     with pytest.raises(KernelOpError, match=r"open Decisions.*depth \(required\)") as refused:
-        PackagePartition("sdp_1").module(model)
+        configured_root(model, "sdp_1")
     assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
 
 
 def test_the_graphs_input_order_is_the_port_order() -> None:
     model = kernel_model(second_weights=False)
     configure_partition(model)
-    package = PackagePartition("sdp_1")
-    assert {port.name for port in package.module(model).abi.pins} >= {"s_axis_0", "s_axis_1"}
+    pins = configured_root(model, "sdp_1")[0].module.abi.pins
+    assert {port.name for port in pins} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
-        package.module(model)
+        configured_root(model, "sdp_1")
 
 
 def test_the_chains_emitted_top_elaborates_before_vivado(
@@ -115,8 +115,7 @@ def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
     assert toolchain.ran == []
 
 
-@pytest.mark.vivado
-@pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
+@requires_vivado
 def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"

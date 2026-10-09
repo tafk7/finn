@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Mapping
 
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
@@ -106,7 +106,7 @@ class InstanceIP:
     the project adds to find it."""
 
     vlnv: str
-    repositories: Tuple[str, ...]
+    repositories: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,7 @@ class PynqBuilt:
     hwh: str
     timing: str
     placed: str
-    out_of_context: Dict[str, str] = field(default_factory=dict)
+    out_of_context: dict[str, str] = field(default_factory=dict)
 
 
 def _instances(export: Integration) -> list[str]:
@@ -262,7 +262,7 @@ def block_design(
     return "\n".join(lines) + "\n"
 
 
-def project_script(export: Integration, design: str, jobs: Optional[int] = None) -> str:
+def project_script(export: Integration, design: str, jobs: int | None = None) -> str:
     """The project's Tcl (``ip_config.tcl``): ``templates.custom_zynq_shell_template``
     filled with the export's clock (the period asked, in whole MHz as the template
     takes it), its AXI-Lite and AXI-MM counts, board and part, the block design
@@ -325,7 +325,7 @@ def build_pynq(
     directory: Path,
     *,
     toolchain: Toolchain | None = None,
-    jobs: Optional[int] = None,
+    jobs: int | None = None,
     options: PynqOptions = PynqOptions(),
     completion: Completion | None = None,
 ) -> PynqBuilt:
@@ -340,7 +340,7 @@ def build_pynq(
     packaged (the build's)."""
     toolchain = toolchain or machine_toolchain()
     node, body, body_file = partition_body(model)
-    ips: Dict[str, InstanceIP] = {}
+    ips: dict[str, InstanceIP] = {}
     for instance in _instances(export):
         if instance == export.partition:
             if body.get(OUTPUT_IP) is None:

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import extensions, graph, inspection, selections
+from . import inspection, selections
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
@@ -12,6 +12,7 @@ from ._execution import (
 )
 from .compiler import Model, design_space
 from .declarations import (
+    UNSUPPLIED,
     Const,
     Constraint,
     ConstraintGroup,
@@ -58,6 +59,7 @@ from .results import (
     Rejected,
     Unresolved,
     ViewAssessment,
+    finding_record,
     reject,
     require_value,
 )
@@ -71,6 +73,7 @@ __all__ = [
     "Model",
     "composite",
     "Param",
+    "UNSUPPLIED",
     "LocatedParam",
     "Const",
     "Decision",
@@ -119,6 +122,7 @@ __all__ = [
     "ConstraintAssessment",
     "ReadinessAssessment",
     "ViewAssessment",
+    "finding_record",
     "reject",
     "require_value",
     # Configuration revisions and selections
@@ -140,8 +144,6 @@ __all__ = [
     "NativeCancellationDetails",
     "cancellation_details",
     # Public services
-    "extensions",
-    "graph",
     "inspection",
     "selections",
 ]

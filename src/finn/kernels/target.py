@@ -13,9 +13,11 @@ Which part, board and shell have which capabilities is the flow's
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from finn.core.space import Requirement, requires
 from finn.kernels.utilization import Fabric, Resources
 
 
@@ -27,21 +29,16 @@ class DspBlock(str, Enum):
     DSP58 = "DSP58"
 
 
-_DSP_WIDTHS = {
-    "DSP48E1": (25, 18, 48),
-    "DSP48E2": (27, 18, 48),
-    "DSP58": (27, 24, 58),
+_DSP_WIDTHS: dict[DspBlock, tuple[int, int, int]] = {
+    DspBlock.DSP48E1: (25, 18, 48),
+    DspBlock.DSP48E2: (27, 18, 48),
+    DspBlock.DSP58: (27, 24, 58),
 }
 
 
-def dsp_widths(target: object) -> tuple[int, int, int]:
-    """Return multiplier A/B and accumulator capacities for a declared target."""
-
-    name = str(getattr(target, "value", target))
-    try:
-        return _DSP_WIDTHS[name]
-    except KeyError as error:
-        raise ValueError(f"unsupported target DSP {name!r}") from error
+def dsp_widths(dsp: DspBlock) -> tuple[int, int, int]:
+    """Return multiplier A/B and accumulator capacities for a DSP block."""
+    return _DSP_WIDTHS[dsp]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -76,6 +73,28 @@ class Platform:
     resources: Resources | None
 
 
+def uram_requirements(
+    platform: Platform,
+    cases: tuple[object, ...] | Callable[[object], bool],
+    *,
+    init: bool = False,
+) -> tuple[Requirement, ...]:
+    """What the ``cases`` of a value Decision that store in UltraRAM require of
+    ``platform`` (a kernel's ``Platform`` parameter): its UltraRAM, and, for a memory
+    with initial contents (``init``), an UltraRAM that takes them."""
+    absent = requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=cases)
+    if not init:
+        return (absent,)
+    return (
+        absent,
+        requires(
+            platform.uram_init,
+            "uram-init: the platform's UltraRAM takes no initial contents",
+            cases=cases,
+        ),
+    )
+
+
 @dataclass(frozen=True, kw_only=True)
 class Target:
     """The build target: the part, the shell that integrates the partition (``ip``: the
@@ -88,4 +107,10 @@ class Target:
     board: str | None = None
 
 
-__all__ = ["DspBlock", "Fabric", "Platform", "Resources", "Target", "dsp_widths"]
+__all__ = [
+    "DspBlock",
+    "Platform",
+    "Target",
+    "dsp_widths",
+    "uram_requirements",
+]

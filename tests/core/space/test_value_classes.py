@@ -22,7 +22,7 @@ from typing import Generic, Literal, TypeVar
 from value_classes import is_frozen, mutable_fields
 
 import finn.core.space as space
-from finn.core.space.graph import Located
+from finn.core.space import Located
 from finn.core.space.semantics import ValueSemantics
 
 T = TypeVar("T")

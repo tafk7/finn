@@ -81,7 +81,7 @@ def decision_key(linked: LinkedModel, index: int) -> str:
     return linked.nodes[index].key
 
 
-def _descend(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -> int:
+def descend(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -> int:
     for record in path:
         current = scopes[scope]
         if record is current.record:
@@ -99,10 +99,10 @@ def _descend(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -
 def _choice(
     scopes: Sequence[Scope], choices: Sequence[Choice], scope: int, path: Sequence[Declaration]
 ) -> Choice:
-    scope = _descend(scopes, scope, path[:-1])
+    scope = descend(scopes, scope, path[:-1])
     index = scopes[scope].choices.get(path[-1])
     if index is None:
-        raise RequestError("the Decision over nodes is not placed in this compiled scope")
+        raise RequestError("the Decision over nodes is not part of this compiled scope")
     return choices[index]
 
 
@@ -126,14 +126,14 @@ def resolve_reference(
         raise RequestError("reference scope does not belong to this model")
     if isinstance(reference, NodeChoice) and len(reference._space_path) > 1:
         # ``Site.plant.heating``: a Decision over nodes reached through a node.
-        scope = _descend(scopes, scope, reference._space_path[:-1])
+        scope = descend(scopes, scope, reference._space_path[:-1])
     reference = unwrap(reference)
     try:
         return scopes[scope].members[reference]
     except (KeyError, TypeError):
         pass
     if isinstance(reference, MemberRef):
-        target = _descend(scopes, scope, reference.path)
+        target = descend(scopes, scope, reference.path)
         member = unwrap(reference.member)
         try:
             return scopes[target].members[member]

@@ -49,7 +49,6 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    requires,
     requiring,
 )
 from finn.kernels.artifacts.abi import Endpoint
@@ -57,7 +56,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
-from finn.kernels.target import Platform
+from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.transport import MarkerKind, StreamMarker
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
@@ -140,10 +139,7 @@ class InputGeneratorKernel(Kernel):
         return self.frame_words * self.word_bits
 
     ram_style: str = Decision(
-        domain=requiring(
-            memory_styles(frame_bits),
-            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
-        )
+        domain=requiring(memory_styles(frame_bits), *uram_requirements(platform, ("ultra",)))
     )
 
     @derived

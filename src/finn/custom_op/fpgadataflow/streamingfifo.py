@@ -29,8 +29,8 @@ import warnings
 from qonnx.core.datatype import DataType
 
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
+from finn.custom_op.fpgadataflow.resource_models import _fifo_cost, _resolve
 from finn.util.basic import is_versal
-from finn.util.resource_models import _fifo_cost, _resolve
 
 
 class StreamingFIFO(HWCustomOp):

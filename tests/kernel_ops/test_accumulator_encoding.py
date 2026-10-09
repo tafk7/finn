@@ -38,9 +38,9 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.core.executors.xsim.rtl import pack, stream_through
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Ranked
@@ -52,7 +52,7 @@ from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
 )
-from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.transformation.kernels.package import boundary_facts
 
 ULTRA96 = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)  # DSP48E2: the packed core
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)  # DSP58: the INT8 core too
@@ -230,7 +230,7 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
         flat = [int(value) for value in values.reshape(-1)]
         lanes, bits = facts["lanes"], DataType[facts["element"]].bitwidth()
         words[facts["port"]] = (
-            [pack(flat[i : i + lanes], bits) for i in range(0, len(flat), lanes)],
+            [pack_lanes(flat[i : i + lanes], bits) for i in range(0, len(flat), lanes)],
             lanes * bits,
         )
     return words

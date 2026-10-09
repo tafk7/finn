@@ -6,7 +6,8 @@
 ``XSim`` claims a partition node (StreamingDataflowPartition) whose body is a partition
 of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
 
-1. **the point**: the body's shell root, its nodes' choices replayed and the rest
+1. **the point**: the body's shell root, its nodes' and its tensors' channel choices
+   replayed and the rest
    completed by ``completion`` (``Baseline()`` by default), and its boundary
    (``configured_root``): each graph input and output at its port;
 2. **the words**: each input tensor, as integers of its boundary element (a value
@@ -47,15 +48,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import numpy as np
 import numpy.typing as npt
 
-from finn.core.executors.base import is_partition
 from finn.core.executors.xsim.pacing import STALLED, Pacing
 from finn.core.executors.xsim.rtl import Receive, SimulationFailed, Words, stream_out
 from finn.core.space import Available
-from finn.custom_op.kernels.shell import member
+from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import kernel_partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
-from finn.transformation.kernels.package import configured_root
+from finn.transformation.kernels.package import free_side
 from finn.util.basic import make_build_dir
 
 if TYPE_CHECKING:
@@ -115,7 +115,7 @@ class XSim:
     hardware: ClassVar[bool] = True
 
     def claims(self, node: NodeProto, model: ModelWrapper) -> bool:
-        return is_partition(node) and kernel_partition_body(node) is not None
+        return kernel_partition_body(node) is not None
 
     def run(self, node: NodeProto, context: Context, model: ModelWrapper) -> None:
         body = kernel_partition_body(node)
@@ -185,8 +185,7 @@ def boundary(
     outer |= dict(zip((item.name for item in body.graph.output), node.output, strict=True))
     streams = []
     for tensor, port in ports:
-        ends = getattr(point, member(tensor)).endpoints
-        end = ends.source if ends.source_owner is None else ends.sink
+        end = free_side(point, tensor)
         low, high = ordinary_integer_bounds(end.element.dtype)
         streams.append(
             Stream(outer[tensor], port, tensor in outputs, end.form, end.element.bits, low, high)
@@ -210,4 +209,4 @@ def _integers(values: Any, stream: Stream, name: str) -> npt.NDArray[np.int64]:
     return integers
 
 
-__all__ = ["Stream", "Unreadable", "Unstreamable", "XSim", "boundary"]
+__all__ = ["Unreadable", "Unstreamable", "XSim"]

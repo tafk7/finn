@@ -43,6 +43,8 @@ from .errors import DefinitionError, ReferenceUseError
 from .graph import LOCATED, Located
 from .results import NonValue, QueryResult, marked_value_type
 from .semantics import (
+    BOOL,
+    STRING,
     ValueSemantics,
     default_semantics,
     recognize,
@@ -57,8 +59,6 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
-
-_STRING = default_semantics(str)
 
 
 def local_name(value: str, role: str) -> str:
@@ -79,15 +79,23 @@ def class_namespace(space_type: type[Space]) -> dict[str, object]:
 _PACKAGE = __name__.rsplit(".", 1)[0]
 
 
-def source_origin() -> str | None:
-    """``file:line`` of the nearest caller outside this package, for diagnostics."""
-    frame = sys._getframe(1)
+def _outside_frame(depth: int) -> types.FrameType | None:
+    """The nearest frame outside this package, starting ``depth`` frames above the caller."""
+    frame: types.FrameType | None = sys._getframe(depth + 1)
     while frame is not None:
         module = frame.f_globals.get("__name__", "")
         if module != _PACKAGE and not module.startswith(_PACKAGE + "."):
-            return f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}"
-        frame = frame.f_back  # type: ignore[assignment]
+            return frame
+        frame = frame.f_back
     return None
+
+
+def source_origin() -> str | None:
+    """``file:line`` of the nearest caller outside this package, for diagnostics."""
+    frame = _outside_frame(1)
+    if frame is None:
+        return None
+    return f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}"
 
 
 def at(origin: str | None) -> str:
@@ -239,19 +247,14 @@ class ValueDecl(ValueRef[T_co], Generic[T_co]):
         return read_value(instance, self)
 
 
-def _class_body() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+def class_body() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
     """The globals, namespace and enclosing locals of the class body declaring a member.
 
     Annotations are strings under ``from __future__ import annotations``; a
     Space class declared inside a function names that function's local classes, so
     the enclosing frame's locals are kept to resolve them.
     """
-    frame = sys._getframe(2)
-    while frame is not None:
-        module = frame.f_globals.get("__name__", "")
-        if module != _PACKAGE and not module.startswith(_PACKAGE + "."):
-            break
-        frame = frame.f_back  # type: ignore[assignment]
+    frame = _outside_frame(2)
     if frame is None:
         return None
     namespace = frame.f_locals
@@ -264,7 +267,7 @@ def _class_body() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | Non
     return None
 
 
-def _describe_formal(declaration: Declaration, kind: str) -> str:
+def describe_formal(declaration: Declaration, kind: str) -> str:
     owner = declaration.owner
     where = f"{owner.__qualname__}.{declaration.name}" if owner is not None else kind
     return f"{where}{at(declaration.origin)}"
@@ -309,7 +312,7 @@ def declared_annotation(declaration: Declaration, kind: str) -> object:
         return eval(annotation, dict(globals_), dict(locals_))  # noqa: S307 - authored annotation
     except Exception as cause:
         raise PendingAnnotation(
-            f"{_describe_formal(declaration, kind)}: cannot resolve the annotation "
+            f"{describe_formal(declaration, kind)}: cannot resolve the annotation "
             f"{annotation!r}: {cause}"
         ) from cause
 
@@ -322,7 +325,7 @@ class PendingAnnotation(DefinitionError):
 def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
     attribute = declaration.name or kind.lower()
     return DefinitionError(
-        f"{_describe_formal(declaration, kind)}: annotate the {kind.lower()} with its value "
+        f"{describe_formal(declaration, kind)}: annotate the {kind.lower()} with its value "
         f"type, as in `{attribute}: int = {kind}()`"
     )
 
@@ -415,7 +418,7 @@ class Param(ValueDecl[T], Generic[T]):
         if semantics is not None and not isinstance(semantics, ValueSemantics):
             raise DefinitionError("semantics= must be a ValueSemantics")
         instance = cast(Param[object], super().__new__(cls))
-        object.__setattr__(instance, "_body", _class_body())
+        object.__setattr__(instance, "_body", class_body())
         instance.explicit = cast("ValueSemantics[object] | None", semantics)
         instance.semantics = instance.explicit
         instance.space_type = None
@@ -438,7 +441,7 @@ class Param(ValueDecl[T], Generic[T]):
         annotation = declared_annotation(self, "Param")
         if annotation is MISSING and self.explicit is None:
             raise _unannotated(self, "Param")
-        label = _describe_formal(self, "Param")
+        label = describe_formal(self, "Param")
         space_type = _annotated_space_type(annotation)
         if space_type is not None:
             if self.explicit is not None or self.default not in (MISSING, UNSUPPLIED):
@@ -690,7 +693,7 @@ class Decision(ValueDecl[T], Generic[T]):
             from ._nodes import entry_choice
 
             return entry_choice(
-                entries, shared, optional=optional, required=required, when=_guard(when)
+                entries, shared, optional=optional, required=required, when=guard(when)
             )
         if shared or optional is not False:
             raise DefinitionError(
@@ -714,11 +717,11 @@ class Decision(ValueDecl[T], Generic[T]):
                 "ordered= is a bool, for listed values= (a domain= states its own order)"
             )
         instance = cast(Decision[object], super().__new__(cls))
-        object.__setattr__(instance, "_body", _class_body())
+        object.__setattr__(instance, "_body", class_body())
         explicit = cast("ValueSemantics[object] | None", semantics)
         instance.explicit = instance.semantics = explicit
         instance.resolved = False
-        instance.when = _guard(when)
+        instance.when = guard(when)
         # The domain is bound to the value semantics when the model is linked.
         instance.domain = (
             cast(Domain[object], domain)
@@ -758,7 +761,7 @@ class Decision(ValueDecl[T], Generic[T]):
         if annotation is MISSING and self.explicit is None:
             raise _unannotated(self, "Decision")
         self.semantics = _annotation_semantics(
-            annotation, self.explicit, _describe_formal(self, "Decision")
+            annotation, self.explicit, describe_formal(self, "Decision")
         )
         self.resolved = True
         return self
@@ -825,7 +828,7 @@ def unfinished(space_type: type[object], where: str) -> DefinitionError | None:
     )
 
 
-def _guard(when: object) -> ValueRef[bool] | None:
+def guard(when: object) -> ValueRef[bool] | None:
     if when is None:
         return None
     if not isinstance(when, ValueRef):
@@ -847,7 +850,7 @@ class Derived(ValueDecl[T], Generic[T]):
         self.function = function
         self.semantics = semantics
         self.aliases = MappingProxyType(dict(aliases or {}))
-        self.when = _guard(when)
+        self.when = guard(when)
 
     if not TYPE_CHECKING:
 
@@ -930,8 +933,8 @@ class Constraint(_MemberOfNode, Declaration):
     ) -> None:
         self.function = function
         self.aliases = MappingProxyType(dict(aliases or {}))
-        self.semantics = semantics_for(bool)
-        self.when = _guard(when)
+        self.semantics = cast("ValueSemantics[bool]", BOOL)
+        self.when = guard(when)
 
 
 class _ConstraintDecorator:
@@ -1019,7 +1022,7 @@ class View(Declaration, Generic[T]):
             "ValueSemantics[T] | None", getattr(source, "semantics", None)
         )
         self.requires = tuple(requires)
-        self.when = _guard(when)
+        self.when = guard(when)
 
     @classmethod
     def from_function(
@@ -1037,7 +1040,7 @@ class View(Declaration, Generic[T]):
         result.aliases = MappingProxyType(dict(aliases))
         result.semantics = semantics
         result.requires = tuple(requires)
-        result.when = _guard(when)
+        result.when = guard(when)
         return result
 
     @overload
@@ -1143,7 +1146,7 @@ class ViewKey(Generic[T_co]):
 # -- Symbolic references ---------------------------------------------------------------
 
 
-def _path_text(path: Sequence[Declaration]) -> str:
+def path_text(path: Sequence[Declaration]) -> str:
     parts: list[str] = []
     for record in path:
         name = record.name
@@ -1304,7 +1307,7 @@ class MemberRef(_Symbolic, ValueRef[T], Generic[T]):
         self.semantics = cast("ValueSemantics[T] | None", getattr(member, "semantics", None))
 
     def _describe(self) -> str:
-        return f"{_path_text(self.path)}.{self.member.name}{at(self.origin)}"
+        return f"{path_text(self.path)}.{self.member.name}{at(self.origin)}"
 
     def _key(self) -> tuple[object, ...]:
         return (*(id(item) for item in self.path), id(self.member))
@@ -1421,7 +1424,7 @@ class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
         self.semantics = None
 
     def _describe(self) -> str:
-        return f"{_path_text(self.path)}.{self.member}{at(self.origin)}"
+        return f"{path_text(self.path)}.{self.member}{at(self.origin)}"
 
     def _key(self) -> tuple[object, ...]:
         return (*(id(item) for item in self.path), self.member)
@@ -1432,7 +1435,7 @@ class CaseRef(ValueDecl[str]):
 
     def __init__(self, path: tuple[Declaration, ...]) -> None:
         self.path = path
-        self.semantics = _STRING
+        self.semantics = cast("ValueSemantics[str]", STRING)
 
 
 def selected(decision: object) -> str:
@@ -1452,7 +1455,7 @@ class Supplied(ValueDecl[bool]):
 
     def __init__(self, formal: Param[object]) -> None:
         self.formal = formal
-        self.semantics = cast("ValueSemantics[bool]", default_semantics(bool))
+        self.semantics = cast("ValueSemantics[bool]", BOOL)
 
 
 def supplied(formal: object) -> bool:
@@ -1543,7 +1546,6 @@ __all__ = [
     "Decision",
     "Declaration",
     "Derived",
-    "LOCATED",
     "LocatedParam",
     "Members",
     "MemberRef",

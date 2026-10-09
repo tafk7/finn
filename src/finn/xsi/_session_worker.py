@@ -9,8 +9,8 @@ import sysconfig
 import time
 from pathlib import Path
 
-from finn.xsi._artifacts import validate_record
-from finn.xsi._session import digest, pack_streams, unpack_streams
+from finn.xsi._artifacts import digest, validate_record
+from finn.xsi._session import pack_streams, unpack_streams
 
 
 def stream_testbench(sim, io, request):

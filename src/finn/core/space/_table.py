@@ -15,7 +15,6 @@ phase keeps for itself stays in that phase.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import cast
 
 from ._bindings import PlacementBinding, Slot
 from ._configuration import Space
@@ -25,10 +24,7 @@ from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef, ViewKey
 from .expressions import IntOperator
 from .ir import Choice, Node, NodeKind, Provenance, Scope
-from .semantics import ValueSemantics, default_semantics
-
-BOOL = cast(ValueSemantics[object], default_semantics(bool))
-STRING = cast(ValueSemantics[object], default_semantics(str))
+from .semantics import BOOL, ValueSemantics
 
 
 def member_key(scope: str, member: str) -> str:

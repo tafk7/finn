@@ -110,16 +110,16 @@ def test_the_schema_holds_the_memory_choices_and_bias_is_semantic() -> None:
     assert {"pe", "use_axilite", "deep_pipeline", *MEMORY} <= set(schema)
     assert schema["ram_style"] == ("s", ())
     assert schema["ultra_stages"] == ("i", ())
-    assert {"x.transport", "y.transport"} <= set(schema)
-    # Its input never carries a value: no source keys (the table stays the kernel's).
-    assert not any(name.startswith("x.source") for name in schema)
+    # A channel's keys are its tensor's, never the node's; the table stays the kernel's.
+    assert not any(name.partition(".")[0] in ("x", "y") for name in schema)
+    assert len(schema) == 6
     types = op(thresholding_model()).get_nodeattr_types()
     assert types["bias"] == ("i", True, 0)
     assert "bias" not in schema
 
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:
-    assert (Thresholding.op_version, schema_digest(Thresholding)) == (1, "6f01bf0727989462")
+    assert (Thresholding.op_version, schema_digest(Thresholding)) == (1, "7c279bb322d44f45")
     assert Thresholding.op_version == ThresholdingAxiKernel.version
 
 

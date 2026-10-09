@@ -459,7 +459,6 @@ def auto_unstated(memory: str) -> Rejected:
 __all__ = [
     "AUTO_UNSTATED",
     "BLOCK_FIRST_BITS",
-    "CHARACTERISED",
     "MEMORY_STYLES",
     "PRIMITIVES",
     "RESOURCES_SEMANTICS",

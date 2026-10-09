@@ -12,7 +12,7 @@ total, up to three columns:
   out-of-context characterisation;
 - ``out_of_context``: Vivado's synthesis of each IP alone. On a shell with an
   integration, the integration's per-IP runs (``<run>_utilization_synth.rpt``, read by
-  ``utilization_synth``), each run its instance's (``member_instances``); on ``ip``, the
+  ``utilization_synth``), each run its instance's (``_member_instances``); on ``ip``, the
   partition packaged with OOC_SYNTH, its hierarchical report's top
   (``package.hierarchical_utilization``);
 - ``placed``: the routed design's hierarchical report (``placed_hierarchy``), each
@@ -50,7 +50,12 @@ from typing import Any
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels.base import read_target
-from finn.custom_op.kernels.shell import ShellResources, member, shell_resources
+from finn.custom_op.kernels.shell import (
+    ShellResources,
+    configured_root,
+    member,
+    shell_resources,
+)
 from finn.custom_op.partition.kernel_partitions import OUTPUT_REPORTS, partition_body
 from finn.kernels.explore import Completion
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
@@ -58,9 +63,10 @@ from finn.platform import shell_row
 from finn.shells.pynq.runner import STATIC_INSTANCES
 from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
-    configured_root,
+    REPORT_COLUMNS,
     hierarchical_utilization,
     ooc_member_resources,
+    resources_of,
 )
 
 #: The report's file, under the output directory.
@@ -80,12 +86,6 @@ _SITE_TYPES = {
 }
 
 
-def _resources(counts: Mapping[str, int]) -> Resources:
-    found = dict(counts)
-    bram18 = 2 * found.pop("bram36", 0) + found.pop("bram18", 0)
-    return Resources(**found, bram18=bram18)
-
-
 def utilization_synth(text: str) -> Resources:
     """The resources of Vivado's flat ``report_utilization`` of one synthesized IP (a
     ``<run>_utilization_synth.rpt``): its LUTs, registers, block RAM tiles, URAMs and
@@ -103,17 +103,7 @@ def utilization_synth(text: str) -> Resources:
             counts[key] = int(cells[1])
     if "lut" not in counts:
         raise ValueError("no LUT row in the utilization report")
-    return _resources(counts)
-
-
-#: A hierarchical report's columns by the resource they count.
-_HIERARCHY_COLUMNS = {
-    "Total LUTs": "lut",
-    "FFs": "ff",
-    "RAMB36": "bram36",
-    "RAMB18": "bram18",
-    "URAM": "uram",
-}
+    return resources_of(counts)
 
 
 def placed_hierarchy(text: str) -> list[tuple[int, str, Resources]]:
@@ -134,11 +124,11 @@ def placed_hierarchy(text: str) -> list[tuple[int, str, Resources]]:
             continue
         counts: dict[str, int] = {}
         for column, cell in zip(header, cells, strict=True):
-            key = "dsp" if column.startswith("DSP") else _HIERARCHY_COLUMNS.get(column)
+            key = "dsp" if column.startswith("DSP") else REPORT_COLUMNS.get(column)
             if key is not None:
                 counts[key] = counts.get(key, 0) + int(cell)
         name = cells[0]
-        rows.append(((len(name) - len(name.lstrip(" "))) // 2, name.strip(), _resources(counts)))
+        rows.append(((len(name) - len(name.lstrip(" "))) // 2, name.strip(), resources_of(counts)))
     if not rows:
         raise ValueError("no rows in the hierarchical utilization table")
     return rows
@@ -170,7 +160,7 @@ def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
     return max(found)[1] if found else None
 
 
-def member_instances(parent: ModelWrapper, completion: Completion | None) -> dict[str, str]:
+def _member_instances(parent: ModelWrapper, completion: Completion | None) -> dict[str, str]:
     """Each member of the shell's block design by its key in the report (``partition``,
     ``ends.<channel>``, ``static_region.<ip>``) and its instance name, or the instance's
     prefix where Vivado names it (the reset's, by its clock). A shell without an
@@ -220,7 +210,7 @@ def shell_resources_report(
     reports = parent.get(OUTPUT_REPORTS) or {}
     point, _ = configured_root(body, node.name, completion)
     modelled = shell_resources(point)
-    instances = member_instances(parent, completion)
+    instances = _member_instances(parent, completion)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}
     totals: dict[str, Resources | None] = {}
     absent: dict[str, str] = {}
@@ -324,7 +314,6 @@ def shell_resources_report(
 
 __all__ = [
     "RESOURCES_FILE",
-    "member_instances",
     "placed_hierarchy",
     "shell_resources_report",
     "utilization_synth",

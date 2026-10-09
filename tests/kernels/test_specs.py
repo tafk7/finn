@@ -20,10 +20,10 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
+from layering import ROOT
 
 from finn.core.space import Available, Space
 from finn.harness.points import covering, refusal, refused_cases, rejected
@@ -33,7 +33,6 @@ from kernels.helpers import with_adapter_memories
 from kernels.specs import SPECS, conformance_cases
 from kernels.specs.base import ORACLE, TEST_SIDE, KernelSpec, Probe
 
-ROOT = Path(__file__).resolve().parents[2]
 BY_NAME = {spec.name: spec for spec in SPECS}
 PATTERN = f"{KERNEL}.*"
 

@@ -56,21 +56,20 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.executors.xsim.pacing import FREE
+from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import write_target
-from finn.custom_op.kernels.shell import persist, shell_root
+from finn.custom_op.kernels.shell import configured_root, persist, shell_root
 from finn.harness.ops import (
     Disagreement,
     boundary_inputs,
     check_parity,
     graph_inputs,
-    oracle,
 )
 from finn.harness.points import Covering, covering
 from finn.harness.reference import platform_rows
 from finn.kernels.configure import commit
 from finn.kernels.target import DspBlock, Target
 from finn.transformation.kernels import InferKernelTensors
-from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, matmul_model, thresholding_model
 
 # -- the models ------------------------------------------------------------------------
@@ -197,7 +196,7 @@ def test_the_inputs_are_the_datatypes_extremes_and_seeded(name: str) -> None:
 def test_matmul_execute_node_is_the_integer_product_on_the_parity_inputs() -> None:
     model = matmul()
     inputs = boundary_inputs(model, seed("matmul"))
-    assert np.array_equal(oracle(model, inputs)["y"], inputs["x"] @ WEIGHTS)
+    assert np.array_equal(execute_onnx(model, inputs)["y"], inputs["x"] @ WEIGHTS)
 
 
 def test_matmul_execute_node_is_exact_beyond_float32() -> None:
@@ -216,7 +215,7 @@ def test_matmul_execute_node_is_exact_beyond_float32() -> None:
     exact = x @ weights
     assert abs(exact).max() > 2**24
     assert not np.array_equal(np.matmul(x.astype(np.float32), weights.astype(np.float32)), exact)
-    assert np.array_equal(oracle(model, {"x": x})["y"], exact)
+    assert np.array_equal(execute_onnx(model, {"x": x})["y"], exact)
 
 
 def test_an_oracle_value_the_boundary_cannot_present_is_a_disagreement(tmp_path: Path) -> None:

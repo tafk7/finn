@@ -17,8 +17,10 @@ and checked here together:
 - physical: packing of the lanes into the transport word, lane zero lowest;
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
-``compatibility`` compares a producing and a consuming end: the producer's
-values must fit the consumer's element (``ScalarEncoding.fits``). A logical
+``compatibility`` compares a producing and a consuming end's sequences, markers
+and pins; their elements are the channel's ``well_formed``
+(``finn.dataflow.ends.misfit``: the producer's values fit the tensor's element,
+and the tensor's fit the consumer's). A logical
 mismatch is the channel's to repair: its plan (``finn.dataflow.plan``) names the
 steps (reorder or replay, width conversion, markers) and its adapter carries
 them out (``finn.kernels.adapters``). A pure lane permutation, padding and
@@ -41,7 +43,7 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     qonnx_datatype_width,
 )
-from finn.dataflow.plan import Unrealizable, presented
+from finn.dataflow.plan import Hop, Step, Unrealizable, Unrepeatable, plan, presented
 from finn.dataflow.schedule import Pace
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
@@ -240,15 +242,8 @@ class AxisBeat:
 # -- the contract of one channel end -------------------------------------------------------
 
 
-class Level(Enum):
-    LOGICAL = "logical"
-    PHYSICAL = "physical"
-    PROTOCOL = "protocol"
-
-
 @dataclass(frozen=True)
 class Mismatch:
-    level: Level
     code: str
     message: str
 
@@ -335,6 +330,11 @@ def compatibility(
 ) -> tuple[Mismatch, ...]:
     """Every reason ``source`` may not drive ``sink``; empty when they connect.
 
+    The logical rules are the channel's plan's (``finn.dataflow.plan.plan``): a single
+    pass feeding a cyclic consumer is ``channel-repetition``; a sequence step the plan
+    needs, or a mismatch no chain repairs, ``channel-form``; a marker it must make,
+    ``channel-marker``. The pins are checked here.
+
     Elements are not compared: a channel's ``well_formed`` holds each end against
     its tensor's element, and every stage between carries that element.
 
@@ -343,41 +343,38 @@ def compatibility(
     """
     found: list[Mismatch] = []
 
-    def refuse(level: Level, code: str, message: str) -> None:
-        found.append(Mismatch(level, code, message))
+    def refuse(code: str, message: str) -> None:
+        found.append(Mismatch(code, message))
 
     produces = Endpoint.TARGET if source_is_top else Endpoint.INITIATOR
     consumes = Endpoint.INITIATOR if sink_is_top else Endpoint.TARGET
     if source.transport.endpoint is not produces or sink.transport.endpoint is not consumes:
-        refuse(Level.PROTOCOL, "channel-direction", "the source must produce and the sink consume")
+        refuse("channel-direction", "the source must produce and the sink consume")
 
-    if sink.repetition is Repetition.CYCLIC and source.repetition is not Repetition.CYCLIC:
-        refuse(Level.LOGICAL, "channel-repetition", "a single pass cannot feed a cyclic consumer")
-    produced = _presented(source, sink)
-    if produced is None:
-        refuse(
-            Level.LOGICAL,
-            "channel-form",
-            "the consumer's pass is not whole repetitions of the cyclic source",
-        )
-    else:
-        verdict = classify(produced, sink.form)
-        if verdict.adaptation not in (Adaptation.IDENTITY, Adaptation.LANE_PERMUTATION):
-            detail = f": {verdict.reorder}" if verdict.reorder else ""
-            refuse(
-                Level.LOGICAL,
-                "channel-form",
-                f"needs a {verdict.adaptation.value} adapter ({verdict.detail}){detail}",
-            )
-
-    offered = source.rules
-    for signal, rule in sink.rules.items():
-        if rule not in offered.values() and not rule.constant:
-            refuse(
-                Level.LOGICAL,
-                "channel-marker",
-                f"{signal} requires a marker every {rule.beats} beats; none is produced",
-            )
+    # The logical part is the channel's plan: a step it names is an adapter this
+    # connection lacks, and what no step repairs is refused as the plan says.
+    steps: tuple[Hop, ...] = ()
+    try:
+        steps = plan(source.sequence, sink.sequence).hops
+    except Unrepeatable as error:
+        refuse("channel-repetition", str(error))
+    except Unrealizable as error:
+        refuse("channel-form", f"no chain of adapters repairs it: {error}")
+    sequence = [hop for hop in steps if hop.step is not Step.MARKERS]
+    kinds = " -> ".join(hop.step.value for hop in sequence)
+    if sequence:
+        reorders = "; ".join(str(hop.reorder) for hop in sequence if hop.reorder)
+        refuse("channel-form", f"needs a {kinds} adapter" + (f": {reorders}" if reorders else ""))
+    lost = f"none survives the {kinds} adapter" if sequence else "none is produced"
+    for hop in steps:
+        if hop.step is Step.MARKERS:
+            synthesized = set(hop.sink.markers) - set(hop.source.markers)
+            for signal, rule in sink.rules.items():
+                if rule in synthesized:
+                    refuse(
+                        "channel-marker",
+                        f"{signal} requires a marker every {rule.beats} beats; {lost}",
+                    )
 
     if source_is_top:
         consumed = {
@@ -388,7 +385,6 @@ def compatibility(
         unused = [m.signal for m in source.transport.markers if m.signal not in consumed]
         if unused:
             refuse(
-                Level.PROTOCOL,
                 "channel-top-marker",
                 f"top input markers {unused} would be left unconsumed",
             )
@@ -396,28 +392,19 @@ def compatibility(
         ruled = {marker_bit(key)[0] for key in sink.rules}
         missing = [m.signal for m in sink.transport.markers if m.signal not in ruled]
         if missing:
-            refuse(Level.PROTOCOL, "channel-top-marker", f"top output markers {missing} lack rules")
+            refuse("channel-top-marker", f"top output markers {missing} lack rules")
     return tuple(found)
-
-
-def _presented(source: StreamContract, sink: StreamContract) -> Traversal | None:
-    """What a source presents over one consumer pass (``plan.presented``); None if it
-    cannot align. A single pass is compared as it is."""
-    if source.repetition is Repetition.ONCE:
-        return source.form
-    try:
-        return presented(source.sequence, sink.sequence)
-    except Unrealizable:
-        return None
 
 
 def lane_permutation(source: StreamContract, sink: StreamContract) -> tuple[int, ...]:
     """Sink lane -> source lane; the identity unless the lanes are only reordered."""
-    produced = _presented(source, sink)
-    if produced is not None:
-        verdict = classify(produced, sink.form)
-        if verdict.adaptation is Adaptation.LANE_PERMUTATION:
-            return verdict.lane_permutation
+    try:
+        produced = presented(source.sequence, sink.sequence)
+    except Unrealizable:
+        return tuple(range(sink.lanes))
+    verdict = classify(produced, sink.form)
+    if verdict.adaptation is Adaptation.LANE_PERMUTATION:
+        return verdict.lane_permutation
     return tuple(range(sink.lanes))
 
 
@@ -444,7 +431,6 @@ def marker_pairs(
 __all__ = [
     "AxisSpelling",
     "AxisBeat",
-    "Level",
     "MarkerKind",
     "Mismatch",
     "ReadyValidStream",

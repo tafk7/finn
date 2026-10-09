@@ -56,6 +56,9 @@ SHELL_NAMES = (IP, PYNQ, XRT, SLASH)
 NOT_BUILT = {XRT: "the Vitis (XRT) shell", SLASH: "the SLASH shell"}
 """The shells named and refused: the kernel path does not build them yet."""
 
+VIVADO_BLOCK_DESIGN = "vivado-block-design"
+"""The integration of the Zynq shell (``ShellRow.integration``)."""
+
 
 @dataclass(frozen=True, kw_only=True)
 class Scaled:
@@ -239,7 +242,7 @@ ROWS: dict[tuple[str, str | None], ShellRow] = {
             control_budget=PYNQ_CONTROL_BUDGET,
             memory_ports=0,
             clk2x=False,
-            integration="vivado-block-design",
+            integration=VIVADO_BLOCK_DESIGN,
             host_runtime="zynq-iodma",
             static_region=ZYNQ_STATIC_REGION,
             characterised=PYNQ_CHARACTERISED,
@@ -292,21 +295,18 @@ def shell_row(shell: str, board: str | None) -> ShellRow:
 __all__ = [
     "IP",
     "IP_ROW",
-    "NOT_BUILT",
     "PYNQ",
     "PYNQ_CHARACTERISED",
     "PYNQ_CONTROL_BUDGET",
-    "PYNQ_MEMORY_PORT",
-    "PYNQ_TIMED",
     "ROWS",
     "SHELL_NAMES",
     "SLASH",
     "Scaled",
     "ShellRow",
     "StaticRegion",
+    "VIVADO_BLOCK_DESIGN",
     "XRT",
     "ZYNQ_STATIC_REGION",
     "built_shell",
-    "pynq_caveat",
     "shell_row",
 ]

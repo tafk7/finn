@@ -146,7 +146,8 @@ def prepare_stitched_rtlsim(model, behav=False, *, toolchain=None):
     FINN_SIMULATION. Returns the library's base directory and relative path."""
     with open(model.get_metadata_prop("vivado_stitch_proj") + "/all_verilog_srcs.txt") as f:
         all_verilog_srcs = f.read().split()
-    top_module_name = file_to_basename(model.get_metadata_prop("wrapper_filename")).strip(".v")
+    wrapper = file_to_basename(model.get_metadata_prop("wrapper_filename"))
+    top_module_name = wrapper.removesuffix(".v")
     single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
     trace_file = model.get_metadata_prop("rtlsim_trace")
     debug = not (trace_file is None or trace_file == "")
@@ -228,16 +229,11 @@ def rtlsim_exec_cppxsi(
     ), """The
     directory from metadata property "vivado_stitch_proj" doesn't exist"""
     trace_file = model.get_metadata_prop("rtlsim_trace")
-    if not dummy_data_mode:
-        # ignore last value which would be batchsize
-        io_dict, if_dict, num_out_values, o_tensor_info = prep_rtlsim_io_dict(
-            model, execution_context
-        )[:-1]
 
     # prepare rtlsim compiled object (unless it already exists)
     rtlsim_so = model.get_metadata_prop("rtlsim_so")
     top_module_file_name = file_to_basename(model.get_metadata_prop("wrapper_filename"))
-    top_module_name = top_module_file_name.strip(".v")
+    top_module_name = top_module_file_name.removesuffix(".v")
     if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
         sim_base, sim_rel = prepare_stitched_rtlsim(model, behav, toolchain=toolchain)
         # pass in correct tracefile from attribute
@@ -380,7 +376,7 @@ def rtlsim_exec_cppxsi(
     return ret_dict
 
 
-def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None, *, toolchain=None):
+def rtlsim_exec(model, execution_context, pre_hook=None, post_hook=None, *, toolchain=None):
     """Use finnxsi to execute given model with stitched IP. The execution
     context contains the input values. Hook functions can be optionally
     specified to observe/alter the state of the circuit
@@ -473,16 +469,3 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None,
         execution_context[o_name] = o_folded_tensor.reshape(o_shape)
 
     model.set_metadata_prop("cycles_rtlsim", str(n_cycles))
-
-
-def rtlsim_exec(model, execution_context, pre_hook=None, post_hook=None, *, toolchain=None):
-    """Use XSI to execute given model with stitched IP. The execution
-    context contains the input values. Hook functions can be optionally
-    specified to observe/alter the state of the circuit, receiving the
-    sim object as their first argument:
-    - pre_hook : hook function to be called before sim start (after reset)
-    - post_hook : hook function to be called after sim end
-    Without a compiled library in the rtlsim_so metadata, ``toolchain`` (a
-    prepared ``Toolchain``, None for the default) compiles one.
-    """
-    rtlsim_exec_finnxsi(model, execution_context, pre_hook, post_hook, toolchain=toolchain)

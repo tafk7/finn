@@ -27,7 +27,8 @@ The records:
 The queries: ``part(name)`` and ``device(name)``, the name compared without case
 and answered in Vivado's spelling, never a pattern or a nearby part (an unknown name
 is refused, ``unknown-part``, ``unknown-device``, listing close names without
-choosing one); ``parts(pattern, family=)``. A device whose pair FINN does not build
+choosing one); ``parts(pattern, family=)``; ``part_report(name)``, a part's facts as
+the resources report states them. A device whose pair FINN does not build
 for is catalogued with its identity and totals, and states why (``unsupported``);
 the resolution refuses its parts (``unsupported-architecture``).
 
@@ -51,17 +52,19 @@ import json
 import os
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from finn.kernels.target import DspBlock, Fabric
-from finn.kernels.utilization import RESOURCE_NAMES, Resources
+from finn.kernels.target import DspBlock
+from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
 from finn.platform.architectures import CAP_EVIDENCE, CapEvidence, rule
 from finn.platform.refusal import TargetRefused
 
 DATA = Path(__file__).resolve().parent / "data"
+FILES = ("resources.jsonl", "devices.jsonl", "parts.jsonl", "manifest.json")
+"""The data files: the resource, device and part records, one a line, then the manifest."""
 OVERLAY_SETTING = "FINN_PLATFORM_CATALOG"
 """The machine setting that names a catalog overlay file (unset: none)."""
 
@@ -263,7 +266,7 @@ class _Invalid(ValueError):
     pass
 
 
-def _expect(record: object, where: str, required: set[str], optional: set[str]) -> dict:  # type: ignore[type-arg]
+def _expect(record: object, where: str, required: set[str], optional: set[str]) -> dict[str, Any]:
     if not isinstance(record, dict):
         raise _Invalid(f"{where}: a record is a JSON object, not {record!r}")
     missing = required - set(record)
@@ -345,8 +348,8 @@ class _Entries:
     """The records of the committed data or of an overlay, checked one by one."""
 
     resources: dict[str, Record] = field(default_factory=dict)
-    devices: dict[str, dict] = field(default_factory=dict)  # type: ignore[type-arg]
-    parts: dict[str, dict] = field(default_factory=dict)  # type: ignore[type-arg]
+    devices: dict[str, dict[str, Any]] = field(default_factory=dict)
+    parts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 _DEVICE_FIELDS = {"name", "architecture", "family", "resources"}
@@ -430,13 +433,9 @@ def load(data: Path = DATA, overlay: Path | None = None) -> Catalog:
     no rule or the device is not built as its pair's) and ``parts``; ``source``, the
     file's, or each entry's own; ``overrides: true`` on an entry that replaces a
     shipped one of its name. Anything else is refused (``catalog-overlay-invalid``)."""
-    manifest = json.loads((data / "manifest.json").read_text())
-    shipped = _read_entries(
-        _jsonl(data / "resources.jsonl"),
-        _jsonl(data / "devices.jsonl"),
-        _jsonl(data / "parts.jsonl"),
-        overlay=False,
-    )
+    *records, manifest_file = (data / name for name in FILES)
+    manifest = json.loads(manifest_file.read_text())
+    shipped = _read_entries(*(_jsonl(path) for path in records), overlay=False)
     tool = manifest["tool"]
     origin = (
         f"FINN's part catalog, from Vivado {tool['version']} ({tool['build']}): get_parts and "
@@ -599,7 +598,44 @@ def parts(pattern: str | None = None, *, family: str | None = None) -> list[Part
     return catalog().parts(pattern, family=family)
 
 
+def part_report(name: str) -> dict[str, object]:
+    """The target's part as the part catalog states it: its device, the device's
+    resources per SLR (``None`` where an overlay states no split), on a reduced die of
+    several SLRs each SLR's site capacity under the device's totals as a cap (``cap``:
+    the totals, the resources they cap, which of those caps a fill proved and which are
+    inferred, and the evidence), the devices that share them, and where its facts come
+    from (``source``); a part the catalog does not have says why, with no source."""
+    try:
+        found = part(name)
+    except TargetRefused as refused:
+        return {"name": name, "source": None, "refused": str(refused)}
+    device = found.device
+    cap: dict[str, object] | None = None
+    if device.capped:
+        review = device.cap_evidence
+        proven = set() if review is None else review.proven
+        cap = {
+            "slrs": SLRS_CAPPED,
+            "totals": asdict(device.resources),
+            "proven": [each for each in device.capped if each in proven],
+            "inferred": [each for each in device.capped if each not in proven],
+            "evidence": found.source if review is None else review.evidence,
+        }
+    return {
+        "name": found.name,
+        "device": device.name,
+        "architecture": device.architecture,
+        "family": device.family,
+        "slrs": None if device.slrs is None else [asdict(slr) for slr in device.slrs],
+        "cap": cap,
+        "shared_with": list(device.shared_with),
+        "source": found.source,
+    }
+
+
 __all__ = [
+    "DATA",
+    "FILES",
     "OVERLAY_SETTING",
     "Catalog",
     "Device",
@@ -608,6 +644,7 @@ __all__ = [
     "device",
     "load",
     "part",
+    "part_report",
     "parts",
     "SLRS_CAPPED",
     "Record",

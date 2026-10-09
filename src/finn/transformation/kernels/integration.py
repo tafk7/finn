@@ -47,20 +47,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from finn.custom_op.kernels.base import read_target
-from finn.custom_op.kernels.shell import member
+from finn.custom_op.kernels.base import known_shape, read_target
+from finn.custom_op.kernels.shell import configured_root, member
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
 from finn.kernels.explore import Completion
-from finn.transformation.kernels.package import configured_root
+from finn.platform import VIVADO_BLOCK_DESIGN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-VIVADO_BLOCK_DESIGN = "vivado-block-design"
-"""The integration of the Zynq shell (``finn.platform.ShellRow.integration``)."""
 
 END_INSTANCES = {"in": "idma", "out": "odma"}
 """An end's instance name in the block design by its direction, numbered in port order."""
@@ -255,7 +252,7 @@ def integration(model: ModelWrapper, completion: Completion | None = None) -> In
                 f"{tensor} ({port}): the {row.shell!r} shell places no end on it; its "
                 "integration connects every boundary port to an end"
             )
-        shape = body.get_tensor_shape(tensor)
+        shape = known_shape(body, tensor)
         if shape is None:
             raise IntegrationError(f"{tensor} ({port}): the partition states no shape for it")
         contract: EndContract = channel.end_contract
@@ -268,7 +265,7 @@ def integration(model: ModelWrapper, completion: Completion | None = None) -> In
                 instance=instance,
                 tensor=tensor,
                 port=port,
-                shape=tuple(shape),
+                shape=shape,
                 contract=contract,
                 iodma=iodma_configuration(contract),
             )

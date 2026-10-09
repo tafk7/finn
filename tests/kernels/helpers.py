@@ -60,10 +60,11 @@ from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.matmul import MatMulKernel, block_diagonal
-from finn.kernels.target import DspBlock, Fabric, Platform
+from finn.kernels.matmul import MatMulKernel, block_diagonal, datatype_range
+from finn.kernels.target import DspBlock, Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.values.domains import set_index_dtype, stored_element
+from finn.kernels.utilization import Fabric
+from finn.kernels.values.domains import range_dtype, set_index_dtype, stored_element
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -101,6 +102,15 @@ def full_platform(dsp: DspBlock, *, period_ns: float = 5.0) -> Platform:
 
 FULL_DSP48E2 = full_platform(DspBlock.DSP48E2)
 FULL_DSP58 = full_platform(DspBlock.DSP58)
+
+
+def exact_result_dtype(
+    vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
+) -> QONNXDataType:
+    """The smallest encoding of every full-range integer dot product of ``vector_length``
+    values of each datatype (``range_dtype`` of ``matmul.datatype_range``): the result
+    type a test states for a MatMul whose weights are not known."""
+    return range_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
 
 
 def point_for(kernel: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:

@@ -17,7 +17,7 @@ from ._configuration import Space
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, RequestError
 from .ir import Node
-from .occurrence import _attach, _prepare_values, decision_index, state
+from .occurrence import attach, decision_index, prepare_values, state
 from .results import Available, QueryResult
 from .semantics import equal, snapshot
 
@@ -116,7 +116,7 @@ def try_with_choices(
     all_changes = (*_requests(point, changes), *keyword_changes)
     normalized = _normalize_changes(point, all_changes)
     with current.lock:
-        prepared = _prepare_values(
+        prepared = prepare_values(
             current.linked,
             {index: item.value for index, item in normalized.items() if not item.remove},
             "choice",
@@ -174,7 +174,7 @@ def try_with_choices(
             return ConfigurationResult(point, False, tuple(outcomes))
 
         snapshot = trial.publish()
-        successor = cast(S, _attach(snapshot, point._scope))
+        successor = cast(S, attach(snapshot, point._scope))
         published: list[ChangeOutcome] = []
         for request, outcome in zip(all_changes, outcomes):
             item = normalized[request.node]

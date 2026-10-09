@@ -28,6 +28,7 @@
 
 import os
 import re
+from typing import Any
 
 #: The most Vivado runs a build launches at once by default (``launch_runs -jobs``):
 #: a Zynq shell's block design synthesizes about ten IPs out of context, one run
@@ -180,6 +181,60 @@ def parse_clock_summary(report_path):
                 "mhz": float(match.group(3)),
             }
     return clocks
+
+
+#: The clock the Zynq shell's PS drives the accelerator with: Zynq UltraScale+'s
+#: and Zynq-7000's name for it.
+PL_CLOCKS = ("clk_pl_0", "clk_fpga_0")
+
+
+def delivered_clock(
+    timing_report: str,
+    period_ns: float,
+    cycles: int | None = None,
+    objective_fps: float | None = None,
+) -> dict[str, Any]:
+    """The clock the routed design delivers (a PL clock of the timing report's clock
+    summary) beside the period asked, and, given the partition's bottleneck
+    ``cycles`` a frame, the frames a second at each; ``objective_fps`` is the
+    throughput asked. A delivered period other than the one asked is a ``warning``
+    with both numbers (the shell's PS gives its nearest clock to the request)."""
+    clocks = parse_clock_summary(timing_report)
+    name = next((clock for clock in PL_CLOCKS if clock in clocks), None)
+    if name is None:
+        return {
+            "target_period_ns": period_ns,
+            "warning": f"no PL clock ({', '.join(PL_CLOCKS)}) in {timing_report}: "
+            f"its clock summary lists {sorted(clocks)}",
+        }
+    delivered, mhz = clocks[name]["period_ns"], clocks[name]["mhz"]
+    report: dict[str, Any] = {
+        "clock": name,
+        "target_period_ns": period_ns,
+        "delivered_period_ns": delivered,
+        "delivered_mhz": mhz,
+    }
+    if cycles is not None:
+        report["bottleneck_cycles"] = cycles
+        report["fps_at_target"] = round(1e9 / (period_ns * cycles), 1)
+        report["fps_at_delivered"] = round(mhz * 1e6 / cycles, 1)
+    if objective_fps is not None:
+        report["objective_fps"] = objective_fps
+    # The report states periods to the picosecond.
+    if abs(delivered - period_ns) >= 0.0005:
+        warning = (
+            f"the shell delivers {name} at {delivered} ns ({mhz} MHz), "
+            f"not the {period_ns} ns asked"
+        )
+        if cycles is not None:
+            warning += (
+                f": {cycles} cycles a frame give {report['fps_at_delivered']:,.0f} fps at it, "
+                f"{report['fps_at_target']:,.0f} at the clock asked"
+            )
+        if objective_fps is not None:
+            warning += f"; the objective is {objective_fps:,.0f} fps"
+        report["warning"] = warning
+    return report
 
 
 def _parse_vivado_power_report(report_path):

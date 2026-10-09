@@ -3,10 +3,11 @@
 
 """The canonical projection: a value, as ordered pairs of tagged scalars.
 
-Everything hashed in this package is hashed through here, and the shape is
-chosen rather than inherited.  A preimage of ordered ``(path, tag, text)``
-triples has **no mapping to order and no number whose type is ambiguous**, so
-the two problems a canonical-encoding library would solve do not arise:
+Every digest that keys a module (``fingerprint``, an HLS request's key) is
+taken here, and the shape is chosen rather than inherited.  A preimage of
+ordered ``(path, tag, text)`` triples has **no mapping to order and no number
+whose type is ambiguous**, so the two problems a canonical-encoding library
+would solve do not arise:
 
 * There is no map-ordering rule to obey.  RFC 8949 §4.2.1 orders map keys
   bytewise-lexicographically and §4.2.3 orders them length-first; at least one
@@ -15,8 +16,8 @@ the two problems a canonical-encoding library would solve do not arise:
 * ``True``, ``1``, ``1.0`` and ``"1"`` differ by construction, because the tag
   is part of the preimage.  RFC 8785 JCS could not have given us that.
 
-So the projection is ours and versioned, and it moves under a contract version
-rather than under somebody's dependency upgrade.
+So the projection is ours and versioned, and it moves under
+``PROJECTION_VERSION`` rather than under somebody's dependency upgrade.
 
 Two properties are worth stating because the tests hold them rather than a
 docstring: nothing here iterates anything unordered, and every scalar carries
@@ -33,9 +34,8 @@ from hashlib import sha256
 from typing import Union
 
 #: Bumped when the projection's *shape* changes -- a new tag, a different path
-#: syntax, a changed float encoding.  Every key in the store is taken over a
-#: preimage that begins with this, so a change is visible as an unsupported
-#: projection rather than as an unexplained miss.
+#: syntax, a changed float encoding.  Every digest is taken over a preimage
+#: that begins with this, so a change of shape changes every digest.
 PROJECTION_VERSION = "projection-v1"
 
 #: One projected leaf: where it sits, what type it is, and its text.
@@ -146,13 +146,13 @@ def preimage(pairs: Sequence[Pair]) -> bytes:
 
 
 def digest(value: Projectable) -> str:
-    """Project a value and hash it.  The one hash function in this package."""
+    """Project a value and hash it."""
 
     return sha256(preimage(project(value))).hexdigest()
 
 
 def content_digest(data: bytes) -> str:
-    """The digest of a file's bytes, as stored in a ``ContentRef``."""
+    """The digest of a file's bytes, as a ``SourceFile`` records it (``artifacts.sources``)."""
 
     return sha256(data).hexdigest()
 

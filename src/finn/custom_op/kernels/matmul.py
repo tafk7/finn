@@ -30,13 +30,14 @@ is not this op (``matmul-batched``); B's shape unstated is ``fact-unstated``. It
 reads no datatype.
 
 Its domain step (``exact``): an integer MatMul whose facts let a partial sum pass
-the integers the operands' container holds exactly (A's type's largest magnitude
-times the largest sum of a column of B's magnitudes: B's values when it is an
-initializer, else its type's) is refused (``matmul-container-exceeded``), and an
-operand that bound reads unannotated, or A's container unstated, is
-``fact-unstated``. Graph preparation widens an integer region's container where its
-bounds need it (P6), and its checkpoint refuses a bound past 2**53 (P7,
-``container-inexact``), so a prepared graph does not give it: the refusal is the
+the integers the operands' container holds exactly
+(``finn.core.containers.matmul_partial_sums``: A's type's largest magnitude times the
+largest sum of a column of B's magnitudes, B's values when it is an initializer, else
+its type's; the bound graph preparation's checkpoint reads too) is refused
+(``matmul-container-exceeded``), and an operand that bound reads unannotated, or A's
+container unstated, is ``fact-unstated``. Graph preparation widens an integer region's
+container where its bounds need it (P6), and its checkpoint refuses a bound past 2**53
+(P7, ``container-inexact``), so a prepared graph does not give it: the refusal is the
 safety net for a graph that skipped preparation.
 """
 
@@ -47,7 +48,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import numpy.typing as npt
 
-from finn.core.containers import container, exact_up_to, name
+from finn.core.containers import container, exact_up_to, matmul_partial_sums, name
 from finn.core.space import Finding, Rejected
 from finn.custom_op.kernels.base import (
     FactUnstated,
@@ -118,13 +119,9 @@ class MatMul(KernelOp):
         types = [datatype(model, tensor, label) for tensor in (a, b)]
         if not all(dtype.is_integer() for dtype in types):
             return ()  # float semantics, as ONNX's
-        largest = max(abs(int(types[0].min())), abs(int(types[0].max())))
-        if stored is not None:
-            column = int(np.abs(np.asarray(stored, dtype=np.float64)).sum(axis=0).max(initial=0))
-        else:
-            k = shape(model, b, label)[0]
-            column = k * max(abs(int(types[1].min())), abs(int(types[1].max())))
-        bound = largest * column
+        a_largest, b_largest = (max(abs(int(t.min())), abs(int(t.max()))) for t in types)
+        k = shape(model, b, label)[0]
+        bound = matmul_partial_sums(a_largest, k, b_largest, stored)
         held = container(model, a)
         limit = exact_up_to(held)
         if held is None or limit is None:

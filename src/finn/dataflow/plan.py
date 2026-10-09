@@ -33,7 +33,8 @@ carries data words only.
 The plan says what must happen, not which hardware does it: a channel's two
 adapter Decisions, one a side, choose a realization, and each candidate refuses
 a plan it cannot carry out. ``Unrealizable`` names what no chain can repair: another
-element order or positions, or a single pass feeding a cyclic consumer.
+element order or positions, or a single pass feeding a cyclic consumer
+(``Unrepeatable``, its own kind: no step repeats a pass).
 """
 
 from __future__ import annotations
@@ -113,6 +114,10 @@ class Unrealizable(ValueError):
     """No chain of steps turns the source's beat sequence into the sink's."""
 
 
+class Unrepeatable(Unrealizable):
+    """A single pass feeding a cyclic consumer: no step repeats a pass."""
+
+
 def presented(source: BeatSequence, sink: BeatSequence) -> Traversal:
     """What ``source`` presents over one pass of ``sink``: a cyclic source repeats.
 
@@ -120,7 +125,7 @@ def presented(source: BeatSequence, sink: BeatSequence) -> Traversal:
     its elements.
     """
     if sink.repetition is Repetition.CYCLIC and source.repetition is not Repetition.CYCLIC:
-        raise Unrealizable("a single pass cannot feed a cyclic consumer")
+        raise Unrepeatable("a single pass cannot feed a cyclic consumer")
     form = source.form
     if source.repetition is Repetition.ONCE or form.shape != sink.form.shape:
         return form
@@ -197,4 +202,4 @@ def plan(source: BeatSequence, sink: BeatSequence) -> Plan:
     return Plan(tuple(hops))
 
 
-__all__ = ["Hop", "Plan", "Step", "Unrealizable", "plan", "presented"]
+__all__ = ["Hop", "Plan", "Step", "Unrealizable", "Unrepeatable", "plan", "presented"]

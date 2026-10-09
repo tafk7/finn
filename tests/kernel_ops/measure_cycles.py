@@ -43,8 +43,8 @@ from qonnx.core.onnx_exec import execute_onnx
 
 from finn.builder.kernel_testbench import boundary_words
 from finn.core.executors.xsim.rtl import link_stream, measure
-from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import ShellRoot, member, shell_root
+from finn.custom_op.kernels.base import channel_choices
+from finn.custom_op.kernels.shell import ShellRoot, member, save_channels, shell_root
 from finn.harness.toolchain import print_identity
 
 
@@ -80,9 +80,10 @@ def schedule_of(root: ShellRoot, node: NodeProto) -> Any:
 def alone_body(model: ModelWrapper, node: NodeProto) -> ModelWrapper:
     """``node`` as the body of a partition of its own: a copy of ``model`` (its target,
     initializers and annotations) holding the node alone, its inputs other than
-    initializers the graph's inputs and its outputs the graph's outputs. An output whose
-    transport the node does not hold is pinned ``direct``: in ``model`` its FIFO, if any,
-    is its consumer's."""
+    initializers the graph's inputs and its outputs the graph's outputs, its channels'
+    choices as their tensors state them. An output that ``model`` does not output, or
+    whose tensor states no transport, is pinned ``direct``: in ``model`` its FIFO, if any,
+    sits before its consumer."""
     single = ModelWrapper(copy.deepcopy(model.model))
     graph = single.graph
     infos = {info.name: info for info in (*graph.input, *graph.value_info, *graph.output)}
@@ -95,10 +96,20 @@ def alone_body(model: ModelWrapper, node: NodeProto) -> ModelWrapper:
         del field[:]
         field.extend(copy.deepcopy(infos[name]) for name in names)
     del graph.value_info[:]
-    op = kernel_op(single, graph.node[0])
-    held = op.choices()
-    pinned = {f"{port}.transport": "direct" for port in op.outputs}
-    op.save({key: value for key, value in pinned.items() if key not in held})
+    outputs = {each.name for each in model.graph.output}
+    direct = {
+        "transport": "direct",
+        "transport.fifo.buffer.depth": None,
+        "transport.fifo.buffer.ram_style": None,
+    }
+    save_channels(
+        single,
+        {
+            tensor: direct
+            for tensor in node.output
+            if tensor not in outputs or "transport" not in channel_choices(single, tensor)
+        },
+    )
     return single
 
 

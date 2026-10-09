@@ -78,7 +78,7 @@ def built_hls(
     if not requests:
         return {}
     toolchain = toolchain or machine_toolchain()
-    roots = {"finnlib": Path(resources.path("finnlib"))} if roots is None else roots
+    roots = {"finnlib": resources.finnlib_root()} if roots is None else roots
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=scratch, prefix="hls_requests_") as staging:

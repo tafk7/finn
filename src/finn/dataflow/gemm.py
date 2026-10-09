@@ -54,4 +54,4 @@ class Form(Enum):
         return self.value.y
 
 
-__all__ = ["Form", "Signature", "k", "m", "n"]
+__all__ = ["Form", "k", "m", "n"]

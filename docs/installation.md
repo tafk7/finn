@@ -580,8 +580,11 @@ first, `auto` last, a FIFO in FinnLib's own `auto` selection), and when the
 partition is built sizes its FIFOs at that folding; `placeholder`, for debugging, also completes a required choice, and
 says `DEBUG: completed by placeholder` for every value it takes. A required choice
 left open (a FIFO's depth) is refused by name when the partition is built. The
-choices the strategies made are written to `kernel_choices.json`, and what the
-exploration found (the strategies, each with the choices it committed, attempts
+choices the strategies made are written to `kernel_choices.json`, by graph name
+(`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"compute.packed.pe": 16}}`:
+a kernel's choices under its node, a channel's under the tensor it carries, where the
+partition's body states them, in graph order: each node's input channels, the node,
+its output channels), and what the exploration found (the strategies, each with the choices it committed, attempts
 and time; every choice with the strategy that made it; every completed value and
 who completed it; whether FIFOs were sized; per-member cycles and buffering, the
 bottleneck, and the shell's resources against the part's, of the point as it is

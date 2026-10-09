@@ -19,8 +19,9 @@ from finn.builder.build_dataflow import (
     build_dataflow_directory,
     read_build_config,
 )
-from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
+from finn.builder.build_dataflow_checks import run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.kernel_build_checks import Severity
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     KernelOutputType,

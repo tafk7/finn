@@ -387,8 +387,6 @@ def netlist(module: Composed, name: str) -> str:
 
 __all__ = [
     "EmittedModule",
-    "HLS_DATA_SUFFIXES",
-    "HLS_SOURCE_SUFFIXES",
     "emit_module",
     "instance_name",
     "instance_net",

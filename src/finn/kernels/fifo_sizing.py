@@ -85,15 +85,15 @@ class Pattern:
 
 
 @dataclass(frozen=True)
-class Replay:
-    """An input adapter's ``input_gen``: its buffer, and the pattern its consumer reads
-    its output at."""
+class Buffered:
+    """An input adapter's ``input_gen`` (any chain of one ``input_gen``, a replay or
+    not): its buffer, and the pattern its consumer reads its output at."""
 
     buffer: NestBuffer
     reads: Pattern
 
 
-Acceptance = Pattern | Replay
+Acceptance = Pattern | Buffered
 
 
 def converted(times: Sequence[int], lanes_in: int, lanes_out: int) -> tuple[int, ...]:
@@ -136,7 +136,7 @@ def simulate(
     taken: list[int] = []  # when the input side took it
     late: list[int] = []
     # An input_gen's presented beats, when each was presented, and its freed count.
-    replay = accept if isinstance(accept, Replay) else None
+    buffered = accept if isinstance(accept, Buffered) else None
     shown: list[int] = []
     freed_at: list[int] = []  # the cycle at which the freed count reached each value
     freed_count = 0
@@ -145,8 +145,8 @@ def simulate(
         """Present beats until ``count`` words are freed; False when a beat waits on a
         word not yet taken."""
         nonlocal freed_count
-        assert replay is not None
-        buffer, frame = replay.buffer, len(replay.buffer.reads)
+        assert buffered is not None
+        buffer, frame = buffered.buffer, len(buffered.buffer.reads)
         frame_words, read_gaps = buffer.freed[-1], accept_gaps
         while freed_count < count:
             beat = len(shown)
@@ -175,13 +175,13 @@ def simulate(
         at = ready + (FIFO_LATENCY if depth else 0)
         if taken:
             at = max(at, taken[-1] + 1)
-        if replay is None:
+        if buffered is None:
             assert isinstance(accept, Pattern)
             reads = accept_gaps[n % len(accept.times)]
             if taken:
                 at = max(at, taken[-1] + reads)
         else:
-            room = n - replay.buffer.capacity + 1  # words that must be freed first
+            room = n - buffered.buffer.capacity + 1  # words that must be freed first
             if room > 0:
                 if not present_until(room):
                     return None
@@ -266,7 +266,7 @@ def ends(channel: Channel) -> tuple[Pattern, Acceptance]:
         kinds = " -> ".join(stage.kind for stage in stages)
         raise NotModelled(f"an input adapter of {kinds}: not modelled")
     module = stages[0].module
-    return supply, Replay(nest_buffer(module.frame, module.dims, module.coefs), consumer)
+    return supply, Buffered(nest_buffer(module.frame, module.dims, module.coefs), consumer)
 
 
 @dataclass(frozen=True)
@@ -318,12 +318,11 @@ __all__ = [
     "Flow",
     "NotModelled",
     "Pattern",
-    "Replay",
+    "Buffered",
     "Sized",
     "converted",
     "ends",
     "least_depth",
     "simulate",
     "size",
-    "within",
 ]

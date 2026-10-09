@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The pytest side of the XSim testbench (``finn.core.executors.xsim.rtl``): the marker an
-XSim test carries, and the skip of one that synthesizes an HLS leaf first."""
+XSim test carries, the skip of one that synthesizes an HLS leaf first, and the marker a
+Vivado packaging test carries."""
 
 from __future__ import annotations
 
@@ -27,6 +28,21 @@ def requires_xsim(test: _Test) -> _Test:
         not vivado_simulator(), reason="Vivado simulator tools are unavailable"
     )
     marked: _Test = pytest.mark.xsim(skip(test))  # a dynamic mark is typed Any
+    return marked
+
+
+def requires_vivado(test: _Test) -> _Test:
+    """Marked ``vivado``, and skipped without a selected Vivado.
+
+    A ``vivado`` command on PATH does not mean a Vivado installation is selected
+    (``vivado_simulator``): the machine's toolchain must name one (XILINX_VIVADO).
+    ``check-kernels.sh`` deselects ``vivado``, and ``xsim-sweep.sh`` runs it.
+    """
+    skip = pytest.mark.skipif(
+        not machine_toolchain().environment.get("XILINX_VIVADO"),
+        reason="Vivado is not selected",
+    )
+    marked: _Test = pytest.mark.vivado(skip(test))  # a dynamic mark is typed Any
     return marked
 
 

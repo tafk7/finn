@@ -35,8 +35,9 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
-from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
+from finn.builder.build_dataflow_checks import run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
+from finn.builder.kernel_build_checks import Severity
 from finn.builder.kernel_build_config import (
     SHELL_OUTPUTS,
     KernelBuildConfig,
@@ -44,7 +45,6 @@ from finn.builder.kernel_build_config import (
     KernelVerificationStepType,
 )
 from finn.builder.kernel_build_steps import (
-    delivered_clock,
     step_kernel_bitfile,
     step_kernel_choices,
     step_kernel_deployment_package,
@@ -55,6 +55,7 @@ from finn.builder.kernel_build_steps import (
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
+from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_BITFILE,
@@ -85,9 +86,10 @@ from finn.transformation.kernels import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
-from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.transformation.kernels.package import boundary_facts
 from finn.util.resources import resource_path, tcl_quote
 from finn.util.toolchain import Toolchain
+from finn.util.vivado import delivered_clock
 from kernel_ops.models import (
     chain_source,
     configure_partition,
@@ -581,39 +583,50 @@ def set_folding() -> dict[str, dict[str, int]]:
 SET_FOLDING = set_folding()
 
 
-#: Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
-#: completed, 57 on 8 nodes: the Zynq landing's baseline build's (Ultra96, 5 ns,
-#: [target_throughput, size_fifos]), whose choices were all persisted then, and each
-#: MatMul's pumping, completed off: the doubled clock is the shell's, which the kernels
-#: no longer read off the platform (SZ11 (e)), so the choice is open on pynq too. Every
-#: memory takes its baseline, an explicit style (SZ18): the first three layers' weights
-#: in block RAM (8 192 bits and more), the last layer's and every input buffer in LUTRAM,
-#: and each threshold table's stages in LUTRAM, no block stage.
-TFC_BUILT = {
-    node: {
-        **folding,
-        **(
-            {
+def tfc_built() -> dict[str, dict[str, object]]:
+    """Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
+    completed, 57 by graph name (on 8 nodes and 13 tensors): the Zynq landing's baseline
+    build's (Ultra96, 5 ns, [target_throughput, size_fifos]), whose choices were all
+    persisted then, and each MatMul's pumping, completed off: the doubled clock is the
+    shell's, which the kernels no longer read off the platform (SZ11 (e)), so the choice
+    is open on pynq too. Each layer's kernel on its node; each channel on its tensor: a
+    MultiThreshold's input, a MatMul's activations and weights, the graph's output. Every
+    memory takes its baseline, an explicit style (SZ18): the first three layers' weights
+    in block RAM (8 192 bits and more), the last layer's and every input buffer in LUTRAM,
+    and each threshold table's stages in LUTRAM, no block stage."""
+    built: dict[str, dict[str, object]] = {}
+    for node, folding in SET_FOLDING.items():
+        layer = int(node.rsplit("_", 1)[1])
+        if node.startswith("MatMul"):
+            built[node] = {
+                **folding,
                 "compute.packed.compute_pumping": False,
                 "compute.packed.reducer": "tree",
-                "w.source.memstream.pumped_memory": False,
-                "w.source.memstream.ram_style": "distributed" if node == "MatMul_3" else "block",
-                "w.transport": "direct",
-                "x.adapter.input_gen.input_gen.ram_style": "distributed",
-                "x.transport": "direct",
             }
-            if node.startswith("MatMul")
-            else {
+            built[f"MultiThreshold_{layer}_out0"] = {
+                "adapter.input_gen.input_gen.ram_style": "distributed",
+                "transport": "direct",
+            }
+            built[f"MatMul_{layer}_param0"] = {
+                "source.memstream.pumped_memory": False,
+                "source.memstream.ram_style": "distributed" if node == "MatMul_3" else "block",
+                "transport": "direct",
+            }
+        else:
+            built[node] = {
+                **folding,
                 "block_stages": 0,
                 "deep_pipeline": False,
                 "ram_style": "distributed",
-                "x.transport": "direct",
             }
-        ),
-        **({"y.transport": "direct"} if node == "MatMul_3" else {}),
-    }
-    for node, folding in SET_FOLDING.items()
-}
+            built[f"MatMul_{layer - 1}_out0" if layer else "Reshape_0_out0"] = {
+                "transport": "direct"
+            }
+    built["MatMul_3_out0"] = {"transport": "direct"}
+    return built
+
+
+TFC_BUILT = tfc_built()
 
 
 @pytest.mark.slow

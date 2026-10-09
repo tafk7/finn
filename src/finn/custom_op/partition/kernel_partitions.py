@@ -19,16 +19,16 @@ integration made (the integration project, the bitfile, the hardware handoff, th
 reports by name, and the host runtime that runs it). A partition's boundary is not
 stored: what reads it (the integration export and the driver it describes, the
 interface description, the testbench) derives it from the configured root
-(``finn.transformation.kernels.package.configured_root``).
+(``finn.custom_op.kernels.shell.configured_root``).
 
-This module depends on qonnx only, below the KernelOps and their transformations, so
-the builder and the flow import it without loading the kernel stack.
+This module depends on qonnx (and onnx, which qonnx depends on) only, below the
+KernelOps and their transformations, so the builder and the flow import it without
+loading the kernel stack.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
+from onnx import NodeProto
 from qonnx.core.metadata import JSON, Namespace
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -85,36 +85,44 @@ OUTPUT_HOST_RUNTIME = OUTPUTS.key("host_runtime", str, check=_named, expect="a h
 """What runs the bitfile on the host (``finn.platform.ShellRow.host_runtime``)."""
 
 
-def is_kernel_partition(model: Any) -> bool:
+def is_partition(node: NodeProto) -> bool:
+    """Whether ``node`` is a partition node (StreamingDataflowPartition): its body is a
+    model of its own."""
+    return bool(node.domain == PARTITION_DOMAIN and node.op_type == PARTITION_OP)
+
+
+def is_kernel_partition(model: ModelWrapper) -> bool:
     """Whether a partition model is a model of KernelOps: it has nodes, all KernelOps."""
     return bool(model.graph.node) and all(
         node.domain == KERNEL_OPS_DOMAIN for node in model.graph.node
     )
 
 
-def _body_file(node: Any) -> str:
+def body_file(node: NodeProto) -> str:
+    """The file of a partition node's body: its ``model`` attribute, refused
+    (``TypeError``) when that is no path."""
     path = getCustomOp(node).get_nodeattr("model")
     if not isinstance(path, str):
         raise TypeError(f"{node.name}: its model attribute is {path!r}, not a path")
     return path
 
 
-def kernel_partition_body(node: Any) -> ModelWrapper | None:
+def kernel_partition_body(node: NodeProto) -> ModelWrapper | None:
     """The body of a StreamingDataflowPartition node whose body is a partition of
     KernelOps, opened through the node; None for any other node."""
-    if node.op_type != PARTITION_OP or node.domain != PARTITION_DOMAIN:
+    if not is_partition(node):
         return None
-    body = ModelWrapper(_body_file(node))
+    body = ModelWrapper(body_file(node))
     return body if is_kernel_partition(body) else None
 
 
-def kernel_partition_nodes(model: Any) -> list[Any]:
+def kernel_partition_nodes(model: ModelWrapper) -> list[NodeProto]:
     """The model's partition nodes (``PARTITION_DOMAIN``'s StreamingDataflowPartition)
     whose body is a partition of KernelOps."""
     return [node for node in model.graph.node if kernel_partition_body(node) is not None]
 
 
-def partition_body(model: Any) -> tuple[Any, ModelWrapper, str]:
+def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
     """The kernel path's parent graph's one partition node of KernelOps, its body opened
     through the node, and the body's file. A graph with none, or more than one, is
     refused: the kernel path cuts its KernelOps once."""
@@ -125,7 +133,7 @@ def partition_body(model: Any) -> tuple[Any, ModelWrapper, str]:
             "parent graph holds one (step_kernel_partition cuts once)"
         )
     (node,) = found
-    path = _body_file(node)
+    path = body_file(node)
     return node, ModelWrapper(path), path
 
 
@@ -142,7 +150,9 @@ __all__ = [
     "OUTPUT_VLNV",
     "PARTITION_DOMAIN",
     "PARTITION_OP",
+    "body_file",
     "is_kernel_partition",
+    "is_partition",
     "kernel_partition_body",
     "kernel_partition_nodes",
     "partition_body",

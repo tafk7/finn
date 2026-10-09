@@ -84,7 +84,13 @@ def _rtl_scalar(value: Scalar) -> str:
 
 
 def typed_canonical(value: object) -> object:
-    """``value`` with each enum and dataclass tagged by its type, for a digest."""
+    """``value`` with each enum and dataclass tagged by its type, for a digest.
+
+    A second canonical form beside ``projection.project``, which differs from it only
+    by the dataclass type tag; ``fingerprint`` alone reads it. Folding the two changes
+    every module digest, and so the emitted module names: it waits for the next
+    ``PROJECTION_VERSION`` bump.
+    """
     if isinstance(value, Enum):
         return (f"enum:{type(value).__module__}.{type(value).__qualname__}", value.name)
     if is_dataclass(value) and not isinstance(value, type):
@@ -524,6 +530,4 @@ __all__ = [
     "fingerprint",
     "merge",
     "module_name",
-    "sanitize_stem",
-    "typed_canonical",
 ]

@@ -1,7 +1,7 @@
 # Copyright Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-# Guards finn.util.resource_models._resolve() against drift from the RAM_STYLE_EFF
+# Guards finn.custom_op.fpgadataflow.resource_models._resolve() against drift from the RAM_STYLE_EFF
 # selection in finn-rtllib/fifo/hdl/fifo.sv. _resolve() is a hand-written Python mirror of
 # that selection, used for resource estimation and the build report; if someone edits
 # fifo.sv without updating _resolve(), this test fails.
@@ -14,7 +14,7 @@ import pytest
 
 import re
 
-from finn.util.resource_models import _resolve
+from finn.custom_op.fpgadataflow.resource_models import _resolve
 from finn.util.resources import resource_path
 
 # fifo.sv spells the SRL backing "shift"; FINN's vocabulary calls it "srl" (translated

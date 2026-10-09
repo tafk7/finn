@@ -19,13 +19,11 @@ import os
 import pkgutil
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
+from layering import ROOT
 
 import finn.kernels
-
-ROOT = Path(__file__).resolve().parents[2]
 
 MODULES = sorted(
     module.name for module in pkgutil.walk_packages(finn.kernels.__path__, "finn.kernels.")

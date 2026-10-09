@@ -3,7 +3,7 @@
 
 """ExploreKernelChoices with a rank-style policy (``Ranked``): every open choice of a
 model's KernelOps, committed by a policy that only ranks what the engine says is viable,
-persisted on the owning nodes.
+persisted on their owners: a kernel's on its node, a channel's on its tensor.
 
 On the Chain (``kernels.chain``) as a model (MatMul, Thresholding, MatMul) for Ultra96 without
 a shell: no UltraRAM, a doubled clock (nothing states it away).
@@ -20,8 +20,14 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.base import (
+    CHANNEL,
+    KernelOpError,
+    channel_choices,
+    kernel_op,
+    write_target,
+)
+from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Choice, ExploreError, Ranked, RankPolicy
 from finn.kernels.target import Target
@@ -31,7 +37,6 @@ from finn.transformation.kernels import (
     ToKernelOps,
     completion,
 )
-from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, chain_source
 
 URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP48E2, shell="ip")
@@ -53,11 +58,16 @@ def offer(key: str, cases: tuple[object, ...], refused: dict[str, str]) -> Choic
 
 
 def choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
-    return {
+    """Every choice the model states, by graph name: each KernelOp node's (empty when it
+    holds none), then each tensor's channel choices."""
+    found = {
         node.name: kernel_op(model, node).choices()
         for node in model.graph.node
         if node.domain == "finn.custom_op.kernels"
     }
+    for tensor in model.tensors_stating(CHANNEL):
+        found[tensor] = channel_choices(model, tensor)
+    return found
 
 
 class Recording:
@@ -135,15 +145,15 @@ def test_the_policy_is_offered_viable_cases_only_and_no_forced_decision() -> Non
     assert not any(key.endswith(".compute") for key in offered)
     # Forced Decisions are derived on every read, never stored.
     stored = {key for node in choices(model).values() for key in node}
-    assert "compute" not in stored and "w.source" not in stored
+    assert not {"compute", "source", "adapter"} & stored
     assert "ultra_stages" not in stored  # one viable count without UltraRAM
 
 
 def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
     model = kernel_model().transform(ranked(Last(memories=True)))
-    assert choices(model)["first"]["w.source.memstream.ram_style"] not in ("ultra", "auto")
+    assert choices(model)["w1"]["source.memstream.ram_style"] not in ("ultra", "auto")
     uram = kernel_model(URAM).transform(ranked(Last(memories=True)))
-    assert choices(uram)["first"]["w.source.memstream.ram_style"] == "ultra"
+    assert choices(uram)["w1"]["source.memstream.ram_style"] == "ultra"
 
 
 def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> None:
@@ -185,10 +195,10 @@ class PreferUltra:
 
 def adapter_memories(model: ModelWrapper) -> dict[str, object]:
     return {
-        f"{node}.{key}": value
-        for node, saved in choices(model).items()
+        f"{owner}.{key}": value
+        for owner, saved in choices(model).items()
         for key, value in saved.items()
-        if ".adapter." in key and key.endswith(".ram_style")
+        if key.startswith("adapter.") and key.endswith(".ram_style")
     }
 
 

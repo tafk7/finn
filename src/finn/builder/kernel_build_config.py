@@ -13,23 +13,25 @@ configuration (folding, FIFO sizing, specialization, the Vitis and SLASH shells)
 field of it: what the kernel path does not make, it cannot be asked for.
 """
 
-from dataclasses import dataclass, field, fields
-from dataclasses_json import DataClassJsonMixin, Undefined, config
-from dataclasses_json.undefined import UndefinedParameterError
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
+from dataclasses_json import DataClassJsonMixin, Undefined, config
+from qonnx.core.modelwrapper import ModelWrapper
+
+from finn.builder.config_common import ToolchainResolution, declared
 from finn.kernels.target import Target
-from finn.platform import TargetRequest, shell_row
+from finn.platform import VIVADO_BLOCK_DESIGN, TargetRequest, shell_row
 from finn.shells.pynq.runner import PynqOptions
-from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN
 from finn.transformation.prepare import GraphPreparation
-from finn.util.toolchain import Selection, Toolchain, machine_selection
+from finn.util.toolchain import Selection
 
 
 class KernelOutputType(str, Enum):
     """What a kernel-path build makes beside its partition and reports. The names are
-    DataflowOutputType's.
+    DataflowOutputType's; the values are the kernel path's own (``ooc_synth``), which
+    ``finn.outputs`` records.
 
     The partition's own, on every shell: ``stitched_ip``, the shell root's packaged IP
     with its interface description and its XSim testbench, written and not run (the
@@ -116,24 +118,6 @@ VERIFIED_BY = {
 }
 
 
-def declared(cls: type, name: str) -> Callable[[Any], Any]:
-    """The decoder of the nested dataclass ``cls`` a configuration states as ``name``,
-    refusing keys ``cls`` does not declare (dataclasses_json would drop them, as it
-    does a nested dataclass's), naming them."""
-
-    def decode(stated: Any) -> Any:
-        if stated is None or isinstance(stated, cls):
-            return stated
-        unknown = sorted(set(stated) - {item.name for item in fields(cls)})
-        if unknown:
-            raise UndefinedParameterError(
-                f"{name}: keys {cls.__name__} does not declare: {unknown}"
-            )
-        return cls(**stated)
-
-    return decode
-
-
 #: The steps of a kernel-path build, from a Brevitas export: the graph-preparation
 #: phase (the export to a streamlined graph, checked), the kernel-path phase (the
 #: target, KernelOps, their choices, the partition, its verification), then the
@@ -149,14 +133,15 @@ default_kernel_build_steps = [
 # configuration is read (from_json, from_dict), never dropped: a DataflowBuildConfig
 # field stated here (target_fps, shell_flow_type, ...) is refused, not ignored.
 @dataclass
-class KernelBuildConfig(DataClassJsonMixin):
+class KernelBuildConfig(DataClassJsonMixin, ToolchainResolution):
     """The configuration of a kernel-path build, passed to build_dataflow_cfg, or
     written as ``kernel_build_config.json`` beside ``model.onnx`` for
     build_dataflow_directory and the ``build_dataflow`` command. Serialized to and
     from JSON as DataflowBuildConfig is; reading one refuses a key it does not
     declare (``UndefinedParameterError``, naming the keys)."""
 
-    dataclass_json_config = config(undefined=Undefined.RAISE)["dataclasses_json"]
+    # dataclasses_json types the hook None, the value its dataclass_json decorator sets.
+    dataclass_json_config = config(undefined=Undefined.RAISE)["dataclasses_json"]  # type: ignore[assignment]
 
     #: Directory where the build's outputs and reports are written
     output_dir: str
@@ -266,10 +251,14 @@ class KernelBuildConfig(DataClassJsonMixin):
     verbose: bool = False
 
     #: Functions to run after named steps or phases, as DataflowBuildConfig's.
-    inject_steps_after: Dict[str, List[Callable]] = field(default_factory=dict)
+    inject_steps_after: Dict[
+        str, List[Callable[[ModelWrapper, "KernelBuildConfig"], ModelWrapper]]
+    ] = field(default_factory=dict)
 
     #: Functions to run before named steps or phases, as DataflowBuildConfig's.
-    inject_steps_before: Dict[str, List[Callable]] = field(default_factory=dict)
+    inject_steps_before: Dict[
+        str, List[Callable[[ModelWrapper, "KernelBuildConfig"], ModelWrapper]]
+    ] = field(default_factory=dict)
 
     def _resolve_target(self) -> Target:
         """The build's target (finn.platform.resolve_target), every refusal named."""
@@ -288,17 +277,3 @@ class KernelBuildConfig(DataClassJsonMixin):
                 f"{', '.join(sorted(self.shell_options))}"
             )
         return None
-
-    def _resolve_selection(self) -> Selection:
-        """The selection this build runs its tools by: ``toolchain`` laid over the
-        machine's (``machine_selection``), each field it states winning; unset, the
-        machine's."""
-        return machine_selection(stated=self.toolchain)
-
-    def _resolve_toolchain(self) -> Toolchain:
-        """The prepared toolchain every tool step of this build runs in, prepared once
-        and kept on the instance (not a field: it is prepared, not configured)."""
-        toolchain = getattr(self, "_toolchain", None)
-        if toolchain is None:
-            toolchain = self._toolchain = self._resolve_selection().prepare()
-        return toolchain

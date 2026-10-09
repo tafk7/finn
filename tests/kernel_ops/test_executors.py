@@ -32,18 +32,19 @@ from finn.core.onnx_exec import (
     DEFAULT_EXECUTORS,
     HardwareRequired,
     InsidePartition,
-    Provenance,
+    RanBy,
     execute_onnx,
     executing,
 )
+from finn.custom_op.kernels.shell import PARTITION
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     PARTITION_DOMAIN,
     PARTITION_OP,
     kernel_partition_body,
 )
-from finn.harness.ops import as_partition, boundary_inputs
-from finn.transformation.kernels.cut import partition_kernel_ops
+from finn.harness.ops import boundary_inputs
+from finn.transformation.kernels.cut import CutKernelPartition, partition_kernel_ops
 from kernel_ops.models import configure_partition, kernel_model, thresholding_model
 
 X = np.array([[-2.0, -1.0, 1.0, 2.0]], dtype=np.float32)
@@ -183,7 +184,7 @@ def test_python_claims_kernel_ops_and_partition_nodes_only() -> None:
 
 def test_the_provenance_names_the_executor_of_each_node(tmp_path: Path) -> None:
     relu = Constant("Relu", 3.0)
-    ran: Provenance = {}
+    ran: RanBy = {}
     execute_onnx(host_graph(), {"x": X}, executors=(relu,), provenance=ran)
     assert ran == {"relu": relu, "negate": None}
     _, parent = chain_partition(tmp_path)
@@ -228,7 +229,7 @@ def test_a_hardware_executor_satisfies_a_run_that_requires_hardware(tmp_path: Pa
     """The host's nodes are no hardware nodes: qonnx runs them in a run that requires
     hardware; the partition node runs on the hardware executor that claims it."""
     simulator = Constant(PARTITION_OP, 5.0, hardware=True)
-    ran: Provenance = {}
+    ran: RanBy = {}
     parent = partition_of_host_graph(tmp_path)
     y = execute_onnx(
         parent, {"x": X}, executors=(simulator,), require_hardware=True, provenance=ran
@@ -306,13 +307,13 @@ def test_a_start_node_inside_a_partition_is_refused(tmp_path: Path) -> None:
 def test_xsim_runs_a_one_node_partition_as_python_does(tmp_path: Path) -> None:
     model = thresholding_model()
     inputs = boundary_inputs(model, 5)
-    parent = as_partition(model, tmp_path / "body.onnx", "activate_partition")
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     simulator = XSim(directory=tmp_path / "xsim")
-    ran: Provenance = {}
+    ran: RanBy = {}
     found = execute_onnx(
         parent, inputs, executors=(simulator,), require_hardware=True, provenance=ran
     )
-    assert ran == {"activate_partition": simulator}
+    assert ran == {PARTITION: simulator}
     assert np.array_equal(found["y"], execute_onnx(model, inputs)["y"])
     assert np.array_equal(found["y"], execute_onnx(parent, inputs)["y"])
 
@@ -325,7 +326,7 @@ def test_xsim_runs_the_chain_whole_up_to_an_end_node_inside_it(tmp_path: Path) -
     (partition,) = parent.graph.node
     x = {"x": np.array(chain.X, dtype=np.float32)}
     simulator = XSim(directory=tmp_path / "xsim")
-    ran: Provenance = {}
+    ran: RanBy = {}
     activate = body_node(parent, "activate")
     found = execute_onnx(
         parent,

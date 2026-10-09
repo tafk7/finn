@@ -20,14 +20,13 @@ from finn.builder.kernel_resources import (
     utilization_synth,
 )
 from finn.custom_op.kernels.base import write_target
-from finn.custom_op.kernels.shell import ShellResources, shell_resources
+from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import resolve_target, shell_row
 from finn.platform.shells import PYNQ_CHARACTERISED
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 

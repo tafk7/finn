@@ -151,7 +151,6 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.target import Platform
 from finn.kernels.transport import (
     AxisBeat,
-    Level,
     Mismatch,
     StreamContract,
     compatibility,
@@ -166,7 +165,7 @@ from finn.kernels.values.semantics import (
     IntegerTensor,
 )
 
-SOURCES: dict[str, type[Space] | Space] = {"memstream": MemStreamKernel}
+SOURCES: dict[str, type[MemStreamKernel]] = {"memstream": MemStreamKernel}
 """The kernels that can drive a channel with its known value, by case: a memory."""
 
 
@@ -289,8 +288,9 @@ class ChannelFifo(Space):
 
 @dataclass(frozen=True)
 class ChannelEnds:
-    """A channel's two ends: each end's owner (the user's port node, None at the root's
-    boundary) and its contract."""
+    """A channel's two ends: each end's owner (the user's port node; the channel's
+    source label, ``source.<case>``, for a known value; None at the root's boundary)
+    and its contract."""
 
     source_owner: str | None
     source: StreamContract
@@ -592,7 +592,6 @@ class Channel(Space):
             if current.transport.data_width > ends.sink.transport.data_width:
                 found.append(
                     Mismatch(
-                        Level.PHYSICAL,
                         "channel-padding",
                         "a child's padding is wider than the top word that must carry it",
                     )
@@ -617,7 +616,7 @@ class Channel(Space):
                 continue
             kernel = None if node is None else node.rpartition(".")[0]
             if kernel == "":
-                return reject("channel-user", f"{node} presents an end, but is no kernel's port")
+                return reject("channel-port", f"{node} presents an end, but is no kernel's port")
             owners.append(None if kernel is None else "^" + kernel)
         links: list[Link] = []
         owner, current = owners[0], ends.source

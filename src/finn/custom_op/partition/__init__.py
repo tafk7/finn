@@ -10,14 +10,16 @@ no placement, no estimates. What the flow reads of a partition and what a build 
 it are ``kernel_partitions``'s.
 
 qonnx resolves this domain by importing it and reads its op classes from ``__all__``, so
-this module exports op classes only. It imports qonnx only; the executors it runs its
-body with (``finn.core.onnx_exec``), when it runs.
+this module exports op classes only. It imports qonnx and ``kernel_partitions`` only;
+the executors it runs its body with (``finn.core.onnx_exec``), when it runs.
 """
 
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.general.genericpartition import GenericPartition
+
+from finn.custom_op.partition.kernel_partitions import body_file
 
 opset_version = 1
 
@@ -34,10 +36,7 @@ class StreamingDataflowPartition(GenericPartition):
         from finn.core.onnx_exec import execute_onnx, executing  # noqa: PLC0415
 
         node = self.onnx_node
-        path = self.get_nodeattr("model")
-        if not isinstance(path, str):
-            raise TypeError(f"{node.name}: its model attribute is {path!r}, not a path")
-        body = ModelWrapper(path)
+        body = ModelWrapper(body_file(node))
         full = self.get_nodeattr("return_full_exec_context") == 1
         inputs = {
             body_input.name: context[name]

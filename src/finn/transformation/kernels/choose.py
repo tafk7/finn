@@ -8,8 +8,8 @@ model of KernelOps the kernel path's cut made (``CutKernelPartition``; the build
 it through the parent graph's node, ``partition_body``), so which KernelOps go together
 is the cut's alone: a model holding any other node is refused. It builds the body's
 shell root once (``shell_root``: their kernels, the channels between them and the
-channels on its boundary; the nodes' saved choices replayed, a stale one dropped with
-why; members named as the graph, ``MatMul_0``),
+channels on its boundary; the nodes' and the channels' saved choices replayed, a stale
+one dropped with why; members named as the graph, ``MatMul_0``),
 runs the strategies in order through one ``Seam`` (``finn.kernels.explore``), each
 from the point the one before returned, and then:
 
@@ -20,18 +20,19 @@ from the point the one before returned, and then:
   sizing, on a copy that is not stored) and refuses a completed point its shell
   does not admit (``admission_refusal``: its AXI-Lite buses, memory ports and
   doubled clock against the shell's row), by name;
-- persists the point's commitments on the nodes that own them, each node's whole
-  (``persist``): the choices made on purpose, never a completed one; a saved choice
-  is never changed (an explorer fills open choices only), and a stale one is
-  cleared;
+- persists the point's commitments where they are stated, each owner's whole
+  (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
+  the choices made on purpose, never a completed one; a saved choice is never changed
+  (an explorer fills open choices only), and a stale one is cleared;
 - keeps what it found (``explored``): the committed point, the cost of the
   completed one and the report (the strategies, each with the choices it
   committed, attempts and time, and the completed values it read, if any; every
-  committed choice by its owner, with the strategy that made it, ``saved`` for
-  one the model held before; the completion policy and every value it completed,
-  by owner, with who completed it; each FIFO's memory style beside the storage
-  FinnLib's selection gives it and what it uses (``fifo_storage``: its ``auto``
-  is FinnLib's, not Vivado's); the required choices it leaves open, which
+  committed choice by its owner (a node or a tensor, by graph name, and the key
+  there, as ``kernel_choices.json`` names it), with the strategy that made it,
+  ``saved`` for one the model held before; the completion policy and every value it
+  completed, by owner, with who completed it; each FIFO's memory style beside the
+  storage FinnLib's selection gives it and what it uses (``fifo_storage``: its
+  ``auto`` is FinnLib's, not Vivado's); the required choices it leaves open, which
   hardware generation refuses; whether FIFOs were sized; the dropped choices with
   why, per member cycles, buffering and resources, the bottleneck, and the
   shell's resources against the platform's, ``resources``), so an outer search can
@@ -61,9 +62,9 @@ channels its ends (none: the ``ip`` shell). Where a channel has an end, the repo
 has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
 
-``fresh`` clears the nodes' choices before the root is built, so the strategies
-explore from scratch; otherwise a saved choice is pinned and an exploration
-resumes from what was saved.
+``fresh`` clears the nodes' choices and the channel choices the body's tensors state
+before the root is built, so the strategies explore from scratch; otherwise a saved
+choice is pinned and an exploration resumes from what was saved.
 
 A strategy is written as a spec, ``{"strategy": name, **parameters}``
 (``strategy(spec)``, the names ``KERNEL_STRATEGIES``), as a build configuration
@@ -86,7 +87,7 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn.core.space import Available
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target
+from finn.custom_op.kernels.base import KernelOpError, clear_channel_choices, kernel_op, read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
     admission_refusal,
@@ -116,9 +117,7 @@ from finn.kernels.explore import (
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
-from finn.platform import TargetRefused
-from finn.platform import part as catalog_part
-from finn.platform.catalog import SLRS_CAPPED
+from finn.platform import part_report
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -214,42 +213,6 @@ def resources_exact(platform: Platform | None) -> str:
     )
 
 
-def part_report(name: str) -> dict[str, object]:
-    """The target's part as the part catalog states it (``finn.platform.catalog``):
-    its device, the device's resources per SLR (``None`` where an overlay states no
-    split), on a reduced die of several SLRs each SLR's site capacity under the
-    device's totals as a cap (``cap``: the totals, the resources they cap, which of
-    those caps a fill proved and which are inferred, and the evidence), the devices
-    that share them, and where its facts come from (``source``); a part the catalog
-    does not have says why, with no source."""
-    try:
-        found = catalog_part(name)
-    except TargetRefused as refused:
-        return {"name": name, "source": None, "refused": str(refused)}
-    device = found.device
-    cap: dict[str, object] | None = None
-    if device.capped:
-        review = device.cap_evidence
-        proven = set() if review is None else review.proven
-        cap = {
-            "slrs": SLRS_CAPPED,
-            "totals": asdict(device.resources),
-            "proven": [each for each in device.capped if each in proven],
-            "inferred": [each for each in device.capped if each not in proven],
-            "evidence": found.source if review is None else review.evidence,
-        }
-    return {
-        "name": found.name,
-        "device": device.name,
-        "architecture": device.architecture,
-        "family": device.family,
-        "slrs": None if device.slrs is None else [asdict(slr) for slr in device.slrs],
-        "cap": cap,
-        "shared_with": list(device.shared_with),
-        "source": found.source,
-    }
-
-
 def _resources_report(
     cost: Cost,
     split: ShellResources | str,
@@ -339,9 +302,9 @@ def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[s
 
 
 def _fifo_storage(seam: Seam, point: Any) -> dict[str, dict[str, object]]:
-    """Each FIFO's memory style on the completed ``point``, by the node and attribute that
-    would persist it, beside the storage the RTL selects for it (FinnLib's ``auto``:
-    shift, distributed, block or ultra) and what it uses."""
+    """Each FIFO's memory style on the completed ``point``, by the graph name (a node or a
+    tensor) and key that would persist it, beside the storage the RTL selects for it
+    (FinnLib's ``auto``: shift, distributed, block or ultra) and what it uses."""
     found: dict[str, dict[str, object]] = {}
     declared = seam.declared(point)
     for key, value in seam.chosen(point).items():
@@ -363,8 +326,8 @@ def _fifo_storage(seam: Seam, point: Any) -> dict[str, dict[str, object]]:
 
 
 def _choices_by_owner(seam: Seam, made_by: Mapping[str, str]) -> dict[str, dict[str, str]]:
-    """Each committed choice, by the node and attribute that persist it (as
-    ``kernel_choices.json`` names it), with who made it."""
+    """Each committed choice, by the graph name (a node or a tensor) and key that persist
+    it (as ``kernel_choices.json`` names it), with who made it."""
     found: dict[str, dict[str, str]] = {}
     for key, strategy_name in made_by.items():
         node, attribute = seam.owner(key) or ("", key)
@@ -373,13 +336,13 @@ def _choices_by_owner(seam: Seam, made_by: Mapping[str, str]) -> dict[str, dict[
 
 
 def _owned(seam: Seam, key: str) -> str:
-    """``key`` as its owner names it: ``node.attribute``."""
+    """``key`` as its owner names it: ``<graph name>.<key>``."""
     node, attribute = seam.owner(key) or ("", key)
     return f"{node}.{attribute}"
 
 
 def _completed_by_owner(seam: Seam, completed: Completed[Any]) -> dict[str, dict[str, object]]:
-    """Each completed value by the node and attribute that would persist it, with who
+    """Each completed value by the graph name and key that would persist it, with who
     completed it."""
     found: dict[str, dict[str, object]] = {}
     for key, value in completed.values.items():
@@ -470,6 +433,7 @@ def explore_kernel_choices(
         for node in nodes:
             op = kernel_op(model, node)
             op.save(dict.fromkeys(op.choices()))
+        clear_channel_choices(model)
     started = time.perf_counter()
     root = shell_root(model, nodes)
     seam = Seam(root.members, root.owners, read_target(model).platform, completion)

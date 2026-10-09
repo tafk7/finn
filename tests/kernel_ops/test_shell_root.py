@@ -3,12 +3,12 @@
 
 """The shell root of KernelOp nodes: the Chain (``kernels.chain``) built from them.
 
-Each node's choices are saved on it; the root's adapter memories, open (several
-viable), are the flow's to choose and are saved on their consumers; each
-edge's adapter is forced. The root's members are its channels, the boundary's among
-them, and its kernels, named as the graph. The rebuilt root's module is
-the Chain's (``kernels.chain``), configured the same way: the same flat netlist and
-pins, and in XSim what ``execute_onnx`` computes on the source.
+Each node's choices are saved on it and each channel's on its tensor; the root's
+adapter memories, open (several viable), are the flow's to choose and are saved on
+their channels' tensors; each edge's adapter is forced. The root's members are its
+channels, the boundary's among them, and its kernels, named as the graph. The rebuilt
+root's module is the Chain's (``kernels.chain``), configured the same way: the same
+flat netlist and pins, and in XSim what ``execute_onnx`` computes on the source.
 """
 
 from __future__ import annotations
@@ -24,14 +24,19 @@ from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.core.executors.xsim.rtl import pack, stream_through
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import KernelOpError, kernel_op
-from finn.custom_op.kernels.shell import persist, shell_root
+from finn.custom_op.kernels.base import CHANNEL_KEYS, KernelOpError, channel_choices, kernel_op
+from finn.custom_op.kernels.shell import persist, save_channels, shell_root
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.configure import chosen, commit
 from finn.kernels.explore import Ranked, SizeFifos
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps, explore_kernel_choices
+from finn.transformation.kernels import (
+    InferKernelTensors,
+    ToKernelOps,
+    explore_kernel_choices,
+    kernel_choices_config,
+)
 from finn.transformation.kernels.cut import CutKernelPartition
 from kernel_ops.models import (
     INT3,
@@ -63,12 +68,15 @@ def test_a_shell_root_refuses_a_node_that_is_not_a_kernel_op() -> None:
         shell_root(model, model.graph.node[1:2])
 
 
-def test_edge_choices_persist_on_their_consumers() -> None:
+def test_channel_choices_persist_on_their_tensors() -> None:
+    """The adapter memories chosen in the root are stated on the tensors of x and levels,
+    and no node holds a channel's choice."""
     model = kernel_model()
     configure_partition(model)
-    ops = {node.name: kernel_op(model, node) for node in model.graph.node}
-    assert "x.adapter.input_gen.input_gen.ram_style" in ops["first"].choices()
-    assert "x.adapter.input_gen.input_gen.ram_style" in ops["second"].choices()  # levels
+    assert "adapter.input_gen.input_gen.ram_style" in channel_choices(model, "x")
+    assert "adapter.input_gen.input_gen.ram_style" in channel_choices(model, "levels")
+    attributes = {attribute.name for node in model.graph.node for attribute in node.attribute}
+    assert not any(name.startswith(("x.", "w.", "y.")) for name in attributes)
 
 
 def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
@@ -89,9 +97,12 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
 def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
     model = kernel_model()
     configure_partition(model)
-    second = kernel_op(model, model.graph.node[2])
-    # A memory of a chain the levels edge does not take.
-    second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
+    # A memory of a chain the levels edge does not take: the writer refuses it, so it is
+    # written past it.
+    other = {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}
+    with pytest.raises(KernelOpError, match="levels: refused choices: adapter.input_gen_vpc"):
+        save_channels(model, {"levels": other})
+    model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
     root = shell_root(model, model.graph.node, name="chain")
     stale = "levels.adapter.input_gen_vpc.input_gen.ram_style"
     assert list(root.dropped) == [stale]
@@ -103,11 +114,14 @@ def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None
 
 def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> None:
     """Weights lifted to a graph input leave the node streamed: its weight channel has no
-    value, so no source, and the source's choices, now the weight edge's, are the
-    partition's to replay: it drops them as stale."""
+    value, so no source, and the source's choices, stated on the tensor w, now the
+    weight edge's, are the partition's to replay: it drops them as stale."""
     model = matmul_model()
     stored = kernel_op(model, model.graph.node[0])
-    stored.save({"compute.packed.pe": 2, "w.source.memstream.ram_style": "block"})
+    stored.save({"compute.packed.pe": 2})
+    save_channels(model, {"w": {"source.memstream.ram_style": "block"}})
+    owned: Any = stored.point()
+    assert owned.w.source.ram_style == "block"  # the node owns w's channel
     lift(model, "w")
     model.set_tensor_datatype("w", INT3)
     streamed = kernel_op(model, model.graph.node[0])
@@ -120,6 +134,7 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's.
+    assert channel_choices(model, "w") == {"source.memstream.ram_style": "block"}
     point: Any = streamed.point()
     assert point.matmul.compute.pe == 2 and streamed.verify_node() == []
     assert list(shell_root(model, model.graph.node).dropped) == ["w.source.memstream.ram_style"]
@@ -152,9 +167,9 @@ def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
     model = kernel_model(second_weights=False)
     root = shell_root(model, model.graph.node, name="chain")
     assert root.boundary == (("x", "s_axis_0"), ("w2", "s_axis_1"), ("y", "m_axis_0"))
-    assert root.owners["w2"] == ("second", "w.")
-    assert root.owner("w2.transport") == ("second", "w.transport")
-    # Every channel has a transport, the weight edge's as x's: each its consumer's.
+    assert root.owners["w2"] == "w2"
+    assert root.owner("w2.transport") == ("w2", "transport")
+    # Every channel has a transport, the weight edge's as x's: each its tensor's.
     keys = {decision.key for decision in inspection.decisions(root.point)}
     assert {"w2.transport", "x.transport"} <= keys
 
@@ -162,24 +177,25 @@ def test_streamed_weights_are_a_boundary_of_the_partition() -> None:
 def test_the_owner_map() -> None:
     model = kernel_model()
     root = shell_root(model, model.graph.node, name="chain")
+    # Each member's owner is its graph name: a channel's tensor, a kernel's node.
     assert dict(root.owners) == {
-        "first": ("first", ""),
-        "x": ("first", "x."),
-        "w1": ("first", "w."),
-        "activate": ("activate", ""),
-        "hidden": ("activate", "x."),
-        "second": ("second", ""),
-        "levels": ("second", "x."),
-        "w2": ("second", "w."),
-        "y": ("second", "y."),
+        "x": "x",
+        "w1": "w1",
+        "hidden": "hidden",
+        "levels": "levels",
+        "w2": "w2",
+        "y": "y",
+        "first": "first",
+        "activate": "activate",
+        "second": "second",
     }
-    # A key's owner is its longest owned member path's: the edge's, then the kernel's.
+    # A key's owner is its longest member path's, the key there the rest of it.
     assert root.owner("levels.adapter.input_gen.input_gen.ram_style") == (
-        "second",
-        "x.adapter.input_gen.input_gen.ram_style",
+        "levels",
+        "adapter.input_gen.input_gen.ram_style",
     )
     assert root.owner("second.compute.packed.pe") == ("second", "compute.packed.pe")
-    assert root.owner("y.transport") == ("second", "y.transport")
+    assert root.owner("y.transport") == ("y", "transport")
     assert root.owner("levelsx.transport") is None
     assert root.members == (
         "x",
@@ -194,20 +210,22 @@ def test_the_owner_map() -> None:
     )
 
 
-def test_a_choice_in_the_root_persists_on_the_weight_streams_owner() -> None:
+def test_a_choice_in_the_root_persists_on_the_weights_tensor() -> None:
     model = kernel_model()
     root = shell_root(model, model.graph.node, name="chain")
     written = persist(model, root, commit(root.point, {"w2.source.memstream.ram_style": "block"}))
-    assert written["second"]["w.source.memstream.ram_style"] == "block"
-    second = kernel_op(model, model.graph.node[2])
-    assert second.choices()["w.source.memstream.ram_style"] == "block"
+    assert written["w2"]["source.memstream.ram_style"] == "block"
+    assert channel_choices(model, "w2")["source.memstream.ram_style"] == "block"
+    replayed: Any = kernel_op(model, model.graph.node[2]).point()
+    assert replayed.w.source.ram_style == "block"
     rebuilt = shell_root(model, model.graph.node, name="chain")
     assert rebuilt.point.w2.source.ram_style == "block" and not rebuilt.dropped
 
 
 def test_an_explored_point_persists_and_replays_as_itself() -> None:
     """Every choice an exploration commits, a boundary channel's and the others',
-    goes back to its owner by path and replays onto the same point."""
+    goes back to its owner (a node or a tensor) by path and replays onto the same
+    point."""
     model = kernel_model()
     explored = explore_kernel_choices(model, [Ranked(Lanes(2)), SizeFifos()])
     made = chosen(explored.point)
@@ -215,10 +233,11 @@ def test_an_explored_point_persists_and_replays_as_itself() -> None:
     assert "first.compute.packed.pe" in made
     rebuilt = shell_root(model, model.graph.node)
     assert not rebuilt.dropped and chosen(rebuilt.point) == made
-    # Written again from the replayed point, every node holds what it held.
-    held = {node.name: kernel_op(model, node).choices() for node in model.graph.node}
+    # Written again from the replayed point, every node and tensor holds what it held.
+    held = kernel_choices_config(model)
+    assert {"first", "x", "levels", "y"} <= set(held)
     persist(model, rebuilt, rebuilt.point)
-    assert {node.name: kernel_op(model, node).choices() for node in model.graph.node} == held
+    assert kernel_choices_config(model) == held
 
 
 def test_a_node_named_like_a_tensor_is_refused() -> None:
@@ -296,18 +315,18 @@ def test_a_kernel_choice_the_root_refuses_is_dropped_named_and_cleared_by_persis
 def test_persist_clears_what_the_point_does_not_commit() -> None:
     model = kernel_model()
     root = shell_root(model, model.graph.node, name="chain")
-    second = kernel_op(model, model.graph.node[2])
-    second.save({"x.adapter.input_gen_vpc.input_gen.ram_style": "auto"})
+    model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
     stale = shell_root(model, model.graph.node, name="chain")
     assert list(stale.dropped) == ["levels.adapter.input_gen_vpc.input_gen.ram_style"]
     persist(model, stale, stale.point)
-    assert "x.adapter.input_gen_vpc.input_gen.ram_style" not in second.choices()
-    owned = {key: root.owner(key) for key in chosen(root.point)}
-    assert second.choices() == {
-        owner[1]: value
-        for key, value in chosen(root.point).items()
-        if (owner := owned[key]) is not None and owner[0] == "second"
-    }
+    assert "adapter.input_gen_vpc.input_gen.ram_style" not in channel_choices(model, "levels")
+    # Every owner holds what the point commits, by graph name and the key there.
+    expected: dict[str, dict[str, object]] = {}
+    for key, value in chosen(root.point).items():
+        owner = root.owner(key)
+        assert owner is not None
+        expected.setdefault(owner[0], {})[owner[1]] = value
+    assert kernel_choices_config(model) == expected
 
 
 @requires_xsim
@@ -323,7 +342,7 @@ def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
         inputs={
             "s_axis_0": (
                 [
-                    pack(chain.X[r][f : f + chain.SIMD], a_bits)
+                    pack_lanes(chain.X[r][f : f + chain.SIMD], a_bits)
                     for r in range(chain.ROWS)
                     for f in range(0, chain.INPUTS, chain.SIMD)
                 ],
@@ -333,7 +352,7 @@ def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
         outputs={
             "m_axis_0": (
                 [
-                    pack(y[r][f : f + chain.PE].tolist(), y_bits)
+                    pack_lanes(y[r][f : f + chain.PE].tolist(), y_bits)
                     for r in range(chain.ROWS)
                     for f in range(0, chain.OUTPUTS, chain.PE)
                 ],

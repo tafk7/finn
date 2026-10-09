@@ -9,7 +9,7 @@ one root (a shell root, its members its channels and kernels, each at its path:
 ``member_of``):
 
 - ``choices(point)``: each open Decision as a ``Choice``: its key, who persists it
-  (``owner``: the node and attribute), the Space class that declares it, its
+  (``owner``: the graph name and the key there), the Space class that declares it, its
   viable cases in domain order (or ``None``: known by membership only, a FIFO's
   depth), whether that order is one (``Domain.ordered``), and why each other case
   is not viable. A forced Decision is never a choice.
@@ -44,9 +44,9 @@ before returned, fills only open choices, and says what it did (``report``).
 
 The strategies, each an objective and its constraints searched through the seam:
 
-- ``Pinned(path)``: fixed choices, by node and attribute (a folding file in the
-  kernels' attribute names, the form the kernel path's ``kernel_choices.json``
-  takes), committed as one batch;
+- ``Pinned(path)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
+  a kernel's under its node, a channel's under its tensor, the form the kernel path's
+  ``kernel_choices.json`` takes), committed as one batch;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
   folding through an unordered choice its cycles wait on by trying each case (a
@@ -126,8 +126,9 @@ class Choice:
     ``cases``: the viable cases, in domain order (several; none when the Decision is
     refused, ``refused`` then naming why for each); ``None`` for a Decision known by
     membership only, whose value an explorer proposes. ``ordered``: the domain states
-    an order of its cases (``divisors_of``, an integer range). ``owner``: the node and
-    attribute that persist it, when the seam knows the owners. ``required``: it has
+    an order of its cases (``divisors_of``, an integer range). ``owner``: the graph name
+    that persists it (a node or a tensor) and the key there, when the seam knows the
+    owners. ``required``: it has
     no safe baseline (``Decision(required=True)``), so no completion but the debug
     one takes its first case.
     """
@@ -216,8 +217,8 @@ class Stated:
 
 class Seam:
     """The seam over the points of one root: its ``members`` by path (whose cost it
-    reads); for each member, by path, the owner that persists its choices and the
-    owner's key prefix; the
+    reads); for each member, by path, the owner that persists its choices (a graph
+    name: a kernel's node, a channel's tensor); the
     ``platform`` its kernels are built for (its clock, which a throughput reads); and
     the ``completion`` policy that completes a point on a copy (``Baseline()`` unless
     the build names another). ``attempts`` counts the attempts made through it, and
@@ -227,13 +228,14 @@ class Seam:
     def __init__(
         self,
         members: Sequence[str],
-        owners: Mapping[str, tuple[str, str]] | None = None,
+        owners: Mapping[str, str] | None = None,
         platform: Platform | None = None,
         completion: Completion | None = None,
     ) -> None:
         self.members = tuple(members)
         self._members = frozenset(self.members)
         self.owners = MappingProxyType(dict(owners or {}))
+        self._paths = {owner: path for path, owner in self.owners.items()}
         self.platform = platform
         self.completion: Completion = Baseline() if completion is None else completion
         self.attempts = 0
@@ -257,26 +259,18 @@ class Seam:
         return member_of(self._members, key)
 
     def owner(self, key: str) -> tuple[str, str] | None:
-        """The owner that persists ``key``, and the key there (its attribute): the owner of
-        the longest owned member path that prefixes it."""
+        """The owner that persists ``key``, and the key there: the owner of the longest
+        owned member path that prefixes it, and the key below that path."""
         path = member_of(self.owners, key)
         if path is None:
             return None
-        node, prefix = self.owners[path]
-        return node, prefix + key[len(path) + 1 :]
+        return self.owners[path], key[len(path) + 1 :]
 
-    def key(self, owner: str, attribute: str) -> str | None:
-        """The root key an owner's attribute names: the member's whose prefix it carries
-        (the longest, so an edge's ``x.`` wins over the kernel's empty prefix)."""
-        matched = [
-            (len(prefix), name)
-            for name, (node, prefix) in self.owners.items()
-            if node == owner and attribute.startswith(prefix)
-        ]
-        if not matched:
-            return None
-        length, name = max(matched)
-        return f"{name}.{attribute[length:]}"
+    def key(self, owner: str, key: str) -> str | None:
+        """The root key ``key`` names on ``owner`` (a graph name): the key below the
+        member it owns."""
+        path = self._paths.get(owner)
+        return None if path is None else f"{path}.{key}"
 
     # -- the three questions --------------------------------------------------------------
 
@@ -678,12 +672,12 @@ class Placeholder(Baseline):
 
 
 class Pinned:
-    """Fixed choices by owner and attribute (``{node: {attribute: value}}``: a folding
-    file in the kernels' attribute names, the form ``kernel_choices.json`` takes),
+    """Fixed choices by owner and key (``{graph name: {key: value}}``: a kernel's under
+    its node, a channel's under its tensor, the form ``kernel_choices.json`` takes),
     read from ``path`` and committed as one batch. A choice already committed to the
-    same value is skipped; anything else the seam refuses (an owner or attribute that
-    is no choice here, a value not viable, a committed choice it would change) is
-    refused, named."""
+    same value is skipped; anything else the seam refuses (an owner or key that is no
+    choice here, a value not viable, a committed choice it would change) is refused,
+    named."""
 
     strategy = "pinned"
 
@@ -694,7 +688,7 @@ class Pinned:
         if not isinstance(loaded, dict) or not all(
             isinstance(values, dict) for values in loaded.values()
         ):
-            raise ExploreError(f"{self.path}: not a {{node: {{attribute: value}}}} file")
+            raise ExploreError(f"{self.path}: not a {{graph name: {{key: value}}}} file")
         self.choices: dict[str, dict[str, object]] = loaded
 
     def explore(self, seam: Seam, point: S) -> S:
@@ -702,10 +696,10 @@ class Pinned:
         batch: dict[str, object] = {}
         unknown: list[str] = []
         for owner, values in self.choices.items():
-            for attribute, value in values.items():
-                key = seam.key(owner, attribute)
+            for name, value in values.items():
+                key = seam.key(owner, name)
                 if key is None:
-                    unknown.append(f"{owner}.{attribute}")
+                    unknown.append(f"{owner}.{name}")
                 elif key not in held or held[key] != value:
                     batch[key] = value
         if unknown:

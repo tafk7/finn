@@ -16,13 +16,11 @@ adapter refuses it.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import pack, stream_through
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
@@ -32,18 +30,17 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.matmul import exact_result_dtype
 from finn.kernels.memstream import MemStreamKernel
 from kernels.helpers import (
     FULL_DSP48E2,
     Root,
+    exact_result_dtype,
     labels,
     with_adapter_memories,
     with_direct_transports,
 )
 from kernels.xsim import requires_xsim
 
-ROOT = Path(__file__).resolve().parents[2]
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
 PE1, SIMD1, PE2, SIMD2 = 4, 2, 2, 2
 A = W = DataType["INT3"]
@@ -200,7 +197,7 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
         inputs={
             "in0_V": (
                 [
-                    pack(X[r][f : f + SIMD1], a_bits)
+                    pack_lanes(X[r][f : f + SIMD1], a_bits)
                     for r in range(ROWS)
                     for f in range(0, INPUTS, SIMD1)
                 ],
@@ -210,7 +207,7 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
         outputs={
             "out0_V": (
                 [
-                    pack(y[r][f : f + PE2], y_bits)
+                    pack_lanes(y[r][f : f + PE2], y_bits)
                     for r in range(ROWS)
                     for f in range(0, OUTPUTS, PE2)
                 ],

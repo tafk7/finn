@@ -38,7 +38,7 @@ from finn.builder.kernel_build_config import (
 from finn.builder.kernel_build_steps import step_kernel_stitched_ip
 from finn.builder.kernel_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.executors.xsim.rtl import SimulationFailed
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_IP,
     partition_body,
@@ -51,7 +51,6 @@ from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import (
     boundary_facts,
-    configured_root,
     free_side,
     hierarchical_utilization,
     ooc_member_resources,
@@ -237,7 +236,6 @@ def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> 
 
 
 @requires_xsim
-@pytest.mark.skipif(shutil.which("vivado") is None, reason="Vivado is not selected")
 def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     tmp_path: Path, tfc_streamlined: Path
 ) -> None:

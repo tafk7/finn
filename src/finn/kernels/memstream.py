@@ -33,7 +33,6 @@ doubled clock, which its module states and the shell root admits (``clock-unavai
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 from dataclasses import replace
 from math import ceil, prod
@@ -46,7 +45,6 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    requires,
     requiring,
 )
 from finn.dataflow.datatypes import (
@@ -64,12 +62,17 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import (
+    Contribution,
+    CopiedSource,
+    GeneratedData,
+    hex_image,
+)
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
+from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     Fabric,
@@ -148,13 +151,7 @@ class MemStreamKernel(Kernel):
 
     ram_style: str = Decision(
         domain=requiring(
-            memory_styles(table_bits),
-            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
-            requires(
-                platform.uram_init,
-                "uram-init: the platform's UltraRAM takes no initial contents",
-                cases=("ultra",),
-            ),
+            memory_styles(table_bits), *uram_requirements(platform, ("ultra",), init=True)
         )
     )
     # A pumped memory takes a doubled clock, which the shell admits.
@@ -250,10 +247,7 @@ class MemStreamKernel(Kernel):
             bits = half
         else:
             words = tuple(image)
-        digits = (bits + 3) // 4
-        data = "".join(f"{word:0{digits}x}\n" for word in words).encode()
-        name = f"memstream_{hashlib.sha256(data).hexdigest()[:16]}.dat"
-        return GeneratedData(name, data)
+        return hex_image("memstream", words, bits)
 
     @derived
     def config_bus(self) -> Bus:

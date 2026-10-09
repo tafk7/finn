@@ -325,12 +325,7 @@ def _index(model: ModelWrapper, node: NodeProto) -> int:
 
 __all__ = [
     "NARROW_FLOATS",
-    "TIES",
-    "WIDE",
-    "Holding",
-    "Ties",
     "exact_containers",
-    "holding",
     "widened",
     "widened_regions",
 ]

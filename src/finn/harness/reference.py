@@ -67,7 +67,8 @@ from finn.core.containers import container, held, numpy_type
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, datatype, kernel_op
 from finn.dataflow.datatypes import ordinary_integer_bounds
-from finn.harness.ops import Integers, boundary_inputs, executed, graph_inputs
+from finn.harness.ops import boundary_inputs, executed
+from finn.harness.orders import Integers
 from finn.kernels.target import Target
 from finn.platform import BOARDS, IP, ROWS, part, resolve_target
 from finn.platform.architectures import RULES
@@ -387,7 +388,6 @@ __all__ = [
     "coverage",
     "digest",
     "drawn_inputs",
-    "graph_inputs",
     "observe",
     "platform_rows",
 ]

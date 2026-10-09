@@ -21,7 +21,7 @@ holds what it needs and nothing of the machine:
 re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
 its ``run.sh`` as its user would, in a toolchain's environment: the build's
 verification step ``stitched_ip_testbench``, which the user asks for, and which fails
-on a mismatch. ``run.sh`` repeats ``finn.core.executors.xsim.rtl.simulate``'s commands with the
+on a mismatch. ``run.sh`` follows ``finn.core.executors.xsim.rtl.simulate``'s commands with the
 directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
@@ -43,17 +43,18 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
 
 from finn.core.containers import container, held, numpy_type
-from finn.core.executors.xsim.rtl import SimulationFailed, Words, pack, stream_bench
-from finn.core.onnx_exec import execute_onnx as execute_parent_graph
-from finn.custom_op.kernels.shell import member
+from finn.core.executors.xsim.rtl import SimulationFailed, Words, stream_bench
+from finn.core.onnx_exec import execute_onnx
+from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import partition_body
+from finn.dataflow.traversal import pack
+from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
-from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.transformation.kernels.package import boundary_facts, free_side
 from finn.util.toolchain import Toolchain, machine_toolchain, run_process
 
 #: The directory of the testbench, beside the packaged IP.
@@ -65,13 +66,6 @@ RUN_SCRIPT = "run.sh"
 #: How long ``run_testbench`` lets the script run: three tool runs of at most five
 #: minutes each, as ``finn.core.executors.xsim.rtl.simulate`` allows each.
 RUN_TIMEOUT = 900
-
-
-def words(form: Any, values: NDArray[Any], bits: int) -> list[int]:
-    """The beats ``form`` (a Traversal) presents of ``values``, each packed lane zero
-    lowest, ``bits`` a lane."""
-    flat = values.reshape(form.shape)
-    return [pack([int(flat[position]) for position in beat], bits) for beat in form.positions()]
 
 
 def boundary_words(
@@ -87,19 +81,13 @@ def boundary_words(
     found: tuple[dict[str, Words], dict[str, Words]] = ({}, {})
     for side, facts in zip(found, (inputs, outputs), strict=True):
         for each in facts:
-            ends = getattr(point, member(each["tensor"])).endpoints
-            end = ends.source if ends.source_owner is None else ends.sink
+            end = free_side(point, each["tensor"])
             bits = int(end.element.bits)
             side[each["port"]] = (
-                words(end.form, context[each["tensor"]], bits),
+                list(pack(end.form, np.asarray(context[each["tensor"]]).reshape(-1), bits)),
                 bits * each["lanes"],
             )
     return found
-
-
-def _inputs(body: ModelWrapper) -> list[str]:
-    initializers = {tensor.name for tensor in body.graph.initializer}
-    return [item.name for item in body.graph.input if item.name not in initializers]
 
 
 def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]]:
@@ -108,7 +96,7 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
     export's float32, or float64 where graph preparation widened the region)."""
     rng = np.random.default_rng(seed)
     frame: dict[str, NDArray[Any]] = {}
-    for name in _inputs(body):
+    for name in graph_inputs(body):
         datatype = body.get_tensor_datatype(name)
         if not datatype.is_integer():
             raise ValueError(f"{name}: a {datatype.name} input; the testbench streams integers")
@@ -131,15 +119,16 @@ def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[st
     if shape is None:
         raise ValueError(f"{node.name}: the parent graph's input states no shape")
     frame = source_input.reshape(shape)
-    context = execute_parent_graph(
+    context = execute_onnx(
         parent, {parent.graph.input[0].name: frame}, return_full_exec_context=True
     )
-    return {name: context[name] for name in _inputs(body)}
+    return {name: context[name] for name in graph_inputs(body)}
 
 
 def _run_script(top: str, sources: Sequence[str]) -> str:
-    """``run.sh``: the harness's simulator commands (``finn.core.executors.xsim.rtl.simulate``) with
-    the testbench directory's own paths."""
+    """``run.sh``: the XSim executor's simulator commands
+    (``finn.core.executors.xsim.rtl.simulate``), with the testbench directory's own paths
+    and two ``xelab`` threads."""
     compiled = [source for source in sources if not is_header(source)]
     xvlog = [
         "xvlog",
@@ -258,6 +247,5 @@ __all__ = [
     "generated_frame",
     "partition_frame",
     "run_testbench",
-    "words",
     "write_testbench",
 ]

@@ -67,16 +67,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from finn.kernels.target import DspBlock, Fabric
-from finn.kernels.utilization import RESOURCE_NAMES, Resources
+from finn.kernels.target import DspBlock
+from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
 from finn.platform.architectures import CAP_EVIDENCE, RULES, SERIES, CapEvidence, Rule, rules_digest
-from finn.platform.catalog import Record
+from finn.platform.catalog import DATA, FILES, Record
 from finn.util.toolchain import machine_toolchain
 
-HERE = Path(__file__).resolve().parent
-DATA = HERE / "data"
-SCRIPT = HERE / "catalog.tcl"
-FILES = ("resources.jsonl", "devices.jsonl", "parts.jsonl", "manifest.json")
+SCRIPT = Path(__file__).resolve().parent / "catalog.tcl"
 
 SLICE_SITES = frozenset({"SLICEL", "SLICEM"})
 BRAM18_SITES = frozenset({"RAMB18E1", "FIFO18E1", "RAMB181", "RAMBFIFO18", "RAMB18_L", "RAMB18_U"})

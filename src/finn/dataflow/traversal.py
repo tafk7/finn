@@ -474,7 +474,7 @@ def pack(
         flat = np.asarray(integers, dtype=np.int64)
     except OverflowError:
         return _pack_exact(form, integers, bits)
-    lanes = flat[_offset_array(form.beat_loops)[:, None] + _offset_array(form.lane_loops)]
+    lanes = flat[offsets(form).reshape(form.beats, form.lanes)]
     # Bit k of every lane, lane zero's bits first and each lane's least significant
     # first; an arithmetic shift by at most 63 reads the sign above an int64.
     planes = np.empty((*lanes.shape, bits), dtype=np.uint8)

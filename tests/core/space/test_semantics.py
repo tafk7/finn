@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 
-from finn.core.space import Model, Space
+from finn.core.space import Decision, Model, Param, Space, design_space, divisors_of
 from finn.core.space._runtime import Snapshot, decision_state, evaluate
 from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 from finn.core.space.ir import Argument, LinkedModel, Node
@@ -185,7 +185,12 @@ def test_view_applicability_precedes_unresolved_requirements() -> None:
 
 
 def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
-    report = object()
+    class Lanes(Space):
+        extent: int = Param()
+        lanes: int = Decision(domain=divisors_of(extent))
+
+    report = design_space(Lanes(extent=12)).try_with_choices({Lanes.lanes: 5})
+    assert not report.accepted
     assert ConfigurationError(report).report is report
     assert isinstance(RequestError("missing input"), ValueError)
     cause = ZeroDivisionError("bad formula")

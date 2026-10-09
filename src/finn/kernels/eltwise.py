@@ -11,6 +11,7 @@ whose DSP block is DSP58. b_scale is rounded to binary32 before checking its
 native restrictions and emitting the parameter.
 Operation and scale describe the computation; they are supplied inputs, not
 interchangeable implementation choices.
+No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
 from __future__ import annotations

@@ -17,12 +17,12 @@ from pathlib import Path
 
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import pack, stream_through
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from finn.kernels.matmul import MatMulKernel
 from kernels.chain import (
     HIDDEN,
     INPUTS,
@@ -42,7 +42,7 @@ from kernels.chain import (
     matmul,
     weights,
 )
-from kernels.helpers import FULL_DSP48E2, Root, labels
+from kernels.helpers import FULL_DSP48E2, Root, exact_result_dtype, labels
 from kernels.xsim import requires_xsim
 
 
@@ -179,7 +179,7 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
         inputs={
             "s_axis_0": (
                 [
-                    pack(X[r][f : f + SIMD], a_bits)
+                    pack_lanes(X[r][f : f + SIMD], a_bits)
                     for r in range(ROWS)
                     for f in range(0, INPUTS, SIMD)
                 ],
@@ -189,7 +189,7 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
         outputs={
             "m_axis_0": (
                 [
-                    pack(y[r][f : f + PE], y_bits)
+                    pack_lanes(y[r][f : f + PE], y_bits)
                     for r in range(ROWS)
                     for f in range(0, OUTPUTS, PE)
                 ],

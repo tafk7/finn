@@ -14,10 +14,10 @@ from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
+from layering import ROOT
 
 from finn import resources as finn_resources
 
-ROOT = Path(__file__).resolve().parents[2]
 # -I -S ignores PYTHONPATH, the current directory, user packages and .pth files.
 # Only the wheel target and ordinary dependency site-packages (which provide
 # QONNX) are added. No FINN source or test package is on this path.
@@ -46,7 +46,8 @@ sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import DspBlock, Fabric, Platform
+from finn.kernels.target import DspBlock, Platform
+from finn.kernels.utilization import Fabric
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel

@@ -3,8 +3,9 @@
 
 """Small ONNX models of KernelOps, and of the source graphs conversion reads.
 
-Also the Chain (``kernels.chain``) as KernelOps with its choices saved, its partition
-root rebuilt, and a KernelOp's schema digest."""
+Also the Chain (``kernels.chain``) as KernelOps with its choices saved (each kernel's
+on its node, each channel's on its tensor), its partition root rebuilt, and a
+KernelOp's schema digest."""
 
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
-from finn.custom_op.kernels.shell import ShellRoot, persist, shell_root
+from finn.custom_op.kernels.shell import ShellRoot, persist, save_channels, shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.target import Target
 from finn.platform import resolve_target
@@ -269,10 +270,6 @@ MATMUL = {
     "compute.packed.simd": chain.SIMD,
     "compute.packed.compute_pumping": False,
     "compute.packed.reducer": "tree",
-    "w.source.memstream.ram_style": "distributed",
-    "w.source.memstream.pumped_memory": False,
-    "w.transport": "direct",
-    "x.transport": "direct",
 }
 THRESHOLDING = {
     "pe": chain.PE,
@@ -281,28 +278,42 @@ THRESHOLDING = {
     "ram_style": "distributed",
     "block_stages": 0,
     "ultra_stages": 0,
-    "x.transport": "direct",
 }
+WEIGHT_CHANNEL: dict[str, object] = {
+    "source.memstream.ram_style": "distributed",
+    "source.memstream.pumped_memory": False,
+    "transport": "direct",
+}
+"""A stored weight's channel, as ``kernels.chain`` configures it."""
+EDGE: dict[str, object] = {"transport": "direct"}
+"""Every other channel of the Chain, as ``kernels.chain`` configures it."""
+
+
+def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
+    """``model`` converted by ``ToKernelOps`` on ``TARGET``, and the conversion."""
+    conversion = ToKernelOps(TARGET)
+    return model.transform(conversion), conversion
 
 
 def kernel_model(**options: Any) -> ModelWrapper:
-    """The Chain as KernelOps, each node's choices saved as ``kernels.chain`` configures them."""
+    """The Chain as KernelOps, each node's choices saved on it and each channel's on its
+    tensor, as ``kernels.chain`` configures them."""
     model = (
         chain_source(**options)
         .transform(InferShapes())
         .transform(ToKernelOps(TARGET))
         .transform(InferKernelTensors())
     )
+    channels: dict[str, dict[str, object]] = {}
     for node in model.graph.node:
-        choices = MATMUL if node.op_type == "MatMul" else THRESHOLDING
-        if node.op_type == "MatMul" and model.get_initializer(node.input[1]) is None:
-            # Streamed weights: no value, so no source; the weight edge's transport is
-            # the root's.
-            choices = {k: v for k, v in choices.items() if not k.startswith("w.source.")}
-        if node.output[0] in {output.name for output in model.graph.output}:
-            # A graph output: no KernelOp consumes it, so its producer owns its transport.
-            choices = {**choices, "y.transport": "direct"}
-        kernel_op(model, node).save(choices)
+        kernel_op(model, node).save(MATMUL if node.op_type == "MatMul" else THRESHOLDING)
+        channels[node.input[0]] = EDGE
+        if node.op_type == "MatMul":
+            # Streamed weights: no value, so no source; the weight edge's transport.
+            stored = model.get_initializer(node.input[1]) is not None
+            channels[node.input[1]] = WEIGHT_CHANNEL if stored else EDGE
+    channels |= {output.name: EDGE for output in model.graph.output}
+    save_channels(model, channels)
     return model
 
 
@@ -346,8 +357,11 @@ def configure_partition(model: ModelWrapper) -> tuple[ShellRoot, Any]:
 
 __all__ = [
     "DOMAIN",
+    "EDGE",
+    "WEIGHT_CHANNEL",
     "chain_source",
     "configure_partition",
+    "convert",
     "kernel_model",
     "open_memories",
     "streamed_w2_model",

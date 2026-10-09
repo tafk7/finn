@@ -29,7 +29,7 @@ import finn.custom_op.kernels.shell as shell
 from finn.core.space import composite, design_space
 from finn.core.space.errors import ValueUnavailableError
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
-from finn.custom_op.kernels.shell import Shell, admission_refusal, shell_root
+from finn.custom_op.kernels.shell import Shell, admission_refusal, configured_root, shell_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe
@@ -37,7 +37,6 @@ from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform import IP_ROW, ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
-from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import MATMUL, kernel_model
 from kernel_ops.tfc import ULTRA96
 

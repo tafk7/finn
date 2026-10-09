@@ -10,10 +10,11 @@
 
 This module provides utilities for RTL simulation support via finn_xsi. The
 finn_xsi C++ extension is built against the selected Vivado on first use;
-``python -m finn.xsi.setup`` builds it ahead of time.
+``python -m finn.xsi.setup`` builds it ahead of time. The kernel path simulates
+through ``finn.core.executors.xsim`` and does not use this package.
 
 Usage:
-    from finn import xsi  # noqa: PLC0415
+    from finn import xsi
     if xsi.is_available():
         sim = xsi.SimEngine(...)
 """
@@ -36,12 +37,11 @@ def is_available() -> bool:
 # Cache for loaded modules
 _adapter_module: Optional[Any] = None
 _sim_engine_module: Optional[Any] = None
-_xsi_module: Optional[Any] = None
 
 
 def _load_modules() -> None:
     """Build finn_xsi if needed and import it; raise with the reason if impossible."""
-    global _adapter_module, _sim_engine_module, _xsi_module
+    global _adapter_module, _sim_engine_module
 
     if _adapter_module is not None:
         return
@@ -55,13 +55,13 @@ def _load_modules() -> None:
         sys.path.insert(0, str(xsi_so.parent))
     try:
         # Imports must be inside function: the native module is only importable
-        # from the artifact directory.
-        import xsi  # noqa: PLC0415
+        # from the artifact directory. xsi is imported for its effect: it loads the
+        # native module the adapter needs.
+        import xsi  # noqa: F401, PLC0415
 
         import finn_xsi.adapter  # noqa: PLC0415
         import finn_xsi.sim_engine  # noqa: PLC0415
 
-        _xsi_module = xsi
         _adapter_module = finn_xsi.adapter
         _sim_engine_module = finn_xsi.sim_engine
     finally:
@@ -71,9 +71,6 @@ def _load_modules() -> None:
 
 # List of functions to wrap from finn_xsi.adapter
 _ADAPTER_FUNCTIONS = [
-    "locate_glbl",
-    "compile_sim_obj",
-    "get_simkernel_so",
     "load_sim_obj",
     "reset_rtlsim",
     "close_rtlsim",

@@ -26,6 +26,7 @@ Its domain is what that hardware takes: ordinary integers (``max`` over
 ``ap_int``/``ap_uint``), any window and stride its channel can present, any PE
 dividing the channels. Its computation's reference is test-side until a KernelOp
 reaches it (decision KT12 A1): ``tests/kernels/specs/pool.py``.
+No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
 from __future__ import annotations
@@ -256,4 +257,4 @@ class PoolKernel(Kernel):
         )
 
 
-__all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "element_type", "pool_top"]
+__all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "element_type"]

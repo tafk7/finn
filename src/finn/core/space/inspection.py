@@ -37,7 +37,7 @@ from .errors import RequestError
 from .ir import Layer, LinkedModel, NodeKind, Provenance
 from .occurrence import candidate as _candidate
 from .occurrence import state
-from .references import DecisionHandle, ValueHandle, _descend, decision_key
+from .references import DecisionHandle, ValueHandle, decision_key, descend
 from .results import (
     Available,
     ConstraintAssessment,
@@ -395,7 +395,7 @@ def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Pr
     linked = compiled.linked
     record = declared_path(reference) if isinstance(reference, Space) else None
     if record is not None:
-        return linked.scope_provenance.get(_descend(linked.scopes, scope, record))
+        return linked.scope_provenance.get(descend(linked.scopes, scope, record))
     return linked.provenance.get(compiled.resolve(scope, reference))
 
 

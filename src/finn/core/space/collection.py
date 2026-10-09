@@ -29,10 +29,10 @@ from .declarations import (
     ValueRef,
     View,
     ViewKey,
-    _describe_formal,
     at,
     class_namespace,
     declared_annotation,
+    describe_formal,
     local_name,
 )
 from .errors import DefinitionError
@@ -98,7 +98,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
         return  # a Decision over nodes persists its key; its annotation only types it
     options = get_args(annotation) if get_origin(annotation) in (Union, UnionType) else ()
     options = options or (annotation,)
-    label = _describe_formal(decision, "Decision")
+    label = describe_formal(decision, "Decision")
     for key, record in decision.candidates.items():
         if record is None:
             if type(None) not in options:

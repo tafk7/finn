@@ -94,7 +94,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from finn import resources
 from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -118,6 +117,7 @@ from finn.kernels.artifacts.module import (
     declared_registers,
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
+from finn.resources import finnlib_root
 from finn.transformation.kernels.hls import built_hls
 from finn.util.toolchain import Toolchain, machine_toolchain, xelab_threads
 
@@ -134,10 +134,11 @@ class Receive:
     bits: int
 
 
-def pack(values: Sequence[int], bits: int) -> int:
-    """Lanes low first, each ``bits`` wide."""
+def pack_lanes(values: Sequence[int], bits: int) -> int:
+    """One beat's lanes as a word: lanes low first, each ``bits`` wide (two's
+    complement, as Python integers: a numpy lane does not overflow the shift)."""
     mask = (1 << bits) - 1
-    return sum((value & mask) << (index * bits) for index, value in enumerate(values))
+    return sum((int(value) & mask) << (index * bits) for index, value in enumerate(values))
 
 
 #: The part an HLS leaf is synthesized for to be simulated: the one FinnLib's own HLS
@@ -161,7 +162,7 @@ def materialize(
     default), unless the HLS cache holds it (``built_hls``: ``cache``, ``$FINN_HOME/hls``
     by default).
     """
-    root = Path(resources.path("finnlib"))
+    root = finnlib_root()
     built = built_hls(module, part, toolchain=toolchain, cache=cache, roots={"finnlib": root})
     emitted = emit_module(module, directory / "module", roots={"finnlib": root}, built=built)
     sources = [str(emitted.directory / path) for path in emitted.sources]

@@ -39,21 +39,26 @@ OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
 # stays at a few minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado end2end slow
 gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/executors \
-    src/finn/core/containers.py \
+    src/finn/core/containers.py src/finn/core/onnx_exec.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/transformation/prepare \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
     src/finn/builder/kernel_testbench.py src/finn/builder/kernel_resources.py \
+    src/finn/builder/kernel_build_checks.py \
+    src/finn/builder/kernel_build_config.py src/finn/builder/kernel_build_runner.py \
+    src/finn/builder/kernel_build_steps.py \
     scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep tests/oracle
 # finn.util.toolchain: the toolchain packaging takes (PackagePartition's toolchain=).
-# finn.shells.pynq's runner and driver; its IODMA and IP generation are frozen
-# extractions of the HWCustomOp flow's, untyped as they were.
-# finn.builder.kernel_testbench and kernel_resources: the ip shell's testbench and the
-# resources per shell member, the builder modules typed.
+# finn.shells.pynq's runner and driver; its IODMA and IP generation are annotated, not
+# strictly checked: frozen extractions of the HWCustomOp flow's.
+# finn.builder's kernel path: its configuration, its checks, step runner and steps, the ip
+# shell's testbench and the resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
     -p finn.transformation.kernels -p finn.transformation.prepare -p finn.harness \
-    -p finn.core.executors -m finn.core.containers \
+    -p finn.core.executors -m finn.core.containers -m finn.core.onnx_exec \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.util.toolchain \
-    -m finn.builder.kernel_testbench -m finn.builder.kernel_resources
+    -m finn.builder.kernel_build_config -m finn.builder.kernel_build_runner \
+    -m finn.builder.kernel_build_steps -m finn.builder.kernel_testbench \
+    -m finn.builder.kernel_resources -m finn.builder.kernel_build_checks
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle

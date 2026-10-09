@@ -25,7 +25,7 @@ from .declarations import (
     declared_path,
 )
 from .errors import EvaluationError, RequestError
-from .ir import LinkedModel
+from .ir import Choice, LinkedModel
 from .results import (
     Available,
     ConstraintAssessment,
@@ -54,7 +54,7 @@ def state(point: Space) -> Snapshot:
     return current
 
 
-def _attach(current: Snapshot, scope: int) -> Space:
+def attach(current: Snapshot, scope: int) -> Space:
     space_type = current.linked.scopes[scope].space_type
     instance = object.__new__(space_type)
     object.__setattr__(instance, "_state", current)
@@ -62,7 +62,7 @@ def _attach(current: Snapshot, scope: int) -> Space:
     return instance
 
 
-def _prepare_values(
+def prepare_values(
     linked: LinkedModel,
     pending: Mapping[int, object],
     role: str,
@@ -94,16 +94,16 @@ def bind(model: Model[S], parameters: Mapping[int, object]) -> S:
     ]
     if missing:
         raise RequestError(f"missing required parameters: {', '.join(missing)}")
-    frozen = _prepare_values(model.linked, parameters, "parameter")
+    frozen = prepare_values(model.linked, parameters, "parameter")
     snapshot = _runtime.Snapshot(cast(Model[Space], model), frozen)
-    return cast(S, _attach(snapshot, 0))
+    return cast(S, attach(snapshot, 0))
 
 
 def _node_scope(point: Space, reference: object) -> tuple[int, int | None] | None:
     """For a node reference: (the scope holding it, the node's scope or None if unsupplied)."""
     from ._configuration import Space
     from ._nodes import NodeDecl, is_reference_input
-    from .references import _descend
+    from .references import descend
 
     if isinstance(reference, Space):
         path = declared_path(reference)
@@ -118,7 +118,7 @@ def _node_scope(point: Space, reference: object) -> tuple[int, int | None] | Non
         return None
     current = state(point)
     scopes = current.linked.scopes
-    holder = _descend(scopes, point._scope, outer)
+    holder = descend(scopes, point._scope, outer)
     scope = scopes[holder]
     if last is scope.record:
         return holder, holder
@@ -149,7 +149,7 @@ def query(point: Space, reference: object) -> QueryResult[object]:
             if not isinstance(answer, Available) or answer.value is not True:
                 return answer if not isinstance(answer, Available) else Inapplicable()
         assert target is not None
-        return Available(_attach(current, target))
+        return Available(attach(current, target))
     index = current.model.resolve(point._scope, reference)
     result = _runtime.evaluate(current, index).result
     return _runtime.copy_result(current, index, result)
@@ -367,7 +367,7 @@ def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] 
 def root(point: Space) -> Space:
     current = state(point)
     _execution.check_snapshot(current)
-    return point if point._scope == 0 else _attach(current, 0)
+    return point if point._scope == 0 else attach(current, 0)
 
 
 def child(point: Space, record: Declaration) -> Space:
@@ -387,40 +387,41 @@ def child(point: Space, record: Declaration) -> Space:
         _read_index(point, scope.members[record])  # raises: unsupplied
     if child_scope is None:
         raise RequestError("child node is not part of this compiled scope")
-    return _attach(current, child_scope)
+    return attach(current, child_scope)
+
+
+def _scope_choice(current: Snapshot, scope: int, decision: object) -> Choice:
+    """The Choice of a Decision over nodes in compiled scope ``scope``."""
+    from ._nodes import unwrap
+
+    record = unwrap(decision)
+    choices = current.linked.scopes[scope].choices
+    try:
+        return current.linked.choices[choices[record]]
+    except (KeyError, TypeError) as error:
+        raise RequestError("the Decision over nodes is not part of this compiled scope") from error
 
 
 def selected_candidate(point: Space, decision: Declaration) -> Space | None:
     """The configuration of the candidate a Decision over nodes selects, or None."""
     current = state(point)
     _execution.check_snapshot(current)
-    scope = current.linked.scopes[point._scope]
-    try:
-        choice = current.linked.choices[scope.choices[decision]]
-    except KeyError as error:
-        raise RequestError("the Decision over nodes is not part of this compiled scope") from error
+    choice = _scope_choice(current, point._scope, decision)
     case = _read_index(point, choice.selector)
     for key, candidate in choice.cases:
         if key == case:
-            return None if candidate is None else _attach(current, candidate)
+            return None if candidate is None else attach(current, candidate)
     raise EvaluationError(choice.key, "selection", "selector is not a declared case")
 
 
 def candidate(point: Space, decision: object, case: str) -> Space | None:
     """A candidate's configuration whether or not it is selected (None for a None case)."""
-    from ._nodes import unwrap
-
     current = state(point)
     _execution.check_snapshot(current)
     if type(case) is not str:
         raise RequestError("a candidate key must be a string")
-    record = unwrap(decision)
-    scope = current.linked.scopes[point._scope]
-    try:
-        choice = current.linked.choices[scope.choices[record]]
-    except (KeyError, TypeError) as error:
-        raise RequestError("the Decision over nodes is not part of this compiled scope") from error
+    choice = _scope_choice(current, point._scope, decision)
     for key, index in choice.cases:
         if key == case:
-            return None if index is None else _attach(current, index)
+            return None if index is None else attach(current, index)
     raise RequestError(f"{choice.key}: unknown candidate {case!r}")

@@ -5,7 +5,6 @@
 
 import struct
 from dataclasses import replace
-from pathlib import Path
 
 import pyslang
 import pytest
@@ -29,7 +28,6 @@ from finn.kernels.thresholding import ThresholdingAxiKernel
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, point_for
 from kernels.xsim import requires_xsim
 
-ROOT = Path(__file__).resolve().parents[2]
 FINNLIB = finnlib_root()
 SOURCE_ROOTS = {"finnlib": FINNLIB}
 

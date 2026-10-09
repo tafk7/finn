@@ -48,9 +48,6 @@ from finn.builder.build_dataflow_config import (
     default_build_dataflow_steps,
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
-from finn.builder.build_dataflow_phases import (
-    recorded_step_times as recorded_dataflow_step_times,
-)
 from finn.builder.build_dataflow_steps import (
     _maybe_enable_verify_behavioral,
     build_dataflow_step_lookup,
@@ -102,15 +99,6 @@ def _step_lookup(cfg: BuildConfig) -> tuple[list, dict]:
         **build_dataflow_step_lookup,
         **build_dataflow_phase_lookup,
     }
-
-
-def _step_times_recorder(cfg: BuildConfig):
-    """What records the times of the steps a phase of ``cfg``'s flow runs: the kernel
-    path's runner (finn.builder.kernel_build_runner) for a KernelBuildConfig, the
-    HWCustomOp flow's phases for a DataflowBuildConfig."""
-    if isinstance(cfg, KernelBuildConfig):
-        return recorded_step_times
-    return recorded_dataflow_step_times
 
 
 def resolve_build_steps(cfg: BuildConfig, partial: bool = True):
@@ -208,7 +196,7 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
                 print("Running step: %s [%d/%d]" % (step_name, step_num, len(build_dataflow_steps)))
             # run the step
             step_start = time.time()
-            with _step_times_recorder(cfg)() as inner_times:
+            with recorded_step_times() as inner_times:
                 model = transform_step(model, cfg)
             step_end = time.time()
             # restore stdout/stderr

@@ -21,12 +21,11 @@ from finn.custom_op.kernels.base import KernelOpError, write_target
 from finn.transformation.kernels import (
     InferKernelTensors,
     Outcome,
-    ToKernelOps,
     between_kernel_ops,
     kernel_ops_report,
     kernel_ops_summary,
 )
-from kernel_ops.models import DOMAIN, TARGET
+from kernel_ops.models import DOMAIN, TARGET, convert
 
 GENERAL = "qonnx.custom_op.general"
 
@@ -77,11 +76,6 @@ UNSORTED = [[2.5, -1.5, 0.5]] * 4  # count(x >= t) is any order's; the kernel's 
 def multithreshold(x: str = "INT4", t: str = "FLOAT32", table: Any = SORTED) -> ModelWrapper:
     """x (3, 4) -> MultiThreshold ``mt`` with the (4, 3) initializer t -> y (UINT2)."""
     return model_of([multithreshold_node("x", "t", "y")], {"x": ([3, 4], x)}, {"t": (table, t)})
-
-
-def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
-    conversion = ToKernelOps(TARGET)
-    return model.transform(conversion), conversion
 
 
 def refused(model: ModelWrapper) -> list[tuple[str, str]]:

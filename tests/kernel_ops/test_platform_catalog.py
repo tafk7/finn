@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import asdict, replace
@@ -17,10 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from kernels.xsim import requires_vivado
 
-from finn.kernels.target import DspBlock, Fabric
-from finn.kernels.utilization import RESOURCE_NAMES, Resources
-from finn.platform import BOARDS, TargetRefused, resolve_target
+from finn.kernels.target import DspBlock
+from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
+from finn.platform import BOARDS, TargetRefused, device, part_report, parts, resolve_target
 from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
 from finn.platform.catalog import (
     DATA,
@@ -42,7 +42,6 @@ from finn.platform.generate import (
     parse_devices,
     slr_resources,
 )
-from finn.transformation.kernels.choose import part_report
 
 ZU3 = [Resources(lut=70_560, ff=141_120, bram18=432, uram=0, dsp=360)]
 ZU7 = [Resources(lut=230_400, ff=460_800, bram18=624, uram=96, dsp=1_728)]
@@ -326,6 +325,17 @@ def test_the_guides_overlay_resolves_its_custom_part(machine_overlay: Path) -> N
     assert reported["slrs"] == [stated]
 
 
+def test_device_and_parts_answer_from_the_process_catalog(machine_overlay: Path) -> None:
+    """``device`` and ``parts`` (``finn.platform``), the documented queries: the catalog
+    the process resolves by, with the overlay the machine setting names."""
+    loaded = catalog()
+    (custom,) = parts("xczu3eg_es1-*")
+    assert custom == loaded.part("XCZU3EG_ES1-SBVA484-1-E")
+    assert device(custom.device.name.upper()) == custom.device
+    family = custom.device.family
+    assert parts(family=family) == loaded.parts(family=family) and custom in parts(family=family)
+
+
 def test_a_part_the_catalog_lacks_is_reported_without_a_source() -> None:
     reported = part_report("a part with UltraRAM it initializes")
     assert reported["source"] is None and "unknown-part" in str(reported["refused"])
@@ -596,12 +606,10 @@ def test_every_boards_part_resolves_with_its_totals() -> None:
 # -- the generator, with Vivado ----------------------------------------------------------
 
 
-@pytest.mark.vivado
+@requires_vivado
 def test_the_generator_reproduces_a_devices_record(tmp_path: Path) -> None:
     """The extraction on the smallest Zynq-7000 device, linked as the generator does:
     its SLRs' resources are the committed record's and confirm its rule."""
-    if shutil.which("vivado") is None:
-        pytest.skip("no Vivado on PATH")
     _wait([_vivado(tmp_path, "devices-0", ["devices", "xc7z010clg400-1"])])
     (probe,) = parse_devices([(tmp_path / "devices-0.log").read_text()]).values()
     shipped = load(DATA).device("xc7z010")

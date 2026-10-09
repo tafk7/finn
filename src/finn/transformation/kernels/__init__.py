@@ -22,8 +22,9 @@ DSE seam (``finn.kernels.explore``) by a list of strategies
 (``completion``: one by its name) completes what they leave open wherever a
 partition is costed or built, never saved;
 ``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
-included, from its saved choices, completed; ``kernel_choices_config`` exports the
-nodes' choices, sparse, for ``ApplyConfig``; ``PackagePartition`` packages a
+included, from its saved choices, completed; ``kernel_choices_config`` exports a
+body's choices, sparse, by graph name (the nodes' and the tensors' channel choices),
+which ``Pinned`` reads back; ``PackagePartition`` packages a
 partition of KernelOps as the IP the shells read, and ``ElaboratePartition`` compiles
 and elaborates its RTL in XSim, a check before a shell builds it;
 ``integration.integration`` exports what a shell's integration builds around the

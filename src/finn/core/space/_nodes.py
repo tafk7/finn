@@ -34,22 +34,21 @@ from .declarations import (
     PendingAnnotation,
     ValueRef,
     View,
-    _guard,
-    _path_text,
     at,
     declared_path,
+    guard,
     local_name,
+    path_text,
     source_origin,
     unfinished,
 )
 from .domains import finite
 from .errors import DefinitionError
-from .semantics import ValueSemantics, default_semantics, recognize, snapshot, unrecognized
+from .semantics import STRING, ValueSemantics, recognize, snapshot, unrecognized
 
 if TYPE_CHECKING:
     from ._configuration import Space
 
-_STRING = default_semantics(str)
 _SPACE: list[type[Space]] = []
 
 
@@ -313,7 +312,7 @@ def _reference_supplier(formal: Param[object], value: object, label: str) -> obj
     path = declared_path(value) if isinstance(value, Space) else None
     if supplied is None and path is not None and len(path) > 1:
         raise DefinitionError(
-            f"{label}: {_path_text(path)} reaches into another node; a reference input "
+            f"{label}: {path_text(path)} reaches into another node; a reference input "
             "names a node placed beside it, or forwards an input of the enclosing Space class"
         )
     if supplied is None:
@@ -525,7 +524,7 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
     if error is not None:
         raise error
     keywords = dict(keywords)
-    when = _guard(keywords.pop("when", None))
+    when = guard(keywords.pop("when", None))
     members, handles = space_members(space_type)
     unknown = sorted(keywords.keys() - members.keys())
     if unknown:
@@ -550,16 +549,6 @@ def _segments(record: Declaration) -> tuple[str, ...]:
     return (str(record.name),)
 
 
-def _path_label(path: tuple[Declaration, ...], name: str) -> str:
-    # Inside a class body a node has no name yet: identify it by its call line.
-    names = [
-        record.name
-        or f"<{getattr(record, 'space_type', type(record)).__qualname__} node{at(record.origin)}>"
-        for record in path
-    ]
-    return ".".join((*names, name))
-
-
 def assign(instance: object, name: str, value: object) -> None:
     """``node.member = value``: supply or override a member of a declaration.
 
@@ -573,7 +562,7 @@ def assign(instance: object, name: str, value: object) -> None:
     path = declared_path(instance)
     if path is None:
         raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
-    label = f"{_path_label(path, name)} (assigned at {origin})"
+    label = f"{path_text(path)}.{name} (assigned at {origin})"
     if any(not isinstance(item, NodeDecl) for item in path):
         raise DefinitionError(
             f"{label}: assign members of a node declaration, or of the nodes below it, not "
@@ -729,10 +718,10 @@ class NodeChoice:
 def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None) -> NodeChoice:
     if not values:
         raise DefinitionError("a Decision over nodes requires at least one candidate")
-    from .declarations import _class_body
+    from .declarations import class_body
 
     decision = Declaration.__new__(NodeDecision)
-    object.__setattr__(decision, "_body", _class_body())
+    object.__setattr__(decision, "_body", class_body())
     decision.replaces = None
     decision.strict = False
     decision.required = False
@@ -752,10 +741,11 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
     if all(record is None for record in candidates.values()):
         raise DefinitionError(f"a Decision over nodes{at(decision.origin)} needs a node candidate")
     decision.candidates = MappingProxyType(candidates)
-    decision.semantics = decision.explicit = _STRING
+    string = cast("ValueSemantics[str]", STRING)
+    decision.semantics = decision.explicit = string
     decision.resolved = True
     decision.when = when
-    decision.domain = finite(tuple(candidates), _STRING)
+    decision.domain = finite(tuple(candidates), string)
     decision.sites = []
     proxy = NodeChoice((decision,))
     decision.proxy = proxy

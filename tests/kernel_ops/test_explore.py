@@ -25,7 +25,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import configured_root, save_channels, shell_root
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     Accepted,
@@ -52,7 +52,6 @@ from finn.transformation.kernels import (
     strategy,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, matmul_model
 from kernel_ops.test_choose import choices, kernel_model
 
@@ -64,16 +63,17 @@ def seam_of(model: ModelWrapper) -> tuple[Seam, Any]:
     return Seam(root.members, root.owners, read_target(model).platform), root.point
 
 
-def test_a_choice_names_the_node_and_attribute_that_persist_it() -> None:
+def test_a_choice_names_the_node_or_tensor_that_persists_it() -> None:
     explorer, point = seam_of(kernel_model())
     offered = {choice.key: choice for choice in explorer.choices(point)}
     assert offered["first.compute.packed.pe"].owner == ("first", "compute.packed.pe")
-    # An edge's choice is its consumer's, a graph output's its producer's.
-    assert offered["levels.transport"].owner == ("second", "x.transport")
-    assert offered["y.transport"].owner == ("second", "y.transport")
-    assert explorer.key("second", "x.transport") == "levels.transport"
+    # A channel's choice is its tensor's: an edge's, a graph output's alike.
+    assert offered["levels.transport"].owner == ("levels", "transport")
+    assert offered["y.transport"].owner == ("y", "transport")
+    assert explorer.key("levels", "transport") == "levels.transport"
     assert explorer.key("second", "compute.packed.pe") == "second.compute.packed.pe"
-    assert explorer.key("second", "y.transport") == "y.transport"
+    assert explorer.key("y", "transport") == "y.transport"
+    assert explorer.key("nobody", "transport") is None
     # A key's member is the longest member path that prefixes it, at a segment.
     assert explorer.member_of("levels.transport") == "levels"
     assert explorer.member_of("y.transport.fifo.buffer.depth") == "y"
@@ -126,7 +126,7 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     model = kernel_model()
     explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
     saved = choices(model)
-    assert saved["first"]["compute.packed.pe"] == 2 and saved["second"]["x.transport"] == "direct"
+    assert saved["first"]["compute.packed.pe"] == 2 and saved["levels"]["transport"] == "direct"
     report = explored.report
     assert report["bottleneck"] == {
         "members": ["x", "levels", "first", "second"],
@@ -215,13 +215,13 @@ def test_what_no_strategy_chose_is_completed_on_a_copy_and_never_saved() -> None
     assert completed["first"]["compute.packed.pe"] == {"value": 1, "by": "baseline"}
     assert completed["first"]["compute.packed.simd"] == {"value": 1, "by": "baseline"}
     assert completed["first"]["compute.packed.reducer"] == {"value": "tree", "by": "baseline"}
-    assert completed["first"]["w.source.memstream.ram_style"]["value"] == "distributed"
+    assert completed["w1"]["source.memstream.ram_style"]["value"] == "distributed"
     assert completed["activate"]["ram_style"]["value"] == "distributed"
     assert completed["activate"]["block_stages"]["value"] == 0
     assert report["completion"]["open"] == [] and report["bottleneck"] is not None
     # The transports are sized on the completed copy (at hardware generation, sizing
     # is the default completion's): a choice of size_fifos, never saved either.
-    assert completed["second"]["x.transport"]["by"] == "size_fifos"
+    assert completed["levels"]["transport"]["by"] == "size_fifos"
     assert report["fifos"].startswith("sized at completion by baseline: ")
     assert explored.completed is not None
     values = {
@@ -262,7 +262,7 @@ def test_a_strategy_that_reads_completed_values_is_flagged_and_its_choices_saved
     assert "first.compute.packed.pe" in reader["read_completed"]
     # Sizing before folding sizes at the completed folding, and its transports are saved.
     assert sizing["read_completed"].startswith("sized at completed folding (read completed ")
-    assert choices(model)["second"]["x.transport"] in ("direct", "fifo")
+    assert choices(model)["levels"]["transport"] in ("direct", "fifo")
     assert {"saved", "size_fifos"} >= {
         name for held in report["choices"].values() for name in held.values()
     }
@@ -275,14 +275,14 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
         json.dumps(
             {
                 "first": {"compute.packed.pe": 1},
-                "second": {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 8},
+                "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
             }
         )
     )
     model = kernel_model().transform(ExploreKernelChoices([Pinned(pinned), Ranked(Lanes(2))]))
     saved = choices(model)
     assert saved["first"]["compute.packed.pe"] == 1 and saved["first"]["compute.packed.simd"] == 2
-    assert saved["second"]["x.transport.fifo.buffer.depth"] == 8
+    assert saved["levels"]["transport.fifo.buffer.depth"] == 8
     # A whole kernel_choices.json pins another model to the same choices, in one batch:
     # the FIFO and its depth, nested under it, together.
     exported = tmp_path / "kernel_choices.json"
@@ -298,8 +298,9 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
         kernel_model().transform(ExploreKernelChoices([Pinned(pinned)]))
 
 
-#: A memory pinned ``auto``: the first MatMul's weights and the thresholds' stages.
-AUTO = {"first": {"w.source.memstream.ram_style": "auto"}, "activate": {"ram_style": "auto"}}
+#: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the
+#: thresholds' stages.
+AUTO = {"w1": {"source.memstream.ram_style": "auto"}, "activate": {"ram_style": "auto"}}
 
 
 def stated_auto(report: Mapping[str, Any]) -> None:
@@ -312,7 +313,7 @@ def stated_auto(report: Mapping[str, Any]) -> None:
         why.endswith("ram_style auto, placed by Vivado, not stated") for why in reasons.values()
     )
     assert "activate" in reasons
-    assert report["completed"]["second"]["w.source.memstream.ram_style"]["value"] == "distributed"
+    assert report["completed"]["w2"]["source.memstream.ram_style"]["value"] == "distributed"
 
 
 def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: Path) -> None:
@@ -323,6 +324,7 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
     for node in model.graph.node:
         if node.name in AUTO:
             kernel_op(model, node).save(AUTO[node.name])
+    save_channels(model, {"w1": AUTO["w1"]})
     model.save(tmp_path / "saved.onnx")
     saved = ModelWrapper(str(tmp_path / "saved.onnx"))
     report = explore_kernel_choices(saved, []).report
@@ -370,7 +372,7 @@ def test_every_committed_choice_names_the_strategy_that_made_it() -> None:
         (node, attribute) for node, held in choices(model).items() for attribute in held
     }
     assert made_by[("first", "compute.packed.pe")] == "target_throughput"
-    assert made_by[("second", "x.transport")] == "size_fifos"
+    assert made_by[("levels", "transport")] == "size_fifos"
     assert ("first", "compute.packed.reducer") not in made_by
     assert first["completed"]["first"]["compute.packed.reducer"]["by"] == "baseline"
     target, sizing = first["strategies"]

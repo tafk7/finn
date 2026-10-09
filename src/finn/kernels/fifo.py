@@ -31,14 +31,13 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
-    requires,
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
-from finn.kernels.target import Platform
+from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Resources, lutram, memory
 
 
@@ -121,11 +120,11 @@ def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabri
     ``lo`` space and its ``hi`` one (``_decomposition``), a ``hi`` space shallower than
     the primitive left ``auto`` (a model, ``_hi_style``). The control (pointers, the
     output register, the UltraRAM output queue) is taken from the HWCustomOp flow's FIFO
-    model (``finn.util.resource_models._fifo_cost``, fitted against finn-rtllib's
-    ``fifo.sv``, the same design with an occupancy monitor), which this one duplicates
-    until that flow retires; the terms it does not carry over are listed below."""
-    # A deliberate duplicate of ``finn.util.resource_models._fifo_cost``, the HWCustomOp
-    # flow's model of the same RTL; one goes when that flow retires. Where the two
+    model (``finn.custom_op.fpgadataflow.resource_models._fifo_cost``, fitted against
+    finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor), which this one
+    duplicates until that flow retires; the terms it does not carry over are listed below."""
+    # A deliberate duplicate of ``finn.custom_op.fpgadataflow.resource_models._fifo_cost``,
+    # the HWCustomOp flow's model of the same RTL; one goes when that flow retires. Where the two
     # differ, by what this one does not carry over (FinnLib's ``rtl/infra/fifo.sv``):
     # - the storage is stated by ``finn.kernels.utilization`` from the arrays the RTL
     #   declares, in the fabric's primitives, not by the legacy model's fitted packing. A
@@ -211,9 +210,7 @@ class FifoKernel(Kernel):
 
     ram_style: str = Decision(
         values=("auto", "shift", "distributed", "block", "ultra"),
-        requires=(
-            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=("ultra",)),
-        ),
+        requires=uram_requirements(platform, ("ultra",)),
     )
 
     @derived
@@ -265,6 +262,5 @@ __all__ = [
     "FifoKernel",
     "FifoStorage",
     "fifo_resources",
-    "fifo_storage",
     "least_depth_holding",
 ]

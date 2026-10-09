@@ -21,7 +21,8 @@ Run on every build, none of them executing the graph:
   ``finn.core.containers``: float32 holds integers up to 2**24, float64 (an integer
   region P6 widened) up to 2**53, an integer container its range (TopK's indices,
   INT64). A MatMul's partial sums count, bounded by its A's largest magnitude times
-  B's largest column sum of magnitudes. An integer tensor in another container, or
+  B's largest column sum of magnitudes (``finn.core.containers.matmul_partial_sums``,
+  the bound MatMul's domain step reads too). An integer tensor in another container, or
   whose producer no rule bounds and whose annotation is wider than its container's
   exact integers, is named as not checked (``container-unchecked``), never refused on
   its annotation alone.
@@ -47,9 +48,10 @@ import numpy as np
 from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.containers import container, exact_up_to
+from finn.core.containers import container, exact_up_to, matmul_partial_sums
 from finn.core.containers import name as container_name
 from finn.core.space import Finding, FindingKind
+from finn.util.graph import between
 
 OWNER = "P7 checkpoint"
 """The owner of the checkpoint's findings."""
@@ -59,9 +61,8 @@ OWNER = "P7 checkpoint"
 class Deviation:
     """Where the prepared graph computes otherwise than the export, on purpose:
     ``statement`` says what differs and where it is exact; ``values``, whether it can
-    change an output's value or only an annotation. As a KernelOp declares its own;
-    each value deviation's predicate (where it explains a difference) is the test
-    harness's."""
+    change an output's value or only an annotation. Each value deviation's predicate
+    (where it explains a difference) is the test harness's."""
 
     statement: str
     values: bool
@@ -90,6 +91,9 @@ DEVIATIONS: Mapping[str, Deviation] = MappingProxyType(
         ),
     }
 )
+
+#: The codes of the deviations that can change an output's value.
+VALUE_DEVIATIONS: tuple[str, ...] = tuple(code for code, each in DEVIATIONS.items() if each.values)
 
 
 @dataclass(frozen=True)
@@ -214,17 +218,17 @@ def _matmul(
     shape = model.get_tensor_shape(node.input[0])
     if a is None or b is None or not shape:
         return [None]
-    largest = max(abs(a[0]), abs(a[1]))
+    largest, b_largest, k = max(abs(a[0]), abs(a[1])), max(abs(b[0]), abs(b[1])), int(shape[-1])
     weights = model.get_initializer(node.input[1])
     if weights is not None and weights.ndim == 2 and _integers(np.asarray(weights)):
         w = np.asarray(weights, dtype=object).astype(int)
         high = np.where(w > 0, w * a[1], w * a[0]).sum(axis=0)
         low = np.where(w > 0, w * a[0], w * a[1]).sum(axis=0)
-        magnitude = largest * int(np.abs(w).sum(axis=0).max())
+        magnitude = matmul_partial_sums(largest, k, b_largest, w)
         return [_bound(int(low.min()), int(high.max()), magnitude)]
-    k = int(shape[-1])
     corners = _corners(a, b)
-    return [_bound(k * min(corners), k * max(corners), k * max(abs(c) for c in corners))]
+    magnitude = matmul_partial_sums(largest, k, b_largest)
+    return [_bound(k * min(corners), k * max(corners), magnitude)]
 
 
 def _xnor_popcount(
@@ -545,31 +549,8 @@ def bounds(model: ModelWrapper) -> Bounded:
 
 def _between(model: ModelWrapper, anchors: Collection[tuple[str, str]]) -> list[str]:
     """The nodes at none of ``anchors`` downstream of a node at one and upstream of
-    another."""
-    producer = {name: node for node in model.graph.node for name in node.output}
-    consumers: dict[str, list[NodeProto]] = {}
-    for node in model.graph.node:
-        for name in node.input:
-            consumers.setdefault(name, []).append(node)
-    anchored = [node for node in model.graph.node if (node.domain, node.op_type) in anchors]
-
-    def reached(step: Callable[[NodeProto], Iterable[NodeProto]]) -> set[str]:
-        seen: set[str] = set()
-        frontier = [follower for node in anchored for follower in step(node)]
-        while frontier:
-            node = frontier.pop()
-            if node.name not in seen:
-                seen.add(node.name)
-                frontier.extend(step(node))
-        return seen
-
-    after = reached(lambda node: [c for name in node.output for c in consumers.get(name, [])])
-    before = reached(lambda node: [producer[name] for name in node.input if name in producer])
-    return [
-        node.name
-        for node in model.graph.node
-        if (node.domain, node.op_type) not in anchors and node.name in after & before
-    ]
+    another (``finn.util.graph.between``)."""
+    return [n.name for n in between(model, lambda n: (n.domain, n.op_type) in anchors)]
 
 
 def remaining(model: ModelWrapper, anchors: Collection[tuple[str, str]]) -> list[Finding]:
@@ -650,20 +631,6 @@ def checkpoint(model: ModelWrapper, anchors: Collection[tuple[str, str]]) -> Che
     bounded = bounds(model)
     findings = (*structure(model, anchors), *bounded.findings, *remaining(model, anchors))
     return Checkpoint(tuple(findings), bounded.bounded, bounded.unbounded)
-
-
-def finding_record(finding: Finding) -> dict[str, Any]:
-    """A finding as JSON's values, as report/kernel_ops.json records them."""
-    return {
-        "kind": finding.kind.value,
-        "code": finding.code,
-        "owner": finding.owner,
-        "message": finding.message,
-        "details": {
-            key: list(value) if isinstance(value, tuple) else value
-            for key, value in finding.details
-        },
-    }
 
 
 def summary(findings: Iterable[Finding]) -> list[str]:

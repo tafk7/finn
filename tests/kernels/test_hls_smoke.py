@@ -27,7 +27,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
-from finn.core.executors.xsim.rtl import pack, stream_through
+from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus, Clock, Direction, Endpoint, Free, Reset, Signal
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
@@ -145,7 +145,7 @@ def chained(first: HlsSource, second: HlsSource) -> Composed:
 def words(image: Array) -> tuple[list[int], int]:
     """An HWC image's beats, SIMD channels a beat, lane zero the lowest channel."""
     flat = image.reshape(-1, SIMD).tolist()
-    return [pack(beat, BITS) for beat in flat], BITS * SIMD
+    return [pack_lanes(beat, BITS) for beat in flat], BITS * SIMD
 
 
 def image() -> Array:

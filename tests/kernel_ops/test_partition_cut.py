@@ -30,6 +30,7 @@ from finn.custom_op.kernels.base import (
     read_target,
     write_target,
 )
+from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_INTERFACES,
@@ -52,7 +53,7 @@ from finn.transformation.kernels.integration import (
     integration,
     wire_one_bus_each,
 )
-from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.transformation.kernels.package import boundary_facts
 from kernel_ops.models import (
     ROW_MAJOR_W2,
     configure_partition,
@@ -171,7 +172,7 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
 
 def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
     parent = chain().transform(CutKernelPartition(tmp_path / "once"))
-    with pytest.raises(ValueError, match="holds a partition already: the kernel path cuts once"):
+    with pytest.raises(KernelOpError, match="holds a partition already: the kernel path cuts once"):
         parent.transform(CutKernelPartition(tmp_path / "twice"))
     with pytest.raises(ValueError, match="holds 0 partitions of KernelOps"):
         partition_body(chain())

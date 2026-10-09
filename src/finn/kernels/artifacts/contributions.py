@@ -19,11 +19,11 @@ enters at synthesis and in the synthesis key.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Union
 
-from finn.kernels.artifacts.projection import digest
+from finn.kernels.artifacts.projection import content_digest, digest
 
 
 class ContributionError(Exception):
@@ -69,6 +69,15 @@ class GeneratedData:
         _relative(self.path, "the module's directory")
         if type(self.data) is not bytes:
             raise ContributionError("generated data is bytes")
+
+
+def hex_image(prefix: str, words: Iterable[int], bits: int) -> GeneratedData:
+    """A ``$readmemh`` memory image, one word of ``bits`` per line, named
+    ``<prefix>_<digest>.dat`` by its contents."""
+
+    digits = (bits + 3) // 4
+    data = "".join(f"{word:0{digits}x}\n" for word in words).encode()
+    return GeneratedData(f"{prefix}_{content_digest(data)[:16]}.dat", data)
 
 
 # An identifier HLS keeps as a top's RTL name: no leading, trailing or double underscore.
@@ -188,7 +197,6 @@ __all__ = [
     "GeneratedData",
     "HEADER_SUFFIXES",
     "HlsSource",
-    "NAME_PLACEHOLDER",
-    "request_key",
+    "hex_image",
     "request_stem",
 ]

@@ -11,7 +11,8 @@ identity is the channel that carries it, so it holds no name.
 An element is a datatype and the range of its values, by default the
 datatype's. A producer that knows its values (a value owner) states a tighter
 range; one element ``fits`` another when its values are values of the other,
-which is what a channel checks between a producer and its consumer.
+which is what a channel checks between each end and its tensor
+(``finn.dataflow.ends.misfit``).
 """
 
 from __future__ import annotations

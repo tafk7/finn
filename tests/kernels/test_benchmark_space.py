@@ -16,7 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+from layering import ROOT
+
 SCRIPT = ROOT / "scripts" / "benchmark-space.py"
 # Two of everything: the least that gives each comparison the script makes two
 # sides (one narrow query against several branches, alternating kernel choices).

@@ -100,8 +100,8 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
     assert dict(point.module.parameters)["RAM_STYLE"] == rtl_style
 
 
-#: The HWCustomOp flow's FIFO model (``finn.util.resource_models``) at the oracle, by
-#: depth and width: the style it resolves for ``auto`` and that style's cost
+#: The HWCustomOp flow's FIFO model (``finn.custom_op.fpgadataflow.resource_models``) at
+#: the oracle, by depth and width: the style it resolves for ``auto`` and that style's cost
 #: (UltraScale+; the oracle's ``fifo_cost`` probe).
 LEGACY_FIFOS = {(row["depth"], row["width"]): row for row in capture("fifo_cost")}
 

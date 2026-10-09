@@ -1,23 +1,48 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""How the kernel path runs a step inside one of its phases
-(finn.builder.kernel_build_steps): the steps a KernelBuildConfig injects before and after
-it, each step's model saved as an intermediate model, and each step's time recorded while
-build_dataflow records them (``recorded_step_times``)."""
+"""How a builder phase runs a step inside it (the kernel path's phases in
+finn.builder.kernel_build_steps, the HWCustomOp flow's in
+finn.builder.build_dataflow_phases): the steps a build configuration injects before and
+after it, each step's model saved as an intermediate model, and each step's time
+recorded while build_dataflow records them (``recorded_step_times``)."""
 
 from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from qonnx.core.modelwrapper import ModelWrapper
-from typing import TYPE_CHECKING
+from typing import Any, Protocol, TypeVar
 
-if TYPE_CHECKING:
-    from finn.builder.kernel_build_config import KernelBuildConfig
+from qonnx.core.modelwrapper import ModelWrapper
+
+
+class _StepConfig(Protocol):
+    """What ``execute_step`` reads of a build configuration (a KernelBuildConfig or a
+    DataflowBuildConfig)."""
+
+    @property
+    def output_dir(self) -> str: ...
+
+    @property
+    def save_intermediate_models(self) -> bool | None: ...
+
+    @property
+    def inject_steps_before(
+        self,
+    ) -> Mapping[str, Sequence[Callable[[ModelWrapper, Any], ModelWrapper]]]: ...
+
+    @property
+    def inject_steps_after(
+        self,
+    ) -> Mapping[str, Sequence[Callable[[ModelWrapper, Any], ModelWrapper]]]: ...
+
+
+#: The build configuration a step takes, as execute_step passes it on.
+_Config = TypeVar("_Config", bound=_StepConfig)
+
 
 #: The seconds each step a phase runs took, by name, while a build records them
 #: (``recorded_step_times``); None outside one.
@@ -37,14 +62,16 @@ def recorded_step_times() -> Iterator[dict[str, float]]:
         _step_times.reset(token)
 
 
-def _save_intermediate_model(model: ModelWrapper, step_name: str, cfg: KernelBuildConfig) -> None:
+def _save_intermediate_model(model: ModelWrapper, step_name: str, cfg: _StepConfig) -> None:
     """The model after ``step_name``, as intermediate_models/<step_name>.onnx."""
     intermediate_model_dir = cfg.output_dir + "/intermediate_models"
     os.makedirs(intermediate_model_dir, exist_ok=True)
     model.save(f"{intermediate_model_dir}/{step_name}.onnx")
 
 
-def _timed(step_fn, model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def _timed(
+    step_fn: Callable[[ModelWrapper, _Config], ModelWrapper], model: ModelWrapper, cfg: _Config
+) -> ModelWrapper:
     """``step_fn`` run on the model, its time recorded if a build records step times."""
     started = time.time()
     model = step_fn(model, cfg)
@@ -55,11 +82,15 @@ def _timed(step_fn, model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper
     return model
 
 
-def execute_step(step_fn, model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def execute_step(
+    step_fn: Callable[[ModelWrapper, _Config], ModelWrapper], model: ModelWrapper, cfg: _Config
+) -> ModelWrapper:
     """Run ``step_fn`` inside a phase: the steps ``cfg.inject_steps_before`` names for it
     first and those ``cfg.inject_steps_after`` names after it, each one's model saved
     as an intermediate model if ``cfg.save_intermediate_models``, and each one timed
-    (``recorded_step_times``)."""
+    (``recorded_step_times``). Injection names a phase or a step inside one:
+    ``inject_steps_after={"step_hw_codegen": [my_func]}`` runs ``my_func`` after
+    ``step_hw_codegen`` inside ``phase_build_hardware`` too."""
     step_name = step_fn.__name__
     for injected_step in cfg.inject_steps_before.get(step_name, []):
         model = _timed(injected_step, model, cfg)

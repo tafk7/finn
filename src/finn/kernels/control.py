@@ -122,11 +122,9 @@ class ControlBus(Space):
 
 __all__ = [
     "CONTROL",
-    "CONTROL_SEMANTICS",
     "Control",
     "ControlBus",
     "EXPORTED",
-    "EXPORTED_SEMANTICS",
     "Exported",
     "held_bus",
     "top_bus",

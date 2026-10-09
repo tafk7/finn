@@ -15,6 +15,11 @@ regions that need it (P6) and its checkpoint checks every integer tensor against
 it; a KernelOp's domain step (``KernelOp.exact``) reads it to say where its
 reference is exact against ONNX executed in its operands' container; the harness
 draws a tensor's inputs as its container holds them.
+
+What a container must hold is the largest magnitude a value reaches on the way to it.
+For a MatMul that is its partial sums (``matmul_partial_sums``), the one bound both
+the checkpoint (``container-inexact``) and MatMul's domain step
+(``matmul-container-exceeded``) read, so that the two refusals agree.
 """
 
 from __future__ import annotations
@@ -91,11 +96,27 @@ def held(values: npt.NDArray[np.int64], element_type: int) -> npt.NDArray[np.int
     return found
 
 
+def matmul_partial_sums(a: int, k: int, b: int, weights: npt.ArrayLike | None = None) -> int:
+    """The largest magnitude an integer MatMul's partial sums reach, Y = A @ B with B a
+    (k, n) matrix: A's largest magnitude ``a`` times B's largest column sum of
+    magnitudes. That sum is of B's values, ``weights``, where they are known (an
+    initializer), else ``k`` times B's largest magnitude ``b``. In exact integers: a
+    weight that is no integer counts as the next one up."""
+    if weights is None:
+        return a * k * b
+    magnitudes = np.abs(np.asarray(weights))
+    if magnitudes.dtype.kind == "f":
+        magnitudes = np.ceil(magnitudes)
+    columns = magnitudes.astype(np.int64).astype(object).sum(axis=0)
+    return a * int(max(np.atleast_1d(columns), default=0))
+
+
 __all__ = [
     "EXACT_UP_TO",
     "container",
     "exact_up_to",
     "held",
+    "matmul_partial_sums",
     "name",
     "numpy_type",
 ]

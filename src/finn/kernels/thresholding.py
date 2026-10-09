@@ -58,7 +58,6 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -87,13 +86,18 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import (
+    Contribution,
+    CopiedSource,
+    GeneratedData,
+    hex_image,
+)
 from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
+from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     Fabric,
@@ -286,12 +290,7 @@ class ThresholdingAxiKernel(Kernel):
     ultra_stages: int = Decision(
         domain=requiring(
             stage_counts(stages),
-            requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=_staged),
-            requires(
-                platform.uram_init,
-                "uram-init: the platform's UltraRAM takes no initial contents",
-                cases=_staged,
-            ),
+            *uram_requirements(platform, _staged, init=True),
         )
     )
 
@@ -568,7 +567,7 @@ class ThresholdingAxiKernel(Kernel):
             return 1 << (value - 1).bit_length()
 
         group = padded(folds) if sets > 1 else folds
-        mask, digits = (1 << bits) - 1, (bits + 3) // 4
+        mask = (1 << bits) - 1
         words = []
         for index in range(sets * group):
             chosen, fold = divmod(index, group)
@@ -577,8 +576,7 @@ class ThresholdingAxiKernel(Kernel):
                 for position in range(padded(count)):
                     inside = fold < folds and lane < lanes and position < count
                     words.append(table[chosen][row][position] & mask if inside else 0)
-        data = "".join(f"{word:0{digits}x}\n" for word in words).encode()
-        return GeneratedData(f"thresholds_{hashlib.sha256(data).hexdigest()[:16]}.dat", data)
+        return hex_image("thresholds", words, bits)
 
     def parameters(self) -> Mapping[str, int | str]:
         sets, rows, count = self.shape

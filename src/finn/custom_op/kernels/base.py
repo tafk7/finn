@@ -11,8 +11,9 @@ its range. It states its placement once, as data (``kernel``, ``formals``,
 ``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
 root is generated from it, and a shell root places the same kernel. It
 binds its node root through the bind cache, on its inputs for inference and
-whole for its choices, replays the choices its node holds, and answers the
-compiler's queries from the result.
+whole for its choices, replays the choices its node holds and those its owned
+parameter channels' tensors state, and answers the compiler's queries from the
+result.
 
 Each node is asked three questions, each with one owner (KT18):
 
@@ -50,17 +51,21 @@ Two kinds of attribute:
 
 - **semantic**: part of the operation, stated by the graph (Thresholding's
   ``bias``); required, never a choice;
-- **choice**: one per decision key of the op's node root, sparse, absent
-  meaning open. The kernel's keys are unprefixed (``compute.packed.pe``), a
-  channel's sit under the op's port name (``x.adapter…``, ``w.transport``,
-  ``y.transport``). A channel's choices are its consumer's; an output
-  channel's are its producer's only where no KernelOp consumes it (a graph
-  output), so ``y.*`` is set on a node whose output leaves the graph. The ONNX type
+- **choice**: one per decision key of the op's kernel in its node root,
+  unprefixed (``compute.packed.pe``), sparse, absent meaning open. The ONNX type
   is the key's value semantics' (``int`` and ``bool``: ``i``, ``str``: ``s``),
   and a selector lists its cases. The node's attributes are the persisted form.
 
-Replay commits the node's choices atomically on its cached base point. A choice
-nested under a selector nobody committed (``compute.packed.pe`` with
+A channel's choices are not its nodes': they are stated on the tensor it carries
+(``CHANNEL``, the ``finn.channel`` namespace of the tensor's typed metadata), and
+only in a partition's body, a model whose nodes are all KernelOps
+(``channel_choices``; a shell root replays them, and only a shell root, which holds
+both of a channel's ends, checks them: ``shell.save_channels``). A graph with nodes on
+the host (the whole graph, before the cut) states none.
+
+Replay commits the node's choices atomically on its cached base point, with the
+choices of each parameter channel the node owns, as the initializer's tensor states
+them. A choice nested under a selector nobody committed (``compute.packed.pe`` with
 ``compute`` open) applies when the selector is forced (its one viable case),
 and forced cases are never committed, so nothing else happens at replay and
 nothing forced reaches a node. A refusal names every refused key, an
@@ -97,6 +102,7 @@ from finn.core.space import (
 )
 from finn.custom_op.kernels.cache import BIND_CACHE, Facts
 from finn.custom_op.kernels.roots import node_root, placed
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, is_kernel_partition
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
@@ -108,8 +114,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
-from finn.kernels.target import DspBlock, Fabric, Platform, Target
-from finn.kernels.utilization import Resources
+from finn.kernels.target import DspBlock, Platform, Target
+from finn.kernels.utilization import Fabric, Resources
 from finn.kernels.values.domains import stored_element
 from finn.kernels.values.semantics import IntegerTensorValue, integer_bytes, integer_digest
 
@@ -170,8 +176,12 @@ Shapes = dict[str, tuple[tuple[int, ...], QONNXDataType]]
 
 
 class KernelOpError(ValueError):
-    """A node an op cannot bind or configure: a missing or refused fact, or a refused
-    choice. ``keys`` names the refused choices, by attribute, when there are any."""
+    """A node or a channel the KernelOps cannot bind or configure: a missing or refused
+    fact, or a refused choice. ``keys`` names what is refused, as its owner states it,
+    when there is something to name: a node's choice attributes (``compute.packed.pe``),
+    a channel's keys (``transport``, or ``<tensor>.<key>`` where a node's point or
+    packaging names the owner), or the tensors whose channel choices are refused
+    whole."""
 
     def __init__(self, message: str, keys: tuple[str, ...] = ()) -> None:
         super().__init__(message)
@@ -411,6 +421,82 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
     return found or dict.fromkeys(choices, "refused together")
 
 
+# -- channels ----------------------------------------------------------------------------
+
+CHANNEL = Namespace("finn.channel", version=1, follow=True)
+"""A channel's stated choices, typed metadata of the tensor it carries (qonnx's
+``qonnx.core.metadata``; entries ``finn.channel/transport``), sparse, absent meaning
+open: one key per Decision ``Channel`` declares (``CHANNEL_KEYS``), generated from them
+as a KernelOp's schema is from its node root, its type the Decision's value semantics'
+and a selector's values its cases. Stated in a partition's body only
+(``channel_choices``). It follows its tensor into the body the cut makes, and the cut
+clears the parent's copy, so a channel has one home. A tensor stating another shape of
+it (a key ``Channel`` does not declare, or another version) is refused, by name: the
+partition is explored again."""
+
+CHANNEL_TYPES: dict[str, type] = {"int": int, "bool": bool, "str": str}
+
+
+def _channel_key(item: inspection.DecisionInfo[object]) -> Key[Any]:
+    kind = CHANNEL_TYPES[value_type(item)]
+    if not item.selector:
+        return CHANNEL.key(item.key, kind)
+    cases = item.cases
+    return CHANNEL.key(
+        item.key, kind, check=lambda value: value in cases, expect=f"one of {list(cases)}"
+    )
+
+
+CHANNEL_KEYS: dict[str, Key[Any]] = {
+    item.key: _channel_key(item) for item in inspection.decisions(Channel)
+}
+"""``CHANNEL``'s keys by name: ``Channel``'s decision keys (``transport``,
+``transport.fifo.buffer.depth``, ``source.memstream.ram_style``, ...)."""
+
+
+def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
+    """Refuse the channel choices ``tensors`` state, by name, unless ``model`` is a
+    partition's body (its nodes all KernelOps): a graph with nodes on the host (the
+    whole graph, before the cut) states none; the build's choices come in through
+    ``kernel_choices.json`` (``Pinned``), which exploration applies to the body."""
+    named = list(tensors)
+    if not named or is_kernel_partition(model):
+        return
+    hosts = [
+        node.name or node.op_type for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN
+    ]
+    raise KernelOpError(
+        f"{', '.join(named)}: channel choices ({CHANNEL.name}) are stated in a partition's "
+        f"body only, not on a graph with nodes on the host ({', '.join(hosts) or 'none'}): "
+        "state them through kernel_choices.json (Pinned), which exploration applies to the "
+        "body",
+        tuple(named),
+    )
+
+
+def channel_choices(model: ModelWrapper, tensor: str) -> dict[str, object]:
+    """The choices ``tensor``'s channel states (``CHANNEL``), by key: only those present.
+    Stated outside a partition's body (``refuse_outside_body``), or in a shape
+    ``CHANNEL`` does not declare, they are refused, by name."""
+    try:
+        stated: dict[str, object] = model.namespace(CHANNEL, tensor=tensor)
+    except MetadataError as error:
+        raise KernelOpError(
+            f"{tensor}: its channel choices are not {CHANNEL.name}'s: {error}; explore the "
+            "partition again",
+            (tensor,),
+        ) from error
+    if stated:
+        refuse_outside_body(model, [tensor])
+    return stated
+
+
+def clear_channel_choices(model: ModelWrapper) -> None:
+    """Clear the choices every tensor's channel states (``CHANNEL``)."""
+    for tensor in model.tensors_stating(CHANNEL):
+        model.clear(CHANNEL, tensor=tensor)
+
+
 # -- the op ------------------------------------------------------------------------------
 
 
@@ -497,23 +583,15 @@ class KernelOp(CustomOp):
 
     @classmethod
     def attribute(cls, key: str) -> str | None:
-        """A node-root key's attribute: the kernel's unprefixed, an input or owned
-        channel's as it is, an output channel's transport as it is. An output presents
-        what is produced, so it opens no adapter of its own."""
+        """A node-root key's attribute: the kernel's, unprefixed; none for a channel's,
+        which its tensor states (``CHANNEL``)."""
         head, _, rest = key.partition(".")
-        if head == cls.member:
-            return rest
-        if head in cls.outputs:
-            return key if rest.partition(".")[0] == "transport" else None
-        return key if head in cls.ports else None
+        return rest if head == cls.member else None
 
     @classmethod
     def node_key(cls, attribute: str) -> str:
         """An attribute's node-root key."""
-        head = attribute.partition(".")[0]
-        return (
-            attribute if head in cls.ports or head in cls.outputs else f"{cls.member}.{attribute}"
-        )
+        return f"{cls.member}.{attribute}"
 
     @classmethod
     def root(cls) -> type[Kernel]:
@@ -524,8 +602,8 @@ class KernelOp(CustomOp):
 
     @classmethod
     def schema(cls) -> dict[str, tuple[str, tuple[str, ...]]]:
-        """The choice attributes: name -> (ONNX type, a selector's cases), from the node
-        root's decision keys."""
+        """The choice attributes: name -> (ONNX type, a selector's cases), from the
+        decision keys of the kernel in the node root."""
         if cls not in KernelOp._schemas:
             found: dict[str, tuple[str, tuple[str, ...]]] = {}
             for item in inspection.decisions(cls.root()):
@@ -580,13 +658,17 @@ class KernelOp(CustomOp):
             for port, tensor in zip(self.outputs, node.output)
         }
 
-    def edges(self) -> dict[str, Tensor]:
-        """The tensor of each channel of the node root, by port, inputs and outputs."""
-        return self.input_edges() | self.output_edges()
-
     def base(self) -> Kernel:
         """The node root bound from this node's facts, nothing chosen."""
         return BIND_CACHE.point(self.facts())
+
+    def _channel_hint(self, names: Iterable[str]) -> str:
+        """Where ``names`` are stated, if they are a channel's (one named under a port):
+        on its tensor."""
+        ports = {port for port in (*self.ports, *self.outputs) if port}
+        if any(name.partition(".")[0] in ports for name in names):
+            return f"; a channel's choices are its tensor's ({CHANNEL.name}, save_channels)"
+        return ""
 
     def choices(self) -> dict[str, object]:
         """The node's choices, by attribute: only those present. An attribute neither
@@ -599,29 +681,30 @@ class KernelOp(CustomOp):
                 continue
             if name not in schema:
                 raise KernelOpError(
-                    f"{self.label}: {name} is not a choice of {self.op_type}", (name,)
+                    f"{self.label}: {name} is not a choice of {self.op_type}"
+                    + self._channel_hint([name]),
+                    (name,),
                 )
             found[name] = attribute.s.decode() if schema[name][0] == "s" else int(attribute.i)
         return found
 
-    def node_part(self, facts: Facts, choices: Mapping[str, object]) -> dict[str, object]:
-        """The choices a node root replays: its kernel's and its owned channels'. An
-        edge's, input or output, belong to the root that declares the edge."""
-        edges = ({port for port in self.ports if port} - set(facts.owned)) | set(self.outputs)
-        return {
-            name: value for name, value in choices.items() if name.partition(".")[0] not in edges
-        }
-
     def point(self, extra: Mapping[str, object] | None = None) -> Kernel:
-        """The node root with the node's choices (and ``extra``) replayed."""
+        """The node root with the node's choices (and ``extra``, by attribute) replayed,
+        and those of each parameter channel the node owns, which the initializer's
+        tensor states (``channel_choices``)."""
         facts = self.facts()
-        wanted = self.node_part(facts, {**self.choices(), **(extra or {})})
+        wanted = {
+            self.node_key(name): value
+            for name, value in {**self.choices(), **(extra or {})}.items()
+        }
+        names = {key: key.partition(".")[2] for key in wanted}
+        for port, tensor in self.owned(facts).items():
+            for key, value in channel_choices(self.model(), tensor).items():
+                wanted[f"{port}.{key}"] = value
+                names[f"{port}.{key}"] = f"{tensor}.{key}"
         if not wanted:
             return BIND_CACHE.point(facts)
-        names = {self.node_key(name): name for name in wanted}
-        typed = typed_choices(
-            [self.root()], {self.node_key(name): value for name, value in wanted.items()}
-        )
+        typed = typed_choices([self.root()], wanted)
 
         def build(base: Kernel) -> Kernel:
             replayed = committed(base, typed)
@@ -634,12 +717,17 @@ class KernelOp(CustomOp):
         return BIND_CACHE.configured(facts, typed, build)
 
     def save(self, choices: Mapping[str, object | None]) -> None:
-        """Commit ``choices`` (made on purpose) over the node's persisted ones: replayed
-        on a fresh base and written only if accepted; ``None`` clears a choice."""
+        """Commit ``choices`` (made on purpose, the kernel's) over the node's persisted
+        ones: every one replayed on a fresh base and written only if accepted; ``None``
+        clears a choice. A channel's are its tensor's (``shell.save_channels``)."""
         schema = self.schema()
         unknown = sorted(set(choices) - set(schema))
         if unknown:
-            raise KernelOpError(f"{self.label}: {unknown} are not choices of {self.op_type}")
+            raise KernelOpError(
+                f"{self.label}: {unknown} are not choices of {self.op_type}"
+                + self._channel_hint(unknown),
+                tuple(unknown),
+            )
         merged: dict[str, int | str] = {}
         for name, value in {**self.choices(), **choices}.items():
             if value is None:
@@ -799,23 +887,33 @@ def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
 
 
 __all__ = [
+    "CHANNEL",
+    "CHANNEL_KEYS",
     "PLATFORM",
     "PLATFORM_FIELDS",
     "PLATFORM_KEYS",
     "KernelOp",
     "FactUnstated",
     "KernelOpError",
+    "Match",
+    "Shapes",
     "admitted",
-    "candidate_refusals",
+    "channel_choices",
+    "clear_channel_choices",
     "committed",
     "datatype",
     "edge_tensor",
     "integer_tensor",
     "kernel_op",
+    "known_shape",
+    "node_attributes",
     "read_target",
     "refusal",
+    "refuse_outside_body",
+    "refused",
     "rows",
     "shape",
     "typed_choices",
+    "unstated",
     "write_target",
 ]

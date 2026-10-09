@@ -18,8 +18,8 @@ import sys
 
 import pytest
 
-#: The HWCustomOp flow: its ops, analyses and transformations, and its builder's steps,
-#: phases and configuration (DataflowBuildConfig).
+#: The HWCustomOp flow: its ops, analyses and transformations, its builder's steps,
+#: phases and configuration (DataflowBuildConfig), and its stitched-IP executor.
 LEGACY = (
     "finn.custom_op.fpgadataflow",
     "finn.analysis",
@@ -27,6 +27,7 @@ LEGACY = (
     "finn.builder.build_dataflow_steps",
     "finn.builder.build_dataflow_phases",
     "finn.builder.build_dataflow_config",
+    "finn.core.rtlsim_exec",
 )
 
 #: The kernel path, as a build imports it.

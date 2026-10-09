@@ -30,7 +30,7 @@ admits. Every refusal is named (``TargetRefused``).
 """
 
 from finn.platform.boards import BOARDS, Board
-from finn.platform.catalog import Device, Part, device, part, parts
+from finn.platform.catalog import device, part, part_report, parts
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import refuse_drift, resolve_target
@@ -39,9 +39,7 @@ from finn.platform.shells import (
     IP_ROW,
     PYNQ,
     ROWS,
-    SHELL_NAMES,
-    SLASH,
-    XRT,
+    VIVADO_BLOCK_DESIGN,
     ShellRow,
     StaticRegion,
     shell_row,
@@ -53,18 +51,15 @@ __all__ = [
     "IP_ROW",
     "PYNQ",
     "ROWS",
-    "SHELL_NAMES",
-    "SLASH",
-    "XRT",
+    "VIVADO_BLOCK_DESIGN",
     "Board",
-    "Device",
-    "Part",
     "ShellRow",
     "StaticRegion",
     "TargetRefused",
     "TargetRequest",
     "device",
     "part",
+    "part_report",
     "parts",
     "refuse_drift",
     "resolve_target",

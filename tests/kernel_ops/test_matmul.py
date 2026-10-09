@@ -22,8 +22,9 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 
 import finn.custom_op.kernels as domain
-from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError
+from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, channel_choices
 from finn.custom_op.kernels.matmul import MatMul
+from finn.custom_op.kernels.shell import save_channels
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -100,32 +101,26 @@ def test_each_missing_or_refused_fact_is_named() -> None:
 # -- the schema -------------------------------------------------------------------------
 
 
-def test_the_schema_is_the_node_roots_decision_keys() -> None:
+def test_the_schema_is_the_kernels_decision_keys() -> None:
     schema = MatMul.schema()
-    assert len(schema) == 33
-    assert sum(kind == "s" for kind, _ in schema.values()) == 23
+    assert len(schema) == 9
+    assert sum(kind == "s" for kind, _ in schema.values()) == 3
     assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
     assert schema["compute.packed.pe"] == ("i", ())
     assert schema["compute.packed.compute_pumping"] == ("i", ())
     assert schema["compute.packed.reducer"] == ("s", ())
-    # Each channel's keys under the op's port names: the output's are its producer's where
-    # no KernelOp consumes it (a graph output).
-    assert "w.transport" in schema and {"x.output_adapter", "x.adapter"} <= set(schema)
-    assert {"x.transport", "y.transport"} <= set(schema)
-    # The weights' source is the weight channel's: its keys sit under the port name.
-    assert schema["w.source"] == ("s", ("memstream",))
-    assert schema["w.source.memstream.ram_style"] == ("s", ())
-    assert not any(name.startswith("memory") for name in schema)
-    # The activations never carry a value: their channel compiles no source, so no keys.
-    assert not any(name.startswith("x.source") for name in schema)
+    # A channel's keys are its tensor's (finn.channel), never the node's: none sits under
+    # a port name, the weights' source neither.
+    assert not any(name.partition(".")[0] in ("x", "w", "y") for name in schema)
+    assert not any(name.startswith(("memory", "source")) for name in schema)
     types = op(matmul_model()).get_nodeattr_types()
     assert types["compute"] == ("s", False, "", {"packed", "int8_dsp58"})
 
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:
-    """Changing a kernel's or a channel's keys changes the schema. Unreleased, the digest
-    is re-pinned without an op-version bump (clean breaks)."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "36430af08fe19e7b")
+    """Changing a kernel's keys changes the schema. Unreleased, the digest is re-pinned
+    without an op-version bump (clean breaks)."""
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "6a16c9aa62655d95")
 
 
 # -- persistence ------------------------------------------------------------------------
@@ -133,11 +128,11 @@ def test_the_schema_is_pinned_for_its_op_version() -> None:
 
 def test_save_writes_choices_and_replay_reads_them() -> None:
     model = matmul_model()
-    op(model).save({**FOLDING, "w.transport": "direct"})
-    assert attributes(model) == sorted([*FOLDING, "w.transport"])
+    op(model).save(FOLDING)
+    assert attributes(model) == sorted(FOLDING)
     assert op(model).choices()["compute.packed.pe"] == 2
     point = op(model).point()
-    assert point.matmul.compute.pe == 2 and point.w.transport is not None
+    assert point.matmul.compute.pe == 2
     # A refused save writes nothing; the refusal names the key.
     with pytest.raises(KernelOpError) as error:
         op(model).save({"compute.packed.pe": 3})
@@ -150,19 +145,27 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
         op(model).save({"compute": 1})
     with pytest.raises(KernelOpError, match="among"):
         op(model).save({"compute": "dense"})
+    # A channel's choice is no node's: refused, naming where it is stated.
+    with pytest.raises(KernelOpError, match="are not choices of MatMul; a channel's choices"):
+        op(model).save({"w.transport": "direct"})
 
 
-def test_the_weight_sources_choices_persist_on_the_node_and_a_forced_source_is_not() -> None:
-    """The node owns its weight channel: the source's keys are its attributes, under
-    the port name. The source, its one case forced, is written only when saved on
-    purpose."""
+def test_the_weight_sources_choices_persist_on_the_weights_and_the_node_replays_them() -> None:
+    """The node owns its weight channel, whose choices are stated on the initializer's
+    tensor, beside its value, never on the node; the node's point replays them. The
+    source, its one case forced, is written only when saved on purpose."""
     model = matmul_model()
-    op(model).save({"w.source.memstream.ram_style": "block", "w.transport": "direct"})
-    assert attributes(model) == ["w.source.memstream.ram_style", "w.transport"]
+    save_channels(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
+    assert attributes(model) == []
+    assert channel_choices(model, "w") == {
+        "source.memstream.ram_style": "block",
+        "transport": "direct",
+    }
     point = op(model).point()
     assert point.w.source.ram_style == "block" and isinstance(point.w.source, MemStreamKernel)
-    op(model).save({"w.source": "memstream"})
-    assert "w.source" in attributes(model) and op(model).point().w.source.ram_style == "block"
+    save_channels(model, {"w": {"source": "memstream"}})
+    assert channel_choices(model, "w")["source"] == "memstream"
+    assert op(model).point().w.source.ram_style == "block"
 
 
 def test_a_forced_choice_is_never_saved() -> None:

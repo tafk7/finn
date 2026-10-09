@@ -54,6 +54,8 @@ stream side, the free side's contract:
 
 A boundary channel exports its end's contract under ``END`` (none without an end),
 which the shell root sums with its static region (``finn.custom_op.kernels.shell``).
+These ends are not ``finn.dataflow.ends``'s, which are the two beat sequences a channel's
+producer and consumer present (``End``, ``Ends``).
 """
 
 from __future__ import annotations
@@ -324,7 +326,6 @@ __all__ = [
     "END",
     "ENDS",
     "IODMA_HLS",
-    "IODMA_LEAST_PORT",
     "LCM",
     "MEMORY_LATENCY",
     "NO_CONVERTER",

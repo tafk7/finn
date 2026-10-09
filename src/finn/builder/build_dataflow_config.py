@@ -29,15 +29,15 @@
 
 import numpy as np
 import os
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from dataclasses_json import Undefined, config, dataclass_json
-from dataclasses_json.undefined import UndefinedParameterError
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
+from finn.builder.config_common import ToolchainResolution, declared
 from finn.transformation.fpgadataflow.alveo_build import VitisOptStrategy
 from finn.util.basic import hbm_boards, part_map, vitis_default_platform
-from finn.util.toolchain import Selection, Toolchain, machine_selection
+from finn.util.toolchain import Selection
 
 
 class AutoFIFOSizingMethod(str, Enum):
@@ -143,30 +143,12 @@ estimate_only_dataflow_steps = [
 hw_codegen_dataflow_steps = estimate_only_dataflow_steps + ["step_hw_codegen"]
 
 
-def declared(cls: type, name: str) -> Callable[[Any], Any]:
-    """The decoder of the nested dataclass ``cls`` a configuration states as ``name``,
-    refusing keys ``cls`` does not declare (dataclasses_json would drop them, as it
-    does a nested dataclass's), naming them."""
-
-    def decode(stated: Any) -> Any:
-        if stated is None or isinstance(stated, cls):
-            return stated
-        unknown = sorted(set(stated) - {item.name for item in fields(cls)})
-        if unknown:
-            raise UndefinedParameterError(
-                f"{name}: keys {cls.__name__} does not declare: {unknown}"
-            )
-        return cls(**stated)
-
-    return decode
-
-
 # undefined=RAISE: a key the configuration does not declare is refused, named, when a
 # configuration is read (from_json, from_dict), never dropped: after a rename, an old
 # configuration would otherwise build with the new field's default.
 @dataclass_json(undefined=Undefined.RAISE)
 @dataclass
-class DataflowBuildConfig:
+class DataflowBuildConfig(ToolchainResolution):
     """Build configuration to be passed to the build_dataflow function. Can be
     serialized into or de-serialized from JSON files for persistence; reading one
     refuses a key it does not declare (``UndefinedParameterError``, naming the keys).
@@ -475,22 +457,6 @@ class DataflowBuildConfig:
             return self.synth_clk_period_ns
         else:
             return self.hls_clk_period_ns
-
-    def _resolve_selection(self) -> Selection:
-        """The selection this build runs its tools by: ``toolchain`` laid over the
-        machine's (``machine_selection``), each field it states winning; unset, the
-        machine's."""
-        return machine_selection(stated=self.toolchain)
-
-    def _resolve_toolchain(self) -> Toolchain:
-        """The prepared toolchain every tool step of this build runs in: the resolved
-        selection, prepared by the first step that asks and then the same object for
-        every later step. Kept on the instance, not a field: it is prepared, not
-        configured, and is not serialized with the build configuration."""
-        toolchain = getattr(self, "_toolchain", None)
-        if toolchain is None:
-            toolchain = self._toolchain = self._resolve_selection().prepare()
-        return toolchain
 
     def _resolve_driver_platform(self):
         if self.shell_flow_type == ShellFlowType.VIVADO_ZYNQ:

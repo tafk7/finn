@@ -51,7 +51,7 @@ from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.core.space import Finding, FindingKind
+from finn.core.space import Finding, FindingKind, finding_record
 from finn.custom_op.kernels.base import (
     FactUnstated,
     KernelOp,
@@ -63,6 +63,7 @@ from finn.custom_op.kernels.base import (
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.kernels.target import Target
 from finn.transformation.kernels.infer import infer_node
+from finn.util.graph import between
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -192,43 +193,8 @@ def _trial(
 def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:
     """The host nodes on a path that leaves the KernelOps and re-enters them, in graph
     order: a partition of every KernelOp would depend on itself through them. Graph
-    convexity, not node order."""
-    producer = {tensor: node for node in model.graph.node for tensor in node.output}
-    consumers: dict[str, list[NodeProto]] = {}
-    for node in model.graph.node:
-        for tensor in node.input:
-            consumers.setdefault(tensor, []).append(node)
-    kernel_ops = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
-
-    def reached(step: Any) -> set[str]:
-        seen: set[str] = set()
-        frontier = [follower for node in kernel_ops for follower in step(node)]
-        while frontier:
-            node = frontier.pop()
-            if _label(node) not in seen:
-                seen.add(_label(node))
-                frontier.extend(step(node))
-        return seen
-
-    after = reached(
-        lambda node: [follower for t in node.output for follower in consumers.get(t, [])]
-    )
-    before = reached(lambda node: [producer[t] for t in node.input if t in producer])
-    return tuple(
-        _label(node)
-        for node in model.graph.node
-        if node.domain != KERNEL_OPS_DOMAIN and _label(node) in after & before
-    )
-
-
-def _finding_record(finding: Finding) -> dict[str, Any]:
-    return {
-        "kind": finding.kind.value,
-        "code": finding.code,
-        "owner": finding.owner,
-        "message": finding.message,
-        "details": dict(finding.details),
-    }
+    convexity, not node order (``finn.util.graph.between``)."""
+    return tuple(_label(node) for node in between(model, lambda n: n.domain == KERNEL_OPS_DOMAIN))
 
 
 def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dict[str, Any]:
@@ -243,7 +209,7 @@ def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dic
             {
                 "nodes": list(outcome.nodes),
                 "op": outcome.op,
-                "findings": [_finding_record(finding) for finding in outcome.findings],
+                "findings": [finding_record(finding) for finding in outcome.findings],
             }
             for outcome in outcomes
         ],

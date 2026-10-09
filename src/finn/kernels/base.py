@@ -165,8 +165,8 @@ CYCLES = ViewKey("cycles", default_semantics(int))
 a kernel with children's is its slowest member's."""
 
 BUFFERING = ViewKey("buffering", default_semantics(int))
-"""The bits a channel's stages hold between its ends (an adapter's frame, a FIFO's depth);
-a kernel with children's is the sum over its members."""
+"""The bits a channel's stages hold between its ends (an adapter's ``input_gen``
+buffers, a FIFO's depth); a kernel with children's is the sum over its members."""
 
 RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
 """What a kernel or a channel uses of the device (``finn.kernels.utilization.Resources``):
@@ -562,12 +562,15 @@ def extent_of(index: Index) -> int:
     return derived(extent)
 
 
-def factor_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
+_FACTOR_BOUND = 1 << 32
+
+
+def factor_domain(index: Index) -> Domain[int]:
     """A folding factor Decision's domain: the divisors of ``index``'s bound extent.
 
     While no placed port binds ``index`` (a flat build of a module whose
     parameters need no extents), the factor is any the RTL takes, ``1 <= factor
-    < bound``, and is committed as a choice; there is nothing to enumerate.
+    < _FACTOR_BOUND``, and is committed as a choice; there is nothing to enumerate.
     """
     candidates = divisors_of(1).candidates
     assert candidates is not None
@@ -575,7 +578,7 @@ def factor_domain(index: Index, bound: int = 1 << 32) -> Domain[int]:
     def accepts(*, candidate: int, extents: Mapping[Index, int]) -> bool:
         if type(candidate) is not int or candidate < 1:
             return False
-        return extents[index] % candidate == 0 if index in extents else candidate < bound
+        return extents[index] % candidate == 0 if index in extents else candidate < _FACTOR_BOUND
 
     def enumerate_(*, extents: Mapping[Index, int]) -> tuple[int, ...] | Rejected:
         if index not in extents:
@@ -601,13 +604,9 @@ __all__ = [
     "CYCLES",
     "Clocking",
     "HELD",
-    "HELD_SEMANTICS",
     "Kernel",
-    "MODULE",
-    "MODULE_SEMANTICS",
     "NATIVE_CLOCKING",
     "NETLIST",
-    "NETLIST_SEMANTICS",
     "PINS",
     "PORT",
     "RESET",

@@ -23,10 +23,11 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
-from finn.kernels.matmul import MatMulKernel, exact_result_dtype
+from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
+    exact_result_dtype,
     labels,
     matmul_assembly,
     matmul_point,

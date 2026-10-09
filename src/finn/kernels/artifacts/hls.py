@@ -134,7 +134,6 @@ def stage_hls(source: HlsSource, directory: Path, *, roots: Mapping[str, Path]) 
 
 
 __all__ = [
-    "CFLAGS",
     "axis_type",
     "SCRIPT",
     "StagedHls",

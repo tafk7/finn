@@ -15,6 +15,7 @@ the shell root sums with its partition's and its static region's. On the Chain
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,13 @@ from qonnx.core.modelwrapper import ModelWrapper
 import finn.custom_op.kernels.shell as shell
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import read_target, write_target
-from finn.custom_op.kernels.shell import ShellResources, persist, shell_resources, shell_root
+from finn.custom_op.kernels.shell import (
+    ShellResources,
+    configured_root,
+    persist,
+    shell_resources,
+    shell_root,
+)
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
@@ -58,7 +65,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96
 
@@ -294,12 +300,6 @@ def test_sizing_reads_a_free_side_its_end_paces() -> None:
 ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period_ns)
 
 
-@pytest.fixture(scope="module")
-def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
-    """TFC_W2A2's partition body: its KernelOps for Ultra96 at 5 ns in the Zynq shell."""
-    return ModelWrapper(str(tfc_kernel_ops))
-
-
 def explored(
     tfc: ModelWrapper, fps: float, target: Target = ULTRA96, *, sizing: bool = False
 ) -> tuple[ModelWrapper, dict[str, Any]]:
@@ -311,12 +311,20 @@ def explored(
     return model, dict(explore_kernel_choices(model, strategies).report)
 
 
-#: What the ip shell's doubled clock opens on each of TFC's MatMuls, completed off.
-PUMPING = {"compute.packed.compute_pumping": False, "w.source.memstream.pumped_memory": False}
+def pumping(name: str) -> dict[str, object]:
+    """What the ip shell's doubled clock opens on each of TFC's MatMuls, completed off,
+    by graph name: on its node, its kernel's pumping; on its weights' tensor, their
+    memory's."""
+    if re.fullmatch(r"MatMul_\d+", name):
+        return {"compute.packed.compute_pumping": False}
+    if re.fullmatch(r"MatMul_\d+_param0", name):
+        return {"source.memstream.pumped_memory": False}
+    return {}
 
 
 def built(model: ModelWrapper, report: dict[str, Any]) -> dict[str, dict[str, object]]:
-    """Every value the partition is built with, persisted or completed, by node."""
+    """Every value the partition is built with, persisted or completed, by graph name
+    (a node or a tensor)."""
     found = {node: dict(held) for node, held in kernel_choices_config(model).items()}
     for node, held in report["completed"].items():
         found.setdefault(node, {}).update({key: entry["value"] for key, entry in held.items()})
@@ -329,12 +337,12 @@ def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrappe
     model, report = explored(tfc, 1e6, sizing=True)
     # The ends change no choice: persisted alike, and completed alike, each MatMul's
     # pumping off on both (the doubled clock is the shell's, admitted by its root, and
-    # no kernel reads it off the platform); 57 values on 8 nodes.
+    # no kernel reads it off the platform); 57 values on 8 nodes and 13 tensors.
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
     values = built(model, report)
     assert built(ip_model, ip) == values
-    assert all(values[node].items() >= PUMPING.items() for node in values if "MatMul" in node)
-    assert (len(values), sum(map(len, values.values()))) == (8, 57)
+    assert all(values[name].items() >= pumping(name).items() for name in values)
+    assert (len(values), sum(map(len, values.values()))) == (21, 57)
     persisted = kernel_choices_config(model).values()
     assert not [key for held in persisted for key in held if "end" in key.split(".")]
     # The input end at max(196, 49) + 4 and the output end at max(10, 5) + 4, the
@@ -448,8 +456,7 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
     # the Zynq shell's.
     in_zynq = built(zynq_model, zynq)
     assert built(ip_model, ip) == {
-        node: {**held, **(PUMPING if node.startswith("MatMul") else {})}
-        for node, held in in_zynq.items()
+        name: {**held, **pumping(name)} for name, held in in_zynq.items()
     }
     # Every member's cycles but the ended channels', whose ends are the Zynq shell's.
     cycles = {name: row["cycles"] for name, row in ip["members"].items()}

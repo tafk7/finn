@@ -28,11 +28,13 @@
 
 from __future__ import annotations
 
-import copy
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
+from typing import Any
+
 import numpy as np
 import qonnx.analysis.topology as ta
-from collections.abc import Mapping, Sequence
-from contextvars import ContextVar
+from numpy.typing import NDArray
 from onnx import NodeProto
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_node
@@ -44,12 +46,12 @@ from qonnx.util.basic import (
 )
 
 from finn.core.executors import Context, Executor, Python, hardware_node, is_partition
-from finn.core.rtlsim_exec import rtlsim_exec
+from finn.custom_op.partition.kernel_partitions import body_file
 
 #: The executors execute_onnx runs a model with when its caller names none.
 DEFAULT_EXECUTORS: tuple[Executor, ...] = (Python(),)
 
-Provenance = dict[str, Executor | None]
+RanBy = dict[str, Executor | None]
 """Which executor ran each node a run executed, by node name; None where qonnx's
 execute_node ran it (a node no executor claims)."""
 
@@ -83,13 +85,13 @@ def executing() -> tuple[Executor, ...]:
 
 def execute_onnx(
     model: ModelWrapper,
-    input_dict: Mapping[str, np.ndarray],
+    input_dict: Mapping[str, NDArray[Any]],
     return_full_exec_context: bool = False,
     start_node: NodeProto | None = None,
     end_node: NodeProto | None = None,
     executors: Sequence[Executor] = DEFAULT_EXECUTORS,
     require_hardware: bool = False,
-    provenance: Provenance | None = None,
+    provenance: RanBy | None = None,
 ) -> Context:
     """Executes given ONNX ModelWrapper with given named inputs.
     If return_full_exec_context is False, a dict of named outputs is returned
@@ -152,10 +154,14 @@ def execute_onnx(
             _executing.reset(token)
     elif model_exec_mode == "rtlsim":
         # use stitched IP for rtlsim
+        # The legacy stitched-IP executor, loaded only when the model selects it.
+        from finn.core.rtlsim_exec import rtlsim_exec  # noqa: PLC0415
+
         execution_context = _execution_context(model, input_dict)
-        rtlsim_exec(model, execution_context)
+        # qonnx/legacy untyped
+        rtlsim_exec(model, execution_context)  # type: ignore[no-untyped-call]
     else:
-        raise Exception(
+        raise ValueError(
             """Metadata property "exec_mode" is set to an unknown value. Can be left
             unset or has to be set to "rtlsim" for execution using xsi!"""
         )
@@ -171,27 +177,28 @@ def execute_onnx(
         return output_dict
 
 
-def _execution_context(model: ModelWrapper, input_dict: Mapping[str, np.ndarray]) -> Context:
+def _execution_context(model: ModelWrapper, input_dict: Mapping[str, NDArray[Any]]) -> Context:
     """The model's execution context, checked as qonnx's execute_onnx checks it, with
     the given inputs in it."""
     if not model.check_all_tensor_shapes_specified():
-        raise Exception("Found unspecified tensor shapes, try infer_shapes")
+        raise ValueError("Found unspecified tensor shapes, try infer_shapes")
     ret = model.analysis(ta.nodes_topologically_sorted)
-    assert (
-        ret["nodes_topologically_sorted"] is True
-    ), """Nodes must be
+    if ret["nodes_topologically_sorted"] is not True:
+        raise ValueError(
+            """Nodes must be
     topologically sorted."""
+        )
     # every variable required by the graph has some buffer associated with it: graph
     # inputs (the input data as well as the trained parameters) and the graph
     # ValueInfo (intermediate tensors between layers)
-    execution_context = model.make_empty_exec_context()
+    execution_context: Context = model.make_empty_exec_context()
     # fill in any inputs provided to this function
     for inp_name in input_dict.keys():
         if inp_name in execution_context:
             if execution_context[inp_name].shape == input_dict[inp_name].shape:
                 execution_context[inp_name] = input_dict[inp_name]
             else:
-                raise Exception(
+                raise ValueError(
                     "Shape mismatch for provided input %s: found %s expected %s "
                     % (
                         inp_name,
@@ -209,7 +216,7 @@ def _execute_nodes(
     end_node: NodeProto | None,
     executors: tuple[Executor, ...],
     require_hardware: bool,
-    provenance: Provenance | None,
+    provenance: RanBy | None,
 ) -> None:
     """qonnx's node loop (qonnx.core.onnx_exec.execute_onnx) with the executors in
     front of its execute_node: the nodes from start_node to end_node, in the graph's
@@ -218,7 +225,8 @@ def _execute_nodes(
     opset_imports = model.get_opset_imports()
     start_ind, start_inside = _located(model, start_node, "start_node", 0)
     end_ind, end_inside = _located(model, end_node, "end_node", len(graph.node) - 1)
-    assert end_ind + 1 >= start_ind, "Start/end nodes must define valid subgraph"
+    if end_ind + 1 < start_ind:
+        raise ValueError("Start/end nodes must define valid subgraph")
     for index, node in enumerate(graph.node[start_ind : end_ind + 1], start_ind):
         if get_sanitize_quant_tensors() != 0:
             # round input values to match quantization annotation
@@ -235,7 +243,10 @@ def _execute_nodes(
             executor.run(node, execution_context, model)
         else:
             opset_version = opset_imports.get(node.domain, get_preferred_qonnx_opset())
-            execute_node(node, execution_context, graph, opset_version, model=model)
+            # qonnx/legacy untyped
+            execute_node(  # type: ignore[no-untyped-call]
+                node, execution_context, graph, opset_version, model=model
+            )
         if provenance is not None:
             provenance[node.name] = executor
         if get_sanitize_quant_tensors() != 0:
@@ -256,7 +267,7 @@ def _located(
         return index, None
     for index, candidate in enumerate(model.graph.node):
         if is_partition(candidate):
-            body = ModelWrapper(model.get_customop_wrapper(candidate).get_nodeattr("model"))
+            body = ModelWrapper(body_file(candidate))
             if body.get_node_index(node) is not None:
                 return index, node
     raise ValueError(f"{role} {node.name!r} is no node of the model nor of a partition's body")
@@ -297,7 +308,12 @@ def _inside(node: NodeProto, inside: NodeProto, executor: Executor | None, role:
     )
 
 
-def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=False):
+def execute_parent(
+    parent_path: str,
+    child_path: str,
+    input_tensor_npy: NDArray[Any],
+    return_full_ctx: bool = False,
+) -> Any:
     """Execute parent model containing a single StreamingDataflowPartition by
     replacing it with the model at child_path and return result."""
 
@@ -305,9 +321,9 @@ def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=Fa
     iname = parent_model.get_first_global_in()
     oname = parent_model.get_first_global_out()
     sdp_node = parent_model.get_nodes_by_op_type("StreamingDataflowPartition")[0]
-    sdp_node = getCustomOp(sdp_node)
-    sdp_node.set_nodeattr("model", child_path)
-    sdp_node.set_nodeattr("return_full_exec_context", 1 if return_full_ctx else 0)
+    sdp_op = getCustomOp(sdp_node)
+    sdp_op.set_nodeattr("model", child_path)
+    sdp_op.set_nodeattr("return_full_exec_context", 1 if return_full_ctx else 0)
     ret = execute_onnx(parent_model, {iname: input_tensor_npy}, True)
     if return_full_ctx:
         return ret
@@ -315,29 +331,12 @@ def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=Fa
         return ret[oname]
 
 
-def execute_onnx_and_make_model(model, input_dict):
-    """Executes given ONNX ModelWrapper with given named inputs and return a new
-    ModelWrapper where an initializer is provided for each tensor as taken from
-    the execution. This new model is useful for debugging, since it contains
-    all the intermediate activation values."""
-
-    # retrieve the full execution context
-    execution_context = execute_onnx(model, input_dict, True)
-    new_model = copy.deepcopy(model)
-    # create value_info entries and initializers for everything
-    for i in execution_context.keys():
-        new_model.set_initializer(i, execution_context[i])
-    for vi in new_model.graph.value_info:
-        new_model.graph.output.append(vi)
-    return new_model
-
-
 def compare_execution(
-    model_a,
-    model_b,
-    input_dict,
-    compare_fxn=lambda x, y: np.isclose(x, y, atol=1e-3).all(),
-):
+    model_a: ModelWrapper,
+    model_b: ModelWrapper,
+    input_dict: Mapping[str, NDArray[Any]],
+    compare_fxn: Callable[[Any, Any], Any] = lambda x, y: np.isclose(x, y, atol=1e-3).all(),
+) -> Any:
     """Executes two ONNX models and compare their outputs using given function.
 
     compare_fxn should take in two tensors and return a Boolean"""

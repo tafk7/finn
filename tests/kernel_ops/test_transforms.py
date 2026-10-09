@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 import pytest
 from kernels import chain
+from kernels.helpers import exact_result_dtype
 from onnx import TensorProto, helper, numpy_helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -30,7 +31,7 @@ from finn.custom_op.kernels.base import (
     kernel_op,
     read_target,
 )
-from finn.kernels.matmul import exact_result_dtype
+from finn.custom_op.kernels.shell import save_channels
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
 from kernel_ops.models import DOMAIN, TARGET, chain_source, lift
@@ -157,19 +158,24 @@ def test_the_converted_graph_computes_the_source_graphs_results(second_weights: 
 
 # ApplyConfig warns of a node without an entry: here second, which has no choices.
 @pytest.mark.filterwarnings("ignore:\\nNo HW configuration for nodes")
-def test_the_choices_round_trip_through_apply_config() -> None:
+def test_the_nodes_choices_round_trip_through_apply_config() -> None:
+    """The export names nodes and, after them, tensors: ApplyConfig applies the nodes'
+    (a channel's, on its tensor, Pinned reads back: test_explore)."""
     model = inferred()
     first = model.get_customop_wrapper(model.graph.node[0])
-    first.save({"compute.packed.pe": 2, "w.transport": "direct"})
+    first.save({"compute.packed.pe": 2})
     activate = model.get_customop_wrapper(model.graph.node[1])
     activate.save({"ram_style": "auto", "ultra_stages": 0})
+    save_channels(model, {"w1": {"transport": "direct"}})
     config = kernel_choices_config(model)
     assert config == {
-        "first": {"compute.packed.pe": 2, "w.transport": "direct"},
+        "first": {"compute.packed.pe": 2},
         "activate": {"ram_style": "auto", "ultra_stages": 0},
+        "w1": {"transport": "direct"},
     }
-    applied = inferred().transform(ApplyConfig(config))
-    assert kernel_choices_config(applied) == config
+    nodes = {name: held for name, held in config.items() if name != "w1"}
+    applied = inferred().transform(ApplyConfig(nodes))
+    assert kernel_choices_config(applied) == nodes
 
 
 # -- the TFC path's input: a Reshape, then thresholds as streamlining leaves them ---------

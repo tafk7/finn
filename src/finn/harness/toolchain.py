@@ -14,15 +14,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from finn import resources
+from finn.resources import finnlib_root
 from finn.util.toolchain import Toolchain, machine_toolchain
 
 SIMULATOR_TOOLS = ("xvlog", "xelab", "xsim")
-
-
-def finnlib_root() -> Path:
-    """FinnLib as FINN resolves it: FINN_RESOURCES_FINNLIB, a cached copy, or a fetch."""
-    return Path(resources.path("finnlib"))
 
 
 def vivado_simulator(toolchain: Toolchain | None = None) -> bool:
@@ -68,3 +63,6 @@ def print_identity() -> None:
     finnlib = finnlib_root()
     print(f"finn {revision(Path(__file__).resolve().parent)}", flush=True)
     print(f"finnlib {revision(finnlib)} {finnlib}", flush=True)
+
+
+__all__ = ["SIMULATOR_TOOLS", "finnlib_root", "print_identity", "vivado_simulator"]

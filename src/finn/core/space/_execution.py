@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """One native dispatcher for self methods and explicitly bound providers.
 
-Engine generators carry schema bookkeeping. Only authored calls occupy native
-stacks. Failures/cancellation return through waiting reads and drain cleanup.
+Runs authored callbacks on greenlets for the evaluator: engine frames
+(``_runtime``) stay generators and only authored calls take a native stack.
+Guards value transformations and driver-only APIs; failures and cancellation
+return through waiting reads, and cleanup failures are collected
+(``CleanupFailure``, ``NativeCancellationDetails``).
 """
 
 from __future__ import annotations

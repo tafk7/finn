@@ -27,8 +27,8 @@ from .declarations import (
     Present,
     ValueRef,
     View,
-    _path_text,
     at,
+    path_text,
 )
 from .domains import Domain
 from .errors import DefinitionError
@@ -86,11 +86,11 @@ def supply_text(value: object) -> str:
     if isinstance(value, Decision):
         return decision_text(cast(Decision[object], value))
     if isinstance(value, MemberRef):
-        return f"{_path_text(value.path)}.{value.member.name}"
+        return f"{path_text(value.path)}.{value.member.name}"
     if isinstance(value, ChoiceMemberRef):
-        return f"{_path_text(value.path)}.{value.member}"
+        return f"{path_text(value.path)}.{value.member}"
     if isinstance(value, CaseRef):
-        return f"selected({_path_text(value.path)})"
+        return f"selected({path_text(value.path)})"
     if isinstance(value, Present):
         return f"Present({', '.join(supply_text(item) for item in value.sources)})"
     if isinstance(value, Expr):

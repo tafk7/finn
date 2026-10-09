@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, Union, cast, get_args, get_origin
 
 from .semantics import NoTruthValue
 
@@ -22,7 +22,6 @@ class FindingKind(str, Enum):
     LIMITATION = "limitation"
     REJECTION = "rejection"
     AUTHORING = "authoring"
-    REQUEST = "request"
 
 
 def _freeze_detail(value: object) -> object:
@@ -87,6 +86,18 @@ def _finding_sort_key(finding: Finding) -> tuple[object, ...]:
         tuple((key, _detail_key(value)) for key, value in finding.details),
         tuple(_finding_sort_key(cause) for cause in finding.causes),
     )
+
+
+def finding_record(finding: Finding) -> dict[str, Any]:
+    """A finding as JSON's values: its kind, code, owner, message and details (its
+    causes are not recorded)."""
+    return {
+        "kind": finding.kind.value,
+        "code": finding.code,
+        "owner": finding.owner,
+        "message": finding.message,
+        "details": dict(finding.details),
+    }
 
 
 def ordered_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
@@ -359,6 +370,7 @@ __all__ = [
     "assess_constraints",
     "assess_view",
     "constraint_result",
+    "finding_record",
     "merged_findings",
     "ordered_findings",
     "owned_result",

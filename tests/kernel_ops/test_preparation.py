@@ -36,14 +36,22 @@ from qonnx.util.basic import qonnx_make_model
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.kernel_build_config import KernelVerificationStepType
 from finn.builder.kernel_build_steps import PREPARATION_REPORT, step_prepare_checkpoint
-from finn.core.containers import container
+from finn.core.containers import container, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
-from finn.harness.preparation import Draw, Explanation, check_equivalence
+from finn.custom_op.kernels.thresholding import LOWERING
+from finn.harness.preparation import (
+    Draw,
+    Explanation,
+    check_equivalence,
+    float64_refused,
+    in_float64,
+)
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.prepare import (
     BOUND_RULES,
-    DEVIATIONS,
+    RECIPE_TRANSFORMS,
     SUB_PHASES,
+    VALUE_DEVIATIONS,
     GraphPreparation,
     PreparationRefused,
     census,
@@ -54,6 +62,9 @@ from finn.transformation.prepare import (
 from finn.transformation.prepare.checkpoint import interval
 from finn.transformation.prepare.containers import exact_containers, widened_regions
 from finn.transformation.prepare.phase import streamlined
+from finn.transformation.streamline.extract_multithreshold_scale_bias import (
+    ExtractMultiThresholdScaleBias,
+)
 from kernel_ops.models import TARGET
 from kernel_ops.tfc import EXPORT, preparation, preparation_config
 
@@ -125,7 +136,7 @@ EXPLAINS: Mapping[str, Explanation] = {
 
 
 def test_the_predicates_explain_exactly_the_phases_value_deviations() -> None:
-    assert set(EXPLAINS) == {code for code, each in DEVIATIONS.items() if each.values}
+    assert set(EXPLAINS) == set(VALUE_DEVIATIONS)
 
 
 # -- TFC ------------------------------------------------------------------------------------
@@ -447,6 +458,42 @@ def test_partial_sums_past_float32s_integers_are_inexact_unless_the_container_ho
         assert codes(checkpoint(model, ANCHORS).findings) == expected
 
 
+@pytest.mark.parametrize("owned", [True, False], ids=["initializer", "channel"])
+def test_the_checkpoint_and_matmuls_domain_step_refuse_at_one_bound(owned: bool) -> None:
+    """One bound for both refusals (``finn.core.containers.matmul_partial_sums``): INT8
+    activations against a column of magnitudes summing to 2**17 reach 2**24, the last
+    integer float32 holds, and neither refuses; one more step past it and both do, the
+    checkpoint (``container-inexact``) and MatMul's domain step
+    (``matmul-container-exceeded``). Weights an initializer (all -128, then one 1 more),
+    or on a channel (INT8, k 1024, then 1025)."""
+    for k, refused in ((1024, False), (1025, True)):
+        if owned:
+            weights = np.full((k, 1), -128.0)
+            if refused:
+                weights[-1] = 1.0
+            assert matmul_partial_sums(128, k, 128, weights) == 2**24 + refused * 128
+            initializers: dict[str, Any] = {"w": weights}
+            inputs = {"x": ([1, k], "INT8")}
+        else:
+            assert matmul_partial_sums(128, k, 128) == 128 * 128 * k
+            initializers = {}
+            inputs = {"x": ([1, k], "INT8"), "w": ([k, 1], "INT8")}
+        model = graph(
+            [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
+            inputs,
+            ["y"],
+            initializers,
+            {"w": "INT8", "y": "INT32"},
+        )
+        checked = [f.code for f in checkpoint(model, ANCHORS).findings]
+        assert ("container-inexact" in checked) is refused, checked
+        conversion = ToKernelOps(TARGET)
+        copy.deepcopy(model).transform(conversion)
+        (outcome,) = conversion.outcomes
+        found = [f.code for f in outcome.findings]
+        assert ("matmul-container-exceeded" in found) is refused, found
+
+
 # -- P6, containers --------------------------------------------------------------------
 
 #: An INT8 layer over k 2304 with spread weights: partial sums up to 127 * 128 * 2304,
@@ -668,6 +715,26 @@ def test_where_the_export_rounds_its_integers_the_equivalence_names_the_tensor()
     assert (tensor, kind) == ("y", FindingKind.LIMITATION)
 
 
+def test_an_export_onnx_runtime_cannot_run_in_float64_skips_that_run_named() -> None:
+    """ONNX Runtime has no float64 Conv: the equivalence check's float64 run of an export
+    with one (CNV's) is skipped, not run narrower, and named as a limitation
+    (``export-rounds-unchecked``, the op and its node); the rest of the check runs."""
+    weights = np.arange(-4.0, 5.0).reshape(1, 1, 3, 3)
+    export = graph(
+        [helper.make_node("Conv", ["x", "w"], ["y"], name="Conv_0", pads=[1, 1, 1, 1])],
+        {"x": ([1, 1, 4, 4], "INT8")},
+        ["y"],
+        {"w": weights},
+        {"w": "INT8"},
+    )
+    assert float64_refused(in_float64(export)) == {"Conv": ("Conv_0",)}
+    checked = check_equivalence(export, copy.deepcopy(export), seeds=1)
+    assert (checked.draws, checked.findings) == (3, ())
+    ((code, kind, details),) = [(f.code, f.kind, dict(f.details)) for f in checked.rounds]
+    assert (code, kind) == ("export-rounds-unchecked", FindingKind.LIMITATION)
+    assert details == {"ops": ("Conv",), "nodes": ("Conv_0",)}
+
+
 def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test() -> None:
     """KT19 Q4 (NOTE §5.2 item 4): where a datatype decides which op a node is, P3
     rewrites it. A bipolar MatMul becomes XnorPopcountMatMul by the default recipe, at
@@ -686,6 +753,13 @@ def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test() -
     conversion = ToKernelOps(TARGET)
     copy.deepcopy(made).transform(conversion)
     assert not [outcome for outcome in conversion.outcomes if outcome.op]
+
+
+def test_a_recipe_accepts_the_transform_thresholdings_hint_names() -> None:
+    """Thresholding refuses a scaled or fractionally biased MultiThreshold with
+    ``LOWERING`` as its hint; a recipe that follows the hint names a transform it takes."""
+    assert GraphPreparation(streamlining=[LOWERING]).streamlining == [LOWERING]
+    assert RECIPE_TRANSFORMS[LOWERING] is ExtractMultiThresholdScaleBias
 
 
 def test_a_kernel_ops_tensor_without_an_annotation_or_a_shape_is_refused() -> None:
@@ -789,7 +863,7 @@ def test_a_builds_equivalence_difference_is_reported_as_a_failure_and_the_build_
     status, log, report, continued = _built_from(tmp_path, _adding(1.0), _adding(2.0))
     assert status == 0 and continued
     assert "Verification for graph_preparation_python : FAIL" in log
-    declared = ", ".join(code for code, each in DEVIATIONS.items() if each.values)
+    declared = ", ".join(VALUE_DEVIATIONS)
     assert "reported, not refused; a build runs no deviation's predicate" in log
     assert f"the phase declares {declared}\n" in log
     assert "equivalence-unexplained (blocker) 1: y: " in log

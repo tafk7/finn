@@ -23,18 +23,13 @@ from pathlib import Path
 import numpy as np
 
 from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import materialize
+from finn.core.executors.xsim.rtl import materialize, pack_lanes
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.harness.toolchain import print_identity
 from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
 from kernels.sweeps.rtl_transport import drive
 
 BITS = ELEMENT.bits
-
-
-def _pack(values, bits=BITS):
-    mask = (1 << bits) - 1
-    return sum((int(value) & mask) << (index * bits) for index, value in enumerate(values))
 
 
 def _padded(words, bits):
@@ -75,7 +70,7 @@ def run_adapted(label, source, pe, modules, evidence):
     )
     assert kinds == modules, (label, kinds)
     levels = [value + 8 for row in values(*source.shape) for value in row]
-    expected = [_pack(levels[start : start + pe], 4) for start in range(0, len(levels), pe)]
+    expected = [pack_lanes(levels[start : start + pe], 4) for start in range(0, len(levels), pe)]
     top, sources, data = _build(point, evidence / f"adapted_{label}")
     mask = (1 << (4 * pe)) - 1
     for stalls in (False, True):
@@ -96,13 +91,13 @@ def run_transpose(rows, cols, simd, evidence):
     batches = 2
     values = rng.randint(-8, 8, (batches, rows, cols))
     stimulus = [
-        _pack(values[b, i, start : start + simd])
+        pack_lanes(values[b, i, start : start + simd], BITS)
         for b in range(batches)
         for i in range(rows)
         for start in range(0, cols, simd)
     ]
     expected = [
-        _pack(values[b, start : start + simd, j])
+        pack_lanes(values[b, start : start + simd, j], BITS)
         for b in range(batches)
         for j in range(cols)
         for start in range(0, rows, simd)

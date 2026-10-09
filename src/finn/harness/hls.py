@@ -207,4 +207,4 @@ def c_simulate(
     return found
 
 
-__all__ = ["CSimulationFailed", "IDLE_CALLS", "c_simulate", "driver"]
+__all__ = ["CSimulationFailed", "IDLE_CALLS", "c_simulate"]

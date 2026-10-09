@@ -42,8 +42,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast, get_type_hints
 
-from finn.core.space import Param, composite, default_semantics, supplied
-from finn.core.space.declarations import UNSUPPLIED
+from finn.core.space import UNSUPPLIED, Param, composite, default_semantics, supplied
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel

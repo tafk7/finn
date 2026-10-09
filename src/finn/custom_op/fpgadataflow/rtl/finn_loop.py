@@ -269,7 +269,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
             all_verilog_srcs = f.read().split()
         top_module_file_name = os.path.basename(os.path.realpath(self.get_nodeattr("ipgen_path")))
-        top_module_name = top_module_file_name.strip(".v")
+        top_module_name = top_module_file_name.removesuffix(".v")
         single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")

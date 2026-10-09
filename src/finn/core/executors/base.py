@@ -7,11 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from finn.custom_op.partition.kernel_partitions import (
-    KERNEL_OPS_DOMAIN,
-    PARTITION_DOMAIN,
-    PARTITION_OP,
-)
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, is_partition
 
 if TYPE_CHECKING:
     from onnx import NodeProto
@@ -43,13 +39,10 @@ class Executor(Protocol):
     def run(self, node: NodeProto, context: Context, model: ModelWrapper) -> None: ...
 
 
-def is_partition(node: NodeProto) -> bool:
-    """Whether ``node`` is a partition node (StreamingDataflowPartition): its body is a
-    model of its own."""
-    return node.domain == PARTITION_DOMAIN and node.op_type == PARTITION_OP
-
-
 def hardware_node(node: NodeProto) -> bool:
     """Whether ``node`` stands for hardware: a KernelOp, or a partition node. The nodes
     ``Python`` runs as their reference, and a run that requires hardware refuses to."""
     return node.domain == KERNEL_OPS_DOMAIN or is_partition(node)
+
+
+__all__ = ["Context", "Executor", "hardware_node", "is_partition"]

@@ -21,18 +21,12 @@ from finn.core.space import FindingKind
 from finn.custom_op.kernels.base import KernelOpError
 from finn.transformation.kernels import (
     Outcome,
-    ToKernelOps,
     between_kernel_ops,
     kernel_ops_report,
     kernel_ops_summary,
     refuse_host_between,
 )
-from kernel_ops.models import TARGET, chain_source
-
-
-def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
-    conversion = ToKernelOps(TARGET)
-    return model.transform(conversion), conversion
+from kernel_ops.models import chain_source, convert
 
 
 def codes(outcome: Outcome) -> list[tuple[str, str, str]]:

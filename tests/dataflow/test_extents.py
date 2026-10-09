@@ -17,7 +17,15 @@ from itertools import product
 import pytest
 
 from finn.dataflow.gemm import Form, k, m, n
-from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
+from finn.dataflow.schedule import (
+    Access,
+    Affine,
+    Index,
+    Refused,
+    Schedule,
+    bind_extents,
+    plain_index,
+)
 from finn.dataflow.traversal import Traversal
 
 b, c, g, i, j, r, t = (Index(name) for name in ("b", "c", "g", "i", "j", "r", "t"))
@@ -112,6 +120,12 @@ def test_a_view_binds_nothing_and_is_checked_against_the_bound_extents() -> None
         bind_extents([wider, w, y])
     with pytest.raises(Refused, match="^x: a reshaped port reads plain indices$"):
         bind_extents([Access("x", (M, K, N), (m, k * 1 + n), reshaped=True), w, y])
+
+
+def test_a_plain_index_is_one_index_of_coefficient_one() -> None:
+    # The one rule a reshaped port and the binding share: ``m`` and ``m * 1`` alike.
+    assert plain_index(m) == m and plain_index(m * 1) == m
+    assert plain_index(m * 2) is None and plain_index(k + n) is None and plain_index(ZERO) is None
 
 
 def test_an_access_is_a_checked_value() -> None:

@@ -68,6 +68,7 @@ from qonnx.util.cleanup import cleanup_model
 
 import finn.transformation.streamline.absorb as absorb
 import finn.transformation.streamline.collapse_repeated as collapse_repeated
+import finn.transformation.streamline.extract_multithreshold_scale_bias as extract_scale_bias
 import finn.transformation.streamline.reorder as reorder
 import finn.transformation.streamline.round_thresholds as round_thresholds
 import finn.transformation.streamline.sign_to_thres as sign_to_thres
@@ -93,12 +94,20 @@ def _defined_transforms(*modules: ModuleType) -> dict[str, type[Transformation]]
 
 
 #: The transforms a recipe may name, by class name: streamlining's (absorb, reorder,
-#: collapse_repeated, sign_to_thres, round_thresholds, and ``Streamline``, its fixed
+#: collapse_repeated, sign_to_thres, round_thresholds, extract_multithreshold_scale_bias,
+#: which Thresholding's refusals name as their hint, and ``Streamline``, its fixed
 #: sequence), and qonnx's lowerings the default recipes run. Each is constructed with
 #: its defaults.
 RECIPE_TRANSFORMS: Mapping[str, type[Transformation]] = MappingProxyType(
     {
-        **_defined_transforms(absorb, reorder, collapse_repeated, sign_to_thres, round_thresholds),
+        **_defined_transforms(
+            absorb,
+            reorder,
+            collapse_repeated,
+            sign_to_thres,
+            round_thresholds,
+            extract_scale_bias,
+        ),
         "Streamline": Streamline,
         "LowerConvsToMatMul": LowerConvsToMatMul,
         "ConvertBipolarMatMulToXnorPopcount": ConvertBipolarMatMulToXnorPopcount,
@@ -288,7 +297,8 @@ SUB_PHASES: tuple[tuple[str, SubPhase], ...] = (
 
 
 def prepared(model: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
-    """``model``, an export, through every sub-phase in order."""
+    """``model``, an export, through every sub-phase in order. Public API on purpose,
+    though only tests call it: the builder runs ``SUB_PHASES`` itself, one step each."""
     for _, sub_phase in SUB_PHASES:
         model = sub_phase(model, options)
     return model

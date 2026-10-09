@@ -53,10 +53,10 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule
+from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Direction, Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import (
     ACCESS,
@@ -107,7 +107,7 @@ class Port(Space):
         return False
 
     @view
-    def pins(self) -> tuple[object, ...]:
+    def pins(self) -> tuple[Pin, ...]:
         return self.transport.pins()
 
     @view
@@ -249,9 +249,10 @@ class AxiStreamPort(Port):
         try:
             view = None
             if self.reshaped:
-                if not all(isinstance(axis, Index) for axis in index):
+                plain = [each for each in map(plain_index, index) if each is not None]
+                if len(plain) != len(index):
                     raise Refused("a reshaped port reads plain indices")
-                view = tuple(schedule.extent(axis) for axis in index)  # type: ignore[arg-type]
+                view = tuple(schedule.extent(axis) for axis in plain)
             form = schedule.present(
                 self.channel.tensor.shape,
                 index,
@@ -341,10 +342,10 @@ class AxiStreamPort(Port):
                 self.name, bits, self.endpoint, data, valid, ready, self.clock, self.reset
             )
         except ValueError as error:
-            return reject("port-width", f"{self.name}: {error}")
+            return reject("port-signals", f"{self.name}: {error}")
 
     @view(requires=(admitted,))
-    def pins(self) -> tuple[object, ...]:
+    def pins(self) -> tuple[Pin, ...]:
         if self.signals:
             return self.transport.pins()
         return (self.axis.bus(clock=self.clock, reset=self.reset),)
@@ -376,5 +377,4 @@ __all__ = [
     "INTEGER_POLICY",
     "Port",
     "WordPort",
-    "or_none",
 ]

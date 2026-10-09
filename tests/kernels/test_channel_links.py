@@ -148,4 +148,4 @@ def test_a_user_that_is_no_kernels_port_has_no_netlist() -> None:
     assert point.edge.users[0].node == "reader"
     refused = point.edge.query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"channel-user"}
+    assert {finding.code for finding in refused.findings} == {"channel-port"}

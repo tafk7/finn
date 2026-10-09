@@ -15,9 +15,12 @@ its reference against the ONNX it covers, every value equal, and which platform
 rows' kernels admit it, a gap record where none does (the ONNX
 entry); ``finn.harness.points`` draws a kernel's lean covering points and its
 refused side from its design space (KT10); ``finn.harness.orders`` decodes output
-words that differ as the order a stream was walked in, by beat and index tuple.
-The tests that use the harness stay in ``tests/``; nothing here imports pytest or
-the test tree.
+words that differ as the order a stream was walked in, by beat and index tuple;
+``finn.harness.hls`` C-simulates an HLS leaf, its top called by a driver FINN writes;
+``finn.harness.preparation`` checks the prepared graph against the export (its
+equivalence and its annotations' soundness), the check the build runs
+(``step_prepare_checkpoint``). The tests that use the harness stay in ``tests/``;
+nothing here imports pytest or the test tree.
 
 The package re-exports nothing: each name is imported from the module that owns it.
 """

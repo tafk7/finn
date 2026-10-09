@@ -36,7 +36,8 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import DspBlock, Fabric, Platform
+from finn.kernels.target import DspBlock, Platform
+from finn.kernels.utilization import Fabric
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit

@@ -547,6 +547,7 @@ def kernel_fixtures(api):
     PackedDotpKernel = importlib.import_module("finn.kernels.dotp").PackedDotpKernel
     commit = importlib.import_module("finn.kernels.configure").commit
     target = importlib.import_module("finn.kernels.target")
+    Fabric = importlib.import_module("finn.kernels.utilization").Fabric
     Channel = importlib.import_module("finn.kernels.channels").Channel
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
@@ -554,7 +555,7 @@ def kernel_fixtures(api):
     platform = target.Platform(
         period_ns=5.0,
         dsp=target.DspBlock.DSP48E2,
-        fabric=target.Fabric.ULTRASCALE,
+        fabric=Fabric.ULTRASCALE,
         uram=True,
         uram_init=True,
         resources=None,
@@ -589,11 +590,12 @@ def kernel_fixtures(api):
     )
 
     # A MatMul (M=2, K=4, N=4) on streams that carry the tensors it derives.
-    exact_result_dtype = importlib.import_module("finn.kernels.matmul").exact_result_dtype
+    datatype_range = importlib.import_module("finn.kernels.matmul").datatype_range
+    range_dtype = importlib.import_module("finn.kernels.values.domains").range_dtype
     matmul_streams = streams(
         Tensor((2, 4), ScalarEncoding(int3)),
         Tensor((4, 4), ScalarEncoding(int3)),
-        Tensor((2, 4), ScalarEncoding(exact_result_dtype(4, int3, int3))),
+        Tensor((2, 4), ScalarEncoding(range_dtype(*datatype_range(4, int3, int3)))),
     )
     matmul_root = api.composite(
         "PlacedMatMul",
