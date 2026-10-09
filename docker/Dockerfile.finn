@@ -190,7 +190,7 @@ RUN --mount=type=bind,source=pyproject.toml,target=/tmp/finn-lock/pyproject.toml
 # metadata conflict.
 RUN test "$(uv pip list --format freeze | wc -l)" -gt 100 && \
     uv pip check && \
-    python -c "import numpy, scipy, onnx, onnxruntime, torch, qonnx, brevitas" && \
+    python -c "import numpy, onnx, onnxruntime, torch, qonnx, brevitas" && \
     mkdir -p /tmp/pytest-probe && \
     printf 'def test_probe():\n    assert True\n' > /tmp/pytest-probe/test_probe.py && \
     (cd /tmp/pytest-probe && pytest -q -p no:cacheprovider >/dev/null) && \
