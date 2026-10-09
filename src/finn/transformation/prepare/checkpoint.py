@@ -57,43 +57,29 @@ OWNER = "P7 checkpoint"
 """The owner of the checkpoint's findings."""
 
 
-@dataclass(frozen=True)
-class Deviation:
-    """Where the prepared graph computes otherwise than the export, on purpose:
-    ``statement`` says what differs and where it is exact; ``values``, whether it can
-    change an output's value or only an annotation. Each value deviation's predicate
-    (where it explains a difference) is the test harness's."""
-
-    statement: str
-    values: bool
-
-
-#: The phase's declared deviations, by code.
-DEVIATIONS: Mapping[str, Deviation] = MappingProxyType(
+#: The phase's declared deviations, by code: where the prepared graph computes otherwise
+#: than the export, on purpose, each stating what differs and where it is exact. Every one
+#: may change an output's value; each one's predicate (where it explains a difference) is
+#: the test harness's.
+DEVIATIONS: Mapping[str, str] = MappingProxyType(
     {
-        "topk-affine": Deviation(
+        "topk-affine": (
             "AbsorbScalarMulAddIntoTopK drops the scalar scale and bias ahead of the label "
             "select: TopK's indices are the export's, its values differ from the export's "
-            "by that affine map",
-            values=True,
+            "by that affine map"
         ),
-        "sign-at-zero": Deviation(
+        "sign-at-zero": (
             "ConvertSignToThres thresholds at 0, so the prepared graph gives +1 where "
-            "ONNX's Sign gives 0, for an input exactly 0; exact elsewhere",
-            values=True,
+            "ONNX's Sign gives 0, for an input exactly 0; exact elsewhere"
         ),
-        "threshold-float32": Deviation(
+        "threshold-float32": (
             "the export computes the scales and biases streamlining absorbs into "
             "thresholds in float32, and the phase computes and stores the thresholds in "
             "float64: an input within a float32 rounding of a threshold may step "
-            "otherwise than the export; exact elsewhere",
-            values=True,
+            "otherwise than the export; exact elsewhere"
         ),
     }
 )
-
-#: The codes of the deviations that can change an output's value.
-VALUE_DEVIATIONS: tuple[str, ...] = tuple(code for code, each in DEVIATIONS.items() if each.values)
 
 
 @dataclass(frozen=True)

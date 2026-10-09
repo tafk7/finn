@@ -11,7 +11,7 @@ the export with P0 and P1 alone applied (``finn.transformation.prepare.reference
 executed by qonnx, Quant nodes and all; the prepared graph must compute the same
 outputs, element for element, on draws from its input's annotation, the domain the
 build states (``drawn_inputs``: extremes, random, corners). An output element that
-differs passes only where the predicate of a declared value deviation explains it
+differs passes only where the predicate of a declared deviation explains it
 (``Explanation``, keyed by its code); the predicates are the test harness's, so a
 build, which has none, finds every difference (``equivalence-unexplained``). Every
 finding is a blocker to the check's caller: the kernel gate fails on one. A build
@@ -64,7 +64,7 @@ from finn.core.containers import container
 from finn.core.space import Finding, FindingKind
 from finn.harness.orders import Integers
 from finn.harness.reference import as_held, drawn_inputs
-from finn.transformation.prepare import VALUE_DEVIATIONS
+from finn.transformation.prepare import DEVIATIONS
 from finn.transformation.prepare.containers import NARROW_FLOATS, WIDE, widened
 
 if TYPE_CHECKING:
@@ -91,7 +91,7 @@ class Draw:
 
 
 Explanation = Callable[[Draw, int], npt.NDArray[np.bool_]]
-"""A declared value deviation's predicate: the elements of the graph's output at an
+"""A declared deviation's predicate: the elements of the graph's output at an
 index where the deviation explains a difference, in a draw."""
 
 EMPTY: Mapping[str, Explanation] = MappingProxyType({})
@@ -150,7 +150,7 @@ def unexplained(draw: Draw, explains: Mapping[str, Explanation]) -> list[Finding
             differs &= ~np.broadcast_to(explanation(draw, index), differs.shape)
         if differs.any():
             first = tuple(int(i) for i in np.argwhere(differs)[0])
-            declared = ", ".join(VALUE_DEVIATIONS)
+            declared = ", ".join(DEVIATIONS)
             found.append(
                 _finding(
                     "equivalence-unexplained",
@@ -328,11 +328,10 @@ def check_equivalence(
     outputs (``unexplained``) and the annotations' soundness (``unsound``), each
     finding once, at its first draw; where the export rounds (``export_rounds``), unless
     ONNX Runtime cannot run the export in float64 (``float64_refused``: the run is
-    skipped, and named). ``explains`` may name value deviations the phase
-    declares only."""
-    undeclared = sorted(set(explains) - set(VALUE_DEVIATIONS))
+    skipped, and named). ``explains`` may name deviations the phase declares only."""
+    undeclared = sorted(set(explains) - set(DEVIATIONS))
     if undeclared:
-        raise ValueError(f"no value deviation of the phase is named {', '.join(undeclared)}")
+        raise ValueError(f"no deviation of the phase is named {', '.join(undeclared)}")
     found: dict[tuple[str, Any], Finding] = {}
     rounds: dict[str, Finding] = {}
     wide = in_float64(reference)

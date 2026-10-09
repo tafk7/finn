@@ -49,9 +49,9 @@ from finn.harness.preparation import (
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.prepare import (
     BOUND_RULES,
+    DEVIATIONS,
     RECIPE_TRANSFORMS,
     SUB_PHASES,
-    VALUE_DEVIATIONS,
     GraphPreparation,
     PreparationRefused,
     census,
@@ -127,7 +127,7 @@ def threshold_float32(draw: Draw, index: int) -> npt.NDArray[np.bool_]:
     return _everywhere(draw, index, near)
 
 
-#: The predicate of each value deviation the phase declares.
+#: The predicate of each deviation the phase declares.
 EXPLAINS: Mapping[str, Explanation] = {
     "topk-affine": topk_affine,
     "sign-at-zero": sign_at_zero,
@@ -135,8 +135,8 @@ EXPLAINS: Mapping[str, Explanation] = {
 }
 
 
-def test_the_predicates_explain_exactly_the_phases_value_deviations() -> None:
-    assert set(EXPLAINS) == set(VALUE_DEVIATIONS)
+def test_the_predicates_explain_exactly_the_phases_deviations() -> None:
+    assert set(EXPLAINS) == set(DEVIATIONS)
 
 
 # -- TFC ------------------------------------------------------------------------------------
@@ -863,7 +863,7 @@ def test_a_builds_equivalence_difference_is_reported_as_a_failure_and_the_build_
     status, log, report, continued = _built_from(tmp_path, _adding(1.0), _adding(2.0))
     assert status == 0 and continued
     assert "Verification for graph_preparation_python : FAIL" in log
-    declared = ", ".join(VALUE_DEVIATIONS)
+    declared = ", ".join(DEVIATIONS)
     assert "reported, not refused; a build runs no deviation's predicate" in log
     assert f"the phase declares {declared}\n" in log
     assert "equivalence-unexplained (blocker) 1: y: " in log
@@ -983,5 +983,5 @@ def test_threshold_float32_explains_a_threshold_one_rounding_from_the_exports() 
 
 def test_a_predicate_for_no_declared_deviation_is_refused() -> None:
     model = RULES["Relu"](1)
-    with pytest.raises(ValueError, match="no value deviation of the phase is named rounding"):
+    with pytest.raises(ValueError, match="no deviation of the phase is named rounding"):
         check_equivalence(model, model, {"rounding": topk_affine})
