@@ -33,9 +33,12 @@ From them:
   absent ULTRA_RAMS is none). A device sold on a larger die (an XCZU2EG on the
   XCZU3EG's) has more sites than it states: where the sites cover the totals in
   every resource and exceed one, the device is a reduced die, its record states its
-  totals, and over one SLR that SLR's; over several, Vivado does not state the split
-  and the record states none (``finn.platform.catalog.SLRS_UNSTATED``). Anything
-  else is ``slr-sum``. The probe's log names each reduced device;
+  totals, and over one SLR that SLR's; over several, each SLR's sites as its
+  capacity, under the totals as a cap on their sum (``capped``,
+  ``finn.platform.catalog.SLRS_CAPPED``), and the device needs a reviewed row of
+  which caps a fill proved (``finn.platform.architectures.CAP_EVIDENCE``;
+  ``unreviewed-cap`` otherwise, or for a row of no capped device). Anything else is
+  ``slr-sum``. The probe's log names each reduced device;
 - the rule probe: each (ARCHITECTURE, FAMILY) pair needs a rule
   (``finn.platform.architectures``; ``unreviewed-architecture`` otherwise). A
   supported rule's sample part must be one of its pair, and every device of the
@@ -66,7 +69,7 @@ from pathlib import Path
 
 from finn.kernels.target import DspBlock, Fabric
 from finn.kernels.utilization import RESOURCE_NAMES, Resources
-from finn.platform.architectures import RULES, SERIES, Rule, rules_digest
+from finn.platform.architectures import CAP_EVIDENCE, RULES, SERIES, CapEvidence, Rule, rules_digest
 from finn.platform.catalog import Record
 from finn.util.toolchain import machine_toolchain
 
@@ -128,7 +131,8 @@ _CARRY = frozenset({"CARRY4", "CARRY8", "LOOKAHEAD8"})
 
 class GenerationError(RuntimeError):
     """A catalog that cannot be generated, by name: ``unreviewed-architecture``,
-    ``architecture-mismatch``, ``slr-sum``, ``device-inconsistent``, ``extraction``."""
+    ``architecture-mismatch``, ``slr-sum``, ``unreviewed-cap``,
+    ``device-inconsistent``, ``extraction``."""
 
     def __init__(self, name: str, message: str) -> None:
         super().__init__(f"{name}: {message}")
@@ -396,6 +400,7 @@ def derive(
     parts: Sequence[PartRow],
     probes: Mapping[str, DeviceProbe],
     rules: Mapping[tuple[str, str], Rule] = RULES,
+    caps: Mapping[str, CapEvidence] = CAP_EVIDENCE,
 ) -> Catalog:
     """The catalog from an extraction, every check applied."""
     by_device: dict[str, list[PartRow]] = defaultdict(list)
@@ -420,7 +425,7 @@ def derive(
         totals, slr_count = device_totals(rows[0])
         sites = slr_resources(probes[device])
         summed = sum(sites, Resources())
-        slrs: tuple[Resources, ...] | None = sites
+        slrs = sites
         if len(sites) != slr_count or not all(
             getattr(summed, name) >= getattr(totals, name) for name in RESOURCE_NAMES
         ):
@@ -429,13 +434,30 @@ def derive(
                 f"states {slr_count} and {totals}"
             )
             continue
+        capped = False
         if summed != totals:
             # A reduced die: the device is sold with fewer resources than its die's
-            # sites. Vivado states the totals, not their split over the SLRs.
+            # sites. Over one SLR, that SLR is the device; over several, each SLR's
+            # sites are its capacity, and the device's totals cap their sum.
             reduced.append(device)
-            slrs = (totals,) if slr_count == 1 else None
-            log.append(f"{device}|REDUCED|die {summed}|device {totals} over {slr_count} SLRs")
-        record = Record(totals=totals, slr_count=slr_count, slrs=slrs)
+            if slr_count == 1:
+                slrs = (totals,)
+            else:
+                capped = True
+                review = caps.get(device)
+                exceeded = {n for n in RESOURCE_NAMES if getattr(summed, n) > getattr(totals, n)}
+                if review is None:
+                    failures.append(f"unreviewed-cap: {device}: no row in CAP_EVIDENCE")
+                elif not review.proven <= exceeded:
+                    failures.append(
+                        f"unreviewed-cap: {device}: {sorted(review.proven - exceeded)} "
+                        "proven, but the totals cap no SLR sum there"
+                    )
+            log.append(
+                f"{device}|REDUCED|die {summed}|device {totals} over {slr_count} SLRs"
+                + ("|CAPPED" if capped else "")
+            )
+        record = Record(totals=totals, slr_count=slr_count, slrs=slrs, capped=capped)
         if records.setdefault(record.digest, record) != record:
             raise GenerationError("extraction", f"two records share the digest {record.digest}")
         devices.append(
@@ -446,6 +468,12 @@ def derive(
                 "resources": record.digest,
             }
         )
+    capped_devices = {
+        str(each["name"]) for each in devices if records[str(each["resources"])].capped
+    }
+    stale_caps = sorted(set(caps) - capped_devices)
+    if stale_caps:
+        failures.append(f"unreviewed-cap: rows for devices no capped record has: {stale_caps}")
     pairs: dict[tuple[str, str], list[str]] = defaultdict(list)
     for each in devices:
         pairs[(str(each["architecture"]), str(each["family"]))].append(str(each["name"]))
@@ -509,17 +537,18 @@ def derive(
             "resources": len(resource_records),
             "pairs": len(pairs),
             "reduced": len(reduced),
-            "reduced_without_slrs": sum(
-                1 for each in devices if records[str(each["resources"])].slrs is None
-            ),
+            "capped": len(capped_devices),
         },
         "checks": [
             "every part of a device states its device's ARCHITECTURE, FAMILY and totals",
             "each device's per-SLR resources, from its SLRs' sites, sum to its "
             "LUT_ELEMENTS, FLIPFLOPS, 2 x BLOCK_RAMS, ULTRA_RAMS (absent: none) and DSP, "
             "over SLRS SLRs; on a reduced die (sites covering the totals in every "
-            "resource, more in one) the record states the device's totals, and over one "
-            "SLR that SLR's",
+            "resource, more in one) the record states the device's totals, over one SLR "
+            "that SLR's, and over several each SLR's sites as its capacity, the totals "
+            "capping their sum (capped)",
+            "each capped device has a reviewed row of which caps a fill proved "
+            "(finn.platform.architectures.CAP_EVIDENCE)",
             "each supported rule's fabric and DSP block are confirmed on every device of "
             "its pair by the site probe",
         ],

@@ -6,11 +6,12 @@ a build's target from them.
 
 - ``finn.platform.catalog``: every part of the supported series, generated from
   Vivado's part database (``finn.platform.generate``): its device, the device's
-  resources per SLR and totals, and the devices that share them, with an overlay
-  for parts FINN does not ship (``FINN_PLATFORM_CATALOG``);
+  resources per SLR and totals (on a reduced die of several SLRs, each SLR's site
+  capacity under the totals as a cap), and the devices that share them, with an
+  overlay for parts FINN does not ship (``FINN_PLATFORM_CATALOG``);
 - ``finn.platform.architectures``: what FINN builds for each of Vivado's
   architectures (fabric, DSP block, UltraRAM initialisation), each rule checked by
-  the generator's site probe;
+  the generator's site probe, and which caps of each capped device a fill proved;
 - ``finn.platform.boards``: a board's part and Vivado preset;
 - ``finn.platform.shells``: a shell's row for a board: its ends, budgets, doubled
   clock, integration, host runtime and static region;

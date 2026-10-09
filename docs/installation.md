@@ -146,8 +146,11 @@ Zynq-7000, UltraScale, UltraScale+ and Versal that Vivado 2025.2 installs, its
 device, and the device's LUTs, flip-flops, RAMB18s, UltraRAMs and DSPs per SLR.
 Devices with identical resources share one record, and each device states the
 others it shares with. A device sold on a larger die (an XCZU2EG on the XCZU3EG's)
-states its own totals; where it spans several SLRs, Vivado does not say how they
-split, and its `slrs` is `None`. What FINN builds on a device (its fabric, DSP block and
+states its own totals. Where it spans several SLRs, Vivado does not say how they
+split: each SLR states its site capacity, an upper bound for that SLR alone, and the
+device's totals cap their sum (`capped`), so not every SLR can be full at once.
+Which of those caps Vivado was seen to enforce, and which are inferred, is the
+device's `cap_evidence`. What FINN builds on a device (its fabric, DSP block and
 whether an UltraRAM takes initial contents) is the rule for Vivado's
 `(ARCHITECTURE, FAMILY)` pair, `finn.platform.architectures`. A part the catalog
 does not have is refused, `unknown-part`, with close names and none chosen.
@@ -198,7 +201,8 @@ FINN_PLATFORM_CATALOG=~/acme/parts.json build_dataflow ...
 - A device's `resources` is its record, or the `digest` of one the catalog ships
   (`device("xczu3eg").digest`); a part may sit on a shipped device. A record states
   each SLR (`slrs`, as above), or, for a device of one SLR, only its `totals`; one of
-  several SLRs whose split is not known states `totals` and `slr_count`.
+  several SLRs whose split is not known states `totals` and `slr_count`, and a
+  reduced die states each SLR's site capacity with its `totals` and `"capped": true`.
 - Its fabric and DSP block are its pair's rule. Where the pair has none, or the
   device is built otherwise, the device states `fabric` (`series7`, `ultrascale`,
   `versal`), `dsp` (`DSP48E1`, `DSP48E2`, `DSP58`) and, optionally, `uram_init`.

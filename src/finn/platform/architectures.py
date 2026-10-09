@@ -19,6 +19,12 @@ UltraScale and UltraScale+ share one fabric: their SLICEMs have the same BELs, b
 use RAMB18E2 block RAM and the DSP48E2; only UltraScale+ has UltraRAM, which is a
 count of the device's. Each rule's ``evidence`` says, in a sentence of its own,
 what each of its facts rests on.
+
+A reduced die of several SLRs (``finn.platform.catalog.SLRS_CAPPED``) states each
+SLR's site capacity under its totals as a cap. Which of those caps a fill proved, and
+which are inferred, is not a part database fact: ``CAP_EVIDENCE`` holds it, a
+reviewed row per such device with its evidence sentence, and the generator requires
+a row for each (``unreviewed-cap``).
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from finn.kernels.target import DspBlock, Fabric
+from finn.kernels.utilization import RESOURCE_NAMES
 
 ZYNQ7, ULTRASCALE, ULTRASCALE_PLUS, VERSAL = "Zynq-7000", "UltraScale", "UltraScale+", "Versal"
 SERIES = (ZYNQ7, ULTRASCALE, ULTRASCALE_PLUS, VERSAL)
@@ -230,6 +237,92 @@ RULES: dict[tuple[str, str], Rule] = {
 """Every (ARCHITECTURE, FAMILY) pair of the catalog's parts, and what FINN builds there."""
 
 
+@dataclass(frozen=True, kw_only=True)
+class CapEvidence:
+    """How the totals of a reduced die of several SLRs are known to cap its SLRs' site
+    capacity: the resources whose cap a fill proved (``proven``: Vivado placed a
+    design of the device's total and refused one more), the rest of the capped ones
+    inferred from the device's totals, and the ``evidence``, a sentence of its own."""
+
+    device: str
+    proven: frozenset[str]
+    evidence: str
+
+    def __post_init__(self) -> None:
+        if not self.proven <= set(RESOURCE_NAMES):
+            raise ValueError(f"{self.device}: {sorted(self.proven)} are not resources")
+
+
+_FILL = (
+    "Vivado 2025.2 fills of {device} (designs of N DONT_TOUCH primitives, synthesized "
+    "and placed, an SLR's in a pblock of that SLR)"
+)
+_SYNTH_REFUSED = "at synthesis, Synth 8-5833"
+_DRC_REFUSED = "at placement, DRC UTLZ-1"
+
+
+def _derived(device: str, base: str) -> CapEvidence:
+    """A ``_CIV`` variant's caps: no fill ran on it; Vivado states it as ``base``."""
+    return CapEvidence(
+        device=device,
+        proven=frozenset(),
+        evidence=f"No fill ran on {device}: Vivado 2025.2 states it with {base}'s "
+        "LUT_ELEMENTS, FLIPFLOPS, BLOCK_RAMS, ULTRA_RAMS, DSP, SLRS and SLICES, and "
+        "report_utilization -pblocks of one pblock per SLR reads the same sites in each "
+        f"SLR as {base}'s, so every cap is inferred from {base}'s.",
+    )
+
+
+CAP_EVIDENCE: dict[str, CapEvidence] = {
+    each.device: each
+    for each in (
+        CapEvidence(
+            device="xcku085",
+            proven=frozenset({"bram18", "dsp"}),
+            evidence=_FILL.format(device="xcku085")
+            + " placed 1,620 RAMB36E2 and 4,100 DSP48E2, its totals, and refused one more "
+            f"of each ({_SYNTH_REFUSED}; {_DRC_REFUSED}), while each SLR alone held its "
+            "sites' full count (1,080 and 864 RAMB36E2, 2,760 and 2,208 DSP48E2); its LUT "
+            "and FF caps were never filled and are inferred.",
+        ),
+        CapEvidence(
+            device="xcvu160",
+            proven=frozenset({"bram18", "dsp"}),
+            evidence=_FILL.format(device="xcvu160")
+            + " placed 3,276 RAMB36E2 and 1,560 DSP48E2, its totals, and refused one more "
+            f"of each ({_SYNTH_REFUSED}; {_DRC_REFUSED}), while each SLR alone held its "
+            "sites' full count (1,008, 1,260 and 1,260 RAMB36E2, 480, 600 and 600 "
+            "DSP48E2); its LUT and FF caps were never filled and are inferred.",
+        ),
+        CapEvidence(
+            device="xcvu5p",
+            proven=frozenset({"bram18", "dsp", "uram"}),
+            evidence=_FILL.format(device="xcvu5p")
+            + " placed 1,024 RAMB36E2, 3,474 DSP48E2 and 470 URAM288_BASE, its totals, "
+            f"and refused one more of each ({_SYNTH_REFUSED} for the memories; "
+            f"{_DRC_REFUSED} for the DSP), while each SLR alone held its sites' full "
+            "count (720 RAMB36E2, 2,280 DSP48E2, 320 URAM288_BASE); its LUT and FF caps "
+            "were never filled and are inferred.",
+        ),
+        CapEvidence(
+            device="xcvu27p",
+            proven=frozenset({"bram18", "uram"}),
+            evidence=_FILL.format(device="xcvu27p")
+            + " placed 2,016 RAMB36E2 and 960 URAM288_BASE, its totals, and refused one "
+            f"more of each ({_SYNTH_REFUSED}), while each of its four SLRs alone held its "
+            "sites' full count (672 RAMB36E2, 320 URAM288_BASE); its DSP fills did not "
+            "complete, so its DSP cap, like its LUT and FF caps, is inferred.",
+        ),
+        _derived("xcku085_CIV", "xcku085"),
+        _derived("xcvu160_CIV", "xcvu160"),
+        _derived("xcvu5p_CIV", "xcvu5p"),
+    )
+}
+"""Each reduced die of several SLRs, by device name: which of its caps a fill proved
+and which are inferred, reviewed; the generator requires a row for every such device
+(``unreviewed-cap``)."""
+
+
 def rule(architecture: str, family: str) -> Rule | None:
     """The rule of the pair, or ``None``: a pair with no rule is not reviewed."""
     return RULES.get((architecture, family))
@@ -255,4 +348,4 @@ def rules_digest(rules: Mapping[tuple[str, str], Rule] | None = None) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-__all__ = ["RULES", "SERIES", "Rule", "rule", "rules_digest"]
+__all__ = ["CAP_EVIDENCE", "RULES", "SERIES", "CapEvidence", "Rule", "rule", "rules_digest"]

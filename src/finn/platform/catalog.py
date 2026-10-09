@@ -11,8 +11,11 @@ The records:
   ``uram``, ``dsp``) of one or more devices, their number of SLRs and each SLR's
   counts, which sum to the totals, stored once, keyed by the digest of its facts. A
   device sold on a larger die (an XCZU2EG on the XCZU3EG's) states fewer resources
-  than its die's sites; Vivado states its totals and not their split over its SLRs,
-  so a reduced device of several SLRs has no per-SLR counts (``slrs`` is ``None``);
+  than its die's sites, and Vivado does not state how they split over its SLRs: a
+  reduced device of several SLRs states each SLR's site capacity, an upper bound for
+  that SLR alone, with its totals as the cap on their sum (``capped``,
+  ``SLRS_CAPPED``), and which caps a fill proved
+  (``finn.platform.architectures.CAP_EVIDENCE``);
 - a ``Device``: its name, Vivado's ARCHITECTURE and FAMILY, what FINN builds there
   (its pair's rule, ``finn.platform.architectures``), its record's totals
   (``resources``) and SLRs, and the devices that share them (``shared_with``: equal
@@ -55,7 +58,7 @@ from typing import Any
 
 from finn.kernels.target import DspBlock, Fabric
 from finn.kernels.utilization import RESOURCE_NAMES, Resources
-from finn.platform.architectures import rule
+from finn.platform.architectures import CAP_EVIDENCE, CapEvidence, rule
 from finn.platform.refusal import TargetRefused
 
 DATA = Path(__file__).resolve().parent / "data"
@@ -63,31 +66,64 @@ OVERLAY_SETTING = "FINN_PLATFORM_CATALOG"
 """The machine setting that names a catalog overlay file (unset: none)."""
 
 
-SLRS_UNSTATED = "a reduced die: Vivado states the device's totals, not their split over its SLRs"
-"""Why a record of several SLRs states no per-SLR counts."""
+SLRS_CAPPED = (
+    "a reduced die: each SLR's counts are its site capacity, an upper bound for that SLR "
+    "alone; the device's totals cap their sum, so not every SLR can be full at once"
+)
+"""What the SLRs of a ``capped`` record state."""
 
 
 @dataclass(frozen=True, kw_only=True)
 class Record:
     """A resource record: the ``totals``, the number of SLRs (``slr_count``) and each
-    SLR's counts (``slrs``, which sum to the totals; ``None``: not stated, see
-    ``SLRS_UNSTATED``)."""
+    SLR's counts (``slrs``, which sum to the totals; ``None``: not stated, an overlay's
+    device of several SLRs whose split it does not know). A ``capped`` record is a
+    reduced die of several SLRs (``SLRS_CAPPED``): each SLR's counts are its site
+    capacity, and the totals cap their sum, which covers them in every resource and
+    exceeds them in one at least."""
 
     totals: Resources
     slr_count: int
     slrs: tuple[Resources, ...] | None
+    capped: bool = False
 
     def __post_init__(self) -> None:
         if type(self.slr_count) is not int or self.slr_count < 1:
             raise ValueError(f"slr_count is a number of SLRs, not {self.slr_count!r}")
+        if type(self.capped) is not bool:
+            raise ValueError(f"capped is true or false, not {self.capped!r}")
         if self.slrs is None:
             if self.slr_count == 1:
                 raise ValueError("a device of one SLR states it: its totals")
+            if self.capped:
+                raise ValueError("a capped record states each SLR's site capacity")
             return
         if len(self.slrs) != self.slr_count:
             raise ValueError(f"{len(self.slrs)} SLRs stated, not slr_count {self.slr_count}")
-        if sum(self.slrs, Resources()) != self.totals:
-            raise ValueError(f"the SLRs sum to {sum(self.slrs, Resources())}, not the totals")
+        summed = sum(self.slrs, Resources())
+        if not self.capped:
+            if summed != self.totals:
+                raise ValueError(f"the SLRs sum to {summed}, not the totals")
+            return
+        if self.slr_count == 1:
+            raise ValueError("a capped record has several SLRs: one SLR is the device")
+        if not self.capped_resources() or any(
+            getattr(summed, name) < getattr(self.totals, name) for name in RESOURCE_NAMES
+        ):
+            raise ValueError(
+                f"the SLRs of a capped record sum to {summed}, which does not cover the "
+                f"totals {self.totals} and exceed them in one resource"
+            )
+
+    def capped_resources(self) -> tuple[str, ...]:
+        """The resources whose totals cap the SLRs' sum: those it exceeds (none if the
+        record is not ``capped``)."""
+        if not self.capped or self.slrs is None:
+            return ()
+        summed = sum(self.slrs, Resources())
+        return tuple(
+            name for name in RESOURCE_NAMES if getattr(summed, name) > getattr(self.totals, name)
+        )
 
     @property
     def digest(self) -> str:
@@ -96,11 +132,13 @@ class Record:
         return "sha256:" + hashlib.sha256(encoded).hexdigest()[:16]
 
     def stored_facts(self) -> dict[str, object]:
-        """The record as the data stores it, without its digest."""
+        """The record as the data stores it, without its digest (``capped`` only where
+        it is)."""
         return {
             "slr_count": self.slr_count,
             "totals": _counts(self.totals),
             "slrs": None if self.slrs is None else [_counts(slr) for slr in self.slrs],
+            **({"capped": True} if self.capped else {}),
         }
 
     def stored(self) -> dict[str, object]:
@@ -118,9 +156,12 @@ class Device:
     builds there (``fabric``, ``dsp``, ``uram_init``; ``unsupported`` says why it
     builds nothing, and they are then ``None`` and ``False``), its totals
     (``resources``), SLRs (``slr_count``) and each SLR's resources (``slrs``;
-    ``None``: not stated, ``SLRS_UNSTATED``) under their record's ``digest``, the
-    other devices with the same record (``shared_with``), and where its facts come
-    from (``source``)."""
+    ``None``: not stated) under their record's ``digest``, the resources whose
+    totals cap the SLRs' sum on a reduced die (``capped``, ``SLRS_CAPPED``; empty:
+    the SLRs sum to the totals) and, for a shipped device, which of those caps a
+    fill proved (``cap_evidence``, ``finn.platform.architectures.CAP_EVIDENCE``),
+    the other devices with the same record (``shared_with``), and where its facts
+    come from (``source``)."""
 
     name: str
     architecture: str
@@ -131,6 +172,8 @@ class Device:
     resources: Resources
     slr_count: int
     slrs: tuple[Resources, ...] | None
+    capped: tuple[str, ...]
+    cap_evidence: CapEvidence | None
     digest: str
     shared_with: tuple[str, ...]
     source: str
@@ -262,14 +305,16 @@ _RECORD_FIELDS = {"digest", "slr_count", "totals", "slrs"}
 
 
 def _record(stated: object, where: str, *, overlay: bool) -> Record:
-    """A resource record as stored, every field stated and its digest checked; an
-    overlay may leave out what follows from the rest: the ``digest``, the
-    ``totals`` and ``slr_count`` of stated ``slrs``, and the ``slrs`` of a device of
-    one SLR (its totals)."""
+    """A resource record as stored, every field stated (``capped`` only where it is)
+    and its digest checked; an overlay may leave out what follows from the rest: the
+    ``digest``, the ``totals`` and ``slr_count`` of stated ``slrs``, and the ``slrs``
+    of a device of one SLR (its totals)."""
     if overlay:
-        found = _expect(stated, where, set(), _RECORD_FIELDS)
+        found = _expect(stated, where, set(), _RECORD_FIELDS | {"capped"})
     else:
-        found = _expect(stated, where, _RECORD_FIELDS, set())
+        found = _expect(stated, where, _RECORD_FIELDS, {"capped"})
+        if found.get("capped", True) is not True:
+            raise _Invalid(f"{where}: capped is stated only where it is true")
     slrs = found.get("slrs")
     if slrs is not None:
         if not isinstance(slrs, list) or not slrs:
@@ -285,7 +330,9 @@ def _record(stated: object, where: str, *, overlay: bool) -> Record:
     if slrs is None and count == 1:
         slrs = (totals,)
     try:
-        record = Record(totals=totals, slr_count=count, slrs=slrs)
+        record = Record(
+            totals=totals, slr_count=count, slrs=slrs, capped=found.get("capped", False)
+        )
     except ValueError as error:
         raise _Invalid(f"{where}: {error}") from error
     if found.get("digest", record.digest) != record.digest:
@@ -508,6 +555,7 @@ def _device(
         )
     digest = str(entry["resources"])
     source = origin if "source" not in entry else f"{entry['source']} (overlay {overlay})"
+    capped = records[digest].capped_resources()
     return Device(
         name=name,
         architecture=architecture,
@@ -518,6 +566,9 @@ def _device(
         resources=records[digest].totals,
         slr_count=records[digest].slr_count,
         slrs=records[digest].slrs,
+        capped=capped,
+        # The reviewed row is of Vivado's device: an overlay's entry states its own.
+        cap_evidence=CAP_EVIDENCE.get(name) if capped and "source" not in entry else None,
         digest=digest,
         shared_with=tuple(sorted(each for each in by_digest[digest] if each != name)),
         source=source,
@@ -558,6 +609,6 @@ __all__ = [
     "load",
     "part",
     "parts",
-    "SLRS_UNSTATED",
+    "SLRS_CAPPED",
     "Record",
 ]
