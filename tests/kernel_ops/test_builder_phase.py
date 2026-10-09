@@ -22,6 +22,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 from kernels.helpers import Lanes
+from onnx import helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
@@ -31,7 +32,6 @@ from qonnx.transformation.base import Transformation
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
 from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
-from finn.builder.build_dataflow_steps import delivered_clock
 from finn.builder.kernel_build_config import (
     SHELL_OUTPUTS,
     KernelBuildConfig,
@@ -39,6 +39,7 @@ from finn.builder.kernel_build_config import (
     KernelVerificationStepType,
 )
 from finn.builder.kernel_build_steps import (
+    delivered_clock,
     step_infer_kernel_tensors,
     step_kernel_bitfile,
     step_kernel_choices,
@@ -50,12 +51,7 @@ from finn.builder.kernel_build_steps import (
     step_verify_kernel_partition,
 )
 from finn.custom_op.kernels.base import read_target, write_target
-from finn.kernels.artifacts.module import module_name
-from finn.kernels.explore import Ranked
-from finn.platform import TargetRefused, TargetRequest, resolve_target
-from finn.transformation.fpgadataflow import pynq_runner
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_BITFILE,
     OUTPUT_INTERFACES,
@@ -65,21 +61,28 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUTS,
     partition_body,
 )
-from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
-from finn.transformation.fpgadataflow.pynq_runner import (
+from finn.kernels.artifacts.module import module_name
+from finn.kernels.explore import Ranked
+from finn.platform import TargetRefused, TargetRequest, resolve_target
+from finn.shells.pynq import runner as pynq_runner
+from finn.shells.pynq.ipgen import prepare_ip
+from finn.shells.pynq.runner import (
     InstanceIP,
     block_design,
     iodma_model,
     project_script,
 )
+from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.kernels import (
     completion,
     explore_kernel_choices,
     kernel_choices_config,
     shell_bottleneck,
 )
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts, configured_root
+from finn.util.resources import resource_path, tcl_quote
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import chain_source, configure_partition, kernel_model, matmul_model
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
@@ -890,16 +893,52 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
 def test_the_runner_generates_z0s_iodmas_for_tfc(
     z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each end's IODMA_hls, generated in its scratch model by PrepareIP (for real: code
+    """Each end's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
     generation runs no tool), is Z0's code, text for text."""
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
     export = integration(z0_tfc, completion("baseline"))
     for end in export.ends:
-        prepare = PrepareIP(export.part, export.period_ns)  # type: ignore[no-untyped-call]
-        model = iodma_model(end).transform(prepare)
+        model = prepare_ip(iodma_model(end), export.part, export.period_ns)
         (node,) = model.graph.node
         code = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")))
         assert (code / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[end.instance]
+
+
+@pytest.mark.slow
+def test_the_iodmas_code_is_the_hwcustomop_flows_copied(
+    z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shell's IODMA is a frozen copy of the HWCustomOp flow's IODMA_hls: for each of
+    TFC's ends, the HLS top it generates is the original's, byte for byte, and so is its
+    Vitis HLS script but for the custom HLS directory the original names and no IODMA
+    includes from. The check goes with the original when the HWCustomOp flow is
+    deleted."""
+    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
+    export = integration(z0_tfc, completion("baseline"))
+    for end in export.ends:
+        copied = prepare_ip(iodma_model(end), export.part, export.period_ns)
+        original = iodma_model(end)
+        (node,) = original.graph.node
+        node.domain = "finn.custom_op.fpgadataflow.hls"
+        node.attribute.append(helper.make_attribute("backend", "fpgadataflow"))
+        original.model.opset_import.append(helper.make_opsetid(node.domain, 1))
+        prepare = PrepareIP(export.part, export.period_ns)  # type: ignore[no-untyped-call]
+        original = original.transform(prepare)
+
+        def code(model: ModelWrapper, name: str) -> str:
+            (node,) = model.graph.node
+            directory = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")))
+            return (directory / name.format(node.name)).read_text().replace(str(directory), "")
+
+        assert code(copied, "top_{}.cpp") == code(original, "top_{}.cpp")
+        custom_hls = (
+            'set config_customhlsdir "{0}"\nputs "custom HLS dir: $config_customhlsdir"\n'.format(
+                tcl_quote(resource_path("custom_hls"))[1:-1]
+            )
+        )
+        script = code(original, "hls_syn_{}.tcl").replace(custom_hls, "")
+        script = script.replace(" -I$config_customhlsdir", "")
+        assert code(copied, "hls_syn_{}.tcl") == script
 
 
 #: TFC's bottleneck at Z0's choices on its shell root, ends included: the input end's 196
@@ -928,38 +967,41 @@ TFC_IO_SHAPES = {
 }
 
 
-def tool_recorders(tmp_path: Path) -> dict[str, type[Transformation]]:
+def tool_recorders(tmp_path: Path) -> dict[str, object]:
     """The runner's tool steps, each replaced by one that states what the tool would
-    have made, in ``tmp_path``: PrepareIP and HLSSynthIP do nothing, CreateStitchedIP
-    states an end's IP, PackagePartition the partition's."""
+    have made, in ``tmp_path``: prepare_ip and hls_synth_ip do nothing,
+    create_stitched_ip states an end's IP, PackagePartition the partition's."""
 
-    def recorder(name: str) -> type[Transformation]:
-        class Recorded(Transformation):
-            def __init__(self, *args: object, **kwargs: object) -> None:
-                super().__init__()
-                self.args = args
+    class Packaged(Transformation):
+        def __init__(self, name: str, **kwargs: object) -> None:
+            super().__init__()
+            self.name = name
 
-            def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-                if name == "PackagePartition":
-                    model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
-                    model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.args[0]}:1.0")
-                    model.set(OUTPUT_INTERFACES, {"axilite": []})
-                if name == "CreateStitchedIP":
-                    hls = tmp_path / "hls" / str(self.args[2])
-                    hls.mkdir(parents=True, exist_ok=True)
-                    for node in model.graph.node:
-                        getCustomOp(node).set_nodeattr("ip_path", str(hls))
-                    model.set_metadata_prop("vivado_stitch_proj", str(tmp_path / "stitch"))
-                    model.set_metadata_prop(
-                        "vivado_stitch_vlnv", f"xilinx_finn:finn:{self.args[2]}:1.0"
-                    )
-                return model, False
+        def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+            model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
+            model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.name}:1.0")
+            model.set(OUTPUT_INTERFACES, {"axilite": []})
+            return model, False
 
-        return Recorded
+    def unchanged(model: ModelWrapper, *args: object, **kwargs: object) -> ModelWrapper:
+        return model
+
+    def stitched(
+        model: ModelWrapper, part: str, period_ns: float, instance: str, **kwargs: object
+    ) -> ModelWrapper:
+        hls = tmp_path / "hls" / instance
+        hls.mkdir(parents=True, exist_ok=True)
+        for node in model.graph.node:
+            getCustomOp(node).set_nodeattr("ip_path", str(hls))
+        model.set_metadata_prop("vivado_stitch_proj", str(tmp_path / "stitch"))
+        model.set_metadata_prop("vivado_stitch_vlnv", f"xilinx_finn:finn:{instance}:1.0")
+        return model
 
     return {
-        name: recorder(name)
-        for name in ("PrepareIP", "HLSSynthIP", "CreateStitchedIP", "PackagePartition")
+        "prepare_ip": unchanged,
+        "hls_synth_ip": unchanged,
+        "create_stitched_ip": stitched,
+        "PackagePartition": Packaged,
     }
 
 

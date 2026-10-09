@@ -27,9 +27,9 @@ from finn.builder.kernel_build_config import (
     KernelVerificationStepType,
 )
 from finn.custom_op.kernels.base import read_target
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
-from finn.transformation.fpgadataflow.kernel_partitions import partition_body
-from finn.transformation.fpgadataflow.pynq_runner import PynqOptions
+from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.kernels import kernel_choices_config
 from finn.util.toolchain import Selection
 from kernel_ops.tfc import ULTRA96

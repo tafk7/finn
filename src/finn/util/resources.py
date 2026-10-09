@@ -28,7 +28,7 @@ def resource_path(family: str, *parts: str) -> str:
     return str(resource.resolve())
 
 
-def tcl_quote(value):
+def tcl_quote(value: object) -> str:
     """Quote a literal Tcl word, including whitespace and substitution characters."""
     value = str(value)
     for char in ("\\", '"', "$", "[", "]"):

@@ -7,7 +7,7 @@ The BNN-PYNQ TFC at two bits (``brevitas_examples``, its weights from the torch
 hub cache) through finn-dev's own end-to-end steps to the streamlined graph
 (``tests/end2end/test_end2end_bnn_pynq.py``: export, tidy, pre- and
 post-processing, streamline), then ``ToKernelOps``, ``InferKernelTensors`` and
-``CreateDataflowPartition``: the input flatten (a Reshape) before the partition
+``partition_kernel_ops``: the input flatten (a Reshape) before the partition
 and the label select (TopK) after it, both on the host.
 
 Every open kernel choice (folding, memories, transports) is committed on the
@@ -41,12 +41,12 @@ from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.kernels.explore import Ranked
 from finn.platform import resolve_target
-from finn.transformation.fpgadataflow.create_dataflow_partition import CreateDataflowPartition
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
 )
+from finn.transformation.kernels.cut import partition_kernel_ops
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
@@ -126,7 +126,7 @@ def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapp
     (``ULTRA96``), cut once into ``directory``: the parent graph (Reshape, the partition,
     TopK), the partition's body, every choice open, and the body's file."""
     model = source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
-    parent = model.transform(CreateDataflowPartition(partition_model_dir=str(directory)))
+    parent = partition_kernel_ops(model, directory)
     body_file = getCustomOp(parent.graph.node[1]).get_nodeattr("model")
     return parent, ModelWrapper(body_file), body_file
 

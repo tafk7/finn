@@ -79,6 +79,11 @@ from qonnx.transformation.base import Transformation
 from finn import resources
 from finn.custom_op.kernels.base import KernelOpError, read_target, shape
 from finn.custom_op.kernels.shell import admission_refusal, member, shell_root
+from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_INTERFACES,
+    OUTPUT_IP,
+    OUTPUT_VLNV,
+)
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
@@ -90,11 +95,6 @@ from finn.kernels.configure import member_of, undecided
 from finn.kernels.ends import EndContract
 from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
 from finn.kernels.utilization import Resources
-from finn.transformation.fpgadataflow.kernel_partitions import (
-    OUTPUT_INTERFACES,
-    OUTPUT_IP,
-    OUTPUT_VLNV,
-)
 from finn.util.basic import make_build_dir
 from finn.util.toolchain import Toolchain, machine_toolchain
 

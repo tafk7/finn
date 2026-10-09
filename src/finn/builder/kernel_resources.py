@@ -51,11 +51,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import ShellResources, member, shell_resources
+from finn.custom_op.partition.kernel_partitions import OUTPUT_REPORTS, partition_body
 from finn.kernels.explore import Completion
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
-from finn.transformation.fpgadataflow.kernel_partitions import OUTPUT_REPORTS, partition_body
-from finn.transformation.fpgadataflow.pynq_runner import STATIC_INSTANCES
+from finn.shells.pynq.runner import STATIC_INSTANCES
 from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     configured_root,

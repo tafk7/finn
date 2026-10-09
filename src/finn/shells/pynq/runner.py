@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The ``pynq`` shell's build of the kernel path's partition: the Vivado runner of the
-Zynq block design, and the PYNQ driver, both from the partition's integration export
+Zynq block design, from the partition's integration export
 (``finn.transformation.kernels.integration``).
 
 The runner (``build_pynq``):
 
 - generates each end's ``IODMA_hls`` IP in a scratch model of its one node, configured
-  as the export states it (``IntegratedEnd.iodma``), through ``PrepareIP`` and
-  ``HLSSynthIP``, and packages it as the block design instantiates it
-  (``CreateStitchedIP``, named as the end's instance: ``xilinx_finn:finn:<instance>:1.0``
-  with the pins ``IODMA_PINS`` names);
+  as the export states it (``IntegratedEnd.iodma``), through code generation and Vitis
+  HLS (``ipgen.prepare_ip``, ``ipgen.hls_synth_ip``), and packages it as the block
+  design instantiates it (``ipgen.create_stitched_ip``, named as the end's instance:
+  ``xilinx_finn:finn:<instance>:1.0`` with the pins ``IODMA_PINS`` names);
 - packages the partition (``PackagePartition``: its body states its IP in
   ``finn.outputs``), unless its body already states the IP this build packaged
   (``STITCHED_IP`` or ``OOC_SYNTH``: the partition is packaged once);
@@ -24,54 +24,42 @@ The runner (``build_pynq``):
   hardware handoff, the routed timing report, the template's ``impl_1`` hierarchical
   utilization report and each IP's out-of-context synthesis report.
 
-The driver (``write_driver``) is the PYNQ driver of the HWCustomOp flow
-(``make_driver``), its I/O from the export's ends: each end's tensor and shape, the
-channel's element, and its beats and lanes; it sets PL0 to the clock it is given, the
-one the bitfile delivers. ``driver_description`` states what it takes and returns.
-
-It sits in the flow beside ``ZynqBuild``, not in ``finn.transformation.kernels``: the
-IODMA's IP generation and the template are the flow's, which that layer does not
-import (``tests/layering.py``).
+The driver its host runtime runs is ``driver``'s.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field, fields
-from onnx import TensorProto, helper
 from pathlib import Path
-from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.util.basic import qonnx_make_model
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from onnx import TensorProto, helper
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.util.basic import qonnx_make_model
+
 from finn import resources
-from finn.transformation.fpgadataflow.create_stitched_ip import (
-    CreateStitchedIP,
-    collect_ip_dirs,
-)
-from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_IP,
     OUTPUT_VLNV,
     partition_body,
 )
-from finn.transformation.fpgadataflow.make_driver import (
-    packed_shape,
-    pynq_driver_text,
-    write_pynq_driver_support,
+from finn.kernels.explore import Completion
+from finn.shells.pynq import iodma, templates
+from finn.shells.pynq.ipgen import (
+    create_stitched_ip,
+    hls_synth_ip,
+    ip_repositories,
+    prepare_ip,
 )
-from finn.transformation.fpgadataflow.prepare_ip import PrepareIP
 from finn.transformation.kernels.integration import IntegratedEnd, Integration
 from finn.transformation.kernels.package import PackagePartition
 from finn.util.basic import make_build_dir
 from finn.util.resources import tcl_quote
-from finn.util.toolchain import machine_toolchain
+from finn.util.toolchain import Toolchain, machine_toolchain
 from finn.util.vivado import vivado_jobs
 
-from . import templates
-
-#: The domain of the IODMA_hls nodes the ends' IPs are generated from.
-IODMA_DOMAIN = "finn.custom_op.fpgadataflow.hls"
+#: The domain of the IODMA_hls node an end's IP is generated from.
+IODMA_DOMAIN = iodma.__name__
 
 #: The project the template creates (``create_project finn_zynq_link``).
 PROJECT = "finn_zynq_link"
@@ -137,7 +125,7 @@ class PynqBuilt:
     out_of_context: Dict[str, str] = field(default_factory=dict)
 
 
-def _instances(export: Integration) -> list:
+def _instances(export: Integration) -> list[str]:
     """The block design's instances in its order: the input ends, the partition, the
     output ends."""
     inputs = [end.instance for end in export.ends if end.contract.direction == "in"]
@@ -159,7 +147,6 @@ def iodma_model(end: IntegratedEnd) -> ModelWrapper:
         [sink.name],
         name=f"{end.instance}_IODMA_hls_0",
         domain=IODMA_DOMAIN,
-        backend="fpgadataflow",
         **end.iodma.attributes,
     )
     model = ModelWrapper(
@@ -174,22 +161,21 @@ def iodma_model(end: IntegratedEnd) -> ModelWrapper:
 
 
 def generate_end_ip(
-    end: IntegratedEnd, part: str, period_ns: float, directory: Path, toolchain
+    end: IntegratedEnd, part: str, period_ns: float, directory: Path, toolchain: Toolchain
 ) -> InstanceIP:
     """``end``'s IP: its scratch model (``iodma_model``, saved in ``directory``) through
-    PrepareIP and HLSSynthIP, packaged by CreateStitchedIP as ``end.instance``, every
-    tool run through ``toolchain``."""
+    code generation and Vitis HLS, packaged as ``end.instance`` (``ipgen``), every tool
+    run through ``toolchain``."""
     model = iodma_model(end)
-    model = model.transform(PrepareIP(part, period_ns))
-    model = model.transform(HLSSynthIP(toolchain=toolchain))
-    model = model.transform(CreateStitchedIP(part, period_ns, end.instance, toolchain=toolchain))
+    model = prepare_ip(model, part, period_ns)
+    model = hls_synth_ip(model, toolchain=toolchain)
+    model = create_stitched_ip(model, part, period_ns, end.instance, toolchain=toolchain)
     directory.mkdir(parents=True, exist_ok=True)
     model.save(str(directory / f"{end.instance}.onnx"))
-    project = model.get_metadata_prop("vivado_stitch_proj")
-    return InstanceIP(
-        vlnv=model.get_metadata_prop("vivado_stitch_vlnv"),
-        repositories=tuple(collect_ip_dirs(model, project)),
-    )
+    vlnv = model.get_metadata_prop("vivado_stitch_vlnv")
+    if vlnv is None:
+        raise RuntimeError(f"{end.instance}: its packaged IP states no VLNV")
+    return InstanceIP(vlnv=vlnv, repositories=tuple(ip_repositories(model)))
 
 
 def _owner(pin: str) -> str:
@@ -200,7 +186,7 @@ def _interface(own: str, peer: str) -> str:
     return f"connect_bd_intf_net [get_bd_intf_pins {own}] [get_bd_intf_pins {peer}]"
 
 
-def debug_lines(export: Integration) -> list:
+def debug_lines(export: Integration) -> list[str]:
     """Integrated logic analyzers on every stream between an end and the partition (each
     net named by its master pin) and on the memory interconnect's port to the
     processor, as the template's debug block sets them on the HWCustomOp flow's."""
@@ -338,10 +324,10 @@ def build_pynq(
     export: Integration,
     directory: Path,
     *,
-    toolchain=None,
+    toolchain: Toolchain | None = None,
     jobs: Optional[int] = None,
     options: PynqOptions = PynqOptions(),
-    completion=None,
+    completion: Completion | None = None,
 ) -> PynqBuilt:
     """Build the kernel path's parent graph ``model`` in the Zynq block design of its
     integration export ``export`` (see the module docstring): the ends' IPs (their
@@ -362,13 +348,16 @@ def build_pynq(
                     PackagePartition(node.name, toolchain=toolchain, completion=completion)
                 )
                 body.save(body_file)
-            ips[instance] = InstanceIP(body.get(OUTPUT_VLNV), (body.get(OUTPUT_IP),))
+            vlnv, ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
+            if vlnv is None or ip is None:
+                raise RuntimeError(f"{node.name}: its body states no packaged IP")
+            ips[instance] = InstanceIP(vlnv, (ip,))
         else:
             end = export.end(instance)
             ips[instance] = generate_end_ip(
                 end, export.part, export.period_ns, Path(directory), toolchain
             )
-    project = make_build_dir(prefix="vivado_zynq_proj_")
+    project: str = make_build_dir(prefix="vivado_zynq_proj_")  # type: ignore[no-untyped-call]
     script = project + "/ip_config.tcl"
     with open(script, "w") as f:
         f.write(project_script(export, block_design(export, ips, options.enable_hw_debug), jobs))
@@ -381,69 +370,6 @@ def build_pynq(
     return collect(project)
 
 
-def driver_shapes(export: Integration) -> Dict[str, Any]:
-    """The driver's I/O from the export's ends, in ``get_driver_shapes``' form: each
-    input end's (``i``) and output end's (``o``) element as its ``DataType``, its
-    tensor's shape (``normal``), its frame as the stream carries it, ``(1, beats,
-    lanes)`` (``folded``), and that packed into bytes (``packed``), and its instance."""
-    shapes: Dict[str, Any] = {}
-    for side, direction, dma in (("i", "in", "idma_names"), ("o", "out", "odma_names")):
-        ends = [end for end in export.ends if end.contract.direction == direction]
-        folded = [(1, end.contract.beats, end.contract.lanes) for end in ends]
-        shapes[f"{side}dt"] = [f"DataType['{end.contract.element.dtype.name}']" for end in ends]
-        shapes[f"{side}shape_normal"] = [tuple(end.shape) for end in ends]
-        shapes[f"{side}shape_folded"] = folded
-        shapes[f"{side}shape_packed"] = [
-            packed_shape(end.contract.element.dtype, each) for end, each in zip(ends, folded)
-        ]
-        shapes[dma] = [end.instance for end in ends]
-    return shapes
-
-
-def write_driver(export: Integration, directory: str, fclk_mhz: float, bitfile: str) -> None:
-    """The PYNQ driver of the integration ``export`` into ``directory``: its I/O the
-    export's (``driver_shapes``), PL0 set to ``fclk_mhz``, the clock the bitfile
-    delivers; driver.py and validate.py run ``bitfile``, relative to ``directory``,
-    unless told another."""
-    os.makedirs(directory, exist_ok=True)
-    write_pynq_driver_support(directory)
-    with open(os.path.join(directory, "driver.py"), "w") as f:
-        f.write(
-            pynq_driver_text(export.host_runtime, driver_shapes(export), fclk_mhz, bitfile=bitfile)
-        )
-
-
-def driver_description(
-    export: Integration, fclk_mhz: float, bitfile: str, before: list, after: list
-) -> Dict[str, Any]:
-    """What the driver of ``export`` takes and returns (SS9): the bitfile it runs, by
-    its path in the build's output directory and in the deployment package, both of
-    which hold bitfile/ beside driver/; the partition's inputs and outputs, each by its
-    tensor's name, element and shape, and the end that moves it; the clock it sets; and
-    the host's nodes of the parent graph that run ``before`` and ``after`` it."""
-
-    def tensors(direction: str) -> list:
-        return [
-            {
-                "name": end.tensor,
-                "element": end.contract.element.dtype.name,
-                "shape": list(end.shape),
-                "dma": end.instance,
-            }
-            for end in export.ends
-            if end.contract.direction == direction
-        ]
-
-    return {
-        "host_runtime": export.host_runtime,
-        "bitfile": bitfile,
-        "fclk_mhz": fclk_mhz,
-        "takes": tensors("in"),
-        "returns": tensors("out"),
-        "host": {"before": list(before), "after": list(after)},
-    }
-
-
 __all__ = [
     "InstanceIP",
     "PynqBuilt",
@@ -452,10 +378,7 @@ __all__ = [
     "build_pynq",
     "collect",
     "debug_lines",
-    "driver_description",
-    "driver_shapes",
     "generate_end_ip",
     "iodma_model",
     "project_script",
-    "write_driver",
 ]

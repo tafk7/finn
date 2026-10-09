@@ -49,11 +49,11 @@ from typing import TYPE_CHECKING, Any
 
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import member
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
 from finn.kernels.explore import Completion
-from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels.package import configured_root
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ IODMA_PINS = {
     "control": "s_axi_control_0",
 }
 """The pins of an ``IODMA_hls`` end's IP, its one node packaged as a stitched IP (the pynq
-shell's runner, ``finn.transformation.fpgadataflow.pynq_runner``)."""
+shell's runner, ``finn.shells.pynq.runner``)."""
 
 CLOCK, RESET = "ap_clk", "ap_rst_n"
 """Every instance's clock and reset pins."""

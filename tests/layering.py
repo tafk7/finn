@@ -5,11 +5,12 @@
 
 ```text
 finn.core.space  <-  finn.kernels  <-  finn.platform  <-  finn.custom_op.kernels
-finn.dataflow    <-                <-  finn.transformation.kernels
+finn.dataflow    <-                <-  finn.transformation.kernels  <-  finn.shells
                                    <-  finn.harness
                                    <-  the flow (all other finn)
+finn.custom_op.partition  <-  finn.transformation.kernels, finn.shells, the flow
 finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, finn.harness,
-                                               the flow
+                                               finn.shells, the flow
 ```
 
 ``LAYERS`` is the one statement of that order. A module belongs to the layer
@@ -97,17 +98,12 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel partition's body and outputs. The module sits in the flow's package
-    # but below both its writers (the cut, PackagePartition) and its readers (the
-    # builder, the integration export): it imports qonnx only, so the flow imports
-    # it without loading the kernel stack.
-    Layer(
-        "kernel_partitions",
-        ("finn.transformation.fpgadataflow.kernel_partitions",),
-        (),
-        ("qonnx",),
-        "tests/kernel_ops",
-    ),
+    # The kernel path's partition node (its ONNX domain) and what is read and built of
+    # a partition (kernel_partitions): below both their writers (the cut,
+    # PackagePartition) and their readers (the builder, the integration export, the
+    # shell's build). qonnx only, so the builder reads it without loading the kernel
+    # stack.
+    Layer("partition", ("finn.custom_op.partition",), (), ("qonnx",), "tests/kernel_ops"),
     # What the flow and the kernel tests build on: helpers, the resource store and
     # the XSI binding (finn.util and finn.xsi import each other). Below the flow:
     # no module here imports a flow module.
@@ -126,7 +122,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "transformation.kernels",
         ("finn.transformation.kernels",),
-        (*_KERNEL_STACK, "platform", "custom_op.kernels", "kernel_partitions", "util"),
+        (*_KERNEL_STACK, "platform", "custom_op.kernels", "partition", "util"),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -140,6 +136,25 @@ LAYERS: tuple[Layer, ...] = (
         (),
         "tests/kernel_ops",
     ),
+    # The shells' builds: what builds the partition into a shell (the pynq shell's block
+    # design, its ends' IODMAs, its driver), from the integration export. Below the
+    # flow: the builder runs them, and nothing here imports the HWCustomOp flow. The
+    # board's driver files (finn.shells.pynq.data) import pynq, each other and, to
+    # validate, dataset_loading.
+    Layer(
+        "shells",
+        ("finn.shells",),
+        (
+            *_KERNEL_STACK,
+            "platform",
+            "custom_op.kernels",
+            "partition",
+            "util",
+            "transformation.kernels",
+        ),
+        ("numpy", "onnx", "qonnx", "pynq", "driver", "driver_base", "dataset_loading"),
+        "tests/kernel_ops",
+    ),
     # The flow: every FINN module no other layer claims. finn.util.torch_hw_modules
     # is here by its imports: the PyTorch twin of the PWPolyF custom op, it reads
     # that op's constants (finn.custom_op.general). Upstream FINN documents it at
@@ -151,11 +166,12 @@ LAYERS: tuple[Layer, ...] = (
             *_KERNEL_STACK,
             "platform",
             "custom_op.kernels",
-            "kernel_partitions",
+            "partition",
             "util",
             "platform.generate",
             "transformation.kernels",
             "harness",
+            "shells",
         ),
         ANY,
         "tests/kernel_ops",

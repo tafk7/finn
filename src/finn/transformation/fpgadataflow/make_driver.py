@@ -50,7 +50,7 @@ from typing import Dict, Tuple
 
 import finn.util
 from finn import deploy
-from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.util.basic import make_build_dir
 from finn.util.data_packing import finnpy_to_packed_bytearray, to_external_tensor
 from finn.util.rtlsim import dat_file_to_numpy_array

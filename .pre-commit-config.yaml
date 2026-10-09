@@ -26,8 +26,9 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Recorded evidence is reference material, not maintained code.
-exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/)'
+# Recorded evidence is reference material, not maintained code. The pynq shell's data
+# (driver files, the IODMA IP's descriptor) are shipped as they are: no hook rewrites them.
+exclude: '^(docs/conf.py|docs/(kernel|space)-[^/]+/|src/finn/shells/pynq/data/)'
 
 default_language_version:
     python: python3.12
@@ -65,7 +66,7 @@ repos:
   - id: ruff-check
     name: ruff check (gate paths)
     args: [--extend-select, I, --fix]
-    files: &gate_ruff '^(src/finn/(core/space|dataflow|kernels|platform|custom_op/kernels|transformation/kernels|harness)/|tests/(core/space|dataflow|kernels|kernel_ops|xsim_sweep)/|tests/(layering|value_classes)\.py$|scripts/(benchmark-space|_gate_precommit|emitted_text)\.py$|src/finn/builder/kernel_(testbench|resources)\.py$)'
+    files: &gate_ruff '^(src/finn/(core/space|dataflow|kernels|platform|custom_op/kernels|custom_op/partition|transformation/kernels|harness|shells)/|tests/(core/space|dataflow|kernels|kernel_ops|xsim_sweep)/|tests/(layering|value_classes)\.py$|scripts/(benchmark-space|_gate_precommit|emitted_text)\.py$|src/finn/builder/kernel_(testbench|resources)\.py$)'
   - id: ruff-format
     files: *gate_ruff
   - id: ruff-check

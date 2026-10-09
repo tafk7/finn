@@ -23,12 +23,12 @@ from typing import cast
 import pytest
 
 from finn.custom_op.kernels.base import KernelOpError, kernel_op
-from finn.kernels.artifacts import build
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
 )
+from finn.kernels.artifacts import build
 from finn.transformation.kernels import PackagePartition
 from finn.util.toolchain import Toolchain
 from kernel_ops.models import configure_partition, kernel_model

@@ -33,11 +33,11 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 from qonnx.util.basic import get_by_name
 
-from finn.transformation.fpgadataflow.externalize_params import ExternalizeParams
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     is_kernel_partition,
 )
+from finn.transformation.fpgadataflow.externalize_params import ExternalizeParams
 from finn.util.basic import make_build_dir
 
 #: The domain of the StreamingDataflowPartition nodes the parent graph holds.

@@ -21,14 +21,14 @@ import shutil
 from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from typing import Any
 
-from finn.builder.build_dataflow_phases import _execute_step
-from finn.builder.build_dataflow_steps import delivered_clock, deployment_package
 from finn.builder.kernel_build_config import (
     KernelBuildConfig,
     KernelOutputType,
     KernelVerificationStepType,
 )
+from finn.builder.kernel_build_runner import execute_step
 from finn.builder.kernel_resources import RESOURCES_FILE, shell_resources_report
 from finn.builder.kernel_testbench import (
     TESTBENCH_DIR,
@@ -39,9 +39,7 @@ from finn.builder.kernel_testbench import (
 )
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import read_target
-from finn.platform import refuse_drift, shell_row
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
@@ -50,11 +48,9 @@ from finn.transformation.fpgadataflow.kernel_partitions import (
     OUTPUT_REPORTS,
     partition_body,
 )
-from finn.transformation.fpgadataflow.pynq_runner import (
-    build_pynq,
-    driver_description,
-    write_driver,
-)
+from finn.platform import refuse_drift, shell_row
+from finn.shells.pynq.driver import driver_description, write_driver
+from finn.shells.pynq.runner import build_pynq
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
@@ -64,12 +60,14 @@ from finn.transformation.kernels import (
     shell_bottleneck,
     strategy,
 )
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN, integration
 from finn.transformation.kernels.package import (
     ElaboratePartition,
     PackagePartition,
     configured_root,
 )
+from finn.util.vivado import parse_clock_summary
 
 
 def _kernel_path_source(cfg: KernelBuildConfig) -> str:
@@ -329,6 +327,60 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig):
     return model
 
 
+#: The clock the Zynq shell's PS drives the accelerator with: Zynq UltraScale+'s
+#: and Zynq-7000's name for it.
+PL_CLOCKS = ("clk_pl_0", "clk_fpga_0")
+
+
+def delivered_clock(
+    timing_report: str,
+    period_ns: float,
+    cycles: int | None = None,
+    objective_fps: float | None = None,
+) -> dict[str, Any]:
+    """The clock the routed design delivers (a PL clock of the timing report's clock
+    summary) beside the period asked, and, given the partition's bottleneck
+    ``cycles`` a frame, the frames a second at each; ``objective_fps`` is the
+    throughput asked. A delivered period other than the one asked is a ``warning``
+    with both numbers (the shell's PS gives its nearest clock to the request)."""
+    clocks = parse_clock_summary(timing_report)
+    name = next((clock for clock in PL_CLOCKS if clock in clocks), None)
+    if name is None:
+        return {
+            "target_period_ns": period_ns,
+            "warning": f"no PL clock ({', '.join(PL_CLOCKS)}) in {timing_report}: "
+            f"its clock summary lists {sorted(clocks)}",
+        }
+    delivered, mhz = clocks[name]["period_ns"], clocks[name]["mhz"]
+    report: dict[str, Any] = {
+        "clock": name,
+        "target_period_ns": period_ns,
+        "delivered_period_ns": delivered,
+        "delivered_mhz": mhz,
+    }
+    if cycles is not None:
+        report["bottleneck_cycles"] = cycles
+        report["fps_at_target"] = round(1e9 / (period_ns * cycles), 1)
+        report["fps_at_delivered"] = round(mhz * 1e6 / cycles, 1)
+    if objective_fps is not None:
+        report["objective_fps"] = objective_fps
+    # The report states periods to the picosecond.
+    if abs(delivered - period_ns) >= 0.0005:
+        warning = (
+            f"the shell delivers {name} at {delivered} ns ({mhz} MHz), "
+            f"not the {period_ns} ns asked"
+        )
+        if cycles is not None:
+            warning += (
+                f": {cycles} cycles a frame give {report['fps_at_delivered']:,.0f} fps at it, "
+                f"{report['fps_at_target']:,.0f} at the clock asked"
+            )
+        if objective_fps is not None:
+            warning += f"; the objective is {objective_fps:,.0f} fps"
+        report["warning"] = warning
+    return report
+
+
 def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     """The Zynq block design's bitfile (the pynq shell's runner, build_pynq) from the
     partition's integration export, written as report/integration.json. Into the output
@@ -441,7 +493,7 @@ def _shipped_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> Path:
 
 def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig):
     """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
-    pynq_runner.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
+    finn.shells.pynq.driver.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
     partition's integration export's ends, PL0 set to the clock the bitfile delivers
     (report/delivered_clock.json), and the bitfile the build ships (finn.outputs) its
     default, relative to driver/. report/driver.json states that bitfile, what the
@@ -533,7 +585,8 @@ def step_kernel_deployment_package(model: ModelWrapper, cfg: KernelBuildConfig):
             )
     deploy = output / "deploy"
     shutil.rmtree(deploy, ignore_errors=True)
-    deployment_package(cfg.output_dir)
+    shutil.copytree(output / "bitfile", deploy / "bitfile")
+    shutil.copytree(output / "driver", deploy / "driver", copy_function=shutil.copyfile)
     host_model(model, deploy / "model")
     shutil.copy(output / "report" / "driver.json", deploy / "driver.json")
     return model
@@ -568,11 +621,11 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig):
 
     Returns the parent graph: the host's nodes and the partition node, whose body
     holds the KernelOps, their choices committed."""
-    model = _execute_step(step_kernel_ops, model, cfg)
-    model = _execute_step(step_infer_kernel_tensors, model, cfg)
-    model = _execute_step(step_kernel_partition, model, cfg)
-    model = _execute_step(step_kernel_choices, model, cfg)
-    model = _execute_step(step_verify_kernel_partition, model, cfg)
+    model = execute_step(step_kernel_ops, model, cfg)
+    model = execute_step(step_infer_kernel_tensors, model, cfg)
+    model = execute_step(step_kernel_partition, model, cfg)
+    model = execute_step(step_kernel_choices, model, cfg)
+    model = execute_step(step_verify_kernel_partition, model, cfg)
     return model
 
 
@@ -585,11 +638,11 @@ def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig):
     - step_kernel_driver: The driver of the shell's host runtime
     - step_kernel_resources: The resources per member of the shell
     - step_kernel_deployment_package: The bitfile and driver, packaged"""
-    model = _execute_step(step_kernel_stitched_ip, model, cfg)
-    model = _execute_step(step_kernel_bitfile, model, cfg)
-    model = _execute_step(step_kernel_driver, model, cfg)
-    model = _execute_step(step_kernel_resources, model, cfg)
-    model = _execute_step(step_kernel_deployment_package, model, cfg)
+    model = execute_step(step_kernel_stitched_ip, model, cfg)
+    model = execute_step(step_kernel_bitfile, model, cfg)
+    model = execute_step(step_kernel_driver, model, cfg)
+    model = execute_step(step_kernel_resources, model, cfg)
+    model = execute_step(step_kernel_deployment_package, model, cfg)
     return model
 
 

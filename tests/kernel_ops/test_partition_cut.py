@@ -30,20 +30,20 @@ from finn.custom_op.kernels.base import (
     read_target,
     write_target,
 )
-from finn.platform import resolve_target
-from finn.transformation.fpgadataflow.create_dataflow_partition import (
-    CreateDataflowPartition,
-)
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
-from finn.transformation.fpgadataflow.kernel_partitions import (
+from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_VLNV,
     partition_body,
 )
+from finn.platform import resolve_target
+from finn.transformation.fpgadataflow.create_dataflow_partition import (
+    CreateDataflowPartition,
+)
+from finn.transformation.fpgadataflow.insert_iodma import InsertIODMA
 from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import (
     Address,
     Connection,

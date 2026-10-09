@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from finn.custom_op.kernels.base import KernelOp
-from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

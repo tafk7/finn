@@ -87,6 +87,7 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
     shell_root,
 )
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     Baseline,
@@ -108,7 +109,6 @@ from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform import TargetRefused
 from finn.platform import part as catalog_part
-from finn.transformation.fpgadataflow.kernel_partitions import KERNEL_OPS_DOMAIN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

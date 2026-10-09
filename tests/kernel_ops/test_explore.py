@@ -25,6 +25,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     Accepted,
     Baseline,
@@ -40,8 +41,6 @@ from finn.kernels.explore import (
 )
 from finn.kernels.utilization import Resources
 from finn.platform import resolve_target
-from finn.transformation.fpgadataflow.cut_kernel_partition import CutKernelPartition
-from finn.transformation.fpgadataflow.kernel_partitions import partition_body
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
@@ -51,6 +50,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
     strategy,
 )
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import configured_root
 from kernel_ops.models import TARGET, matmul_model
 from kernel_ops.test_choose import choices, kernel_model

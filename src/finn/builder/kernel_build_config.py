@@ -12,15 +12,15 @@ configuration (folding, FIFO sizing, specialization, the Vitis and SLASH shells)
 field of it: what the kernel path does not make, it cannot be asked for.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from dataclasses_json import DataClassJsonMixin, Undefined, config
+from dataclasses_json.undefined import UndefinedParameterError
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from finn.builder.build_dataflow_config import declared
 from finn.kernels.target import Target
 from finn.platform import TargetRequest, shell_row
-from finn.transformation.fpgadataflow.pynq_runner import PynqOptions
+from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.kernels.integration import VIVADO_BLOCK_DESIGN
 from finn.util.toolchain import Selection, Toolchain, machine_selection
 
@@ -100,6 +100,24 @@ VERIFIED_BY = {
         "step_kernel_stitched_ip",
     ),
 }
+
+
+def declared(cls: type, name: str) -> Callable[[Any], Any]:
+    """The decoder of the nested dataclass ``cls`` a configuration states as ``name``,
+    refusing keys ``cls`` does not declare (dataclasses_json would drop them, as it
+    does a nested dataclass's), naming them."""
+
+    def decode(stated: Any) -> Any:
+        if stated is None or isinstance(stated, cls):
+            return stated
+        unknown = sorted(set(stated) - {item.name for item in fields(cls)})
+        if unknown:
+            raise UndefinedParameterError(
+                f"{name}: keys {cls.__name__} does not declare: {unknown}"
+            )
+        return cls(**stated)
+
+    return decode
 
 
 #: The steps of a kernel-path build, from a streamlined model: the kernel-path phase
@@ -187,7 +205,7 @@ class KernelBuildConfig(DataClassJsonMixin):
 
     #: The options of the target's shell's build, as that build states them; a shell
     #: without a build (``ip``) takes none. The ``pynq`` shell's
-    #: (finn.transformation.fpgadataflow.pynq_runner.PynqOptions): ``enable_hw_debug``,
+    #: (finn.shells.pynq.runner.PynqOptions): ``enable_hw_debug``,
     #: integrated logic analyzers on the ends' streams. In JSON:
     #: {"enable_hw_debug": true}. None by default.
     shell_options: Dict[str, Any] = field(default_factory=dict)

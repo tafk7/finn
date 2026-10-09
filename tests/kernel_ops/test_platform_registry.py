@@ -25,7 +25,7 @@ from finn.platform import (
     shell_row,
 )
 from finn.platform.shells import PYNQ_CONTROL_BUDGET, ZYNQ_STATIC_REGION
-from finn.transformation.fpgadataflow.templates import custom_zynq_shell_template
+from finn.shells.pynq.templates import custom_zynq_shell_template
 from finn.util.basic import get_dsp_block as untyped_dsp_block
 from finn.util.basic import (
     part_map,
