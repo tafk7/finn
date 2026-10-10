@@ -27,6 +27,17 @@ and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
 port's beat sequence derives from it. ``reshape_activations`` reads (M, K, N)
 activations as (M, K * N): a densely realized depthwise operation.
 
+A dense form read through a ``window`` (``finn.dataflow.gemm.Window``, a lowered
+convolution) splits ``m`` into the pixels ``(oh, ow)`` and ``k`` into the window
+``(kh, kw, c)``: x reads the image's ``(H * W, C)`` rows at
+``(oh * SH + kh * DH, ow * SW + kw * DW, c)``, w its ``(K, N)`` viewed
+``(KH, KW, C, N)`` and y ``(OH * OW, N)``; the schedule walks ``(oh, ow, n, kh, kw,
+c)`` with ``n`` split by PE and ``c`` by SIMD (so SIMD divides the channels), and
+activation TLAST closes each window. The window's extents are its own, the channels
+and outputs the tensors'. The core sees the beats of a dense form of
+``K = KH * KW * C``: the window is the activation channel's (its adapter reads the
+image through it), not the core's.
+
 The results' range, ``result_range``, is its parent's statement (MatMul's);
 each core derives from it its accumulator (``result_dtype``, ``ACCU_WIDTH``),
 the encoding the ``y`` port presents over that range: both current cores
@@ -59,8 +70,8 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
-from finn.dataflow.gemm import Form, k, m, n
-from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
+from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
@@ -151,6 +162,8 @@ class DotpAxiKernel(Kernel):
 
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
+    # A dense form read through a window (the module docstring): a lowered convolution.
+    window: Window = Param(required=False)
     # The range of its results: its parent's statement (MatMul binds its result range),
     # so that it is known before the results channel exists.
     result_range: tuple[int, int] = Param()
@@ -160,13 +173,34 @@ class DotpAxiKernel(Kernel):
     w_channel: Channel = Param(required=False)
     y_channel: Channel = Param(required=False)
 
-    # Each extent bound from the tensors the ports read (``Kernel.extents``).
+    @derived
+    def windowed(self) -> bool:
+        """Whether it reads its activations through a window."""
+        return self.present(DotpAxiKernel.window)
+
+    @derived
+    def extents(self) -> dict[Index, int] | Rejected:
+        """Each index's extent, bound from the tensors its placed ports read, and a
+        window's own (``Window.extents``)."""
+        return self._bound(self.window.extents if self.windowed else None)
+
     rows = extent_of(m)  # M: the results' rows
     outputs = extent_of(n)  # N: the results' columns
     reduction = extent_of(k)  # K: the weights' rows, stored (k, n)
+    channels = extent_of(c)  # C: a window's channels
+
+    @derived
+    def lanes_of(self) -> Index:
+        """The index SIMD splits: the reduction, or a window's channels."""
+        return c if self.windowed else k
+
+    @derived
+    def simd_extent(self) -> int:
+        """The extent SIMD divides: K, or a window's channels."""
+        return self.channels if self.windowed else self.reduction
 
     pe: int = Decision(domain=divisors_of(outputs))
-    simd: int = Decision(domain=divisors_of(reduction))
+    simd: int = Decision(domain=divisors_of(simd_extent))
 
     @derived
     def pumpable(self) -> bool:
@@ -181,9 +215,18 @@ class DotpAxiKernel(Kernel):
     )
 
     @derived
+    def reduced(self) -> tuple[Index, ...]:
+        """The reduction's indices: ``k``, or a window's ``(kh, kw, c)``."""
+        return (kh, kw, c) if self.windowed else (k,)
+
+    @derived
     def schedule(self) -> Schedule | Rejected:
-        """``n`` split by PE and ``k`` by SIMD; ``m``, then ``n``, then the reduction."""
-        return self.bound_schedule(order=(m, n, k), factors={n: self.pe, k: self.simd})
+        """``n`` split by PE and the reduction by SIMD; the rows (a window's pixels), then
+        ``n``, then the reduction (a window's taps, then its channels)."""
+        rows = (oh, ow) if self.windowed else (m,)
+        return self.bound_schedule(
+            order=(*rows, n, *self.reduced), factors={n: self.pe, self.lanes_of: self.simd}
+        )
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType | Rejected:
@@ -201,13 +244,32 @@ class DotpAxiKernel(Kernel):
         return self.schedule.beat_count
 
     @derived
-    def x_index(self) -> tuple[Index, ...]:
-        return self.form.x
+    def signature(self) -> tuple[tuple[Index | Affine, ...], ...]:
+        """The indices x, w and y read: the form's, or its window's."""
+        found = self.window.signature if self.windowed else self.form.value
+        return found.x, found.w, found.y
+
+    @derived
+    def x_index(self) -> tuple[Index | Affine, ...]:
+        return self.signature[0]
+
+    @derived
+    def w_index(self) -> tuple[Index | Affine, ...]:
+        return self.signature[1]
+
+    @derived
+    def y_index(self) -> tuple[Index | Affine, ...]:
+        return self.signature[2]
 
     @derived
     def x_lanes(self) -> tuple[Index, ...]:
         """dotp_axi's activation lanes: SIMD alone, or ``s * PE + p`` depthwise."""
-        return (k, n) if self.form is Form.DEPTHWISE else (k,)
+        return (k, n) if self.form is Form.DEPTHWISE else (self.lanes_of,)
+
+    @derived
+    def w_lanes(self) -> tuple[Index, ...]:
+        """Each weight beat's PE * SIMD lanes, SIMD fastest."""
+        return (n, self.lanes_of)
 
     @derived(semantics=INTEGER_POLICY)
     def activation_policy(self) -> Integer:
@@ -226,7 +288,7 @@ class DotpAxiKernel(Kernel):
         schedule=schedule,
         index=x_index,
         lanes=x_lanes,
-        closes=(k,),
+        closes=reduced,
         reshaped=reshape_activations,
     )
     w = AxiStreamPort(
@@ -235,8 +297,9 @@ class DotpAxiKernel(Kernel):
         channel=w_channel,
         admits=Integer(min_bits=2, signed=True),
         schedule=schedule,
-        index=(k, n),
-        lanes=(n, k),
+        index=w_index,
+        lanes=w_lanes,
+        reshaped=windowed,
     )
     y = AxiStreamPort(
         name="m_axis_output",
@@ -244,9 +307,9 @@ class DotpAxiKernel(Kernel):
         channel=y_channel,
         admits=Integer(),
         schedule=schedule,
-        index=(m, n),
+        index=y_index,
         lanes=(n,),
-        reduces=(k,),
+        reduces=reduced,
         dtype=result_dtype,
         value_range=result_range,
     )

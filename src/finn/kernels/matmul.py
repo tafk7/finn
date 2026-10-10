@@ -11,6 +11,13 @@ outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
 - ``DEPTHWISE``: Y[m, n] = sum over k of X[m, k, n] * W[k, n]. Each output
   channel reads its own activations, so nothing is replayed.
 
+A dense operation may read its activations through a ``window``
+(``finn.dataflow.gemm.Window``): a convolution lowered to a matrix multiplication,
+``m`` the output pixels (OH * OW) and ``k`` the window ``(kh, kw, c)``, KH * KW * C.
+Its activations are then the image, ``(H * W, C)``, which the activation channel's
+adapter reads through the window (an ``input_gen``); its weights and results are
+the dense form's.
+
 Weights are read ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
 operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``realization`` Decision, on the dense datapath with block-diagonal weights
@@ -79,7 +86,7 @@ from finn.dataflow.datatypes import (
     canonical_qonnx_datatype,
     ordinary_integer_bounds,
 )
-from finn.dataflow.gemm import Form
+from finn.dataflow.gemm import Form, Window
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
@@ -163,6 +170,8 @@ class MatMulKernel(Kernel):
     n: int = Param()
     k: int = Param()
     form: Form = Param(default=Form.DENSE)
+    # A dense form read through a window: a lowered convolution (module docstring).
+    window: Window = Param(required=False)
     activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
@@ -170,6 +179,11 @@ class MatMulKernel(Kernel):
     @derived
     def depthwise(self) -> bool:
         return self.form is Form.DEPTHWISE
+
+    @derived
+    def windowed(self) -> bool:
+        """Whether it reads its activations through a window."""
+        return self.present(MatMulKernel.window)
 
     @derived
     def reads_depthwise(self) -> bool:
@@ -237,6 +251,18 @@ class MatMulKernel(Kernel):
     def extents_supported(self) -> bool | Rejected:
         if any(type(value) is not int or value < 1 for value in (self.m, self.n, self.k)):
             return reject("matmul-extents", "the extents m, n and k must be positive integers")
+        if not self.windowed:
+            return True
+        window = self.window
+        if self.depthwise:
+            return reject("matmul-window", "a window reads a dense form's activations")
+        if self.k % window.taps or self.m != window.output[0] * window.output[1]:
+            return reject(
+                "matmul-window",
+                f"a {window.kernel} window giving {window.output} pixels reads M = "
+                f"{window.output[0] * window.output[1]} rows of a multiple of {window.taps}, "
+                f"not M = {self.m}, K = {self.k}",
+            )
         return True
 
     # The tensors the channels carry.
@@ -257,8 +283,14 @@ class MatMulKernel(Kernel):
 
     @view
     def activation_tensor(self) -> Tensor | Rejected:
-        """(M, K), or (M, K, N) depthwise, however the datapath reads it."""
-        shape = (self.m, self.k, self.n) if self.depthwise else (self.m, self.k)
+        """(M, K), or (M, K, N) depthwise, however the datapath reads it; through a window,
+        the image's (H * W, C) rows."""
+        shape: tuple[int, ...]
+        if self.windowed:
+            (height, width), taps = self.window.image, self.window.taps
+            shape = (height * width, self.k // taps)
+        else:
+            shape = (self.m, self.k, self.n) if self.depthwise else (self.m, self.k)
         return self._tensor(shape, self.activation_dtype)
 
     @view
@@ -316,6 +348,7 @@ class MatMulKernel(Kernel):
         {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
         form=datapath,
         reshape_activations=dense_view,
+        window=window,
         result_range=result_range,
         platform=platform,
         x_channel=x_channel,
