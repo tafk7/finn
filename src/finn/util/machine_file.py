@@ -3,7 +3,7 @@
 
 """The machine file: where this machine's Xilinx tools and licence server are.
 
-One file holds a machine's defaults, in the names every modality reads:
+One file holds a machine's defaults:
 
     # ~/.config/finn/xilinx.env
     FINN_XILINX_PATH=/opt/Xilinx

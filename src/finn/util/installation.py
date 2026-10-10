@@ -10,6 +10,9 @@ from pathlib import Path
 
 
 def main():
+    """Print one JSON line per distribution named on the command line (``finn`` and
+    ``qonnx`` by default): its version, where it is imported from and how it was
+    installed. Run as ``python -m finn.util.installation``."""
     for name in sys.argv[1:] or ["finn", "qonnx"]:
         try:
             dist = importlib.metadata.distribution(name)

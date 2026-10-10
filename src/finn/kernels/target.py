@@ -3,12 +3,10 @@
 
 """The build target as kernels see it: the platform's capabilities and its clock.
 
-Capabilities, never part, board or shell names, reach kernels. ``Platform`` is the
-record of them and of the clock period the kernels must meet; ``Target`` adds what
-the flow states beside it: the part, the shell and the board when one is stated.
-Which part, board and shell have which capabilities is the flow's
-(``finn.platform.resolve_target``); the graph states the result
-(``finn.platform``, read by ``finn.custom_op.kernels.base.read_target``).
+Capabilities reach kernels, never part, board or shell names. ``Platform`` holds the
+capabilities and the clock period the kernels must meet; ``Target`` adds the part, the
+shell and the board, if one is named. The flow resolves them (``finn.platform``) and
+records them in the model.
 """
 
 from __future__ import annotations
@@ -43,9 +41,9 @@ def dsp_widths(dsp: DspBlock) -> tuple[int, int, int]:
 
 @dataclass(frozen=True, kw_only=True)
 class Platform:
-    """What the target supplies to kernels: its clock period and its capabilities,
-    every field stated. A kernel that reads it requires it: there is no default
-    platform, so a kernel built in a harness or a test states the one it means.
+    """What the target gives kernels: its clock period and its capabilities. There is
+    no default platform, so a kernel built in a harness or a test names the one it
+    means.
 
     - ``period_ns``: the clock period the kernels must meet (``ap_clk``);
     - ``dsp``: the DSP block (``None``: none stated, which a DSP core refuses);
@@ -58,11 +56,11 @@ class Platform:
       not a budget (``None``: not known for this part). No kernel reads it; a
       strategy may.
 
-    What a shell gives a partition is not a capability here: its budgets (AXI-Lite
-    buses, memory ports) and its aligned doubled clock (``ap_clk2x``) are the shell
-    row's (``finn.platform.ShellRow``), which the shell root admits what the
-    partition's module presents against. A kernel states that it takes the doubled
-    clock (its module's clocking), and offers its pumped cases on any platform.
+    What a shell gives a partition is not a capability: its budgets (AXI-Lite buses,
+    memory ports) and its aligned doubled clock (``ap_clk2x``) are in its shell row
+    (``finn.platform.ShellRow``), and the partition is checked against that row. So a
+    kernel offers its pumped cases on any platform and declares that it takes the
+    doubled clock.
     """
 
     period_ns: float
@@ -98,8 +96,8 @@ def uram_requirements(
 @dataclass(frozen=True, kw_only=True)
 class Target:
     """The build target: the part, the shell that integrates the partition (``ip``: the
-    packaged IP, integrated by its user), the board when one is stated, and the
-    platform its kernels are built for."""
+    packaged IP, integrated by its user), the board if one is named, and the platform
+    its kernels are built for."""
 
     part: str
     platform: Platform
