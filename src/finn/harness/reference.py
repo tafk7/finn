@@ -44,7 +44,7 @@ export's float32, or float64 where graph preparation widened the region); the
 reference gets them as int64.
 
 A ``Coverage``'s ``record`` is its JSON form, for a report to collect. A nested
-pattern's positive graph (several nodes, WindowedMatMul's Im2Col and MatMul) is
+pattern's positive graph (several nodes, Conv's Im2Col and MatMul) is
 compared whole. Not here: the generated network through the kernel path into XSim
 (T2) is the tests', since the harness does not import the flow's builder.
 """

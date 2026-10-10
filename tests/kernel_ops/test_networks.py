@@ -15,10 +15,10 @@ against the KernelOps' ``execute_node`` (the oracle) on the same inputs.
 
 Lean (KT10): two graphs an op, one simulation each. MatMul: unsigned activations over
 k = 64 with weights stored, and weights streamed as a second graph input. Thresholding:
-a row a channel, and NHWC images. WindowedMatMul: an overlapping 3 x 3 window over a
+a row a channel, and NHWC images. Conv: an overlapping 3 x 3 window over a
 6 x 6 x 4 image, and a strided, dilated one that passes rows and columns: the image
 enters once, and the window is its channel's ``input_gen``
-(``tests/kernel_ops/test_windowed_matmul.py`` folds CNV's first layer).
+(``tests/kernel_ops/test_conv.py`` folds CNV's first layer).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from finn.harness.reference import OpSpec
 from finn.platform import TargetRequest
 from finn.transformation.kernels.choose import completion
 from kernel_ops.models import TARGET
-from kernel_ops.specs import matmul, thresholding, windowed_matmul
+from kernel_ops.specs import conv, matmul, thresholding
 
 NETWORKS = [
     pytest.param(spec, name, id=f"{spec.op.op_type}-{name}")
@@ -49,8 +49,8 @@ NETWORKS = [
         (matmul.SPEC, "streamed-weights"),
         (thresholding.SPEC, "rows"),
         (thresholding.SPEC, "nhwc"),
-        (windowed_matmul.SPEC, "3x3-stride-1"),
-        (windowed_matmul.SPEC, "strided-dilated"),
+        (conv.SPEC, "3x3-stride-1"),
+        (conv.SPEC, "strided-dilated"),
     )
 ]
 

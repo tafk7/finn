@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""WindowedMatMul beyond its spec (``kernel_ops.specs.windowed_matmul``): the window
+"""Conv beyond its spec (``kernel_ops.specs.conv``): the window
 reaches the hardware as its image channel's reorder, and CNV's convolutions convert.
 
 - A single convolution through the builder's kernel-path phase: the image enters once,
@@ -12,13 +12,13 @@ reaches the hardware as its image channel's reorder, and CNV's convolutions conv
 - In XSim (``finn.harness.ops.check_parity``, the ``XSim`` executor), the folded
   single layers compute what the op's ``execute_node`` computes, every output word:
   CNV's first layer at SIMD 3 and PE 16 among them.
-- Inside a partition: a Thresholding (NHWC, PE channels a beat) feeding a WindowedMatMul
+- Inside a partition: a Thresholding (NHWC, PE channels a beat) feeding a Conv
   (SIMD channels a beat) is one edge whose plan is the window's reorder, after a width
   conversion where PE and SIMD differ; in XSim the two compute what their
   ``execute_node`` do.
 - CNV_W2A2 (the BNN-PYNQ CNV at two bits, its weights from the torch hub cache, as
   ``kernel_ops.tfc`` takes TFC) through graph preparation and ``ToKernelOps``: each of
-  its six ``Im2Col`` and ``MatMul`` pairs converts to one WindowedMatMul, and the host
+  its six ``Im2Col`` and ``MatMul`` pairs converts to one Conv, and the host
   nodes between KernelOps are the two max pools, the flatten's Transpose and its
   Reshape.
 """
@@ -33,21 +33,24 @@ import pytest
 from kernels.xsim import requires_xsim
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import is_custom_op
+from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.kernel_build_config import KernelBuildConfig
 from finn.builder.kernel_build_steps import phase_graph_preparation, phase_kernel_path
+from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
-from finn.custom_op.partition.kernel_partitions import partition_body
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.dataflow.traversal import vector_major
 from finn.harness.ops import boundary_inputs, check_parity
 from finn.platform import TargetRequest
 from finn.transformation.kernels import ToKernelOps
-from finn.transformation.kernels.convert import between_kernel_ops
+from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
 from finn.transformation.prepare import GraphPreparation
 from kernel_ops.models import convert
-from kernel_ops.specs import windowed_matmul
+from kernel_ops.specs import conv
 from kernel_ops.specs.base import GENERAL, source
 from kernel_ops.test_networks import config
 from kernel_ops.tfc import PREPROCESSING, ULTRA96
@@ -56,9 +59,29 @@ CNV_SHAPE = (1, 3, 32, 32)
 CNV_EXPORT = "cnv_w2a2.onnx"
 
 
+def test_the_kernel_op_conv_and_onnxs_conv_never_resolve_to_each_other() -> None:
+    """The op type is ONNX's name in the KernelOps' domain: qonnx resolves a node by its
+    domain, an ONNX ``Conv`` (the default domain) is no custom op, and conversion finds
+    KernelOps by their anchor (``Im2Col``), never by a ``Conv``."""
+    model, conversion = convert(conv.lowered().transform(InferShapes()))
+    (node,) = model.graph.node
+    assert (node.domain, node.op_type) == (KERNEL_OPS_DOMAIN, "Conv")
+    assert isinstance(model.get_customop_wrapper(node), Conv)
+    assert is_custom_op(KERNEL_OPS_DOMAIN, "Conv") and not is_custom_op("", "Conv")
+    assert not is_custom_op(GENERAL, "Conv")
+    assert ("", "Conv") not in kernel_ops_by_anchor()
+    assert [op.op_type for op in kernel_ops_by_anchor()[GENERAL, "Im2Col"]] == ["Conv"]
+    # qonnx's inference reads the node through its domain: its output stays the kernel's.
+    stated = model.get_tensor_datatype("y")
+    inference = InferDataTypes()  # type: ignore[no-untyped-call]
+    again = model.transform(InferShapes()).transform(inference)
+    assert again.get_tensor_datatype("y") == stated
+    assert [o.op for o in conversion.outcomes] == ["Conv"]
+
+
 def single_layer(name: str, directory: Path) -> ModelWrapper:
     """The positive graph ``name`` through the kernel-path phase: the partition's body."""
-    source = windowed_matmul.SPEC.positive[name]().transform(InferShapes())
+    source = conv.SPEC.positive[name]().transform(InferShapes())
     _, body, _ = partition_body(phase_kernel_path(source, config(directory)))
     return body
 
@@ -107,7 +130,7 @@ def test_the_folded_layer_computes_in_xsim_what_its_kernel_op_computes(
     name: str, simd: int, pe: int, tmp_path: Path
 ) -> None:
     body = folded(name, simd, pe, tmp_path / "build")
-    label = f"WindowedMatMul-{name}"
+    label = f"Conv-{name}"
     check_parity(
         body,
         tmp_path / "xsim",
@@ -118,7 +141,7 @@ def test_the_folded_layer_computes_in_xsim_what_its_kernel_op_computes(
 
 def thresholded(pe: int, simd: int) -> ModelWrapper:
     """A Thresholding of a 6 x 6 x 4 INT4 image (NHWC, UINT2 levels) at ``pe``, and a 3 x 3
-    WindowedMatMul of its levels to 8 outputs at ``simd`` and PE 2: converted for
+    Conv of its levels to 8 outputs at ``simd`` and PE 2: converted for
     ``TARGET`` (Ultra96's part, the ``ip`` shell), its choices on its nodes."""
     threshold = helper.make_node(
         "MultiThreshold",
@@ -129,16 +152,16 @@ def thresholded(pe: int, simd: int) -> ModelWrapper:
         out_dtype="UINT2",
         data_layout="NHWC",
     )
-    patches = windowed_matmul.im2col((1, 6, 6, 4), (3, 3))
+    patches = conv.im2col((1, 6, 6, 4), (3, 3))
     patches.input[0] = "a"
     nodes = [threshold, patches, helper.make_node("MatMul", ["p", "w"], ["y"], name="mm")]
     stored = {
         "t": (np.array([[-2.0, 0.0, 2.0]] * 4), "INT4"),
-        "w": (windowed_matmul.weights(36, 8, -8, 7), "INT4"),
+        "w": (conv.weights(36, 8, -8, 7), "INT4"),
     }
     graph = source(nodes, {"x": ([1, 6, 6, 4], "INT4")}, stored).transform(InferShapes())
     model, conversion = convert(graph)
-    assert [outcome.op for outcome in conversion.outcomes] == ["Thresholding", "WindowedMatMul"]
+    assert [outcome.op for outcome in conversion.outcomes] == ["Thresholding", "Conv"]
     kernel_op(model, model.graph.node[0]).save({"pe": pe})
     kernel_op(model, model.graph.node[1]).save(
         {"compute.packed.simd": simd, "compute.packed.pe": 2}
@@ -191,7 +214,7 @@ def cnv_exported(directory: Path) -> ModelWrapper:
 
 
 @pytest.mark.slow
-def test_cnvs_six_convolutions_each_convert_to_one_windowed_matmul(tmp_path: Path) -> None:
+def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
     """CNV_W2A2 prepared as its build states it (the preprocessing merged, the input
     UINT8, the top label selected; the equivalence check off, as the conversion is what
     is checked), then ``ToKernelOps`` for Ultra96 at 5 ns in the Zynq shell."""
@@ -208,7 +231,7 @@ def test_cnvs_six_convolutions_each_convert_to_one_windowed_matmul(tmp_path: Pat
     prepared = phase_graph_preparation(cnv_exported(tmp_path), settings)
     conversion = ToKernelOps(ULTRA96)
     model = prepared.transform(conversion)
-    windowed = [outcome for outcome in conversion.outcomes if outcome.op == "WindowedMatMul"]
+    windowed = [outcome for outcome in conversion.outcomes if outcome.op == "Conv"]
     assert [outcome.nodes for outcome in windowed] == [
         (f"Im2Col_{layer}", f"MatMul_{layer}") for layer in range(6)
     ]

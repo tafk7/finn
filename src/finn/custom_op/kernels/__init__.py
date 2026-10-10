@@ -20,10 +20,10 @@ in its own body, and is named by its op type at version 1. A model imports the
 domain at ``opset_version``, the version its op classes are written for.
 """
 
+from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
-from finn.custom_op.kernels.windowed_matmul import WindowedMatMul
 
 opset_version = 1
 
-__all__ = ["MatMul", "Thresholding", "WindowedMatMul"]
+__all__ = ["Conv", "MatMul", "Thresholding"]

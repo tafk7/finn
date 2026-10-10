@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""WindowedMatMul's ONNX entry: a lowered convolution, qonnx ``Im2Col`` and the ONNX
-``MatMul`` reading its patches, as graph preparation's P3 lowers a Conv.
+"""Conv's ONNX entry: a lowered convolution, qonnx ``Im2Col`` and the ONNX
+``MatMul`` reading its patches, as graph preparation's P3 lowers an ONNX ``Conv``.
 
 Positive: a window over the whole image (CNV's last 3 x 3 layer), 2 x 2 windows at
 stride 2 (no overlap), 3 x 3 at stride 1 (overlapping, CNV's other layers), a strided
@@ -20,7 +20,7 @@ import numpy as np
 from onnx import NodeProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.custom_op.kernels import WindowedMatMul
+from finn.custom_op.kernels import Conv
 from finn.harness.reference import OpSpec
 from kernel_ops.specs.base import GENERAL, source
 
@@ -57,7 +57,7 @@ def im2col(
     )
 
 
-def conv(
+def lowered(
     image: tuple[int, int, int, int] = (1, 6, 6, 4),
     kernel: tuple[int, int] = (3, 3),
     outputs: int = 8,
@@ -102,24 +102,24 @@ def unread() -> ModelWrapper:
 
 
 SPEC = OpSpec(
-    WindowedMatMul,
+    Conv,
     positive={
-        "whole-image": lambda: conv((1, 3, 3, 8), outputs=4),
-        "2x2-stride-2": lambda: conv((1, 4, 4, 3), (2, 2), outputs=6, stride=(2, 2)),
-        "3x3-stride-1": lambda: conv(),
-        "strided-dilated": lambda: conv(
+        "whole-image": lambda: lowered((1, 3, 3, 8), outputs=4),
+        "2x2-stride-2": lambda: lowered((1, 4, 4, 3), (2, 2), outputs=6, stride=(2, 2)),
+        "3x3-stride-1": lambda: lowered(),
+        "strided-dilated": lambda: lowered(
             (1, 8, 8, 2), outputs=4, x="UINT4", stride=(2, 2), dilation=(2, 2)
         ),
         # CNV_W2A2's first layer: an INT8 image (the input quantizer's), ternary weights.
-        "cnv-conv0": lambda: conv((1, 32, 32, 3), outputs=64, x="INT8", w="INT2"),
+        "cnv-conv0": lambda: lowered((1, 32, 32, 3), outputs=64, x="INT8", w="INT2"),
     },
     negative={
-        "pads": (lambda: conv(pads=(1, 1, 1, 1)), "window-pads"),
-        "depthwise": (lambda: conv(depthwise=1), "window-depthwise"),
+        "pads": (lambda: lowered(pads=(1, 1, 1, 1)), "window-pads"),
+        "depthwise": (lambda: lowered(depthwise=1), "window-depthwise"),
         "fan-out": (fan_out, "match-interior-exposed"),
         "unread": (unread, "window-unread"),
-        "batched": (lambda: conv(w_shape=(4, 36, 8)), "matmul-batched"),
+        "batched": (lambda: lowered(w_shape=(4, 36, 8)), "matmul-batched"),
     },
 )
 
-__all__ = ["SPEC", "conv", "im2col"]
+__all__ = ["SPEC", "im2col", "lowered"]

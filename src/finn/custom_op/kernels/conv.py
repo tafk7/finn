@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The WindowedMatMul KernelOp: a lowered convolution, qonnx ``Im2Col`` then ONNX
+"""The Conv KernelOp: a lowered convolution, qonnx ``Im2Col`` then ONNX
 ``MatMul``, bound to ``MatMulKernel`` read through a window.
 
 A convolution reaches graph preparation's output as ``Im2Col`` (qonnx's: NHWC by
@@ -14,6 +14,12 @@ writes ``(1, OH, OW, N)``; its kernel is MatMul's on a dense form read through a
 ``Window`` (``finn.dataflow.gemm``), so the image's channel carries the window as
 its reorder (an ``input_gen`` adapter), as FINN's sliding-window generator fed its
 matrix-vector unit, with no kernel of its own.
+
+Its op type is ONNX's name, ``Conv``, in the KernelOps' domain
+(``finn.custom_op.kernels``): qonnx resolves a node's op by its domain first, so an
+ONNX ``Conv`` (the default domain) is never this op, and this op never ONNX's. It
+anchors at ``Im2Col``, not at a ``Conv``: graph preparation lowers each ONNX ``Conv``
+before conversion.
 
 Its pattern: an ``Im2Col`` whose patches a ``MatMul`` reads as A, the weights a
 matrix (``matmul-batched`` otherwise). Refused by code: padding
@@ -73,10 +79,10 @@ def _pair(value: object) -> tuple[int, int] | None:
     return found[0], found[1]
 
 
-class WindowedMatMul(MatMul):
+class Conv(MatMul):
     """qonnx Im2Col then ONNX MatMul, bound to ``MatMulKernel`` read through a window."""
 
-    op_type = "WindowedMatMul"
+    op_type = "Conv"
     op_version = MatMulKernel.version
     kernel = MatMulKernel
     formals = (*MatMul.formals, "window")
@@ -195,4 +201,4 @@ class WindowedMatMul(MatMul):
         context[self.onnx_node.output[0]] = self.product(patches, context[w])
 
 
-__all__ = ["WindowedMatMul"]
+__all__ = ["Conv"]
