@@ -10,5 +10,5 @@ shell row of the platform registry that integrates the partition
 
 A shell's build reads the partition's integration export
 (``finn.transformation.kernels.integration``) and the packaged partition
-(``PackagePartition``); the builder (``finn.builder.kernel_build_steps``) runs it.
+(``PackagePartition``); the builder (``finn.builder.build_dataflow_steps``) runs it.
 """

@@ -45,7 +45,7 @@ def declared(cls: type, name: str) -> Callable[[Any], Any]:
     return decode
 
 
-class KernelOutputType(str, Enum):
+class DataflowOutputType(str, Enum):
     """What a kernel-path build makes beside its partition and reports. The values are
     what ``finn.outputs`` records.
 
@@ -70,21 +70,24 @@ class KernelOutputType(str, Enum):
 
 #: The outputs only a shell that integrates the partition makes.
 SHELL_OUTPUTS = (
-    KernelOutputType.BITFILE,
-    KernelOutputType.PYNQ_DRIVER,
-    KernelOutputType.DEPLOYMENT_PACKAGE,
+    DataflowOutputType.BITFILE,
+    DataflowOutputType.PYNQ_DRIVER,
+    DataflowOutputType.DEPLOYMENT_PACKAGE,
 )
 
 #: The outputs each output is made from, which a build asking for it asks for too: the
 #: driver from its bitfile's delivered clock, the deployment from the bitfile and the
 #: driver of the same build.
 OUTPUT_NEEDS = {
-    KernelOutputType.PYNQ_DRIVER: (KernelOutputType.BITFILE,),
-    KernelOutputType.DEPLOYMENT_PACKAGE: (KernelOutputType.BITFILE, KernelOutputType.PYNQ_DRIVER),
+    DataflowOutputType.PYNQ_DRIVER: (DataflowOutputType.BITFILE,),
+    DataflowOutputType.DEPLOYMENT_PACKAGE: (
+        DataflowOutputType.BITFILE,
+        DataflowOutputType.PYNQ_DRIVER,
+    ),
 }
 
 
-class KernelVerificationStepType(str, Enum):
+class VerificationStepType(str, Enum):
     """The checks a build runs beside those it always runs, as asked: none by
     default, since no build re-verifies the partition's computation (its KernelOps'
     ``execute_node`` is the reference, and the harness checks the hardware against
@@ -117,18 +120,18 @@ class KernelVerificationStepType(str, Enum):
 #: The steps each verification needs to run, each a step or its phase: the one that
 #: keeps its reference, and the one that checks.
 VERIFIED_BY = {
-    KernelVerificationStepType.GRAPH_PREPARATION_PYTHON: (
+    VerificationStepType.GRAPH_PREPARATION_PYTHON: (
         ("phase_graph_preparation", "step_prepare_import"),
         ("phase_graph_preparation", "step_prepare_checkpoint"),
     ),
-    KernelVerificationStepType.PARTITION_PYTHON: (
+    VerificationStepType.PARTITION_PYTHON: (
         ("phase_kernel_path", "step_kernel_ops"),
         ("phase_kernel_path", "step_verify_kernel_partition"),
     ),
-    KernelVerificationStepType.PARTITION_ELABORATION: (
+    VerificationStepType.PARTITION_ELABORATION: (
         ("phase_kernel_path", "step_verify_kernel_partition"),
     ),
-    KernelVerificationStepType.STITCHED_IP_TESTBENCH: (
+    VerificationStepType.STITCHED_IP_TESTBENCH: (
         ("phase_kernel_outputs", "step_kernel_stitched_ip"),
     ),
 }
@@ -138,7 +141,7 @@ VERIFIED_BY = {
 #: phase (the export to a streamlined graph, checked), the kernel-path phase (the
 #: target, KernelOps, their choices, the partition, its verification), then the
 #: outputs its shell makes.
-default_kernel_build_steps = [
+default_build_dataflow_steps = [
     "phase_graph_preparation",
     "phase_kernel_path",
     "phase_kernel_outputs",
@@ -148,9 +151,9 @@ default_kernel_build_steps = [
 # undefined=RAISE: a key the configuration does not declare is refused, named, when a
 # configuration is read (from_json, from_dict), never dropped.
 @dataclass
-class KernelBuildConfig(DataClassJsonMixin):
+class DataflowBuildConfig(DataClassJsonMixin):
     """The configuration of a kernel-path build, passed to build_dataflow_cfg, or
-    written as ``kernel_build_config.json`` beside ``model.onnx`` for
+    written as ``dataflow_build_config.json`` beside ``model.onnx`` for
     build_dataflow_directory and the ``build_dataflow`` command. Serialized to and
     from JSON; reading one refuses a key it does not declare
     (``UndefinedParameterError``, naming the keys)."""
@@ -180,11 +183,11 @@ class KernelBuildConfig(DataClassJsonMixin):
         metadata=config(decoder=declared(GraphPreparation, "preparation")),
     )
 
-    #: What the build makes beside the partition and its reports (KernelOutputType):
+    #: What the build makes beside the partition and its reports (DataflowOutputType):
     #: the partition's IP and its out-of-context resources on any shell; the bitfile,
     #: driver and deployment package on a shell that integrates the partition. None by
     #: default.
-    generate_outputs: List[KernelOutputType] = field(default_factory=list)
+    generate_outputs: List[DataflowOutputType] = field(default_factory=list)
 
     #: The exploration (step_kernel_choices): the strategies that choose the KernelOps'
     #: open choices through the DSE seam, run as written, each a spec with its own
@@ -215,9 +218,9 @@ class KernelBuildConfig(DataClassJsonMixin):
     kernel_completion: str = "baseline"
 
     #: The checks the build runs beside those it always runs
-    #: (KernelVerificationStepType), none by default: step_prepare_checkpoint's,
+    #: (VerificationStepType), none by default: step_prepare_checkpoint's,
     #: step_verify_kernel_partition's, and step_kernel_stitched_ip's testbench.
-    verify_steps: List[KernelVerificationStepType] = field(default_factory=list)
+    verify_steps: List[VerificationStepType] = field(default_factory=list)
 
     #: The .npy file of inputs PARTITION_PYTHON runs the partition and the source on,
     #: one frame per index of its first axis. STITCHED_IP's testbench streams its first
@@ -243,8 +246,8 @@ class KernelBuildConfig(DataClassJsonMixin):
     shell_options: Dict[str, Any] = field(default_factory=dict)
 
     #: If given, only run the steps in the list, each a step or phase name of the
-    #: kernel path (finn.builder.kernel_build_steps) or a function called with
-    #: (model, KernelBuildConfig); by default default_kernel_build_steps.
+    #: kernel path (finn.builder.build_dataflow_steps) or a function called with
+    #: (model, DataflowBuildConfig); by default default_build_dataflow_steps.
     steps: Optional[List[Any]] = None
 
     #: If given, start from this step or phase, loading the intermediate model saved
@@ -266,12 +269,12 @@ class KernelBuildConfig(DataClassJsonMixin):
 
     #: Functions to run after named steps or phases.
     inject_steps_after: Dict[
-        str, List[Callable[[ModelWrapper, "KernelBuildConfig"], ModelWrapper]]
+        str, List[Callable[[ModelWrapper, "DataflowBuildConfig"], ModelWrapper]]
     ] = field(default_factory=dict)
 
     #: Functions to run before named steps or phases.
     inject_steps_before: Dict[
-        str, List[Callable[[ModelWrapper, "KernelBuildConfig"], ModelWrapper]]
+        str, List[Callable[[ModelWrapper, "DataflowBuildConfig"], ModelWrapper]]
     ] = field(default_factory=dict)
 
     def _resolve_selection(self) -> Selection:

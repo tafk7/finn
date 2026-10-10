@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's build configuration (``KernelBuildConfig``): read from and written to
+"""The kernel path's build configuration (``DataflowBuildConfig``): read from and written to
 JSON, refusing what it does not declare, and built through the one ``build_dataflow``
 entry."""
 
@@ -20,13 +20,13 @@ from finn.builder.build_dataflow import (
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import run_all_config_checks
-from finn.builder.kernel_build_checks import Severity
-from finn.builder.kernel_build_config import (
-    KernelBuildConfig,
-    KernelOutputType,
-    KernelVerificationStepType,
-    default_kernel_build_steps,
+from finn.builder.build_dataflow_config import (
+    DataflowBuildConfig,
+    DataflowOutputType,
+    VerificationStepType,
+    default_build_dataflow_steps,
 )
+from finn.builder.kernel_build_checks import Severity
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
@@ -40,7 +40,7 @@ STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
 
 def test_the_kernel_path_builds_on_ip_explores_nothing_and_completes_by_baseline() -> None:
-    cfg = KernelBuildConfig.from_json(json.dumps(STATED))
+    cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
     assert cfg.generate_outputs == [] and cfg.verify_steps == []
     assert cfg.kernel_exploration == [] and cfg.kernel_completion == "baseline"
@@ -48,11 +48,11 @@ def test_the_kernel_path_builds_on_ip_explores_nothing_and_completes_by_baseline
     # Prepared from the export as exported: its own inputs and outputs, the default
     # recipes.
     assert cfg.preparation == GraphPreparation()
-    assert default_kernel_build_steps[0] == "phase_graph_preparation"
+    assert default_build_dataflow_steps[0] == "phase_graph_preparation"
 
 
 def test_a_configuration_holds_through_json() -> None:
-    cfg = KernelBuildConfig(
+    cfg = DataflowBuildConfig(
         output_dir="out",
         target=TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq"),
         preparation=GraphPreparation(
@@ -64,14 +64,14 @@ def test_a_configuration_holds_through_json() -> None:
             streamlining=["Streamline"],
             topology=[],
         ),
-        generate_outputs=list(KernelOutputType),
+        generate_outputs=list(DataflowOutputType),
         kernel_exploration=[
             {"strategy": "target_throughput", "fps": 1_000_000},
             {"strategy": "size_fifos"},
         ],
         kernel_exploration_fresh=True,
         kernel_completion="placeholder",
-        verify_steps=list(KernelVerificationStepType),
+        verify_steps=list(VerificationStepType),
         verify_input_npy="frames.npy",
         toolchain=Selection(
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
@@ -85,7 +85,7 @@ def test_a_configuration_holds_through_json() -> None:
         verbose=True,
     )
     written = cfg.to_json()
-    assert KernelBuildConfig.from_json(written) == cfg
+    assert DataflowBuildConfig.from_json(written) == cfg
     stated = json.loads(written)
     assert stated["target"] == {
         "period_ns": 5.0,
@@ -134,19 +134,19 @@ def test_a_configuration_holds_through_json() -> None:
 )
 def test_an_undeclared_key_is_refused_naming_it(key: str) -> None:
     with pytest.raises(UndefinedParameterError, match=key):
-        KernelBuildConfig.from_json(json.dumps({**STATED, key: None}))
+        DataflowBuildConfig.from_json(json.dumps({**STATED, key: None}))
 
 
 def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
     target = {"period_ns": 5.0, "board": "Ultra96", "shell_flow_type": "vivado_zynq"}
     with pytest.raises(UndefinedParameterError, match="target: .*shell_flow_type"):
-        KernelBuildConfig.from_json(json.dumps({**STATED, "target": target}))
+        DataflowBuildConfig.from_json(json.dumps({**STATED, "target": target}))
     toolchain = {"hls_frontned": "vitis-run"}
     with pytest.raises(UndefinedParameterError, match="toolchain: .*hls_frontned"):
-        KernelBuildConfig.from_json(json.dumps({**STATED, "toolchain": toolchain}))
+        DataflowBuildConfig.from_json(json.dumps({**STATED, "toolchain": toolchain}))
     preparation = {"max_multithreshold_bitwidth": 8}
     with pytest.raises(UndefinedParameterError, match="preparation: .*max_multithreshold_bitwidth"):
-        KernelBuildConfig.from_json(json.dumps({**STATED, "preparation": preparation}))
+        DataflowBuildConfig.from_json(json.dumps({**STATED, "preparation": preparation}))
 
 
 @pytest.mark.parametrize(
@@ -162,7 +162,7 @@ def test_a_preparation_the_phase_cannot_run_is_refused_naming_it(
     preparation: dict[str, object], refused: str
 ) -> None:
     with pytest.raises(ValueError, match=refused):
-        KernelBuildConfig.from_json(json.dumps({**STATED, "preparation": preparation}))
+        DataflowBuildConfig.from_json(json.dumps({**STATED, "preparation": preparation}))
 
 
 @pytest.mark.parametrize(
@@ -178,7 +178,7 @@ def test_shell_options_the_shells_build_does_not_take_are_refused(
 ) -> None:
     """Before the build: the configuration's check names the option its shell refuses."""
     target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
-    cfg = KernelBuildConfig.from_json(
+    cfg = DataflowBuildConfig.from_json(
         json.dumps({**STATED, "target": target, "shell_options": options})
     )
     with pytest.raises(ValueError, match=refused):
@@ -193,25 +193,25 @@ def test_shell_options_the_shells_build_does_not_take_are_refused(
 def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
     for output in ("rtlsim_performance", "estimate_reports", "cpp_driver"):
         with pytest.raises(ValueError, match=output):
-            KernelBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": [output]}))
+            DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": [output]}))
     stated = {**STATED, "generate_outputs": ["stitched_ip", "ooc_synth"]}
-    assert KernelBuildConfig.from_json(json.dumps(stated)).generate_outputs == [
-        KernelOutputType.STITCHED_IP,
-        KernelOutputType.OOC_SYNTH,
+    assert DataflowBuildConfig.from_json(json.dumps(stated)).generate_outputs == [
+        DataflowOutputType.STITCHED_IP,
+        DataflowOutputType.OOC_SYNTH,
     ]
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError, match="states kernel_build_config.json"):
+    with pytest.raises(FileNotFoundError, match="states dataflow_build_config.json"):
         read_build_config(str(tmp_path))
-    (tmp_path / "kernel_build_config.json").write_text(json.dumps(STATED))
-    assert isinstance(read_build_config(str(tmp_path)), KernelBuildConfig)
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps(STATED))
+    assert isinstance(read_build_config(str(tmp_path)), DataflowBuildConfig)
 
 
 @pytest.mark.slow
 def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export: Path) -> None:
     """build_dataflow_directory (the ``build_dataflow`` command's entry) builds a
-    directory's KernelBuildConfig through the kernel path in its build process: TFC
+    directory's DataflowBuildConfig through the kernel path in its build process: TFC
     from its export, prepared as the configuration's JSON states, on the default ip
     shell, named by its board, explored as its Zynq build is, to its verified
     partition, whose target is the part's on ip."""
@@ -219,14 +219,14 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     directory.mkdir()
     shutil.copyfile(tfc_export, directory / "model.onnx")
     shutil.copyfile(tfc_export.parent / PREPROCESSING, directory / PREPROCESSING)
-    cfg = KernelBuildConfig(
+    cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),
         preparation=preparation(directory),
         kernel_exploration=[{"strategy": "target_throughput", "fps": 1_000_000}],
         enable_build_pdb_debug=False,
     )
-    (directory / "kernel_build_config.json").write_text(cfg.to_json())
+    (directory / "dataflow_build_config.json").write_text(cfg.to_json())
     assert build_dataflow_directory(str(directory)) == 0
     output = tmp_path / "output"
     built = ModelWrapper(str(output / "intermediate_models" / "step_verify_kernel_partition.onnx"))

@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Tuple
 
+from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.kernel_build_checks import Check, Severity, kernel_path_checks
-from finn.builder.kernel_build_config import KernelBuildConfig
 from finn.platform import TargetRefused
 from finn.util.basic import get_vivado_version
 
@@ -71,7 +71,7 @@ def _vivado_checks(board: Optional[str], v: Optional[Tuple[int, int]]) -> List[C
     return checks
 
 
-def run_all_config_checks(cfg: KernelBuildConfig) -> Report:
+def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     """Run all configuration checks of a kernel-path build and return the report: the
     Vivado release its board needs, and the kernel path's own checks
     (finn.builder.kernel_build_checks)."""

@@ -43,16 +43,16 @@ from finn.builder.build_dataflow_checks import (
     run_all_config_checks,
     save_report,
 )
-from finn.builder.kernel_build_config import (
-    KernelBuildConfig,
-    default_kernel_build_steps,
+from finn.builder.build_dataflow_config import (
+    DataflowBuildConfig,
+    default_build_dataflow_steps,
 )
-from finn.builder.kernel_build_runner import recorded_step_times
-from finn.builder.kernel_build_steps import kernel_build_step_lookup
+from finn.builder.build_dataflow_phases import recorded_step_times
+from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
 #: beside model.onnx.
-CONFIG_FILE = "kernel_build_config.json"
+CONFIG_FILE = "dataflow_build_config.json"
 
 
 # adapted from https://stackoverflow.com/a/39215961
@@ -74,19 +74,19 @@ class StreamToLogger(object):
         pass
 
 
-def resolve_build_steps(cfg: KernelBuildConfig, partial: bool = True):
+def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
     """Resolve build steps from config, supporting both phases and fine-grained steps
-    of the kernel path (finn.builder.kernel_build_steps).
+    of the kernel path (finn.builder.build_dataflow_steps).
 
     Note: When using phase-based builds with start_step/stop_step, specify phase names
     (e.g., start_step="phase_kernel_outputs") rather than fine-grained step names.
     Phases save intermediate models for each internal step, but the build loop
     operates at the phase level.
     """
-    all_steps = kernel_build_step_lookup
+    all_steps = build_dataflow_step_lookup
     steps = cfg.steps
     if steps is None:
-        steps = default_kernel_build_steps
+        steps = default_build_dataflow_steps
 
     steps_as_fxns = []
     for transform_step in steps:
@@ -133,7 +133,7 @@ def resolve_build_steps(cfg: KernelBuildConfig, partial: bool = True):
     return steps_as_fxns
 
 
-def resolve_step_filename(step_name: str, cfg: KernelBuildConfig, step_delta: int = 0):
+def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
     step_names = list(map(lambda x: x.__name__, resolve_build_steps(cfg, partial=False)))
     assert step_name in step_names, "start_step %s not found" + step_name
     step_no = step_names.index(step_name) + step_delta
@@ -210,9 +210,9 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
     return 0
 
 
-def build_dataflow_cfg(model_filename, cfg: KernelBuildConfig):
+def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     """Best-effort build a dataflow accelerator using the given configuration, through
-    the kernel path's steps (finn.builder.kernel_build_steps).
+    the kernel path's steps (finn.builder.build_dataflow_steps).
 
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
@@ -278,14 +278,14 @@ def build_dataflow_cfg(model_filename, cfg: KernelBuildConfig):
         log_file_handler.close()
 
 
-def read_build_config(path_to_cfg_dir: str) -> KernelBuildConfig:
+def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
     """The build configuration a build directory states: its CONFIG_FILE. A directory
     without one is refused, naming the file."""
     path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
     with open(path) as f:
-        return KernelBuildConfig.from_json(f.read())
+        return DataflowBuildConfig.from_json(f.read())
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):
@@ -296,7 +296,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     The specified directory path_to_cfg_dir must contain the following files:
 
     * model.onnx : ONNX model to be converted to dataflow accelerator
-    * kernel_build_config.json : its KernelBuildConfig (read_build_config)
+    * dataflow_build_config.json : its DataflowBuildConfig (read_build_config)
 
     """
     # get absolute path

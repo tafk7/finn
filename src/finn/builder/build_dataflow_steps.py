@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's steps and phases, each a ``(model, KernelBuildConfig) -> model``
-function, registered by name in ``kernel_build_step_lookup`` for a KernelBuildConfig's
-``steps`` (finn.builder.kernel_build_config).
+"""The kernel path's steps and phases, each a ``(model, DataflowBuildConfig) -> model``
+function, registered by name in ``build_dataflow_step_lookup`` for a DataflowBuildConfig's
+``steps`` (finn.builder.build_dataflow_config).
 
 ``phase_graph_preparation`` takes a Brevitas export to the streamlined graph the kernel
 path converts, by the sub-phases of finn.transformation.prepare, and checks what it
@@ -27,12 +27,12 @@ import numpy as np
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.builder.kernel_build_config import (
-    KernelBuildConfig,
-    KernelOutputType,
-    KernelVerificationStepType,
+from finn.builder.build_dataflow_config import (
+    DataflowBuildConfig,
+    DataflowOutputType,
+    VerificationStepType,
 )
-from finn.builder.kernel_build_runner import execute_step
+from finn.builder.build_dataflow_phases import execute_step
 from finn.builder.kernel_resources import RESOURCES_FILE, shell_resources_report
 from finn.builder.kernel_testbench import (
     TESTBENCH_DIR,
@@ -101,13 +101,13 @@ from finn.util.vivado import delivered_clock
 PREPARATION_REPORT = "report/graph_preparation.json"
 
 
-def _preparation_source(cfg: KernelBuildConfig) -> str:
+def _preparation_source(cfg: DataflowBuildConfig) -> str:
     """Where step_prepare_import keeps the export, the reference of the phase's
     equivalence check."""
     return cfg.output_dir + "/intermediate_models/graph_preparation_source.onnx"
 
 
-def _preparation_report(cfg: KernelBuildConfig, fresh: bool = False) -> dict[str, Any]:
+def _preparation_report(cfg: DataflowBuildConfig, fresh: bool = False) -> dict[str, Any]:
     """The phase's report so far, as written; an empty one when ``fresh`` or none is."""
     path = Path(cfg.output_dir) / PREPARATION_REPORT
     if fresh or not path.is_file():
@@ -116,14 +116,14 @@ def _preparation_report(cfg: KernelBuildConfig, fresh: bool = False) -> dict[str
     return report
 
 
-def _write_preparation_report(cfg: KernelBuildConfig, report: dict[str, Any]) -> None:
+def _write_preparation_report(cfg: DataflowBuildConfig, report: dict[str, Any]) -> None:
     path = Path(cfg.output_dir) / PREPARATION_REPORT
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2))
 
 
 def _sub_phase(
-    run: SubPhase, model: ModelWrapper, cfg: KernelBuildConfig, fresh: bool = False
+    run: SubPhase, model: ModelWrapper, cfg: DataflowBuildConfig, fresh: bool = False
 ) -> ModelWrapper:
     """``model`` through the sub-phase ``run``, what it changed recorded in the phase's
     report under the sub-phase's name (finn.transformation.prepare: SUB_PHASES, census)
@@ -144,48 +144,48 @@ def _sub_phase(
     return model
 
 
-def step_prepare_import(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_import(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P0: the export through qonnx's cleanup (finn.transformation.prepare.phase.imported).
     Starts report/graph_preparation.json afresh. When GRAPH_PREPARATION_PYTHON is
     asked, the export is kept as that check's reference (graph_preparation_source.onnx)."""
-    if KernelVerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
+    if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
         os.makedirs(os.path.dirname(_preparation_source(cfg)), exist_ok=True)
         model.save(_preparation_source(cfg))
     return _sub_phase(imported, model, cfg, fresh=True)
 
 
-def step_prepare_quantization(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_quantization(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P2: Quant activations to MultiThresholds and weights to integers, as finn-dev's
     step_qonnx_to_finn and step_tidy_up
     (finn.transformation.prepare.phase.quantization_lowered)."""
     return _sub_phase(quantization_lowered, model, cfg)
 
 
-def step_prepare_io(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_io(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P1: the network's inputs and outputs as ``cfg.preparation`` states them: its
     preprocessing model merged ahead, its input datatype, its label select
     (finn.transformation.prepare.phase.io_explicit)."""
     return _sub_phase(io_explicit, model, cfg)
 
 
-def step_prepare_streamlining(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_streamlining(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P3: the streamlining recipe (``cfg.preparation.streamlining``)."""
     return _sub_phase(streamlined, model, cfg)
 
 
-def step_prepare_topology(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_topology(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P4: the topology recipe (``cfg.preparation.topology``), layouts inferred."""
     return _sub_phase(topology_settled, model, cfg)
 
 
-def step_prepare_containers(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P6: every integer tensor held exactly by its container, the integer regions that
     need it widened to float64, Casts at their edges, the graph's inputs and outputs
     unchanged (finn.transformation.prepare.containers)."""
     return _sub_phase(containers_exact, model, cfg)
 
 
-def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """P7: the prepared graph checked before the kernel path converts it
     (finn.transformation.prepare.checkpoint): its structure, its integer annotations'
     soundness and its containers' exactness, by bound, against the KernelOps' anchors;
@@ -212,7 +212,7 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
         "unbounded": dict(checked.unbounded),
         "findings": [finding_record(finding) for finding in checked.findings],
     }
-    if KernelVerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
+    if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
         source_file = _preparation_source(cfg)
         if not os.path.isfile(source_file):
             raise FileNotFoundError(
@@ -245,7 +245,7 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
     )
     for line in summary(checked.findings):
         print(line)
-    if KernelVerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
+    if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
         print(
             "Verification for graph_preparation_python : "
             + ("FAIL" if equivalence.findings else "SUCCESS")
@@ -267,13 +267,13 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
     return model
 
 
-def _kernel_path_source(cfg: KernelBuildConfig) -> str:
+def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
     """Where step_kernel_ops keeps the model it converts, the reference of the
     partition's Python check."""
     return cfg.output_dir + "/intermediate_models/kernel_path_source.onnx"
 
 
-def step_kernel_ops(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_ops(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """State the build's target in the model (``cfg.target``, resolved) and rewrite
     each node a KernelOp binds (MatMul, MultiThreshold) and the kernels admit as one,
     every tensor inferred as it goes: ToKernelOps. When PARTITION_PYTHON is asked, the
@@ -282,7 +282,7 @@ def step_kernel_ops(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper
     why it stays on the host) and logs its summary; refuses host nodes between
     KernelOps, each named with its findings (refuse_host_between), which partitioning
     could not leave out."""
-    if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
+    if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         os.makedirs(os.path.dirname(_kernel_path_source(cfg)), exist_ok=True)
         model.save(_kernel_path_source(cfg))
     conversion = ToKernelOps(cfg._resolve_target())
@@ -297,7 +297,7 @@ def step_kernel_ops(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper
     return model
 
 
-def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Explore the partition's KernelOps, its body opened through the parent graph's
     partition node (partition_body), through the DSE seam by the strategies
     ``cfg.kernel_exploration`` lists, in order (finn.transformation.kernels.strategy:
@@ -362,13 +362,13 @@ def step_kernel_choices(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWra
     return model
 
 
-def _partition_directory(cfg: KernelBuildConfig) -> Path:
+def _partition_directory(cfg: DataflowBuildConfig) -> Path:
     """Where the kernel path keeps its partition's body (``partition.onnx``) and the
     scratch models its shell's integration generates its ends' IPs from (``ends/``)."""
     return Path(cfg.output_dir) / "partition"
 
 
-def step_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Cut the KernelOps once into one StreamingDataflowPartition, the nodes before and
     after it on the host (CutKernelPartition), before anything explores them. The parent
     graph is the build's model from here on; the partition is named ``partition`` (its
@@ -377,7 +377,7 @@ def step_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelW
     return model.transform(CutKernelPartition(_partition_directory(cfg)))
 
 
-def _verify_kernel_partition_python(model: ModelWrapper, cfg: KernelBuildConfig) -> bool:
+def _verify_kernel_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> bool:
     """The partition's own outputs, for each input ``verify_input_npy`` states: the
     parent graph ``model`` executed, its partition node running its body of KernelOps,
     against the model the kernel path started from (step_kernel_ops'
@@ -427,7 +427,7 @@ def _verify_kernel_partition_python(model: ModelWrapper, cfg: KernelBuildConfig)
     return all_match
 
 
-def step_verify_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_verify_kernel_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Check the kernel path's partition before a shell builds it, its body opened
     through the parent graph's partition node.
 
@@ -442,10 +442,10 @@ def step_verify_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig) ->
     node, body, _ = partition_body(model)
     configured_root(body, node.name, completion(cfg.kernel_completion))
     refuse_drift(read_target(body), cfg._resolve_target(), "build")
-    if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
+    if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         matched = _verify_kernel_partition_python(model, cfg)
         print("Verification for kernel_partition_python : " + ("SUCCESS" if matched else "FAIL"))
-    if KernelVerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
+    if VerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
         directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
         body.transform(
             ElaboratePartition(
@@ -458,7 +458,7 @@ def step_verify_kernel_partition(model: ModelWrapper, cfg: KernelBuildConfig) ->
     return model
 
 
-def _objective_fps(cfg: KernelBuildConfig) -> float | None:
+def _objective_fps(cfg: DataflowBuildConfig) -> float | None:
     """The throughput the exploration's target_throughput strategy asks, if any."""
     asked: list[float] = [
         spec["fps"]
@@ -469,7 +469,7 @@ def _objective_fps(cfg: KernelBuildConfig) -> float | None:
 
 
 def _integrating_row(
-    model: ModelWrapper, cfg: KernelBuildConfig, output: KernelOutputType
+    model: ModelWrapper, cfg: DataflowBuildConfig, output: DataflowOutputType
 ) -> ShellRow:
     """The shell row the parent graph ``model`` states (its partition body's target),
     which must be the configuration's and integrate the partition to make
@@ -486,7 +486,7 @@ def _integrating_row(
     return row
 
 
-def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the partition as an IP into ``stitched_ip/``, if STITCHED_IP or OOC_SYNTH
     is asked: PackagePartition on the body the parent graph's partition node opens,
     named as the partition (its node, ``partition``), its choices completed by
@@ -503,8 +503,8 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
     runs once, in the build's toolchain's environment, and the step fails
     (``SimulationFailed``) if the module's outputs differ from the partition's in
     Python."""
-    stitched = KernelOutputType.STITCHED_IP in cfg.generate_outputs
-    ooc = KernelOutputType.OOC_SYNTH in cfg.generate_outputs
+    stitched = DataflowOutputType.STITCHED_IP in cfg.generate_outputs
+    ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
     if not (stitched or ooc):
         print("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
         return model
@@ -534,13 +534,13 @@ def step_kernel_stitched_ip(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
         testbench = directory / TESTBENCH_DIR
         write_testbench(body, testbench, frame, completion=kernel_completion, label=node.name)
         print(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
-        if KernelVerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
+        if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
             run_testbench(testbench, toolchain=cfg._resolve_toolchain())
             print("Verification for stitched_ip_testbench : SUCCESS")
     return model
 
 
-def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def _pynq_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """The Zynq block design's bitfile (the pynq shell's runner, build_pynq) from the
     partition's integration export, written as report/integration.json. Into the output
     directory: the bitfile and its hardware handoff (bitfile/), the routed timing report
@@ -608,7 +608,7 @@ def _pynq_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
     return model
 
 
-def step_kernel_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Build the shell the parent graph states (its partition's target) around the
     partition to a bitfile, if BITFILE is asked, by its integration (the one with a
     bitfile build: the pynq shell's Vivado block design, _pynq_bitfile), the partition
@@ -616,10 +616,10 @@ def step_kernel_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWra
     was made (finn.outputs: the project, bitfile, hwh, reports and host runtime). Vivado
     launches as many runs at once as the toolchain's selection says
     (``Selection.vivado_jobs``), and the shell's build takes ``cfg.shell_options``."""
-    if KernelOutputType.BITFILE not in cfg.generate_outputs:
+    if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         print("BITFILE not in requested outputs, skipping step_kernel_bitfile.")
         return model
-    row = _integrating_row(model, cfg, KernelOutputType.BITFILE)
+    row = _integrating_row(model, cfg, DataflowOutputType.BITFILE)
     if row.integration != VIVADO_BLOCK_DESIGN:
         raise ValueError(f"bitfile: no build for the {row.integration!r} integration")
     return _pynq_bitfile(model, cfg)
@@ -640,7 +640,7 @@ def _delivered_mhz(model: ModelWrapper) -> float:
     return float(clock["delivered_mhz"])
 
 
-def _shipped_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> Path:
+def _shipped_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Path:
     """The bitfile the parent graph states (finn.outputs), relative to the output
     directory, which the deployment package mirrors (bitfile/ beside driver/)."""
     bitfile = model.get(OUTPUT_BITFILE)
@@ -652,7 +652,7 @@ def _shipped_bitfile(model: ModelWrapper, cfg: KernelBuildConfig) -> Path:
     return Path(bitfile).relative_to(Path(cfg.output_dir))
 
 
-def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
     finn.shells.pynq.driver.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
     partition's integration export's ends, PL0 set to the clock the bitfile delivers
@@ -661,10 +661,10 @@ def step_kernel_driver(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrap
     driver takes and returns, by name, element and shape, and the host's nodes before
     and after it (driver_description); the parent graph states it among its reports.
     driver/ is written afresh: nothing an earlier build left there stays."""
-    if KernelOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
+    if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_kernel_driver.")
         return model
-    row = _integrating_row(model, cfg, KernelOutputType.PYNQ_DRIVER)
+    row = _integrating_row(model, cfg, DataflowOutputType.PYNQ_DRIVER)
     if row.integration != VIVADO_BLOCK_DESIGN:
         raise ValueError(f"pynq_driver: no driver for the {row.integration!r} integration")
     fclk_mhz = _delivered_mhz(model)
@@ -713,17 +713,17 @@ def _host_model(model: ModelWrapper, directory: Path) -> Path:
     return directory / "parent.onnx"
 
 
-def step_kernel_deployment_package(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the bitfile and the driver for deployment, if DEPLOYMENT_PACKAGE is asked,
     with the host's part of the parent graph as a model (deploy/model/, _host_model) and
     the driver's description (deploy/driver.json, report/driver.json). It ships the
     bitfile and the driver the parent graph states (finn.outputs), which this output
     directory's bitfile and driver steps made: a model stating neither, or another
     directory's, is refused by name, and deploy/ is written afresh."""
-    if KernelOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
+    if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         print("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
-    _integrating_row(model, cfg, KernelOutputType.DEPLOYMENT_PACKAGE)
+    _integrating_row(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
     output = Path(cfg.output_dir)
     made = {
         "bitfile": (model.get(OUTPUT_BITFILE), output / "bitfile" / "finn-accel.bit"),
@@ -753,7 +753,7 @@ def step_kernel_deployment_package(model: ModelWrapper, cfg: KernelBuildConfig) 
     return model
 
 
-def step_kernel_resources(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def step_kernel_resources(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Write report/resources.json: the resources of each member of the partition's
     shell (the partition, each end, each IP of the static region) and their total, as
     the shell root states them (the model), as Vivado synthesized each IP out of
@@ -770,7 +770,7 @@ def step_kernel_resources(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelW
     return model
 
 
-def phase_graph_preparation(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def phase_graph_preparation(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Phase: graph preparation, from a Brevitas export to the streamlined graph the
     kernel path converts, as ``cfg.preparation`` states it. It reads no target.
 
@@ -799,7 +799,7 @@ def phase_graph_preparation(model: ModelWrapper, cfg: KernelBuildConfig) -> Mode
     return model
 
 
-def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def phase_kernel_path(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Phase: the kernel path, from a prepared model to a partition of KernelOps.
 
     Internal steps:
@@ -818,7 +818,7 @@ def phase_kernel_path(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapp
     return model
 
 
-def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def phase_kernel_outputs(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Phase: the outputs the configuration asks (generate_outputs).
 
     Internal steps (each but step_kernel_resources checks generate_outputs):
@@ -835,8 +835,8 @@ def phase_kernel_outputs(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWr
     return model
 
 
-#: The kernel path's steps and phases by name, for a KernelBuildConfig's ``steps``.
-kernel_build_step_lookup = {
+#: The kernel path's steps and phases by name, for a DataflowBuildConfig's ``steps``.
+build_dataflow_step_lookup = {
     step.__name__: step
     for step in (
         step_prepare_import,

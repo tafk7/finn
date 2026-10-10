@@ -37,8 +37,8 @@ from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.builder.kernel_build_config import KernelBuildConfig
-from finn.builder.kernel_build_steps import phase_graph_preparation, phase_kernel_path
+from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_steps import phase_graph_preparation, phase_kernel_path
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
@@ -218,7 +218,7 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
     """CNV_W2A2 prepared as its build states it (the preprocessing merged, the input
     UINT8, the top label selected; the equivalence check off, as the conversion is what
     is checked), then ``ToKernelOps`` for Ultra96 at 5 ns in the Zynq shell."""
-    settings = KernelBuildConfig(
+    settings = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
         preparation=GraphPreparation(

@@ -77,7 +77,7 @@ STATIC_INSTANCES = {
 
 @dataclass(frozen=True)
 class PynqOptions:
-    """The ``pynq`` shell's build options (``KernelBuildConfig.shell_options`` on a
+    """The ``pynq`` shell's build options (``DataflowBuildConfig.shell_options`` on a
     ``pynq`` target). ``enable_hw_debug``: integrated logic analyzers on the ends'
     streams and on the memory interconnect's port to the processor."""
 

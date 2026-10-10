@@ -16,7 +16,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 from finn.builder import build_dataflow
-from finn.builder.kernel_build_config import KernelBuildConfig
+from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.platform import TargetRequest
 from finn.util.toolchain import Selection, machine_selection
 from finn.util.vivado import vivado_jobs
@@ -36,7 +36,7 @@ def identity_model():
 
 
 def builder_config(**settings):
-    return KernelBuildConfig(**{"output_dir": "out", "target": TARGET, **settings})
+    return DataflowBuildConfig(**{"output_dir": "out", "target": TARGET, **settings})
 
 
 def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeypatch):
@@ -104,19 +104,19 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
         "hls_frontend": None,
         "vivado_jobs": None,
     }
-    restored = KernelBuildConfig.from_json(cfg.to_json())
+    restored = DataflowBuildConfig.from_json(cfg.to_json())
     assert restored.toolchain == selection and restored == cfg
     # The prepared toolchain is not serialized with it.
     monkeypatch.setattr(Selection, "prepare", lambda selection: object())
     cfg._resolve_toolchain()
-    assert KernelBuildConfig.from_json(cfg.to_json()) == restored
+    assert DataflowBuildConfig.from_json(cfg.to_json()) == restored
     # Unset, it stays unset: the machine's selection is never written into the
     # configuration, which another machine may build from.
     monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/site/tools")
     unset = builder_config()
     unset._resolve_toolchain()
     assert json.loads(unset.to_json())["toolchain"] is None
-    assert KernelBuildConfig.from_json(unset.to_json()) == unset
+    assert DataflowBuildConfig.from_json(unset.to_json()) == unset
 
 
 #: The parent's toolchain variables: none, or another Vivado than the selected one.
@@ -140,7 +140,7 @@ def test_the_build_process_runs_in_the_configured_selection(monkeypatch, tmp_pat
     directory.mkdir()
     (directory / "model.onnx").write_bytes(identity_model().model.SerializeToString())
     cfg = builder_config(toolchain=selection)
-    (directory / "kernel_build_config.json").write_text(cfg.to_json())
+    (directory / "dataflow_build_config.json").write_text(cfg.to_json())
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "finn_build"))
     monkeypatch.setenv("FINN_RESOURCES_FINNLIB", "/parent/finnlib")
     for variable in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS"):

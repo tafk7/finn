@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's configuration checks: what a KernelBuildConfig's build refuses or
+"""The kernel path's configuration checks: what a DataflowBuildConfig's build refuses or
 warns of before its first step (``kernel_path_checks``).
 
 ``run_all_config_checks`` (``finn.builder.build_dataflow_checks``) runs these and adds
@@ -15,13 +15,13 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 
-from finn.builder.kernel_build_config import (
+from finn.builder.build_dataflow_config import (
     OUTPUT_NEEDS,
     SHELL_OUTPUTS,
     VERIFIED_BY,
-    KernelBuildConfig,
-    KernelOutputType,
-    KernelVerificationStepType,
+    DataflowBuildConfig,
+    DataflowOutputType,
+    VerificationStepType,
 )
 from finn.platform import TargetRefused, shell_row
 
@@ -45,7 +45,7 @@ class Check:
     suggestion: str | None = None
 
 
-def _resolved_step_names(cfg: KernelBuildConfig) -> set[str] | None:
+def _resolved_step_names(cfg: DataflowBuildConfig) -> set[str] | None:
     """The names of the steps the build runs (steps, start_step, stop_step), or None
     when they cannot be resolved (the build then fails on its own when it starts)."""
     try:
@@ -58,7 +58,7 @@ def _resolved_step_names(cfg: KernelBuildConfig) -> set[str] | None:
         return None
 
 
-def kernel_path_checks(cfg: KernelBuildConfig) -> list[Check]:
+def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
     """The checks of a kernel-path build that its configuration's type does not make
     impossible: its target resolves (finn.platform.resolve_target); the shell outputs
     it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
@@ -94,7 +94,7 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> list[Check]:
                 "remove them from generate_outputs",
             )
         )
-    asked = {KernelOutputType(output) for output in cfg.generate_outputs}
+    asked = {DataflowOutputType(output) for output in cfg.generate_outputs}
     for output, needs in OUTPUT_NEEDS.items():
         missing = [need.value for need in needs if output in asked and need not in asked]
         if missing:
@@ -121,7 +121,7 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> list[Check]:
                 "enable_hw_debug), or none",
             )
         )
-    if KernelVerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(
+    if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(
         cfg.verify_input_npy
     ):
         checks.append(
@@ -133,17 +133,17 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> list[Check]:
                 "Provide a valid verification input .npy file or disable verification",
             )
         )
-    testbench = KernelVerificationStepType.STITCHED_IP_TESTBENCH
-    if testbench in cfg.verify_steps and KernelOutputType.STITCHED_IP not in asked:
+    testbench = VerificationStepType.STITCHED_IP_TESTBENCH
+    if testbench in cfg.verify_steps and DataflowOutputType.STITCHED_IP not in asked:
         checks.append(
             Check(
                 "kernel_testbench_output",
                 Severity.ERROR,
                 False,
                 f"verify_steps includes {testbench.value}, which runs the testbench "
-                f"{KernelOutputType.STITCHED_IP.value} writes, and generate_outputs does "
+                f"{DataflowOutputType.STITCHED_IP.value} writes, and generate_outputs does "
                 "not ask for it",
-                f"Add {KernelOutputType.STITCHED_IP.value} to generate_outputs, or remove "
+                f"Add {DataflowOutputType.STITCHED_IP.value} to generate_outputs, or remove "
                 f"{testbench.value} from verify_steps",
             )
         )
@@ -151,7 +151,7 @@ def kernel_path_checks(cfg: KernelBuildConfig) -> list[Check]:
     if resolved is None:
         return checks
     for each in cfg.verify_steps:
-        vstep = KernelVerificationStepType(each)
+        vstep = VerificationStepType(each)
         unmet = [" or ".join(either) for either in VERIFIED_BY[vstep] if not resolved & set(either)]
         if unmet:
             checks.append(

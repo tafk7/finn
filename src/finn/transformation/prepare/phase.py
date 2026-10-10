@@ -138,7 +138,7 @@ DEFAULT_TOPOLOGY = (
 
 @dataclass(frozen=True)
 class GraphPreparation:
-    """The graph-preparation phase's options (``KernelBuildConfig.preparation``). In
+    """The graph-preparation phase's options (``DataflowBuildConfig.preparation``). In
     JSON, for TFC: {"preprocessing": "preproc.onnx", "input_datatype": "UINT8",
     "topk": 1}.
 

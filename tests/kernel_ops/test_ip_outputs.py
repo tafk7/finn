@@ -28,14 +28,14 @@ import pytest
 from kernels.xsim import requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.builder import kernel_build_steps
+from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.kernel_build_config import (
-    KernelBuildConfig,
-    KernelOutputType,
-    KernelVerificationStepType,
+from finn.builder.build_dataflow_config import (
+    DataflowBuildConfig,
+    DataflowOutputType,
+    VerificationStepType,
 )
-from finn.builder.kernel_build_steps import step_kernel_stitched_ip
+from finn.builder.build_dataflow_steps import step_kernel_stitched_ip
 from finn.builder.kernel_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.executors.xsim.rtl import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
@@ -183,18 +183,18 @@ def test_the_testbench_is_an_output_run_only_by_its_verification_step(
     once, in the build's toolchain."""
     ran: list[tuple[Path, object]] = []
     monkeypatch.setattr(
-        kernel_build_steps,
+        build_dataflow_steps,
         "run_testbench",
         lambda directory, *, toolchain: ran.append((directory, toolchain)),
     )
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
     stub = PackagedByStub()
-    for verify_steps in ([], [KernelVerificationStepType.STITCHED_IP_TESTBENCH]):
+    for verify_steps in ([], [VerificationStepType.STITCHED_IP_TESTBENCH]):
         output = tmp_path / f"output_{len(verify_steps)}"
-        cfg = KernelBuildConfig(
+        cfg = DataflowBuildConfig(
             output_dir=str(output),
             target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
-            generate_outputs=[KernelOutputType.STITCHED_IP],
+            generate_outputs=[DataflowOutputType.STITCHED_IP],
             verify_steps=verify_steps,
             verify_input_npy=str(tmp_path / "absent.npy"),
         )
@@ -249,15 +249,15 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     images = np.random.default_rng(3).integers(0, 256, size=(2, *SHAPE[1:])).astype(np.float32)
     np.save(tmp_path / "input.npy", images)
     output = tmp_path / "output"
-    cfg = KernelBuildConfig(
+    cfg = DataflowBuildConfig(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
-        generate_outputs=[KernelOutputType.STITCHED_IP],
+        generate_outputs=[DataflowOutputType.STITCHED_IP],
         kernel_exploration=[
             {"strategy": "target_throughput", "fps": 1e6},
             {"strategy": "size_fifos"},
         ],
-        verify_steps=[KernelVerificationStepType.STITCHED_IP_TESTBENCH],
+        verify_steps=[VerificationStepType.STITCHED_IP_TESTBENCH],
         verify_input_npy=str(tmp_path / "input.npy"),
         enable_build_pdb_debug=False,
     )
