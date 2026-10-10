@@ -18,6 +18,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import (
     build_dataflow_directory,
     read_build_config,
+    resolve_step_filename,
 )
 from finn.builder.build_dataflow_checks import (
     Report,
@@ -287,6 +288,17 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
         DataflowOutputType.STITCHED_IP,
         DataflowOutputType.OOC_SYNTH,
     ]
+
+
+def test_a_start_step_the_build_does_not_have_is_named_with_its_steps() -> None:
+    """A default build's steps are its phases: a step inside one is no start_step."""
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "start_step": "step_kernel_choices"}))
+    with pytest.raises(AssertionError) as refused:
+        resolve_step_filename("step_kernel_choices", cfg, -1)
+    assert str(refused.value) == (
+        "start_step 'step_kernel_choices' is not one of this build's steps: "
+        "phase_graph_preparation, phase_kernel_path, phase_kernel_outputs"
+    )
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:

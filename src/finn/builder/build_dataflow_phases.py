@@ -83,8 +83,8 @@ def _execute_step(step_fn: _Step, model: ModelWrapper, cfg: DataflowBuildConfig)
     first and those ``cfg.inject_steps_after`` names after it, each one's model saved
     as an intermediate model if ``cfg.save_intermediate_models``, and each one timed
     (``recorded_step_times``). Injection names a phase or a step inside one:
-    ``inject_steps_after={"step_hw_codegen": [my_func]}`` runs ``my_func`` after
-    ``step_hw_codegen`` inside ``phase_build_hardware`` too."""
+    ``inject_steps_after={"step_kernel_choices": [my_func]}`` runs ``my_func`` after
+    ``step_kernel_choices`` inside ``phase_kernel_path`` too."""
     step_name = step_fn.__name__
     for injected_step in cfg.inject_steps_before.get(step_name, []):
         model = _timed(injected_step, model, cfg)
