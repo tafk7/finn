@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """How FINN runs AMD's tools: a selected installation, its prepared environment, and
 the one way a tool process is started and reaped.
 

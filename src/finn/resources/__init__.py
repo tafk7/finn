@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """External resources: directory trees FINN uses but does not contain.
 
 Each resource (finn-hlslib, Vivado board files, a user's RTL library...) is
@@ -147,7 +150,7 @@ def path(name: str, fetch: bool = True) -> str:
         raise ResourceError(
             f"Resource {name} is not in any cache ({searched}) and fetching is disabled. "
             f"Where the network is available, run `finn-resources fetch {name} --dest DIR`, "
-            f"then use DIR as {PREFIX}CACHE."
+            f"then set {PREFIX}DIR=DIR (or {PREFIX}SYSTEM_CACHE=DIR to use it read-only)."
         )
     return str(_store.fetch(resource, _store.fetch_root()))
 

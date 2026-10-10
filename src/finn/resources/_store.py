@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Digest-keyed caches and the fetchers that fill them.
 
 Each cache entry is ``<root>/<name>-<digest16>/`` with a marker file holding the

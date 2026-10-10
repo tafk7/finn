@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Resource declarations: parsing, validation and merging.
 
 A declaration is a TOML table naming one resource and its pinned source. FINN's
