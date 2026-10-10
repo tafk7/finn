@@ -230,8 +230,11 @@ def test_cache_order_and_read_only_system_cache(boards, tmp_path, monkeypatch):
 
 def test_offline_and_no_fetch_report_the_fetch_command(boards, monkeypatch):
     monkeypatch.setenv("FINN_RESOURCES_OFFLINE", "1")
-    with pytest.raises(resources.ResourceError, match="finn-resources fetch kv260-boards"):
+    with pytest.raises(resources.ResourceError, match="finn-resources fetch kv260-boards") as error:
         resources.path("kv260-boards")
+    # The message names settings that exist.
+    assert "set FINN_RESOURCES_DIR=DIR" in str(error.value)
+    assert "FINN_RESOURCES_SYSTEM_CACHE=DIR" in str(error.value)
     monkeypatch.delenv("FINN_RESOURCES_OFFLINE")
     with pytest.raises(resources.ResourceError, match="not in any cache"):
         resources.paths("test-boards", fetch=False)
