@@ -79,7 +79,8 @@ class StreamingDataflowPartition(GenericPartition):
         if run.full_context:
             outputs = {body_output.name for body_output in body.graph.output}
             for name, value in ran.items():
-                if name not in outputs:
+                # "" is qonnx's placeholder for an unset optional input, no body tensor.
+                if name and name not in outputs:
                     context[prefix + name] = value
 
 

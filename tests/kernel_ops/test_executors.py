@@ -369,6 +369,25 @@ def test_python_runs_a_partitions_body_from_a_start_node_inside_it(tmp_path: Pat
         execute_onnx(parent, {"x": x["x"], "hidden": hidden}, start_node=activate)
 
 
+def test_a_full_context_fed_back_starts_a_run_mid_way(tmp_path: Path) -> None:
+    """A full context, qonnx's ``""`` (an unset optional input) in it, is a valid
+    input_dict: a run from the partition node, or from a node of its body, gives the
+    original run's outputs. The body's ``""`` is no body tensor of the full context."""
+    _, parent = chain_partition(tmp_path)
+    (partition,) = parent.graph.node
+    x = {"x": np.array(chain.X, dtype=np.float32)}
+    context = execute_onnx(parent, x, return_full_exec_context=True)
+    assert "" in context and f"{partition.name}_" not in context
+    for start, ran in (
+        (partition, ["first", "activate", "second"]),
+        (body_node(parent, "activate"), ["activate", "second"]),
+    ):
+        recording = Recording()
+        found = execute_onnx(parent, context, start_node=start, executors=(recording,))
+        assert recording.ran == [partition.name, *ran]
+        assert np.array_equal(found["y"], context["y"])
+
+
 def test_xsim_taps_the_links_between_the_kernels_of_a_partition(tmp_path: Path) -> None:
     """Each tensor a kernel of the body produces and another consumes, at its producer's
     output and in its producer's traversal: ``levels`` at the thresholding's output,
