@@ -137,9 +137,12 @@ def execute_onnx(
     name, ``<node>_<tensor>`` (the body's outputs under the parent's names): Python's all
     of the body's context, a hardware executor's each link it observed between two
     kernels of the body, as its producer presents it. A caller starts inside a body from
-    a context so named: input_dict may name a body's tensors so.
+    a context so named: input_dict may name a body's tensors so. A full context is a valid
+    input_dict: its ``""``, qonnx's placeholder for an unset optional input, is skipped
+    (the run's own context makes it again).
     """
 
+    input_dict = {name: value for name, value in input_dict.items() if name != ""}
     # validate that all provided input names exist in the model
     # this catches common bugs like using outdated tensor names
     valid_tensor_names = set(model.get_all_tensor_names())
