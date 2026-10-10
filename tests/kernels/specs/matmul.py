@@ -11,7 +11,7 @@ from typing import Any
 from qonnx.core.datatype import DataType
 
 from finn.core.space import design_space
-from finn.dataflow.gemm import Form
+from finn.dataflow.gemm import Form, Window
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import FULL_DSP48E2
 from kernels.specs.base import ORACLE, KernelSpec, Probe, SweepCases, placed, refuses
@@ -87,6 +87,17 @@ SPEC = KernelSpec(
             lambda: placed(depthwise()),
             frozenset({"matmul-native"}),
             {"kernel.realization": "native"},
+        ),
+        # Its activations are then the window's image, which the channel does not carry.
+        Probe(
+            "a window whose pixels are not its rows",
+            lambda: placed(matmul(), window=Window((2, 2), (1, 1))),
+            frozenset({"matmul-window", "matmul-tensor"}),
+        ),
+        Probe(
+            "a window whose taps do not divide its reduction",
+            lambda: placed(matmul(), window=Window((1, 5), (1, 4))),
+            frozenset({"matmul-window", "matmul-tensor"}),
         ),
     ),
     sweeps=(MATMUL_SWEEPS,),

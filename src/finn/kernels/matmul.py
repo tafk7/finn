@@ -259,9 +259,9 @@ class MatMulKernel(Kernel):
         if self.k % window.taps or self.m != window.output[0] * window.output[1]:
             return reject(
                 "matmul-window",
-                f"a {window.kernel} window giving {window.output} pixels reads M = "
-                f"{window.output[0] * window.output[1]} rows of a multiple of {window.taps}, "
-                f"not M = {self.m}, K = {self.k}",
+                f"a {window.kernel} window over {window.image} reads M = "
+                f"{window.output[0] * window.output[1]} pixels and a K of its {window.taps} "
+                f"taps times the channels, not M = {self.m}, K = {self.k}",
             )
         return True
 
