@@ -34,6 +34,7 @@ from finn.core.executors.xsim.rtl import (
     WATCHDOG_MARGIN,
     WORDS_DIFFER,
     SimulationFailed,
+    Tap,
     Undriven,
     Words,
     WordsDiffer,
@@ -47,6 +48,7 @@ from finn.dataflow.traversal import pack as pack_beats
 from finn.dataflow.traversal import vector_major
 from finn.harness.toolchain import SIMULATOR_TOOLS, vivado_simulator
 from finn.kernels.artifacts.abi import ClockAlignment
+from finn.kernels.artifacts.build import instance_net
 from finn.kernels.artifacts.module import Held, RegisterMap, declared_registers
 from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.matmul import datatype_range
@@ -152,6 +154,66 @@ def test_the_stream_bench_keeps_each_outputs_words_for_a_decoding(tmp_path: Path
     assert '$writememh("m_axis_0.received.mem", m_axis_0_got);' in bench.text
     assert f'$fatal(1, "{WORDS_DIFFER}: %0d output words", differing);' in bench.text
     assert 'if (!differing) $display("m_axis_0 word %0d: %h != %h"' in bench.text
+
+
+def test_a_tap_reads_a_link_at_its_producers_nets_and_only_when_asked(tmp_path: Path) -> None:
+    """A tap reads the netlist's nets from the testbench: the module's sources are the same,
+    and a testbench without taps has none of a tap's text."""
+    module = chain().module
+    link = next(
+        link for link in module.fragment.links if link.source.instance and link.sink.instance
+    )
+    end = link.source
+    assert end.instance is not None
+    tap = Tap(end, 3, link.lane_bits)
+    tapped = stream_bench(
+        module, tmp_path / "tapped", inputs=CHAIN_IN, outputs=CHAIN_OUT, taps={"link_0": tap}
+    )
+    plain = stream_bench(module, tmp_path / "plain", inputs=CHAIN_IN, outputs=CHAIN_OUT)
+    data = f"dut.{instance_net(end.instance, end.data)}"
+    assert f"link_0_tapped[link_0_taps] <= {data}[{link.lane_bits - 1}:0];" in tapped.text
+    assert f"dut.{instance_net(end.instance, end.valid)} && " in tapped.text
+    assert '$writememh("link_0.tapped.mem", link_0_tapped);' in tapped.text
+    assert "tap" not in plain.text and "dut.n__" not in plain.text
+    assert [Path(s).name for s in tapped.sources] == [Path(s).name for s in plain.sources]
+    for source in plain.sources:
+        relative = Path(source).relative_to(tmp_path / "plain")
+        assert (tmp_path / "tapped" / relative).read_bytes() == Path(source).read_bytes()
+
+
+def test_a_tap_the_module_cannot_present_is_refused(tmp_path: Path) -> None:
+    module = chain().module
+    link = next(link for link in module.fragment.links if link.source.instance)
+    with pytest.raises(ValueError, match="places no instance nowhere"):
+        stream_bench(
+            module,
+            tmp_path,
+            inputs=CHAIN_IN,
+            outputs=CHAIN_OUT,
+            taps={"link_0": Tap(replace(link.source, instance="nowhere"), 3, 1)},
+        )
+    with pytest.raises(ValueError, match="identifier no stream has"):
+        stream_bench(
+            module,
+            tmp_path,
+            inputs=CHAIN_IN,
+            outputs=CHAIN_OUT,
+            taps={"m_axis_0": Tap(link.source, 3, 1)},
+        )
+    assert not any(tmp_path.iterdir())
+    root = next(link for link in module.fragment.links if link.source.instance is None)
+    with pytest.raises(ValueError, match="a root's port is streamed, not tapped"):
+        Tap(root.source, 3, 1)
+    with pytest.raises(ValueError, match="bits of a"):
+        Tap(link.source, 3, link.source.data_bits + 1)
+
+
+def test_a_taps_words_end_at_the_first_it_did_not_take(tmp_path: Path) -> None:
+    from finn.core.executors.xsim.rtl import _read_taken  # noqa: PLC0415
+
+    written = tmp_path / "link_0.tapped.mem"
+    written.write_text("// memory\n@0\n0a\n1f\nxx\nxx\n")
+    assert _read_taken(written) == [0x0A, 0x1F]
 
 
 @pytest.mark.parametrize("pacing", [FREE, STALLED])
