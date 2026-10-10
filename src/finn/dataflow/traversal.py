@@ -20,8 +20,8 @@ included), a width conversion, a lane regroup, or none at all.
 A ``BeatSequence`` is what one end of a channel presents of the tensor it
 carries: its traversal per pass, whether the pass repeats (``Repetition``), and
 the marker rules it offers or requires. ``unreplayed`` is the boundary rule: the
-receiver of a channel realizes its own replay, while whole-pass repetition stays
-part of the interface; ``period`` strips the whole-pass repetition.
+receiver of a channel realizes its own replay and window, while whole-pass
+repetition stays part of the interface; ``period`` strips the whole-pass repetition.
 
 Words and tensors: ``pack`` presents an integer operand as one raw word per beat,
 and ``unpack``, its inverse, reads the operand back from the words; both at the
@@ -521,16 +521,44 @@ class BeatSequence:
                 raise ValueError(f"a marker every {rule.beats} beats closes no loop level")
 
 
+def each_once(form: Traversal) -> bool:
+    """Whether ``form`` presents each position of its tensor once a pass, its stride-0
+    loops (repetition, replay) aside: its moving loops are a mixed radix over the tensor,
+    each stride the product of the extents of those finer than it."""
+    moving = sorted(
+        (loop for loop in (*form.beat_loops, *form.lane_loops) if loop.stride),
+        key=lambda loop: loop.stride,
+    )
+    reach = 1
+    for loop in moving:
+        if loop.stride != reach:
+            return False
+        reach *= loop.extent
+    return reach == prod(form.shape)
+
+
 def unreplayed(form: Traversal) -> Traversal:
-    """``form`` without replay: its stride-0 beat loops inside a moving loop.
+    """``form`` without what its receiver realizes: its replay (its stride-0 beat loops
+    inside a moving loop), and its window, where it reads a position twice or not at all.
 
     Outermost stride-0 loops repeat the whole pass and stay: that repetition is
-    part of an interface, while replay is realized by the receiver.
+    part of an interface, while replay is realized by the receiver. A window (a
+    sliding window's overlap, or a stride that passes positions) is the receiver's
+    too (its channel's reorder): without its replay, a ``form`` that does not
+    present each position once (``each_once``) is the tensor's frame, each position
+    once in row-major order at ``form``'s lanes, where those are the tensor's
+    innermost elements (``vector_major``); otherwise it stays as it is.
     """
     loops = form.beat_loops
     moving = next((index for index, loop in enumerate(loops) if loop.stride), len(loops))
     kept = (*loops[:moving], *(loop for loop in loops[moving:] if loop.stride))
-    return Traversal(form.shape, kept, form.lane_loops)
+    once = Traversal(form.shape, kept, form.lane_loops)
+    lanes = form.lane_loops
+    contiguous = not lanes or (len(lanes) == 1 and lanes[0].stride == 1)
+    if each_once(once) or not contiguous or form.shape[-1] % form.lanes:
+        return once
+    frame = vector_major(form.shape, form.lanes)
+    return Traversal(form.shape, (*loops[:moving], *frame.beat_loops), frame.lane_loops)
 
 
 def period(form: Traversal) -> Traversal:
@@ -685,6 +713,7 @@ __all__ = [
     "Traversal",
     "axis_strides",
     "classify",
+    "each_once",
     "offsets",
     "pack",
     "passes",

@@ -41,8 +41,9 @@ is its identity and the prefix of its persisted decision keys. A boundary
 whose ``port`` is not supplied is refused (``channel-boundary``): a root names
 a port only for what may cross it, an ONNX input or output of a partition.
 The boundary presents what its internal end presents, by one rule: an input
-boundary without the replay its receiver realizes (``unreplayed``), an output
-boundary as produced, neither with markers and both as a single pass.
+boundary without the replay or the window its receiver realizes (``unreplayed``: a
+window's image once, row-major), an output boundary as produced, neither with
+markers and both as a single pass.
 
 Every channel, boundaries included, owns a ``transport`` Decision over two
 nodes between its adapters: ``direct`` or ``fifo``. The FIFO candidate owns its

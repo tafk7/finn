@@ -5,8 +5,9 @@
 in graph order. ``ToKernelOps`` converts the covered set to one node on its boundary
 tensors, refuses a set that is not convex or whose interior is read outside it, by
 code, moves the nodes the set depends on before its anchor, and keeps one outcome
-naming every covered node. No KernelOp of the domain covers more than its anchor yet,
-so a test-only one does: an ONNX Identity and the MatMul reading it, as MatMul."""
+naming every covered node. The domain's Conv covers an Im2Col and its MatMul
+(``kernel_ops.specs.conv``); these test-only ones exercise the rules on
+other shapes: an ONNX Identity and the MatMul reading it, as MatMul."""
 
 from __future__ import annotations
 

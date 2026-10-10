@@ -27,6 +27,8 @@ from finn.dataflow.traversal import (
     Reorder,
     Traversal,
     classify,
+    each_once,
+    unreplayed,
     vector_major,
 )
 
@@ -174,3 +176,30 @@ def test_positions_the_source_never_presents_stay_unrealizable() -> None:
     top_rows = Traversal.over((4, 4, 1), ((0, 2, 1), (1, 4, 1)), ())
     with pytest.raises(Unrealizable, match="different positions"):
         plan(BeatSequence(top_rows), BeatSequence(window(4, 4, 1, 1)))
+
+
+# -- the boundary: the receiver realizes its window --------------------------------------
+
+
+def test_an_input_boundary_presents_a_windows_frame_once() -> None:
+    """Without its replay a window still reads positions twice (overlap) or not at all (a
+    stride passing them): an input boundary presents the image once, row-major at the
+    window's lanes, and the window is its receiver's reorder."""
+    for sink in (window(6, 6, 4, 2), window(8, 8, 2, 1, stride=2, dilation=2)):
+        assert not each_once(sink)
+        assert unreplayed(sink) == vector_major(sink.shape, sink.lanes)
+    replayed = window(6, 6, 4, 2).replayed(4, inner_beats=18)
+    assert unreplayed(replayed) == vector_major((6, 6, 4), 2)
+    assert plan(BeatSequence(unreplayed(replayed)), BeatSequence(replayed)).steps == (Step.REORDER,)
+
+
+def test_a_boundary_that_presents_each_position_once_keeps_its_order() -> None:
+    """A permutation (a transpose, a window that tiles its image) is presented as it is,
+    as is a whole pass repeated (outermost replay), the interface's own."""
+    tiled = window(4, 4, 3, 3, k=2, stride=2)
+    assert each_once(tiled) and unreplayed(tiled) == tiled
+    assert tiled != vector_major((4, 4, 3), 3)
+    repeated = window(6, 6, 4, 2).repeated(2)
+    assert unreplayed(repeated) == vector_major((6, 6, 4), 2).repeated(2)
+    transposed = Traversal.over((2, 3), ((1, 3, 1), (0, 2, 1)), ())
+    assert each_once(transposed) and unreplayed(transposed) == transposed

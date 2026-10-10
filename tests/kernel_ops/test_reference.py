@@ -241,8 +241,8 @@ def test_a_pattern_reads_no_datatype(spec: OpSpec, name: str) -> None:
         check_match_pure(spec.op, model)
         found = spec.op.match(model, model.graph.node[0])
         assert isinstance(found, Match)
-        assert (found.nodes, dict(found.attributes)) == (
-            (model.graph.node[0],),
+        assert ([each.name for each in found.nodes], dict(found.attributes)) == (
+            [each.name for each in stated.nodes],
             dict(stated.attributes),
         )
 
