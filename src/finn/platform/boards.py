@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The boards a build may name: each board's part and the Vivado board preset the
-Zynq shell's block design selects for it.
+"""The boards a build may name: each board's part, the Vivado board preset the
+Zynq shell's block design selects for it, and any Vivado release it needs.
 
 FINN's PYNQ boards, each with its part. A board is a FINN name for one board revision.
 A board without a Vivado preset (ZCU111) can only be named for its part, on the ``ip``
@@ -18,11 +18,13 @@ from dataclasses import dataclass
 class Board:
     """A board: its FINN ``name``, its ``part``, and the Vivado ``board_part`` the Zynq
     template selects for it (``preset``). A ``None`` preset means the template has no
-    branch for the board, so the ``pynq`` shell has no row for it."""
+    branch for the board, so the ``pynq`` shell has no row for it. ``vivado`` is the
+    earliest Vivado release, (year, minor), a build for it needs; ``None`` means any."""
 
     name: str
     part: str
     preset: str | None
+    vivado: tuple[int, int] | None = None
 
 
 BOARDS: dict[str, Board] = {
@@ -50,6 +52,7 @@ BOARDS: dict[str, Board] = {
             name="AUP-ZU3_8GB",
             part="xczu3eg-sfvc784-2-e",
             preset="realdigital.org:aup-zu3-8gb:part0:1.0",
+            vivado=(2024, 1),
         ),
     )
 }
