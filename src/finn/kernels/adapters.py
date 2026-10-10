@@ -13,7 +13,7 @@ that chain does not realize, so at most one candidate survives a side:
 - the output side, before the transport (``OUTPUT_ADAPTERS``): ``vpc``, a width
   conversion;
 - the input side, after it (``ADAPTERS``): ``input_gen``, a reorder, replay
-  included, and marker synthesis; ``input_gen_vpc``, a reorder, then new lanes;
+  and sliding windows included, and marker synthesis; ``input_gen_vpc``, a reorder, then new lanes;
   ``input_gen_vpc_input_gen``, a reorder, new lanes, then markers (a ``vpc``
   carries none).
 

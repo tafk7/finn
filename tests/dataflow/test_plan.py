@@ -78,9 +78,20 @@ def test_a_cyclic_source_repeats_by_elements_into_its_consumer_s_pass() -> None:
 def test_what_no_chain_repairs_is_unrealizable() -> None:
     with pytest.raises(Unrealizable, match="cyclic consumer"):
         plan(BeatSequence(ROWS), BeatSequence(ROWS, Repetition.CYCLIC))
+    # A sink reading positions the source never presents.
     half = Traversal.over((4,), ((0, 1, 2),), ((0, 2, 1),))
-    with pytest.raises(Unrealizable):
-        plan(BeatSequence(vector_major((4,), 2)), BeatSequence(half))
+    with pytest.raises(Unrealizable, match="different positions"):
+        plan(BeatSequence(half), BeatSequence(vector_major((4,), 2)))
+
+
+def test_a_sink_reading_part_of_each_frame_is_a_reorder() -> None:
+    # The first beat of each two: the frame's other beat is dropped.
+    half = Traversal.over((4,), ((0, 1, 2),), ((0, 2, 1),))
+    found = plan(BeatSequence(vector_major((4,), 2)), BeatSequence(half))
+    assert found.steps == (Step.REORDER,)
+    reorder = found.hops[0].reorder
+    assert reorder is not None
+    assert (reorder.frame_beats, reorder.dims, reorder.coefs) == (2, (1,), (0,))
 
 
 def test_a_plan_splits_at_the_transport_after_its_leading_width_conversions() -> None:
