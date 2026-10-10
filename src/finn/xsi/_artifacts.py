@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Small adjacent compatibility records for native bridge and compiled designs."""
 
 import hashlib

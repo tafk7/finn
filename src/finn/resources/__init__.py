@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """External resources: directory trees FINN uses but does not contain.
 
 Each resource (finn-hlslib, Vivado board files, a user's RTL library...) is

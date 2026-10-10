@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """finn-resources: list, fetch, verify and update FINN's external resources."""
 import argparse
 import os

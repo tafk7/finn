@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Pure XSI design compilation/discovery; importing this module never loads the bridge."""
 import errno
 import json

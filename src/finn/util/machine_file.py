@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """The machine file: where this machine's Xilinx tools and licence server are.
 
 One file holds a machine's defaults, in the names every modality reads:

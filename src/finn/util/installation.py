@@ -1,3 +1,6 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
 """Inspect selected distributions without changing installation or import state."""
 import importlib.metadata
 import importlib.util
