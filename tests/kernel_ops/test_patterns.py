@@ -25,6 +25,7 @@ from finn.custom_op.kernels.base import KernelOp, KernelOpError, Match
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.transformation.kernels import Outcome, kernel_ops_by_anchor
 from kernel_ops.models import convert
+from kernel_ops.specs import windowed_matmul
 
 GENERAL = "qonnx.custom_op.general"
 
@@ -233,7 +234,9 @@ class Twin(Thresholding):
 
 
 def positives() -> list[ModelWrapper]:
-    return [build() for build, _, _ in POSITIVE.values()]
+    """Each positive graph, and a lowered convolution (WindowedMatMul's nested pattern,
+    its spec's graphs: ``kernel_ops.specs.windowed_matmul``)."""
+    return [*(build() for build, _, _ in POSITIVE.values()), windowed_matmul.conv()]
 
 
 def test_every_kernel_op_of_the_domain_anchors_and_is_matched() -> None:

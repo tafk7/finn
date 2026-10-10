@@ -26,6 +26,7 @@ from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, channel_ch
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.shell import save_channels
 from finn.custom_op.kernels.thresholding import Thresholding
+from finn.custom_op.kernels.windowed_matmul import WindowedMatMul
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -274,11 +275,12 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
         assert isinstance(getCustomOp(model.graph.node[0], onnx_opset_version=1), MatMul)
     # Each op class states its identity in its own body: qonnx's rule reads it
     # there, and the domain's opset version is the one the module states.
-    for op in (MatMul, Thresholding):
+    for op in (MatMul, Thresholding, WindowedMatMul):
         assert "op_type" in vars(op) and "op_version" in vars(op)
         assert op_identity(op) == (op.op_type, op.op_version)
     assert op_identity(MatMul) == ("MatMul", MatMulKernel.version)
     assert op_identity(Thresholding) == ("Thresholding", ThresholdingAxiKernel.version)
+    assert op_identity(WindowedMatMul) == ("WindowedMatMul", MatMulKernel.version)
     assert get_domain_opset_version("finn.custom_op.kernels") == domain.opset_version
-    assert domain.__all__ == ["MatMul", "Thresholding"]
+    assert domain.__all__ == ["MatMul", "Thresholding", "WindowedMatMul"]
     assert PLATFORM_KEYS["dsp"].entry in {item.key for item in model.graph.metadata_props}

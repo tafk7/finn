@@ -43,7 +43,7 @@ safety net for a graph that skipped preparation.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import numpy.typing as npt
@@ -93,7 +93,14 @@ class MatMul(KernelOp):
     op_version = MatMulKernel.version
     kernel = MatMulKernel
     member = "matmul"
-    formals = ("m", "n", "k", "activation_dtype", "weights_dtype", "platform")
+    formals: ClassVar[tuple[str, ...]] = (
+        "m",
+        "n",
+        "k",
+        "activation_dtype",
+        "weights_dtype",
+        "platform",
+    )
     ports = ("x", "w")
     references = {"x": "x_channel", "w": "w_channel", "y": "y_channel"}
     parameters = ("w",)
@@ -148,19 +155,34 @@ class MatMul(KernelOp):
             ),
         )
 
-    def facts(self) -> Facts:
+    def weights(self) -> tuple[int, int]:
+        """The weights' (k, n); weights that are not a matrix are refused."""
         model, label = self.model(), self.label
-        a, b = self.onnx_node.input
-        m, k = rows(shape(model, a, label))
+        b = self.onnx_node.input[1]
         weights_shape = shape(model, b, label)
         if len(weights_shape) != 2:
             raise KernelOpError(
                 f"{label}: the weights {b} are {weights_shape}, not (k, n): not a MatMul "
                 "(its pattern refuses them, matmul-batched)"
             )
-        k_b, n = weights_shape
+        k, n = weights_shape
+        return k, n
+
+    def extents(self) -> tuple[int, int, int, dict[str, object]]:
+        """(m, n, k), A's leading axes its rows, and the kernel's other formals that read
+        the graph's shapes: none."""
+        model, label = self.model(), self.label
+        a, b = self.onnx_node.input
+        m, k = rows(shape(model, a, label))
+        k_b, n = self.weights()
         if k != k_b:
             raise KernelOpError(f"{label}: {a} has {k} columns and {b} {k_b} rows")
+        return m, n, k, {}
+
+    def facts(self) -> Facts:
+        model, label = self.model(), self.label
+        a, b = self.onnx_node.input
+        m, n, k, shaped = self.extents()
         activation, weights_dtype = datatype(model, a, label), datatype(model, b, label)
         platform = self.target().platform
         common: dict[str, object] = dict(
@@ -170,6 +192,7 @@ class MatMul(KernelOp):
             activation_dtype=activation,
             weights_dtype=weights_dtype,
             platform=platform,
+            **shaped,
         )
         key = (
             self.op_type,
@@ -180,6 +203,7 @@ class MatMul(KernelOp):
             activation.name,
             weights_dtype.name,
             platform,
+            *shaped.values(),
         )
         root, edges = self.root(), (self.input_edges, self.output_edges)
         if model.get_initializer(b) is None:
@@ -202,18 +226,27 @@ class MatMul(KernelOp):
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """Y = A @ B (module docstring): exactly, in integers carried in A's container, for
         integer operands; in the operands' container for floats."""
+        a, b = self.onnx_node.input
+        context[self.onnx_node.output[0]] = self.product(context[a], context[b])
+
+    def product(self, x: Any, w: Any) -> npt.NDArray[Any]:
+        """``x @ w``, the values of this node's A and B (module docstring): exactly, in
+        integers carried in ``x``'s container, for integer operands (by their
+        annotations); in the operands' container for floats."""
         model, label = self.model(), self.label
         a, b = self.onnx_node.input
-        held = np.asarray(context[a]).dtype
+        held = np.asarray(x).dtype
         if not all(datatype(model, tensor, label).is_integer() for tensor in (a, b)):
-            x, w = np.asarray(context[a]), np.asarray(context[b])
-            context[self.onnx_node.output[0]] = np.matmul(x.astype(held), w.astype(held))
-            return
-        x, w = _integers(label, a, context[a]), _integers(label, b, context[b])
+            floats: npt.NDArray[Any] = np.matmul(
+                np.asarray(x).astype(held), np.asarray(w).astype(held)
+            )
+            return floats
+        x, w = _integers(label, a, x), _integers(label, b, w)
         largest = int(np.abs(x).max(initial=0)) * int(np.abs(w).sum(axis=0).max(initial=0))
         if largest >= 1 << 63:  # int64 might not hold a sum: Python's integers
             x, w = x.astype(object), w.astype(object)
-        context[self.onnx_node.output[0]] = np.matmul(x, w).astype(held)
+        found: npt.NDArray[Any] = np.matmul(x, w).astype(held)
+        return found
 
 
 __all__ = ["MatMul"]
