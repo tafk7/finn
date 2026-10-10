@@ -12,6 +12,10 @@ reaches the hardware as its image channel's reorder, and CNV's convolutions conv
 - In XSim (``finn.harness.ops.check_parity``, the ``XSim`` executor), the folded
   single layers compute what the op's ``execute_node`` computes, every output word:
   CNV's first layer at SIMD 3 and PE 16 among them.
+- Inside a partition: a Thresholding (NHWC, PE channels a beat) feeding a WindowedMatMul
+  (SIMD channels a beat) is one edge whose plan is the window's reorder, after a width
+  conversion where PE and SIMD differ; in XSim the two compute what their
+  ``execute_node`` do.
 - CNV_W2A2 (the BNN-PYNQ CNV at two bits, its weights from the torch hub cache, as
   ``kernel_ops.tfc`` takes TFC) through graph preparation and ``ToKernelOps``: each of
   its six ``Im2Col`` and ``MatMul`` pairs converts to one WindowedMatMul, and the host
@@ -24,8 +28,10 @@ from __future__ import annotations
 import zlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 from kernels.xsim import requires_xsim
+from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
@@ -40,7 +46,9 @@ from finn.platform import TargetRequest
 from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops
 from finn.transformation.prepare import GraphPreparation
+from kernel_ops.models import convert
 from kernel_ops.specs import windowed_matmul
+from kernel_ops.specs.base import GENERAL, source
 from kernel_ops.test_networks import config
 from kernel_ops.tfc import PREPROCESSING, ULTRA96
 
@@ -105,6 +113,61 @@ def test_the_folded_layer_computes_in_xsim_what_its_kernel_op_computes(
         tmp_path / "xsim",
         inputs=boundary_inputs(body, zlib.crc32(label.encode())),
         label=label,
+    )
+
+
+def thresholded(pe: int, simd: int) -> ModelWrapper:
+    """A Thresholding of a 6 x 6 x 4 INT4 image (NHWC, UINT2 levels) at ``pe``, and a 3 x 3
+    WindowedMatMul of its levels to 8 outputs at ``simd`` and PE 2: converted for
+    ``TARGET`` (Ultra96's part, the ``ip`` shell), its choices on its nodes."""
+    threshold = helper.make_node(
+        "MultiThreshold",
+        ["x", "t"],
+        ["a"],
+        name="mt",
+        domain=GENERAL,
+        out_dtype="UINT2",
+        data_layout="NHWC",
+    )
+    patches = windowed_matmul.im2col((1, 6, 6, 4), (3, 3))
+    patches.input[0] = "a"
+    nodes = [threshold, patches, helper.make_node("MatMul", ["p", "w"], ["y"], name="mm")]
+    stored = {
+        "t": (np.array([[-2.0, 0.0, 2.0]] * 4), "INT4"),
+        "w": (windowed_matmul.weights(36, 8, -8, 7), "INT4"),
+    }
+    graph = source(nodes, {"x": ([1, 6, 6, 4], "INT4")}, stored).transform(InferShapes())
+    model, conversion = convert(graph)
+    assert [outcome.op for outcome in conversion.outcomes] == ["Thresholding", "WindowedMatMul"]
+    kernel_op(model, model.graph.node[0]).save({"pe": pe})
+    kernel_op(model, model.graph.node[1]).save(
+        {"compute.packed.simd": simd, "compute.packed.pe": 2}
+    )
+    return model
+
+
+INSIDE = [(2, 2, ("reorder", "markers")), (4, 2, ("width_conversion", "reorder", "markers"))]
+
+
+@pytest.mark.parametrize(("pe", "simd", "steps"), INSIDE)
+def test_a_window_inside_the_partition_is_its_edges_reorder(
+    pe: int, simd: int, steps: tuple[str, ...]
+) -> None:
+    point, _ = configured_root(thresholded(pe, simd), "inside")
+    assert tuple(hop.step.value for hop in point.a.plan.hops) == steps
+    labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
+    assert "a.adapter.input_gen.input_gen" in labels
+
+
+@requires_xsim
+@pytest.mark.parametrize(("pe", "simd"), [case[:2] for case in INSIDE])
+def test_a_window_inside_the_partition_computes_in_xsim_what_its_kernel_ops_compute(
+    pe: int, simd: int, tmp_path: Path
+) -> None:
+    model = thresholded(pe, simd)
+    label = f"inside-{pe}-{simd}"
+    check_parity(
+        model, tmp_path, inputs=boundary_inputs(model, zlib.crc32(label.encode())), label=label
     )
 
 
