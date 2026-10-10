@@ -3,7 +3,9 @@
 
 """``finn.util.graph.between``: the nodes outside a set on a path that leaves it and
 re-enters it, by the graph's tensors, in graph order. Its two readers' cases: the
-KernelOps' (``test_outcomes``) and the checkpoint's prediction (``test_preparation``)."""
+KernelOps' (``test_outcomes``) and the checkpoint's prediction (``test_preparation``).
+``upstream``: the nodes outside a set it depends on (nested patterns,
+``test_nested_patterns``)."""
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ from onnx import NodeProto, TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.util.graph import between
+from finn.util.graph import between, upstream
 
 
 def graph(nodes: list[NodeProto], outputs: list[str]) -> ModelWrapper:
@@ -89,3 +91,21 @@ def test_the_nodes_themselves_are_returned_named_or_not() -> None:
     found = between(model, matmul)
     assert [(node.op_type, list(node.output)) for node in found] == [("Relu", ["r"])]
     assert found[0] is model.graph.node[1]
+
+
+def test_upstream_is_every_node_outside_the_set_it_depends_on_in_graph_order() -> None:
+    """``scale`` feeds ``a`` and ``bias`` feeds ``b`` through ``shift``; ``after`` and
+    ``aside`` feed neither."""
+    model = graph(
+        [
+            helper.make_node("Relu", ["x"], ["r"], name="scale"),
+            helper.make_node("MatMul", ["r", "w"], ["h"], name="a"),
+            helper.make_node("Neg", ["x"], ["n"], name="bias"),
+            helper.make_node("Neg", ["x"], ["z"], name="aside"),
+            helper.make_node("Relu", ["n"], ["s"], name="shift"),
+            helper.make_node("MatMul", ["h", "s"], ["y"], name="b"),
+            helper.make_node("Neg", ["y"], ["q"], name="after"),
+        ],
+        ["q", "z"],
+    )
+    assert [node.name for node in upstream(model, matmul)] == ["scale", "bias", "shift"]
