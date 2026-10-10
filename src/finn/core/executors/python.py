@@ -24,9 +24,11 @@ class Python:
 
     A KernelOp's ``execute_node`` is the op's reference, the oracle its hardware is
     checked against. A partition node's ``execute_node`` executes its body with
-    ``finn.core.onnx_exec.execute_onnx`` under the executors of the run that reached it
-    (``finn.core.onnx_exec.executing``), so the caller's choice reaches the body's nodes.
-    It is no hardware: a run that requires hardware refuses it.
+    ``finn.core.onnx_exec.execute_onnx`` as the run that reached it asks
+    (``finn.core.onnx_exec.running``): under its executors, so the caller's choice
+    reaches the body's nodes, from or up to a node of the body where the run starts or
+    ends there, and with the body's tensors in a full context. It is no hardware: a run
+    that requires hardware refuses it.
     """
 
     hardware: ClassVar[bool] = False

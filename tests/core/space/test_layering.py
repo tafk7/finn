@@ -170,7 +170,8 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("harness", "finn.core.executors.xsim.executor.XSim"),
         ("harness", "finn.core.onnx_exec.execute_onnx"),
         # The partition node runs its body under the executors of the run that reached it.
-        ("custom_op.partition", "finn.core.onnx_exec.executing"),
+        ("custom_op.partition", "finn.core.onnx_exec.running"),
+        ("executors", "finn.core.onnx_exec.running"),
         ("executors", "finn.custom_op.partition.kernel_partitions.kernel_partition_body"),
         ("flow", "finn.shells.pynq.runner.build_pynq"),
         ("shells", "finn.transformation.kernels.integration.integration"),
