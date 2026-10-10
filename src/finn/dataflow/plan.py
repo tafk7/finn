@@ -7,8 +7,9 @@
 requires and returns the canonical chain of steps that turns one into the
 other, each step between two beat sequences:
 
-- ``REORDER``: a buffered loop-nest reorder, replay included (``classify``'s
-  ``Reorder``: the frame, loop extents and strides of the nest);
+- ``REORDER``: a buffered loop-nest reorder, replay and sliding windows
+  included (``classify``'s ``Reorder``: the frame, loop extents and strides of
+  the nest);
 - ``WIDTH``: the same element order, another number of lanes a beat;
 - ``MARKERS``: the consumer's marker rules synthesized on an unchanged
   sequence.
@@ -32,9 +33,10 @@ carries data words only.
 
 The plan says what must happen, not which hardware does it: a channel's two
 adapter Decisions, one a side, choose a realization, and each candidate refuses
-a plan it cannot carry out. ``Unrealizable`` names what no chain can repair: another
-element order or positions, or a single pass feeding a cyclic consumer
-(``Unrepeatable``, its own kind: no step repeats a pass).
+a plan it cannot carry out. ``Unrealizable`` names what no chain can repair:
+positions the source does not present, an order no reorder reaches, or a single
+pass feeding a cyclic consumer (``Unrepeatable``, its own kind: no step repeats a
+pass).
 """
 
 from __future__ import annotations

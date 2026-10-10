@@ -317,12 +317,14 @@ def test_inner_shuffle_moves_the_lane_axis():
     assert verdict.adaptation is Adaptation.LANE_REGROUP
 
 
-def test_different_operands_and_missing_positions_are_incompatible():
+def test_different_operands_and_positions_never_presented_are_incompatible():
     assert classify(vector_major((4,), 2), vector_major((8,), 2)).adaptation is (
         Adaptation.INCOMPATIBLE
     )
     half = Traversal.over((4,), ((0, 1, 2),), ((0, 2, 1),))
-    assert classify(vector_major((4,), 2), half).adaptation is Adaptation.INCOMPATIBLE
+    assert classify(half, vector_major((4,), 2)).adaptation is Adaptation.INCOMPATIBLE
+    # The other way, the sink drops the frame's second beat: a reorder.
+    assert classify(vector_major((4,), 2), half).adaptation is Adaptation.REORDER
 
 
 # -- compatibility -----------------------------------------------------------------------

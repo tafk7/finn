@@ -12,7 +12,9 @@ regroups the element sequence), runs the realized chain on the source's
 positions, and compares the result with the sink's positions and required
 markers, up to the one fixed lane permutation the connection wires. Random
 pairs cover mismatched lane counts, lane axes, beat orders, replays and
-markers, among them NF other than SF and swapped lane orders.
+markers, among them NF other than SF and swapped lane orders, and sliding
+windows (strided, dilated, replayed per output fold) over images presented at
+another lane count.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from math import prod
 import pytest
 
 from finn.dataflow.plan import Unrealizable, plan
+from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import (
     BeatSequence,
     LevelEnd,
@@ -175,3 +178,41 @@ def test_random_plans_move_every_element_to_its_place(seed):
             continue
         realized += 1
     assert realized >= 100, (realized, refused)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_random_windows_move_every_element_to_its_place(seed):
+    rng = random.Random(seed)
+    oh, ow, f, kh, kw, c = (Index(name) for name in ("oh", "ow", "f", "kh", "kw", "c"))
+    generated = 0
+    for _ in range(60):
+        k, stride, dilation = rng.choice((1, 2, 3)), rng.choice((1, 2, 3)), rng.choice((1, 2))
+        span = dilation * (k - 1) + 1
+        h, w, ch = rng.randint(span, 7), rng.randint(span, 7), rng.choice((1, 2, 3, 4))
+        folds = rng.choice((1, 2))
+        lanes = [d for d in range(1, ch + 1) if ch % d == 0]
+        schedule = Schedule(
+            {
+                oh: (h - span) // stride + 1,
+                ow: (w - span) // stride + 1,
+                f: folds,
+                kh: k,
+                kw: k,
+                c: ch,
+            },
+            factors={c: rng.choice(lanes)},
+            order=(oh, ow, f, kh, kw, c),
+        )
+        sink = schedule.present(
+            (h, w, ch), (oh * stride + kh * dilation, ow * stride + kw * dilation, c), lanes=(c,)
+        )
+        # A marker per window, when the window spans whole beats.
+        per_window = schedule.steps(kh) * schedule.steps(kw) * schedule.steps(c)
+        markers = (LevelEnd(per_window),) if rng.random() < 0.5 else ()
+        kinds = check(
+            BeatSequence(vector_major((h, w, ch), rng.choice(lanes))),
+            BeatSequence(sink, markers=markers),
+        )
+        generated += "input_gen" in kinds
+    # Most draws overlap, skip or replay; a 1 x 1 window at stride 1 is the image itself.
+    assert generated >= 40, generated

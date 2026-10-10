@@ -14,7 +14,8 @@ Construction canonicalizes the nests, so two traversals are equal exactly when
 they present the same positions in the same beats and lanes. ``classify``
 compares two traversals of one operand and names the adaptation a mismatch
 needs: free lane wiring, a loop-nest reorder (``Reorder``: its frame, loop
-extents and strides), a width conversion, a lane regroup, or none at all.
+extents and strides; replay, and windows that overlap or skip within the frame,
+included), a width conversion, a lane regroup, or none at all.
 
 A ``BeatSequence`` is what one end of a channel presents of the tensor it
 carries: its traversal per pass, whether the pass repeats (``Repetition``), and
@@ -277,16 +278,19 @@ class Adaptation(Enum):
 
     IDENTITY = "identity"
     LANE_PERMUTATION = "lane_permutation"  # free: wires only
-    REORDER = "reorder"  # a buffered loop-nest reorder, or replay
+    REORDER = "reorder"  # a buffered loop-nest reorder: replay and windows included
     WIDTH_CONVERSION = "width_conversion"  # same element order, different lanes
     LANE_REGROUP = "lane_regroup"  # the lane axis changes (a banked transpose)
-    INCOMPATIBLE = "incompatible"  # different positions, or no loop-nest relation
+    INCOMPATIBLE = "incompatible"  # positions never presented, or an order no reorder reaches
 
 
 @dataclass(frozen=True)
 class Reorder:
     """A loop-nest reorder: per frame of ``frame_beats`` input beats, emit the beat
-    at ``sum(index[i] * coefs[i])`` for the nested ``dims`` (outer first)."""
+    at ``sum(index[i] * coefs[i])`` for the nested ``dims`` (outer first).
+
+    A beat may be emitted more than once (replay, overlapping windows) or not at
+    all (a window's stride passing it)."""
 
     frame_beats: int
     dims: tuple[int, ...]
@@ -337,6 +341,16 @@ def classify(source: Traversal, sink: Traversal) -> Classification:
 
 
 def _reorder(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
+    """The reorder from ``source``'s beat nest to ``sink``'s, if one exists.
+
+    The loop matching (each sink loop one source loop, or a new replay) comes
+    first and keeps its parameters; a nest that matches no loop-for-loop may
+    still read the frame through digit vectors (``_stepped``): a window.
+    """
+    return _matched(source, sink) or _stepped(source, sink)
+
+
+def _matched(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
     refined = _common_refinement(source, sink)
     if refined is None:
         return None
@@ -344,10 +358,7 @@ def _reorder(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
     replays = [loop for loop in consumed if loop.stride == 0 and loop not in produced]
     if Counter(consumed) - Counter(replays) != Counter(produced):
         return None
-    shared = 0
-    while shared < min(len(produced), len(consumed)) and produced[shared] == consumed[shared]:
-        shared += 1
-    produced, consumed = produced[shared:], consumed[shared:]
+    produced, consumed = _unshared(produced, consumed)
     beat_stride: dict[Loop, list[int]] = {}
     for index, loop in enumerate(produced):
         beat_stride.setdefault(loop, []).append(prod(item.extent for item in produced[index + 1 :]))
@@ -360,6 +371,88 @@ def _reorder(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
         tuple(loop.extent for loop in consumed),
         tuple(coefs),
     )
+
+
+def _stepped(source: Sequence[Loop], sink: Sequence[Loop]) -> Reorder | None:
+    """A reorder whose sink loops each step the source's frame by a digit vector.
+
+    Each sink loop's stride is decomposed over the frame's loops, largest
+    stride first, into a digit vector: one step of the sink loop moves the
+    source's digits by it. The sink's beat at digits ``d`` is then the frame
+    beat whose digits are ``sum(d[k] * vector[k])``, provided no digit leaves
+    its loop: the sink's whole nest stays inside the frame's box. Two sink loops
+    stepping one digit overlap (a sliding window); a digit value no sink beat
+    reaches drops those beats (a strided window).
+
+    The greedy decomposition is exact when each of the frame's moving loops
+    strides past everything its finer loops reach, as a frame presenting each
+    offset once in a compact order does (``vector_major``). Otherwise it may
+    miss a decomposition and answer None: sound, not complete.
+    """
+    boundaries = {
+        value
+        for loop in (*source, *sink)
+        if loop.stride
+        for value in (loop.stride, loop.stride * loop.extent)
+    }
+    # Split only to find the shared outer loops; the frame is read through its
+    # coarsest loops, since a split would put a carry where the sink has none.
+    produced, consumed = (
+        _canonical(nest)
+        for nest in _unshared(
+            _split_where_exact(source, boundaries), _split_where_exact(sink, boundaries)
+        )
+    )
+    beat_stride = [
+        prod(loop.extent for loop in produced[index + 1 :]) for index in range(len(produced))
+    ]
+    largest_first = sorted(range(len(produced)), key=lambda index: -produced[index].stride)
+    reach = [0] * len(produced)
+    coefs = []
+    for loop in consumed:
+        rest, coef = loop.stride, 0
+        for index in largest_first:
+            stride = produced[index].stride
+            if not stride or not rest:
+                continue
+            digit = min(produced[index].extent - 1, rest // stride)
+            rest -= digit * stride
+            reach[index] += (loop.extent - 1) * digit
+            coef += digit * beat_stride[index]
+        if rest:
+            return None
+        coefs.append(coef)
+    if any(reached >= loop.extent for reached, loop in zip(reach, produced)):
+        return None
+    # A frame read once per frame (the sink's nest empty) is a loop of one beat.
+    return Reorder(
+        prod(loop.extent for loop in produced),
+        tuple(loop.extent for loop in consumed) or (1,),
+        tuple(coefs) or (0,),
+    )
+
+
+def _split_where_exact(loops: Sequence[Loop], boundaries: set[int]) -> tuple[Loop, ...]:
+    """``loops`` split at every boundary that splits a loop exactly; the others are kept."""
+    refined: list[Loop] = []
+    for loop in loops:
+        pieces: tuple[Loop, ...] = (loop,)
+        for boundary in sorted(boundaries, reverse=True):
+            pieces = tuple(
+                part for piece in pieces for part in (_split(piece, boundary) or (piece,))
+            )
+        refined.extend(pieces)
+    return tuple(refined)
+
+
+def _unshared(
+    produced: Sequence[Loop], consumed: Sequence[Loop]
+) -> tuple[tuple[Loop, ...], tuple[Loop, ...]]:
+    """Both nests without the outer loops they share: what remains of ``produced`` is the frame."""
+    shared = 0
+    while shared < min(len(produced), len(consumed)) and produced[shared] == consumed[shared]:
+        shared += 1
+    return tuple(produced[shared:]), tuple(consumed[shared:])
 
 
 @dataclass(frozen=True)

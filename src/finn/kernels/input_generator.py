@@ -4,9 +4,11 @@
 """Buffered, same-word-width traversal of consecutive input frames.
 
 For each frame, emit the word at sum(index[i] * strides[i]) in the nested
-loop order described by its loop extents (``dims``). Zero strides repeat words.
-This declaration
-admits finite traversals wholly within each frame. olst[i] marks completion
+loop order described by its loop extents (``dims``). Zero strides repeat words,
+and so do loops stepping the same words (a sliding window). This declaration
+admits finite traversals wholly within each frame, which is all a window needs:
+the module frees the words no later loop step reads, so a window holds a few
+rows of its image, not the frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
