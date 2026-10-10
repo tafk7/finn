@@ -18,8 +18,15 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.builder.build_dataflow import (
     build_dataflow_directory,
     read_build_config,
+    resolve_step_filename,
 )
-from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
+from finn.builder.build_dataflow_checks import (
+    Report,
+    Severity,
+    format_report,
+    run_all_config_checks,
+    save_report,
+)
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -32,7 +39,7 @@ from finn.platform import TargetRequest, resolve_target
 from finn.shells.pynq.runner import PynqOptions
 from finn.transformation.kernels import kernel_choices_config
 from finn.transformation.prepare import GraphPreparation
-from finn.util.toolchain import Selection
+from finn.util.toolchain import Selection, Toolchain
 from kernel_ops.tfc import PREPROCESSING, ULTRA96, preparation
 
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
@@ -189,6 +196,89 @@ def test_shell_options_the_shells_build_does_not_take_are_refused(
     assert refused in check.message
 
 
+def board_build(tmp_path: Path, board: str, shell: str = "pynq") -> DataflowBuildConfig:
+    """A build for ``board`` on ``shell``, its toolchain one whose PATH has no tools:
+    no Vivado on its route, unless a test stands in for the probe."""
+    cfg = DataflowBuildConfig.from_json(
+        json.dumps({**STATED, "target": {"period_ns": 5.0, "board": board, "shell": shell}})
+    )
+    cfg._toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
+    return cfg
+
+
+def release(found: tuple[int, int]) -> object:
+    """A stand-in for ``Toolchain.probe`` that finds Vivado ``found``."""
+
+    def probe(self: Toolchain, tool: str, timeout: float = 0) -> tuple[int, ...]:
+        assert tool == "vivado"
+        return found
+
+    return probe
+
+
+def board_checks(report: Report) -> list[tuple[bool, str]]:
+    return [
+        (check.passed, check.message) for check in report.checks if check.name == "board_vivado"
+    ]
+
+
+def test_no_vivado_on_the_route_is_reported_not_raised(tmp_path: Path) -> None:
+    """Without Vivado on the build's route, the report states none detected; a board
+    whose row requires a release fails its check, naming why, and one without passes
+    every Vivado check."""
+    report = run_all_config_checks(board_build(tmp_path, "AUP-ZU3_8GB"))
+    assert report.vivado_version is None and report.has_errors()
+    ((passed, message),) = board_checks(report)
+    assert not passed
+    assert message.startswith("AUP-ZU3_8GB requires Vivado 2024.1 or later, no Vivado detected")
+    assert "Could not probe vivado" in message
+    report = run_all_config_checks(board_build(tmp_path, "Ultra96"))
+    assert report.vivado_version is None and board_checks(report) == []
+    assert "Vivado: Not detected" in format_report(report)
+
+
+def test_a_toolchain_that_does_not_prepare_is_no_vivado_detected(tmp_path: Path) -> None:
+    cfg = board_build(tmp_path, "AUP-ZU3_8GB")
+    del cfg._toolchain
+    cfg.toolchain = Selection(settings=(str(tmp_path / "missing-settings64.sh"),))
+    report = run_all_config_checks(cfg)
+    assert report.vivado_version is None
+    ((passed, message),) = board_checks(report)
+    assert not passed and "no Vivado detected" in message
+
+
+@pytest.mark.parametrize(
+    "found, passed",
+    [((2023, 2), False), ((2024, 1), True), ((2025, 2), True)],
+)
+def test_the_release_a_boards_row_requires_against_the_toolchains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, found: tuple[int, int], passed: bool
+) -> None:
+    """The release comes from the build's toolchain's probe, the requirement from the
+    board's row (AUP-ZU3_8GB's, 2024.1), on the shell that names the board; on ``ip``
+    the target names no board and nothing is required."""
+    monkeypatch.setattr(Toolchain, "probe", release(found))
+    report = run_all_config_checks(board_build(tmp_path, "AUP-ZU3_8GB"))
+    assert report.vivado_version == found
+    ((check_passed, message),) = board_checks(report)
+    assert check_passed is passed
+    if not passed:
+        assert message == "AUP-ZU3_8GB requires Vivado 2024.1 or later, found 2023.2"
+    assert board_checks(run_all_config_checks(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
+
+
+def test_the_report_states_the_toolchains_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Toolchain, "probe", release((2025, 2)))
+    report = run_all_config_checks(board_build(tmp_path, "Ultra96"))
+    assert report.vivado_version == (2025, 2)
+    assert not report.has_errors()
+    assert "Vivado: 2025.2" in Path(save_report(report, str(tmp_path))).read_text()
+    stated = json.loads((tmp_path / "config_check_report.json").read_text())
+    assert stated["vivado_version"] == [2025, 2]
+
+
 def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
     for output in ("rtlsim_performance", "estimate_reports", "cpp_driver"):
         with pytest.raises(ValueError, match=output):
@@ -198,6 +288,17 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
         DataflowOutputType.STITCHED_IP,
         DataflowOutputType.OOC_SYNTH,
     ]
+
+
+def test_a_start_step_the_build_does_not_have_is_named_with_its_steps() -> None:
+    """A default build's steps are its phases: a step inside one is no start_step."""
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "start_step": "step_kernel_choices"}))
+    with pytest.raises(AssertionError) as refused:
+        resolve_step_filename("step_kernel_choices", cfg, -1)
+    assert str(refused.value) == (
+        "start_step 'step_kernel_choices' is not one of this build's steps: "
+        "phase_graph_preparation, phase_kernel_path, phase_kernel_outputs"
+    )
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:

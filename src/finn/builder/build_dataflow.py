@@ -143,7 +143,9 @@ def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
 
 def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
     step_names = list(map(lambda x: x.__name__, resolve_build_steps(cfg, partial=False)))
-    assert step_name in step_names, "start_step %s not found" + step_name
+    assert (
+        step_name in step_names
+    ), f"start_step {step_name!r} is not one of this build's steps: {', '.join(step_names)}"
     step_no = step_names.index(step_name) + step_delta
     assert step_no >= 0, "Invalid step+delta combination"
     assert step_no < len(step_names), "Invalid step+delta combination"

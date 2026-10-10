@@ -4,8 +4,9 @@
 """Configuration check system for FINN builds - catches incompatibilities early.
 
 What a DataflowBuildConfig's build refuses or warns of before its first step: the kernel
-path's own checks (``kernel_path_checks``) and the Vivado release its board needs
-(``run_all_config_checks`` runs both). A check is a ``Check`` of a ``Severity``.
+path's own checks (``kernel_path_checks``) and the Vivado release its board's row
+requires, against the release its toolchain runs (``run_all_config_checks`` runs both).
+A check is a ``Check`` of a ``Severity``.
 """
 
 import importlib
@@ -24,8 +25,7 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
-from finn.platform import TargetRefused, shell_row
-from finn.util.basic import get_vivado_version
+from finn.platform import BOARDS, Board, TargetRefused, shell_row
 
 
 class Severity(Enum):
@@ -194,56 +194,48 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
     return checks
 
 
-def _vivado_checks(board: Optional[str], v: Optional[Tuple[int, int]]) -> List[Check]:
-    """The Vivado release a build for ``board`` needs, and whether ``v`` is one FINN
-    recommends."""
-    checks = []
-    if board == "V80":
-        checks.append(
-            _check(
-                "v80_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 2),
-                "V80 board requires Vivado 2024.2 or later, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",  # type: ignore[index]
-                "Upgrade to Vivado 2024.2 or later to use V80",
-            )
+def _vivado_release(cfg: DataflowBuildConfig) -> Tuple[Optional[Tuple[int, int]], str]:
+    """The Vivado release the build's own toolchain runs (``Toolchain.probe``), or None
+    and why when none is detected: no Vivado on its route, or its toolchain not
+    prepared."""
+    try:
+        year, minor = cfg._resolve_toolchain().probe("vivado")
+    except (RuntimeError, OSError) as missing:
+        return None, str(missing)
+    return (year, minor), ""
+
+
+def _vivado_checks(board: Optional[Board], v: Optional[Tuple[int, int]], why: str) -> List[Check]:
+    """Whether ``v``, the Vivado release detected (None: none, for the reason ``why``),
+    meets the release ``board``'s row requires (``Board.vivado``); no check for a board
+    without a requirement, or no board."""
+    if board is None or board.vivado is None:
+        return []
+    needed = f"{board.vivado[0]}.{board.vivado[1]}"
+    found = f"found {v[0]}.{v[1]}" if v else f"no Vivado detected: {why}"
+    return [
+        _check(
+            "board_vivado",
+            Severity.ERROR,
+            v is not None and v >= board.vivado,
+            f"{board.name} requires Vivado {needed} or later, {found}",
+            f"Select Vivado {needed} or later in the build's toolchain",
         )
-    if board == "AUP-ZU3_8GB":
-        checks.append(
-            _check(
-                "aupzu3_vivado",
-                Severity.ERROR,
-                v and v >= (2024, 1),
-                f"AUP-ZU3_8GB board requires Vivado 2024.1 or later, "
-                f"found {v[0]}.{v[1] if v else 'unknown'}",  # type: ignore[index]
-                "Upgrade to Vivado 2024.1 or later to use AUP-ZU3_8GB",
-            )
-        )
-    if v and v not in [(2022, 2), (2024, 2)]:
-        checks.append(
-            _check(
-                "vivado_stable",
-                Severity.INFO,
-                False,
-                f"Vivado {v[0]}.{v[1]} is used. Recommended versions are "
-                "2022.2 and 2024.2, other versions can be used but may have unexpected issues.",
-            )
-        )
-    return checks
+    ]
 
 
 def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
     """Run all configuration checks of a kernel-path build and return the report: the
     Vivado release its board needs, and the kernel path's own checks
-    (kernel_path_checks)."""
-    v = get_vivado_version()
+    (kernel_path_checks). The report states the release the build's toolchain runs."""
+    v, why = _vivado_release(cfg)
     board = None
     try:
-        board = cfg._resolve_target().board
+        name = cfg._resolve_target().board
+        board = BOARDS[name] if name is not None else None
     except TargetRefused:
         pass  # kernel_path_checks names it
-    checks = _vivado_checks(board, v) + kernel_path_checks(cfg)
+    checks = _vivado_checks(board, v, why) + kernel_path_checks(cfg)
     return Report(timestamp=datetime.now().isoformat(), vivado_version=v, checks=checks)
 
 

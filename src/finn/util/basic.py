@@ -27,25 +27,16 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """Support code the kernel path, graph preparation and the tests share: build
-directories (``make_build_dir``, ``robust_rmtree``), the Vivado release the environment
-selects, and the Resize input a streamlining transform reads."""
+directories (``make_build_dir``, ``robust_rmtree``) and the Resize input a streamlining
+transform reads."""
 
 import errno
 import os
-import re
 import shutil
 import tempfile
 import time
-from typing import Optional, Tuple
 
 from finn import resources
-
-
-def get_vivado_version() -> Optional[Tuple[int, int]]:
-    """Extract Vivado version as (year, minor) tuple from XILINX_VIVADO."""
-    path = os.environ.get("XILINX_VIVADO", "")
-    match = re.search(r"\b(20\d{2})\.(1|2)\b", path)
-    return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 def make_build_dir(prefix=""):

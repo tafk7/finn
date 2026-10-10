@@ -16,11 +16,11 @@ digest = "sha256:eaeda81ff5f5c12ad413bcd346dac0b039cc2738368f99aef5d5ce8743a3c98
 # Vivado board files. Third-party files FINN does not redistribute; each root is
 # a separate Vivado board repository path.
 
-# FinnLib: the RTL and HLS sources of finn.kernels and of the MVAU/VVAU replay
-# buffer. It is private and changes with FINN, so it is not redistributable and
-# is never baked into an image: developers point FINN_RESOURCES_FINNLIB at a
-# working clone, and the pin records which commit a FINN revision was validated
-# against. Fetching needs SSH access to the repository.
+# FinnLib: the RTL and HLS sources of the kernels in finn.kernels. It is private
+# and changes with FINN, so it is not redistributable and is never baked into an
+# image: developers point FINN_RESOURCES_FINNLIB at a working clone, and the pin
+# records which commit a FINN revision was validated against. Fetching needs SSH
+# access to the repository.
 [resources.finnlib]
 description = "FinnLib RTL and HLS component library"
 kind = ["kernel-sources"]
