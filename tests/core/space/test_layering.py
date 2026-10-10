@@ -55,7 +55,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.kernels.dotp", "kernels"),
         ("finn.custom_op.partition.kernel_partitions.partition_body", "partition"),
         ("finn.custom_op.partition.StreamingDataflowPartition", "custom_op.partition"),
-        ("finn.builder.kernel_build_steps", "flow"),
+        ("finn.builder.build_dataflow_steps", "flow"),
         ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
@@ -93,9 +93,9 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("space", "finn.dataflow.tensor"),
         ("space", "numpy"),
         # util below the flow.
-        ("util", "finn.builder.kernel_build_steps.step_kernel_bitfile"),
+        ("util", "finn.builder.build_dataflow_steps.step_kernel_bitfile"),
         # The shells below the flow: the builder runs them, never the other way.
-        ("shells", "finn.builder.kernel_build_steps"),
+        ("shells", "finn.builder.build_dataflow_steps"),
         ("transformation.kernels", "finn.shells.pynq.runner"),
         ("util", "finn.core.onnx_exec.execute_onnx"),
         # What is read of a partition reads qonnx only, below the kernel stack, the

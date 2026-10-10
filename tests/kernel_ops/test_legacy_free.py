@@ -20,16 +20,13 @@ from importlib.util import find_spec
 
 import pytest
 
-#: The HWCustomOp flow, deleted: its ops, analyses and transformations, its builder's
-#: steps, phases and configuration, and its stitched-IP executor.
+#: The HWCustomOp flow, deleted: its ops, analyses and transformations, and its
+#: stitched-IP executor.
 DELETED = (
     "finn.custom_op.fpgadataflow",
     "finn.custom_op.general",
     "finn.analysis",
     "finn.transformation.fpgadataflow",
-    "finn.builder.build_dataflow_steps",
-    "finn.builder.build_dataflow_phases",
-    "finn.builder.build_dataflow_config",
     "finn.core.rtlsim_exec",
     "finn.deploy",
 )
@@ -37,8 +34,9 @@ DELETED = (
 #: The kernel path, as a build imports it.
 KERNEL_PATH = (
     "finn.builder.build_dataflow",
-    "finn.builder.kernel_build_steps",
-    "finn.builder.kernel_build_config",
+    "finn.builder.build_dataflow_phases",
+    "finn.builder.build_dataflow_steps",
+    "finn.builder.build_dataflow_config",
     "finn.custom_op.kernels",
     "finn.kernels",
     "finn.platform",

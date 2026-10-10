@@ -13,7 +13,7 @@ import onnx.helper as oh
 import sys
 
 import finn.builder.build_dataflow as build
-from finn.builder.kernel_build_config import KernelBuildConfig
+from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.platform import TargetRequest
 from finn.util.basic import make_build_dir
 
@@ -46,7 +46,7 @@ def failed_build(monkeypatch, terminal: bool) -> tuple[int, list]:
     output = make_build_dir("test_build_failure_")
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
-    cfg = KernelBuildConfig(
+    cfg = DataflowBuildConfig(
         output_dir=output,
         target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
         steps=[step_fails],

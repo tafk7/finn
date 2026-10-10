@@ -33,8 +33,8 @@ from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.builder.kernel_build_config import KernelBuildConfig
-from finn.builder.kernel_build_steps import phase_graph_preparation
+from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_phases import phase_graph_preparation
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
@@ -83,11 +83,11 @@ def preparation(directory: Path) -> GraphPreparation:
     )
 
 
-def preparation_config(directory: Path, **settings: Any) -> KernelBuildConfig:
+def preparation_config(directory: Path, **settings: Any) -> DataflowBuildConfig:
     """A build of TFC from its export in ``directory`` (``preparation``), its outputs
     under ``directory / "output"``, for Ultra96 in the Zynq shell at 5 ns, no debugger
     and no intermediate models."""
-    return KernelBuildConfig(
+    return DataflowBuildConfig(
         **{
             "output_dir": str(directory / "output"),
             "target": TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),

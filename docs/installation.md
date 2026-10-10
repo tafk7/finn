@@ -496,7 +496,7 @@ settings script is sourced), under the site command directory
 `FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the machine
 file's `FINN_XILINX_VERSION` (`vitis-run` from 2025.1, else `vitis_hls`). A
 build prepares one toolchain (the selection its configuration names,
-`KernelBuildConfig.toolchain`, or the machine's when it names none, on the
+`DataflowBuildConfig.toolchain`, or the machine's when it names none, on the
 first step that runs a tool) and passes it to every step that runs a tool
 (HLS synthesis, packaging, simulation, the shell's build);
 `build_dataflow_directory` prepares its build process's environment from the same
@@ -512,8 +512,8 @@ site owns remote activation, path visibility and remote cancellation.
 A build configuration may name its toolchain, the HLS frontend included; the
 frontend is never guessed from the executables found: it is the one stated, or the
 machine file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build has a configuration of its own,
-`finn.builder.kernel_build_config.KernelBuildConfig`, written as
-`kernel_build_config.json` beside `model.onnx`, which `build_dataflow` builds. A
+`finn.builder.build_dataflow_config.DataflowBuildConfig`, written as
+`dataflow_build_config.json` beside `model.onnx`, which `build_dataflow` builds. A
 kernel-path build of TFC for Ultra96 in the
 Zynq shell (the environment as configured, so `settings` stays empty):
 

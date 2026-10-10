@@ -31,8 +31,8 @@ from kernels.xsim import requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.builder.kernel_build_config import KernelBuildConfig
-from finn.builder.kernel_build_steps import phase_kernel_path
+from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_phases import phase_kernel_path
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.harness.ops import boundary_inputs, check_parity, graph_inputs
@@ -55,10 +55,10 @@ NETWORKS = [
 ]
 
 
-def config(directory: Path) -> KernelBuildConfig:
+def config(directory: Path) -> DataflowBuildConfig:
     """The kernel path for ``TARGET`` (Ultra96's part at 5 ns on the ``ip`` shell), its
     choices the default exploration's (none) and completion's (the baseline)."""
-    return KernelBuildConfig(
+    return DataflowBuildConfig(
         output_dir=str(directory),
         target=TargetRequest(part=TARGET.part, period_ns=TARGET.platform.period_ns),
         generate_outputs=[],

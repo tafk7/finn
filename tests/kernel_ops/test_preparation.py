@@ -34,8 +34,8 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.kernel_build_config import KernelVerificationStepType
-from finn.builder.kernel_build_steps import PREPARATION_REPORT, step_prepare_checkpoint
+from finn.builder.build_dataflow_config import VerificationStepType
+from finn.builder.build_dataflow_steps import PREPARATION_REPORT, step_prepare_checkpoint
 from finn.core.containers import container, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
@@ -158,7 +158,7 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
     cfg = preparation_config(
         tfc_directory,
         steps=["phase_graph_preparation"],
-        verify_steps=[KernelVerificationStepType.GRAPH_PREPARATION_PYTHON],
+        verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
         save_intermediate_models=True,
     )
     assert build_dataflow_cfg(str(tfc_directory / EXPORT), cfg) == 0
@@ -839,7 +839,7 @@ def _built_from(tmp_path: Path, export: ModelWrapper, prepared_as: ModelWrapper)
         tmp_path,
         preparation=GraphPreparation(),
         steps=["step_prepare_import", alter, "step_prepare_checkpoint", record],
-        verify_steps=[KernelVerificationStepType.GRAPH_PREPARATION_PYTHON],
+        verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
     )
     status = build_dataflow_cfg(str(tmp_path / "export.onnx"), cfg)
     output = Path(cfg.output_dir)

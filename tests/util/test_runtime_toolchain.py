@@ -373,13 +373,13 @@ def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
         "steps": [],
         "enable_build_pdb_debug": False,
     }
-    (project / "kernel_build_config.json").write_text(json.dumps(config))
+    (project / "dataflow_build_config.json").write_text(json.dumps(config))
     cwd, env = os.getcwd(), dict(os.environ)
     assert build_dataflow_directory(str(project)) == 0
     assert (project / "output/time_per_step.json").is_file()
     assert os.getcwd() == cwd and dict(os.environ) == env
     config["steps"] = ["not_a_step"]
-    (project / "kernel_build_config.json").write_text(json.dumps(config))
+    (project / "dataflow_build_config.json").write_text(json.dumps(config))
     proc = subprocess.run(
         [str(Path(sys.executable).parent / "build_dataflow"), str(project)],
         cwd=tmp_path,
@@ -402,7 +402,7 @@ def test_checkpoint_reuse_requires_original_intermediate_path(tmp_path):
     from onnx import TensorProto, helper  # noqa: PLC0415
 
     from finn.builder.build_dataflow import build_dataflow_cfg  # noqa: PLC0415
-    from finn.builder.kernel_build_config import KernelBuildConfig  # noqa: PLC0415
+    from finn.builder.build_dataflow_config import DataflowBuildConfig  # noqa: PLC0415
     from finn.platform import TargetRequest  # noqa: PLC0415
 
     model = helper.make_model(
@@ -416,7 +416,7 @@ def test_checkpoint_reuse_requires_original_intermediate_path(tmp_path):
     )
     source = tmp_path / "model.onnx"
     onnx.save(model, source)
-    cfg = KernelBuildConfig(
+    cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
         steps=[step_first, step_second],

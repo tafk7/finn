@@ -3,7 +3,7 @@
 
 """The builder's kernel-path phase (``phase_kernel_path``) on TFC_W2A2, up to its partition.
 
-``build_dataflow_cfg`` runs a KernelBuildConfig's default steps from the exported
+``build_dataflow_cfg`` runs a DataflowBuildConfig's default steps from the exported
 network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
 phase: no Vivado. Each step's
 output is recorded as it runs (``inject_steps_after``), and the partition is compared
@@ -34,15 +34,14 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
-from finn.builder.build_dataflow_checks import run_all_config_checks
-from finn.builder.kernel_build_checks import Severity
-from finn.builder.kernel_build_config import (
+from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
+from finn.builder.build_dataflow_config import (
     SHELL_OUTPUTS,
-    KernelBuildConfig,
-    KernelOutputType,
-    KernelVerificationStepType,
+    DataflowBuildConfig,
+    DataflowOutputType,
+    VerificationStepType,
 )
-from finn.builder.kernel_build_steps import (
+from finn.builder.build_dataflow_steps import (
     step_kernel_bitfile,
     step_kernel_choices,
     step_kernel_deployment_package,
@@ -108,7 +107,7 @@ STEPS = (
 )
 
 
-def explore(source: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+def explore(source: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """``source`` through the kernel path's steps to its exploration: the parent graph,
     cut once, its body's choices explored and saved."""
     model = source
@@ -131,14 +130,14 @@ def source(tfc_streamlined: Path) -> ModelWrapper:
 ULTRA96_PYNQ = TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq")
 
 
-def config(directory: Path, **settings: Any) -> KernelBuildConfig:
+def config(directory: Path, **settings: Any) -> DataflowBuildConfig:
     """Ultra96 in the Zynq shell at 5 ns, a bitfile asked, the default steps, no
     debugger."""
-    return KernelBuildConfig(
+    return DataflowBuildConfig(
         **{
             "output_dir": str(directory / "output"),
             "target": ULTRA96_PYNQ,
-            "generate_outputs": [KernelOutputType.BITFILE],
+            "generate_outputs": [DataflowOutputType.BITFILE],
             "enable_build_pdb_debug": False,
             **settings,
         }
@@ -151,8 +150,8 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
 ) -> None:
     seen: dict[str, ModelWrapper] = {}
 
-    def recorder(name: str) -> Callable[[ModelWrapper, KernelBuildConfig], ModelWrapper]:
-        def record(model: ModelWrapper, cfg: KernelBuildConfig) -> ModelWrapper:
+    def recorder(name: str) -> Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper]:
+        def record(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
             seen[name] = ModelWrapper(copy.deepcopy(model.model))
             return model
 
@@ -176,8 +175,8 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
         stop_step="phase_kernel_path",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
         verify_steps=[
-            KernelVerificationStepType.GRAPH_PREPARATION_PYTHON,
-            KernelVerificationStepType.PARTITION_PYTHON,
+            VerificationStepType.GRAPH_PREPARATION_PYTHON,
+            VerificationStepType.PARTITION_PYTHON,
         ],
         verify_input_npy=str(tmp_path / "input.npy"),
     )
@@ -351,7 +350,7 @@ def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: P
     accepted. The bitfile's step refuses it too, by the shell the parent graph
     states."""
     on_ip = TargetRequest(board="Ultra96", period_ns=5.0)
-    every = list(KernelOutputType)
+    every = list(DataflowOutputType)
     cfg = config(tmp_path, target=on_ip, generate_outputs=every)
     assert failed_checks(cfg) == {
         "kernel_path_shell": [
@@ -359,7 +358,7 @@ def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: P
             "the partition; its outputs are the packaged IP's (stitched_ip, ooc_synth)"
         ]
     }
-    ip_outputs = [KernelOutputType.STITCHED_IP, KernelOutputType.OOC_SYNTH]
+    ip_outputs = [DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
     assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=ip_outputs)) == {}
     assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=[])) == {}
     assert failed_checks(config(tmp_path, generate_outputs=every)) == {}
@@ -375,17 +374,17 @@ def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> 
     and the driver: asked without them, each is refused before any step runs, naming
     what it lacks."""
     needs = "it is made from them, in the same build"
-    driver = config(tmp_path, generate_outputs=[KernelOutputType.PYNQ_DRIVER])
+    driver = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
     assert failed_checks(driver) == {"kernel_output_needs": [f"pynq_driver needs bitfile: {needs}"]}
-    deployment = [KernelOutputType.BITFILE, KernelOutputType.DEPLOYMENT_PACKAGE]
+    deployment = [DataflowOutputType.BITFILE, DataflowOutputType.DEPLOYMENT_PACKAGE]
     assert failed_checks(config(tmp_path, generate_outputs=deployment)) == {
         "kernel_output_needs": [f"deployment_package needs pynq_driver: {needs}"]
     }
-    alone = config(tmp_path, generate_outputs=[KernelOutputType.DEPLOYMENT_PACKAGE])
+    alone = config(tmp_path, generate_outputs=[DataflowOutputType.DEPLOYMENT_PACKAGE])
     assert failed_checks(alone) == {
         "kernel_output_needs": [f"deployment_package needs bitfile, pynq_driver: {needs}"]
     }
-    shell = [KernelOutputType.BITFILE, KernelOutputType.PYNQ_DRIVER]
+    shell = [DataflowOutputType.BITFILE, DataflowOutputType.PYNQ_DRIVER]
     assert failed_checks(config(tmp_path, generate_outputs=shell)) == {}
 
 
@@ -436,7 +435,7 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
 
 
 def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> None:
-    verify = [KernelVerificationStepType.PARTITION_ELABORATION]
+    verify = [VerificationStepType.PARTITION_ELABORATION]
     cfg = config(tmp_path, steps=["phase_kernel_outputs"], verify_steps=verify)
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
@@ -447,7 +446,7 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
     # The preparation's equivalence needs the export kept, and the checkpoint: a build
     # from a prepared model, or from the checkpoint alone, never checks it.
-    preparation = [KernelVerificationStepType.GRAPH_PREPARATION_PYTHON]
+    preparation = [VerificationStepType.GRAPH_PREPARATION_PYTHON]
     for steps in (
         {"steps": ["phase_kernel_path"]},
         {"steps": ["step_prepare_checkpoint", "phase_kernel_path"]},
@@ -462,10 +461,10 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
         assert "graph_preparation_python, which needs" in warning.message
     cfg = config(tmp_path, verify_steps=preparation, stop_step="phase_graph_preparation")
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
-    python = config(tmp_path, verify_steps=[KernelVerificationStepType.PARTITION_PYTHON])
+    python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
-    testbench = [KernelVerificationStepType.STITCHED_IP_TESTBENCH]
+    testbench = [VerificationStepType.STITCHED_IP_TESTBENCH]
     cfg = config(tmp_path, steps=["phase_kernel_path"], verify_steps=testbench)
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
@@ -481,7 +480,7 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
         ]
     }
     asked = config(
-        tmp_path, verify_steps=testbench, generate_outputs=[KernelOutputType.STITCHED_IP]
+        tmp_path, verify_steps=testbench, generate_outputs=[DataflowOutputType.STITCHED_IP]
     )
     assert failed_checks(asked) == {}
 
@@ -1068,9 +1067,9 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         tmp_path,
         kernel_exploration=Z0_CHAIN,
         generate_outputs=[
-            KernelOutputType.BITFILE,
-            KernelOutputType.PYNQ_DRIVER,
-            KernelOutputType.DEPLOYMENT_PACKAGE,
+            DataflowOutputType.BITFILE,
+            DataflowOutputType.PYNQ_DRIVER,
+            DataflowOutputType.DEPLOYMENT_PACKAGE,
         ],
     )
     vivado = FakeVivado(timing=TIMING_REPORT)
@@ -1241,7 +1240,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
-    cfg = config(tmp_path, generate_outputs=[KernelOutputType.PYNQ_DRIVER])
+    cfg = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
     with pytest.raises(ValueError, match="the model states no delivered clock"):
         step_kernel_driver(parent, cfg)
     report = tmp_path / "delivered_clock.json"
