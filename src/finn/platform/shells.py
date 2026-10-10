@@ -1,43 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shells a partition is integrated by, one row per shell and board.
+"""Shell rows: what each shell gives a partition on each board (its ends, budgets,
+clocks, integration, host runtime and static region) and what it costs.
 
-A shell row states what the shell gives a partition and what it takes from it:
-
-- the ends it offers each boundary channel's free side (``finn.kernels.ends``);
-- its budgets, which the shell root's admission counts: the AXI-Lite buses the
-  partition and its ends may present together, and the AXI memory ports the
-  partition itself may use;
-- whether it supplies an aligned doubled clock (``ap_clk2x``): the row owns the
-  fact, and the shell root's admission reads it against a module that takes one
-  (``clock-unavailable``); the target carries no copy;
-- how it is integrated and run on the host;
-- its static region: the logic it instantiates beside the partition and its ends,
-  and what that uses of the device, by the counts that scale it
-  (``StaticRegion.resources``: out of context, ``SHELL_CHARACTERISED``);
-- where its ends' and static region's statements were characterised and the shell
-  built and timed (``characterised``), and what that does not cover on its board
-  (``caveat``), which the exploration and resources reports state.
-
-The shells:
-
-- ``ip``, the default: the partition's packaged IP, which its user integrates. It
-  has no ends, offers ``ap_clk2x`` (stated beside the IP for its integrator to
-  supply) and bounds neither budget: it integrates nothing, so it lists every
-  AXI-Lite bus and memory port however many there are. One row for every part and
-  board.
-- ``pynq``: the Zynq block design the PYNQ driver runs, one row per board the Zynq
-  template has a branch for (a ``BOARDS`` row with a preset; not ZCU111). Its ends
-  are ``IODMA_hls`` movers at the processing system's 128-bit HP port, a frame a
-  call; its AXI-Lite interconnect takes nine buses; a partition gets no memory port
-  of its own and no doubled clock. Its static region is the template's: the
-  processing system and its reset, a SmartConnect taking a master a memory port into
-  the HP port, and an AXI interconnect giving a slave an AXI-Lite bus from the
-  processor. Its ends and static region were characterised on xczu3eg and xczu7ev,
-  and the shell built and timed on Ultra96 only (SZ2): on every other board its
-  statements of the shell's cost are carried over, and its rows say so.
-- ``xrt`` and ``slash`` are named and not built: the kernel path builds Zynq first.
+``ip`` is the packaged IP for the user to integrate, on any part. ``pynq`` is the Zynq
+block design, one row per board the template supports. ``xrt`` and ``slash`` are
+recognised and refused.
 """
 
 from __future__ import annotations
@@ -54,7 +23,7 @@ SHELL_NAMES = (IP, PYNQ, XRT, SLASH)
 """Every shell a build may name."""
 
 NOT_BUILT = {XRT: "the Vitis (XRT) shell", SLASH: "the SLASH shell"}
-"""The shells named and refused: the kernel path does not build them yet."""
+"""Shells a build may name that the kernel path does not build, so they are refused."""
 
 VIVADO_BLOCK_DESIGN = "vivado-block-design"
 """The integration of the Zynq shell (``ShellRow.integration``)."""
@@ -78,15 +47,11 @@ class Scaled:
 
 @dataclass(frozen=True, kw_only=True)
 class StaticRegion:
-    """A shell's own logic beside the partition and its ends, by what scales it: the
-    ``processor`` and its ``reset``, fixed; the ``memory_interconnect``, an AXI
-    master a memory port (each end's, and each the partition initiates) into the
-    processor's memory; the ``control_interconnect``, an AXI-Lite slave a bus (the
-    partition's and each end's) from the processor. Each is named by its Vivado IP,
-    and its resources stated beside it (``*_use``), out of context
-    (``SHELL_CHARACTERISED``). The processor addresses the AXI-Lite buses from
-    ``control_base``, in the order they are connected, each at its aperture's
-    alignment and at least ``control_aperture`` bytes."""
+    """A shell's own logic beside the partition and its ends, each IP with its
+    resources out of context. The memory interconnect takes one master per memory
+    port, and the control interconnect gives one slave per AXI-Lite bus. The processor
+    addresses the AXI-Lite buses from ``control_base``, in connection order, each
+    aligned to its aperture and at least ``control_aperture`` bytes."""
 
     processor: str
     reset: str
@@ -100,9 +65,8 @@ class StaticRegion:
     control_interconnect_use: Scaled
 
     def resources(self, *, masters: int, slaves: int) -> tuple[tuple[str, Resources], ...]:
-        """What each of its IPs uses, by its Vivado IP, with ``masters`` memory ports and
-        ``slaves`` AXI-Lite buses connected: at least one of each, as the template
-        builds it."""
+        """What each IP uses, by its Vivado IP name, with ``masters`` memory ports and
+        ``slaves`` AXI-Lite buses connected. The template connects at least one of each."""
         if masters < 1 or slaves < 1:
             raise ValueError(
                 f"a static region connects at least one memory port and one AXI-Lite bus, "
@@ -173,6 +137,8 @@ IP_ROW = ShellRow(
     characterised=None,
     caveat=None,
 )
+"""The ``ip`` shell's row, for any part. It integrates nothing, so it bounds no budget,
+and the IP's integrator supplies the doubled clock."""
 
 PYNQ_MEMORY_PORT = 128
 """The bits of the processing system's HP port the Zynq template connects each end to,
@@ -182,7 +148,7 @@ PYNQ_CONTROL_BUDGET = 9
 """The AXI-Lite buses the Zynq template's interconnect takes."""
 
 PYNQ_TIMED = ("Ultra96",)
-"""The boards the ``pynq`` shell was built and timed on (SZ2)."""
+"""The boards the ``pynq`` shell was built and timed on."""
 
 PYNQ_CHARACTERISED = (
     f"ends ({IODMA_HLS}) and static region {SHELL_CHARACTERISED} (ends on xczu3eg, the "
@@ -205,14 +171,8 @@ def pynq_caveat(board: str) -> str | None:
     )
 
 
-# The Zynq template's static region out of context (``SHELL_CHARACTERISED``): xczu3eg and
-# xczu7ev give the same counts; the other boards' parts were not synthesized, and the
-# shell was built and timed on Ultra96 only (``PYNQ_CHARACTERISED``, ``pynq_caveat``).
-# The SmartConnect at 2, 3 and 4 masters of 128 bits (5 346, 7 615 and 9 777 LUTs),
-# within 0.4 %; a narrower master costs less (a 32-bit one about 150 LUTs). The AXI
-# interconnect's converters from the processor's 128-bit port, 1 277 LUTs whatever its
-# slaves, and its crossbar from 2 slaves (131, 184 and 361 LUTs at 2, 4 and 9), within
-# 5 %; one slave needs none.
+# Fitted from out-of-context synthesis of the Zynq template on xczu3eg and xczu7ev,
+# which agree. Other boards' parts were not synthesized.
 ZYNQ_STATIC_REGION = StaticRegion(
     processor="zynq_ultra_ps_e",
     reset="proc_sys_reset",
@@ -256,8 +216,7 @@ ROWS: dict[tuple[str, str | None], ShellRow] = {
 
 
 def built_shell(shell: str) -> str:
-    """``shell``, a shell the kernel path builds; one not named, or named and not
-    built, is refused by name."""
+    """Return ``shell`` if the kernel path builds it; refuse it otherwise."""
     if shell in NOT_BUILT:
         raise TargetRefused(
             "unsupported-shell",
@@ -270,9 +229,9 @@ def built_shell(shell: str) -> str:
 
 
 def shell_row(shell: str, board: str | None) -> ShellRow:
-    """The row of ``shell`` for ``board``. A shell not built (``built_shell``), or with
-    no row for the board (none stated, or one it does not build for: on ``pynq``, a
-    board the Zynq template has no branch for), is refused by name."""
+    """The row of ``shell`` for ``board``. Refuses a shell that is not built, a missing
+    board, and a board the shell has no row for (on ``pynq``, a board the Zynq template
+    has no branch for)."""
     if built_shell(shell) == IP:
         return IP_ROW
     if board is None:

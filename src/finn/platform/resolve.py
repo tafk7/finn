@@ -18,21 +18,11 @@ from finn.platform.shells import IP, built_shell, shell_row
 def resolve_target(
     *, period_ns: float, part: str | None = None, board: str | None = None, shell: str = IP
 ) -> Target:
-    """The target of a build at ``period_ns`` for ``board`` or ``part``, integrated by
-    ``shell`` (``ip`` unless one is stated).
-
-    A board names its part; a part stated beside it is an assertion, refused when it
-    is not the board's (``board-part-mismatch``). On the ``ip`` shell a board only
-    names its part, and the target states none: the packaged IP is built for the part
-    and integrated by its user, wherever the part is, so a build that names the board
-    and one that names its part make the same model. The platform is the part's
-    facts in the catalog (``finn.platform.catalog``: its device's fabric, DSP block,
-    UltraRAM and totals) and the clock period; a part the catalog does not have is
-    refused (``unknown-part``), and so is one of a device FINN does not build for
-    (``unsupported-architecture``). The target names the part as Vivado spells it. What the
-    shell gives (its doubled clock, its budgets) is its row's, for the shell and board
-    the target names (``finn.platform.shell_row``), and no copy of it is the target's.
-    Every refusal is named (``TargetRefused``)."""
+    """Resolve a build's target. A board gives its part, and a part given with it must
+    match. On the ``ip`` shell the board is dropped from the target, so naming a board
+    or its part gives the same model. The shell's own facts (doubled clock, budgets)
+    stay in its row and are not copied into the target. Refusals are
+    ``TargetRefused``."""
     built_shell(shell)
     if not period_ns > 0:
         raise TargetRefused("period-invalid", f"a clock period is > 0 ns, not {period_ns!r}")
@@ -73,10 +63,10 @@ def resolve_target(
 
 
 def refuse_drift(stated: Target, built: Target, build: str) -> None:
-    """Refuse a ``build`` (what it is, for the message) whose target, ``built``, is not
-    the one a model states (``stated``), each differing field named
-    (``target-drift``): a model's target is changed only by converting it again. A
-    resolved target names its part as Vivado spells it, so parts compare exactly."""
+    """Refuse a build whose target (``built``) differs from the model's (``stated``),
+    naming each differing field; ``build`` names the build in the message. A model's
+    target changes only by converting it again. A resolved target spells its part as
+    Vivado does, so parts compare exactly."""
     pairs = [
         ("part", stated.part, built.part),
         ("shell", stated.shell, built.shell),
