@@ -32,7 +32,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import phase_kernel_path
+from finn.builder.build_dataflow_phases import phase_kernel_path
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.harness.ops import boundary_inputs, check_parity, graph_inputs

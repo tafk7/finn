@@ -15,7 +15,7 @@ structure, its annotations' soundness and its containers' exactness, by bound, a
 declares where the phase computes otherwise than the export (``DEVIATIONS``). The
 equivalence with the export executes both graphs and is the harness's
 (``finn.harness.preparation``). The builder runs them as ``phase_graph_preparation``
-(``finn.builder.build_dataflow_steps``).
+(``finn.builder.build_dataflow_phases``).
 
 The phase reads no target: nothing here imports ``finn.platform`` or the KernelOps
 (``tests/layering.py``); the checkpoint is given the KernelOps' anchors.

@@ -34,6 +34,7 @@ DELETED = (
 #: The kernel path, as a build imports it.
 KERNEL_PATH = (
     "finn.builder.build_dataflow",
+    "finn.builder.build_dataflow_phases",
     "finn.builder.build_dataflow_steps",
     "finn.builder.build_dataflow_config",
     "finn.custom_op.kernels",

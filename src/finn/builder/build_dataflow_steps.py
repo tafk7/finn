@@ -1,9 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's steps and phases, each a ``(model, DataflowBuildConfig) -> model``
-function, registered by name in ``build_dataflow_step_lookup`` for a DataflowBuildConfig's
-``steps`` (finn.builder.build_dataflow_config).
+"""The kernel path's steps, each a ``(model, DataflowBuildConfig) -> model`` function,
+registered by name in ``build_dataflow_step_lookup`` for a DataflowBuildConfig's ``steps``
+(finn.builder.build_dataflow_config). Its phases (finn.builder.build_dataflow_phases) run
+them in order.
 
 ``phase_graph_preparation`` takes a Brevitas export to the streamlined graph the kernel
 path converts, by the sub-phases of finn.transformation.prepare, and checks what it
@@ -32,7 +33,6 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
-from finn.builder.build_dataflow_phases import execute_step
 from finn.builder.kernel_resources import RESOURCES_FILE, shell_resources_report
 from finn.builder.kernel_testbench import (
     TESTBENCH_DIR,
@@ -770,72 +770,7 @@ def step_kernel_resources(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     return model
 
 
-def phase_graph_preparation(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Phase: graph preparation, from a Brevitas export to the streamlined graph the
-    kernel path converts, as ``cfg.preparation`` states it. It reads no target.
-
-    Internal steps, in the order they run (the sub-phases of
-    finn.transformation.prepare.phase):
-    - step_prepare_import: P0, qonnx's cleanup
-    - step_prepare_quantization: P2, Quant to MultiThreshold, weights to integers
-    - step_prepare_io: P1, preprocessing merged, input datatype, label select
-    - step_prepare_streamlining: P3, the streamlining recipe
-    - step_prepare_topology: P4, the topology recipe
-    - step_prepare_containers: P6, integer regions widened where float32 is not exact
-    - step_prepare_checkpoint: P7, the prepared graph checked (and its equivalence
-      with the export, as verify_steps asks)
-
-    Writes report/graph_preparation.json."""
-    for step in (
-        step_prepare_import,
-        step_prepare_quantization,
-        step_prepare_io,
-        step_prepare_streamlining,
-        step_prepare_topology,
-        step_prepare_containers,
-        step_prepare_checkpoint,
-    ):
-        model = execute_step(step, model, cfg)
-    return model
-
-
-def phase_kernel_path(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Phase: the kernel path, from a prepared model to a partition of KernelOps.
-
-    Internal steps:
-    - step_kernel_ops: State the build target in the model, rewrite to KernelOps,
-      every tensor inferred as it goes
-    - step_kernel_partition: The KernelOps cut once into one partition, the rest on the host
-    - step_kernel_choices: Commit the partition's open choices by the configured strategies
-    - step_verify_kernel_partition: Check the partition (and what verify_steps asks)
-
-    Returns the parent graph: the host's nodes and the partition node, whose body
-    holds the KernelOps, their choices committed."""
-    model = execute_step(step_kernel_ops, model, cfg)
-    model = execute_step(step_kernel_partition, model, cfg)
-    model = execute_step(step_kernel_choices, model, cfg)
-    model = execute_step(step_verify_kernel_partition, model, cfg)
-    return model
-
-
-def phase_kernel_outputs(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Phase: the outputs the configuration asks (generate_outputs).
-
-    Internal steps (each but step_kernel_resources checks generate_outputs):
-    - step_kernel_stitched_ip: The partition's IP, its description, resources, testbench
-    - step_kernel_bitfile: The shell built around the partition, to a bitfile
-    - step_kernel_driver: The driver of the shell's host runtime
-    - step_kernel_resources: The resources per member of the shell
-    - step_kernel_deployment_package: The bitfile and driver, packaged"""
-    model = execute_step(step_kernel_stitched_ip, model, cfg)
-    model = execute_step(step_kernel_bitfile, model, cfg)
-    model = execute_step(step_kernel_driver, model, cfg)
-    model = execute_step(step_kernel_resources, model, cfg)
-    model = execute_step(step_kernel_deployment_package, model, cfg)
-    return model
-
-
-#: The kernel path's steps and phases by name, for a DataflowBuildConfig's ``steps``.
+#: The kernel path's steps by name, for a DataflowBuildConfig's ``steps``.
 build_dataflow_step_lookup = {
     step.__name__: step
     for step in (
@@ -855,8 +790,5 @@ build_dataflow_step_lookup = {
         step_kernel_driver,
         step_kernel_resources,
         step_kernel_deployment_package,
-        phase_graph_preparation,
-        phase_kernel_path,
-        phase_kernel_outputs,
     )
 }

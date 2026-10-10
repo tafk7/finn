@@ -38,7 +38,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import phase_graph_preparation, phase_kernel_path
+from finn.builder.build_dataflow_phases import phase_graph_preparation, phase_kernel_path
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root

@@ -246,8 +246,9 @@ class DataflowBuildConfig(DataClassJsonMixin):
     shell_options: Dict[str, Any] = field(default_factory=dict)
 
     #: If given, only run the steps in the list, each a step or phase name of the
-    #: kernel path (finn.builder.build_dataflow_steps) or a function called with
-    #: (model, DataflowBuildConfig); by default default_build_dataflow_steps.
+    #: kernel path (finn.builder.build_dataflow_phases, finn.builder.build_dataflow_steps)
+    #: or a function called with (model, DataflowBuildConfig); by default
+    #: default_build_dataflow_steps.
     steps: Optional[List[Any]] = None
 
     #: If given, start from this step or phase, loading the intermediate model saved

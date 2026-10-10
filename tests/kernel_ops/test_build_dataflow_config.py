@@ -19,14 +19,13 @@ from finn.builder.build_dataflow import (
     build_dataflow_directory,
     read_build_config,
 )
-from finn.builder.build_dataflow_checks import run_all_config_checks
+from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
     VerificationStepType,
     default_build_dataflow_steps,
 )
-from finn.builder.kernel_build_checks import Severity
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target

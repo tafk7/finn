@@ -34,7 +34,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
-from finn.builder.build_dataflow_checks import run_all_config_checks
+from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import (
     SHELL_OUTPUTS,
     DataflowBuildConfig,
@@ -51,7 +51,6 @@ from finn.builder.build_dataflow_steps import (
     step_kernel_resources,
     step_verify_kernel_partition,
 )
-from finn.builder.kernel_build_checks import Severity
 from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (

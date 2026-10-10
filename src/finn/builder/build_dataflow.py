@@ -47,7 +47,10 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     default_build_dataflow_steps,
 )
-from finn.builder.build_dataflow_phases import recorded_step_times
+from finn.builder.build_dataflow_phases import (
+    build_dataflow_phase_lookup,
+    recorded_step_times,
+)
 from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
@@ -76,17 +79,22 @@ class StreamToLogger(object):
 
 def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
     """Resolve build steps from config, supporting both phases and fine-grained steps
-    of the kernel path (finn.builder.build_dataflow_steps).
+    of the kernel path (finn.builder.build_dataflow_phases, finn.builder.build_dataflow_steps).
 
     Note: When using phase-based builds with start_step/stop_step, specify phase names
     (e.g., start_step="phase_kernel_outputs") rather than fine-grained step names.
     Phases save intermediate models for each internal step, but the build loop
     operates at the phase level.
     """
-    all_steps = build_dataflow_step_lookup
     steps = cfg.steps
     if steps is None:
         steps = default_build_dataflow_steps
+
+    # Merge phase and step lookup dictionaries
+    all_steps = {
+        **build_dataflow_step_lookup,
+        **build_dataflow_phase_lookup,
+    }
 
     steps_as_fxns = []
     for transform_step in steps:

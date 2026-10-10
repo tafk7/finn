@@ -34,7 +34,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import phase_graph_preparation
+from finn.builder.build_dataflow_phases import phase_graph_preparation
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
