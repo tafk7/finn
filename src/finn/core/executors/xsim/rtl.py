@@ -56,7 +56,11 @@ which beat carries which index tuple, not as a word that differs.
 they arrived, none expected (``Receive``: how many, of how many bits): what an
 executor that only executes takes. The testbench then writes every such output's
 words beside it (``<port>.received.mem``) once all have arrived, and compares
-nothing.
+nothing. It also taps, when asked (``Tap``), a link between the module's instances
+at its producer's output pin: each handshake's word there, as many as the tap takes,
+written beside the testbench (``<tap>.tapped.mem``) at the end. A tap reads the
+netlist's nets by hierarchical name (``instance_net``) from the testbench: the module
+is the same, and a testbench without taps is the same text.
 
 The stimulus and the expected words, and each bus's writes, are ``$readmemh``
 files beside the testbench (``<port>.input.mem``, ``<port>.output.mem``,
@@ -112,6 +116,7 @@ from finn.kernels.artifacts.module import (
     Composed,
     Leaf,
     Link,
+    LinkEnd,
     Module,
     RegisterMap,
     declared_registers,
@@ -132,6 +137,31 @@ class Receive:
 
     count: int
     bits: int
+
+
+@dataclass(frozen=True)
+class Tap:
+    """A link inside a composed module, observed at one instance's end (``end``, its
+    producer's output pins): the low ``bits`` of its data word at each of the first
+    ``count`` handshakes there (``stream_out``)."""
+
+    end: LinkEnd
+    count: int
+    bits: int
+
+    def __post_init__(self) -> None:
+        if self.end.instance is None:
+            raise ValueError(f"{self.end.data}: a root's port is streamed, not tapped")
+        if not 0 < self.bits <= self.end.data_bits:
+            raise ValueError(
+                f"{self.end.instance}.{self.end.data}: {self.bits} bits of a "
+                f"{self.end.data_bits}-bit word"
+            )
+
+    def net(self, pin: str) -> str:
+        """The testbench's hierarchical name of the net of the end's ``pin``."""
+        assert self.end.instance is not None
+        return f"dut.{instance_net(self.end.instance, pin)}"
 
 
 def pack_lanes(values: Sequence[int], bits: int) -> int:
@@ -290,14 +320,18 @@ def stream_out(
     cycles: int = 0,
     toolchain: Toolchain | None = None,
     cache: Path | None = None,
+    taps: Mapping[str, Tap] | None = None,
 ) -> dict[str, tuple[int, ...]]:
     """Stream ``inputs`` through ``module``, paced by ``pacing``, and return each output's
-    words as they arrived (payload bits), as many as its ``Receive`` states; see the module
-    docstring for every pin it drives. Nothing is compared: an output word beyond its count,
-    the watchdog or a tool's error raises ``SimulationFailed``.
+    words as they arrived (payload bits), as many as its ``Receive`` states, by port, and
+    each tap's words by its name (``taps``: the words its link carried, up to its count,
+    fewer if the link carried fewer); see the module docstring for every pin it drives.
+    Nothing is compared: an output word beyond its count, the watchdog or a tool's error
+    raises ``SimulationFailed``.
 
     ``cycles`` as ``stream_through`` takes them. ``toolchain`` runs the simulator and HLS
     (the machine's by default); ``cache`` is the HLS cache (``materialize``)."""
+    taps = taps or {}
     bench = stream_bench(
         module,
         directory,
@@ -307,11 +341,17 @@ def stream_out(
         cycles=cycles,
         toolchain=toolchain,
         cache=cache,
+        taps=taps,
     )
     for port in outputs:
         (directory / f"{port}.{RECEIVED}").unlink(missing_ok=True)
+    for name in taps:
+        (directory / f"{name}.{TAPPED}").unlink(missing_ok=True)
     simulate(bench.sources, bench.text, directory, toolchain=toolchain)
-    return {port: tuple(_read_memory(directory / f"{port}.{RECEIVED}")) for port in outputs}
+    found = {port: tuple(_read_memory(directory / f"{port}.{RECEIVED}")) for port in outputs}
+    for name in taps:
+        found[name] = tuple(_read_taken(directory / f"{name}.{TAPPED}"))
+    return found
 
 
 def measure(
@@ -400,6 +440,8 @@ PERIOD_NS = 10
 #: the file beside it each output's received words are written to then (``<port>.``).
 WORDS_DIFFER = "output words differ"
 RECEIVED = "received.mem"
+#: The file beside the testbench each tap's words are written to (``<tap>.``).
+TAPPED = "tapped.mem"
 
 
 class Undriven(ValueError):
@@ -567,18 +609,22 @@ def stream_bench(
     observed: Mapping[str, tuple[str, str]] | None = None,
     toolchain: Toolchain | None = None,
     cache: Path | None = None,
+    taps: Mapping[str, Tap] | None = None,
 ) -> StreamBench:
     """Write the module's sources, its data files and the stimulus and expected words into
     ``directory``, and the testbench that drives every pin of the module from what it
     declares (the module docstring); nothing simulates. An output given as ``Receive``
     is compared with nothing: its words are written beside the testbench once every
-    output has presented its words. ``toolchain`` and ``cache`` as ``materialize`` takes
-    them.
+    output has presented its words, and so are each tap's (``Tap``, by its name, an
+    identifier). ``toolchain`` and ``cache`` as ``materialize`` takes them.
 
     Refuses, before writing anything, a stream the module does not present
-    (``ValueError``) and an input the testbench has no value for (``Undriven``).
+    (``ValueError``), an input the testbench has no value for (``Undriven``) and a tap
+    of an instance the module does not place, or named as one of its streams
+    (``ValueError``).
     """
     _check_streams(module, inputs, outputs)
+    _check_taps(module, taps or {})
     pins = abi_pins(module.abi.pins)
     clocks = _clocks(pins)
     streams = _streams(module)
@@ -774,6 +820,17 @@ def stream_bench(
         lines.append(f"wire {vector}{name};")  # an output nothing reads
     for name, (valid, ready) in (observed or {}).items():
         count.append(f'if ({valid} && {ready}) $display("BEAT {name} %0d", cycle);')
+    for name, tap in (taps or {}).items():
+        end, total = tap.end, tap.count
+        lines += [f"logic [{tap.bits - 1}:0] {name}_tapped [{total}];", f"int {name}_taps = 0;"]
+        count.append(
+            f"""if ({tap.net(end.valid)} && {tap.net(end.ready)}) begin
+                if ({name}_taps < {total})
+                    {name}_tapped[{name}_taps] <= {tap.net(end.data)}[{tap.bits - 1}:0];
+                {name}_taps <= {name}_taps + 1;
+            end"""
+        )
+        returned.append(f'$writememh("{name}.{TAPPED}", {name}_tapped);')
 
     total_writes = sum(len(found.writes) for found in writes.values())
     budget = (
@@ -862,6 +919,30 @@ def _stream(
             raise
         received = {port: _read_memory(directory / f"{port}.{RECEIVED}") for port in outputs}
         raise WordsDiffer(str(failed), received) from None
+
+
+def _check_taps(module: Module, taps: Mapping[str, Tap]) -> None:
+    placed = dict(module.fragment.instances) if isinstance(module, Composed) else {}
+    streams = _streams(module)
+    for name, tap in taps.items():
+        if not name.isidentifier() or name in streams:
+            raise ValueError(f"{name!r}: a tap is named by an identifier no stream has")
+        if tap.end.instance not in placed:
+            raise ValueError(f"tap {name}: the module places no instance {tap.end.instance}")
+
+
+def _read_taken(path: Path) -> list[int]:
+    """A tap's words as ``$writememh`` wrote them, up to the first it did not take (an
+    unknown word, ``x``)."""
+    words: list[int] = []
+    for line in path.read_text().splitlines():
+        for token in line.split("//", 1)[0].split():
+            if token.startswith("@"):
+                continue
+            if not all(digit in "0123456789abcdefABCDEF" for digit in token):
+                return words
+            words.append(int(token, 16))
+    return words
 
 
 def _read_memory(path: Path) -> list[int]:

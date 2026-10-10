@@ -34,13 +34,26 @@ and ``cache``, the HLS cache ``materialize`` takes an HLS leaf's product from. N
 compiled is pointed to by a node attribute. Each run simulates in the simulator's own
 processes (xvlog, xelab, xsim), so runs in one process do not share simulator state.
 
-It is ``hardware``: a run that requires hardware accepts it. It runs a partition whole:
-the tensors inside the body (the links between its kernels) are not observed.
+**Links**, when the run returns its full context (``finn.core.onnx_exec.running``):
+each tensor between two kernels of the body is tapped in the simulation, at its
+producer's output, before any adapter (``rtl.Tap``), and read back with the producer's
+traversal and element: the ONNX tensor itself, as its producer presents it. It enters
+the context as the partition node's Python run names a body's tensor,
+``<node>_<tensor>``, in the container the body's context holds it in, so a hardware run
+and a Python run compare entry by entry. A run that does not return its full context
+taps nothing.
+
+It is ``hardware``: a run that requires hardware accepts it. It runs a partition whole,
+from its inputs: a run that starts inside the body is refused before it runs
+(``finn.core.onnx_exec.InsidePartition``). A run that ends inside it (at ``end_node``,
+a node of the body) simulates the whole partition and observes: of the body's tensors,
+it writes those its nodes up to ``end_node`` produce (the outputs among them, and the
+links, when the full context is returned), as Python's run up to that node would.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -49,9 +62,10 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.core.executors.xsim.pacing import STALLED, Pacing
-from finn.core.executors.xsim.rtl import Receive, SimulationFailed, Words, stream_out
+from finn.core.executors.xsim.rtl import Receive, SimulationFailed, Tap, Words, stream_out
+from finn.core.onnx_exec import running, window
 from finn.core.space import Available
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_root, member
 from finn.custom_op.partition.kernel_partitions import kernel_partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
@@ -84,11 +98,12 @@ class Unreadable(SimulationFailed):
 
 @dataclass(frozen=True)
 class Stream:
-    """A boundary port of a partition: its tensor in the parent's context, whether it is
-    an output, the traversal the port presents, and its element's payload bits and
-    range."""
+    """A boundary port of a partition: its tensor in the parent's context and in the
+    body (``inner``), whether it is an output, the traversal the port presents, and its
+    element's payload bits and range."""
 
     tensor: str
+    inner: str
     port: str
     output: bool
     form: Traversal
@@ -120,7 +135,10 @@ class XSim:
     def run(self, node: NodeProto, context: Context, model: ModelWrapper) -> None:
         body = kernel_partition_body(node)
         assert body is not None, f"{node.name}: XSim runs a partition of KernelOps"
+        run = running()
+        reached = {tensor for inner in window(body, None, run.end_node) for tensor in inner.output}
         point, streams = boundary(body, node, self.completion)
+        tapped = links(body, point, reached) if run.full_context else ()
         cycles = point.query(type(point).cycles)
         inputs: dict[str, Words] = {}
         outputs: dict[str, Receive] = {}
@@ -139,25 +157,32 @@ class XSim:
             cycles=cycles.value if isinstance(cycles, Available) else 0,
             toolchain=self.toolchain,
             cache=self.cache,
+            taps={link.name: link.tap for link in tapped},
         )
         for stream in streams:
-            if not stream.output:
-                continue
-            words = received[stream.port]
-            try:
-                values = unpack(stream.form, words, stream.bits, signed=stream.low < 0)
-            except ValueError as error:
+            if stream.output and stream.inner in reached:
                 where = f"{node.name}: {stream.tensor} ({stream.port})"
-                raise Unreadable(f"{where}: {error}", received) from None
-            held = context[stream.tensor]
-            found = values.reshape(np.shape(held)).astype(np.asarray(held).dtype)
-            if not np.array_equal(found, values.reshape(found.shape)):
-                raise Unreadable(
-                    f"{node.name}: {stream.tensor}'s container ({found.dtype}) does not hold "
-                    "the values its port presented exactly",
+                context[stream.tensor] = _read(
+                    stream.form,
+                    stream.bits,
+                    stream.low < 0,
+                    context[stream.tensor],
+                    received[stream.port],
+                    where,
                     received,
                 )
-            context[stream.tensor] = found
+        held = body.make_empty_exec_context() if tapped else {}
+        for link in tapped:
+            where = f"{node.name}: link {link.tensor} ({link.tap.end.instance})"
+            context[f"{node.name}_{link.tensor}"] = _read(
+                link.form,
+                link.bits,
+                link.signed,
+                held[link.tensor],
+                received[link.name],
+                where,
+                received,
+            )
 
     def _run_directory(self, name: str) -> Path:
         """A directory of its own for one run of the partition node ``name``."""
@@ -170,6 +195,66 @@ class XSim:
             found = self.directory / f"{name}.{index}"
         found.mkdir(parents=True)
         return found
+
+
+@dataclass(frozen=True)
+class Tapped:
+    """A link of a partition's body: its tensor between two kernels, the tap at its
+    producer's output (``name``, the testbench's), and the traversal its producer
+    presents it in, its element's bits and whether they are signed."""
+
+    tensor: str
+    name: str
+    tap: Tap
+    form: Traversal
+    bits: int
+    signed: bool
+
+
+def links(body: ModelWrapper, point: Any, tensors: Collection[str]) -> tuple[Tapped, ...]:
+    """The links of ``body`` among ``tensors``, in the body's node order: each tensor a
+    node of the body produces and another consumes, tapped at its producer's end of its
+    channel in ``point``, the body's configured root (``boundary``): its first hop's
+    source, before any adapter."""
+    consumed = {tensor for inner in body.graph.node for tensor in inner.input}
+    found: list[Tapped] = []
+    for inner in body.graph.node:
+        for tensor in inner.output:
+            if tensor not in tensors or tensor not in consumed:
+                continue
+            channel = getattr(point, member(tensor))
+            produced = channel.endpoints.source
+            end = channel.hops[0].source.under(member(tensor))
+            form, bits = produced.form, produced.element.bits
+            low, _ = ordinary_integer_bounds(produced.element.dtype)
+            tap = Tap(end, form.beats, form.lanes * bits)
+            found.append(Tapped(tensor, f"link_{len(found)}", tap, form, bits, low < 0))
+    return tuple(found)
+
+
+def _read(
+    form: Traversal,
+    bits: int,
+    signed: bool,
+    held: Any,
+    words: tuple[int, ...],
+    where: str,
+    received: Mapping[str, tuple[int, ...]],
+) -> npt.NDArray[Any]:
+    """The tensor ``words`` present in ``form``, in the shape and container of ``held``,
+    the context's: refused (``Unreadable``) when they are no tensor of ``form`` or the
+    container does not hold their values exactly."""
+    try:
+        values = unpack(form, words, bits, signed=signed)
+    except ValueError as error:
+        raise Unreadable(f"{where}: {error}", received) from None
+    found = values.reshape(np.shape(held)).astype(np.asarray(held).dtype)
+    if not np.array_equal(found, values.reshape(found.shape)):
+        raise Unreadable(
+            f"{where}: its container ({found.dtype}) does not hold the values presented exactly",
+            received,
+        )
+    return found
 
 
 def boundary(
@@ -188,7 +273,16 @@ def boundary(
         end = free_side(point, tensor)
         low, high = ordinary_integer_bounds(end.element.dtype)
         streams.append(
-            Stream(outer[tensor], port, tensor in outputs, end.form, end.element.bits, low, high)
+            Stream(
+                outer[tensor],
+                tensor,
+                port,
+                tensor in outputs,
+                end.form,
+                end.element.bits,
+                low,
+                high,
+            )
         )
     return point, tuple(streams)
 

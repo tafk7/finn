@@ -221,7 +221,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The kernel path's partition node, its ONNX domain (finn.custom_op.partition, less
     # kernel_partitions): it runs its body with the executors of the run that reached it
-    # (finn.core.onnx_exec.executing), imported when it runs, since the executors read
+    # (finn.core.onnx_exec.running), imported when it runs, since the executors read
     # kernel_partitions, under this package.
     Layer(
         "custom_op.partition",

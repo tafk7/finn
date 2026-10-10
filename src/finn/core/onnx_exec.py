@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -62,24 +63,36 @@ class HardwareRequired(RuntimeError):
 
 
 class InsidePartition(ValueError):
-    """start_node or end_node is a node of a partition's body, where the run cannot start
-    or stop: the message names the partition and what to run instead."""
+    """start_node is a node of a partition's body, and a hardware executor runs that
+    partition: it simulates the partition whole, from its inputs, so the run cannot start
+    there. The message names the partition and what to run instead."""
 
 
-# The executors of the innermost execute_onnx running in this context. A node's
-# execute_node has no parameter for them (qonnx's CustomOp.execute_node(context,
-# graph)), so an op that executes a model of its own, the partition node, reads them
-# here (executing()) and passes them on.
-_executing: ContextVar[tuple[Executor, ...]] = ContextVar(
-    "finn.core.onnx_exec.executing", default=DEFAULT_EXECUTORS
-)
+@dataclass(frozen=True)
+class Running:
+    """What the innermost execute_onnx running in this context was asked, as a node that
+    executes a body of its own (a partition node) reads it: the executors, whether the
+    run returns its full context, and the node of the running node's body the run starts
+    or ends at (None: its body runs whole at that end).
+
+    A node's execute_node has no parameter for them (qonnx's
+    ``CustomOp.execute_node(context, graph)``), so the node, or the executor that runs
+    it, reads them here (``running``)."""
+
+    executors: tuple[Executor, ...] = DEFAULT_EXECUTORS
+    full_context: bool = False
+    start_node: NodeProto | None = None
+    end_node: NodeProto | None = None
 
 
-def executing() -> tuple[Executor, ...]:
-    """The executors of the innermost execute_onnx running in this context, or the
-    default outside one: what a node that executes a body of its own (a partition
+_running: ContextVar[Running] = ContextVar("finn.core.onnx_exec.running", default=Running())
+
+
+def running() -> Running:
+    """What the innermost execute_onnx running in this context was asked (``Running``),
+    or the default outside one: what a node that executes a body of its own (a partition
     node) executes it with."""
-    return _executing.get()
+    return _running.get()
 
 
 def execute_onnx(
@@ -112,18 +125,29 @@ def execute_onnx(
     the executor that ran it (None for qonnx's execute_node); a partition's body,
     run by its node, is not this run's.
 
-    start_node and end_node may also be nodes of a partition node's body. A hardware
-    executor runs a partition whole: it refuses to start inside it (InsidePartition,
-    naming the alternative: cut the graph there and build that partition), and
-    ending inside it runs the whole partition, whose outputs are what it observes (the
-    tensors inside the body are not in the context). Under any other executor a run
-    neither starts nor ends inside a body (InsidePartition).
+    start_node and end_node may also be nodes of a partition node's body: the run then
+    starts or ends at that partition node, and its body runs from or up to that node
+    (``running``). Python runs the body so, its nodes from start_node to end_node. A
+    hardware executor runs a partition whole: it refuses to start inside it
+    (InsidePartition, naming the alternative: cut the graph there and build that
+    partition), and ending inside it simulates the whole partition and observes, of its
+    tensors, those up to end_node.
+
+    The full context holds the tensors of a partition's body under the partition node's
+    name, ``<node>_<tensor>`` (the body's outputs under the parent's names): Python's all
+    of the body's context, a hardware executor's each link it observed between two
+    kernels of the body, as its producer presents it. A caller starts inside a body from
+    a context so named: input_dict may name a body's tensors so.
     """
 
     # validate that all provided input names exist in the model
     # this catches common bugs like using outdated tensor names
     valid_tensor_names = set(model.get_all_tensor_names())
-    for inp_name in input_dict.keys():
+    unknown = [name for name in input_dict if name not in valid_tensor_names]
+    if unknown:
+        # A body's tensor, as a full context names it (<node>_<tensor>).
+        valid_tensor_names |= _body_tensors(model)
+    for inp_name in unknown:
         if inp_name not in valid_tensor_names:
             graph_input_names = sorted(t.name for t in model.graph.input)
             raise ValueError(
@@ -132,19 +156,11 @@ def execute_onnx(
             )
 
     execution_context = _execution_context(model, input_dict)
-    token = _executing.set(tuple(executors))
+    token = _running.set(Running(tuple(executors), return_full_exec_context))
     try:
-        _execute_nodes(
-            model,
-            execution_context,
-            start_node,
-            end_node,
-            tuple(executors),
-            require_hardware,
-            provenance,
-        )
+        _execute_nodes(model, execution_context, start_node, end_node, require_hardware, provenance)
     finally:
-        _executing.reset(token)
+        _running.reset(token)
 
     if return_full_exec_context:
         return execution_context
@@ -186,7 +202,35 @@ def _execution_context(model: ModelWrapper, input_dict: Mapping[str, NDArray[Any
                         str(input_dict[inp_name].shape),
                     )
                 )
+        else:
+            # A body's tensor (<node>_<tensor>): its partition node passes it on, and
+            # its body's run checks its shape.
+            execution_context[inp_name] = input_dict[inp_name]
     return execution_context
+
+
+def _body_tensors(model: ModelWrapper) -> set[str]:
+    """Each tensor of a partition node's body, by the name a full context holds it under:
+    ``<node>_<tensor>``."""
+    return {
+        f"{node.name}_{name}"
+        for node in model.graph.node
+        if is_partition(node)
+        for name in ModelWrapper(body_file(node)).get_all_tensor_names()
+    }
+
+
+def window(
+    model: ModelWrapper, start_node: NodeProto | None, end_node: NodeProto | None
+) -> list[NodeProto]:
+    """The nodes of ``model`` a run from ``start_node`` to ``end_node`` executes, in the
+    graph's order (from the first, to the last, where None): both nodes of ``model``."""
+    nodes = list(model.graph.node)
+    start = 0 if start_node is None else model.get_node_index(start_node)
+    end = len(nodes) - 1 if end_node is None else model.get_node_index(end_node)
+    if start is None or end is None:
+        raise ValueError("start_node and end_node are nodes of the model")
+    return nodes[start : end + 1]
 
 
 def _execute_nodes(
@@ -194,13 +238,16 @@ def _execute_nodes(
     execution_context: Context,
     start_node: NodeProto | None,
     end_node: NodeProto | None,
-    executors: tuple[Executor, ...],
     require_hardware: bool,
     provenance: RanBy | None,
 ) -> None:
     """qonnx's node loop (qonnx.core.onnx_exec.execute_onnx) with the executors in
     front of its execute_node: the nodes from start_node to end_node, in the graph's
-    order, each sanitized in place to its quantization annotation as qonnx sanitizes it."""
+    order, each sanitized in place to its quantization annotation as qonnx sanitizes it.
+    A partition node the run starts or ends inside runs with that node of its body in
+    ``running()``."""
+    run = running()
+    executors = run.executors
     graph = model.graph
     opset_imports = model.get_opset_imports()
     start_ind, start_inside = _located(model, start_node, "start_node", 0)
@@ -215,18 +262,22 @@ def _execute_nodes(
         hardware = executor is not None and executor.hardware
         if require_hardware and hardware_node(node) and not hardware:
             raise HardwareRequired(_unclaimed(node, executor, executors))
-        if index == start_ind and start_inside is not None:
-            raise InsidePartition(_inside(node, start_inside, executor, "start_node"))
-        if index == end_ind and end_inside is not None and not hardware:
-            raise InsidePartition(_inside(node, end_inside, executor, "end_node"))
-        if executor is not None:
-            executor.run(node, execution_context, model)
-        else:
-            opset_version = opset_imports.get(node.domain, get_preferred_qonnx_opset())
-            # qonnx/legacy untyped
-            execute_node(  # type: ignore[no-untyped-call]
-                node, execution_context, graph, opset_version, model=model
-            )
+        start = start_inside if index == start_ind else None
+        end = end_inside if index == end_ind else None
+        if start is not None and hardware:
+            raise InsidePartition(_inside(node, start, executor))
+        token = _running.set(replace(run, start_node=start, end_node=end))
+        try:
+            if executor is not None:
+                executor.run(node, execution_context, model)
+            else:
+                opset_version = opset_imports.get(node.domain, get_preferred_qonnx_opset())
+                # qonnx/legacy untyped
+                execute_node(  # type: ignore[no-untyped-call]
+                    node, execution_context, graph, opset_version, model=model
+                )
+        finally:
+            _running.reset(token)
         if provenance is not None:
             provenance[node.name] = executor
         if get_sanitize_quant_tensors() != 0:
@@ -272,19 +323,11 @@ def _unclaimed(node: NodeProto, executor: Executor | None, executors: Sequence[E
     )
 
 
-def _inside(node: NodeProto, inside: NodeProto, executor: Executor | None, role: str) -> str:
-    where = f"{role} {inside.name} is inside partition {node.name}"
-    if executor is not None and executor.hardware:
-        return (
-            f"{where}, which {_named(executor)} simulates whole, from its inputs: it cannot "
-            f"start there. Cut the graph at {inside.name} and build that partition to "
-            "simulate from it"
-        )
-    point = "from" if role == "start_node" else "up to"
+def _inside(node: NodeProto, inside: NodeProto, executor: Executor | None) -> str:
     return (
-        f"{where}, which {_named(executor)} runs whole: running a partition's body {point} "
-        f"one of its nodes is not supported. Give the partition node {node.name}, or run "
-        f"its body (its model attribute) {point} {inside.name}"
+        f"start_node {inside.name} is inside partition {node.name}, which "
+        f"{_named(executor)} simulates whole, from its inputs: it cannot start there. Cut "
+        f"the graph at {inside.name} and build that partition to simulate from it"
     )
 
 
