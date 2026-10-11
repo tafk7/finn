@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import shutil
 from collections.abc import Callable
@@ -103,6 +104,9 @@ from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_options, partition
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
+
+#: The steps' logger, whose lines a step called outside a build logs.
+STEPS_LOG = "finn.builder.build_dataflow_steps"
 
 #: The builder's phases from the prepared graph to the verified partition.
 KERNEL_PATH = ["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"]
@@ -307,7 +311,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
 @pytest.mark.slow
 def test_the_debug_placeholder_sets_nothing_on_tfc(
-    source: ModelWrapper, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    source: ModelWrapper, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The debug placeholder is a strategy (``placeholder``), written in the list: on TFC
     no required choice is open, so it sets nothing, logs no DEBUG value, and the
@@ -315,7 +319,8 @@ def test_the_debug_placeholder_sets_nothing_on_tfc(
     cfg = config(
         tmp_path, step_options=exploration(kernel_exploration=[{"strategy": "placeholder"}])
     )
-    model = explore(source, cfg)
+    with caplog.at_level(logging.INFO, logger=STEPS_LOG):
+        model = explore(source, cfg)
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     assert report["open"] == [] and "completion" not in report and "completed" not in report
     (placeholder,) = report["strategies"]
@@ -324,8 +329,9 @@ def test_the_debug_placeholder_sets_nothing_on_tfc(
         {},
         {},
     )
-    logged = capsys.readouterr().out
-    assert not [line for line in logged.splitlines() if line.startswith("DEBUG:")]
+    logged = [record.getMessage() for record in caplog.records if record.name == STEPS_LOG]
+    assert "Kernel choices: placeholder changed 0" in logged
+    assert not [line for line in logged if line.startswith("DEBUG:")]
     step_verify_partition(model, cfg)
 
 
@@ -512,12 +518,12 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
 
 
 def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A host node on a path from a KernelOp to a KernelOp is refused where the build
     converts, named with its findings, after the report is written: not at
     partitioning, which would find the partition depending on itself."""
-    with pytest.raises(KernelOpError) as refused:
+    with caplog.at_level(logging.INFO, logger=STEPS_LOG), pytest.raises(KernelOpError) as refused:
         step_convert_to_hw(host_between_source(), config(tmp_path))
     assert str(refused.value) == (
         "1 host nodes sit between KernelOps, so a partition of the KernelOps would depend "
@@ -525,7 +531,7 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     )
     report = json.loads((tmp_path / "output" / "report" / "kernel_ops.json").read_text())
     assert report["between_kernel_ops"] == ["flip"]
-    assert capsys.readouterr().out.splitlines() == [
+    assert [record.getMessage() for record in caplog.records if record.name == STEPS_LOG] == [
         "ToKernelOps: 2 converted (MatMul 2); 1 on the host; report/kernel_ops.json",
         "ToKernelOps:   no-kernel-op (limitation) 1: Transpose 1",
     ]

@@ -11,6 +11,7 @@ A check is a ``Check`` of a ``Severity``.
 
 import importlib
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -28,6 +29,8 @@ from finn.builder.build_dataflow_config import (
 from finn.platform import BOARDS, Board, TargetRefused, shell_row
 from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
+
+_LOG = logging.getLogger(__name__)
 
 
 class Severity(Enum):
@@ -269,6 +272,24 @@ def format_report(report: Report) -> str:
     lines.append(f"\nSUMMARY: {len(errors)} errors, {len(warnings)} warnings, {len(infos)} info")
     lines.append("=" * 70)
     return "\n".join(lines)
+
+
+#: The log level of a failed check, by its severity.
+_LEVELS = {
+    Severity.ERROR: logging.ERROR,
+    Severity.WARNING: logging.WARNING,
+    Severity.INFO: logging.INFO,
+}
+
+
+def log_report(report: Report) -> None:
+    """Log the report: its text (format_report) at INFO, then each failed check at its
+    severity, with its suggestion."""
+    _LOG.info(format_report(report))
+    for c in report.checks:
+        if not c.passed:
+            suggestion = f" -> {c.suggestion}" if c.suggestion else ""
+            _LOG.log(_LEVELS[c.severity], f"{c.name}: {c.message}{suggestion}")
 
 
 def save_report(report: Report, output_dir: str) -> str:

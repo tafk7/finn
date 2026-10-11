@@ -27,19 +27,20 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import clize
+import contextlib
 import json
 import logging
 import os
 import pdb  # NOQA
 import sys
 import time
-import traceback
+import warnings
 from dataclasses import replace
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
 from finn.builder.build_dataflow_checks import (
-    format_report,
+    log_report,
     run_all_config_checks,
     save_report,
 )
@@ -53,29 +54,143 @@ from finn.builder.build_dataflow_steps import (
     PrepareIoOptions,
     build_dataflow_step_lookup,
 )
+from finn.core.space import by_code
+from finn.toolchain.launcher import ToolFailed, ToolUnavailable
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
 #: beside model.onnx.
 CONFIG_FILE = "dataflow_build_config.json"
 
+#: The build log, in the output directory.
+LOG_FILE = "build_dataflow.log"
 
-# adapted from https://stackoverflow.com/a/39215961
-class StreamToLogger(object):
-    """
-    Fake file-like stream object that redirects writes to a logger instance.
-    """
+#: The runner's own logger: its lines (the build's paths, each step it runs, the
+#: outcome) are the console's at INFO; every other logger's only from WARNING.
+_LOG = logging.getLogger(__name__)
 
-    def __init__(self, logger, level):
-        self.logger = logger
-        self.level = level
-        self.linebuf = ""
+#: A record with this ``extra`` goes to the build log only, unless ``verbose`` (a
+#: refusal's traceback).
+FILE_ONLY = {"finn_console": False}
 
-    def write(self, buf):
-        for line in buf.rstrip().splitlines():
-            self.logger.log(self.level, line.rstrip())
+#: The step running now, stamped on every record of the build: module-level, not a
+#: context variable, since a step's thread pool (the HLS pool) does not inherit
+#: context.
+_step = "-"
 
-    def flush(self):
-        pass
+
+class _StepStamp(logging.Filter):
+    """Stamps each record with the step running when it was made (``step``); a captured
+    warning's text loses the line end warnings.formatwarning gives it."""
+
+    def filter(self, record):
+        record.step = _step
+        if record.name == "py.warnings" and isinstance(record.msg, str):
+            record.msg = record.msg.rstrip("\n")
+        return True
+
+
+class _Console(logging.Filter):
+    """What a build shows on its console: with ``verbose``, what the log file has;
+    otherwise the runner's lines, and every logger's warnings, refusals and failures.
+    INFO and below go to stdout, WARNING and above to stderr (``errors``)."""
+
+    def __init__(self, verbose: bool, errors: bool):
+        super().__init__()
+        self.verbose = verbose
+        self.errors = errors
+
+    def filter(self, record):
+        if (record.levelno >= logging.WARNING) != self.errors:
+            return False
+        if self.verbose:
+            return True
+        if not getattr(record, "finn_console", True):
+            return False
+        return record.levelno >= logging.WARNING or record.name == _LOG.name
+
+
+class _ConsoleFormat(logging.Formatter):
+    """The message alone for INFO and below; ``LEVEL: message`` above."""
+
+    def format(self, record):
+        text = super().format(record)
+        return text if record.levelno < logging.WARNING else f"{record.levelname}: {text}"
+
+
+@contextlib.contextmanager
+def _build_log(cfg):
+    """The build's log for the ``with`` block: FINN's loggers (``finn``) and Python's
+    warnings (``py.warnings``, captured through ``logging.captureWarnings``) to
+    ``LOG_FILE`` in ``cfg.output_dir``, every line with its level, step and logger, and
+    to the console (_Console). ``finn`` logs from INFO, unless its caller set a level.
+    No stream is swapped: a third party's print reaches the console as printed. The
+    handlers, the levels and the warnings hook are restored after, so a notebook's own
+    logging is left as it was."""
+    global _step
+    os.makedirs(cfg.output_dir, exist_ok=True)
+    stamp = _StepStamp()
+    file_handler = logging.FileHandler(os.path.join(cfg.output_dir, LOG_FILE), mode="a")
+    file_handler.setFormatter(
+        logging.Formatter("[%(asctime)s] %(levelname)s %(step)s %(name)s: %(message)s")
+    )
+    handlers = [file_handler]
+    for stream, errors in ((sys.stdout, False), (sys.stderr, True)):
+        console = logging.StreamHandler(stream)
+        console.addFilter(_Console(cfg.verbose, errors))
+        console.setFormatter(_ConsoleFormat("%(message)s"))
+        handlers.append(console)
+    loggers = [logging.getLogger("finn"), logging.getLogger("py.warnings")]
+    saved = [(logger, logger.level, logger.propagate) for logger in loggers]
+    for handler in handlers:
+        handler.addFilter(stamp)
+        for logger in loggers:
+            logger.addHandler(handler)
+    for logger in loggers:
+        # Not also to the root's handlers (a notebook's), which would say it twice.
+        logger.propagate = False
+    if loggers[0].level == logging.NOTSET:
+        loggers[0].setLevel(logging.INFO)
+    # Not if the caller captures warnings already: its hook stays as it is.
+    capture = warnings.showwarning is not getattr(logging, "_showwarning", None)
+    if capture:
+        logging.captureWarnings(True)
+    try:
+        yield
+    finally:
+        _step = "-"
+        if capture:
+            logging.captureWarnings(False)
+        for logger, level, propagate in saved:
+            logger.setLevel(level)
+            logger.propagate = propagate
+            for handler in handlers:
+                logger.removeHandler(handler)
+        for handler in handlers:
+            handler.close()
+
+
+def _log_failure(step: str, error: BaseException) -> None:
+    """Log a failed step's error by its kind (the traceback in the log file each time):
+    a tool unavailable (``ToolUnavailable``: the tool and what selects it); a tool that
+    ran and failed (``ToolFailed``: its transcript and error lines); a refusal (any
+    error carrying ``findings``: their number and one line per code); a verdict (an
+    ``AssertionError`` of its own type: ``Verification for <step> : FAIL``); anything
+    else, a bug, with its traceback on the console too."""
+    kind = type(error).__name__
+    if isinstance(error, (ToolUnavailable, ToolFailed)):
+        _LOG.error("%s: %s: %s", step, kind, error)
+    elif hasattr(error, "findings"):
+        findings = tuple(error.findings)
+        _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), kind, error)
+        for line in by_code(findings):
+            _LOG.error("  %s", line)
+    elif isinstance(error, AssertionError) and type(error) is not AssertionError:
+        _LOG.error("Verification for %s : FAIL", step)
+        _LOG.error("%s: %s", kind, error)
+    else:
+        _LOG.error("%s failed: %s: %s", step, kind, error, exc_info=error)
+        return
+    _LOG.error("%s: the traceback", step, exc_info=error, extra=FILE_ONLY)
 
 
 def _expanded_steps(cfg: DataflowBuildConfig):
@@ -166,35 +281,26 @@ def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: 
     return filename
 
 
-def _run_build_steps(model, cfg, build_dataflow_steps, log):
-    """Run the resolved build steps in order, logging to `log`.
+def _run_build_steps(model, cfg, build_dataflow_steps):
+    """Run the resolved build steps in order, in the build's log (_build_log), each
+    record stamped with its step.
 
     Writes time_per_step.json: the seconds each step took, by name. Returns 0 on
-    success and -1 on the first failing step.
+    success and -1 on the first failing step, its failure logged first (_log_failure);
+    then the postmortem debugger, if ``enable_build_pdb_debug`` and stdin is a terminal.
     """
+    global _step
     step_num = 1
     time_per_step = dict()
-    stdout_logger = StreamToLogger(log, logging.INFO)
-    stderr_logger = StreamToLogger(log, logging.ERROR)
-    stdout_orig = sys.stdout
-    stderr_orig = sys.stderr
     for transform_step in build_dataflow_steps:
+        step_name = transform_step.__name__
         try:
-            step_name = transform_step.__name__
-            print("Running step: %s [%d/%d]" % (step_name, step_num, len(build_dataflow_steps)))
-            # redirect output to logfile
-            if not cfg.verbose:
-                sys.stdout = stdout_logger
-                sys.stderr = stderr_logger
-                # also log current step name to logfile
-                print("Running step: %s [%d/%d]" % (step_name, step_num, len(build_dataflow_steps)))
+            _step = step_name
+            _LOG.info("Running step: %s [%d/%d]", step_name, step_num, len(build_dataflow_steps))
             # run the step
             step_start = time.time()
             model = transform_step(model, cfg)
             step_end = time.time()
-            # restore stdout/stderr
-            sys.stdout = stdout_orig
-            sys.stderr = stderr_orig
             time_per_step[step_name] = step_end - step_start
             chkpt_name = "%s.onnx" % (step_name)
             if cfg.save_intermediate_models:
@@ -204,27 +310,25 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
                 model.save("%s/%s" % (intermediate_model_dir, chkpt_name))
             step_num += 1
         except:  # noqa
-            # restore stdout/stderr
-            sys.stdout = stdout_orig
-            sys.stderr = stderr_orig
-            # print exception info and traceback
             extype, value, tb = sys.exc_info()
-            traceback.print_exc()
+            _log_failure(step_name, value)
             # start postmortem debug if configured, and only where someone can answer it:
             # with stdin not a terminal (pytest, a batch job) pdb's read would fail and
             # report itself instead of the error above
             if not cfg.enable_build_pdb_debug:
-                print("enable_build_pdb_debug not set in build config, exiting...")
+                _LOG.info("enable_build_pdb_debug not set in build config, exiting...")
             elif sys.stdin is None or not sys.stdin.isatty():
-                print("enable_build_pdb_debug set, but stdin is not a terminal, exiting...")
+                _LOG.info("enable_build_pdb_debug set, but stdin is not a terminal, exiting...")
             else:
                 pdb.post_mortem(tb)
-            print("Build failed")
+            _LOG.error("Build failed")
             return -1
+        finally:
+            _step = "-"
 
     with open(cfg.output_dir + "/time_per_step.json", "w") as f:
         json.dump(time_per_step, f, indent=2)
-    print("Completed successfully")
+    _LOG.info("Completed successfully")
     return 0
 
 
@@ -232,68 +336,51 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     """Best-effort build a dataflow accelerator using the given configuration, through
     the kernel path's steps (finn.builder.build_dataflow_steps).
 
+    The build's log (``LOG_FILE`` in the output directory, and the console) exists
+    before anything else is done (_build_log): the configuration checks are logged,
+    each failed one at its severity, and a configuration refused is logged before it
+    raises.
+
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
     """
-    # if start_step is specified, override the input model
-    if cfg.start_step is None:
-        print("Building dataflow accelerator from " + model_filename)
-        model = ModelWrapper(model_filename)
-    else:
-        intermediate_model_filename = resolve_step_filename(cfg.start_step, cfg, -1)
-        print(
-            "Building dataflow accelerator from intermediate checkpoint"
-            + intermediate_model_filename
-        )
-        model = ModelWrapper(intermediate_model_filename)
-    assert type(model) is ModelWrapper
-    finn_build_dir = resources.scratch()
+    with _build_log(cfg):
+        try:
+            # if start_step is specified, override the input model
+            if cfg.start_step is None:
+                _LOG.info("Building dataflow accelerator from " + model_filename)
+                model = ModelWrapper(model_filename)
+            else:
+                intermediate_model_filename = resolve_step_filename(cfg.start_step, cfg, -1)
+                _LOG.info(
+                    "Building dataflow accelerator from intermediate checkpoint"
+                    + intermediate_model_filename
+                )
+                model = ModelWrapper(intermediate_model_filename)
+            assert type(model) is ModelWrapper
+            finn_build_dir = resources.scratch()
 
-    print("Intermediate outputs will be generated in " + str(finn_build_dir))
-    print("Final outputs will be generated in " + cfg.output_dir)
-    print("Build log is at " + cfg.output_dir + "/build_dataflow.log")
-    # create the output dir if it doesn't exist
-    if not os.path.exists(cfg.output_dir):
-        os.makedirs(cfg.output_dir)
+            _LOG.info("Intermediate outputs will be generated in " + str(finn_build_dir))
+            _LOG.info("Final outputs will be generated in " + cfg.output_dir)
+            _LOG.info("Build log is at " + os.path.join(cfg.output_dir, LOG_FILE))
 
-    # Run configuration checks
-    config_report = run_all_config_checks(cfg)
-    print(format_report(config_report))
-    report_path = save_report(config_report, cfg.output_dir)
-    print(f"Configuration check report saved to: {report_path}")
+            # Run configuration checks
+            config_report = run_all_config_checks(cfg)
+            log_report(config_report)
+            report_path = save_report(config_report, cfg.output_dir)
+            _LOG.info(f"Configuration check report saved to: {report_path}")
 
-    if config_report.has_errors():
-        raise AssertionError(
-            "Configuration check failed with errors. Fix the issues above to proceed."
-        )
+            if config_report.has_errors():
+                raise AssertionError(
+                    "Configuration check failed with errors. Fix the issues above to proceed."
+                )
 
-    build_dataflow_steps = resolve_build_steps(cfg)
-    # set up logger
-    # Note: basicConfig() is ignored if logging already configured (e.g., in Jupyter)
-    # So we explicitly add a file handler to ensure build_dataflow.log is created
-    log = logging.getLogger("build_dataflow")
-    log.setLevel(logging.DEBUG)
-    log.propagate = (
-        False  # Prevent propagation to root logger (avoids duplicate console output in Jupyter)
-    )
-
-    # Create file handler for build_dataflow.log
-    log_file_handler = logging.FileHandler(cfg.output_dir + "/build_dataflow.log", mode="a")
-    log_file_handler.setLevel(logging.DEBUG)
-    log_file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
-
-    # Remove any existing handlers from this logger to avoid duplicates
-    for handler in log.handlers[:]:
-        log.removeHandler(handler)
-
-    # Add the file handler (only file output, no console output)
-    log.addHandler(log_file_handler)
-
-    try:
-        return _run_build_steps(model, cfg, build_dataflow_steps, log)
-    finally:
-        log.removeHandler(log_file_handler)
-        log_file_handler.close()
+            build_dataflow_steps = resolve_build_steps(cfg)
+        except Exception as error:
+            _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
+            _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
+            raise
+        return _run_build_steps(model, cfg, build_dataflow_steps)
 
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:

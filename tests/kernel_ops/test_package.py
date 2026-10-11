@@ -15,6 +15,7 @@ the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 
 from __future__ import annotations
 
+import logging
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -96,12 +97,14 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
 
 
 def test_the_chains_emitted_top_elaborates_before_vivado(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     configure_partition(model := kernel_model())
-    reaches_vivado(model, "sdp_1", tmp_path / "project")
-    # The check says that it ran, what it checked, and its time.
-    (line,) = capsys.readouterr().out.splitlines()
+    logger = "finn.transformation.kernels.package"
+    with caplog.at_level(logging.INFO, logger=logger):
+        reaches_vivado(model, "sdp_1", tmp_path / "project")
+    # The check logs that it ran, what it checked, and its time.
+    (line,) = [record.getMessage() for record in caplog.records if record.name == logger]
     assert line.startswith("sdp_1: slang elaborated finn_partition")
     assert "its 4 ports agree with the pins (" in line and line.endswith(" s)")
 

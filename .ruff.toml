@@ -6,3 +6,16 @@ exclude = [
 
 [lint]
 select = ["E", "F", "PLC"]
+
+# T20 (no print) is the gates' (scripts/_gate-common.sh gate_ruff, and the gate paths'
+# ruff-check in .pre-commit-config.yaml): library code logs. Commands print: the CLIs,
+# the board's validation script, the identity a measurement prints (which
+# scripts/rtl-log-summary.sh reads), the scripts and the tests' own tools.
+[lint.per-file-ignores]
+"src/finn/platform/generate.py" = ["T20"]
+"src/finn/resources/_cli.py" = ["T20"]
+"src/finn/xsi/setup.py" = ["T20"]
+"src/finn/harness/toolchain.py" = ["T20"]
+"src/finn/shells/pynq/data/**" = ["T20"]
+"scripts/**" = ["T20"]
+"tests/**" = ["T20"]

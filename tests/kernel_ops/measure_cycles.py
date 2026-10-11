@@ -29,6 +29,8 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import logging
+import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -311,6 +313,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--only", choices=("chain", "tfc"))
     parser.add_argument("--work", type=Path, help="the simulations' directory (OUT/work)")
     args = parser.parse_args(argv)
+    # measure's tables are its log's (finn.core.rtlsim_bench), printed as they come.
+    tables = logging.getLogger("finn.core.rtlsim_bench")
+    tables.setLevel(logging.INFO)
+    tables.addHandler(logging.StreamHandler(sys.stdout))
     print_identity()
     out: Path = args.out.resolve()
     work: Path = (args.work or out / "work").resolve()

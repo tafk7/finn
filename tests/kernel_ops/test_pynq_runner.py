@@ -14,6 +14,7 @@ says so. TFC's runner (Z0's block design, IODMAs and driver) is in test_builder_
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from collections.abc import Callable
@@ -396,7 +397,7 @@ def unstated(body: ModelWrapper) -> None:
 def test_an_ip_made_from_another_design_is_packaged_again(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
     since: Callable[[ModelWrapper], None],
 ) -> None:
     """A body whose IP was made from another design than its own now (a choice changed
@@ -405,16 +406,17 @@ def test_an_ip_made_from_another_design_is_packaged_again(
     design now."""
     vivado = FakeVivado()
     earlier = tmp_path / "stitched_ip" / "ip"
-    parent, export, built, seen = recorded_build(
-        monkeypatch, tmp_path, vivado, packaged=earlier, since=since
-    )
+    with caplog.at_level(logging.INFO, logger="finn.shells.pynq.runner"):
+        parent, export, built, seen = recorded_build(
+            monkeypatch, tmp_path, vivado, packaged=earlier, since=since
+        )
     assert [name for name, _, _ in seen].count("PackagePartition") == 1
     _, body, _ = partition_body(parent)
     assert body.get(OUTPUT_IP) == str(tmp_path / "packaged" / "ip")
     assert body.get(OUTPUT_MADE_FROM) == design_digest(body) == built.made_from
     ((_, _, script),) = vivado.runs
     assert block_design(export, built_ips(tmp_path)) in script
-    assert f"partition: its IP ({earlier}) was made from the design " in capsys.readouterr().out
+    assert f"partition: its IP ({earlier}) was made from the design " in caplog.text
 
 
 def test_the_debug_option_reaches_the_block_design(

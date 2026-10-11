@@ -224,7 +224,8 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: a terminal.
     enable_build_pdb_debug: bool = True
 
-    #: Whether every step's output is printed to stdout, not only to the build log.
+    #: Whether the console shows everything the build log has; otherwise the runner's
+    #: lines (each step it runs, the outcome), warnings, refusals and failures.
     verbose: bool = False
 
     #: Functions to run after named steps or phases.
