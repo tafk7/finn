@@ -7,7 +7,7 @@ called by a driver FINN writes, with no HLS run (tier T1½).
 ``c_simulate`` stages the leaf's request (``finn.kernels.artifacts.hls.stage_hls``),
 writes the driver from the leaf's ABI alone (each AXIS bus an ``hls::stream`` of
 ``axis_type``, in the ABI's order, which is the top's argument order), compiles both
-against the toolchain's HLS installation (``Toolchain.hls_installation``, as the legacy
+against the toolchain's HLS installation (``finn.toolchain.hls.installation``, as the legacy
 flow's cppsim compiles) and runs it: each input's words, with their TLAST where the
 bus has one, are read from a file beside the driver; the top is called until every
 output has presented the words the caller expects and ``IDLE_CALLS`` calls more, or
@@ -30,6 +30,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import TOP, axis_type, include_path, stage_hls
 from finn.kernels.artifacts.module import Leaf
+from finn.toolchain import hls
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
 
 Words = tuple[Sequence[int], int]
@@ -176,7 +177,7 @@ def c_simulate(
         if bus.endpoint is Endpoint.TARGET and name not in inputs:
             (directory / f"{name}.in").write_text("")
     (directory / "driver.cpp").write_text(driver(request.function, streams, outputs))
-    include = toolchain.hls_installation() / "include"
+    include = hls.installation(toolchain) / "include"
     compiled = toolchain.run(
         "g++",
         [

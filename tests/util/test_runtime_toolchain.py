@@ -13,6 +13,7 @@ import threading
 import time
 from pathlib import Path
 
+from finn.toolchain import hls
 from finn.toolchain.hls import CallHLS
 from finn.toolchain.launcher import (
     Selection,
@@ -21,6 +22,7 @@ from finn.toolchain.launcher import (
     ToolUnavailable,
     run_process,
 )
+from finn.xsi.paths import simulation_environment
 
 
 def executable(path, body):
@@ -221,7 +223,7 @@ def test_probes_run_once_per_selection(tmp_path):
     )
     tc = Selection(command_dir=str(tmp_path), hls_frontend="vitis-run").prepare({})
     for _ in range(3):
-        frontend, args = tc.hls_command("script.tcl")
+        frontend, args = hls.command(tc, "script.tcl")
         assert (frontend, args) == ("vitis-run", ["--mode", "hls", "--tcl", "script.tcl"])
     assert log.read_text().splitlines() == ["--version", "--help"]
 
@@ -321,7 +323,7 @@ def test_frontend_availability_does_not_override_compatibility(tmp_path):
     executable(tmp_path / "vitis_hls", 'print("AMD 2025.1")\n')
     tc = Selection(command_dir=str(tmp_path), hls_frontend="vitis_hls").prepare({})
     with pytest.raises(ValueError, match="incompatible"):
-        tc.hls_command("build.tcl")
+        hls.command(tc, "build.tcl")
 
 
 def test_the_simulation_environment_loads_the_simulator_libraries_in_workers(tmp_path):
@@ -338,7 +340,7 @@ def test_the_simulation_environment_loads_the_simulator_libraries_in_workers(tmp
         "LD_LIBRARY_PATH": "/parent/lib",
     }
     toolchain = Selection().prepare(env)
-    child = toolchain.simulation_environment()
+    child = simulation_environment(toolchain)
     assert child["LD_LIBRARY_PATH"] == f"{vivado}/lib/lnx64.o:/parent/lib"
     assert toolchain.environment["LD_LIBRARY_PATH"] == "/parent/lib"
     result = run_process(
@@ -352,19 +354,19 @@ def test_the_simulation_environment_loads_the_simulator_libraries_in_workers(tmp
         env=child,
     )
     assert result.stdout.decode().strip() == child["LD_LIBRARY_PATH"]
-    assert (
-        "LD_LIBRARY_PATH" not in Selection().prepare({"PATH": os.defpath}).simulation_environment()
+    assert "LD_LIBRARY_PATH" not in simulation_environment(
+        Selection().prepare({"PATH": os.defpath})
     )
 
 
 def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
-    hls, vitis = tmp_path / "hls", tmp_path / "vitis"
-    named = {"PATH": os.defpath, "XILINX_HLS": str(hls), "XILINX_VITIS": str(vitis)}
-    assert Selection().prepare(named).hls_installation() == hls
+    installed, vitis = tmp_path / "hls", tmp_path / "vitis"
+    named = {"PATH": os.defpath, "XILINX_HLS": str(installed), "XILINX_VITIS": str(vitis)}
+    assert hls.installation(Selection().prepare(named)) == installed
     del named["XILINX_HLS"]
-    assert Selection().prepare(named).hls_installation() == vitis
+    assert hls.installation(Selection().prepare(named)) == vitis
     with pytest.raises(ToolUnavailable, match="XILINX_HLS or XILINX_VITIS"):
-        Selection().prepare({"PATH": os.defpath}).hls_installation()
+        hls.installation(Selection().prepare({"PATH": os.defpath}))
 
 
 @pytest.mark.slow

@@ -125,8 +125,8 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.resources import finnlib_root
-from finn.toolchain import vivado
-from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, xelab_threads
+from finn.toolchain import xsim
+from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 
 Words = tuple[Sequence[int], int]
@@ -220,6 +220,10 @@ class WordsDiffer(SimulationFailed):
         self.received = {port: tuple(words) for port, words in received.items()}
 
 
+#: How long each of the simulator's tools may run, in seconds.
+TOOL_TIMEOUT = 300
+
+
 def simulate(
     sources: Sequence[str | Path],
     testbench: str,
@@ -229,57 +233,28 @@ def simulate(
 ) -> str:
     """Elaborate the testbench module ``check`` over ``sources``; it must display PASS.
 
-    Each tool runs through ``toolchain`` (the machine's by default), whose Vivado
-    provides ``glbl.v`` (``ToolUnavailable`` without one). The simulator's output, which
-    the testbench may have displayed more in. ``xvlog`` or ``xelab`` failing is
-    ``ToolFailed``, naming its log; the testbench failing is ``SimulationFailed``."""
+    XSim's driver (``finn.toolchain.xsim``) runs each tool through ``toolchain`` (the
+    machine's by default), whose Vivado provides ``glbl.v`` (``ToolUnavailable`` without
+    one), within ``TOOL_TIMEOUT``. The simulator's output, which the testbench may have
+    displayed more in. ``xvlog`` or ``xelab`` failing is ``ToolFailed``, naming its log;
+    the testbench failing is ``SimulationFailed``."""
     toolchain = toolchain or host_toolchain()
-    glbl = vivado.glbl(toolchain)
     bench = directory / "check.sv"
     bench.write_text("`timescale 1ns/1ps\n" + testbench)
-    commands = (
-        # Relaxed, as FINN's own flow elaborates (finn_xsi: ``xelab -relax``).
-        (
-            "xvlog",
-            [
-                "--sv",
-                "--relax",
-                *(f"--include={directory}" for directory in include_directories(sources)),
-                *(str(source) for source in sources if not is_header(source)),
-                str(glbl),
-                str(bench),
-            ],
-        ),
-        (
-            "xelab",
-            [
-                "work.check",
-                "work.glbl",
-                "--mt",
-                xelab_threads(toolchain.environment),
-                "-L",
-                "unisims_ver",
-                "-L",
-                "unimacro_ver",
-                "--snapshot",
-                "check",
-                "--timescale",
-                "1ns/1ps",
-            ],
-        ),
-        ("xsim", ["check", "--runall"]),
+    xsim.elaborate(
+        toolchain,
+        directory,
+        [source for source in sources if not is_header(source)],
+        "check",
+        includes=include_directories(sources),
+        snapshot="check",
+        testbench=bench,
+        timeout=TOOL_TIMEOUT,
     )
-    output = printed = ""
-    for tool, args in commands:
-        result = toolchain.run(tool, args, cwd=directory, timeout=300, check=False)
-        output = result.stdout.decode(errors="replace")
-        printed = output + result.stderr.decode(errors="replace")
-        if result.returncode != 0 and tool != "xsim":
-            # Each writes its log where it runs (``xvlog.log``, ``xelab.log``).
-            raise ToolFailed.of_run(tool, result, transcript=directory / f"{tool}.log")
-        if result.returncode != 0:
-            raise SimulationFailed(printed)
-    if "PASS" not in output:
+    result = xsim.simulate(toolchain, directory, "check", timeout=TOOL_TIMEOUT)
+    output = result.stdout.decode(errors="replace")
+    printed = output + result.stderr.decode(errors="replace")
+    if result.returncode != 0 or "PASS" not in output:
         raise SimulationFailed(printed)
     return output
 

@@ -14,28 +14,26 @@ from pathlib import Path
 
 import pytest
 
-from finn.builder.kernel_resources import (
-    placed_hierarchy,
-    shell_resources_report,
-    utilization_synth,
-)
+from finn.builder.kernel_resources import shell_resources_report
 from finn.custom_op.kernels.base import write_target
 from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import resolve_target, shell_row
 from finn.platform.shells import PYNQ_CHARACTERISED
+from finn.toolchain.vivado import placed_hierarchy, utilization_synth
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.package import resources_of
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 
 def test_an_ips_synthesis_report_is_read_from_its_site_types() -> None:
-    # Two RAMB36 and one RAMB18 are five halves; the primitives' later rows are not read.
-    assert utilization_synth(UTILIZATION_SYNTH.format(lut=120, ff=200)) == Resources(
-        lut=120, ff=200, bram18=5, dsp=3
-    )
+    # The primitives' later rows are not read; two RAMB36 and one RAMB18 are five halves.
+    counts = utilization_synth(UTILIZATION_SYNTH.format(lut=120, ff=200))
+    assert counts == {"lut": 120, "ff": 200, "bram36": 2, "bram18": 1, "dsp": 3}
+    assert resources_of(counts) == Resources(lut=120, ff=200, bram18=5, dsp=3)
 
 
 def test_the_placed_hierarchy_is_read_by_depth() -> None:
@@ -50,8 +48,8 @@ def test_the_placed_hierarchy_is_read_by_depth() -> None:
         (2, "idma0"),
         (2, "odma0"),
     ]
-    assert rows[0][2] == Resources(lut=1000, ff=2000, bram18=5, dsp=4)
-    assert rows[4][2] == Resources(lut=400, ff=800, bram18=3, dsp=4)
+    assert resources_of(rows[0][2]) == Resources(lut=1000, ff=2000, bram18=5, dsp=4)
+    assert resources_of(rows[4][2]) == Resources(lut=400, ff=800, bram18=3, dsp=4)
 
 
 def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> None:

@@ -15,14 +15,15 @@ holds what it needs and nothing of the machine:
 - ``module/``, the module's sources, and each memory's INIT_FILE beside the testbench;
 - ``run.sh``, which compiles, elaborates and runs it with Vivado's simulator found on
   PATH (``xvlog``, ``xelab``, ``xsim``), ``glbl.v`` from ``$XILINX_VIVADO``, and exits
-  0 printing ``PASS`` when every output word matched.
+  0 printing ``PASS`` when every output word matched; a failed compilation or
+  elaboration exits with its own status (``finn.toolchain.xsim.EXIT_STATUS``).
 
 ``write_testbench`` simulates nothing: the testbench is an output, and no build
 re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
 its ``run.sh`` as its user would, in a toolchain's environment: the build's
 verification step ``stitched_ip_testbench``, which the user asks for, and which fails
-on a mismatch. ``run.sh`` follows ``finn.core.rtlsim_bench.simulate``'s commands with the
-directory's own paths.
+on a mismatch. ``run.sh``'s commands are XSim's driver's (``finn.toolchain.xsim.script``),
+which ``finn.core.rtlsim_bench.simulate`` runs, with the directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
@@ -34,7 +35,6 @@ from its datatype.
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -54,7 +54,8 @@ from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
-from finn.toolchain.launcher import Toolchain, host_toolchain, run_process
+from finn.toolchain import xsim
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
 from finn.transformation.kernels.package import boundary_facts, free_side
 
 #: The directory of the testbench, beside the packaged IP.
@@ -126,40 +127,17 @@ def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[st
 
 
 def _run_script(top: str, sources: Sequence[str]) -> str:
-    """``run.sh``: the XSim executor's simulator commands
-    (``finn.core.rtlsim_bench.simulate``), with the testbench directory's own paths
-    and two ``xelab`` threads."""
-    compiled = [source for source in sources if not is_header(source)]
-    xvlog = [
-        "xvlog",
-        "--sv",
-        "--relax",
-        *(f"--include={directory}" for directory in include_directories(sources)),
-        *compiled,
-        '"$XILINX_VIVADO/data/verilog/src/glbl.v"',
-        "check.sv",
-    ]
-    xelab = [
-        "xelab",
-        "work.check",
-        "work.glbl",
-        "--mt",
-        "2",
-        "-L",
-        "unisims_ver",
-        "-L",
-        "unimacro_ver",
-        "--snapshot",
+    """``run.sh``: the simulator's commands (``finn.toolchain.xsim.script``), with the
+    testbench directory's own paths and two ``xelab`` threads, then the verdict."""
+    commands = xsim.script(
+        [source for source in sources if not is_header(source)],
         "check",
-        "--timescale",
-        "1ns/1ps",
-    ]
-
-    def line(command: Sequence[str]) -> str:
-        return " \\\n    ".join(
-            word if word.startswith('"$') else shlex.quote(word) for word in command
-        )
-
+        includes=include_directories(sources),
+        testbench="check.sv",
+        snapshot="check",
+        threads="2",
+        log="xsim.log",
+    )
     return f"""#!/bin/sh
 # The XSim testbench of {top}: one frame streamed through the module (check.sv), each
 # output word checked against the partition executed in Python. Needs Vivado's
@@ -167,11 +145,7 @@ def _run_script(top: str, sources: Sequence[str]) -> str:
 # exits 0 when every word matched.
 set -e
 cd "$(dirname "$0")"
-: "${{XILINX_VIVADO:?set XILINX_VIVADO (source Vivado's settings64.sh)}}"
-{line(xvlog)}
-{line(xelab)}
-xsim check --runall --log xsim.log
-grep -q STREAM_PASS xsim.log
+{commands}grep -q STREAM_PASS xsim.log
 echo PASS
 """
 
@@ -206,10 +180,11 @@ def write_testbench(
 def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
     ``toolchain``'s environment (the machine's by default), a command directory it
-    selects first on ``PATH``. Returns what it printed, which ends in ``PASS``; a
-    mismatch, a tool's error or a timeout raises ``finn.core.rtlsim_bench.SimulationFailed``
-    with what it printed. A launcher route, which runs a tool elsewhere, runs no local
-    script: refused (``ValueError``)."""
+    selects first on ``PATH``. Returns what it printed, which ends in ``PASS``. ``xvlog`` or
+    ``xelab`` failing (the script's ``finn.toolchain.xsim.EXIT_STATUS``) raises
+    ``ToolFailed``, naming its log; a mismatch, any other failure or a timeout
+    ``finn.core.rtlsim_bench.SimulationFailed`` with what it printed. A launcher route,
+    which runs a tool elsewhere, runs no local script: refused (``ValueError``)."""
     toolchain = toolchain or host_toolchain()
     selection = toolchain.selection
     if selection.launcher:
@@ -233,6 +208,12 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
         raise SimulationFailed(
             f"{RUN_SCRIPT} ran over {RUN_TIMEOUT} s:\n" + printed.decode(errors="replace")
         ) from expired
+    for tool, status in xsim.EXIT_STATUS.items():
+        if result.returncode == status:
+            # Each writes its log where it runs (``xvlog.log``, ``xelab.log``).
+            raise ToolFailed.of_run(
+                tool, result, transcript=directory / f"{tool}.log", what=str(directory / RUN_SCRIPT)
+            )
     output = result.stdout.decode(errors="replace")
     printed = output + result.stderr.decode(errors="replace")
     if result.returncode != 0 or output.splitlines()[-1:] != ["PASS"]:

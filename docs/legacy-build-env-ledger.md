@@ -25,7 +25,7 @@ shell setup and the container entrypoint use it only to find the checkout.
 
 | Mechanism | Current consumers | Gate for further removal |
 | --- | --- | --- |
-| Loader path before Python starts | XSI's simulation kernel and floating-point libraries: `Toolchain.simulation_environment()` for `build_dataflow_directory`'s build process; `docker/finn-toolchain.sh` for native shells; the image's loader settings. | Fresh-worker XSI experiment passes correctness, loader, cleanup, cancellation and timing tests on supported installations. |
+| Loader path before Python starts | XSI's simulation kernel and floating-point libraries: `finn.xsi.paths.simulation_environment` for `build_dataflow_directory`'s build process; `docker/finn-toolchain.sh` for native shells; the image's loader settings. | Fresh-worker XSI experiment passes correctness, loader, cleanup, cancellation and timing tests on supported installations. |
 | Remaining native compatibility | The numeric sweeps' live-object simulation (`finn.xsi`, `finn_xsi`) still uses current interfaces. Imports of simulation consumers no longer load native libraries; compilation/discovery is pure Python. | Installation-validate before changing the binding. |
 | Vendor header/library interpretation | `XILINX_VIVADO` read ambiently by `xsi/setup.py` and `xsi/paths.py`; the build's configuration check probes the release through the build's `Toolchain` | These should read the selected `Toolchain`. |
 | Native bridge/design reuse | `.finn.json` records cover artifact/tool/source/header/ABI/compile inputs. | Real AMD compatibility, concurrent reuse and functional-equivalence evidence. |

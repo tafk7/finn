@@ -34,13 +34,10 @@ from finn.custom_op.partition.kernel_partitions import (
 )
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
+from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
 from finn.transformation.kernels.hls import HlsAbiRefused
-from finn.transformation.kernels.package import (
-    ElaboratePartition,
-    hierarchical_utilization,
-    partition_utilization_report,
-)
+from finn.transformation.kernels.package import ElaboratePartition, partition_utilization_report
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import NoVivado, reaches_vivado
 
@@ -254,7 +251,7 @@ def test_elaboration_without_vivado_is_unavailable(tmp_path: Path) -> None:
     assert missing.value.tool == "vivado"
 
 
-@pytest.mark.parametrize("tool, log", [("xvlog", "xvlog.log"), ("xelab", "elaborate.log")])
+@pytest.mark.parametrize("tool, log", [("xvlog", "xvlog.log"), ("xelab", "xelab.log")])
 def test_elaboration_that_fails_is_the_simulators_failure_naming_its_log(
     tmp_path: Path, tool: str, log: str
 ) -> None:

@@ -1,8 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What a simulation runs on: FinnLib as FINN resolves it, Vivado as FINN's toolchain
-selects it, and the revisions a run prints first in its log.
+"""What a simulation runs on: FinnLib as FINN resolves it, and the revisions a run
+prints first in its log. Whether the toolchain can simulate is XSim's driver's
+(``finn.toolchain.xsim.available``).
 
 Apart from ``finn.core.rtlsim_bench`` so that a job importing only these (a numeric sweep
 driving XSI, an artifact test reading FinnLib) is not keyed by the testbench writer's
@@ -15,28 +16,6 @@ import subprocess
 from pathlib import Path
 
 from finn.resources import finnlib_root
-from finn.toolchain import vivado
-from finn.toolchain.launcher import Toolchain, ToolUnavailable, host_toolchain
-
-SIMULATOR_TOOLS = ("xvlog", "xelab", "xsim")
-
-
-def vivado_simulator(toolchain: Toolchain | None = None) -> bool:
-    """Whether ``toolchain`` (the machine's by default) selects a Vivado that provides
-    xvlog, xelab and xsim.
-
-    FINN images put tool shims on PATH, so a command being found does not mean a
-    Vivado installation is selected: the toolchain must also name one, with the
-    ``glbl.v`` a simulation elaborates (``finn.toolchain.vivado.glbl``).
-    """
-    toolchain = toolchain or host_toolchain()
-    try:
-        vivado.glbl(toolchain)
-        for tool in SIMULATOR_TOOLS:
-            toolchain.command(tool)
-    except ToolUnavailable:
-        return False
-    return True
 
 
 def print_identity() -> None:
@@ -66,4 +45,4 @@ def print_identity() -> None:
     print(f"finnlib {revision(finnlib)} {finnlib}", flush=True)
 
 
-__all__ = ["SIMULATOR_TOOLS", "finnlib_root", "print_identity", "vivado_simulator"]
+__all__ = ["finnlib_root", "print_identity"]

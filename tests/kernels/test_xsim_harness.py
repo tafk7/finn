@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -46,15 +47,17 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack as pack_beats
 from finn.dataflow.traversal import vector_major
-from finn.harness.toolchain import SIMULATOR_TOOLS, vivado_simulator
 from finn.kernels.artifacts.abi import ClockAlignment
 from finn.kernels.artifacts.build import instance_net
 from finn.kernels.artifacts.module import Held, RegisterMap, declared_registers
+from finn.kernels.artifacts.sources import include_directories
 from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.matmul import datatype_range
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.toolchain import xsim
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
+from finn.toolchain.xsim import TOOLS, available
 from kernels.chain import chain
 from kernels.conformance import Sample, place
 from kernels.helpers import FULL_DSP48E2, full_platform, point_for
@@ -308,7 +311,7 @@ def _toolchain(tmp_path: Path, xsim_prints: str, fails: str | None = None) -> To
     prints an error, writes its log and exits 1. Its Vivado holds ``glbl.v``."""
     tools = tmp_path / "tools"
     tools.mkdir()
-    for tool in SIMULATOR_TOOLS:
+    for tool in TOOLS:
         printed = xsim_prints if tool == "xsim" else ""
         failing = (
             f'echo "ERROR: [{tool}] it failed" | tee {tool}.log\nexit 1\n' if tool == fails else ""
@@ -331,9 +334,41 @@ def test_simulate_runs_the_tools_of_its_toolchain(tmp_path: Path) -> None:
     output = simulate(["a.sv"], "module check; endmodule\n", tmp_path / "sim", toolchain=toolchain)
     assert "PASS" in output
     calls = (tmp_path / "calls").read_text().splitlines()
-    assert [Path(call.split()[0]).name for call in calls] == list(SIMULATOR_TOOLS)
+    assert [Path(call.split()[0]).name for call in calls] == list(TOOLS)
     assert f"{tmp_path}/vivado/data/verilog/src/glbl.v" in calls[0]  # the toolchain's Vivado
-    assert vivado_simulator(toolchain)
+    assert available(toolchain)
+
+
+def test_a_script_replays_the_commands_simulate_runs(tmp_path: Path) -> None:
+    """``finn.toolchain.xsim.script`` (``run.sh``'s commands) writes the words the driver
+    runs for ``simulate``: ``glbl.v`` from ``$XILINX_VIVADO``, each of xvlog and xelab
+    exiting with its own status when it fails."""
+    toolchain = _toolchain(tmp_path, "PASS")
+    directory = tmp_path / "sim"
+    directory.mkdir()
+    sources = ["a.sv", "inc/b.svh"]
+    simulate(sources, "module check; endmodule\n", directory, toolchain=toolchain)
+    ran = [call.split()[1:] for call in (tmp_path / "calls").read_text().splitlines()]
+    text = xsim.script(
+        ["a.sv"],
+        "check",
+        includes=include_directories(sources),
+        testbench=str(directory / "check.sv"),
+        snapshot="check",
+        threads=xsim.xelab_threads(toolchain.environment),
+    )
+    lines = text.replace(" \\\n    ", " ").splitlines()
+    assert lines[0].startswith(': "${XILINX_VIVADO:?')
+    glbl = str(tmp_path / "vivado/data/verilog/src/glbl.v")
+    written = []
+    for line, status in zip(lines[1:], ("10", "11", "1"), strict=True):
+        words = shlex.split(line)
+        assert words[-3:] == ["||", "exit", status]
+        written.append(
+            [glbl if word == "$XILINX_VIVADO/data/verilog/src/glbl.v" else word for word in words]
+        )
+    assert [words[1:-3] for words in written] == ran
+    assert xsim.EXIT_STATUS == {"xvlog": 10, "xelab": 11}
 
 
 def test_simulate_without_pass_fails_as_an_assertion(tmp_path: Path) -> None:
@@ -346,14 +381,14 @@ def test_simulate_without_pass_fails_as_an_assertion(tmp_path: Path) -> None:
 def test_a_toolchain_naming_no_vivado_has_no_simulator(tmp_path: Path) -> None:
     toolchain = _toolchain(tmp_path, "PASS")
     bare = Toolchain(toolchain.selection, {"PATH": os.defpath})
-    assert not vivado_simulator(bare)
+    assert not available(bare)
     with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
         simulate([], "", tmp_path, toolchain=bare)
     assert missing.value.tool == "vivado"
     assert "host file" in str(missing.value)  # what selects it
     # An installation without its glbl.v is none either.
     (tmp_path / "vivado/data/verilog/src/glbl.v").unlink()
-    assert not vivado_simulator(toolchain)
+    assert not available(toolchain)
     with pytest.raises(ToolUnavailable, match="glbl.v"):
         simulate([], "", tmp_path, toolchain=toolchain)
 

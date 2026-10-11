@@ -46,7 +46,7 @@ from finn.shells.pynq.runner import (
     project_script,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
-from finn.toolchain import hls
+from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
@@ -478,7 +478,8 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
 
     toolchain = HlsToolchain(Selection(hls_frontend="vitis_hls"), {"PATH": f"{tools}:{os.defpath}"})
     monkeypatch.setattr(pynq_runner, "host_toolchain", machine_refused)
-    monkeypatch.setattr(hls, "host_toolchain", machine_refused)
+    # HLS reads the launcher's (finn.toolchain.hls imports the module).
+    monkeypatch.setattr(launcher, "host_toolchain", machine_refused)
     _, export, _, seen = recorded_build(
         monkeypatch, tmp_path, toolchain, replaced=("PackagePartition", "create_stitched_ip")
     )

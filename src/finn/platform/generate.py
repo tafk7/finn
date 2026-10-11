@@ -59,11 +59,12 @@ import argparse
 import hashlib
 import json
 import re
-import subprocess
 import sys
 import tempfile
+import threading
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,7 +72,7 @@ from finn.kernels.target import DspBlock
 from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
 from finn.platform.architectures import CAP_EVIDENCE, RULES, SERIES, CapEvidence, Rule, rules_digest
 from finn.platform.catalog import DATA, FILES, Record
-from finn.toolchain.launcher import host_toolchain
+from finn.toolchain.launcher import Toolchain, host_toolchain
 
 SCRIPT = Path(__file__).resolve().parent / "catalog.tcl"
 
@@ -254,27 +255,47 @@ def parse_devices(texts: Iterable[str]) -> dict[str, DeviceProbe]:
     return probes
 
 
-def _vivado(work: Path, name: str, args: Sequence[str]) -> subprocess.Popen[bytes]:
-    toolchain = host_toolchain()
-    command = toolchain.command(
-        "vivado", "-mode", "batch", "-nojournal", "-nolog", "-source", SCRIPT, "-tclargs", *args
-    )
-    log = (work / f"{name}.log").open("wb")
-    return subprocess.Popen(
-        command, cwd=work, env=dict(toolchain.environment), stdout=log, stderr=subprocess.STDOUT
-    )
+def _vivado_runs(
+    work: Path, runs: Sequence[tuple[str, Sequence[str]]], toolchain: Toolchain
+) -> None:
+    """Run the extraction script once for each ``(name, arguments)`` of ``runs``, all at
+    once, each through ``toolchain`` in a thread of its own, its output in
+    ``work/<name>.log``. ``GenerationError`` names the first that failed once all have
+    ended; an interrupt stops them all."""
+    cancel = threading.Event()
 
+    def run(name: str, args: Sequence[str]) -> int:
+        result = toolchain.run(
+            "vivado",
+            ["-mode", "batch", "-nojournal", "-nolog", "-source", SCRIPT, "-tclargs", *args],
+            cwd=work,
+            cancel=cancel,
+            check=False,
+        )
+        (work / f"{name}.log").write_bytes(result.stdout + result.stderr)
+        return result.returncode
 
-def _wait(processes: Sequence[subprocess.Popen[bytes]]) -> None:
-    failed = [str(process.args) for process in processes if process.wait() != 0]
+    with ThreadPoolExecutor(max_workers=max(1, len(runs))) as pool:
+        started = [pool.submit(run, name, args) for name, args in runs]
+        try:
+            statuses = [each.result() for each in started]
+        except BaseException:
+            cancel.set()
+            raise
+    failed = [name for (name, _), status in zip(runs, statuses, strict=True) if status != 0]
     if failed:
-        raise GenerationError("extraction", f"{len(failed)} Vivado runs failed: {failed[0]}")
+        raise GenerationError(
+            "extraction", f"{len(failed)} Vivado runs failed: {work / failed[0]}.log"
+        )
 
 
 def extract(work: Path, jobs: int) -> None:
     """Run the extraction into ``work``: ``parts-<i>.log`` and ``devices-<i>.log``."""
+    toolchain = host_toolchain()
     work.mkdir(parents=True, exist_ok=True)
-    _wait([_vivado(work, f"parts-{i}", ["parts", str(i), str(jobs)]) for i in range(jobs)])
+    _vivado_runs(
+        work, [(f"parts-{i}", ["parts", str(i), str(jobs)]) for i in range(jobs)], toolchain
+    )
     parts = parse_parts(path.read_text() for path in sorted(work.glob("parts-*.log")))
     first: dict[str, str] = {}
     for row in parts:
@@ -282,12 +303,14 @@ def extract(work: Path, jobs: int) -> None:
     # The largest devices first, dealt round so each run links a similar share.
     by_size = sorted(first, key=lambda device: -int(_totals(parts, device)[0] or 0))
     batches = [by_size[i::jobs] for i in range(jobs)]
-    _wait(
+    _vivado_runs(
+        work,
         [
-            _vivado(work, f"devices-{i}", ["devices", *(first[device] for device in batch)])
+            (f"devices-{i}", ["devices", *(first[device] for device in batch)])
             for i, batch in enumerate(batches)
             if batch
-        ]
+        ],
+        toolchain,
     )
 
 

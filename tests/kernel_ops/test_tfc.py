@@ -38,7 +38,7 @@ from finn.custom_op.partition.kernel_partitions import (
 from finn.kernels.configure import commit, undecided
 from finn.kernels.explore import Ranked
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
-from finn.transformation.kernels.package import boundary_facts
+from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
 from kernel_ops.models import DOMAIN
 from kernel_ops.packaging import reaches_vivado, read_back
 from kernel_ops.tfc import LANES, SHAPE, ULTRA96, cut, partition, partitioned, streamlined
@@ -212,6 +212,19 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     described = json.loads((project / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     assert [stream["beats"] for stream in described["streams"]] == [49, 1]
+
+
+@requires_xsim
+def test_tfc_w2a2s_partition_compiles_and_elaborates_in_xsim(
+    tfc_streamlined: Path, tmp_path: Path
+) -> None:
+    """``ElaboratePartition`` on TFC's partition, by the machine's Vivado: xvlog and xelab
+    with the flags every simulation elaborates with (``finn.toolchain.xsim``), so the
+    check is as strict as the module's simulation."""
+    _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path / "build")
+    directory = tmp_path / "elaborate"
+    body.transform(ElaboratePartition(directory=directory))
+    assert "Built simulation snapshot partition" in (directory / "xelab.log").read_text()
 
 
 # Partitions the whole network, a few seconds.

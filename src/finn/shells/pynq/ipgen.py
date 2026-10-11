@@ -5,7 +5,8 @@
 """An end's IODMA as the IP the pynq shell's block design instantiates: its scratch model
 of one ``IODMA_hls`` node (``finn.shells.pynq.iodma``) through code generation
 (``prepare_ip``), Vitis HLS (``hls_synth_ip``) and a block design of its own, packaged
-(``create_stitched_ip``), whose IP repositories ``ip_repositories`` names.
+(``create_stitched_ip``, on the Tcl ``stitched_ip_tcl`` writes), whose IP repositories
+``ip_repositories`` names.
 
 This is a frozen extraction of the HWCustomOp flow's ``PrepareIP``, ``HLSSynthIP`` and
 ``CreateStitchedIP`` (and ``ReplaceVerilogRelPaths``, ``collect_ip_dirs``) for one IODMA
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import sys
 from importlib.resources import files
 from pathlib import Path
@@ -222,29 +222,33 @@ def _block_design(op: IODMA_hls) -> tuple[list[str], list[str], dict[str, list]]
     return create, connect, names
 
 
-def create_stitched_ip(
-    model: ModelWrapper,
-    fpgapart: str,
-    clk_ns: float,
-    ip_name: str,
-    toolchain: Toolchain | None = None,
-) -> ModelWrapper:
-    """The IODMA's IP (``hls_synth_ip``'s) in a Vivado block design of its own, named
-    ``ip_name``, packaged as the IP ``xilinx_finn:finn:<ip_name>:1.0`` by Vivado run in
-    ``toolchain`` (by default the machine's). The scratch model states the project
-    (``vivado_stitch_proj``), the VLNV, the interface names and the wrapper HDL."""
-    op = _iodma(model)
-    # ensure non-relative readmemh .dat files
-    _replace_verilog_relpaths(op.get_nodeattr("ipgen_path"))
+#: The stitched project's name, in its directory.
+_PROJECT = "finn_vivado_stitch_proj"
+
+
+def _vlnv(ip_name: str) -> str:
+    """The packaged IP's VLNV."""
+    return "xilinx_finn:finn:%s:1.0" % ip_name
+
+
+def _wrapper(project: str, ip_name: str) -> str:
+    """Where Vivado writes the block design's wrapper HDL (``.srcs``; some releases write
+    it under ``.gen``)."""
+    return "%s/%s.srcs/sources_1/bd/%s/hdl/%s_wrapper.v" % (project, _PROJECT, ip_name, ip_name)
+
+
+def stitched_ip_tcl(
+    op: IODMA_hls, project: str, fpgapart: str, clk_ns: float, ip_name: str
+) -> tuple[str, dict[str, list]]:
+    """The Tcl that builds the IODMA ``op``'s block design in ``project``, named
+    ``ip_name``, for ``fpgapart`` at ``clk_ns``, and packages it as the IP ``_vlnv``
+    names; and the external interfaces' names by protocol. It runs nothing, and reads
+    the shell's data (``data/``) where it lies."""
     ip_dir = op.get_nodeattr("ip_path")
-    assert os.path.isdir(ip_dir), "IP generation directory doesn't exist."
     create, connect, names = _block_design(op)
-    prjname = "finn_vivado_stitch_proj"
-    vivado_stitch_proj_dir = make_build_dir(prefix="vivado_stitch_proj_")
-    model.set_metadata_prop("vivado_stitch_proj", vivado_stitch_proj_dir)
     block_name = ip_name
     tcl = [
-        "create_project %s %s -part %s" % (prjname, vivado_stitch_proj_dir, fpgapart),
+        "create_project %s %s -part %s" % (_PROJECT, project, fpgapart),
         # no warnings on long module names
         "set_msg_config -id {[BD 41-1753]} -suppress",
         "set_property ip_repo_paths [list %s] [current_project]" % tcl_quote(ip_dir),
@@ -260,25 +264,19 @@ def create_stitched_ip(
     tcl.append("validate_bd_design")
     tcl.append("save_bd_design")
     # create wrapper hdl (for rtlsim later on)
-    bd_base = "%s/%s.srcs/sources_1/bd/%s" % (vivado_stitch_proj_dir, prjname, block_name)
+    bd_base = "%s/%s.srcs/sources_1/bd/%s" % (project, _PROJECT, block_name)
     bd_filename = "%s/%s.bd" % (bd_base, block_name)
     tcl.append("make_wrapper -files [get_files %s] -top" % bd_filename)
-    wrapper_filename = "%s/hdl/%s_wrapper.v" % (bd_base, block_name)
-    tcl.append("add_files -norecurse %s" % tcl_quote(wrapper_filename))
-    model.set_metadata_prop("wrapper_filename", wrapper_filename)
+    tcl.append("add_files -norecurse %s" % tcl_quote(_wrapper(project, ip_name)))
     tcl.append("set_property top %s_wrapper [current_fileset]" % block_name)
     # export block design itself as an IP core
-    block_vendor = "xilinx_finn"
-    block_library = "finn"
-    block_vlnv = "%s:%s:%s:1.0" % (block_vendor, block_library, block_name)
-    model.set_metadata_prop("vivado_stitch_vlnv", block_vlnv)
-    model.set_metadata_prop("vivado_stitch_ifnames", json.dumps(names))
+    block_vlnv = _vlnv(ip_name)
     tcl.append(
         (
             "ipx::package_project -root_dir %s/ip -vendor %s "
             "-library %s -taxonomy /UserIP -module %s -import_files"
         )
-        % (vivado_stitch_proj_dir, block_vendor, block_library, block_name)
+        % (project, "xilinx_finn", "finn", block_name)
     )
     # Allow user to customize clock in deployment of stitched IP
     tcl.append("set_property ipi_drc {ignore_freq_hz true} [ipx::current_core]")
@@ -298,8 +296,8 @@ def create_stitched_ip(
         "set_property value_resolve_type user [ipx::get_bus_parameters "
         "-of [ipx::get_bus_interfaces -of [ipx::current_core ]]]"
     )
-    # add a rudimentary driver mdd to get correct ranges in xparameters.h later on
-    copytree(data_path("mdd"), vivado_stitch_proj_dir + "/data")
+    # the rudimentary driver mdd (copied into the project) gives correct ranges in
+    # xparameters.h later on
     tcl.append(_CORE_CLEANUP)
     # export list of used Verilog files (for rtlsim later on)
     tcl.append(
@@ -308,31 +306,57 @@ def create_stitched_ip(
         + '|| FILE_TYPE == "Verilog Header" || FILE_TYPE == VHDL '
         + "|| FILE_TYPE == XCI)}]"
     )
-    v_file_list = "%s/all_verilog_srcs.txt" % vivado_stitch_proj_dir
+    v_file_list = "%s/all_verilog_srcs.txt" % project
     tcl.append("set fp [open %s w]" % v_file_list)
     # write each verilog filename to all_verilog_srcs.txt
     tcl.append("foreach vf $all_v_files {puts $fp $vf}")
     tcl.append("close $fp")
-    # write the project creator tcl script
-    tcl_string = "\n".join(tcl) + "\n"
-    with open(vivado_stitch_proj_dir + "/make_project.tcl", "w") as f:
-        f.write(tcl_string)
-    # create a shell script and call Vivado
-    make_project_sh = vivado_stitch_proj_dir + "/make_project.sh"
+    return "\n".join(tcl) + "\n", names
+
+
+def create_stitched_ip(
+    model: ModelWrapper,
+    fpgapart: str,
+    clk_ns: float,
+    ip_name: str,
+    toolchain: Toolchain | None = None,
+) -> ModelWrapper:
+    """The IODMA's IP (``hls_synth_ip``'s) in a Vivado block design of its own, named
+    ``ip_name``, packaged as the IP ``xilinx_finn:finn:<ip_name>:1.0`` by Vivado run in
+    ``toolchain`` (by default the machine's) on the Tcl ``stitched_ip_tcl`` writes. The
+    scratch model states the project (``vivado_stitch_proj``), the VLNV, the interface
+    names and the wrapper HDL."""
+    op = _iodma(model)
+    # ensure non-relative readmemh .dat files
+    _replace_verilog_relpaths(op.get_nodeattr("ipgen_path"))
+    assert os.path.isdir(op.get_nodeattr("ip_path")), "IP generation directory doesn't exist."
+    project = make_build_dir(prefix="vivado_stitch_proj_")
+    tcl, names = stitched_ip_tcl(op, project, fpgapart, clk_ns, ip_name)
+    wrapper_filename = _wrapper(project, ip_name)
+    model.set_metadata_prop("vivado_stitch_proj", project)
+    model.set_metadata_prop("wrapper_filename", wrapper_filename)
+    model.set_metadata_prop("vivado_stitch_vlnv", _vlnv(ip_name))
+    model.set_metadata_prop("vivado_stitch_ifnames", json.dumps(names))
+    # the rudimentary driver the Tcl adds to the IP
+    copytree(data_path("mdd"), project + "/data")
+    with open(project + "/make_project.tcl", "w") as f:
+        f.write(tcl)
     toolchain = toolchain or host_toolchain()
     toolchain.probe("vivado")
-    args = ["-mode", "batch", "-source", "make_project.tcl"]
-    with open(make_project_sh, "w") as f:
-        f.write("#!/bin/bash\nset -e\ncd " + shlex.quote(vivado_stitch_proj_dir) + "\n")
-        f.write("exec " + shlex.join(toolchain.command("vivado", *args)) + "\n")
-    result = toolchain.run("vivado", args, cwd=vivado_stitch_proj_dir, check=False)
+    result = toolchain.run(
+        "vivado",
+        ["-mode", "batch", "-source", "make_project.tcl"],
+        cwd=project,
+        check=False,
+        replay=Path(project) / "make_project.sh",
+    )
     sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
     sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
     if result.returncode != 0:
         raise ToolFailed.of_run(
             "vivado",
             result,
-            transcript=Path(vivado_stitch_proj_dir) / "vivado.log",
+            transcript=Path(project) / "vivado.log",
             what="the stitched project",
         )
     # wrapper may be created in different location depending on Vivado version
@@ -357,4 +381,11 @@ def ip_repositories(model: ModelWrapper) -> list[str]:
     return [_iodma(model).get_nodeattr("ip_path"), project + "/ip"]
 
 
-__all__ = ["create_stitched_ip", "data_path", "hls_synth_ip", "ip_repositories", "prepare_ip"]
+__all__ = [
+    "create_stitched_ip",
+    "data_path",
+    "hls_synth_ip",
+    "ip_repositories",
+    "prepare_ip",
+    "stitched_ip_tcl",
+]

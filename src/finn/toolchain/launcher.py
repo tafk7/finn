@@ -15,6 +15,10 @@ the one way a tool process is started and reaped.
 - ``run_process`` is the process primitive under both: a new process group,
   killed whole on timeout or cancellation.
 
+Only the route lives here: what one tool needs (HLS's frontend and installation,
+XSim's commands, Vivado's installation) is its own module's, ``finn.toolchain.hls``,
+``xsim`` and ``vivado``.
+
 A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
 so that one build runs every tool through one route; without one, it runs by the
 machine's (``host_toolchain``). Nothing is discovered or activated on import.
@@ -42,8 +46,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
-# Modules, not names: finn.toolchain.vivado reads this module's errors in turn.
-from finn.toolchain import host, vivado
+# Modules, not names: finn.toolchain.vivado and .hls read this module in turn.
+from finn.toolchain import hls, host, vivado
 
 StrPath = str | os.PathLike[str]
 
@@ -54,10 +58,6 @@ _LOG = logging.getLogger(__name__)
 # selection and the environment's PATH, so parallel HLS synthesis probes once.
 PROBE_TIMEOUT = 120
 _VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
-_HLS_CAPABLE: set[tuple[Hashable, ...]] = set()
-
-#: The HLS frontends a selection may name.
-HLS_FRONTENDS = ("vivado_hls", "vitis_hls", "vitis-run")
 
 
 class Cancel(Protocol):
@@ -184,7 +184,7 @@ class Selection:
             raise ValueError(
                 "Site routes own activation; do not combine launcher and local settings"
             )
-        if self.hls_frontend is not None and self.hls_frontend not in HLS_FRONTENDS:
+        if self.hls_frontend is not None and self.hls_frontend not in hls.FRONTENDS:
             raise ValueError("Unknown HLS frontend: " + self.hls_frontend)
         if self.vivado_jobs is not None:
             vivado.vivado_jobs(self.vivado_jobs)
@@ -381,17 +381,6 @@ class ToolFailed(RuntimeError):
         )
 
 
-#: The simulator libraries an XSI simulation loads, by the installation that has
-#: them: the Vivado simulation kernel (``finn_xsi``), and the floating-point
-#: operators HLS-generated code links. docker/finn-toolchain.sh puts the same
-#: directories on a native shell's loader path.
-SIMULATION_LIBRARIES = (
-    ("XILINX_VIVADO", "lib/lnx64.o"),
-    ("XILINX_VITIS", "lnx64/tools/fpo_v7_1"),
-    ("XILINX_HLS", "lnx64/tools/fpo_v7_1"),
-)
-
-
 @dataclass(frozen=True)
 class Toolchain:
     """A selection with its prepared environment, a read-only snapshot: every tool
@@ -432,39 +421,6 @@ class Toolchain:
             )
             raise ToolUnavailable(tool, f"not on this toolchain's route ({where})")
         return [*selection.launcher, executable, *(os.fspath(arg) for arg in args)]
-
-    def hls_installation(self) -> Path:
-        """The local installation whose HLS C++ headers (``include/``) and C
-        simulation libraries (``lnx64/``) code compiled by ``g++`` uses: the
-        environment's ``XILINX_HLS``, else ``XILINX_VITIS`` (whose installation
-        carries HLS from 2025.1). ``ToolUnavailable`` when it names neither."""
-        for variable in ("XILINX_HLS", "XILINX_VITIS"):
-            if self.environment.get(variable):
-                return Path(self.environment[variable])
-        raise ToolUnavailable(
-            "HLS",
-            "this toolchain names no HLS installation (XILINX_HLS or XILINX_VITIS) "
-            "for HLS C++ headers and C simulation libraries",
-        )
-
-    def simulation_environment(self) -> dict[str, str]:
-        """This environment with the loader path an XSI simulation needs: the
-        simulator libraries of its installations (``SIMULATION_LIBRARIES``, those
-        that exist) ahead of its ``LD_LIBRARY_PATH``. The loader reads the path when
-        a process starts, so this is the environment of a new process that
-        simulates: the build process of ``build_dataflow_directory``, an XSI C++
-        driver."""
-        environment = dict(self.environment)
-        libraries = [
-            str(Path(environment[variable]) / suffix)
-            for variable, suffix in SIMULATION_LIBRARIES
-            if environment.get(variable) and (Path(environment[variable]) / suffix).is_dir()
-        ]
-        if environment.get("LD_LIBRARY_PATH"):
-            libraries.append(environment["LD_LIBRARY_PATH"])
-        if libraries:
-            environment["LD_LIBRARY_PATH"] = ":".join(libraries)
-        return environment
 
     def run(
         self,
@@ -521,7 +477,9 @@ class Toolchain:
             raise ToolFailed.of_run(tool, result, transcript=transcript)
         return result
 
-    def _probe_key(self, *what: Hashable) -> tuple[Hashable, ...]:
+    def probe_key(self, *what: Hashable) -> tuple[Hashable, ...]:
+        """The key of what a probe learns of this route (``what``), cached per process:
+        by the selection and the environment's PATH."""
         return (*what, self.selection, self.environment.get("PATH", ""))
 
     def probe(self, tool: str, timeout: float = PROBE_TIMEOUT) -> tuple[int, ...]:
@@ -529,7 +487,7 @@ class Toolchain:
         route; once per selection and PATH in a process. Not a licence test.
         ``ToolUnavailable`` when the tool is not on the route, or does not answer
         with a release."""
-        key = self._probe_key("version", tool)
+        key = self.probe_key("version", tool)
         if key in _VERSIONS:
             return _VERSIONS[key]
         route = shlex.join(self.selection.launcher) if self.selection.launcher else "local"
@@ -552,55 +510,18 @@ class Toolchain:
         _VERSIONS[key] = version
         return version
 
-    def hls_frontend(self) -> str:
-        """The HLS frontend this selection names; ``ValueError`` when it names none."""
-        if self.selection.hls_frontend is None:
-            raise ValueError(
-                "This selection names no HLS frontend; state one, or lay it over the "
-                "machine's (host_selection)"
-            )
-        return self.selection.hls_frontend
-
-    def hls_command(self, script: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, list[str]]:
-        """The selected HLS frontend and its arguments to run ``script``; refused
-        (``ValueError``) when the probed release does not match the frontend."""
-        frontend = self.hls_frontend()
-        version = self.probe(frontend, timeout)
-        # These are FINN code-generation constraints, separate from whether a
-        # command exists. Preserve the standalone/unified transition deliberately.
-        supported = {
-            "vivado_hls": version <= (2020, 1),
-            "vitis_hls": (2020, 1) <= version <= (2024, 2),
-            "vitis-run": version >= (2025, 1),
-        }[frontend]
-        if not supported:
-            raise ValueError(
-                f"FINN HLS frontend {frontend} is incompatible with {version}; "
-                "select the matching frontend explicitly"
-            )
-        capability = self._probe_key("hls-capability", frontend)
-        if frontend == "vitis-run" and capability not in _HLS_CAPABLE:
-            help_result = self.run(frontend, ["--help"], timeout=timeout)
-            help_text = (help_result.stdout + help_result.stderr).decode("utf-8", errors="replace")
-            if "hls" not in help_text.lower():
-                raise RuntimeError("Selected vitis-run does not advertise HLS capability")
-            _LOG.info("capability tool=vitis-run hls=advertised")
-            _HLS_CAPABLE.add(capability)
-        args = ["--mode", "hls", "--tcl", script] if frontend == "vitis-run" else ["-f", script]
-        return frontend, args
-
 
 def identity(toolchain: Toolchain, tool: str) -> str:
     """The installation ``tool`` runs from, by what it is, never where it is installed:
     ``tool``, the release its ``data/version.sh`` states (``XILINX_VERSION_DEFAULT``,
     ``unstated`` without one) and its ``data/version.dat``'s digest (``none`` without
     one). An HLS frontend's installation is the HLS installation
-    (``Toolchain.hls_installation``), any other tool's Vivado's
+    (``finn.toolchain.hls.installation``), any other tool's Vivado's
     (``finn.toolchain.vivado.installation``). The one key of what a tool built: the
     HLS cache's, a compiled XSI design's and the XSI bridge's. Reads two files and
     runs nothing; ``ToolUnavailable`` when the toolchain names no such installation."""
-    if tool in HLS_FRONTENDS:
-        installation = toolchain.hls_installation()
+    if tool in hls.FRONTENDS:
+        installation = hls.installation(toolchain)
     else:
         installation = vivado.installation(toolchain)
     data = installation / "data"
@@ -632,7 +553,7 @@ def host_selection(
     (``scripts/activate.sh``, ``docker/run``, ``finn-toolchain.sh``; no settings
     script is sourced), under the site command directory ``FINN_TOOL_DIR_OVERRIDE``
     names, if it names one, with the HLS frontend of the host file's
-    ``FINN_XILINX_VERSION`` (``machine_hls_frontend``) and the Vivado jobs
+    ``FINN_XILINX_VERSION`` (``finn.toolchain.hls.host_frontend``) and the Vivado jobs
     ``FINN_VIVADO_JOBS`` says, if it says. Each is read here, once a call. A selection
     a caller states (a build configuration's ``toolchain``) is laid over it
     (``Selection.over``): each field it states wins, and the machine's keep the rest."""
@@ -640,7 +561,7 @@ def host_selection(
     jobs = environ.get(VIVADO_JOBS_SETTING)
     if jobs is not None and not re.fullmatch(r"[0-9]+", jobs):
         raise ValueError(f"{VIVADO_JOBS_SETTING}={jobs} is not a number of runs")
-    frontend = machine_hls_frontend(environ)
+    frontend = hls.host_frontend(environ)
     try:
         machine = Selection(
             command_dir=environ.get(COMMAND_DIR_SETTING) or None,
@@ -652,33 +573,7 @@ def host_selection(
     return machine if stated is None else stated.over(machine)
 
 
-def machine_hls_frontend(environ: Mapping[str, str] | None = None) -> str:
-    """The HLS frontend of the release the host file selects
-    (``FINN_XILINX_VERSION``, which the environment may override): ``vitis-run``
-    from 2025.1, else ``vitis_hls``, which is also the frontend when it names no
-    release. ``ValueError`` when the release is not ``YEAR.MINOR``."""
-    version = host.settings(environ).get("FINN_XILINX_VERSION")
-    if version is None:
-        return "vitis_hls"
-    match = re.fullmatch(r"(20\d{2})\.(\d+)", version)
-    if match is None:
-        raise ValueError(f"FINN_XILINX_VERSION={version} is not a release (YEAR.MINOR)")
-    return "vitis-run" if tuple(map(int, match.groups())) >= (2025, 1) else "vitis_hls"
-
-
 def host_toolchain() -> Toolchain:
     """``host_selection()`` prepared over this process's environment: the
     toolchain of a transformation called without one."""
     return host_selection().prepare()
-
-
-def xelab_threads(environment: Mapping[str, str]) -> str:
-    """The value of ``xelab --mt`` in ``environment``: ``FINN_XELAB_MT``, else
-    ``NUM_DEFAULT_WORKERS``, else 8; one thread is ``off``.
-
-    Xelab's own default, ``auto``, can expand to hundreds of workers on a shared
-    server, and large stitched FINNLoop designs have shown intermittent elaborator
-    SIGABRTs in that mode, so the default stays bounded.
-    """
-    threads = environment.get("FINN_XELAB_MT", environment.get("NUM_DEFAULT_WORKERS", "8"))
-    return "off" if threads == "1" else threads

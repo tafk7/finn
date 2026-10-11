@@ -28,6 +28,7 @@ from finn.harness.hls import c_simulate
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.pool import PoolKernel, element_type
+from finn.toolchain import hls
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
 from kernels.conformance import KERNEL, Sample, _ends, _values, _words, place
 from kernels.specs.pool import max_pool, pool
@@ -113,7 +114,7 @@ def test_element_types_follow_signedness() -> None:
 def _c_simulator() -> bool:
     toolchain = host_toolchain()
     try:
-        toolchain.hls_installation()
+        hls.installation(toolchain)
         toolchain.command("g++")
     except ToolUnavailable:
         return False
