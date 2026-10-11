@@ -23,8 +23,10 @@ through the partition and compare it with ``execute_onnx`` of the source.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
@@ -43,7 +45,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.configure import undecided
-from finn.kernels.explore import Ranked
+from finn.kernels.explore import Pinned, Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.platform import resolve_target
@@ -171,13 +173,21 @@ def source(case: Case) -> ModelWrapper:
 
 def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) -> ModelWrapper:
     """The case as KernelOps, inferred, every choice committed at two lanes; ``compute``
-    pins each MatMul's core."""
+    pins each MatMul's core for the exploration (``Pinned``): ranking reopens every choice
+    not held, so a core saved on the node would be ranked again, and the pin replaces the
+    core conversion stored with the choices under it."""
     model = source(case).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    if compute is not None:
-        for node in model.graph.node:
-            if node.op_type == "MatMul":
-                kernel_op(model, node).save({"compute": compute})
-    return model.transform(ExploreKernelChoices([Ranked(Lanes(2))]))
+    ranked = Ranked(Lanes(2))
+    if compute is None:
+        return model.transform(ExploreKernelChoices([ranked]))
+    pins = {
+        node.name: {"compute": compute} for node in model.graph.node if node.op_type == "MatMul"
+    }
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "pinned.json"
+        path.write_text(json.dumps(pins))
+        pinned = Pinned(path)
+    return model.transform(ExploreKernelChoices([pinned, ranked]))
 
 
 def _matmuls(model: ModelWrapper) -> list[Any]:
@@ -208,6 +218,18 @@ def test_a_thresholding_reads_an_unsigned_result() -> None:
     point: Any = thresholding.point()
     assert point.x.tensor.element == ScalarEncoding(DataType["UINT6"])
     assert thresholding.verify_node() == []
+
+
+@pytest.mark.parametrize("name", ("ternary", "below"))
+def test_a_pinned_core_is_the_one_explored(name: str) -> None:
+    """The INT8 core the ``xsim`` test simulates on a DSP58 part: pinned, it is kept, and
+    nothing conversion stored under the packed core is left."""
+    model = kernel_ops(CASES[name], target=VCK190, compute="int8_dsp58")
+    for op in _matmuls(model):
+        assert type(op.point().matmul.compute).__name__ == "Int8Dsp58DotpKernel"
+        stored = op.choices()
+        assert stored["compute"] == "int8_dsp58"
+        assert not [key for key in stored if key.startswith("compute.packed.")]
 
 
 def test_narrowed_weights_shrink_the_memory_image() -> None:
