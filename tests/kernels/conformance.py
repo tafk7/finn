@@ -123,6 +123,7 @@ from finn.kernels.control import ControlBus
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import StreamContract
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
 
 KERNEL, SOURCE = "kernel", "source"
@@ -571,7 +572,7 @@ def _check_rtl(
     if requests and not synthesize:
         stage_hls(requests[0], directory, roots={"finnlib": finnlib_root()})
         return
-    top, sources, _ = materialize(leaf, directory)
+    top, sources, _ = materialize(leaf, directory, toolchain=host_toolchain())
     abi = leaf.abi
     extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
@@ -741,6 +742,7 @@ def _simulate(
                 pacing=PACING[mode],
                 repeating=repeating,
                 cycles=cycles.value if isinstance(cycles, Available) else 0,
+                toolchain=host_toolchain(),
             )
         except WordsDiffer as error:
             decoded = decode(

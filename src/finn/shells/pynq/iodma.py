@@ -392,9 +392,9 @@ class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
         ]
         return default_directives
 
-    def ipgen_singlenode_code(self, toolchain: Toolchain | None = None) -> None:
+    def ipgen_singlenode_code(self, *, toolchain: Toolchain) -> None:
         """Builds the bash script for IP generation using the CallHLS utility, and runs
-        it in ``toolchain`` (by default the machine's)."""
+        it in ``toolchain``."""
         node = self.onnx_node
         code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
         builder = CallHLS(toolchain=toolchain)

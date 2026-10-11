@@ -9,37 +9,47 @@
 """FINN XSI (Xilinx Simulation Interface) support module
 
 This module provides utilities for RTL simulation support via finn_xsi. The
-finn_xsi C++ extension is built against the selected Vivado on first use;
-``python -m finn.xsi.setup`` builds it ahead of time. The kernel path simulates
-through ``finn.core.rtlsim_bench`` and does not use this package.
+finn_xsi C++ extension is built against the Vivado of the toolchain it is given on
+first use; ``python -m finn.xsi.setup`` builds it ahead of time, against the
+machine's. The kernel path simulates through ``finn.core.rtlsim_bench`` and does not
+use this package.
 
 Usage:
     from finn import xsi
-    if xsi.is_available():
-        sim = xsi.load_sim_obj(...)
+    from finn.toolchain.launcher import host_toolchain
+    toolchain = host_toolchain()
+    if xsi.is_available(toolchain):
+        sim = xsi.load_sim_obj(..., toolchain=toolchain)
 """
 
+from __future__ import annotations
+
 import sys
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from finn.toolchain.launcher import Toolchain
 
 
-def is_available() -> bool:
-    """Whether RTL simulation can be used here: the finn_xsi extension can be built.
+def is_available(toolchain: Toolchain) -> bool:
+    """Whether RTL simulation can be used here: the finn_xsi extension can be built
+    against ``toolchain``'s Vivado.
 
     Cheap: checks prerequisites (a selected Vivado with XSim headers, a C++
     compiler, pybind11) without building, importing or running anything.
     """
     from finn.xsi.setup import check_prerequisites  # noqa: PLC0415
 
-    return not check_prerequisites()
+    return not check_prerequisites(toolchain)
 
 
 # Cache for the loaded adapter
 _adapter_module: Optional[Any] = None
 
 
-def _load_modules() -> None:
-    """Build finn_xsi if needed and import it; raise with the reason if impossible."""
+def _load_modules(toolchain: Toolchain) -> None:
+    """Build finn_xsi for ``toolchain`` if needed and import it; raise with the reason
+    if impossible."""
     global _adapter_module
 
     if _adapter_module is not None:
@@ -47,7 +57,7 @@ def _load_modules() -> None:
 
     from finn.xsi.setup import ensure_built  # noqa: PLC0415
 
-    xsi_so = ensure_built()
+    xsi_so = ensure_built(toolchain)
     # The Python adapter is installed normally; only the native artifact is external.
     added = str(xsi_so.parent) not in sys.path
     if added:
@@ -67,9 +77,21 @@ def _load_modules() -> None:
             sys.path.remove(str(xsi_so.parent))
 
 
-# List of functions to wrap from finn_xsi.adapter
+def load_sim_obj(
+    sim_out_dir: Any, out_so_relative_path: Any, tracefile: Any = None, *, toolchain: Toolchain
+) -> Any:
+    """``finn_xsi.adapter.load_sim_obj``, the extension built for ``toolchain`` first
+    (``_load_modules``)."""
+    _load_modules(toolchain)
+    assert _adapter_module is not None
+    return _adapter_module.load_sim_obj(
+        sim_out_dir, out_so_relative_path, tracefile, toolchain=toolchain
+    )
+
+
+# The functions of finn_xsi.adapter that act on a loaded simulation: they import
+# nothing native, so they need no extension built.
 _ADAPTER_FUNCTIONS = [
-    "load_sim_obj",
     "reset_rtlsim",
     "close_rtlsim",
 ]
@@ -82,12 +104,7 @@ def __getattr__(name: str) -> Any:
 
         return getattr(compilation, name)
     if name in _ADAPTER_FUNCTIONS:
+        import finn_xsi.adapter  # noqa: PLC0415
 
-        def wrapper(*args, **kwargs):
-            _load_modules()
-            return getattr(_adapter_module, name)(*args, **kwargs)
-
-        wrapper.__name__ = name
-        wrapper.__doc__ = f"Wrapper for finn_xsi.adapter.{name}"
-        return wrapper
+        return getattr(finn_xsi.adapter, name)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

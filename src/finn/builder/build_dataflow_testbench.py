@@ -16,7 +16,8 @@ holds what it needs and nothing of the machine:
 - ``run.sh``, which compiles, elaborates and runs it with Vivado's simulator found on
   PATH (``xvlog``, ``xelab``, ``xsim``), ``glbl.v`` from ``$XILINX_VIVADO``, and exits
   0 printing ``PASS`` when every output word matched; a failed compilation or
-  elaboration exits with its own status (``finn.toolchain.xsim.EXIT_STATUS``).
+  elaboration exits with its own status (``finn.toolchain.xsim.EXIT_STATUS``), and so
+  does an environment without them (``UNAVAILABLE_STATUS``), before anything runs.
 
 ``write_testbench`` simulates nothing: the testbench is an output, and no build
 re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
@@ -54,7 +55,7 @@ from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.toolchain import xsim
-from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
+from finn.toolchain.launcher import Toolchain, ToolFailed, ToolUnavailable, run_process
 from finn.transformation.kernels.package import boundary_facts, free_side
 
 #: The directory of the testbench, beside the packaged IP.
@@ -154,19 +155,27 @@ def write_testbench(
     directory: Path,
     frame: Mapping[str, NDArray[Any]],
     *,
+    toolchain: Toolchain,
     label: str = "the partition",
 ) -> None:
     """Write the XSim testbench of the partition ``body`` into ``directory``, streaming
     ``frame`` (its inputs by tensor) and expecting the body's outputs on it, executed in
     Python; see the module docstring. The module is the one PackagePartition packages
     (``configured_root``), and the watchdog allows the cycles its
-    root states. Nothing is simulated (``run_testbench`` runs it)."""
+    root states. Nothing is simulated (``run_testbench`` runs it); ``toolchain`` synthesizes
+    an HLS leaf's request first, unless the HLS cache holds it
+    (``finn.core.rtlsim_bench.materialize``)."""
     point, boundary = configured_root(body, label)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)
     directory.mkdir(parents=True, exist_ok=True)
     bench = stream_bench(
-        point.module, directory, inputs=inputs, outputs=outputs, cycles=int(point.cycles)
+        point.module,
+        directory,
+        inputs=inputs,
+        outputs=outputs,
+        cycles=int(point.cycles),
+        toolchain=toolchain,
     )
     (directory / "check.sv").write_text("`timescale 1ns/1ps\n" + bench.text)
     relative = [str(Path(source).relative_to(directory)) for source in bench.sources]
@@ -175,18 +184,19 @@ def write_testbench(
     script.chmod(0o755)
 
 
-def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str:
+def run_testbench(directory: Path, *, toolchain: Toolchain) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
-    ``toolchain``'s environment (the machine's by default), a command directory it
+    ``toolchain``'s environment, a command directory it
     selects first on ``PATH``, written into its transcript as it runs: in the
     toolchain's log directory when it has one (``Toolchain.transcript``), else beside
     ``run.sh`` (``run.sh.stdout.log``, ``.stderr.log``). Returns what it printed, which
-    ends in ``PASS``. ``xvlog`` or ``xelab`` failing (the script's
-    ``finn.toolchain.xsim.EXIT_STATUS``) raises ``ToolFailed``, naming the transcript;
+    ends in ``PASS``. An environment that names no Vivado or lacks one of the
+    simulator's commands (the script's ``finn.toolchain.xsim.UNAVAILABLE_STATUS``)
+    raises ``ToolUnavailable``; ``xvlog`` or ``xelab`` failing (its
+    ``finn.toolchain.xsim.EXIT_STATUS``) ``ToolFailed``, naming the transcript;
     a mismatch, any other failure or a timeout
     ``finn.core.rtlsim_bench.SimulationFailed`` with what it printed. A launcher route,
     which runs a tool elsewhere, runs no local script: refused (``ValueError``)."""
-    toolchain = toolchain or host_toolchain()
     selection = toolchain.selection
     if selection.launcher:
         raise ValueError(
@@ -210,6 +220,11 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
         raise SimulationFailed(
             f"{RUN_SCRIPT} ran over {RUN_TIMEOUT} s:\n" + printed.decode(errors="replace")
         ) from expired
+    if result.returncode == xsim.UNAVAILABLE_STATUS:
+        said = result.stderr.decode(errors="replace").strip().splitlines()
+        raise ToolUnavailable(
+            "xsim", f"{directory / RUN_SCRIPT}: {said[-1] if said else 'not runnable here'}"
+        )
     for tool, status in xsim.EXIT_STATUS.items():
         if result.returncode == status:
             # The script's transcript holds the tool's output (each also writes its own

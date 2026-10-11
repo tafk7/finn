@@ -58,30 +58,30 @@ def test_artifacts_are_keyed_by_vivado_installation(tmp_path, monkeypatch, vivad
 
 def test_missing_toolchain_is_reported_not_skipped(monkeypatch):
     monkeypatch.delenv("XILINX_VIVADO", raising=False)
-    assert not xsi.is_available()
+    assert not xsi.is_available(host_toolchain())
     with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
-        xsi_setup.ensure_built()
+        xsi_setup.ensure_built(host_toolchain())
     assert missing.value.tool == "vivado"
 
 
 def test_first_use_builds_once_and_reuses(toolchain):
     _, log = toolchain
-    artifact = xsi_setup.ensure_built()
+    artifact = xsi_setup.ensure_built(host_toolchain())
     assert artifact.read_bytes() == b"native bridge"
-    assert xsi_setup.ensure_built() == artifact
+    assert xsi_setup.ensure_built(host_toolchain()) == artifact
     assert len(log.read_text().splitlines()) == 1
 
 
 def test_changed_artifact_is_rebuilt(toolchain):
     _, log = toolchain
-    artifact = xsi_setup.ensure_built()
+    artifact = xsi_setup.ensure_built(host_toolchain())
     artifact.write_bytes(b"corrupted")
-    assert xsi_setup.ensure_built().read_bytes() == b"native bridge"
+    assert xsi_setup.ensure_built(host_toolchain()).read_bytes() == b"native bridge"
     assert len(log.read_text().splitlines()) == 2
 
 
 def _build(queue):
-    queue.put(str(xsi_setup.ensure_built()))
+    queue.put(str(xsi_setup.ensure_built(host_toolchain())))
 
 
 def test_concurrent_first_use_builds_once(toolchain):

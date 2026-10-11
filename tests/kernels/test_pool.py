@@ -142,6 +142,7 @@ def test_the_top_computes_the_case_in_c_simulation(tmp_path: Path) -> None:
         inputs={"s_axis": (words, window.form.lanes * window.element.bits)},
         lasts={"s_axis": lasts},
         outputs={"m_axis": len(expected_words)},
+        toolchain=host_toolchain(),
     )
     assert found == {"m_axis": expected_words}
 
@@ -169,6 +170,7 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
         },
         frames=4,
         cycles=point.cycles,
+        toolchain=host_toolchain(),
     )
     core = f"{KERNEL}.s_axis_TDATA"
     assert measured.per_frame(core) == beats == 48

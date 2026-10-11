@@ -40,6 +40,9 @@ GLBL_WORD = '"$XILINX_VIVADO/data/verilog/src/glbl.v"'
 #: What a ``script`` exits with when ``xvlog`` or ``xelab`` fails, by tool; a
 #: simulation that fails exits 1.
 EXIT_STATUS = {"xvlog": 10, "xelab": 11}
+#: What a ``script`` exits with, before it runs anything, when its environment names no
+#: Vivado (``XILINX_VIVADO``) or one of the simulator's commands is not on its PATH.
+UNAVAILABLE_STATUS = 12
 
 
 def xelab_threads(environment: Mapping[str, str]) -> str:
@@ -169,8 +172,9 @@ def script(
 ) -> str:
     """The shell lines that compile, elaborate and simulate as ``elaborate`` and
     ``simulate`` do, with the paths as given (relative to where the script runs) and
-    ``glbl.v`` from ``$XILINX_VIVADO``, which they first require. ``xvlog`` or ``xelab``
-    failing exits with its ``EXIT_STATUS``; ``xsim`` failing exits 1."""
+    ``glbl.v`` from ``$XILINX_VIVADO``. They first require it set and the three commands
+    on PATH, else exit ``UNAVAILABLE_STATUS``, saying which is missing. ``xvlog`` or
+    ``xelab`` failing exits with its ``EXIT_STATUS``; ``xsim`` failing exits 1."""
 
     def words(command: Sequence[str]) -> list[str]:
         return [word if word.startswith('"$') else shlex.quote(word) for word in command]
@@ -179,7 +183,10 @@ def script(
     xelab = ["xelab", *elaborate_args(top, snapshot, threads)]
     # The two long commands a word a line; the simulation on one.
     return (
-        ': "${XILINX_VIVADO:?set XILINX_VIVADO (source Vivado\'s settings64.sh)}"\n'
+        '[ -n "${XILINX_VIVADO:-}" ] || { echo "XILINX_VIVADO is not set: source the '
+        f'settings64.sh of Vivado" >&2; exit {UNAVAILABLE_STATUS}; }}\n'
+        f"for tool in {' '.join(TOOLS)}; do command -v \"$tool\" >/dev/null || "
+        f'{{ echo "$tool is not on PATH" >&2; exit {UNAVAILABLE_STATUS}; }}; done\n'
         + " \\\n    ".join(words(xvlog))
         + f" || exit {EXIT_STATUS['xvlog']}\n"
         + " \\\n    ".join(words(xelab))

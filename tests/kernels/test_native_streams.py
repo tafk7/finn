@@ -11,6 +11,7 @@ from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2, eltwise, generator
 from kernels.xsim import requires_xsim
 
@@ -119,6 +120,7 @@ module check;
 endmodule
 """,
         tmp_path,
+        toolchain=host_toolchain(),
     )
 
 

@@ -31,6 +31,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import (
     FULL_DSP48E2,
     Root,
@@ -216,4 +217,5 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
         },
         pacing=STALLED if stalled else FREE,
         cycles=design.cycles,
+        toolchain=host_toolchain(),
     )

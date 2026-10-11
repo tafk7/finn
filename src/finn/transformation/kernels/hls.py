@@ -32,7 +32,7 @@ from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf, Module
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.toolchain.hls import HlsProduct, synthesize
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.launcher import Toolchain
 
 
 class HlsAbiRefused(ValueError):
@@ -67,18 +67,17 @@ def built_hls(
     module: Module,
     part: str,
     *,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
     cache: Path | None = None,
     roots: Mapping[str, Path] | None = None,
 ) -> dict[str, Path]:
     """Each HLS request's exported Verilog in ``module``, by its top's name, synthesized for
     ``part`` unless cached (``cache``, ``$FINN_HOME/hls`` by default) and checked against
     its leaf's pins. ``roots`` resolves the headers' roots (FinnLib as FINN resolves it by
-    default); ``toolchain`` runs HLS (the machine's by default)."""
+    default); ``toolchain`` runs HLS."""
     requests = hls_requests(module)
     if not requests:
         return {}
-    toolchain = toolchain or host_toolchain()
     roots = {"finnlib": resources.finnlib_root()} if roots is None else roots
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
     scratch.mkdir(parents=True, exist_ok=True)

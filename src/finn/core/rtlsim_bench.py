@@ -9,8 +9,8 @@ through a module, and measure its cycles. The XSim executor
 memory's INIT_FILE where ``$readmemh`` reads it; an HLS leaf's request is
 synthesized first, for ``HLS_PART``, or taken from the HLS cache
 (``finn.transformation.kernels.hls.built_hls``). ``simulate`` elaborates a
-testbench module ``check`` against sources, with the tools of FINN's toolchain
-(the machine's unless one is given), and requires it to display ``PASS``;
+testbench module ``check`` against sources, with the tools of the toolchain it is
+given, and requires it to display ``PASS``;
 otherwise it raises ``SimulationFailed``, a verdict. A compiler or elaborator that
 fails before the testbench runs is ``finn.toolchain.launcher.ToolFailed``, and a
 toolchain that selects no Vivado ``ToolUnavailable``.
@@ -127,7 +127,7 @@ from finn.kernels.artifacts.module import (
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.resources import finnlib_root
 from finn.toolchain import xsim
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.launcher import Toolchain
 from finn.transformation.kernels.hls import built_hls
 
 _LOG = logging.getLogger(__name__)
@@ -188,14 +188,14 @@ def materialize(
     directory: Path,
     *,
     part: str = HLS_PART,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
     cache: Path | None = None,
 ) -> tuple[str, list[str], dict[str, str]]:
     """The top module, its HDL sources, and each INIT_FILE's name and contents.
 
     FinnLib is the ``finnlib`` resource (``FINN_RESOURCES_FINNLIB`` overrides it). An HLS
-    leaf's request is synthesized for ``part`` first by ``toolchain`` (the machine's by
-    default), unless the HLS cache holds it (``built_hls``: ``cache``, ``$FINN_HOME/hls``
+    leaf's request is synthesized for ``part`` first by ``toolchain``, unless the HLS
+    cache holds it (``built_hls``: ``cache``, ``$FINN_HOME/hls``
     by default).
     """
     root = finnlib_root()
@@ -232,16 +232,15 @@ def simulate(
     testbench: str,
     directory: Path,
     *,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
 ) -> str:
     """Elaborate the testbench module ``check`` over ``sources``; it must display PASS.
 
-    XSim's driver (``finn.toolchain.xsim``) runs each tool through ``toolchain`` (the
-    machine's by default), whose Vivado provides ``glbl.v`` (``ToolUnavailable`` without
-    one), within ``TOOL_TIMEOUT``. The simulator's output, which the testbench may have
+    XSim's driver (``finn.toolchain.xsim``) runs each tool through ``toolchain``, whose
+    Vivado provides ``glbl.v`` (``ToolUnavailable`` without one), within
+    ``TOOL_TIMEOUT``. The simulator's output, which the testbench may have
     displayed more in. ``xvlog`` or ``xelab`` failing is ``ToolFailed``, naming its log;
     the testbench failing is ``SimulationFailed``."""
-    toolchain = toolchain or host_toolchain()
     bench = directory / "check.sv"
     bench.write_text("`timescale 1ns/1ps\n" + testbench)
     xsim.elaborate(
@@ -272,11 +271,13 @@ def stream_through(
     repeating: bool = False,
     cycles: int = 0,
     registers: Mapping[str, RegisterMap] | None = None,
+    toolchain: Toolchain,
 ) -> None:
     """Stream ``inputs`` through ``module``, paced by ``pacing``, and check that each output
     presents its words; see the module docstring for every pin it drives. Raises
     ``WordsDiffer`` when every output presented its words and some differ,
-    ``SimulationFailed`` on any other failure.
+    ``SimulationFailed`` on any other failure. ``toolchain`` runs the simulator and HLS
+    (``materialize``).
 
     ``cycles`` is what the model states the run takes beyond its boundary's beats (a root
     kernel's ``cycles``, when its members' work exceeds its streams'), for the watchdog.
@@ -291,6 +292,7 @@ def stream_through(
         repeating=repeating,
         cycles=cycles,
         registers=registers,
+        toolchain=toolchain,
     )
 
 
@@ -302,7 +304,7 @@ def stream_out(
     outputs: Mapping[str, Receive],
     pacing: Pacing = STALLED,
     cycles: int = 0,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
     cache: Path | None = None,
     taps: Mapping[str, Tap] | None = None,
 ) -> dict[str, tuple[int, ...]]:
@@ -313,8 +315,8 @@ def stream_out(
     Nothing is compared: an output word beyond its count, the watchdog or a tool's error
     raises ``SimulationFailed``.
 
-    ``cycles`` as ``stream_through`` takes them. ``toolchain`` runs the simulator and HLS
-    (the machine's by default); ``cache`` is the HLS cache (``materialize``)."""
+    ``cycles`` as ``stream_through`` takes them. ``toolchain`` runs the simulator and HLS;
+    ``cache`` is the HLS cache (``materialize``)."""
     taps = taps or {}
     bench = stream_bench(
         module,
@@ -346,6 +348,7 @@ def measure(
     outputs: Mapping[str, Words],
     frames: int = 4,
     cycles: int = 0,
+    toolchain: Toolchain,
 ) -> Measured:
     """The cycles of ``frames`` frames streamed back to back, never stalled; its table
     logged too (INFO).
@@ -355,7 +358,8 @@ def measure(
     Every handshake is recorded by the cycle it completes in: on the root's
     streams and on each link between the module's instances, observed at the
     sink's nets (``instance_net``), so a kernel's own ports are measured where the
-    module composes several. ``cycles``, a frame's, as ``stream_through`` takes them.
+    module composes several. ``cycles``, a frame's, and ``toolchain``, as
+    ``stream_through`` takes them.
     """
     if frames < 1:
         raise ValueError(f"at least one frame, not {frames}")
@@ -382,6 +386,7 @@ def measure(
         pacing=FREE,
         cycles=cycles * frames,
         observed=observed,
+        toolchain=toolchain,
     )
     beats: dict[str, list[int]] = {name: [] for name in observed}
     for line in log.splitlines():
@@ -592,7 +597,7 @@ def stream_bench(
     cycles: int = 0,
     registers: Mapping[str, RegisterMap] | None = None,
     observed: Mapping[str, tuple[str, str]] | None = None,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
     cache: Path | None = None,
     taps: Mapping[str, Tap] | None = None,
 ) -> StreamBench:
@@ -890,15 +895,19 @@ def _stream(
     directory: Path,
     inputs: Mapping[str, Words],
     outputs: Mapping[str, Words],
+    *,
+    toolchain: Toolchain,
     **options: Any,
 ) -> str:
     """Stream ``inputs`` through ``module`` checking ``outputs``; the simulator's output.
     Raises ``WordsDiffer`` with the words each output presented when some differ."""
-    bench = stream_bench(module, directory, inputs=inputs, outputs=outputs, **options)
+    bench = stream_bench(
+        module, directory, inputs=inputs, outputs=outputs, toolchain=toolchain, **options
+    )
     for port in outputs:
         (directory / f"{port}.{RECEIVED}").unlink(missing_ok=True)
     try:
-        return simulate(bench.sources, bench.text, directory)
+        return simulate(bench.sources, bench.text, directory, toolchain=toolchain)
     except SimulationFailed as failed:
         if WORDS_DIFFER not in str(failed):
             raise

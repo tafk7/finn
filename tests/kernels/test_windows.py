@@ -34,6 +34,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.configure import commit
 from finn.kernels.input_generator import InputGeneratorKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2
 from kernels.xsim import requires_xsim
 
@@ -205,7 +206,12 @@ def test_the_window_adapter_carries_the_window_in_xsim(case: str, tmp_path: Path
     for contribution in stage.module.sources:
         assert isinstance(contribution, CopiedSource)
         sources.append(root / contribution.path)
-    log = simulate(sources, bench(stage, source, expected_words(source, sink)), tmp_path)
+    log = simulate(
+        sources,
+        bench(stage, source, expected_words(source, sink)),
+        tmp_path,
+        toolchain=host_toolchain(),
+    )
     found = re.search(r"CAPACITY accepted=(\d+)", log)
     assert found is not None, log
     accepted = int(found.group(1))

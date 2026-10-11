@@ -30,7 +30,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.shells.pynq.iodma import IODMA_hls
-from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
+from finn.toolchain.launcher import Toolchain, ToolFailed
 from finn.toolchain.vivado import tcl_quote
 from finn.util.basic import make_build_dir
 
@@ -63,9 +63,9 @@ def prepare_ip(model: ModelWrapper, fpgapart: str, clk: float) -> ModelWrapper:
     return model
 
 
-def hls_synth_ip(model: ModelWrapper, toolchain: Toolchain | None = None) -> ModelWrapper:
-    """The IODMA's IP, by Vitis HLS run in ``toolchain`` (by default the machine's) on
-    the script ``prepare_ip`` wrote; its node states the project, the IP and its VLNV."""
+def hls_synth_ip(model: ModelWrapper, *, toolchain: Toolchain) -> ModelWrapper:
+    """The IODMA's IP, by Vitis HLS run in ``toolchain`` on the script ``prepare_ip``
+    wrote; its node states the project, the IP and its VLNV."""
     _iodma(model).ipgen_singlenode_code(toolchain=toolchain)
     return model
 
@@ -318,11 +318,12 @@ def create_stitched_ip(
     fpgapart: str,
     clk_ns: float,
     ip_name: str,
-    toolchain: Toolchain | None = None,
+    *,
+    toolchain: Toolchain,
 ) -> ModelWrapper:
     """The IODMA's IP (``hls_synth_ip``'s) in a Vivado block design of its own, named
     ``ip_name``, packaged as the IP ``xilinx_finn:finn:<ip_name>:1.0`` by Vivado run in
-    ``toolchain`` (by default the machine's) on the Tcl ``stitched_ip_tcl`` writes. The
+    ``toolchain`` on the Tcl ``stitched_ip_tcl`` writes. The
     scratch model states the project (``vivado_stitch_proj``), the VLNV, the interface
     names and the wrapper HDL."""
     op = _iodma(model)
@@ -340,7 +341,6 @@ def create_stitched_ip(
     copytree(data_path("mdd"), project + "/data")
     with open(project + "/make_project.tcl", "w") as f:
         f.write(tcl)
-    toolchain = toolchain or host_toolchain()
     toolchain.probe("vivado")
     result = toolchain.run(
         "vivado",

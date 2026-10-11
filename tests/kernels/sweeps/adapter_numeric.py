@@ -26,6 +26,7 @@ from finn.core.rtlsim_bench import materialize, pack_lanes
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.harness.toolchain import print_identity
+from finn.toolchain.launcher import host_toolchain
 from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
 from kernels.sweeps.rtl_transport import drive
 
@@ -40,7 +41,7 @@ def _padded(words, bits):
 
 
 def _build(point, directory):
-    return materialize(point.module, directory)
+    return materialize(point.module, directory, toolchain=host_toolchain())
 
 
 ROWS, CHANNELS = 3, 12

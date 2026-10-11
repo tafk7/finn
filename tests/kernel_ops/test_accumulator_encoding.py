@@ -49,6 +49,7 @@ from finn.kernels.explore import Pinned, Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.platform import resolve_target
+from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
@@ -279,6 +280,7 @@ def _computes(case: Case, directory: Path, **options: Any) -> None:
         inputs={port_in: words[port_in]},
         outputs={port_out: words[port_out]},
         cycles=root.point.cycles,
+        toolchain=host_toolchain(),
     )
 
 

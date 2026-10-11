@@ -494,8 +494,12 @@ names no licence gets the host file's (`XILINXD_LICENSE_FILE=PORT@HOST`), except
 on a launcher route, whose site owns it.
 
 Vendor commands execute with argv, child env and cwd. Probes use the identical
-route and a bounded timeout. Every transformation that runs a tool takes a
-prepared toolchain (`toolchain=`); called without one, it runs by the machine's,
+route and a bounded timeout. Every function that runs a tool requires a
+prepared toolchain (`toolchain=`). Only the entry points a user calls default to
+one: `PackagePartition`, `ElaboratePartition` and the XSim executor when they are
+made, the pynq shell's `BuildPynqBitfile`, and the command lines
+(`python -m finn.platform.generate`, `python -m finn.xsi.setup`). Each prepares the
+machine's once and passes it down,
 `finn.toolchain.launcher.host_toolchain()`: the environment as configured (no
 settings script is sourced), under the site command directory
 `FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the machine

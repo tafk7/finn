@@ -46,6 +46,7 @@ from finn.kernels.fifo_sizing import (
     simulate,
 )
 from finn.kernels.input_generator import nest_buffer, nest_geometry
+from finn.toolchain.launcher import host_toolchain
 from kernels import chain
 from kernels.helpers import FULL_DSP48E2
 from kernels.xsim import requires_xsim
@@ -432,6 +433,7 @@ module check;
 endmodule
 """,
         tmp_path,
+        toolchain=host_toolchain(),
     )
     measured = _cycles(log, "ACCEPT")
     supply = Pattern(tuple(range(frame)), frame)  # always valid: never ahead of the source
@@ -508,6 +510,7 @@ module check;
 endmodule
 """,
             directory,
+            toolchain=host_toolchain(),
         )
         left = _cycles(log, "LEFT")
         late = [left[(k + 1) * FRAME - 1] - (k * PERIOD + FRAME - 1) for k in range(frames)]

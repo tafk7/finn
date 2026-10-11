@@ -341,7 +341,7 @@ def build_pynq(
     export: Integration,
     directory: Path,
     *,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
     jobs: int | None = None,
     options: PynqOptions = PynqOptions(),
 ) -> PynqBuilt:
@@ -351,9 +351,8 @@ def build_pynq(
     its IP stated, or the IP the body states already when it was made from the body's
     design as it is now), the project (a new build directory), Vivado run on it, and
     what it made collected. ``toolchain`` is the
-    prepared toolchain every tool runs through, by default the machine's; ``jobs`` the
+    prepared toolchain every tool runs through; ``jobs`` the
     runs Vivado launches at once; ``options`` the shell's build options."""
-    toolchain = toolchain or host_toolchain()
     node, body, body_file = partition_body(model)
     made_from = design_digest(body)
     ips: dict[str, InstanceIP] = {}
@@ -503,7 +502,8 @@ class BuildPynqBitfile(Transformation):
     reports and host runtime), the digest of the partition's design its IP was made from
     (``bitfile_made_from``; the runner packages the partition again when the IP the body
     states was made from another design) and the shell options it was built with
-    (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's;
+    (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's
+    (``host_toolchain``), prepared once, when the transformation is made;
     Vivado launches as many runs at once as its selection says (``vivado_jobs``).
     ``enable_hw_debug`` inserts integrated logic analyzers (``PynqOptions``). ``bitfile``
     and ``clock`` hold the bitfile's path and the delivered clock's report, ``findings``
@@ -518,7 +518,7 @@ class BuildPynqBitfile(Transformation):
     ) -> None:
         super().__init__()
         self.directory = Path(directory)
-        self.toolchain = toolchain
+        self.toolchain = host_toolchain() if toolchain is None else toolchain
         self.options = PynqOptions(enable_hw_debug=enable_hw_debug)
         self.bitfile = self.directory / BITFILE
         self.clock: dict[str, Any] = {}
@@ -534,7 +534,7 @@ class BuildPynqBitfile(Transformation):
         for directory in (reports["integration"].parent, self.bitfile.parent):
             directory.mkdir(parents=True, exist_ok=True)
         reports["integration"].write_text(json.dumps(export.report(), indent=2))
-        toolchain = self.toolchain or host_toolchain()
+        toolchain = self.toolchain
         built = build_pynq(
             model,
             export,

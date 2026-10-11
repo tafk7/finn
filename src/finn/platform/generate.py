@@ -289,9 +289,9 @@ def _vivado_runs(
         )
 
 
-def extract(work: Path, jobs: int) -> None:
-    """Run the extraction into ``work``: ``parts-<i>.log`` and ``devices-<i>.log``."""
-    toolchain = host_toolchain()
+def extract(work: Path, jobs: int, toolchain: Toolchain) -> None:
+    """Run the extraction into ``work``, Vivado run through ``toolchain``:
+    ``parts-<i>.log`` and ``devices-<i>.log``."""
     work.mkdir(parents=True, exist_ok=True)
     _vivado_runs(
         work, [(f"parts-{i}", ["parts", str(i), str(jobs)]) for i in range(jobs)], toolchain
@@ -645,7 +645,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     with tempfile.TemporaryDirectory(prefix="finn-catalog-") as scratch:
         work = options.extracted or options.work or Path(scratch)
         if options.extracted is None:
-            extract(work, options.jobs)
+            # A command a user runs: the machine's toolchain.
+            extract(work, options.jobs, host_toolchain())
         try:
             catalog = derive_from(work)
         except GenerationError as error:

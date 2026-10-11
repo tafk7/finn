@@ -211,16 +211,15 @@ def synthesize(
     part: str,
     *,
     name: str,
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
     cache: Path | None = None,
 ) -> HlsProduct:
     """The product of the staged ``request`` for ``part``, synthesized unless cached.
 
     ``name`` names the entry, ``<name>-<key16>`` under ``cache`` (``hls_cache()`` by
-    default); ``toolchain`` runs the frontend (the machine's by default). Raises
+    default); ``toolchain`` runs the frontend. Raises
     ``ToolFailed`` when the tool fails or leaves no exported RTL, ``ToolUnavailable``
     when the toolchain has no HLS installation or frontend to run."""
-    toolchain = toolchain or launcher.host_toolchain()
     cache = hls_cache() if cache is None else cache
     if not (Path(request) / REQUEST_SCRIPT).is_file():
         raise ValueError(f"{request} holds no {REQUEST_SCRIPT}: it is not a staged request")
@@ -299,9 +298,9 @@ def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: 
 
 class CallHLS:
     """Execute a deliberately selected HLS frontend with child-scoped settings:
-    ``toolchain``'s, by default the machine's (``host_toolchain``)."""
+    ``toolchain``'s."""
 
-    def __init__(self, toolchain: Toolchain | None = None):
+    def __init__(self, toolchain: Toolchain):
         self.toolchain = toolchain
         self.tcl_script = ""
         self.ipgen_path = ""
@@ -315,7 +314,7 @@ class CallHLS:
         self.ipgen_path = path
 
     def build(self, code_gen_dir):
-        toolchain = self.toolchain or launcher.host_toolchain()
+        toolchain = self.toolchain
         self.code_gen_dir = os.path.abspath(code_gen_dir)
         frontend, args = command(toolchain, self.tcl_script)
         self.ipgen_script = str(Path(self.code_gen_dir) / "ipgen.sh")

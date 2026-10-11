@@ -26,7 +26,8 @@ as a tensor: ``pack`` of an output gives back its words, and words that are no t
 hardware's words.
 
 Its options are the executor's, never the graph's: ``pacing`` (``STALLED`` by default),
-``toolchain`` (the machine's by default), ``directory`` (where each run
+``toolchain`` (the machine's, ``host_toolchain``, prepared once when the executor is
+made, unless it is given one), ``directory`` (where each run
 writes its testbench and simulates, a directory of its own for each partition node it
 runs: ``<directory>/<node>``, ``<node>.1``, ...; a fresh build directory by default)
 and ``cache``, the HLS cache ``materialize`` takes an HLS leaf's product from. Nothing
@@ -53,7 +54,7 @@ links, when the full context is returned), as Python's run up to that node would
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -68,6 +69,7 @@ from finn.custom_op.kernels.shell import configured_root, member
 from finn.custom_op.partition.kernel_partitions import kernel_partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
+from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.transformation.kernels.package import free_side
 from finn.util.basic import make_build_dir
 
@@ -76,7 +78,6 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
     from finn.core.executor import Context
-    from finn.toolchain.launcher import Toolchain
 
 
 class Unstreamable(ValueError):
@@ -120,7 +121,7 @@ class XSim:
     """Runs a partition of KernelOps as its hardware, in XSim (module docstring)."""
 
     pacing: Pacing = STALLED
-    toolchain: Toolchain | None = None
+    toolchain: Toolchain = field(default_factory=host_toolchain)
     directory: Path | None = None
     cache: Path | None = None
 

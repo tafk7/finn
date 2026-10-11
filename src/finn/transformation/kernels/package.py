@@ -304,9 +304,9 @@ class PackagePartition(Transformation):
 
     ``ip_name`` is the partition node's name; the part and the clock period are the
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
-    build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
-    (a flow passes its own, so that one build runs Vivado by one route), by default
-    the machine's (``finn.toolchain.launcher.host_toolchain``).
+    build directory by default; ``toolchain`` the prepared toolchain Vivado and HLS run
+    in (a flow passes its own, so that one build runs Vivado by one route), by default
+    the machine's (``finn.toolchain.launcher.host_toolchain``), prepared once, here.
     """
 
     def __init__(
@@ -321,7 +321,7 @@ class PackagePartition(Transformation):
         self.ip_name = ip_name
         self.run_synth = run_synth
         self.directory = directory
-        self.toolchain = toolchain
+        self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         built = read_target(model)
@@ -331,7 +331,7 @@ class PackagePartition(Transformation):
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
         ).resolve()
         project.mkdir(parents=True, exist_ok=True)
-        toolchain = self.toolchain or host_toolchain()
+        toolchain = self.toolchain
         emitted = emit_module(
             module,
             project / "src",
@@ -381,8 +381,8 @@ class ElaboratePartition(Transformation):
 
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
     ``xelab.log``), a new build directory by default; ``toolchain`` is the
-    prepared toolchain the simulator runs in, by default the configured
-    machine's. A failed compilation or
+    prepared toolchain the simulator and HLS run in, by default the machine's
+    (``finn.toolchain.launcher.host_toolchain``), prepared once, here. A failed compilation or
     elaboration raises ``ToolFailed``, naming the log; a toolchain that selects no
     Vivado (for ``glbl.v``) ``ToolUnavailable``.
     """
@@ -395,7 +395,7 @@ class ElaboratePartition(Transformation):
     ):
         super().__init__()
         self.directory = directory
-        self.toolchain = toolchain
+        self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         point, _ = configured_root(model, "the partition")
@@ -403,7 +403,7 @@ class ElaboratePartition(Transformation):
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()
         directory.mkdir(parents=True, exist_ok=True)
-        toolchain = self.toolchain or host_toolchain()
+        toolchain = self.toolchain
         emitted = emit_module(
             point.module,
             directory / "src",

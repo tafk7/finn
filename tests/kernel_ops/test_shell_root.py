@@ -30,6 +30,7 @@ from finn.custom_op.kernels.base import CHANNEL_KEYS, KernelOpError, channel_cho
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root
 from finn.kernels.configure import chosen, commit
 from finn.kernels.explore import Ranked, SizeFifos
+from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
@@ -359,4 +360,5 @@ def test_the_partition_computes_what_onnx_computes(tmp_path: Path) -> None:
             )
         },
         cycles=point.cycles,
+        toolchain=host_toolchain(),
     )

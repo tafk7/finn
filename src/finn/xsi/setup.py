@@ -21,8 +21,8 @@ Options:
 
 RTL simulation builds the extension on first use (ensure_built); running this
 module only builds it ahead of time. Each function takes the toolchain whose Vivado
-the extension is built against (its XSim headers), the machine's
-(``host_toolchain``) by default; without a Vivado, ``ToolUnavailable``.
+the extension is built against (its XSim headers); without a Vivado,
+``ToolUnavailable``. The command line builds against the machine's (``host_toolchain``).
 """
 
 import argparse
@@ -32,7 +32,7 @@ import shutil
 import sys
 import sysconfig
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from finn.toolchain import vivado
 from finn.toolchain.launcher import (
@@ -92,10 +92,9 @@ def get_build_paths(toolchain: Toolchain) -> Tuple[List[str], str, List[str]]:
     return include_dirs, compiler, extra_compile_args
 
 
-def check_prerequisites(toolchain: Optional[Toolchain] = None) -> List[str]:
+def check_prerequisites(toolchain: Toolchain) -> List[str]:
     """Check if required tools are available: a compiler, pybind11, and a Vivado
-    with XSim headers in ``toolchain`` (the machine's by default)."""
-    toolchain = toolchain or host_toolchain()
+    with XSim headers in ``toolchain``."""
     errors = []
 
     # Check for C++ compiler
@@ -167,16 +166,13 @@ def _compile(artifact: Path, verbose: bool, toolchain: Toolchain) -> None:
     )
 
 
-def ensure_built(
-    verbose: bool = False, force: bool = False, toolchain: Optional[Toolchain] = None
-) -> Path:
-    """Return the xsi.so for ``toolchain`` (the machine's by default), building it on
-    first use; ``ToolUnavailable`` when it selects no Vivado.
+def ensure_built(toolchain: Toolchain, verbose: bool = False, force: bool = False) -> Path:
+    """Return the xsi.so for ``toolchain``, building it on first use; ``ToolUnavailable``
+    when it selects no Vivado.
 
     Safe for concurrent callers (e.g. pytest-xdist workers): one builds, the
     others wait and reuse its result.
     """
-    toolchain = toolchain or host_toolchain()
     artifact = xsi_artifact_dir(toolchain) / "xsi.so"
     if not force and _usable(artifact, toolchain):
         return artifact
@@ -194,12 +190,11 @@ def ensure_built(
     return artifact
 
 
-def build_xsi(
-    force: bool = False, verbose: bool = True, toolchain: Optional[Toolchain] = None
-) -> bool:
-    """Build (or reuse) the finn_xsi extension; report failures instead of raising."""
+def build_xsi(toolchain: Toolchain, force: bool = False, verbose: bool = True) -> bool:
+    """Build (or reuse) the finn_xsi extension for ``toolchain``; report failures instead
+    of raising."""
     try:
-        artifact = ensure_built(verbose=verbose, force=force, toolchain=toolchain)
+        artifact = ensure_built(toolchain, verbose=verbose, force=force)
     except (RuntimeError, ToolUnavailable) as error:
         print(error)
         print("\nCommon issues:")
@@ -315,7 +310,7 @@ def main() -> int:
     # Build finn_xsi
     if not args.quiet:
         print("Building finn_xsi extension...")
-    if not build_xsi(force=args.force, verbose=not args.quiet, toolchain=toolchain):
+    if not build_xsi(toolchain, force=args.force, verbose=not args.quiet):
         print("Build failed. Please check the error messages above.")
         return 1
 
