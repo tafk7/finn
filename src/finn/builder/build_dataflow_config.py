@@ -91,8 +91,8 @@ class VerificationStepType(str, Enum):
     """The checks a build runs beside those it always runs, as asked: none by
     default, since no build re-verifies the partition's computation (its KernelOps'
     ``execute_node`` is the reference, and the harness checks the hardware against
-    it). step_prepare_checkpoint runs the prepared graph's; step_verify_kernel_partition
-    the partition's; step_kernel_stitched_ip its testbench's. The Python checks
+    it). step_prepare_checkpoint runs the prepared graph's; step_verify_partition
+    the partition's; step_create_stitched_ip its testbench's. The Python checks
     (GRAPH_PREPARATION_PYTHON, PARTITION_PYTHON) report a failure as FAIL and the
     build continues, but for a prepared annotation a drawn value breaks, which
     refuses the graph; the RTL checks (PARTITION_ELABORATION, STITCHED_IP_TESTBENCH)
@@ -117,34 +117,28 @@ class VerificationStepType(str, Enum):
     STITCHED_IP_TESTBENCH = "stitched_ip_testbench"
 
 
-#: The steps each verification needs to run, each a step or its phase: the one that
-#: keeps its reference, and the one that checks.
+#: The steps each verification needs to run: the one that keeps its reference, and
+#: the one that checks.
 VERIFIED_BY = {
     VerificationStepType.GRAPH_PREPARATION_PYTHON: (
-        ("phase_graph_preparation", "step_prepare_import"),
-        ("phase_graph_preparation", "step_prepare_checkpoint"),
+        "step_prepare_import",
+        "step_prepare_checkpoint",
     ),
-    VerificationStepType.PARTITION_PYTHON: (
-        ("phase_kernel_path", "step_kernel_ops"),
-        ("phase_kernel_path", "step_verify_kernel_partition"),
-    ),
-    VerificationStepType.PARTITION_ELABORATION: (
-        ("phase_kernel_path", "step_verify_kernel_partition"),
-    ),
-    VerificationStepType.STITCHED_IP_TESTBENCH: (
-        ("phase_kernel_outputs", "step_kernel_stitched_ip"),
-    ),
+    VerificationStepType.PARTITION_PYTHON: ("step_convert_to_hw", "step_verify_partition"),
+    VerificationStepType.PARTITION_ELABORATION: ("step_verify_partition",),
+    VerificationStepType.STITCHED_IP_TESTBENCH: ("step_create_stitched_ip",),
 }
 
 
-#: The steps of a kernel-path build, from a Brevitas export: the graph-preparation
-#: phase (the export to a streamlined graph, checked), the kernel-path phase (the
-#: target, KernelOps, their choices, the partition, its verification), then the
-#: outputs its shell makes.
+#: The steps of a kernel-path build, from a Brevitas export: its phases
+#: (finn.builder.build_dataflow_phases), in order.
 default_build_dataflow_steps = [
-    "phase_graph_preparation",
-    "phase_kernel_path",
-    "phase_kernel_outputs",
+    "phase_prepare_model",
+    "phase_convert_to_hardware",
+    "phase_create_accelerator",
+    "phase_optimize_hardware",
+    "phase_build_hardware",
+    "phase_generate_outputs",
 ]
 
 
@@ -171,7 +165,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest = field(metadata=config(decoder=declared(TargetRequest, "target")))
 
-    #: How the export is prepared (phase_graph_preparation), a
+    #: How the export is prepared (phase_prepare_model), a
     #: finn.transformation.prepare.GraphPreparation: P0's ``override_inpsize``, P2's
     #: ``max_multithreshold_bit_width``, P1's ``preprocessing`` (an ONNX model merged
     #: ahead of the network), ``input_datatype`` and ``topk``, the ``streamlining`` and
@@ -189,7 +183,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: default.
     generate_outputs: List[DataflowOutputType] = field(default_factory=list)
 
-    #: The exploration (step_kernel_choices): the strategies that choose the KernelOps'
+    #: The exploration (step_explore): the strategies that choose the KernelOps'
     #: open choices through the DSE seam, run as written, each a spec with its own
     #: parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
     #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
@@ -219,7 +213,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
 
     #: The checks the build runs beside those it always runs
     #: (VerificationStepType), none by default: step_prepare_checkpoint's,
-    #: step_verify_kernel_partition's, and step_kernel_stitched_ip's testbench.
+    #: step_verify_partition's, and step_create_stitched_ip's testbench.
     verify_steps: List[VerificationStepType] = field(default_factory=list)
 
     #: The .npy file of inputs PARTITION_PYTHON runs the partition and the source on,
@@ -251,11 +245,11 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: default_build_dataflow_steps.
     steps: Optional[List[Any]] = None
 
-    #: If given, start from this step or phase, loading the intermediate model saved
-    #: before it (save_intermediate_models must be enabled).
+    #: If given, start from this step, or a phase's first step, loading the
+    #: intermediate model saved before it (save_intermediate_models must be enabled).
     start_step: Optional[str] = None
 
-    #: If given, stop after this step or phase.
+    #: If given, stop after this step, or a phase's last step.
     stop_step: Optional[str] = None
 
     #: Whether each step's model is saved under intermediate_models.

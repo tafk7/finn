@@ -94,7 +94,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("space", "finn.dataflow.tensor"),
         ("space", "numpy"),
         # util below the flow.
-        ("util", "finn.builder.build_dataflow_steps.step_kernel_bitfile"),
+        ("util", "finn.builder.build_dataflow_steps.step_synthesize_bitfile"),
         # The toolchain below util: of FINN, the resource store alone.
         ("toolchain", "finn.util.basic.make_build_dir"),
         ("toolchain", "finn.xsi.paths"),

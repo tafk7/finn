@@ -47,10 +47,7 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     default_build_dataflow_steps,
 )
-from finn.builder.build_dataflow_phases import (
-    build_dataflow_phase_lookup,
-    recorded_step_times,
-)
+from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
@@ -77,89 +74,99 @@ class StreamToLogger(object):
         pass
 
 
-def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
-    """Resolve build steps from config, supporting both phases and fine-grained steps
-    of the kernel path (finn.builder.build_dataflow_phases, finn.builder.build_dataflow_steps).
-
-    Note: When using phase-based builds with start_step/stop_step, specify phase names
-    (e.g., start_step="phase_kernel_outputs") rather than fine-grained step names.
-    Phases save intermediate models for each internal step, but the build loop
-    operates at the phase level.
-    """
+def _expanded_steps(cfg: DataflowBuildConfig):
+    """The build's steps in the order they run (``cfg.steps``, else
+    default_build_dataflow_steps), each phase expanded into its steps
+    (finn.builder.build_dataflow_phases), and the steps ``inject_steps_before`` and
+    ``inject_steps_after`` name around each step or phase placed; with each phase's
+    first and last index in that list. A name neither a step nor a phase is refused,
+    naming both."""
     steps = cfg.steps
     if steps is None:
         steps = default_build_dataflow_steps
 
-    # Merge phase and step lookup dictionaries
-    all_steps = {
-        **build_dataflow_step_lookup,
-        **build_dataflow_phase_lookup,
-    }
-
     steps_as_fxns = []
-    for transform_step in steps:
-        step_name = None
+    phase_spans = {}
 
-        # Get step function and name
-        if type(transform_step) is str:
-            step_name = transform_step
-            if transform_step in all_steps:
-                step_fn = all_steps[transform_step]
-            else:
-                raise ValueError(f"Unknown step or phase: {transform_step}")
+    def place(step_name, step_fn):
+        steps_as_fxns.extend(cfg.inject_steps_before.get(step_name, []))
+        steps_as_fxns.append(step_fn)
+        steps_as_fxns.extend(cfg.inject_steps_after.get(step_name, []))
+
+    for transform_step in steps:
+        if type(transform_step) is str and transform_step in build_dataflow_phase_lookup:
+            first = len(steps_as_fxns)
+            steps_as_fxns.extend(cfg.inject_steps_before.get(transform_step, []))
+            for step_name in build_dataflow_phase_lookup[transform_step]:
+                place(step_name, build_dataflow_step_lookup[step_name])
+            steps_as_fxns.extend(cfg.inject_steps_after.get(transform_step, []))
+            phase_spans.setdefault(transform_step, (first, len(steps_as_fxns) - 1))
+        elif type(transform_step) is str:
+            if transform_step not in build_dataflow_step_lookup:
+                raise ValueError(
+                    f"Unknown step or phase: {transform_step}; the steps: "
+                    f"{', '.join(build_dataflow_step_lookup)}; the phases: "
+                    f"{', '.join(build_dataflow_phase_lookup)}"
+                )
+            place(transform_step, build_dataflow_step_lookup[transform_step])
         elif callable(transform_step):
-            step_fn = transform_step
-            step_name = getattr(transform_step, "__name__", None)
+            place(getattr(transform_step, "__name__", None), transform_step)
         else:
             raise ValueError(f"Invalid step type: {type(transform_step)}")
+    return steps_as_fxns, phase_spans
 
-        # Inject steps BEFORE this step
-        if step_name and step_name in cfg.inject_steps_before:
-            for injected_step in cfg.inject_steps_before[step_name]:
-                steps_as_fxns.append(injected_step)
 
-        # Add the main step
-        steps_as_fxns.append(step_fn)
+def _step_index(name: str, steps_as_fxns, phase_spans, last: bool) -> int:
+    """The index of the step ``name`` in the build's expanded steps; for a phase, of its
+    first step, or its last if ``last``. A name the build does not run is refused,
+    naming the build's steps and phases."""
+    if name in phase_spans:
+        return phase_spans[name][1 if last else 0]
+    step_names = [step_fn.__name__ for step_fn in steps_as_fxns]
+    if name in step_names:
+        return step_names.index(name)
+    raise ValueError(
+        f"{name!r} is not one of this build's steps or phases; its steps: "
+        f"{', '.join(step_names)}; its phases: {', '.join(phase_spans) or 'none'}"
+    )
 
-        # Inject steps AFTER this step
-        if step_name and step_name in cfg.inject_steps_after:
-            for injected_step in cfg.inject_steps_after[step_name]:
-                steps_as_fxns.append(injected_step)
 
+def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
+    """The build's steps, as functions in the order they run: every phase expanded into
+    its steps (finn.builder.build_dataflow_phases), the injected steps placed, and, if
+    ``partial``, only those from ``cfg.start_step`` to ``cfg.stop_step``. Either may name
+    a step, or a phase: its first step to start from, its last to stop after."""
+    steps_as_fxns, phase_spans = _expanded_steps(cfg)
     if partial:
-        step_names = list(map(lambda x: x.__name__, steps_as_fxns))
         if cfg.start_step is None:
             start_ind = 0
         else:
-            start_ind = step_names.index(cfg.start_step)
+            start_ind = _step_index(cfg.start_step, steps_as_fxns, phase_spans, last=False)
         if cfg.stop_step is None:
-            stop_ind = len(step_names) - 1
+            stop_ind = len(steps_as_fxns) - 1
         else:
-            stop_ind = step_names.index(cfg.stop_step)
+            stop_ind = _step_index(cfg.stop_step, steps_as_fxns, phase_spans, last=True)
         steps_as_fxns = steps_as_fxns[start_ind : (stop_ind + 1)]
-
     return steps_as_fxns
 
 
 def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
-    step_names = list(map(lambda x: x.__name__, resolve_build_steps(cfg, partial=False)))
-    assert (
-        step_name in step_names
-    ), f"start_step {step_name!r} is not one of this build's steps: {', '.join(step_names)}"
-    step_no = step_names.index(step_name) + step_delta
+    """The intermediate model of the step ``step_delta`` after ``step_name`` (a step, or
+    a phase: its first step) in the build's steps."""
+    steps_as_fxns, phase_spans = _expanded_steps(cfg)
+    step_no = _step_index(step_name, steps_as_fxns, phase_spans, last=False) + step_delta
     assert step_no >= 0, "Invalid step+delta combination"
-    assert step_no < len(step_names), "Invalid step+delta combination"
+    assert step_no < len(steps_as_fxns), "Invalid step+delta combination"
     filename = cfg.output_dir + "/intermediate_models/"
-    filename += "%s.onnx" % (step_names[step_no])
+    filename += "%s.onnx" % (steps_as_fxns[step_no].__name__)
     return filename
 
 
 def _run_build_steps(model, cfg, build_dataflow_steps, log):
     """Run the resolved build steps in order, logging to `log`.
 
-    Writes time_per_step.json: the seconds each step took, by name, and for a phase
-    also each step it ran, as ``<phase>/<step>``. Returns 0 on success and -1 on the
-    first failing step.
+    Writes time_per_step.json: the seconds each step took, by name. Returns 0 on
+    success and -1 on the first failing step.
     """
     step_num = 1
     time_per_step = dict()
@@ -179,15 +186,12 @@ def _run_build_steps(model, cfg, build_dataflow_steps, log):
                 print("Running step: %s [%d/%d]" % (step_name, step_num, len(build_dataflow_steps)))
             # run the step
             step_start = time.time()
-            with recorded_step_times() as inner_times:
-                model = transform_step(model, cfg)
+            model = transform_step(model, cfg)
             step_end = time.time()
             # restore stdout/stderr
             sys.stdout = stdout_orig
             sys.stderr = stderr_orig
             time_per_step[step_name] = step_end - step_start
-            for inner_name, seconds in inner_times.items():
-                time_per_step[f"{step_name}/{inner_name}"] = seconds
             chkpt_name = "%s.onnx" % (step_name)
             if cfg.save_intermediate_models:
                 intermediate_model_dir = cfg.output_dir + "/intermediate_models"
