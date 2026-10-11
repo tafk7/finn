@@ -47,6 +47,7 @@ from finn.kernels.utilization import Resources
 from finn.platform import resolve_target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
+    ExplorePartition,
     InferKernelTensors,
     ToKernelOps,
     completion,
@@ -352,6 +353,25 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
     pinned.write_text(json.dumps({"nobody": {"pe": 1}}))
     with pytest.raises(ExploreError, match="nobody.pe"):
         kernel_model().transform(ExploreKernelChoices([Pinned(pinned)]))
+
+
+def test_the_build_explores_the_partition_through_its_node(tmp_path: Path) -> None:
+    """ExplorePartition opens the body through the parent graph's partition node,
+    explores it as ExploreKernelChoices explores a body, and saves it again in its file;
+    the parent graph is unchanged. A model with no partition is refused."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path))
+    before = parent.model.SerializeToString()
+    _, cut, body_file = partition_body(parent)
+    exploring = ExplorePartition([Ranked(Lanes(2))])
+    after = parent.transform(exploring)
+    assert after.model.SerializeToString() == before
+    assert exploring.explored is not None and exploring.body is not None
+    saved = choices(ModelWrapper(body_file))
+    assert saved == choices(exploring.body) != choices(cut)
+    assert saved == choices(cut.transform(ExploreKernelChoices([Ranked(Lanes(2))])))
+    assert exploring.explored.report["strategies"][0]["strategy"] == "ranked"
+    with pytest.raises(ValueError, match="holds 0 partitions of KernelOps"):
+        kernel_model().transform(ExplorePartition([Ranked(Lanes(2))]))
 
 
 #: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the

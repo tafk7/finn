@@ -73,6 +73,7 @@ from finn.platform import TargetRefused, TargetRequest, resolve_target
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.ipgen import prepare_ip
 from finn.shells.pynq.runner import (
+    DELIVERED_CLOCK,
     InstanceIP,
     block_design,
     iodma_model,
@@ -1297,18 +1298,19 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
 
 def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) -> None:
     """The driver sets the clock its bitfile delivers and runs the bitfile the build
-    ships: a parent graph that states no delivered clock is refused, so is one whose
-    routed design states no PL clock, and so is one that states no bitfile."""
+    ships: an output directory with no delivered-clock report (the bitfile's build
+    writes it there) is refused, so is one whose routed design states no PL clock, and
+    so is a parent graph that states no bitfile."""
     model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
-    with pytest.raises(ValueError, match="the model states no delivered clock"):
+    report = Path(cfg.output_dir) / DELIVERED_CLOCK
+    with pytest.raises(ValueError, match=f"pynq_driver: no delivered clock \\({report}\\)"):
         step_make_driver(parent, cfg)
-    report = tmp_path / "delivered_clock.json"
+    report.parent.mkdir(parents=True)
     report.write_text(json.dumps({"target_period_ns": 5.0, "warning": "no PL clock in it"}))
-    parent.set(OUTPUT_REPORTS, {"delivered_clock": str(report)})
     with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
         step_make_driver(parent, cfg)
     report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
@@ -1334,7 +1336,8 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path, generate_outputs=list(SHELL_OUTPUTS))
     output_dir = Path(cfg.output_dir)
-    clock = tmp_path / "delivered_clock.json"
+    clock = output_dir / DELIVERED_CLOCK
+    clock.parent.mkdir(parents=True)
     clock.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
     bitfile = output_dir / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(bitfile))

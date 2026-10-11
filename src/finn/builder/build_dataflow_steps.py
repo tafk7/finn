@@ -54,37 +54,31 @@ from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
-    OUTPUT_BITFILE_MADE_FROM,
-    OUTPUT_BITFILE_OPTIONS,
-    OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
     OUTPUT_IP,
     OUTPUT_PROJECT,
     OUTPUT_REPORTS,
-    design_digest,
     partition_body,
 )
 from finn.harness.preparation import check_equivalence
 from finn.kernels.explore import Completion
-from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, refuse_drift, shell_row
-from finn.shells.pynq.driver import driver_description, write_driver
-from finn.shells.pynq.runner import build_pynq
+from finn.platform import refuse_drift
+from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
+from finn.shells.pynq.runner import BITFILE, BuildPynqBitfile, pynq_row, refuse_stale_bitfile
 from finn.toolchain.launcher import Toolchain
-from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
+    EXPLORATION_REPORT,
+    ExplorePartition,
     ToKernelOps,
     completion,
-    explore_kernel_choices,
     kernel_choices_config,
     kernel_ops_by_anchor,
     kernel_ops_report,
     kernel_ops_summary,
     refuse_host_between,
-    shell_bottleneck,
     strategy,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     ElaboratePartition,
     PackagePartition,
@@ -457,9 +451,9 @@ def _completion(cfg: DataflowBuildConfig) -> Completion:
 
 
 def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Explore the partition's KernelOps, its body opened through the parent graph's
-    partition node (partition_body), through the DSE seam by the strategies its options'
-    ``kernel_exploration`` lists (ExploreOptions), in order
+    """Explore the partition's KernelOps through the parent graph's partition node
+    (finn.transformation.kernels.ExplorePartition), through the DSE seam by the strategies
+    its options' ``kernel_exploration`` lists (ExploreOptions), in order
     (finn.transformation.kernels.strategy: each a spec, {"strategy": name, **parameters}),
     and save them where they are stated (a kernel's on its node, a channel's on its tensor,
     finn.channel), the body saved again in its file (explore_kernel_choices): the choices
@@ -479,13 +473,14 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     options = cfg.options("step_explore", ExploreOptions)
     strategies = [strategy(spec) for spec in options.kernel_exploration]
     completing = completion(options.kernel_completion)
-    _, body, body_file = partition_body(model)
-    explored = explore_kernel_choices(
-        body, strategies, fresh=options.kernel_exploration_fresh, completion=completing
+    exploring = ExplorePartition(
+        strategies, fresh=options.kernel_exploration_fresh, completion=completing
     )
-    body.save(body_file)
+    model = model.transform(exploring)
+    explored, body = exploring.explored, exploring.body
+    assert explored is not None and body is not None
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-    with open(cfg.output_dir + "/report/kernel_exploration.json", "w") as f:
+    with open(os.path.join(cfg.output_dir, EXPLORATION_REPORT), "w") as f:
         json.dump(explored.report, f, indent=2)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(body), f, indent=2)
@@ -617,33 +612,13 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     return model
 
 
-def _objective_fps(cfg: DataflowBuildConfig) -> float | None:
-    """The throughput the exploration's target_throughput strategy asks, if any
-    (step_explore's options)."""
-    asked: list[float] = [
-        spec["fps"]
-        for spec in cfg.options("step_explore", ExploreOptions).kernel_exploration
-        if spec.get("strategy") == "target_throughput" and "fps" in spec
-    ]
-    return asked[0] if asked else None
-
-
-def _integrating_row(
+def _refuse_drift(
     model: ModelWrapper, cfg: DataflowBuildConfig, output: DataflowOutputType
-) -> ShellRow:
-    """The shell row the parent graph ``model`` states (its partition body's target),
-    which must be the configuration's and integrate the partition to make
-    ``output``."""
+) -> None:
+    """Refuse, for ``output``, a parent graph ``model`` whose partition body states
+    another target than the configuration's (refuse_drift)."""
     _, body, _ = partition_body(model)
-    target = read_target(body)
-    refuse_drift(target, cfg._resolve_target(), f"{output.value} build")
-    row = shell_row(target.shell, target.board)
-    if row.integration is None:
-        raise ValueError(
-            f"{output.value}: the {target.shell!r} shell does not integrate the partition; "
-            "state a shell that does (pynq, for a board)"
-        )
-    return row
+    refuse_drift(read_target(body), cfg._resolve_target(), f"{output.value} build")
 
 
 def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
@@ -701,184 +676,58 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     return model
 
 
-def _pynq_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """The Zynq block design's bitfile (the pynq shell's runner, build_pynq) from the
-    partition's integration export, written as report/integration.json. Into the output
-    directory: the bitfile and its hardware handoff (bitfile/), the routed timing report
-    (report/post_route_timing.rpt), the template's impl_1 hierarchical utilization
-    (report/placed_utilization.xml), each IP's out-of-context synthesis utilization
-    (report/out_of_context/), and the delivered clock beside the one asked, with the
-    shell root's bottleneck, ends included (report/delivered_clock.json). The parent
-    graph states the bitfile with the digest of the partition's design its IP was made
-    from (``bitfile_made_from``; the runner packages the partition again when the IP the
-    body states was made from another design) and the shell options it was built with
-    (``bitfile_options``)."""
-    kernel_completion = _completion(cfg)
-    _, body, _ = partition_body(model)
-    bottleneck = shell_bottleneck(body, kernel_completion)
-    export = integration(model, kernel_completion)
-    output = Path(cfg.output_dir)
-    report_dir, bitfile_dir = output / "report", output / "bitfile"
-    report_dir.mkdir(parents=True, exist_ok=True)
-    bitfile_dir.mkdir(parents=True, exist_ok=True)
-    (report_dir / "integration.json").write_text(json.dumps(export.report(), indent=2))
-    toolchain = _tools(cfg, "step_synthesize_bitfile")
-    options = cfg._resolve_shell_build_options()
-    if options is None:
-        raise ValueError(
-            "bitfile: the configuration's shell is not the Zynq block design, which "
-            "_pynq_bitfile builds: it states no pynq shell options"
-        )
-    built = build_pynq(
-        model,
-        export,
-        _partition_directory(cfg) / "ends",
-        toolchain=toolchain,
-        jobs=toolchain.selection.vivado_jobs,
-        options=options,
-        completion=kernel_completion,
-    )
-    reports = {
-        "integration": report_dir / "integration.json",
-        "timing": report_dir / "post_route_timing.rpt",
-        "placed": report_dir / "placed_utilization.xml",
-        "out_of_context": report_dir / "out_of_context",
-        "delivered_clock": report_dir / "delivered_clock.json",
-    }
-    bitfile, hwh = bitfile_dir / "finn-accel.bit", bitfile_dir / "finn-accel.hwh"
-    shutil.copy(built.bitfile, bitfile)
-    shutil.copy(built.hwh, hwh)
-    shutil.copy(built.timing, reports["timing"])
-    shutil.copy(built.placed, reports["placed"])
-    reports["out_of_context"].mkdir(exist_ok=True)
-    for path in built.out_of_context.values():
-        shutil.copy(path, reports["out_of_context"])
-    clock = delivered_clock(
-        built.timing,
-        export.period_ns,
-        None if bottleneck is None else bottleneck.cycles,
-        _objective_fps(cfg) if bottleneck is not None else None,
-    )
-    reports["delivered_clock"].write_text(json.dumps(clock, indent=2))
-    if "warning" in clock:
-        print("WARNING: " + clock["warning"])
-    print(f"Bitfile written into {bitfile_dir}")
-    model.set(OUTPUT_PROJECT, built.project)
-    model.set(OUTPUT_BITFILE, str(bitfile))
-    model.set(OUTPUT_BITFILE_MADE_FROM, built.made_from)
-    model.set(OUTPUT_BITFILE_OPTIONS, dataclasses.asdict(options))
-    model.set(OUTPUT_HWH, str(hwh))
-    stated = {name: str(path) for name, path in reports.items()}
-    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), **stated})
-    if export.host_runtime is not None:
-        model.set(OUTPUT_HOST_RUNTIME, export.host_runtime)
-    return model
-
-
 def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Build the shell the parent graph states (its partition's target) around the partition
-    to a bitfile, if BITFILE is asked, by its integration (the one with a bitfile build: the
-    pynq shell's Vivado block design, _pynq_bitfile), the partition completed by
-    step_explore's ``kernel_completion``. The parent graph stays the build's model and
-    states what was made (finn.outputs: the project, bitfile, hwh, reports and host runtime)
-    and what the bitfile was made from (the design's digest, the shell's options). Vivado
-    launches as many runs at once as the toolchain's selection says
-    (``Selection.vivado_jobs``), and the shell's build takes ``cfg.enable_hw_debug``."""
+    """Build the shell the parent graph states (its partition's target) around the
+    partition to a bitfile, if BITFILE is asked, into the output directory: the pynq
+    shell's Vivado block design (finn.shells.pynq.runner.BuildPynqBitfile, which refuses
+    a shell without that build), the partition completed by step_explore's
+    ``kernel_completion``, every tool's transcript in logs/step_synthesize_bitfile, and
+    ``cfg.enable_hw_debug`` its shell option. A parent graph stating another target than
+    the configuration's is refused. The parent graph stays the build's model and states
+    what was made (finn.outputs: the project, bitfile, hwh, reports and host runtime) and
+    what the bitfile was made from (the design's digest, the shell's options); the
+    delivered clock's warning, if any, is logged."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         print("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
         return model
-    row = _integrating_row(model, cfg, DataflowOutputType.BITFILE)
-    if row.integration != VIVADO_BLOCK_DESIGN:
-        raise ValueError(f"bitfile: no build for the {row.integration!r} integration")
-    return _pynq_bitfile(model, cfg)
-
-
-def _delivered_mhz(model: ModelWrapper) -> float:
-    """The clock the parent graph's bitfile delivers, in MHz, from its delivered-clock
-    report; a model without one, or a report that found no PL clock, is refused."""
-    reports = model.get(OUTPUT_REPORTS) or {}
-    if "delivered_clock" not in reports:
-        raise ValueError(
-            "pynq_driver: the model states no delivered clock (finn.outputs reports): the "
-            "driver sets the clock its bitfile delivers; build the bitfile first (bitfile)"
-        )
-    clock = json.loads(Path(reports["delivered_clock"]).read_text())
-    if "delivered_mhz" not in clock:
-        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {clock['warning']}")
-    return float(clock["delivered_mhz"])
-
-
-def _shipped_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Path:
-    """The bitfile the parent graph states (finn.outputs), relative to the output
-    directory, which the deployment package mirrors (bitfile/ beside driver/)."""
-    bitfile = model.get(OUTPUT_BITFILE)
-    if bitfile is None:
-        raise ValueError(
-            "pynq_driver: the model states no bitfile (finn.outputs): the driver runs the "
-            "bitfile the build ships; build the bitfile first (bitfile)"
-        )
-    return Path(bitfile).relative_to(Path(cfg.output_dir))
-
-
-def _refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
-    """Refuse, for ``output``, a bitfile the parent graph states that was not built from
-    its partition's design as it is now: the digest it states (``bitfile_made_from``)
-    is not ``design_digest`` of the body, or it states none."""
-    node, body, _ = partition_body(model)
-    bitfile: str | None = model.get(OUTPUT_BITFILE)
-    stated, now = model.get(OUTPUT_BITFILE_MADE_FROM), design_digest(body)
-    if stated is None:
-        raise ValueError(
-            f"{output}: the model's bitfile ({bitfile}) states no design "
-            "it was built from (finn.outputs bitfile_made_from); build the bitfile again "
-            "(bitfile)"
-        )
-    if stated != now:
-        raise ValueError(
-            f"{output}: the model's bitfile ({bitfile}) is stale: it was "
-            f"built from the design {stated}, and the partition {node.name}'s design is now "
-            f"{now}; build the bitfile again (bitfile)"
-        )
+    _refuse_drift(model, cfg, DataflowOutputType.BITFILE)
+    building = BuildPynqBitfile(
+        Path(cfg.output_dir),
+        toolchain=_tools(cfg, "step_synthesize_bitfile"),
+        enable_hw_debug=cfg.enable_hw_debug,
+        completion=_completion(cfg),
+    )
+    model = model.transform(building)
+    if "warning" in building.clock:
+        print("WARNING: " + building.clock["warning"])
+    print(f"Bitfile written into {building.bitfile.parent}")
+    return model
 
 
 def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
-    finn.shells.pynq.driver.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
-    partition's integration export's ends, PL0 set to the clock the bitfile delivers
-    (report/delivered_clock.json), and the bitfile the build ships (finn.outputs) its
-    default, relative to driver/; a bitfile built from another design than the
-    partition's now is refused, named (_refuse_stale_bitfile). report/driver.json states
-    that bitfile, what the driver takes and returns, by name, element and shape, and the
-    host's nodes before and after it (driver_description); the parent graph states it
-    among its reports.
-    driver/ is written afresh: nothing an earlier build left there stays."""
+    """Write the driver the parent graph's shell's host runtime runs into driver/, and its
+    description into report/driver.json, if PYNQ_DRIVER is asked: the PYNQ driver
+    (finn.shells.pynq.driver.MakePynqDriver), PL0 set to the clock the bitfile delivers
+    (report/delivered_clock.json), the bitfile the build ships (finn.outputs) its
+    default, the partition completed by step_explore's ``kernel_completion``; a bitfile
+    built from another design than the partition's now is refused, named, and so is a
+    parent graph stating another target than the configuration's. The parent graph
+    states the description among its reports."""
     if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
         return model
-    row = _integrating_row(model, cfg, DataflowOutputType.PYNQ_DRIVER)
-    if row.integration != VIVADO_BLOCK_DESIGN:
-        raise ValueError(f"pynq_driver: no driver for the {row.integration!r} integration")
-    fclk_mhz = _delivered_mhz(model)
-    bitfile = _shipped_bitfile(model, cfg)
-    _refuse_stale_bitfile(model, "pynq_driver")
-    export = integration(model, _completion(cfg))
-    driver_dir = os.path.join(cfg.output_dir, "driver")
-    shutil.rmtree(driver_dir, ignore_errors=True)
-    write_driver(export, driver_dir, fclk_mhz, os.path.relpath(bitfile, "driver"))
-    node, _, _ = partition_body(model)
-    names = [each.name for each in model.graph.node]
-    index = names.index(node.name)
-    description = driver_description(
-        export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
-    )
-    report = Path(cfg.output_dir) / "report" / "driver.json"
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(description, indent=2))
-    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "driver": str(report)})
+    _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
+    making = MakePynqDriver(Path(cfg.output_dir), completion=_completion(cfg))
+    model = model.transform(making)
+    description = making.description
     returned = ", ".join(
         f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
     )
-    print(f"PYNQ Python driver written into {driver_dir}, at {fclk_mhz} MHz; it returns {returned}")
+    driver_dir = os.path.join(cfg.output_dir, DRIVER_DIR)
+    print(
+        f"PYNQ Python driver written into {driver_dir}, at {description['fclk_mhz']} MHz; "
+        f"it returns {returned}"
+    )
     return model
 
 
@@ -912,18 +761,16 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     bitfile and the driver the parent graph states (finn.outputs), which this output
     directory's bitfile and driver steps made: a model stating neither, or another
     directory's, or a bitfile built from another design than the partition's now
-    (_refuse_stale_bitfile), is refused by name, and deploy/ is written afresh."""
+    (refuse_stale_bitfile), is refused by name, and deploy/ is written afresh."""
     if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         print("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
-    _integrating_row(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
+    _refuse_drift(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
+    pynq_row(model, "deployment_package")
     output = Path(cfg.output_dir)
     made = {
-        "bitfile": (model.get(OUTPUT_BITFILE), output / "bitfile" / "finn-accel.bit"),
-        "pynq_driver": (
-            (model.get(OUTPUT_REPORTS) or {}).get("driver"),
-            output / "report" / "driver.json",
-        ),
+        "bitfile": (model.get(OUTPUT_BITFILE), output / BITFILE),
+        "pynq_driver": ((model.get(OUTPUT_REPORTS) or {}).get("driver"), output / DRIVER_REPORT),
     }
     for name, (stated, expected) in made.items():
         if stated is None:
@@ -937,13 +784,13 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
                 f"deployment_package: the model's {name} is {stated}, not this output "
                 f"directory's ({expected})"
             )
-    _refuse_stale_bitfile(model, "deployment_package")
+    refuse_stale_bitfile(model, "deployment_package")
     deploy = output / "deploy"
     shutil.rmtree(deploy, ignore_errors=True)
-    shutil.copytree(output / "bitfile", deploy / "bitfile")
-    shutil.copytree(output / "driver", deploy / "driver", copy_function=shutil.copyfile)
+    shutil.copytree(output / BITFILE.parent, deploy / BITFILE.parent)
+    shutil.copytree(output / DRIVER_DIR, deploy / DRIVER_DIR, copy_function=shutil.copyfile)
     _host_model(model, deploy / "model")
-    shutil.copy(output / "report" / "driver.json", deploy / "driver.json")
+    shutil.copy(output / DRIVER_REPORT, deploy / "driver.json")
     return model
 
 

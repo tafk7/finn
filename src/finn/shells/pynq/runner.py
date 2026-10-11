@@ -28,28 +28,48 @@ The runner (``build_pynq``):
   utilization report and each IP's out-of-context synthesis report, with the digest of
   the partition's design its IP was made from.
 
+``BuildPynqBitfile`` is the build as a transformation of the kernel path's parent graph:
+it reads the shell, board, part and clock from the target its partition's body states
+(``pynq_row`` refuses a shell without this build), runs ``build_pynq``, collects the
+bitfile and its reports into the output directory it is given, and records them in the
+parent graph (``finn.outputs``) with what the bitfile was made from. ``refuse_stale_bitfile``
+refuses a bitfile made from another design than the partition's now.
+
 The driver its host runtime runs is ``driver``'s.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import json
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import Transformation
 from qonnx.util.basic import qonnx_make_model
 
 from finn import resources
+from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_BITFILE,
+    OUTPUT_BITFILE_MADE_FROM,
+    OUTPUT_BITFILE_OPTIONS,
+    OUTPUT_HOST_RUNTIME,
+    OUTPUT_HWH,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
+    OUTPUT_PROJECT,
+    OUTPUT_REPORTS,
     OUTPUT_VLNV,
     design_digest,
     partition_body,
 )
 from finn.kernels.explore import Completion
+from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.pynq import iodma, templates
 from finn.shells.pynq.ipgen import (
     create_stitched_ip,
@@ -58,8 +78,9 @@ from finn.shells.pynq.ipgen import (
     prepare_ip,
 )
 from finn.toolchain.launcher import Toolchain, host_toolchain
-from finn.toolchain.vivado import tcl_quote, vivado_jobs
-from finn.transformation.kernels.integration import IntegratedEnd, Integration
+from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
+from finn.transformation.kernels.choose import EXPLORATION_REPORT, shell_bottleneck
+from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
 from finn.transformation.kernels.package import PackagePartition
 from finn.util.basic import make_build_dir
 
@@ -372,7 +393,167 @@ def build_pynq(
     return collect(project, made_from)
 
 
+#: Where ``BuildPynqBitfile`` collects what the build made, under the output directory
+#: it is given: the bitfile and its hardware handoff, and the reports the parent graph
+#: states (``finn.outputs`` ``reports``) by name. The driver reads the delivered clock
+#: from its report (``DELIVERED_CLOCK``).
+BITFILE = Path("bitfile") / "finn-accel.bit"
+HWH = Path("bitfile") / "finn-accel.hwh"
+REPORTS = {
+    "integration": Path("report") / "integration.json",
+    "timing": Path("report") / "post_route_timing.rpt",
+    "placed": Path("report") / "placed_utilization.xml",
+    "out_of_context": Path("report") / "out_of_context",
+    "delivered_clock": Path("report") / "delivered_clock.json",
+}
+DELIVERED_CLOCK = REPORTS["delivered_clock"]
+
+
+def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
+    """The shell row of the target the parent graph ``model``'s partition body states,
+    refused for ``output`` (the output asked, by name) unless the shell builds the Zynq
+    block design around the partition, as this shell's build and driver take it: the
+    ``ip`` shell integrates nothing, and another integration has no build here."""
+    _, body, _ = partition_body(model)
+    target = read_target(body)
+    row = shell_row(target.shell, target.board)
+    if row.integration is None:
+        raise ValueError(
+            f"{output}: the {target.shell!r} shell does not integrate the partition; "
+            "state a shell that does (pynq, for a board)"
+        )
+    if row.integration != VIVADO_BLOCK_DESIGN:
+        raise ValueError(f"{output}: no build for the {row.integration!r} integration")
+    return row
+
+
+def objective_fps(directory: Path) -> float | None:
+    """The throughput the exploration's ``target_throughput`` strategy asked, if any,
+    from the exploration's report the build wrote under ``directory``
+    (``EXPLORATION_REPORT``); None where it asked none or there is no report."""
+    report = Path(directory) / EXPLORATION_REPORT
+    if not report.is_file():
+        return None
+    asked: list[float] = [
+        each["fps"]
+        for each in json.loads(report.read_text()).get("strategies", [])
+        if each.get("strategy") == "target_throughput" and "fps" in each
+    ]
+    return asked[0] if asked else None
+
+
+class BuildPynqBitfile(Transformation):
+    """The Zynq block design's bitfile around the kernel path's parent graph's partition
+    (``build_pynq``), from the partition's integration export, written as
+    report/integration.json, into the output ``directory``: the bitfile and its
+    hardware handoff (bitfile/), the routed timing report (report/post_route_timing.rpt),
+    the template's impl_1 hierarchical utilization (report/placed_utilization.xml), each
+    IP's out-of-context synthesis utilization (report/out_of_context/), and the
+    delivered clock beside the one asked, with the shell root's bottleneck, ends
+    included, and the throughput the exploration asked (``objective_fps``)
+    (report/delivered_clock.json). The shell, board, part and clock are the target the
+    partition's body states (``pynq_row``); the ends' scratch models are kept in
+    ``ends/`` beside the body's file.
+
+    The parent graph states what was made (``finn.outputs``: the project, bitfile, hwh,
+    reports and host runtime), the digest of the partition's design its IP was made from
+    (``bitfile_made_from``; the runner packages the partition again when the IP the body
+    states was made from another design) and the shell options it was built with
+    (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's;
+    Vivado launches as many runs at once as its selection says (``vivado_jobs``).
+    ``enable_hw_debug`` inserts integrated logic analyzers (``PynqOptions``);
+    ``completion`` completes the partition's open choices where it is built. ``bitfile``
+    and ``clock`` hold the bitfile's path and the delivered clock's report."""
+
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        toolchain: Toolchain | None = None,
+        enable_hw_debug: bool = False,
+        completion: Completion | None = None,
+    ) -> None:
+        super().__init__()
+        self.directory = Path(directory)
+        self.toolchain = toolchain
+        self.options = PynqOptions(enable_hw_debug=enable_hw_debug)
+        self.completion = completion
+        self.bitfile = self.directory / BITFILE
+        self.clock: dict[str, Any] = {}
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        pynq_row(model, "bitfile")
+        _, body, body_file = partition_body(model)
+        bottleneck = shell_bottleneck(body, self.completion)
+        export = integration(model, self.completion)
+        reports = {name: self.directory / path for name, path in REPORTS.items()}
+        hwh = self.directory / HWH
+        for directory in (reports["integration"].parent, self.bitfile.parent):
+            directory.mkdir(parents=True, exist_ok=True)
+        reports["integration"].write_text(json.dumps(export.report(), indent=2))
+        toolchain = self.toolchain or host_toolchain()
+        built = build_pynq(
+            model,
+            export,
+            Path(body_file).parent / "ends",
+            toolchain=toolchain,
+            jobs=toolchain.selection.vivado_jobs,
+            options=self.options,
+            completion=self.completion,
+        )
+        shutil.copy(built.bitfile, self.bitfile)
+        shutil.copy(built.hwh, hwh)
+        shutil.copy(built.timing, reports["timing"])
+        shutil.copy(built.placed, reports["placed"])
+        reports["out_of_context"].mkdir(exist_ok=True)
+        for path in built.out_of_context.values():
+            shutil.copy(path, reports["out_of_context"])
+        self.clock = delivered_clock(
+            built.timing,
+            export.period_ns,
+            None if bottleneck is None else bottleneck.cycles,
+            objective_fps(self.directory) if bottleneck is not None else None,
+        )
+        reports["delivered_clock"].write_text(json.dumps(self.clock, indent=2))
+        model.set(OUTPUT_PROJECT, built.project)
+        model.set(OUTPUT_BITFILE, str(self.bitfile))
+        model.set(OUTPUT_BITFILE_MADE_FROM, built.made_from)
+        model.set(OUTPUT_BITFILE_OPTIONS, dataclasses.asdict(self.options))
+        model.set(OUTPUT_HWH, str(hwh))
+        stated = {name: str(path) for name, path in reports.items()}
+        model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), **stated})
+        if export.host_runtime is not None:
+            model.set(OUTPUT_HOST_RUNTIME, export.host_runtime)
+        return model, False
+
+
+def refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
+    """Refuse, for ``output``, a bitfile the parent graph states that was not built from
+    its partition's design as it is now: the digest it states (``bitfile_made_from``)
+    is not ``design_digest`` of the body, or it states none."""
+    node, body, _ = partition_body(model)
+    bitfile: str | None = model.get(OUTPUT_BITFILE)
+    stated, now = model.get(OUTPUT_BITFILE_MADE_FROM), design_digest(body)
+    if stated is None:
+        raise ValueError(
+            f"{output}: the model's bitfile ({bitfile}) states no design "
+            "it was built from (finn.outputs bitfile_made_from); build the bitfile again "
+            "(bitfile)"
+        )
+    if stated != now:
+        raise ValueError(
+            f"{output}: the model's bitfile ({bitfile}) is stale: it was "
+            f"built from the design {stated}, and the partition {node.name}'s design is now "
+            f"{now}; build the bitfile again (bitfile)"
+        )
+
+
 __all__ = [
+    "BITFILE",
+    "DELIVERED_CLOCK",
+    "HWH",
+    "REPORTS",
+    "BuildPynqBitfile",
     "InstanceIP",
     "PynqBuilt",
     "PynqOptions",
@@ -382,5 +563,8 @@ __all__ = [
     "debug_lines",
     "generate_end_ip",
     "iodma_model",
+    "objective_fps",
     "project_script",
+    "pynq_row",
+    "refuse_stale_bitfile",
 ]

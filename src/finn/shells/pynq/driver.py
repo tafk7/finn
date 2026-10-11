@@ -7,6 +7,9 @@
 tensor and shape, the channel's element, and its beats and lanes); it sets PL0 to the
 clock it is given, the one the bitfile delivers, and runs the bitfile it is given
 (``write_driver``). ``driver_description`` states what it takes and returns.
+``MakePynqDriver`` writes both for the kernel path's parent graph, from its target, the
+bitfile it states and the clock that bitfile delivers (its build's report,
+``runner.DELIVERED_CLOCK``).
 
 The driver's text and the files it runs with are the HWCustomOp flow's PYNQ driver's
 (finn.transformation.fpgadataflow.make_driver), copied as the shell's frozen extraction:
@@ -23,6 +26,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from types import ModuleType
 from typing import Any
 
@@ -30,13 +34,22 @@ import numpy as np
 import qonnx
 import qonnx.util.basic
 from qonnx.core.datatype import BaseDataType
+from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import Transformation
 from qonnx.util.basic import gen_finn_dt_tensor
 
 import finn.util
 import finn.util.data_packing
+from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_BITFILE,
+    OUTPUT_REPORTS,
+    partition_body,
+)
+from finn.kernels.explore import Completion
 from finn.shells.pynq import templates
 from finn.shells.pynq.ipgen import data_path
-from finn.transformation.kernels.integration import Integration
+from finn.shells.pynq.runner import DELIVERED_CLOCK, pynq_row, refuse_stale_bitfile
+from finn.transformation.kernels.integration import Integration, integration
 from finn.util.data_packing import finnpy_to_packed_bytearray
 
 
@@ -265,11 +278,92 @@ def driver_description(
     }
 
 
+#: Where ``MakePynqDriver`` writes the driver and its description, under the output
+#: directory it is given.
+DRIVER_DIR = Path("driver")
+DRIVER_REPORT = Path("report") / "driver.json"
+
+
+def delivered_mhz(directory: Path) -> float:
+    """The clock the bitfile built into ``directory`` delivers, in MHz, from its
+    delivered-clock report there (``runner.DELIVERED_CLOCK``); no report, or one that
+    found no PL clock, is refused."""
+    report = Path(directory) / DELIVERED_CLOCK
+    if not report.is_file():
+        raise ValueError(
+            f"pynq_driver: no delivered clock ({report}): the driver sets the clock its "
+            "bitfile delivers; build the bitfile first (bitfile)"
+        )
+    clock = json.loads(report.read_text())
+    if "delivered_mhz" not in clock:
+        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {clock['warning']}")
+    return float(clock["delivered_mhz"])
+
+
+def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
+    """The bitfile the parent graph ``model`` states (finn.outputs), relative to the output
+    ``directory``, which the deployment package mirrors (bitfile/ beside driver/)."""
+    bitfile = model.get(OUTPUT_BITFILE)
+    if bitfile is None:
+        raise ValueError(
+            "pynq_driver: the model states no bitfile (finn.outputs): the driver runs the "
+            "bitfile the build ships; build the bitfile first (bitfile)"
+        )
+    return Path(bitfile).relative_to(Path(directory))
+
+
+class MakePynqDriver(Transformation):
+    """The PYNQ driver the kernel path's parent graph's shell's host runtime runs
+    (``write_driver``), into driver/ under the output ``directory``, written afresh:
+    nothing an earlier build left there stays. Its shell is the target the partition's
+    body states (``pynq_row``); its I/O the partition's integration export's ends, its
+    choices completed by ``completion``; PL0 set to the clock the bitfile delivers
+    (``delivered_mhz``, report/delivered_clock.json under ``directory``); the bitfile the
+    parent graph states (finn.outputs) its default, relative to driver/. A bitfile built
+    from another design than the partition's now is refused, named
+    (``refuse_stale_bitfile``). report/driver.json states that bitfile, what the driver
+    takes and returns, by name, element and shape, and the host's nodes before and after
+    it (``driver_description``); the parent graph states it among its reports.
+    ``description`` holds it."""
+
+    def __init__(self, directory: Path, *, completion: Completion | None = None) -> None:
+        super().__init__()
+        self.directory = Path(directory)
+        self.completion = completion
+        self.description: dict[str, Any] = {}
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        pynq_row(model, "pynq_driver")
+        fclk_mhz = delivered_mhz(self.directory)
+        bitfile = shipped_bitfile(model, self.directory)
+        refuse_stale_bitfile(model, "pynq_driver")
+        export = integration(model, self.completion)
+        driver = self.directory / DRIVER_DIR
+        shutil.rmtree(driver, ignore_errors=True)
+        write_driver(export, str(driver), fclk_mhz, os.path.relpath(bitfile, DRIVER_DIR))
+        node, _, _ = partition_body(model)
+        names = [each.name for each in model.graph.node]
+        index = names.index(node.name)
+        self.description = driver_description(
+            export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
+        )
+        report = self.directory / DRIVER_REPORT
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps(self.description, indent=2))
+        model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "driver": str(report)})
+        return model, False
+
+
 __all__ = [
+    "DRIVER_DIR",
+    "DRIVER_REPORT",
+    "MakePynqDriver",
+    "delivered_mhz",
     "driver_description",
     "driver_shapes",
     "packed_shape",
     "pynq_driver_text",
+    "shipped_bitfile",
     "write_driver",
     "write_pynq_driver_support",
 ]

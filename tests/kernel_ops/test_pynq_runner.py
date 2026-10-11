@@ -13,6 +13,7 @@ says so. TFC's runner (Z0's block design, IODMAs and driver) is in test_builder_
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -27,31 +28,49 @@ from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import kernel_op, write_target
 from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_BITFILE,
+    OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
+    OUTPUT_REPORTS,
     OUTPUT_VLNV,
+    OUTPUTS,
     design_digest,
     partition_body,
 )
 from finn.platform import resolve_target
 from finn.shells.pynq import runner as pynq_runner
-from finn.shells.pynq.driver import driver_description, driver_shapes, write_driver
+from finn.shells.pynq.driver import (
+    DRIVER_DIR,
+    DRIVER_REPORT,
+    MakePynqDriver,
+    driver_description,
+    driver_shapes,
+    write_driver,
+)
 from finn.shells.pynq.runner import (
+    BITFILE,
+    DELIVERED_CLOCK,
+    HWH,
+    BuildPynqBitfile,
     InstanceIP,
     PynqOptions,
     block_design,
     build_pynq,
     collect,
+    objective_fps,
     project_script,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
 from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
+from finn.transformation.kernels.choose import EXPLORATION_REPORT
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from kernel_ops.models import configure_partition, streamed_w2_model
 from kernel_ops.packaging import FakeVivado, bitfile_default, io_shape_dict
+from kernel_ops.test_builder_phase import TIMING_REPORT
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -207,20 +226,14 @@ def built_ips(directory: Path) -> dict[str, InstanceIP]:
     return {**ends, "partition": packaged}
 
 
-def recorded_build(
+def recorded_tools(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    toolchain: object,
     replaced: tuple[str, ...] = (*TOOL_STEPS, "prepare_ip"),
-    options: PynqOptions = PynqOptions(),
-    packaged: Path | None = None,
-    since: Callable[[ModelWrapper], None] | None = None,
-) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
-    """build_pynq over the Chain, the ``replaced`` steps replaced by recorders of what
-    each is given: the parent graph, its export, what the runner collected, and each
-    recorded step's name, toolchain and arguments, in order. With ``packaged``, the
-    body already states that IP, made from its design, as STITCHED_IP leaves it; then
-    ``since`` changes the body after it was packaged."""
+) -> list[tuple[str, object, tuple[object, ...]]]:
+    """The runner's ``replaced`` steps replaced by recorders of what each is given, its
+    build directory under ``tmp_path``: each recorded step's name, toolchain and
+    arguments, in order, as the build runs them."""
     seen: list[tuple[str, object, tuple[object, ...]]] = []
 
     class RecordedPackaging(Transformation):
@@ -258,6 +271,24 @@ def recorded_build(
     for name in replaced:
         monkeypatch.setattr(pynq_runner, name, recorder(name))
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
+    return seen
+
+
+def recorded_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    toolchain: object,
+    replaced: tuple[str, ...] = (*TOOL_STEPS, "prepare_ip"),
+    options: PynqOptions = PynqOptions(),
+    packaged: Path | None = None,
+    since: Callable[[ModelWrapper], None] | None = None,
+) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
+    """build_pynq over the Chain, the ``replaced`` steps recorded (``recorded_tools``):
+    the parent graph, its export, what the runner collected, and each recorded step's
+    name, toolchain and arguments, in order. With ``packaged``, the body already states
+    that IP, made from its design, as STITCHED_IP leaves it; then ``since`` changes the
+    body after it was packaged."""
+    seen = recorded_tools(monkeypatch, tmp_path, replaced)
     parent = zynq_model(tmp_path)
     if packaged is not None:
         _, body, body_file = partition_body(parent)
@@ -422,6 +453,93 @@ def test_a_build_prepares_its_default_toolchain_once(
     assert len(prepared[0].runs) == 1
 
 
+def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """BuildPynqBitfile reads the shell, board, part and clock from the target the
+    partition's body states, runs the build (the ends' scratch models beside the body's
+    file) and collects what Vivado made into the output directory it is given; the
+    delivered clock's report states the throughput the exploration's report asked. The
+    parent graph states the bitfile, its handoff and reports, what it was made from and
+    the options it was built with."""
+    recorded_tools(monkeypatch, tmp_path)
+    parent = zynq_model(tmp_path)
+    output = tmp_path / "output"
+    exploration = output / EXPLORATION_REPORT
+    exploration.parent.mkdir(parents=True)
+    asked = [{"strategy": "target_throughput", "fps": 1000}, {"strategy": "size_fifos"}]
+    exploration.write_text(json.dumps({"strategies": asked}))
+    vivado = FakeVivado(timing=TIMING_REPORT)
+    building = BuildPynqBitfile(output, toolchain=cast(Toolchain, vivado), enable_hw_debug=True)
+    built = parent.transform(building)
+    ((_, _, script),) = vivado.runs
+    assert "set FREQ_MHZ 200\n" in script and f"set FPGA_PART {ZYNQ.part}\n" in script
+    assert "set_property HDL_ATTRIBUTE.DEBUG true" in script
+    _, body, body_file = partition_body(built)
+    assert sorted(path.name for path in (Path(body_file).parent / "ends").iterdir()) == [
+        "idma0.onnx",
+        "idma1.onnx",
+        "odma0.onnx",
+    ]
+    report = output / "report"
+    outputs = built.namespace(OUTPUTS)
+    assert Path(outputs.pop("project")).parent == tmp_path / "build"
+    assert outputs == {
+        "bitfile": str(output / "bitfile" / "finn-accel.bit"),
+        "bitfile_made_from": design_digest(body),
+        "bitfile_options": {"enable_hw_debug": True},
+        "hwh": str(output / "bitfile" / "finn-accel.hwh"),
+        "reports": {
+            "integration": str(report / "integration.json"),
+            "timing": str(report / "post_route_timing.rpt"),
+            "placed": str(report / "placed_utilization.xml"),
+            "out_of_context": str(report / "out_of_context"),
+            "delivered_clock": str(report / "delivered_clock.json"),
+        },
+        "host_runtime": "zynq-iodma",
+    }
+    assert building.bitfile == output / BITFILE
+    assert (output / BITFILE).read_text() == "top_wrapper.bit"
+    assert (output / HWH).read_text() == "top.hwh"
+    assert len(list((report / "out_of_context").iterdir())) == 3
+    assert json.loads((report / "integration.json").read_text()) == integration(parent).report()
+    clock = json.loads((output / DELIVERED_CLOCK).read_text())
+    assert clock == building.clock
+    assert (clock["delivered_mhz"], clock["objective_fps"]) == (187.512, 1000)
+    assert "warning" in clock and "bottleneck_cycles" in clock
+
+
+def test_the_throughput_asked_is_read_from_the_explorations_report(tmp_path: Path) -> None:
+    """The first target_throughput strategy's fps in the exploration's report under the
+    output directory; none where no strategy asked one, or there is no report."""
+    assert objective_fps(tmp_path) is None
+    report = tmp_path / EXPLORATION_REPORT
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"strategies": [{"strategy": "size_fifos"}]}))
+    assert objective_fps(tmp_path) is None
+    asked = [
+        {"strategy": "max_throughput", "within": {"lut": 0.5}},
+        {"strategy": "target_throughput", "fps": 2.5e5},
+        {"strategy": "target_throughput", "fps": 1e6},
+    ]
+    report.write_text(json.dumps({"strategies": asked}))
+    assert objective_fps(tmp_path) == 2.5e5
+
+
+def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
+    """A partition whose target is the ``ip`` shell has no bitfile build: refused, named,
+    before anything is written."""
+    model = streamed_w2_model()
+    write_target(model, resolve_target(part=ZYNQ.part, period_ns=5.0))
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    vivado = FakeVivado()
+    building = BuildPynqBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado))
+    with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
+        parent.transform(building)
+    assert not (tmp_path / "output").exists() and vivado.runs == []
+
+
 #: A Vitis HLS that reports 2024.2 and, given a node's script, makes the IP
 #: directory HLSBackend checks for and notes that it ran.
 FAKE_VITIS_HLS = """
@@ -577,3 +695,50 @@ def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path
         "returns": [{"name": "y", "element": "INT7", "shape": [1, 4], "dma": "odma0"}],
         "host": {"before": ["Reshape_0"], "after": []},
     }
+
+
+def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> None:
+    """MakePynqDriver writes the driver afresh into driver/ under the output directory it
+    is given and its description into report/driver.json: its shell the target the
+    partition's body states, PL0 the clock the delivered-clock report there states, the
+    bitfile the parent graph states its default; the parent graph states the
+    description among its reports. Without the report, or on the ip shell, it is refused
+    before anything is written."""
+    parent = zynq_model(tmp_path)
+    output = tmp_path / "output"
+    _, body, _ = partition_body(parent)
+    parent.set(OUTPUT_BITFILE, str(output / BITFILE))
+    parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
+    with pytest.raises(ValueError, match="pynq_driver: no delivered clock"):
+        parent.transform(MakePynqDriver(output))
+    assert not output.exists()
+    (output / DELIVERED_CLOCK).parent.mkdir(parents=True)
+    (output / DELIVERED_CLOCK).write_text(json.dumps({"delivered_mhz": 187.512}))
+    (output / DRIVER_DIR).mkdir()
+    (output / DRIVER_DIR / "stale.py").write_text("an earlier build's")
+    making = MakePynqDriver(output)
+    made = parent.transform(making)
+    assert sorted(path.name for path in (output / DRIVER_DIR).iterdir()) == [
+        "driver.py",
+        "driver_base.py",
+        "finn",
+        "qonnx",
+        "validate.py",
+    ]
+    driver = (output / DRIVER_DIR / "driver.py").read_text()
+    assert "\nfclk_mhz = 187.512\n" in driver
+    assert bitfile_default(output / DRIVER_DIR / "driver.py", tmp_path) == str(output / BITFILE)
+    description = json.loads((output / DRIVER_REPORT).read_text())
+    assert (
+        description
+        == making.description
+        == driver_description(integration(parent), 187.512, str(BITFILE), [], [])
+    )
+    assert made.get(OUTPUT_REPORTS) == {"driver": str(output / DRIVER_REPORT)}
+    model = streamed_w2_model()
+    write_target(model, resolve_target(part=ZYNQ.part, period_ns=5.0))
+    configure_partition(model)
+    on_ip = model.transform(CutKernelPartition(tmp_path / "ip"))
+    with pytest.raises(ValueError, match="pynq_driver: the 'ip' shell does not integrate"):
+        on_ip.transform(MakePynqDriver(tmp_path / "ip_output"))
+    assert not (tmp_path / "ip_output").exists()
