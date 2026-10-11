@@ -44,7 +44,6 @@ import json
 import logging
 import os
 import subprocess
-import tempfile
 import threading
 from collections import Counter
 from collections.abc import Mapping
@@ -189,8 +188,9 @@ class Manifest:
         """Write the manifest as it is now: a temporary file beside it, renamed over it."""
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            handle, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".build.json.")
-            with os.fdopen(handle, "w") as f:
+            # One writer a process (the lock); the file's mode the process's umask's.
+            temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}")
+            with open(temporary, "w") as f:
                 json.dump(self.state, f, indent=2)
                 f.write("\n")
             os.replace(temporary, self.path)
