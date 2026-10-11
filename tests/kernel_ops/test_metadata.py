@@ -31,13 +31,10 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
-    OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
-    OUTPUT_PROJECT,
-    OUTPUT_REPORTS,
     OUTPUT_VLNV,
     design_digest,
 )
@@ -206,13 +203,10 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         OUTPUT_VLNV: "xilinx_finn:finn:partition:1.0",
         OUTPUT_INTERFACES: {"clk": ["ap_clk"], "s_axis": [["s_axis_0", 32]], "axilite": []},
         OUTPUT_MADE_FROM: DIGEST,
-        OUTPUT_PROJECT: "/build/vivado_zynq_proj",
         OUTPUT_BITFILE: "/out/bitfile/finn-accel.bit",
         OUTPUT_BITFILE_MADE_FROM: DIGEST,
         OUTPUT_BITFILE_OPTIONS: {"enable_hw_debug": False},
         OUTPUT_HWH: "/out/bitfile/finn-accel.hwh",
-        OUTPUT_REPORTS: {"timing": "/out/report/post_route_timing.rpt"},
-        OUTPUT_HOST_RUNTIME: "zynq-iodma",
     }
     for key, value in made.items():
         model.set(key, value)
@@ -225,7 +219,7 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
     for key, bad in (
         (OUTPUT_IP, ""),
         (OUTPUT_INTERFACES, ["ap_clk"]),
-        (OUTPUT_REPORTS, {"timing": 3}),
+        (OUTPUT_HWH, ""),
         (OUTPUT_MADE_FROM, "sha1:" + "0" * 40),
         (OUTPUT_BITFILE_MADE_FROM, DIGEST.upper()),
         (OUTPUT_BITFILE_OPTIONS, ["enable_hw_debug"]),

@@ -42,7 +42,7 @@ import finn.util
 import finn.util.data_packing
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
-    OUTPUT_REPORTS,
+    design_digest,
     partition_body,
 )
 from finn.shells.pynq import templates
@@ -323,8 +323,9 @@ class MakePynqDriver(Transformation):
     from another design than the partition's now is refused, named
     (``refuse_stale_bitfile``). report/driver.json states that bitfile, what the driver
     takes and returns, by name, element and shape, and the host's nodes before and after
-    it (``driver_description``); the parent graph states it among its reports.
-    ``description`` holds it."""
+    it (``driver_description``), and the digest of the design the driver was made from
+    (``made_from``: the partition's, which its bitfile was built from). ``description``
+    holds it."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -340,16 +341,16 @@ class MakePynqDriver(Transformation):
         driver = self.directory / DRIVER_DIR
         shutil.rmtree(driver, ignore_errors=True)
         write_driver(export, str(driver), fclk_mhz, os.path.relpath(bitfile, DRIVER_DIR))
-        node, _, _ = partition_body(model)
+        node, body, _ = partition_body(model)
         names = [each.name for each in model.graph.node]
         index = names.index(node.name)
-        self.description = driver_description(
-            export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
-        )
+        self.description = {
+            **driver_description(export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]),
+            "made_from": design_digest(body),
+        }
         report = self.directory / DRIVER_REPORT
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps(self.description, indent=2))
-        model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "driver": str(report)})
         return model, False
 
 

@@ -47,9 +47,11 @@ def declared(cls: type, name: str) -> Callable[[Any], Any]:
 
 
 class DataflowOutputType(str, Enum):
-    """What a build makes besides the partition and its reports; the values are what
-    ``finn.outputs`` records. stitched_ip and ooc_synth work on any shell; the rest need
-    a shell that integrates the partition (SHELL_OUTPUTS), so not ``ip``."""
+    """What a build makes besides the partition and its reports. The model records what
+    a later step uses (``finn.outputs``: the packaged IP, the bitfile); the build's
+    manifest indexes the run (``report/build.json``). stitched_ip and ooc_synth work on
+    any shell; the rest need a shell that integrates the partition (SHELL_OUTPUTS), so
+    not ``ip``."""
 
     #: the packaged IP, with its interface description and an XSim testbench (written,
     #: not run: STITCHED_IP_TESTBENCH runs it)

@@ -70,6 +70,15 @@ _LOG = logging.getLogger(__name__)
 PROBE_TIMEOUT = 120
 _VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
 
+#: The ``extra`` key of a tool run's log records (``run_process``): a mapping with the
+#: run's number in this process (``run``) and, when it starts, ``tool``, ``command``,
+#: ``cwd``, ``transcript`` (its standard output's file) and ``status`` ``running``;
+#: when it ends, ``status`` (``completed``, ``failed``, or ``stopped`` with the
+#: ``error``), ``seconds`` and ``exit``. A build's manifest indexes them
+#: (finn.builder.build_dataflow_manifest); the log shows the same records.
+TOOL_RUN = "finn_tool_run"
+_RUNS = itertools.count(1)
+
 
 class Cancel(Protocol):
     """A cancellation flag (``threading.Event``, ``multiprocessing.Event``)."""
@@ -121,6 +130,7 @@ def run_process(
     cancel: Cancel | None = None,
     check: bool = True,
     transcript: StrPath | None = None,
+    tool: str | None = None,
 ) -> ToolRun:
     """Run argv in a new local process group; reap it on timeout or cancellation.
 
@@ -134,6 +144,10 @@ def run_process(
     exception carries what the process printed (``output``, ``stderr``); with
     ``check``, a non-zero exit raises ``CalledProcessError``. A remote wrapper is
     responsible for cancelling its remote descendants.
+
+    A run that keeps a transcript is a tool run a build indexes: its log records, when
+    it starts and when it finishes or is stopped, carry ``TOOL_RUN``'s fields, with the
+    run named ``tool`` (by default, its command's first word).
     """
     command = [os.fspath(arg) for arg in argv]
     if not command:
@@ -141,11 +155,27 @@ def run_process(
     environment = _child_environment(os.environ if env is None else env)
     files = None if transcript is None else transcript_files(transcript)
     started = time.monotonic()
+    run = next(_RUNS)
+
+    def indexed(**state: object) -> dict[str, dict[str, object]] | None:
+        # The structured fields of this run's records, for a build's manifest; None
+        # for a run with no transcript (a probe, a settings capture).
+        if files is None:
+            return None
+        return {TOOL_RUN: {"run": run, **state}}
+
     _LOG.info(
         "command=%s cwd=%s transcript=%s",
         shlex.join(command),
         cwd or os.getcwd(),
         "none" if files is None else files[0],
+        extra=indexed(
+            tool=tool or Path(command[0]).name,
+            command=shlex.join(command),
+            cwd=os.fspath(cwd or os.getcwd()),
+            transcript=None if files is None else os.fspath(files[0]),
+            status="running",
+        ),
     )
     if files is None:
         proc = subprocess.Popen(
@@ -210,17 +240,27 @@ def run_process(
             # Only TimeoutExpired declares them; the others carry them for the same reader.
             setattr(exc, "output", out)
             setattr(exc, "stderr", err)
+        seconds = time.monotonic() - started
         _LOG.warning(
             "command stopped duration=%.3fs result=%s",
-            time.monotonic() - started,
+            seconds,
             type(exc).__name__,
+            extra=indexed(status="stopped", seconds=round(seconds, 3), error=type(exc).__name__),
         )
         raise
     if files is not None:
         out, err = printed()
     result = ToolRun(command, proc.returncode, out, err, None if files is None else files[0])
+    seconds = time.monotonic() - started
     _LOG.info(
-        "command finished duration=%.3fs result=%s", time.monotonic() - started, proc.returncode
+        "command finished duration=%.3fs result=%s",
+        seconds,
+        proc.returncode,
+        extra=indexed(
+            status="completed" if proc.returncode == 0 else "failed",
+            seconds=round(seconds, 3),
+            exit=proc.returncode,
+        ),
     )
     if check:
         result.check_returncode()
@@ -587,6 +627,7 @@ class Toolchain:
             cancel=cancel,
             check=False,
             transcript=transcript,
+            tool=tool,
         )
         if check and result.returncode != 0:
             raise ToolFailed.of_run(tool, result)

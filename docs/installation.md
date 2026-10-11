@@ -482,6 +482,27 @@ loader environment before interpreter startup (`docker/finn-toolchain.sh` does f
 shell). Concurrent in-process builds still share stdout and logger state; use
 separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
+What a build leaves in its output directory: `build_dataflow.log` (for a reader:
+every record with its level, step and logger), upstream's `time_per_step.json` and
+`config_check_report.txt`/`.json`, the steps' reports under `report/`, each tool's
+transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as the
+tool runs), the intermediate models, and the outputs asked. `report/build.json` is
+the build's manifest, the index of the run a program reads after the exit code, and
+never the log: the build's identity (FINN's revision where it is known, the
+toolchain's selection, the Vivado release, the target, the model), the configuration
+checks that failed, each step with its phase, status (`running` while it runs, then
+`completed` or `failed`), seconds, the reports it wrote with their findings by code,
+its tool runs with their transcripts, status, exit and messages by severity, and its
+verifications; each verification asked with its verdict (`pass`, `fail`, `error`,
+`not-run`); and the `outcome`: `completed`, `failed` (the step, the error's kind:
+`refusal`, `tool-unavailable`, `tool-failed`, `verdict` or `bug`, the error, a
+refusal's findings by code) or `refused` (the configuration, before the first step).
+It is rewritten as the build goes, so a build that stopped says where. The model
+records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
+`vlnv`, `interfaces`, `made_from`) on the partition's body, the bitfile (`bitfile`,
+`hwh`, `bitfile_made_from`, `bitfile_options`) on the parent graph; the bitfile's
+reports are beside it under `report/`.
+
 `finn.toolchain.launcher.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a
 launcher argv prefix. `Selection.prepare()` snapshots the mapping. With local

@@ -35,7 +35,8 @@ import pdb  # NOQA
 import sys
 import time
 import warnings
-from dataclasses import replace
+from dataclasses import asdict, replace
+from datetime import datetime
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
@@ -45,8 +46,16 @@ from finn.builder.build_dataflow_checks import (
     save_report,
 )
 from finn.builder.build_dataflow_config import (
+    VERIFIED_BY,
     DataflowBuildConfig,
+    VerificationStepType,
     default_build_dataflow_steps,
+)
+from finn.builder.build_dataflow_manifest import (
+    MANIFEST_FILE,
+    Manifest,
+    ManifestHandler,
+    finn_revision,
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import (
@@ -121,10 +130,11 @@ def _build_log(cfg):
     """Set up the build's log for the ``with`` block. FINN's loggers (``finn``) and
     Python's warnings (``py.warnings``, captured through ``logging.captureWarnings``) go
     to ``LOG_FILE`` in ``cfg.output_dir``, each line with its level, step and logger,
-    and to the console (_Console). ``finn`` logs from INFO unless the caller set a level.
-    No stream is redirected, so a third-party print reaches the console unchanged. The
-    handlers, levels and warnings hook are restored afterwards, leaving a notebook's own
-    logging as it was."""
+    and to the console (_Console). ``finn`` logs from INFO, the level the build's
+    manifest is collected from (_indexed); a level the caller set is the one the log
+    file and the console show (INFO if none is set). No stream is redirected, so a
+    third-party print reaches the console unchanged. The handlers, levels and warnings
+    hook are restored afterwards, leaving a notebook's own logging as it was."""
     global _step
     os.makedirs(cfg.output_dir, exist_ok=True)
     stamp = _StepStamp()
@@ -147,8 +157,15 @@ def _build_log(cfg):
     for logger in loggers:
         # Not also to the root's handlers (a notebook's), which would print each line twice.
         logger.propagate = False
-    if loggers[0].level == logging.NOTSET:
-        loggers[0].setLevel(logging.INFO)
+    # FINN logs from INFO, since the manifest is collected from INFO records
+    # (ManifestHandler); a level the caller set above INFO filters the log and console.
+    shown = loggers[0].level or logging.INFO
+    if shown > logging.INFO:
+        for handler in handlers:
+            handler.addFilter(
+                lambda record: record.levelno >= shown or record.name == "py.warnings"
+            )
+    loggers[0].setLevel(min(shown, logging.INFO))
     # Leave the warnings hook alone if the caller already captures warnings.
     capture = warnings.showwarning is not getattr(logging, "_showwarning", None)
     if capture:
@@ -168,28 +185,58 @@ def _build_log(cfg):
             handler.close()
 
 
-def _log_failure(step: str, error: BaseException) -> None:
-    """Log a failed step's error according to its kind; the traceback always goes to the
-    log file. A ``ToolUnavailable`` names the tool and what selects it; a ``ToolFailed``
-    its transcript and error lines; a refusal (an error with ``findings``) their number
-    and one line per code; a failed verification (a subclass of ``AssertionError``)
-    ``Verification for <step> : FAIL``. Anything else is a bug, and its traceback is
-    shown on the console too."""
-    kind = type(error).__name__
-    if isinstance(error, (ToolUnavailable, ToolFailed)):
-        _LOG.error("%s: %s: %s", step, kind, error)
-    elif hasattr(error, "findings"):
+def _failure_kind(error: BaseException) -> str:
+    """The kind of a failed step's error: ``tool-unavailable`` (``ToolUnavailable``),
+    ``tool-failed`` (``ToolFailed``), ``refusal`` (an error with ``findings``),
+    ``verdict`` (a subclass of ``AssertionError``: a failed verification), else ``bug``."""
+    if isinstance(error, ToolUnavailable):
+        return "tool-unavailable"
+    if isinstance(error, ToolFailed):
+        return "tool-failed"
+    if hasattr(error, "findings"):
+        return "refusal"
+    if isinstance(error, AssertionError) and type(error) is not AssertionError:
+        return "verdict"
+    return "bug"
+
+
+def _log_failure(step: str, error: BaseException) -> str:
+    """Log a failed step's error according to its kind (_failure_kind), and return the
+    kind; the traceback always goes to the log file. A tool unavailable names the tool
+    and what selects it; a tool failure its transcript and error lines; a refusal the
+    number of findings and one line per code; a verdict ``Verification for <step> :
+    FAIL``. Anything else is a bug, and its traceback is shown on the console too."""
+    kind = _failure_kind(error)
+    name = type(error).__name__
+    if kind in ("tool-unavailable", "tool-failed"):
+        _LOG.error("%s: %s: %s", step, name, error)
+    elif kind == "refusal":
         findings = tuple(error.findings)
-        _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), kind, error)
+        _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), name, error)
         for line in by_code(findings):
             _LOG.error("  %s", line)
-    elif isinstance(error, AssertionError) and type(error) is not AssertionError:
+    elif kind == "verdict":
         _LOG.error("Verification for %s : FAIL", step)
-        _LOG.error("%s: %s", kind, error)
+        _LOG.error("%s: %s", name, error)
     else:
-        _LOG.error("%s failed: %s: %s", step, kind, error, exc_info=error)
-        return
+        _LOG.error("%s failed: %s: %s", step, name, error, exc_info=error)
+        return kind
     _LOG.error("%s: the traceback", step, exc_info=error, extra=FILE_ONLY)
+    return kind
+
+
+def _findings_by_code(error: BaseException) -> dict[str, int]:
+    """A refusal's findings by code; none for another error."""
+    counts: dict[str, int] = {}
+    for finding in getattr(error, "findings", ()):
+        code = getattr(finding, "code", None)
+        if isinstance(code, str):
+            counts[code] = counts.get(code, 0) + 1
+    return counts
+
+
+#: Each step's phase (finn.builder.build_dataflow_phases), for the manifest.
+_PHASE_OF = {step: phase for phase, steps in build_dataflow_phase_lookup.items() for step in steps}
 
 
 def _expanded_steps(cfg: DataflowBuildConfig):
@@ -279,21 +326,27 @@ def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: 
     return filename
 
 
-def _run_build_steps(model, cfg, build_dataflow_steps):
-    """Run the resolved build steps in order, each log record stamped with its step.
+def _run_build_steps(model, cfg, build_dataflow_steps, manifest=None):
+    """Run the resolved build steps in order, each log record stamped with its step, and
+    record each step's start and end, and the outcome, in the build's ``manifest``
+    (finn.builder.build_dataflow_manifest), if given.
 
     Writes time_per_step.json, the seconds each step took. Returns 0 on success, or -1
-    at the first failing step after logging its failure (_log_failure) and starting the
-    postmortem debugger if ``enable_build_pdb_debug`` is set and stdin is a terminal.
+    at the first failing step after logging its failure (_log_failure), recording it in
+    the manifest, and starting the postmortem debugger if ``enable_build_pdb_debug`` is
+    set and stdin is a terminal.
     """
     global _step
     step_num = 1
     time_per_step = dict()
     for transform_step in build_dataflow_steps:
         step_name = transform_step.__name__
+        step_start = time.time()
         try:
             _step = step_name
             _LOG.info("Running step: %s [%d/%d]", step_name, step_num, len(build_dataflow_steps))
+            if manifest is not None:
+                manifest.step_started(step_name, _PHASE_OF.get(step_name))
             # run the step
             step_start = time.time()
             model = transform_step(model, cfg)
@@ -305,10 +358,15 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
                 if not os.path.exists(intermediate_model_dir):
                     os.makedirs(intermediate_model_dir)
                 model.save("%s/%s" % (intermediate_model_dir, chkpt_name))
+            if manifest is not None:
+                manifest.step_ended("completed", time.time() - step_start)
             step_num += 1
         except:  # noqa
             extype, value, tb = sys.exc_info()
-            _log_failure(step_name, value)
+            kind = _log_failure(step_name, value)
+            if manifest is not None:
+                manifest.failed(step_name, kind, value, _findings_by_code(value))
+                manifest.step_ended("failed", time.time() - step_start)
             # start postmortem debug if configured, and only where someone can answer it:
             # with stdin not a terminal (pytest, a batch job) pdb's read would fail and
             # report itself instead of the error above
@@ -325,22 +383,84 @@ def _run_build_steps(model, cfg, build_dataflow_steps):
 
     with open(cfg.output_dir + "/time_per_step.json", "w") as f:
         json.dump(time_per_step, f, indent=2)
+    if manifest is not None:
+        manifest.completed()
     _LOG.info("Completed successfully")
     return 0
+
+
+def _identity(cfg: DataflowBuildConfig) -> dict:
+    """The build's identity for its manifest, from the configuration before its checks:
+    FINN's revision, the toolchain's selection (the configuration's over the machine's)
+    and the target, each None where it cannot be known. The model and the Vivado release
+    are added later, as the build reads them."""
+    try:
+        selection = asdict(cfg._resolve_selection())
+    except ValueError:
+        selection = None
+    try:
+        resolved = cfg._resolve_target()
+        target = {
+            "part": resolved.part,
+            "shell": resolved.shell,
+            "board": resolved.board,
+            "period_ns": resolved.platform.period_ns,
+        }
+    except (ValueError, LookupError, TypeError):
+        target = None  # the configuration checks name it
+    return {
+        "finn": finn_revision(),
+        "model": None,
+        "output_dir": os.path.abspath(cfg.output_dir),
+        "started": datetime.now().isoformat(timespec="seconds"),
+        "toolchain": selection,
+        "vivado": None,
+        "target": target,
+    }
+
+
+def _asked_verifications(cfg: DataflowBuildConfig) -> dict:
+    """Each verification ``cfg.verify_steps`` asks for, by name, with the step that
+    concludes it (the last in VERIFIED_BY). A name that is not a verification is skipped;
+    the configuration checks report it."""
+    asked = {}
+    for each in cfg.verify_steps:
+        try:
+            verification = VerificationStepType(each)
+        except ValueError:
+            continue
+        asked[verification.value] = VERIFIED_BY[verification][-1]
+    return asked
+
+
+@contextlib.contextmanager
+def _indexed(cfg: DataflowBuildConfig):
+    """The build's manifest (``MANIFEST_FILE`` in the output directory) for the ``with``
+    block, written at once and filled from FINN's log records (ManifestHandler)."""
+    manifest = Manifest(cfg.output_dir, _identity(cfg), _asked_verifications(cfg))
+    handler = ManifestHandler(manifest)
+    logger = logging.getLogger("finn")
+    logger.addHandler(handler)
+    try:
+        yield manifest
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
 
 
 def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     """Best-effort build a dataflow accelerator using the given configuration, through
     the steps of finn.builder.build_dataflow_steps.
 
-    The build log (``LOG_FILE`` in the output directory, and the console) is set up
-    first, so the configuration checks are logged too, and a refused configuration is
-    logged before it raises.
+    The build log (``LOG_FILE`` in the output directory, and the console) and the
+    manifest (``MANIFEST_FILE``, finn.builder.build_dataflow_manifest) are set up first
+    (_build_log, _indexed), so the configuration checks are logged and listed in the
+    manifest too, and a refused configuration is logged and recorded before it raises.
 
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
     """
-    with _build_log(cfg):
+    with _build_log(cfg), _indexed(cfg) as manifest:
         try:
             # if start_step is specified, override the input model
             if cfg.start_step is None:
@@ -354,17 +474,26 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
                 )
                 model = ModelWrapper(intermediate_model_filename)
             assert type(model) is ModelWrapper
+            manifest.identify(
+                model=os.path.abspath(
+                    model_filename if cfg.start_step is None else intermediate_model_filename
+                )
+            )
             finn_build_dir = resources.scratch()
 
             _LOG.info("Intermediate outputs will be generated in " + str(finn_build_dir))
             _LOG.info("Final outputs will be generated in " + cfg.output_dir)
             _LOG.info("Build log is at " + os.path.join(cfg.output_dir, LOG_FILE))
+            _LOG.info("Build manifest is at " + os.path.join(cfg.output_dir, MANIFEST_FILE))
 
             # Run configuration checks
             config_report = run_all_config_checks(cfg)
             log_report(config_report)
             report_path = save_report(config_report, cfg.output_dir)
             _LOG.info(f"Configuration check report saved to: {report_path}")
+            release = config_report.vivado_version
+            manifest.identify(vivado=None if release is None else "%d.%d" % tuple(release))
+            manifest.configuration_checks(config_report, report_path)
 
             if config_report.has_errors():
                 raise AssertionError(
@@ -375,8 +504,9 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
         except Exception as error:
             _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
             _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
+            manifest.refused(error)
             raise
-        return _run_build_steps(model, cfg, build_dataflow_steps)
+        return _run_build_steps(model, cfg, build_dataflow_steps, manifest)
 
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:

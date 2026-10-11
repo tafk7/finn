@@ -60,7 +60,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     point, _ = configured_root(body, node.name)
     modelled = shell_resources(point)
     assert isinstance(modelled, ShellResources)
-    stated = shell_resources_report(parent)
+    stated = shell_resources_report(parent, {})
     assert (stated["shell"], stated["caveat"]) == ("ip", None)
     assert stated["members"] == {
         "partition": {
@@ -104,7 +104,7 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     assert "in the ultrascale primitive table" in exact
     assert "a FIFO's shallow hi space, which Vivado places, is a model" in exact
     assert "placed by Vivado, not stated" in exact
-    stated = shell_resources_report(model.transform(CutKernelPartition(tmp_path)))
+    stated = shell_resources_report(model.transform(CutKernelPartition(tmp_path)), {})
     assert stated["caveat"] == row.caveat
     assert SHELL_CHARACTERISED in stated["columns"]["model"]
     if board == "Ultra96":

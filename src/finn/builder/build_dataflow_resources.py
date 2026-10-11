@@ -59,7 +59,7 @@ from finn.custom_op.kernels.shell import (
     member,
     shell_resources,
 )
-from finn.custom_op.partition.kernel_partitions import OUTPUT_REPORTS, partition_body
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
 from finn.shells.pynq.runner import STATIC_INSTANCES
@@ -135,14 +135,14 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def shell_resources_report(parent: ModelWrapper) -> dict[str, Any]:
+def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) -> dict[str, Any]:
     """``report/resources.json`` for the parent graph ``parent`` (see the module
-    docstring), read from the reports the parent graph lists (``finn.outputs``
-    ``reports``): the shell integration's ``out_of_context`` and ``placed``, and the
-    packaged partition's ``ooc_synth``."""
+    docstring), from the ``reports`` the build made, by name: the shell integration's
+    ``out_of_context`` (a directory) and ``placed`` (``finn.shells.pynq.runner.REPORTS``),
+    and the packaged partition's ``ooc_synth``. A column whose report is not given is
+    absent."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
-    reports = parent.get(OUTPUT_REPORTS) or {}
     point, _ = configured_root(body, node.name)
     modelled = shell_resources(point)
     instances = _member_instances(parent)
