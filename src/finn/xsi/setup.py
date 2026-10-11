@@ -20,26 +20,35 @@ Options:
     --check    Only check build prerequisites; does not inspect the extension
 
 RTL simulation builds the extension on first use (ensure_built); running this
-module only builds it ahead of time.
+module only builds it ahead of time. Each function takes the toolchain whose Vivado
+the extension is built against (its XSim headers), the machine's
+(``host_toolchain``) by default; without a Vivado, ``ToolUnavailable``.
 """
 
 import argparse
 import fcntl
-import json
 import os
 import shutil
 import sys
 import sysconfig
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
-from finn.toolchain.launcher import Selection, run_process
+from finn.toolchain import vivado
+from finn.toolchain.launcher import (
+    Toolchain,
+    ToolUnavailable,
+    host_toolchain,
+    identity,
+    run_process,
+)
 from finn.xsi._artifacts import validate_record, write_record
 from finn.xsi.paths import find_xsi_so, xsi_artifact_dir, xsi_source_dir
 
 
-def get_build_paths() -> Tuple[List[str], str, List[str]]:
-    """Get include paths and compiler for building the extension.
+def get_build_paths(toolchain: Toolchain) -> Tuple[List[str], str, List[str]]:
+    """Get include paths and compiler for building the extension against the Vivado
+    ``toolchain`` selects.
 
     Returns:
         Tuple of (include_dirs, compiler, extra_compile_args)
@@ -67,12 +76,10 @@ def get_build_paths() -> Tuple[List[str], str, List[str]]:
         # Will be caught later in prerequisites check
         pass
 
-    # Get Xilinx Vivado include directory
-    xilinx_vivado = os.environ.get("XILINX_VIVADO")
-    if xilinx_vivado:
-        xilinx_include = os.path.join(xilinx_vivado, "data", "xsim", "include")
-        if os.path.exists(xilinx_include):
-            include_dirs.append(xilinx_include)
+    # The XSim headers of the selected Vivado
+    xilinx_include = vivado.installation(toolchain) / "data" / "xsim" / "include"
+    if xilinx_include.exists():
+        include_dirs.append(str(xilinx_include))
 
     # Determine compiler
     compiler = "g++"
@@ -85,24 +92,24 @@ def get_build_paths() -> Tuple[List[str], str, List[str]]:
     return include_dirs, compiler, extra_compile_args
 
 
-def check_prerequisites() -> List[str]:
-    """Check if required tools are available."""
+def check_prerequisites(toolchain: Optional[Toolchain] = None) -> List[str]:
+    """Check if required tools are available: a compiler, pybind11, and a Vivado
+    with XSim headers in ``toolchain`` (the machine's by default)."""
+    toolchain = toolchain or host_toolchain()
     errors = []
 
     # Check for C++ compiler
     if not shutil.which("g++") and not shutil.which("clang++"):
         errors.append("No C++ compiler found. Please install g++ or clang++.")
 
-    # Check for Xilinx tools
-    if not shutil.which("vivado"):
-        errors.append("'vivado' not found. Ensure Xilinx tools are in PATH.")
-
-    # Check Xilinx Vivado environment variable
-    xilinx_vivado = os.environ.get("XILINX_VIVADO")
-    if not xilinx_vivado:
-        errors.append("XILINX_VIVADO environment variable not set. Please source Vivado settings.")
-    elif not os.path.exists(os.path.join(xilinx_vivado, "data", "xsim", "include")):
-        errors.append(f"Xilinx XSim headers not found at {xilinx_vivado}/data/xsim/include")
+    # Check for the selected Vivado and its XSim headers
+    try:
+        toolchain.command("vivado")
+        headers = vivado.installation(toolchain) / "data" / "xsim" / "include"
+        if not headers.exists():
+            errors.append(f"Xilinx XSim headers not found at {headers}")
+    except ToolUnavailable as missing:
+        errors.append(str(missing))
 
     # Check for pybind11
     try:
@@ -116,27 +123,21 @@ def check_prerequisites() -> List[str]:
 SOURCE_FILES = ["xsi_bind.cpp", "xsi_finn.cpp"]
 
 
-def bridge_identity() -> str:
-    """The toolchain an xsi.so is built against: the selected Vivado installation."""
-    vivado = os.environ.get("XILINX_VIVADO", "")
-    return json.dumps({"installation": os.path.realpath(vivado) if vivado else ""})
-
-
-def _usable(artifact: Path) -> bool:
+def _usable(artifact: Path, toolchain: Toolchain) -> bool:
     if not artifact.is_file():
         return False
     try:
-        validate_record(artifact, kind="bridge", tool=bridge_identity())
+        validate_record(artifact, kind="bridge", tool=identity(toolchain, "xsim"))
     except (OSError, ValueError, KeyError):
         return False
     return True
 
 
-def _compile(artifact: Path, verbose: bool) -> None:
-    """Compile xsi.so to artifact, atomically, and record its inputs."""
+def _compile(artifact: Path, verbose: bool, toolchain: Toolchain) -> None:
+    """Compile xsi.so to artifact against ``toolchain``, atomically, and record its
+    inputs."""
     xsi_path = xsi_source_dir()
-    toolchain = Selection().prepare()
-    include_dirs, compiler, compile_args = get_build_paths()
+    include_dirs, compiler, compile_args = get_build_paths(toolchain)
     partial = artifact.with_name(f".{artifact.name}.{os.getpid()}")
     cmd = [compiler, *compile_args]
     for inc_dir in include_dirs:
@@ -161,19 +162,25 @@ def _compile(artifact: Path, verbose: bool) -> None:
         for path in Path(directory).rglob("*")
         if path.suffix in {".h", ".hpp"} and path.is_file()
     ]
-    write_record(artifact, kind="bridge", tool=bridge_identity(), sources=sources, arguments=cmd)
+    write_record(
+        artifact, kind="bridge", tool=identity(toolchain, "xsim"), sources=sources, arguments=cmd
+    )
 
 
-def ensure_built(verbose: bool = False, force: bool = False) -> Path:
-    """Return the xsi.so for the selected toolchain, building it on first use.
+def ensure_built(
+    verbose: bool = False, force: bool = False, toolchain: Optional[Toolchain] = None
+) -> Path:
+    """Return the xsi.so for ``toolchain`` (the machine's by default), building it on
+    first use; ``ToolUnavailable`` when it selects no Vivado.
 
     Safe for concurrent callers (e.g. pytest-xdist workers): one builds, the
     others wait and reuse its result.
     """
-    artifact = xsi_artifact_dir() / "xsi.so"
-    if not force and _usable(artifact):
+    toolchain = toolchain or host_toolchain()
+    artifact = xsi_artifact_dir(toolchain) / "xsi.so"
+    if not force and _usable(artifact, toolchain):
         return artifact
-    errors = check_prerequisites()
+    errors = check_prerequisites(toolchain)
     if errors:
         raise RuntimeError(
             "RTL simulation needs the finn_xsi extension, which cannot be built here:\n  "
@@ -182,16 +189,18 @@ def ensure_built(verbose: bool = False, force: bool = False) -> Path:
     artifact.parent.mkdir(parents=True, exist_ok=True)
     with open(artifact.parent / ".lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if force or not _usable(artifact):
-            _compile(artifact, verbose)
+        if force or not _usable(artifact, toolchain):
+            _compile(artifact, verbose, toolchain)
     return artifact
 
 
-def build_xsi(force: bool = False, verbose: bool = True) -> bool:
+def build_xsi(
+    force: bool = False, verbose: bool = True, toolchain: Optional[Toolchain] = None
+) -> bool:
     """Build (or reuse) the finn_xsi extension; report failures instead of raising."""
     try:
-        artifact = ensure_built(verbose=verbose, force=force)
-    except RuntimeError as error:
+        artifact = ensure_built(verbose=verbose, force=force, toolchain=toolchain)
+    except (RuntimeError, ToolUnavailable) as error:
         print(error)
         print("\nCommon issues:")
         print("  - Ensure Xilinx Vivado is properly sourced")
@@ -203,12 +212,12 @@ def build_xsi(force: bool = False, verbose: bool = True) -> bool:
     return True
 
 
-def verify_installation() -> bool:
-    """Verify that finn_xsi can be imported and works."""
+def verify_installation(toolchain: Toolchain) -> bool:
+    """Verify that finn_xsi, built for ``toolchain``, can be imported and works."""
     # Check if xsi.so exists
-    xsi_so = find_xsi_so()
+    xsi_so = find_xsi_so(toolchain)
     if xsi_so is None:
-        print(f"\n✗ Compiled extension xsi.so not found in {xsi_artifact_dir()}")
+        print(f"\n✗ Compiled extension xsi.so not found in {xsi_artifact_dir(toolchain)}")
         return False
 
     # The adapter is installed normally; only the native artifact needs a path.
@@ -238,11 +247,12 @@ def verify_installation() -> bool:
         sys.path.pop(0)
 
 
-def clean_build() -> bool:
-    """Clean build artifacts."""
+def clean_build(toolchain: Toolchain) -> bool:
+    """Clean the build artifacts of ``toolchain``'s Vivado."""
     # Only clean the explicitly writable artifact directory.
     removed = False
-    for xsi_so in (xsi_artifact_dir() / "xsi.so", xsi_artifact_dir() / "xsi.so.finn.json"):
+    directory = xsi_artifact_dir(toolchain)
+    for xsi_so in (directory / "xsi.so", directory / "xsi.so.finn.json"):
         if not xsi_so.exists():
             continue
         try:
@@ -267,10 +277,17 @@ def main() -> int:
     parser.add_argument("--quiet", action="store_true", help="Suppress build output")
 
     args = parser.parse_args()
+    # A command a user runs: the machine's toolchain.
+    toolchain = host_toolchain()
 
     # Clean and exit if requested
     if args.clean:
-        if clean_build():
+        try:
+            cleaned = clean_build(toolchain)
+        except ToolUnavailable as missing:
+            print(missing)
+            cleaned = False
+        if cleaned:
             print("Clean completed successfully.")
             return 0
         else:
@@ -280,7 +297,7 @@ def main() -> int:
     # Check prerequisites
     if not args.quiet:
         print("Checking prerequisites...")
-    errors = check_prerequisites()
+    errors = check_prerequisites(toolchain)
 
     if errors:
         print("Prerequisite check failed:")
@@ -298,12 +315,12 @@ def main() -> int:
     # Build finn_xsi
     if not args.quiet:
         print("Building finn_xsi extension...")
-    if not build_xsi(force=args.force, verbose=not args.quiet):
+    if not build_xsi(force=args.force, verbose=not args.quiet, toolchain=toolchain):
         print("Build failed. Please check the error messages above.")
         return 1
 
     # Verify installation
-    verification_result = verify_installation() if not args.quiet else True
+    verification_result = verify_installation(toolchain) if not args.quiet else True
 
     if verification_result:
         if not args.quiet:

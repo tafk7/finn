@@ -26,9 +26,58 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""What FINN knows of Vivado: the installation a toolchain selects (``installation``,
+``release``, ``glbl``), how many runs it launches at once, and how to read its reports.
+
+Every reader of "which Vivado" reads it here, through a toolchain, never from this
+process's environment; each raises ``finn.toolchain.launcher.ToolUnavailable`` when
+the toolchain selects no Vivado.
+"""
+
+from __future__ import annotations
+
 import os
 import re
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+# A module, not names: the launcher reads this module in turn (``vivado_jobs``).
+from finn.toolchain import launcher
+
+if TYPE_CHECKING:
+    from finn.toolchain.launcher import Toolchain
+
+
+def installation(toolchain: Toolchain) -> Path:
+    """The Vivado installation ``toolchain`` selects: the directory its environment's
+    ``XILINX_VIVADO`` names. ``ToolUnavailable`` when it names none, or no directory."""
+    named = toolchain.environment.get("XILINX_VIVADO")
+    if not named:
+        raise launcher.ToolUnavailable(
+            "vivado", "this toolchain names no Vivado installation (XILINX_VIVADO)"
+        )
+    if not Path(named).is_dir():
+        raise launcher.ToolUnavailable("vivado", f"XILINX_VIVADO={named} is no directory")
+    return Path(named)
+
+
+def release(toolchain: Toolchain) -> tuple[int, int]:
+    """The release, (year, minor), of the Vivado ``toolchain`` runs: its answer to
+    ``vivado -version`` through the toolchain's route (``Toolchain.probe``), asked once
+    per selection in a process. ``ToolUnavailable`` when no Vivado answers."""
+    year, minor = toolchain.probe("vivado")[:2]
+    return year, minor
+
+
+def glbl(toolchain: Toolchain) -> Path:
+    """The global module (``glbl.v``) of the Vivado installation ``toolchain`` selects,
+    which every simulation of Xilinx primitives elaborates beside its top.
+    ``ToolUnavailable`` when there is no installation, or it holds no ``glbl.v``."""
+    path = installation(toolchain) / "data" / "verilog" / "src" / "glbl.v"
+    if not path.is_file():
+        raise launcher.ToolUnavailable("vivado", f"the installation holds no {path}")
+    return path
+
 
 #: The most Vivado runs a build launches at once by default (``launch_runs -jobs``):
 #: a Zynq shell's block design synthesizes about ten IPs out of context, one run
@@ -36,7 +85,7 @@ from typing import Any
 VIVADO_JOBS_CAP = 16
 
 
-def vivado_jobs(requested: "int | None" = None) -> int:
+def vivado_jobs(requested: int | None = None) -> int:
     """The number of runs Vivado launches at once (``launch_runs -jobs``): the
     ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP.
     The one check of a number of jobs: a positive integer (``finn.toolchain.launcher.

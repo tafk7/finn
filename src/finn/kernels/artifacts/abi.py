@@ -24,8 +24,10 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Union
 
+from finn.kernels.artifacts import ArtifactError
 
-class AbiError(Exception):
+
+class AbiError(ArtifactError):
     """An ABI is not well formed, so it describes no module."""
 
 

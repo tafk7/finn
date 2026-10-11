@@ -14,4 +14,13 @@ A one-way import rule, a row of the layer table in ``tests/layering.py``:
 ``artifacts`` imports the standard library and its approved dependencies;
 kernels import ``artifacts``, never the reverse. What crosses into it is a
 detached ``Module``.
+
+Each module's error derives from ``ArtifactError``: a value that describes no module,
+no file or no interface. A caller that refuses whatever cannot be built catches it.
 """
+
+
+class ArtifactError(Exception):
+    """A module, its pins, files or interface are not well formed, or cannot be emitted:
+    the base of ``AbiError``, ``BuildError``, ``ContributionError``, ``SourceError``,
+    ``InterfaceError``, ``IpxactError`` and ``ProjectionError``."""

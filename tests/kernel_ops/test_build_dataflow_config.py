@@ -231,7 +231,7 @@ def test_no_vivado_on_the_route_is_reported_not_raised(tmp_path: Path) -> None:
     ((passed, message),) = board_checks(report)
     assert not passed
     assert message.startswith("AUP-ZU3_8GB requires Vivado 2024.1 or later, no Vivado detected")
-    assert "Could not probe vivado" in message
+    assert "vivado: not on this toolchain's route" in message
     report = run_all_config_checks(board_build(tmp_path, "Ultra96"))
     assert report.vivado_version is None and board_checks(report) == []
     assert "Vivado: Not detected" in format_report(report)

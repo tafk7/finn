@@ -33,6 +33,23 @@ elif tool in ("vitis_hls", "vitis-run"):
 """
 
 
+def fake_vivado(directory: Path, release: str = "2024.2") -> Path:
+    """A Vivado installation in ``directory`` as far as FINN reads one without running
+    it: its release (``data/version.sh``), its version file and its ``glbl.v``."""
+    data = directory / "data"
+    (data / "verilog/src").mkdir(parents=True, exist_ok=True)
+    (data / "verilog/src/glbl.v").write_text("module glbl(); endmodule\n")
+    (data / "version.sh").write_text(f"XILINX_VERSION_DEFAULT={release}\n")
+    (data / "version.dat").write_text(f"Vivado {release}\n")
+    return directory
+
+
+@pytest.fixture
+def vivado_installation():
+    """Makes a Vivado installation in a directory (``fake_vivado``)."""
+    return fake_vivado
+
+
 class FakeTools:
     """A command directory of fake vendor tools (FAKE_TOOL)."""
 
@@ -57,15 +74,16 @@ class FakeTools:
 def fake_tools(tmp_path, monkeypatch):
     """Makes command directories of fake tools, by name; ``machine=True`` names
     the machine's (FINN_TOOL_DIR_OVERRIDE). Builds go under tmp_path, one worker
-    each, and the toolchain's installations are empty directories under it:
-    HLS (headers for cppsim) and a Vivado whose path gives its release, with a
-    simulation kernel directory."""
+    each, and the toolchain's installations are directories under it: HLS (headers
+    for cppsim) and a Vivado with a simulation kernel directory and the ``glbl.v`` a
+    simulation elaborates."""
     monkeypatch.delenv("FINN_TOOL_DIR_OVERRIDE", raising=False)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     monkeypatch.setenv("NUM_DEFAULT_WORKERS", "1")
     (tmp_path / "hls").mkdir()
     monkeypatch.setenv("XILINX_HLS", str(tmp_path / "hls"))
     (tmp_path / "2024.2/Vivado/lib/lnx64.o").mkdir(parents=True)
+    fake_vivado(tmp_path / "2024.2/Vivado")
     monkeypatch.setenv("XILINX_VIVADO", str(tmp_path / "2024.2/Vivado"))
 
     def make(name: str, *, machine: bool = False) -> FakeTools:

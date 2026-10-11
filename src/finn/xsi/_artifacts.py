@@ -1,7 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Small adjacent compatibility records for native bridge and compiled designs."""
+"""Small adjacent compatibility records for native bridge and compiled designs; the tool
+a record names is its installation's ``finn.toolchain.launcher.identity``."""
 
 import hashlib
 import json
@@ -15,17 +16,6 @@ def digest(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(chunk)
     return value.hexdigest()
-
-
-def tool_identity(toolchain):
-    return json.dumps(
-        {
-            "version": toolchain.probe("vivado"),
-            "installation": toolchain.environment.get("XILINX_VIVADO", ""),
-            "command_dir": toolchain.selection.command_dir or "",
-        },
-        sort_keys=True,
-    )
 
 
 def write_record(artifact, *, kind, tool, sources, arguments=()):

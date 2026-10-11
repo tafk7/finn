@@ -15,7 +15,8 @@ import subprocess
 from pathlib import Path
 
 from finn.resources import finnlib_root
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain import vivado
+from finn.toolchain.launcher import Toolchain, ToolUnavailable, host_toolchain
 
 SIMULATOR_TOOLS = ("xvlog", "xelab", "xsim")
 
@@ -25,15 +26,15 @@ def vivado_simulator(toolchain: Toolchain | None = None) -> bool:
     xvlog, xelab and xsim.
 
     FINN images put tool shims on PATH, so a command being found does not mean a
-    Vivado installation is selected: the toolchain must also name one (XILINX_VIVADO).
+    Vivado installation is selected: the toolchain must also name one, with the
+    ``glbl.v`` a simulation elaborates (``finn.toolchain.vivado.glbl``).
     """
     toolchain = toolchain or host_toolchain()
-    if not toolchain.environment.get("XILINX_VIVADO"):
-        return False
     try:
+        vivado.glbl(toolchain)
         for tool in SIMULATOR_TOOLS:
             toolchain.command(tool)
-    except FileNotFoundError:
+    except ToolUnavailable:
         return False
     return True
 

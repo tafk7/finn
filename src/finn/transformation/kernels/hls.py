@@ -35,8 +35,9 @@ from finn.toolchain.hls import HlsProduct, synthesize
 from finn.toolchain.launcher import Toolchain, host_toolchain
 
 
-class HlsAbiRefused(Exception):
-    """An HLS product's top contradicts its leaf's declared pins, or cannot be read."""
+class HlsAbiRefused(ValueError):
+    """An HLS product's top contradicts its leaf's declared pins, or cannot be read: a
+    refusal, as every refusal of what a build is asked to build is a ``ValueError``."""
 
 
 def hls_requests(module: Module) -> tuple[tuple[Leaf, HlsSource], ...]:

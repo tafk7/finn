@@ -54,7 +54,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.matmul import datatype_range
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.toolchain.launcher import Selection, Toolchain
+from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 from kernels.chain import chain
 from kernels.conformance import Sample, place
 from kernels.helpers import FULL_DSP48E2, full_platform, point_for
@@ -302,17 +302,25 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
         )
 
 
-def _toolchain(tmp_path: Path, xsim_prints: str) -> Toolchain:
+def _toolchain(tmp_path: Path, xsim_prints: str, fails: str | None = None) -> Toolchain:
     """A toolchain whose simulator tools are scripts in a command directory: each
-    records its arguments, and xsim prints ``xsim_prints``."""
+    records its arguments, xsim prints ``xsim_prints``, and the tool ``fails`` names
+    prints an error, writes its log and exits 1. Its Vivado holds ``glbl.v``."""
     tools = tmp_path / "tools"
     tools.mkdir()
     for tool in SIMULATOR_TOOLS:
         printed = xsim_prints if tool == "xsim" else ""
+        failing = (
+            f'echo "ERROR: [{tool}] it failed" | tee {tool}.log\nexit 1\n' if tool == fails else ""
+        )
         script = tools / tool
-        script.write_text(f'#!/bin/sh\necho "$0 $*" >> "{tmp_path}/calls"\necho "{printed}"\n')
+        script.write_text(
+            f'#!/bin/sh\necho "$0 $*" >> "{tmp_path}/calls"\necho "{printed}"\n{failing}'
+        )
         script.chmod(0o755)
     vivado = tmp_path / "vivado"
+    (vivado / "data/verilog/src").mkdir(parents=True)
+    (vivado / "data/verilog/src/glbl.v").write_text("module glbl(); endmodule\n")
     environment = {"PATH": os.defpath, "XILINX_VIVADO": str(vivado)}
     return Toolchain(Selection(command_dir=str(tools)), environment)
 
@@ -339,8 +347,37 @@ def test_a_toolchain_naming_no_vivado_has_no_simulator(tmp_path: Path) -> None:
     toolchain = _toolchain(tmp_path, "PASS")
     bare = Toolchain(toolchain.selection, {"PATH": os.defpath})
     assert not vivado_simulator(bare)
-    with pytest.raises(LookupError, match="XILINX_VIVADO"):
+    with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
         simulate([], "", tmp_path, toolchain=bare)
+    assert missing.value.tool == "vivado"
+    assert "host file" in str(missing.value)  # what selects it
+    # An installation without its glbl.v is none either.
+    (tmp_path / "vivado/data/verilog/src/glbl.v").unlink()
+    assert not vivado_simulator(toolchain)
+    with pytest.raises(ToolUnavailable, match="glbl.v"):
+        simulate([], "", tmp_path, toolchain=toolchain)
+
+
+@pytest.mark.parametrize("tool", ["xvlog", "xelab"])
+def test_a_tool_that_fails_before_the_testbench_runs_is_the_tools_failure(
+    tmp_path: Path, tool: str
+) -> None:
+    """Compilation or elaboration failing is ``ToolFailed`` naming the tool, its exit
+    status, its log and its first error line: not a verdict on the hardware."""
+    (tmp_path / "sim").mkdir()
+    with pytest.raises(ToolFailed) as failed:
+        simulate([], "", tmp_path / "sim", toolchain=_toolchain(tmp_path, "PASS", fails=tool))
+    assert not isinstance(failed.value, AssertionError)
+    assert (failed.value.tool, failed.value.status) == (tool, 1)
+    assert failed.value.transcript == tmp_path / "sim" / f"{tool}.log"
+    assert failed.value.errors == (f"ERROR: [{tool}] it failed",)
+
+
+def test_a_testbench_that_ends_in_an_error_is_a_verdict(tmp_path: Path) -> None:
+    """xsim exiting with an error is the testbench's ``$fatal``: ``SimulationFailed``."""
+    (tmp_path / "sim").mkdir()
+    with pytest.raises(SimulationFailed, match="it failed"):
+        simulate([], "", tmp_path / "sim", toolchain=_toolchain(tmp_path, "PASS", fails="xsim"))
 
 
 # -- in XSim ---------------------------------------------------------------------------------

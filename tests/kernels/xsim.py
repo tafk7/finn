@@ -13,7 +13,8 @@ from typing import TypeVar
 import pytest
 
 from finn.harness.toolchain import vivado_simulator
-from finn.toolchain.launcher import host_toolchain
+from finn.toolchain import vivado
+from finn.toolchain.launcher import ToolUnavailable, host_toolchain
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
 
@@ -31,17 +32,23 @@ def requires_xsim(test: _Test) -> _Test:
     return marked
 
 
+def _vivado_selected() -> bool:
+    try:
+        vivado.installation(host_toolchain())
+    except ToolUnavailable:
+        return False
+    return True
+
+
 def requires_vivado(test: _Test) -> _Test:
     """Marked ``vivado``, and skipped without a selected Vivado.
 
     A ``vivado`` command on PATH does not mean a Vivado installation is selected
-    (``vivado_simulator``): the machine's toolchain must name one (XILINX_VIVADO).
-    ``check-kernels.sh`` deselects ``vivado``, and ``xsim-sweep.sh`` runs it.
+    (``vivado_simulator``): the machine's toolchain must name one
+    (``finn.toolchain.vivado.installation``). ``check-kernels.sh`` deselects ``vivado``,
+    and ``xsim-sweep.sh`` runs it.
     """
-    skip = pytest.mark.skipif(
-        not host_toolchain().environment.get("XILINX_VIVADO"),
-        reason="Vivado is not selected",
-    )
+    skip = pytest.mark.skipif(not _vivado_selected(), reason="Vivado is not selected")
     marked: _Test = pytest.mark.vivado(skip(test))  # a dynamic mark is typed Any
     return marked
 
@@ -55,7 +62,7 @@ def hls_synthesizer() -> bool:
     try:
         toolchain.command(frontend)
         toolchain.hls_installation()
-    except (FileNotFoundError, LookupError):
+    except ToolUnavailable:
         return False
     return True
 

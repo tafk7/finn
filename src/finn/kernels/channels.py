@@ -134,8 +134,9 @@ from finn.dataflow.plan import Plan, Unrealizable, plan
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.artifacts.module import BuildError, Fragment, Leaf, Link, LinkEnd, Marker
+from finn.kernels.artifacts.module import Fragment, Leaf, Link, LinkEnd, Marker
 from finn.kernels.base import (
     BOUNDARY,
     BUFFERING,
@@ -626,7 +627,7 @@ class Channel(Space):
                 links.append(wired(owner, current, stage.label, stage.input))
                 owner, current = stage.label, stage.output
             links.append(wired(owner, current, owners[1], ends.sink))
-        except BuildError as error:
+        except ArtifactError as error:
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))

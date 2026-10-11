@@ -20,6 +20,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import PurePath
 
+from finn.kernels.artifacts import ArtifactError
+
 HEADER_SUFFIXES = (".svh", ".vh")
 
 
@@ -33,7 +35,7 @@ def include_directories(paths: Sequence[str | PurePath]) -> tuple[PurePath, ...]
     return tuple(dict.fromkeys(PurePath(path).parent for path in paths if is_header(path)))
 
 
-class SourceError(Exception):
+class SourceError(ArtifactError):
     """A module's sources cannot be ordered."""
 
 

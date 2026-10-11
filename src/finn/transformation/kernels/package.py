@@ -67,6 +67,11 @@ compiles and elaborates it in XSim (``xvlog``, ``xelab``), so that RTL which doe
 not compile, or a top whose instances do not elaborate (a port width, a parameter
 out of range, a missing source), is refused before a shell spends its run on it.
 It simulates nothing: it says nothing about the values the RTL computes.
+
+What Vivado or the simulator does is the tool's: a run that fails, or that leaves no
+IP or no utilization report, is ``finn.toolchain.launcher.ToolFailed`` naming its
+transcript, and a toolchain that selects no Vivado ``ToolUnavailable``.
+``KernelOpError`` stays the refusal of what the partition asks for.
 """
 
 from __future__ import annotations
@@ -98,7 +103,8 @@ from finn.kernels.ends import EndContract
 from finn.kernels.explore import Completion
 from finn.kernels.utilization import Resources
 from finn.resources import finnlib_root
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain import vivado
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
 
@@ -223,11 +229,13 @@ def resources_of(counts: Mapping[str, int]) -> Resources:
 
 def partition_utilization_report(project: Path) -> Path:
     """The hierarchical utilization report of a partition packaged with ``run_synth`` in
-    ``project``; refused unless there is exactly one."""
+    ``project``; ``ToolFailed`` unless Vivado left exactly one."""
     reports = sorted(project.glob("*_partition_util.rpt"))
     if len(reports) != 1:
-        raise KernelOpError(
-            f"{project}: one hierarchical utilization report (run_synth), not {len(reports)}"
+        raise ToolFailed.of(
+            "vivado",
+            transcript=project / "package.log",
+            what=f"{project}: one hierarchical utilization report (run_synth), not {len(reports)}",
         )
     return reports[0]
 
@@ -235,7 +243,8 @@ def partition_utilization_report(project: Path) -> Path:
 def hierarchical_utilization(text: str) -> list[tuple[int, str, Resources]]:
     """The rows of Vivado's text ``report_utilization -hierarchical``, in order: each
     instance's depth (the top 0), its name and its resources. The DSP column is the one
-    whose header starts with ``DSP`` (``DSP Blocks``, ``DSP48 Blocks``)."""
+    whose header starts with ``DSP`` (``DSP Blocks``, ``DSP48 Blocks``). ``ToolFailed``
+    when the report holds no such table."""
     rows: list[tuple[int, str, Resources]] = []
     header: list[str] | None = None
     indent = 0
@@ -259,7 +268,7 @@ def hierarchical_utilization(text: str) -> list[tuple[int, str, Resources]]:
             indent = depth
         rows.append(((depth - indent) // 2, names[0], resources_of(counts)))
     if not rows:
-        raise KernelOpError("no hierarchical utilization table in the report")
+        raise ToolFailed("vivado", what="no hierarchical utilization table in the report")
     return rows
 
 
@@ -387,14 +396,19 @@ class PackagePartition(Transformation):
                 run_synth=self.run_synth,
             )
         )
+        transcript = project / "package.log"
+        # A run that fails is ToolFailed, naming Vivado's log.
         toolchain.run(
             "vivado",
-            ["-mode", "batch", "-nojournal", "-log", "package.log", "-source", "package.tcl"],
+            ["-mode", "batch", "-nojournal", "-log", transcript.name, "-source", "package.tcl"],
             cwd=project,
             replay=project / "package.sh",
+            transcript=transcript,
         )
         if not (project / "ip" / "component.xml").is_file():
-            raise KernelOpError(f"{self.ip_name}: no IP packaged; see {project}/package.log")
+            raise ToolFailed.of(
+                "vivado", transcript=transcript, what=f"{self.ip_name}: no IP packaged"
+            )
         described = interface_description(model, point, boundary, self.ip_name)
         (project / INTERFACE_FILE).write_text(json.dumps(described, indent=2) + "\n")
         model.set(OUTPUT_IP, str(project / "ip"))
@@ -412,7 +426,8 @@ class ElaboratePartition(Transformation):
     prepared toolchain the simulator runs in, by default the configured
     machine's; ``completion`` the policy that completes the open choices
     (``configured_root``), by default ``Baseline()``. A failed compilation or
-    elaboration raises ``KernelOpError``, naming the log.
+    elaboration raises ``ToolFailed``, naming the log; a toolchain that selects no
+    Vivado (for ``glbl.v``) ``ToolUnavailable``.
     """
 
     def __init__(
@@ -440,9 +455,7 @@ class ElaboratePartition(Transformation):
             roots={"finnlib": finnlib_root()},
             built=built_hls(point.module, read_target(model).part, toolchain=toolchain),
         )
-        vivado = toolchain.environment.get("XILINX_VIVADO")
-        if not vivado:
-            raise KernelOpError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")
+        glbl = vivado.glbl(toolchain)
         sources = [str(emitted.directory / path) for path in emitted.sources]
         # Relaxed, as FINN's own flow elaborates (finn.xsi: ``xelab -relax``).
         commands = {
@@ -453,7 +466,7 @@ class ElaboratePartition(Transformation):
                 "xvlog.log",
                 *(f"--include={include}" for include in include_directories(sources)),
                 *(source for source in sources if not is_header(source)),
-                str(Path(vivado) / "data/verilog/src/glbl.v"),
+                str(glbl),
             ],
             "xelab": [
                 f"work.{emitted.entry_point}",
@@ -471,7 +484,10 @@ class ElaboratePartition(Transformation):
             result = toolchain.run(tool, args, cwd=directory, check=False)
             if result.returncode != 0:
                 log = directory / ("xvlog.log" if tool == "xvlog" else "elaborate.log")
-                raise KernelOpError(f"{emitted.entry_point}: {tool} failed; see {log}")
+                fails = "compile" if tool == "xvlog" else "elaborate"
+                raise ToolFailed.of_run(
+                    tool, result, transcript=log, what=f"{emitted.entry_point} does not {fails}"
+                )
         return model, False
 
 

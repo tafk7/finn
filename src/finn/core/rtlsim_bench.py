@@ -11,7 +11,9 @@ synthesized first, for ``HLS_PART``, or taken from the HLS cache
 (``finn.transformation.kernels.hls.built_hls``). ``simulate`` elaborates a
 testbench module ``check`` against sources, with the tools of FINN's toolchain
 (the machine's unless one is given), and requires it to display ``PASS``;
-otherwise it raises ``SimulationFailed``.
+otherwise it raises ``SimulationFailed``, a verdict. A compiler or elaborator that
+fails before the testbench runs is ``finn.toolchain.launcher.ToolFailed``, and a
+toolchain that selects no Vivado ``ToolUnavailable``.
 
 ``stream_through`` streams words through a module and checks each AXIS output's
 words, compared on their payload bits (an AXIS word is padded to bytes).
@@ -123,7 +125,8 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.resources import finnlib_root
-from finn.toolchain.launcher import Toolchain, host_toolchain, xelab_threads
+from finn.toolchain import vivado
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, xelab_threads
 from finn.transformation.kernels.hls import built_hls
 
 Words = tuple[Sequence[int], int]
@@ -201,9 +204,10 @@ def materialize(
 
 
 class SimulationFailed(AssertionError):
-    """A simulator tool exited with an error, or the testbench did not display PASS;
-    the message is what the simulator printed. An ``AssertionError``: a check that the
-    hardware does what its testbench expects failed."""
+    """The testbench ran and did not display PASS, or ended the simulation with an error
+    (``$fatal``); the message is what the simulator printed. An ``AssertionError``, a
+    verdict: a check that the hardware does what its testbench expects failed. A tool
+    that fails before the testbench runs is ``ToolFailed``."""
 
 
 class WordsDiffer(SimulationFailed):
@@ -226,12 +230,11 @@ def simulate(
     """Elaborate the testbench module ``check`` over ``sources``; it must display PASS.
 
     Each tool runs through ``toolchain`` (the machine's by default), whose Vivado
-    (XILINX_VIVADO) provides ``glbl.v``. The simulator's output, which the testbench
-    may have displayed more in."""
+    provides ``glbl.v`` (``ToolUnavailable`` without one). The simulator's output, which
+    the testbench may have displayed more in. ``xvlog`` or ``xelab`` failing is
+    ``ToolFailed``, naming its log; the testbench failing is ``SimulationFailed``."""
     toolchain = toolchain or host_toolchain()
-    vivado = toolchain.environment.get("XILINX_VIVADO")
-    if not vivado:
-        raise LookupError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")
+    glbl = vivado.glbl(toolchain)
     bench = directory / "check.sv"
     bench.write_text("`timescale 1ns/1ps\n" + testbench)
     commands = (
@@ -243,7 +246,7 @@ def simulate(
                 "--relax",
                 *(f"--include={directory}" for directory in include_directories(sources)),
                 *(str(source) for source in sources if not is_header(source)),
-                str(Path(vivado) / "data/verilog/src/glbl.v"),
+                str(glbl),
                 str(bench),
             ],
         ),
@@ -271,6 +274,9 @@ def simulate(
         result = toolchain.run(tool, args, cwd=directory, timeout=300, check=False)
         output = result.stdout.decode(errors="replace")
         printed = output + result.stderr.decode(errors="replace")
+        if result.returncode != 0 and tool != "xsim":
+            # Each writes its log where it runs (``xvlog.log``, ``xelab.log``).
+            raise ToolFailed.of_run(tool, result, transcript=directory / f"{tool}.log")
         if result.returncode != 0:
             raise SimulationFailed(printed)
     if "PASS" not in output:

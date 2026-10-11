@@ -11,11 +11,7 @@
 import os
 import os.path
 
-from finn.xsi.compile import (  # noqa: F401
-    compile_sim_obj,
-    get_simkernel_so,
-    locate_glbl,
-)
+from finn.xsi.compile import compile_sim_obj, get_simkernel_so  # noqa: F401
 
 
 def load_sim_obj(sim_out_dir, out_so_relative_path, tracefile=None, simkernel_so=None):

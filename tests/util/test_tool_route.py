@@ -69,7 +69,7 @@ def test_bare_simulation_compiles_under_the_site_directory(fake_tools, tmp_path)
     source.write_text("module top(); endmodule")
     (tmp_path / "sim").mkdir()
     compile_sim_obj("top", [source], tmp_path / "sim")
-    assert site.calls == ["vivado", "xelab"]  # the identity probe, then the compile
+    assert site.calls == ["xelab"]  # the identity reads the installation, runs nothing
 
 
 #: A machine's release, and the calls its HLS synthesis makes: the version probe,

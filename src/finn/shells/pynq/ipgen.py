@@ -31,7 +31,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.shells.pynq.iodma import IODMA_hls
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
 from finn.toolchain.vivado import tcl_quote
 from finn.util.basic import make_build_dir
 
@@ -328,7 +328,13 @@ def create_stitched_ip(
     result = toolchain.run("vivado", args, cwd=vivado_stitch_proj_dir, check=False)
     sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
     sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
-    result.check_returncode()
+    if result.returncode != 0:
+        raise ToolFailed.of_run(
+            "vivado",
+            result,
+            transcript=Path(vivado_stitch_proj_dir) / "vivado.log",
+            what="the stitched project",
+        )
     # wrapper may be created in different location depending on Vivado version
     if not os.path.isfile(wrapper_filename):
         # check in alternative location (.gen instead of .srcs)
