@@ -63,8 +63,8 @@ from finn.custom_op.partition.kernel_partitions import (
 from finn.harness.preparation import check_equivalence
 from finn.kernels.explore import Completion
 from finn.platform import refuse_drift
-from finn.shells.pynq.driver import driver_description, write_driver
-from finn.shells.pynq.runner import BuildPynqBitfile, pynq_row, refuse_stale_bitfile
+from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
+from finn.shells.pynq.runner import BITFILE, BuildPynqBitfile, pynq_row, refuse_stale_bitfile
 from finn.toolchain.launcher import Toolchain
 from finn.transformation.kernels import (
     EXPLORATION_REPORT,
@@ -79,7 +79,6 @@ from finn.transformation.kernels import (
     strategy,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     ElaboratePartition,
     PackagePartition,
@@ -705,70 +704,30 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     return model
 
 
-def _delivered_mhz(model: ModelWrapper) -> float:
-    """The clock the parent graph's bitfile delivers, in MHz, from its delivered-clock
-    report; a model without one, or a report that found no PL clock, is refused."""
-    reports = model.get(OUTPUT_REPORTS) or {}
-    if "delivered_clock" not in reports:
-        raise ValueError(
-            "pynq_driver: the model states no delivered clock (finn.outputs reports): the "
-            "driver sets the clock its bitfile delivers; build the bitfile first (bitfile)"
-        )
-    clock = json.loads(Path(reports["delivered_clock"]).read_text())
-    if "delivered_mhz" not in clock:
-        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {clock['warning']}")
-    return float(clock["delivered_mhz"])
-
-
-def _shipped_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Path:
-    """The bitfile the parent graph states (finn.outputs), relative to the output
-    directory, which the deployment package mirrors (bitfile/ beside driver/)."""
-    bitfile = model.get(OUTPUT_BITFILE)
-    if bitfile is None:
-        raise ValueError(
-            "pynq_driver: the model states no bitfile (finn.outputs): the driver runs the "
-            "bitfile the build ships; build the bitfile first (bitfile)"
-        )
-    return Path(bitfile).relative_to(Path(cfg.output_dir))
-
-
 def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
-    finn.shells.pynq.driver.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
-    partition's integration export's ends, PL0 set to the clock the bitfile delivers
-    (report/delivered_clock.json), and the bitfile the build ships (finn.outputs) its
-    default, relative to driver/; a bitfile built from another design than the
-    partition's now is refused, named (refuse_stale_bitfile). report/driver.json states
-    that bitfile, what the driver takes and returns, by name, element and shape, and the
-    host's nodes before and after it (driver_description); the parent graph states it
-    among its reports.
-    driver/ is written afresh: nothing an earlier build left there stays."""
+    """Write the driver the parent graph's shell's host runtime runs into driver/, and its
+    description into report/driver.json, if PYNQ_DRIVER is asked: the PYNQ driver
+    (finn.shells.pynq.driver.MakePynqDriver), PL0 set to the clock the bitfile delivers
+    (report/delivered_clock.json), the bitfile the build ships (finn.outputs) its
+    default, the partition completed by step_explore's ``kernel_completion``; a bitfile
+    built from another design than the partition's now is refused, named, and so is a
+    parent graph stating another target than the configuration's. The parent graph
+    states the description among its reports."""
     if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
-    pynq_row(model, "pynq_driver")
-    fclk_mhz = _delivered_mhz(model)
-    bitfile = _shipped_bitfile(model, cfg)
-    refuse_stale_bitfile(model, "pynq_driver")
-    export = integration(model, _completion(cfg))
-    driver_dir = os.path.join(cfg.output_dir, "driver")
-    shutil.rmtree(driver_dir, ignore_errors=True)
-    write_driver(export, driver_dir, fclk_mhz, os.path.relpath(bitfile, "driver"))
-    node, _, _ = partition_body(model)
-    names = [each.name for each in model.graph.node]
-    index = names.index(node.name)
-    description = driver_description(
-        export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]
-    )
-    report = Path(cfg.output_dir) / "report" / "driver.json"
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps(description, indent=2))
-    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "driver": str(report)})
+    making = MakePynqDriver(Path(cfg.output_dir), completion=_completion(cfg))
+    model = model.transform(making)
+    description = making.description
     returned = ", ".join(
         f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
     )
-    print(f"PYNQ Python driver written into {driver_dir}, at {fclk_mhz} MHz; it returns {returned}")
+    driver_dir = os.path.join(cfg.output_dir, DRIVER_DIR)
+    print(
+        f"PYNQ Python driver written into {driver_dir}, at {description['fclk_mhz']} MHz; "
+        f"it returns {returned}"
+    )
     return model
 
 
@@ -810,11 +769,8 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     pynq_row(model, "deployment_package")
     output = Path(cfg.output_dir)
     made = {
-        "bitfile": (model.get(OUTPUT_BITFILE), output / "bitfile" / "finn-accel.bit"),
-        "pynq_driver": (
-            (model.get(OUTPUT_REPORTS) or {}).get("driver"),
-            output / "report" / "driver.json",
-        ),
+        "bitfile": (model.get(OUTPUT_BITFILE), output / BITFILE),
+        "pynq_driver": ((model.get(OUTPUT_REPORTS) or {}).get("driver"), output / DRIVER_REPORT),
     }
     for name, (stated, expected) in made.items():
         if stated is None:
@@ -831,10 +787,10 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     refuse_stale_bitfile(model, "deployment_package")
     deploy = output / "deploy"
     shutil.rmtree(deploy, ignore_errors=True)
-    shutil.copytree(output / "bitfile", deploy / "bitfile")
-    shutil.copytree(output / "driver", deploy / "driver", copy_function=shutil.copyfile)
+    shutil.copytree(output / BITFILE.parent, deploy / BITFILE.parent)
+    shutil.copytree(output / DRIVER_DIR, deploy / DRIVER_DIR, copy_function=shutil.copyfile)
     _host_model(model, deploy / "model")
-    shutil.copy(output / "report" / "driver.json", deploy / "driver.json")
+    shutil.copy(output / DRIVER_REPORT, deploy / "driver.json")
     return model
 
 

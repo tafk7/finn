@@ -28,9 +28,12 @@ from qonnx.transformation.base import Transformation
 
 from finn.custom_op.kernels.base import kernel_op, write_target
 from finn.custom_op.partition.kernel_partitions import (
+    OUTPUT_BITFILE,
+    OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
+    OUTPUT_REPORTS,
     OUTPUT_VLNV,
     OUTPUTS,
     design_digest,
@@ -38,7 +41,14 @@ from finn.custom_op.partition.kernel_partitions import (
 )
 from finn.platform import resolve_target
 from finn.shells.pynq import runner as pynq_runner
-from finn.shells.pynq.driver import driver_description, driver_shapes, write_driver
+from finn.shells.pynq.driver import (
+    DRIVER_DIR,
+    DRIVER_REPORT,
+    MakePynqDriver,
+    driver_description,
+    driver_shapes,
+    write_driver,
+)
 from finn.shells.pynq.runner import (
     BITFILE,
     DELIVERED_CLOCK,
@@ -685,3 +695,50 @@ def test_the_description_states_what_the_driver_takes_and_returns(tmp_path: Path
         "returns": [{"name": "y", "element": "INT7", "shape": [1, 4], "dma": "odma0"}],
         "host": {"before": ["Reshape_0"], "after": []},
     }
+
+
+def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> None:
+    """MakePynqDriver writes the driver afresh into driver/ under the output directory it
+    is given and its description into report/driver.json: its shell the target the
+    partition's body states, PL0 the clock the delivered-clock report there states, the
+    bitfile the parent graph states its default; the parent graph states the
+    description among its reports. Without the report, or on the ip shell, it is refused
+    before anything is written."""
+    parent = zynq_model(tmp_path)
+    output = tmp_path / "output"
+    _, body, _ = partition_body(parent)
+    parent.set(OUTPUT_BITFILE, str(output / BITFILE))
+    parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
+    with pytest.raises(ValueError, match="pynq_driver: no delivered clock"):
+        parent.transform(MakePynqDriver(output))
+    assert not output.exists()
+    (output / DELIVERED_CLOCK).parent.mkdir(parents=True)
+    (output / DELIVERED_CLOCK).write_text(json.dumps({"delivered_mhz": 187.512}))
+    (output / DRIVER_DIR).mkdir()
+    (output / DRIVER_DIR / "stale.py").write_text("an earlier build's")
+    making = MakePynqDriver(output)
+    made = parent.transform(making)
+    assert sorted(path.name for path in (output / DRIVER_DIR).iterdir()) == [
+        "driver.py",
+        "driver_base.py",
+        "finn",
+        "qonnx",
+        "validate.py",
+    ]
+    driver = (output / DRIVER_DIR / "driver.py").read_text()
+    assert "\nfclk_mhz = 187.512\n" in driver
+    assert bitfile_default(output / DRIVER_DIR / "driver.py", tmp_path) == str(output / BITFILE)
+    description = json.loads((output / DRIVER_REPORT).read_text())
+    assert (
+        description
+        == making.description
+        == driver_description(integration(parent), 187.512, str(BITFILE), [], [])
+    )
+    assert made.get(OUTPUT_REPORTS) == {"driver": str(output / DRIVER_REPORT)}
+    model = streamed_w2_model()
+    write_target(model, resolve_target(part=ZYNQ.part, period_ns=5.0))
+    configure_partition(model)
+    on_ip = model.transform(CutKernelPartition(tmp_path / "ip"))
+    with pytest.raises(ValueError, match="pynq_driver: the 'ip' shell does not integrate"):
+        on_ip.transform(MakePynqDriver(tmp_path / "ip_output"))
+    assert not (tmp_path / "ip_output").exists()
