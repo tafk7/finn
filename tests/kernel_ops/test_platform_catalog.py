@@ -35,13 +35,13 @@ from finn.platform.generate import (
     DeviceProbe,
     GenerationError,
     PartRow,
-    _vivado,
-    _wait,
+    _vivado_runs,
     confirm,
     derive,
     parse_devices,
     slr_resources,
 )
+from finn.toolchain.launcher import host_toolchain
 
 ZU3 = [Resources(lut=70_560, ff=141_120, bram18=432, uram=0, dsp=360)]
 ZU7 = [Resources(lut=230_400, ff=460_800, bram18=624, uram=96, dsp=1_728)]
@@ -610,7 +610,7 @@ def test_every_boards_part_resolves_with_its_totals() -> None:
 def test_the_generator_reproduces_a_devices_record(tmp_path: Path) -> None:
     """The extraction on the smallest Zynq-7000 device, linked as the generator does:
     its SLRs' resources are the committed record's and confirm its rule."""
-    _wait([_vivado(tmp_path, "devices-0", ["devices", "xc7z010clg400-1"])])
+    _vivado_runs(tmp_path, [("devices-0", ["devices", "xc7z010clg400-1"])], host_toolchain())
     (probe,) = parse_devices([(tmp_path / "devices-0.log").read_text()]).values()
     shipped = load(DATA).device("xc7z010")
     assert slr_resources(probe) == shipped.slrs
