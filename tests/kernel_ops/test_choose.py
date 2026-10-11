@@ -130,8 +130,10 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     root = shell_root(again, again.graph.node)
     assert undecided(root.point, "*") == [] and not root.dropped
     assert inspection.viable(root.point) == ()
-    # Nothing is left to choose, so a second pass commits nothing.
-    assert choices(again.transform(ranked(Lanes()))) == saved
+    # A second pass reopens every choice and ranks it again: the same policy makes the
+    # same choices, another replaces them.
+    assert choices(again.transform(ranked(Lanes(2)))) == saved
+    assert choices(again.transform(ranked(Lanes())))["first"]["compute.packed.pe"] == 1
 
 
 def test_the_policy_is_offered_viable_cases_only_and_no_forced_decision() -> None:
@@ -158,13 +160,14 @@ def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
 
 def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> None:
     # Preferring the FIFO transport opens its depth, a domain known by membership only
-    # and required: no completion takes a case of it. The exploration leaves it open
+    # and required: no baseline takes a case of it. The exploration leaves it open
     # and reports it; hardware generation refuses it, named.
     explore = ExploreKernelChoices([Ranked(Last())])
     model = kernel_model().transform(explore)
     assert explore.explored is not None
-    left = explore.explored.report["completion"]["open"]
+    left = explore.explored.report["open"]
     assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
+    assert explore.explored.report["completion"]["open"] == left
     with pytest.raises(KernelOpError, match=r"to choose before packaging: .*depth \(required\)"):
         configured_root(model, "the chain")
     # The debug placeholder takes the first case of a required choice, and refuses one

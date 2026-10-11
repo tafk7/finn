@@ -15,16 +15,16 @@ leave out;
 answering from their kernels (``infer_node``, the step on one node, which
 ``ToKernelOps`` shares); ``cut.CutKernelPartition`` cuts the KernelOps once into
 the partition, the parent graph's one ``StreamingDataflowPartition``
-(``finn.custom_op.partition``); ``ExploreKernelChoices`` explores the open
-choices of a partition's body (the KernelOps the cut put together) through the
-DSE seam (``finn.kernels.explore``) by a list of strategies
-(``strategy``: one from its spec) and saves them, and a completion policy
-(``completion``: one by its name) completes what they leave open wherever a
+(``finn.custom_op.partition``); ``ExploreKernelChoices`` explores the choices
+of a partition's body (the KernelOps the cut put together) through the DSE seam
+(``finn.kernels.explore``) by a list of strategies (``strategy``: one from its spec),
+each replacing the values it decides, and saves every value; a completion policy
+(``completion``: one by its name) completes what a model leaves open wherever a
 partition is costed or built, never saved;
 ``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
 included, from its saved choices, completed; ``kernel_choices_config`` exports a
-body's choices, sparse, by graph name (the nodes' and the tensors' channel choices),
-which ``Pinned`` reads back; ``PackagePartition`` packages a
+body's choices, every one it states, by graph name (the nodes' and the tensors'
+channel choices), which ``Pinned`` reads back; ``PackagePartition`` packages a
 partition of KernelOps as the IP the shells read, and ``ElaboratePartition`` compiles
 and elaborates its RTL in XSim, a check before a shell builds it;
 ``integration.integration`` exports what a shell's integration builds around the

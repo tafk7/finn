@@ -14,15 +14,17 @@ one root (a shell root, its members its channels and kernels, each at its path:
   depth), whether that order is one (``Domain.ordered``), and why each other case
   is not viable. A forced Decision is never a choice.
 - ``attempt(point, {key: value, ...})``: ``Accepted(point')`` or
-  ``Refused({key: why})``. A batch is accepted when (1) no key is closed (forced or
-  committed: an attempt never changes a choice already made) and every value of an
-  open choice is one of its viable cases (a membership-only value is its domain's
-  to check), (2) the engine accepts the batch atomically (membership, requirements,
-  applicability: a key nested under a selector the same batch commits is the
-  engine's to accept), (3) it leaves no Decision without a viable case, and (4) no
+  ``Refused({key: why})``. A batch is accepted when (1) no key is forced or held (a
+  pin of this run, ``held``) to another value, and every value of an open choice is
+  one of its viable cases (a membership-only value, or a value replacing a stored
+  one, is its domain's to check), (2) the engine accepts the batch atomically
+  (membership, requirements, applicability: a key nested under a selector the same
+  batch commits is the engine's to accept; a stored choice the batch makes invalid
+  refuses it, named), (3) it leaves no Decision without a viable case, and (4) no
   member a key of the batch belongs to refuses itself (its ``admission``, as far as
   it is decided). Viable is not feasible: a refusal names why, so an explorer can
-  recover.
+  recover. An attempt replaces a stored value; it never clears what the change
+  invalidates (``set`` does).
 - ``cost(point)``: each member's cycles a frame, buffering and resources, as the
   kernels and channels export them (``CYCLES``, ``BUFFERING``, ``RESOURCES``); the
   bottleneck, every member tied at the most cycles, once every member's cycles are
@@ -35,18 +37,42 @@ own ``RESOURCES`` (on a shell root, its partition's, its ends' and its static re
 sum, where ``Cost.used`` is its members', the partition's), or, where a member states
 none, the sum of those that do, a lower bound naming the others (``Stated``).
 
+A point is complete: every choice with cases that is not required holds a value,
+its baseline until a strategy sets another. A kernel lists each Decision's cases
+baseline first, its author's knowledge with the reason beside it; a ``Decision(
+required=True)`` has no safe baseline and stays open until a strategy sets it
+(``SizeFifos`` a FIFO's depth). Three operations keep a point complete:
+
+- ``baseline(point)``: every open choice with cases that is not required at its
+  first viable case, in rank order (an enclosing choice before those it guards);
+- ``reopen(point, keys)``: ``keys`` cleared; where the engine refuses because a stored
+  choice reads one of them (left unresolved, refused or inapplicable), that choice is
+  cleared too, and the clear tried again: what a change reaches is what the engine
+  names, never a list kept here. It returns the point and every key it cleared;
+- ``settle(point, prior)``: every open choice, in rank order, at its ``prior`` value
+  where that is still accepted, else (with cases, not required) at its baseline. A
+  key ``held`` comes back to its held value, or the settle is refused naming the pin.
+
+``set(point, changes)`` replaces values: an attempt, the stored choices it makes
+invalid cleared and the attempt repeated, then a settle. ``held`` is the run's own:
+the keys a ``Pinned`` strategy fixed, which no later strategy changes (an attempt
+refuses another value for one), logged by the exploration and never stored.
+
 The engine decides validity; an explorer only proposes and prefers. An
 ``Explorer`` (``explore(seam, point) -> point``) proposes batches, and may keep,
 compare and backtrack over points, which are immutable: nothing persists until the
-explorers return, and then only the commitments of the point they return, the
-choices made on purpose. Explorers chain (``explore``): each explores what the one
-before returned, fills only open choices, and says what it did (``report``).
+explorers return, and then every value of the point they return. Explorers chain
+(``explore``): each explores what the one before returned and says what it did
+(``report``). A strategy runs through ``Seam.run``: it reopens its scope (the choices
+it decides, none held), explores as it always has, and settles, so a value it does not
+decide keeps what an earlier strategy set; ``Seam.runs`` records what each reopened,
+kept and re-baselined.
 
 The strategies, each an objective and its constraints searched through the seam:
 
 - ``Pinned(path)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
   a kernel's under its node, a channel's under its tensor, the form the kernel path's
-  ``kernel_choices.json`` takes), committed as one batch;
+  ``kernel_choices.json`` takes), set as one batch and held for the run;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
   folding through an unordered choice its cycles wait on by trying each case (a
@@ -56,24 +82,23 @@ The strategies, each an objective and its constraints searched through the seam:
   root's resources, as far as they are stated, stay within a fraction of the
   platform's part, for each resource named (bisection on ``TargetCycles``' budget;
   the best point tried is kept);
-- ``SizeFifos()``: every open transport sized at the bottleneck period from
+- ``SizeFifos()``: every transport not held sized at the bottleneck period from
   both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
-  one batch; it runs after folding, or reads the folding completed;
+  one batch, at the stored folding: it runs after the strategies that fold;
+- ``Rebaseline()`` (``baseline``): every choice not held back at its baseline;
+- ``DebugPlaceholder()`` (``placeholder``, for debugging): every open required choice
+  at its first viable case, ``DEBUG: set by placeholder``; one known by membership
+  only (a FIFO's depth) is refused, by name;
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
-What no strategy chose stays open: a point is complete only where it is costed
-or generated, and there a **completion policy** completes it, on a copy that is
-never stored (``Completion``). A kernel lists each Decision's cases baseline
-first, its author's knowledge with the reason beside it; a ``Decision(required=
-True)`` has no safe baseline. ``Baseline()`` takes the first viable case of every
-open choice that is not required; at hardware generation it also sizes the open
-transports on the completed copy (``SizeFifos``), so that a default design runs
-at its bottleneck period. ``Placeholder()``, for debugging, also takes the first
-case of a required choice, and refuses one known by membership only, by name. A
-strategy reads a completed copy through ``Seam.complete``, which the seam
-records (``Seam.reads``): what a strategy committed from completed values is
-stored, and reported as such.
+A strategy that changes folding (``folds``) after the last ``SizeFifos`` leaves its
+depths stale: the engine keeps a stored depth valid when its ends' folding changes,
+so the order is the exploration's to check (``finn.transformation.kernels``).
+
+``Completion``, ``Baseline()`` and ``Placeholder()`` complete a point on a copy where
+it is generated from a model that leaves choices open (``configured_root``); no
+strategy reads a completed copy.
 """
 
 from __future__ import annotations
@@ -129,8 +154,8 @@ class Choice:
     an order of its cases (``divisors_of``, an integer range). ``owner``: the graph name
     that persists it (a node or a tensor) and the key there, when the seam knows the
     owners. ``required``: it has
-    no safe baseline (``Decision(required=True)``), so no completion but the debug
-    one takes its first case.
+    no safe baseline (``Decision(required=True)``), so no baseline but the debug
+    placeholder's takes its first case.
     """
 
     key: str
@@ -215,15 +240,53 @@ class Stated:
         return bool(self.unstated)
 
 
+@dataclass
+class Settled(Generic[S]):
+    """A point settled (``Seam.settle``): the point, and each value settling set, by key,
+    in order: ``kept``, its prior value (or its held one) still accepted; ``baselined``,
+    its baseline, the prior value refused or none."""
+
+    point: S
+    kept: dict[str, object]
+    baselined: dict[str, object]
+
+
+@dataclass
+class Run:
+    """What one strategy's run through the seam did (``Seam.run``): the strategy's name,
+    every key it reopened (its scope, widened to what the engine names as reading it),
+    and what settling kept and re-baselined after it explored."""
+
+    strategy: str
+    reopened: tuple[str, ...]
+    kept: dict[str, object]
+    baselined: dict[str, object]
+
+
+class Unsettled(ExploreError):
+    """A held key (a pin of this run) that settling cannot bring back to its held value:
+    the change that reached it is refused, naming the pin."""
+
+    def __init__(self, key: str, why: str) -> None:
+        super().__init__(f"{key}: {why}")
+        self.key = key
+        self.why = why
+
+
+#: No value: a key absent from a mapping of values.
+_ABSENT = object()
+
+
 class Seam:
     """The seam over the points of one root: its ``members`` by path (whose cost it
     reads); for each member, by path, the owner that persists its choices (a graph
     name: a kernel's node, a channel's tensor); the
     ``platform`` its kernels are built for (its clock, which a throughput reads); and
-    the ``completion`` policy that completes a point on a copy (``Baseline()`` unless
-    the build names another). ``attempts`` counts the attempts made through it, and
-    ``reads`` holds the values of each completed copy a strategy read (``complete``),
-    in order."""
+    the ``completion`` policy that completes a point on a copy where it is generated
+    from a model that leaves choices open (``Baseline()`` unless the build names
+    another; no strategy reads one). ``attempts`` counts the attempts made through it;
+    ``held`` holds the keys pinned for the run, with their values; ``runs`` records
+    each strategy's run, in order."""
 
     def __init__(
         self,
@@ -239,8 +302,10 @@ class Seam:
         self.platform = platform
         self.completion: Completion = Baseline() if completion is None else completion
         self.attempts = 0
-        self.reads: list[dict[str, object]] = []
+        self.held: dict[str, object] = {}
+        self.runs: list[Run] = []
         self._decisions: dict[str, inspection.DecisionInfo[object]] = {}
+        self._transports: dict[str, str] | None = None
 
     def _info(self, point: Space) -> Mapping[str, inspection.DecisionInfo[object]]:
         # Every point of the root shares its class, so its decisions are read once.
@@ -303,38 +368,52 @@ class Seam:
         ]
         return tuple(found)
 
-    def complete(self, point: S, members: Collection[str] | None = None) -> Completed[S]:
-        """``point`` completed by the seam's policy, on a copy (the costing form: an open
-        transport ``direct``), only the choices of ``members`` where named, for a strategy
-        to read: what it completed is recorded in ``reads``, so that a commitment made
-        from it is reported as such."""
-        completed = self.completion.complete(self, point, members=members)
-        self.reads.append(dict(completed.values))
-        return completed
-
     def attempt(self, point: S, batch: Mapping[str, object]) -> Accepted[S] | Refused:
-        """``batch`` committed on ``point``, or why not; see the module docstring."""
+        """``batch`` committed on ``point``, replacing stored values, or why not; see the
+        module docstring."""
+        return self._attempt(point, batch, ())
+
+    def _attempt(
+        self, point: S, batch: Mapping[str, object], clear: Collection[str]
+    ) -> Accepted[S] | Refused:
+        """``attempt``, the keys ``clear`` cleared in the same request."""
         self.attempts += 1
         infos = self._info(point)
         batch = self._typed(batch)
         offered = {choice.key: choice for choice in self.choices(point)}
         why: dict[str, str] = {}
+        forced: dict[str, object] | None = None
         for key, value in batch.items():
             choice = offered.get(key)
+            held = self.held.get(key, _ABSENT)
             if key not in infos:
                 why[key] = "not a Decision of this root"
+            elif held is not _ABSENT and held != value:
+                why[key] = f"held to {held!r} by pinned for this run"
             elif choice is None:
-                closed = self._closed(point, key)
-                if closed is not None:
-                    why[key] = closed
+                if forced is None:
+                    forced = {item.key: item.value for item in inspection.forced(point)}
+                if key in forced:
+                    why[key] = f"forced to {forced[key]!r}, never a choice"
             elif choice.cases is not None and value not in choice.cases:
                 reason = choice.refused.get(str(value)) or choice.refused.get(repr(value))
                 why[key] = f"{value!r} is not viable" + (f": {reason}" if reason else "")
+        if why and forced is not None and set(why) <= set(forced) and len(why) < len(batch):
+            # A key forced here may be a choice once the rest of the batch replaces what
+            # forces it (pumping, once SIMD is 2): it is forced only if it still is there.
+            rest = point.try_with_choices(
+                {infos[key].reference: value for key, value in batch.items() if key not in why},
+                *(point.field(infos[key].reference).clear() for key in clear),
+            )
+            if rest.accepted:
+                still = {item.key for item in inspection.forced(rest.instance)}
+                why = {key: reason for key, reason in why.items() if key in still}
         if why:
             return Refused(why)
         try:
             report = point.try_with_choices(
-                {infos[key].reference: value for key, value in batch.items()}
+                {infos[key].reference: value for key, value in batch.items()},
+                *(point.field(infos[key].reference).clear() for key in clear),
             )
         except (RequestError, ConfigurationError) as error:
             return Refused(dict.fromkeys(batch, str(error)))
@@ -354,6 +433,185 @@ class Seam:
         touched = dict.fromkeys(self.member_of(key) for key in batch)
         why |= self.refusals(configured, (name for name in touched if name is not None))
         return Refused(why) if why else Accepted(configured)
+
+    # -- keeping a point complete ---------------------------------------------------------
+
+    def baseline(self, point: S) -> S:
+        """``point`` with every open choice that has cases and is not required at its
+        baseline, its first viable case the seam accepts, in rank order (a held key at
+        its held value): ``settle`` with no prior value."""
+        return self.settle(point, {})
+
+    def reopen(self, point: S, keys: Iterable[str]) -> tuple[S, tuple[str, ...]]:
+        """``point`` with the stored ``keys`` cleared, and every key cleared: where the
+        engine refuses the clear because a stored choice reads one of them (it would be
+        left unresolved, refused or inapplicable), that choice is cleared too, and the
+        clear tried again. A held key in the reach is cleared, for ``settle`` to bring
+        back. A refusal that names no stored choice is an ``ExploreError``."""
+        stored = self.chosen(point)
+        clear = {key for key in keys if key in stored}
+        if not clear:
+            return point, ()
+        infos = self._info(point)
+        while True:
+            report = point.try_with_choices(
+                *(point.field(infos[key].reference).clear() for key in sorted(clear))
+            )
+            if report.accepted:
+                return report.instance, tuple(key for key in stored if key in clear)
+            refused = [outcome for outcome in report.outcomes if outcome.status == "refused"]
+            reach = {outcome.owner for outcome in refused if outcome.owner in stored} - clear
+            if not reach:
+                raise ExploreError(
+                    "reopening is refused: "
+                    + "; ".join(
+                        f"{outcome.owner}: {describe([outcome.result])}" for outcome in refused
+                    )
+                )
+            clear |= reach
+
+    def settle(
+        self, point: S, prior: Mapping[str, object], members: Collection[str] | None = None
+    ) -> S:
+        """``point`` settled: every open choice (only ``members``' where named), in rank
+        order, at its ``prior`` value where the seam accepts it (a held key at its held
+        value, or ``Unsettled``), else, one with cases that is not required, at its
+        baseline, the first viable case accepted; a required choice or one known by
+        membership only whose prior value is refused, or that has none, stays open."""
+        return self._settle(point, prior, members).point
+
+    def _settle(
+        self, point: S, prior: Mapping[str, object], members: Collection[str] | None = None
+    ) -> Settled[S]:
+        kept: dict[str, object] = {}
+        baselined: dict[str, object] = {}
+        passed: set[str] = set()
+        while True:
+            choice = next(
+                (
+                    choice
+                    for choice in self.choices(point)
+                    if choice.key not in passed
+                    and (members is None or self.member_of(choice.key) in members)
+                    and (
+                        choice.key in self.held
+                        or choice.key in prior
+                        or (choice.cases is not None and not choice.required)
+                    )
+                ),
+                None,
+            )
+            if choice is None:
+                if members is None:
+                    self._check_held(point)
+                return Settled(point, kept, baselined)
+            passed.add(choice.key)
+            held = self.held.get(choice.key, _ABSENT)
+            if held is not _ABSENT:
+                outcome = self.attempt(point, {choice.key: held})
+                if isinstance(outcome, Refused):
+                    raise Unsettled(
+                        choice.key,
+                        f"held to {held!r} by pinned for this run, refused after the "
+                        "change: " + "; ".join(f"{k}: {w}" for k, w in outcome.why.items()),
+                    )
+                point, kept[choice.key] = outcome.point, held
+                continue
+            want = prior.get(choice.key, _ABSENT)
+            if want is not _ABSENT:
+                outcome = self.attempt(point, {choice.key: want})
+                if isinstance(outcome, Accepted):
+                    point, kept[choice.key] = outcome.point, want
+                    continue
+            if choice.cases is None or choice.required:
+                continue
+            point, baselined[choice.key] = _first_case(self, point, choice, choice.cases)
+
+    def _check_held(self, point: Space) -> None:
+        """``Unsettled`` for the first held key ``point`` does not hold at its value (one
+        a change left forced to another value, or inapplicable)."""
+        if not self.held:
+            return
+        values = self.chosen(point)
+        forced: dict[str, object] | None = None
+        for key, value in self.held.items():
+            if values.get(key, _ABSENT) == value:
+                continue
+            if forced is None:
+                forced = {item.key: item.value for item in inspection.forced(point)}
+            found = values.get(key, forced.get(key, _ABSENT))
+            if found != value:
+                now = "inapplicable or open" if found is _ABSENT else f"now {found!r}"
+                raise Unsettled(
+                    key, f"held to {value!r} by pinned for this run, {now} after the change"
+                )
+
+    def set(self, point: S, changes: Mapping[str, object]) -> Accepted[S] | Refused:
+        """``changes`` replacing ``point``'s values, then the point settled from its own
+        values; or why not. Where the engine refuses a stored choice the change makes
+        invalid, it is cleared with the change, and the change tried again; a held one
+        must settle back to its value. A refusal of a key of the change, or of anything
+        that is not a stored choice, refuses it."""
+        prior = self.chosen(point)
+        replaced = self._replace(point, changes)
+        if isinstance(replaced, Refused):
+            return replaced
+        try:
+            return Accepted(self.settle(replaced.point, prior))
+        except Unsettled as error:
+            return Refused({error.key: error.why})
+
+    def _replace(self, point: S, changes: Mapping[str, object]) -> Accepted[S] | Refused:
+        """``set`` without the settle: the point the change and the clears of what it
+        made invalid reach."""
+        stored = self.chosen(point)
+        clear: set[str] = set()
+        while True:
+            outcome = self._attempt(point, changes, sorted(clear))
+            if isinstance(outcome, Accepted):
+                return outcome
+            dependents = {key for key in outcome.why if key in stored and key not in changes}
+            if not dependents or set(outcome.why) - dependents or dependents <= clear:
+                return outcome
+            clear |= dependents
+
+    def run(
+        self,
+        point: S,
+        scope: Iterable[str],
+        search: Callable[[S, Mapping[str, object]], S],
+        strategy: str,
+        *,
+        keep: bool = True,
+    ) -> S:
+        """One strategy's run: ``scope`` reopened (``reopen``), ``search(point, prior)``
+        from there (``prior``: the point's values before), and what it returns settled
+        from ``prior`` (with ``keep`` false, from no prior value: every reopened choice
+        not held at its baseline); recorded in ``runs``."""
+        prior = self.chosen(point)
+        opened, reopened = self.reopen(point, scope)
+        found = search(opened, prior)
+        settled = self._settle(found, prior if keep else {})
+        self.runs.append(Run(strategy, reopened, settled.kept, settled.baselined))
+        return settled.point
+
+    def transports(self, point: Space) -> Mapping[str, str]:
+        """Every transport the root declares, by key, with its FIFO case: a Decision of a
+        ``Channel`` one of whose cases nests a ``FifoKernel``'s ``depth`` and
+        ``ram_style``, found by structure, whatever its state."""
+        if self._transports is None:
+            self._transports = _declared_transports(self, point)
+        return self._transports
+
+    def transport_of(self, point: Space, key: str) -> str | None:
+        """The transport ``key`` is or lies under, or None."""
+        found = self.transports(point)
+        parts = key.split(".")
+        for end in range(len(parts), 0, -1):
+            path = ".".join(parts[:end])
+            if path in found:
+                return path
+        return None
 
     def refusals(self, point: Space, members: Iterable[str] | None = None) -> dict[str, str]:
         """Every member that refuses itself (its ``admission``, as far as it is decided),
@@ -433,18 +691,6 @@ class Seam:
             for key, value in batch.items()
         }
 
-    def _closed(self, point: Space, key: str) -> str | None:
-        """Why ``key`` can be no choice of a batch on ``point`` (forced, or committed), or
-        None: not open now (inapplicable, or its cases wait on an open choice), which the
-        engine decides with the rest of the batch (a selector the batch commits)."""
-        forced = {item.key: item.value for item in inspection.forced(point)}
-        if key in forced:
-            return f"forced to {forced[key]!r}, never a choice"
-        state = point.field(self._info(point)[key].reference).state
-        if isinstance(state, Available) and state.value.status == "committed":
-            return f"committed to {state.value.value!r}"
-        return None
-
 
 class Explorer(Protocol):
     """Explores from ``point`` and returns the point it keeps; ``report`` says what it
@@ -462,6 +708,23 @@ def explore(seam: Seam, point: S, explorers: Iterable[Explorer]) -> S:
     return point
 
 
+def _unheld(seam: Seam, point: Space) -> list[str]:
+    """Every stored key of ``point`` not held: what ``Ranked`` and ``Rebaseline`` reopen."""
+    return [key for key in seam.chosen(point) if key not in seam.held]
+
+
+def _folding(seam: Seam, point: Space) -> list[str]:
+    """The scope of a strategy that folds: every stored key of a member, not held and
+    not a transport's (a transport, or a FIFO's choice under it, is ``SizeFifos``')."""
+    return [
+        key
+        for key in seam.chosen(point)
+        if key not in seam.held
+        and seam.member_of(key) is not None
+        and seam.transport_of(point, key) is None
+    ]
+
+
 # -- rank-style policies -------------------------------------------------------------------
 
 
@@ -472,16 +735,23 @@ class RankPolicy(Protocol):
 
 
 class Ranked:
-    """A rank-style policy as an explorer: the first enumerable open choice in rank
-    order, the policy's first case the seam accepts, until none is open. Choices known
-    by membership only are left to the next explorer."""
+    """A rank-style policy as an explorer: it reopens every choice not held, then takes
+    the first enumerable open choice in rank order at the policy's first case the seam
+    accepts, until none is open, and settles. Choices known by membership only are left
+    to settling (their earlier value, if still accepted) or the next explorer."""
 
     strategy = "ranked"
+    folds = True
 
     def __init__(self, policy: RankPolicy) -> None:
         self.policy = policy
 
     def explore(self, seam: Seam, point: S) -> S:
+        return seam.run(
+            point, _unheld(seam, point), lambda opened, _: self._rank(seam, opened), self.strategy
+        )
+
+    def _rank(self, seam: Seam, point: S) -> S:
         while True:
             choice = next((item for item in seam.choices(point) if item.cases is not None), None)
             if choice is None:
@@ -507,6 +777,12 @@ class Ranked:
 
 def _first_accepted(seam: Seam, point: S, choice: Choice, cases: Sequence[object]) -> S:
     """``point`` with ``choice`` committed to the first of ``cases`` the seam accepts."""
+    return _first_case(seam, point, choice, cases)[0]
+
+
+def _first_case(seam: Seam, point: S, choice: Choice, cases: Sequence[object]) -> tuple[S, object]:
+    """``point`` with ``choice`` committed to the first of ``cases`` the seam accepts, and
+    that case."""
     if not cases:
         detail = "; ".join(f"{case}: {why}" for case, why in choice.refused.items())
         raise ExploreError(f"{choice.key}: no case is viable: {detail}")
@@ -514,7 +790,7 @@ def _first_accepted(seam: Seam, point: S, choice: Choice, cases: Sequence[object
     for case in cases:
         outcome = seam.attempt(point, {choice.key: case})
         if isinstance(outcome, Accepted):
-            return outcome.point
+            return outcome.point, case
         refusals.append(f"{case!r}: " + "; ".join(f"{k}: {w}" for k, w in outcome.why.items()))
     raise ExploreError(f"{choice.key}: no case is accepted: " + "; ".join(refusals))
 
@@ -593,7 +869,7 @@ class Baseline:
             point = self._first_cases(seam, point, skip_transports=True)
             sizer = SizeFifos()
             if sizer.transports(seam, point) and seam.cost(point).bottleneck is not None:
-                sized, held = sizer.explore(seam, point), seam.chosen(point)
+                sized, held = sizer.search(seam, point), seam.chosen(point)
                 made_by = dict.fromkeys(
                     (key for key in seam.chosen(sized) if key not in held), sizer.strategy
                 )
@@ -668,18 +944,76 @@ class Placeholder(Baseline):
         return choice.cases is not None
 
 
+# -- resetting and the debug placeholder ---------------------------------------------------
+
+
+class Rebaseline:
+    """Every choice not held back at its baseline (``baseline``): written first, it
+    starts an exploration over from the kernels' baselines, the pins kept."""
+
+    strategy = "baseline"
+    folds = True
+
+    def explore(self, seam: Seam, point: S) -> S:
+        return seam.run(
+            point, _unheld(seam, point), lambda opened, _: opened, self.strategy, keep=False
+        )
+
+    def report(self) -> dict[str, object]:
+        return {"strategy": self.strategy}
+
+
+class DebugPlaceholder:
+    """The debug placeholder (``placeholder``): every open required choice at its first
+    viable case, in rank order, so that a design can be generated while the strategy
+    that should make that choice does not exist yet; each is logged ``DEBUG: set by
+    placeholder`` (``label``). A required choice known by membership only (a FIFO's
+    depth that no strategy sized) has no first case: it is refused, by name."""
+
+    strategy = "placeholder"
+    label = "DEBUG: set by placeholder"
+    folds = False
+
+    def __init__(self) -> None:
+        self.set: dict[str, object] = {}
+
+    def explore(self, seam: Seam, point: S) -> S:
+        self.set = {}
+        return seam.run(point, (), lambda opened, _: self._place(seam, opened), self.strategy)
+
+    def _place(self, seam: Seam, point: S) -> S:
+        while True:
+            required = [choice for choice in seam.choices(point) if choice.required]
+            choice = next((each for each in required if each.cases is not None), None)
+            if choice is None:
+                if required:
+                    raise ExploreError(
+                        "the placeholder has no case to take for a required choice known by "
+                        "membership only: " + ", ".join(each.key for each in required)
+                    )
+                return point
+            point, self.set[choice.key] = _first_case(seam, point, choice, choice.cases or ())
+
+    def report(self) -> dict[str, object]:
+        return {"strategy": self.strategy, "set": dict(self.set)}
+
+
 # -- fixed choices -------------------------------------------------------------------------
 
 
 class Pinned:
     """Fixed choices by owner and key (``{graph name: {key: value}}``: a kernel's under
     its node, a channel's under its tensor, the form ``kernel_choices.json`` takes),
-    read from ``path`` and committed as one batch. A choice already committed to the
-    same value is skipped; anything else the seam refuses (an owner or key that is no
-    choice here, a value not viable, a committed choice it would change) is refused,
-    named."""
+    read from ``path``, set as one batch (``Seam.set``: replacing what is stored, the
+    choices the change makes invalid cleared and settled) and held for the rest of the
+    run (``Seam.held``): no later strategy changes them. A choice already at the same
+    value is not in the batch, and held all the same; anything the seam refuses (an
+    owner or key that is no choice here, a value it does not take, a key another pin
+    holds otherwise) is refused, named. Written first, so that the strategies after it
+    fold around the pins."""
 
     strategy = "pinned"
+    folds = False
 
     def __init__(self, path: str | PathLike[str]) -> None:
         self.path = str(path)
@@ -690,32 +1024,53 @@ class Pinned:
         ):
             raise ExploreError(f"{self.path}: not a {{graph name: {{key: value}}}} file")
         self.choices: dict[str, dict[str, object]] = loaded
+        self.held: dict[str, object] = {}
 
     def explore(self, seam: Seam, point: S) -> S:
-        held = seam.chosen(point)
-        batch: dict[str, object] = {}
+        stored = seam.chosen(point)
+        wanted: dict[str, object] = {}
         unknown: list[str] = []
         for owner, values in self.choices.items():
             for name, value in values.items():
                 key = seam.key(owner, name)
                 if key is None:
                     unknown.append(f"{owner}.{name}")
-                elif key not in held or held[key] != value:
-                    batch[key] = value
+                else:
+                    wanted[key] = value
         if unknown:
             raise ExploreError(f"{self.path}: no member of the root is owned by {unknown}")
-        if not batch:
-            return point
-        outcome = seam.attempt(point, batch)
-        if isinstance(outcome, Refused):
-            raise ExploreError(
-                f"{self.path}: refused choices: "
-                + "; ".join(f"{k}: {w}" for k, w in sorted(outcome.why.items()))
-            )
-        return outcome.point
+        seam.declared(point)  # the Decisions read, so that values are typed as they take them
+        wanted = seam._typed(wanted)
+        refused = {
+            key: f"held to {seam.held[key]!r} by an earlier pin"
+            for key, value in wanted.items()
+            if key in seam.held and seam.held[key] != value
+        }
+        if refused:
+            raise ExploreError(f"{self.path}: refused choices: " + _named(refused))
+        batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
+
+        def pin(opened: S, _: Mapping[str, object]) -> S:
+            if not batch:
+                return opened
+            outcome = seam._replace(opened, batch)
+            if isinstance(outcome, Refused):
+                raise ExploreError(f"{self.path}: refused choices: " + _named(outcome.why))
+            return outcome.point
+
+        self.held = wanted
+        seam.held.update(wanted)
+        try:
+            return seam.run(point, (), pin, self.strategy)
+        except Unsettled as error:
+            raise ExploreError(f"{self.path}: refused choices: {error}") from error
 
     def report(self) -> dict[str, object]:
         return {"strategy": self.strategy, "path": self.path}
+
+
+def _named(why: Mapping[str, str]) -> str:
+    return "; ".join(f"{key}: {reason}" for key, reason in sorted(why.items()))
 
 
 # -- throughput ----------------------------------------------------------------------------
@@ -747,23 +1102,26 @@ class TargetCycles:
     each of its viable cases, and the case kept is the one that meets the budget with
     the least parallelism: the most cycles within the budget (the fewest where no case
     meets it), then, between cases tied on cycles, the least resources the seam states
-    for the member (where they wait on open choices, of the point completed by the
-    seam's policy, ``Seam.complete``): against the platform's part totals where it
+    for the member (where they wait on its open choices, of the member settled,
+    ``Seam.settle``): against the platform's part totals where it
     states them, the highest share first; otherwise only a case that uses no more of
     any resource is lighter, and cases no count orders are kept in their listing
     order, which the report says. No order is imposed on the cases: each is tried.
     ``report`` names each such choice, the case taken and why (``cases``).
 
-    A member whose cycles wait on any other Decision that is not an ordered open
-    choice of its own is left to the next explorer (``unfolded``, with why); so is
+    Its scope (``Seam.run``) is every member's own stored choices, not held and not a
+    transport's: reopened, its scaling axes are found as above; what it does not fold
+    settles back. A member whose cycles wait on any other Decision that is not an
+    ordered open choice of its own is left to settling (``unfolded``, with why); so is
     every Decision its cycles do not read. ``report`` always states the bottleneck
     reached, of the folded point or, where a member's cycles are left open there, of
-    the point completed by the seam's policy (``bottleneck_of``), and whether it meets
-    the budget asked (``met``); where even the completed point's cycles are not known,
-    ``met`` is ``None`` and ``unknown`` says why.
+    the point settled (``bottleneck_of``), and whether it meets the budget asked
+    (``met``); where even the settled point's cycles are not known, ``met`` is ``None``
+    and ``unknown`` says why.
     """
 
     strategy = "target_cycles"
+    folds = True
 
     def __init__(self, cycles: int, *, relax: bool = True) -> None:
         if cycles < 1:
@@ -777,6 +1135,7 @@ class TargetCycles:
         self.unfolded: dict[str, str] = {}
         self.cases: dict[str, dict[str, object]] = {}
         self._asked = _Asked()
+        self._prior: Mapping[str, object] = {}
 
     @property
     def met(self) -> bool | None:
@@ -784,12 +1143,18 @@ class TargetCycles:
         return None if self.reached is None else self.reached.cycles <= self.cycles
 
     def explore(self, seam: Seam, point: S) -> S:
-        return self._explore(seam, point, _Asked())
+        return seam.run(
+            point,
+            _folding(seam, point),
+            lambda opened, prior: self._explore(seam, opened, _Asked(), prior),
+            self.strategy,
+        )
 
-    def _explore(self, seam: Seam, point: S, asked: _Asked) -> S:
-        """``explore``, asking the seam through ``asked``: what folds of the same seam
-        asked before (``MaxThroughput``'s budgets)."""
-        self._asked = asked
+    def _explore(self, seam: Seam, point: S, asked: _Asked, prior: Mapping[str, object]) -> S:
+        """The fold of ``point``, its scope reopened, asking the seam through ``asked``:
+        what folds of the same seam asked before (``MaxThroughput``'s budgets); ``prior``
+        the values before the reopen, which settling keeps."""
+        self._asked, self._prior = asked, prior
         folded = self._fold_all(seam, point, self.cycles)
         reached = seam.cost(folded).bottleneck
         if self.relax and reached is not None and reached.cycles > self.cycles:
@@ -798,9 +1163,9 @@ class TargetCycles:
             reached = seam.cost(folded).bottleneck
         self.of, self.unknown = "folded", None
         if reached is None:
-            self.of = "completed"
+            self.of = "settled"
             reached, self.unknown = asked.ask(
-                folded, "completed bottleneck", lambda: _completed_bottleneck(seam, folded)
+                folded, "settled bottleneck", lambda: _settled_bottleneck(seam, folded, prior)
             )
         self.reached, self._asked = reached, _Asked()
         return folded
@@ -984,28 +1349,28 @@ class TargetCycles:
 
     def _member_resources(self, seam: Seam, point: S, name: str) -> Resources | str:
         """What member ``name`` uses at ``point``, or else with its own open choices
-        completed by the seam's policy (where its resources wait on them), or why it
-        states none."""
+        settled (where its resources wait on them), or why it states none."""
 
         def find() -> Resources | str:
             cost = seam.cost(point, (name,))
             if name in cost.resources:
                 return cost.resources[name]
-            completed = seam.cost(seam.complete(point, (name,)).point, (name,))
-            return completed.resources.get(name) or completed.unstated[name]
+            settled = seam.cost(seam.settle(point, self._prior, (name,)), (name,))
+            return settled.resources.get(name) or settled.unstated[name]
 
         return self._asked.ask(point, ("resources", name), find)
 
 
-def _completed_bottleneck(seam: Seam, point: Space) -> tuple[Bottleneck | None, str | None]:
-    """The bottleneck of ``point`` completed by the seam's policy on a copy (for a
-    report: nothing is committed from it, so the seam does not record it), or why it
-    is not known."""
+def _settled_bottleneck(
+    seam: Seam, point: Space, prior: Mapping[str, object]
+) -> tuple[Bottleneck | None, str | None]:
+    """The bottleneck of ``point`` settled from ``prior`` (for a report), or why it is not
+    known."""
     try:
-        completed = seam.completion.complete(seam, point).point
+        settled = seam.settle(point, prior)
     except ExploreError as error:
-        return None, f"the completion refuses: {error}"
-    cost = seam.cost(completed)
+        return None, f"settling refuses: {error}"
+    cost = seam.cost(settled)
     if cost.bottleneck is not None:
         return cost.bottleneck, None
     unknown = {**{k: "waits on " + ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
@@ -1117,7 +1482,7 @@ class _Asked:
 @dataclass
 class _Tried:
     """One budget ``MaxThroughput`` tried (``None``: no budget, the least parallelism),
-    what ``TargetCycles`` relaxed it to, the bottleneck its completed point reached,
+    what ``TargetCycles`` relaxed it to, the bottleneck its settled point reached,
     the root's resources there as far as they are stated (``Seam.resources``), and
     whether they fit."""
 
@@ -1150,13 +1515,13 @@ class MaxThroughput:
     The search is bisection on ``TargetCycles``' budget: ``TargetCycles(1)`` (relaxed to
     the fastest bottleneck the folding reaches) and, if that does not fit, no budget
     (the least parallelism); then the least budget between their bottlenecks whose
-    point fits. Each point is costed completed on a copy (``Seam.complete``: the
-    seam's policy, memories in their kernels' first explicit style, transports ``direct``),
-    by the root's resources as far as they are stated (``Seam.resources``: on a shell
-    root its partition's, its ends' and its static region's). Of every point tried, it
-    keeps the one that fits with the fewest cycles, ties to the least resources (the
-    highest use-to-budget ratio first, then the next; then the first tried), and
-    returns it folded, the rest open for the explorers after it. Fewer cycles, more
+    point fits. Its scope is ``TargetCycles``' (``Seam.run``), reopened once; each
+    budget's point is costed settled (``Seam.settle``: what the fold does not decide at
+    its earlier value or its baseline), by the root's resources as far as they are
+    stated (``Seam.resources``: on a shell root its partition's, its ends' and its
+    static region's). Of every point tried, it keeps the one that fits with the fewest
+    cycles, ties to the least resources (the highest use-to-budget ratio first, then
+    the next; then the first tried), and returns it, settled. Fewer cycles, more
     resources is the assumption, as ``TargetCycles``' is; where a budget's point
     departs from it (a larger budget reaching fewer cycles or using more, or a budget
     relaxed above itself: an end's converter, SZ6), the report states it, and the
@@ -1169,7 +1534,7 @@ class MaxThroughput:
 
     Its folds share what they ask of the seam (``_Asked``): a budget whose fold agrees
     with an earlier budget's on its first members reaches the same points there without
-    asking again, and a point already costed is not completed and costed again. Each
+    asking again, and a point already costed is not settled and costed again. Each
     budget's point is the one ``TargetCycles`` alone folds it to.
 
     It refuses nothing (RC5): where even the least parallelism does not fit, it returns
@@ -1181,6 +1546,7 @@ class MaxThroughput:
     """
 
     strategy = "max_throughput"
+    folds = True
 
     def __init__(self, within: Mapping[str, float]) -> None:
         if not within:
@@ -1211,17 +1577,25 @@ class MaxThroughput:
             for name, fraction in self.within.items()
         }
         self.tried, self.departures = [], []
+        return seam.run(
+            point,
+            _folding(seam, point),
+            lambda opened, prior: self._search(seam, opened, prior),
+            self.strategy,
+        )
+
+    def _search(self, seam: Seam, point: S, prior: Mapping[str, object]) -> S:
         asked = _Asked()
-        fastest = self._try(seam, point, 1, asked)
+        fastest = self._try(seam, point, 1, asked, prior)
         self.fastest = fastest.reached.cycles
         kept = fastest
         if not fastest.fits:
-            kept = slowest = self._try(seam, point, None, asked)
+            kept = slowest = self._try(seam, point, None, asked, prior)
             if slowest.fits:
                 low, high = fastest.reached.cycles + 1, slowest.reached.cycles
                 while low < high:
                     middle = (low + high) // 2
-                    if self._try(seam, point, middle, asked).fits:
+                    if self._try(seam, point, middle, asked, prior).fits:
                         high = middle
                     else:
                         low = middle + 1
@@ -1303,23 +1677,32 @@ class MaxThroughput:
             "departures": self.departures,
         }
 
-    def _try(self, seam: Seam, point: S, cycles: int | None, asked: _Asked) -> _Tried:
+    def _try(
+        self,
+        seam: Seam,
+        point: S,
+        cycles: int | None,
+        asked: _Asked,
+        prior: Mapping[str, object],
+    ) -> _Tried:
         """``point`` folded by ``TargetCycles`` at ``cycles`` (None: no budget), and its
-        completed copy's bottleneck and resources, asking the seam through ``asked``."""
+        settled point's bottleneck and resources, asking the seam through ``asked``."""
         folder = TargetCycles(_UNBOUNDED if cycles is None else cycles)
-        folded = folder._explore(seam, point, asked)
-        reached, stated = asked.ask(folded, "costed", lambda: self._cost(seam, folded))
+        folded = folder._explore(seam, point, asked, prior)
+        reached, stated = asked.ask(folded, "costed", lambda: self._cost(seam, folded, prior))
         fits = not over(stated.used, self.budget)
         tried = _Tried(cycles, folder.relaxed_to, folded, reached, stated, fits)
         self.tried.append(tried)
         return tried
 
-    def _cost(self, seam: Seam, folded: Space) -> tuple[Bottleneck, Stated]:
+    def _cost(
+        self, seam: Seam, folded: Space, prior: Mapping[str, object]
+    ) -> tuple[Bottleneck, Stated]:
         """The bottleneck and the root's resources, as far as they are stated, of
-        ``folded`` completed on a copy."""
-        completed = seam.complete(folded).point
-        cost = seam.cost(completed)
-        reached, used = cost.bottleneck, seam.resources(completed)
+        ``folded`` settled from ``prior``."""
+        settled = seam.settle(folded, prior)
+        cost = seam.cost(settled)
+        reached, used = cost.bottleneck, seam.resources(settled)
         if reached is None:
             unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
             raise ExploreError(
@@ -1422,19 +1805,19 @@ class SizeFifos:
     """The FIFO-sizing strategy (K12, DSE8, DSE14, FS1, FS4): a depth for every open
     transport, from both ends' beat patterns at the bottleneck period.
 
-    It reads the period from the seam's cost, every member's cycles: of the point, after
-    folding, or else of the copy the seam completes (``Seam.complete``: the depths then
-    follow the completed folding, and the seam records what was read), and the open
-    transports from the point's choices: an open choice on a
-    ``Channel`` one of whose cases nests the Decisions a ``FifoKernel`` declares (its
-    ``depth`` and ``ram_style``) and another nothing. For each it reads the channel's
-    ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the producer
-    within its idle time, FS1) and proposes, all in one batch, ``direct`` or the FIFO
-    case with its depth (the least DEPTH whose storage holds the least words plus
-    ``margin``, in ``ram_style``'s storage). ``ram_style`` ``None``, the default, leaves
-    the FIFO's style open, for the completion (its first case, ``auto``: FinnLib's own
-    selection by depth and width, which the depth is sized for) or a later strategy; a
-    style named is committed with the depth (SZ18). A channel the model does not read (a
+    It reopens every transport not held (``scope``: a transport, its depth and its
+    style), and reads the period from the seam's cost, every member's cycles at the
+    stored folding (it runs after the strategies that fold; a member whose cycles are
+    not known refuses it), and the open transports from the point's choices: an open
+    choice on a ``Channel`` one of whose cases nests the Decisions a ``FifoKernel``
+    declares (its ``depth`` and ``ram_style``) and another nothing. For each it reads
+    the channel's ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the
+    producer within its idle time, FS1) and proposes, all in one batch, ``direct`` or
+    the FIFO case with its depth (the least DEPTH whose storage holds the least words
+    plus ``margin``, in ``ram_style``'s storage). ``ram_style`` ``None``, the default,
+    leaves the FIFO's style to settling (its earlier value, else its baseline, ``auto``:
+    FinnLib's own selection by depth and width, which the depth is sized for); a style
+    named is committed with the depth (SZ18). A channel the model does not read (a
     boundary without an end, a memory source) is direct, with why. Where the seam refuses
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
     batch is attempted again.
@@ -1444,6 +1827,7 @@ class SizeFifos:
     """
 
     strategy = "size_fifos"
+    folds = False
 
     def __init__(
         self,
@@ -1466,12 +1850,26 @@ class SizeFifos:
         self.proposals: dict[str, _Proposal] = {}
 
     def explore(self, seam: Seam, point: S) -> S:
-        # Before folding is chosen, the ends are read where the seam completes them.
+        return seam.run(
+            point,
+            self.scope(seam, point),
+            lambda opened, _: self.search(seam, opened),
+            self.strategy,
+        )
+
+    def scope(self, seam: Seam, point: Space) -> list[str]:
+        """What it reopens: every stored transport not held, and the FIFO choices under
+        it."""
+        return [
+            key
+            for key in seam.chosen(point)
+            if key not in seam.held and seam.transport_of(point, key) is not None
+        ]
+
+    def search(self, seam: Seam, point: S) -> S:
+        """The open transports of ``point`` sized at its folding, in one batch."""
         read: Space = point
         cost = seam.cost(point)
-        if cost.bottleneck is None and not cost.refused:
-            read = seam.complete(point).point
-            cost = seam.cost(read)
         bottleneck = cost.bottleneck
         if bottleneck is None:
             unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
@@ -1604,6 +2002,32 @@ def _transport(
     )
 
 
+def _declared_transports(seam: Seam, point: Space) -> dict[str, str]:
+    """Every Decision of a ``Channel`` (on the channel itself) one of whose cases, and one
+    only, nests a ``FifoKernel``'s ``depth`` and ``ram_style``, with that case: the
+    transports, by structure (``_transport`` checks an open one further)."""
+    declared = seam.declared(point)
+    nested: dict[str, dict[str, set[str]]] = {}
+    for key, space_type in declared.items():
+        if space_type is None or not issubclass(space_type, FifoKernel):
+            continue
+        parts = key.split(".")
+        # Every prefix of the key a Decision too: the selector, its case below it.
+        for end in range(len(parts) - 2, 0, -1):
+            selector = ".".join(parts[:end])
+            if selector in declared:
+                nested.setdefault(selector, {}).setdefault(parts[end], set()).add(parts[-1])
+    found: dict[str, str] = {}
+    for selector, cases in nested.items():
+        fifos = [case for case, names in cases.items() if {"depth", "ram_style"} <= names]
+        channel = selector.rpartition(".")[0]
+        if len(fifos) != 1 or seam.member_of(selector) != channel:
+            continue
+        if isinstance(_member(point, channel), Channel):
+            found[selector] = fifos[0]
+    return found
+
+
 def _awaited(answer: Unresolved) -> tuple[str, ...]:
     """The open Decisions an unresolved answer waits on."""
     return tuple(
@@ -1627,6 +2051,7 @@ __all__ = [
     "Completed",
     "Completion",
     "Cost",
+    "DebugPlaceholder",
     "ExploreError",
     "Explorer",
     "MaxThroughput",
@@ -1634,13 +2059,17 @@ __all__ = [
     "Placeholder",
     "RankPolicy",
     "Ranked",
+    "Rebaseline",
     "Refused",
     "ResourceBudgetWarning",
+    "Run",
     "Seam",
+    "Settled",
     "SizeFifos",
     "Stated",
     "TargetCycles",
     "TargetThroughput",
+    "Unsettled",
     "UnstatedResourcesWarning",
     "explore",
 ]

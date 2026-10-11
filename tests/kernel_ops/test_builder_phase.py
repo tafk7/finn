@@ -231,9 +231,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     _, built, body_file = partition_body(parent)
     assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
     assert seen["step_verify_partition"].graph.node[1].name == "partition"
-    # The partition's body: the one tfc.py makes by hand, with no choice saved (the
-    # default exploration is none: the baseline completion completes every choice
-    # where the partition is built, never saved).
+    # The partition's body: the one tfc.py makes by hand, every choice it left open saved
+    # at its baseline and its FIFOs sized (the default exploration, [size_fifos]: the
+    # exploration stores every value, and the partition is built from them).
     _, body = partition(source, tmp_path / "by_hand")
     assert [node.op_type for node in built.graph.node] == ["Thresholding", "MatMul"] * 4
 
@@ -241,7 +241,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         return [(node.name, list(node.input), list(node.output)) for node in model.graph.node]
 
     assert wiring(built) == wiring(body)
-    assert kernel_choices_config(built) == {} != kernel_choices_config(body)
+    assert kernel_choices_config(built) != kernel_choices_config(body)
     assert read_target(built) == read_target(parent) == ULTRA96
     # The body's boundary, read from its configured root: the pynq shell's IODMA_hls on
     # both.
@@ -251,16 +251,25 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         ("Reshape_0_out0", "iodma_hls"),
         ("MatMul_3_out0", "iodma_hls"),
     ]
-    assert json.loads((output / "kernel_choices.json").read_text()) == {}
-    # Every folding at its first viable case, one lane.
+    assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(built)
+    # Every folding at its first viable case, one lane: the baseline's, every value saved.
     report = json.loads((output / "report" / "kernel_exploration.json").read_text())
     folding = {
-        f"{node}.{attribute}": entry["value"]
-        for node, held in report["completed"].items()
+        f"{node}.{attribute}": entry
+        for node, held in report["choices"].items()
         for attribute, entry in held.items()
         if attribute.endswith(("pe", "simd"))
     }
-    assert len(folding) == 12 and set(folding.values()) == {1}
+    assert len(folding) == 12 and {entry["value"] for entry in folding.values()} == {1}
+    assert {entry["by"] for entry in folding.values()} == {"baseline"}
+    assert report["completed"] == {}
+    # The default list sizes every transport at that folding, at its period: on TFC each
+    # direct, as the baseline completion sized them at generation before.
+    (sizing,) = report["strategies"]
+    assert sizing["strategy"] == "size_fifos" and sizing["period"] == 50176
+    assert {row["transport"] for row in sizing["channels"].values()} == {"direct"}
+    assert len(sizing["channels"]) == 13
+    assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The verification the configuration asked for, through the partition node: on each
     # of the three inputs, the partition's own output (the last MatMul's INT8 logits, not
     # the parent's label), the parent graph executed with it, equals the streamlined
@@ -280,22 +289,28 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
 
 @pytest.mark.slow
-def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
+def test_the_debug_placeholder_completes_nothing_on_an_explored_body(
     source: ModelWrapper, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    cfg = config(tmp_path, kernel_completion="placeholder")
+    """The exploration stores every value, so the placeholder completion has nothing to
+    take (TFC has no required choice open): it logs no DEBUG value, and the verification
+    passes. The debug placeholder is a strategy now (``placeholder``), written in the
+    list; on TFC it finds nothing required open either."""
+    cfg = config(
+        tmp_path, kernel_completion="placeholder", kernel_exploration=[{"strategy": "placeholder"}]
+    )
     model = explore(source, cfg)
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     assert report["completion"]["policy"] == "placeholder" and report["completion"]["open"] == []
-    entries = [entry for held in report["completed"].values() for entry in held.values()]
-    # Every value but the transports it sized: TFC has no required choice it completes.
-    assert {entry["by"] for entry in entries} == {"DEBUG: completed by placeholder", "size_fifos"}
+    assert report["completed"] == {} and report["open"] == []
+    (placeholder,) = report["strategies"]
+    assert (placeholder["strategy"], placeholder["set"], placeholder["changed"]) == (
+        "placeholder",
+        {},
+        {},
+    )
     logged = capsys.readouterr().out
-    debug = [line for line in logged.splitlines() if line.startswith("DEBUG: completed by")]
-    # The 12 foldings and 28 other values (the 13 transports are sized).
-    assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 40
-    assert "DEBUG: completed by placeholder: MatMul_0.compute.packed.pe = 1" in debug
-    # The verification completes it the same way, and it passes.
+    assert not [line for line in logged.splitlines() if line.startswith("DEBUG:")]
     step_verify_partition(model, cfg)
 
 
@@ -626,7 +641,8 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
         for node, held in kernel_choices_config(body).items()
     }
-    assert folding == SET_FOLDING
+    # Every value is saved: the channels' too, which state no folding.
+    assert {node: each for node, each in folding.items() if each} == SET_FOLDING
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     (target,) = report["strategies"]
     assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
@@ -637,15 +653,15 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # On Ultra96 (DSP48E2) every MatMul's core is forced: no case is tried, and the
     # target is met.
     assert (target["cases"], target["unfolded"], target["met"]) == ({}, {}, True)
-    # Of TFC's 57 choices, the target throughput commits the folding (12), the only ones
-    # saved; the baseline completion completes the rest where the partition is built,
-    # the 13 transports sized on its copy. The report names who made each.
-    assert target["committed"] == 12
-    made_by = [name for held in report["choices"].values() for name in held.values()]
-    assert made_by == ["target_throughput"] * 12
-    completed = [entry["by"] for held in report["completed"].values() for entry in held.values()]
-    assert (completed.count("baseline"), completed.count("size_fifos")) == (32, 13)
-    assert report["fifos"] == "sized at completion by baseline: 13 channels"
+    # Of TFC's 57 choices, every one saved: the target throughput changes the folding off
+    # its baseline (6 of 12) and gives each MatMul's pumping, a choice at SIMD 2 and
+    # more, its baseline; the rest keep the baselines the body took first, transports
+    # direct (no size_fifos in the list). The report names who set each.
+    assert target["committed"] == 10
+    made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
+    assert (made_by.count("target_throughput"), made_by.count("baseline")) == (10, 47)
+    assert report["completed"] == {}
+    assert report["fifos"] == "not sized (no size_fifos in the list): each transport as it was"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
@@ -679,31 +695,22 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
         report = json.loads(
             (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
         )
-        completed = {
-            (node, attribute): entry["value"]
-            for node, held in report["completed"].items()
-            for attribute, entry in held.items()
-        }
-        explored[name] = (completed, report)
+        persisted = json.loads((tmp_path / name / "output" / "kernel_choices.json").read_text())
+        explored[name] = (persisted, report)
     (sized, report), (plain, plain_report) = explored["sized"], explored["plain"]
-    # Without sizing in the chain, the completion sizes the same transports, direct;
-    # every other value is completed alike.
-    assert {key: plain[key] for key in sized} == sized
-    assert {plain[key] for key in plain if key not in sized} == {"direct"}
+    # Without sizing in the list, every transport keeps its baseline, direct: the same
+    # design, every value saved.
+    assert sized == plain
+    assert plain_report["completed"] == report["completed"] == {}
     sizing = report["strategies"][1]
     # At the period the input end sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
-    # It commits the 13 transports the completion sizes without it; the baseline
-    # completes the other 32.
-    assert [each["committed"] for each in report["strategies"]] == [12, 13]
-    assert len(sized) == 32 and len(plain) == 45
-    assert report["fifos"] == "sized by size_fifos: 13 channels"
-    assert plain_report["completion"]["sizing"]["channels"] == sizing["channels"]
+    # It reopens the 13 transports and changes none.
+    assert [each["committed"] for each in report["strategies"]] == [10, 0]
+    assert sizing["reopened"] == 13
+    assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The ends change no choice: TFC is built with the baseline build's 57 values.
-    persisted = json.loads((tmp_path / "sized" / "output" / "kernel_choices.json").read_text())
-    for (node, attribute), value in sized.items():
-        persisted.setdefault(node, {})[attribute] = value
-    assert persisted == TFC_BUILT
+    assert sized == TFC_BUILT
     assert sum(map(len, TFC_BUILT.values())) == 57
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}

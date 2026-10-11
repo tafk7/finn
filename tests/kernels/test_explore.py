@@ -1,7 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The DSE seam over a root: choices, attempts, cost, completion, and the strategies that
+"""The DSE seam over a root: choices, attempts, cost, the operations that keep a point
+complete (baseline, reopen, settle, set), the completion policy, and the strategies that
 search it.
 
 On the Chain (``kernels.chain``: MatMul ``first``, Thresholding ``activate`` at a
@@ -26,16 +27,19 @@ from finn.kernels.explore import (
     Accepted,
     Baseline,
     Bottleneck,
+    DebugPlaceholder,
     ExploreError,
     MaxThroughput,
     Placeholder,
     Ranked,
+    Rebaseline,
     Refused,
     ResourceBudgetWarning,
     Seam,
     Stated,
     TargetCycles,
     TargetThroughput,
+    Unsettled,
     UnstatedResourcesWarning,
     explore,
 )
@@ -51,6 +55,21 @@ MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "secon
 
 def seam() -> tuple[Seam, Any]:
     return Seam(MEMBERS, platform=FULL_DSP48E2), design_space(chain.Chain())
+
+
+def folding(explorer: Seam, point: Any) -> dict[str, object]:
+    """``point``'s stored folding: each PE and SIMD."""
+    return {k: v for k, v in explorer.chosen(point).items() if k.endswith((".pe", ".simd"))}
+
+
+#: The Chain's foldings at a budget of 12 cycles a frame: PE x SIMD = 4, the earlier axis
+#: least.
+FOLDED_12 = {
+    "first.compute.packed.pe": 1,
+    "first.compute.packed.simd": 4,
+    "second.compute.packed.pe": 1,
+    "second.compute.packed.simd": 4,
+}
 
 
 def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> None:
@@ -74,12 +93,31 @@ def test_an_attempt_is_refused_for_a_forced_decision_or_a_case_that_is_not_viabl
     assert isinstance(explorer.attempt(point, {"nowhere.pe": 1}), Refused)
 
 
-def test_an_attempt_never_changes_a_committed_choice() -> None:
+def test_an_attempt_replaces_a_stored_value_but_never_a_held_one() -> None:
     explorer, point = seam()
     direct = explorer.attempt(point, {"y.transport": "direct"})
     assert isinstance(direct, Accepted)
-    again = explorer.attempt(direct.point, {"y.transport": "fifo"})
-    assert isinstance(again, Refused) and again.why == {"y.transport": "committed to 'direct'"}
+    fifo = explorer.attempt(direct.point, {"y.transport": "fifo"})
+    assert isinstance(fifo, Accepted) and explorer.chosen(fifo.point) == {"y.transport": "fifo"}
+    # A key held for the run (a pin) takes no other value.
+    explorer.held["y.transport"] = "direct"
+    held = explorer.attempt(direct.point, {"y.transport": "fifo"})
+    assert isinstance(held, Refused)
+    assert held.why == {"y.transport": "held to 'direct' by pinned for this run"}
+    assert isinstance(explorer.attempt(direct.point, {"y.transport": "direct"}), Accepted)
+
+
+def test_an_attempt_replacing_what_forces_a_choice_may_set_it_in_the_same_batch() -> None:
+    """At SIMD 1 pumping is forced off; a batch replacing SIMD by 2 may set it on, and a
+    batch that leaves it forced may not."""
+    explorer, point = seam()
+    base = explorer.baseline(point)
+    pumped = {"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True}
+    outcome = explorer.attempt(base, pumped)
+    assert isinstance(outcome, Accepted)
+    assert explorer.chosen(outcome.point)["first.compute.packed.compute_pumping"] is True
+    alone = explorer.attempt(base, {"first.compute.packed.compute_pumping": True})
+    assert isinstance(alone, Refused) and "forced to False" in "".join(alone.why.values())
 
 
 def test_an_attempt_that_leaves_a_decision_without_a_viable_case_is_refused() -> None:
@@ -116,10 +154,13 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_an_attempt() -
     sized = explorer.attempt(fifo.point, {depth.key: 16})
     assert isinstance(sized, Accepted)
     # The FIFO sits before the input adapter that makes second's markers, so the
-    # channel carries it: explored to the end, nothing refuses itself.
-    explored = Ranked(Lanes(2)).explore(explorer, sized.point)
+    # channel carries it: folded and settled around it (no transport is a folding
+    # strategy's), nothing refuses itself.
+    explored = TargetCycles(12).explore(explorer, sized.point)
     assert explorer.refusals(explored) == {}
-    assert [stage.label for stage in explored.levels.stages][0] == "transport.fifo.buffer"
+    assert explorer.chosen(explored)[depth.key] == 16
+    labels = [stage.label for stage in explored.levels.stages]
+    assert labels.index("transport.fifo.buffer") < labels.index("adapter.input_gen.input_gen")
     word = explored.levels.transport.word_bits
     assert explorer.cost(explored).buffering["levels"] >= 16 * word
 
@@ -142,13 +183,16 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
     explorer, point = seam()
     strategy = TargetCycles(12)
     folded = strategy.explore(explorer, point)
-    chosen = explorer.chosen(folded)
     # 3 rows x 4 x 4 at 12 cycles: PE x SIMD = 4, the earlier axis least.
-    assert chosen == {
-        "first.compute.packed.pe": 1,
-        "first.compute.packed.simd": 4,
-        "second.compute.packed.pe": 1,
-        "second.compute.packed.simd": 4,
+    assert folding(explorer, folded) == FOLDED_12
+    # The point is settled: every other choice at its baseline, none open.
+    assert explorer.choices(folded) == ()
+    # At SIMD 4, each MatMul's pumping is a choice: its baseline, off.
+    assert explorer.chosen(folded) == {
+        **explorer.chosen(explorer.baseline(point)),
+        **FOLDED_12,
+        "first.compute.packed.compute_pumping": False,
+        "second.compute.packed.compute_pumping": False,
     }
     report = strategy.report()
     assert report["bottleneck"] == {
@@ -169,7 +213,7 @@ def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None
     assert strategy.relaxed_to == 6
     chosen = explorer.chosen(folded)
     assert chosen["first.compute.packed.pe"] == 2 and chosen["first.compute.packed.simd"] == 4
-    assert explorer.cost(explorer.complete(folded).point).bottleneck == Bottleneck(
+    assert explorer.cost(folded).bottleneck == Bottleneck(
         ("x", "levels", "first", "activate", "second"), 6
     )
     unrelaxed = TargetCycles(1, relax=False)
@@ -182,12 +226,12 @@ def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None
     assert strategy.report()["met"] is False
 
 
-def test_target_cycles_states_the_bottleneck_of_the_completed_point_where_it_leaves_one_open() -> (
+def test_target_cycles_states_the_bottleneck_of_the_settled_point_where_it_leaves_one_open() -> (
     None
 ):
-    """A member whose cycles wait on a choice that is not its own is left to the next
-    explorer; the report still states the bottleneck, of the point the seam's policy
-    completes, and whether it meets the budget."""
+    """A member whose cycles wait on a choice that is not its own is left to settling;
+    the report still states the bottleneck, of the point settled, and whether it meets
+    the budget."""
 
     class Partial(TargetCycles):
         def _fold(self, seam: Seam, point: Any, name: str, budget: int) -> Any:
@@ -198,17 +242,18 @@ def test_target_cycles_states_the_bottleneck_of_the_completed_point_where_it_lea
     explorer, point = seam()
     strategy = Partial(12)
     folded = strategy.explore(explorer, point)
-    assert "second.compute.packed.pe" not in explorer.chosen(folded)
+    # Settled: second at its baseline, the least parallelism.
+    assert explorer.chosen(folded)["second.compute.packed.pe"] == 1
+    assert explorer.chosen(folded)["second.compute.packed.simd"] == 1
     report = strategy.report()
     # second, and the channels whose cycles wait on its folding.
     unfolded = report["unfolded"]
     assert isinstance(unfolded, dict) and unfolded["second"] == "left by the test"
     assert all("second." in why for name, why in unfolded.items() if name != "second")
-    # Completed at its baseline, second takes 48 cycles: the budget is missed, and said.
+    # Settled at its baseline, second takes 48 cycles: the budget is missed, and said.
     assert report["bottleneck"]["cycles"] == 48  # type: ignore[index]
     assert "second" in report["bottleneck"]["members"]  # type: ignore[index]
-    assert (report["bottleneck_of"], report["met"]) == ("completed", False)
-    assert explorer.reads == []  # a report's reading: nothing is committed from it
+    assert (report["bottleneck_of"], report["met"]) == ("settled", False)
 
 
 def dsp58_matmul() -> tuple[Seam, Any]:
@@ -276,10 +321,8 @@ def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on
     assert all(
         getattr(used[taken], name) <= getattr(used[other], name) for name in RESOURCE_NAMES
     ) or ("listing order" in row["why"])
-    # What it read to compare (the core's own choices, completed) is recorded.
-    assert explorer.reads and all(
-        key.startswith("first.") for read in explorer.reads for key in read
-    )
+    # What it compared is the member settled in each case; the point it returns is settled.
+    assert explorer.choices(folded) == ()
 
 
 def test_target_cycles_keeps_the_case_with_the_least_parallelism_that_meets_the_budget(
@@ -372,12 +415,174 @@ def test_at_hardware_generation_the_baseline_sizes_fifos_at_the_completed_foldin
     }
 
 
-def test_a_strategy_reads_a_completed_copy_and_the_seam_records_it() -> None:
+# -- keeping a point complete -------------------------------------------------------------
+
+
+def test_the_baseline_takes_each_open_choice_s_first_viable_case_and_leaves_required_ones() -> None:
+    """``Seam.baseline`` stores what the costing completion takes on a copy: each kernel's
+    first case, every transport ``direct``; a required choice stays open."""
     explorer, point = seam()
-    assert explorer.reads == []
-    completed = explorer.complete(point)
-    assert explorer.reads == [completed.values]
-    assert explorer.chosen(point) == {}
+    base = explorer.baseline(point)
+    assert explorer.chosen(base) == Baseline().complete(explorer, point).values
+    assert explorer.choices(base) == () and explorer.cost(base).bottleneck is not None
+    fifo = explorer.attempt(base, {"levels.transport": "fifo"})
+    assert isinstance(fifo, Accepted)
+    assert [(c.key, c.required) for c in explorer.choices(explorer.baseline(fifo.point))] == [
+        ("levels.transport.fifo.buffer.depth", True)
+    ]
+
+
+def test_reopen_widens_the_clear_to_the_stored_choices_the_engine_names() -> None:
+    """Clearing a MatMul's folding leaves its input channel's adapter memory unresolved:
+    the engine refuses the clear naming it, and the reopen clears it too. Nothing
+    outside the reach is touched."""
+    explorer, point = seam()
+    base = explorer.baseline(point)
+    opened, reach = explorer.reopen(base, ["first.compute.packed.pe"])
+    assert reach == ("first.compute.packed.pe", "x.adapter.input_gen.input_gen.ram_style")
+    assert set(explorer.chosen(base)) - set(explorer.chosen(opened)) == set(reach)
+    # A key not stored is nothing to reopen.
+    assert explorer.reopen(point, ["first.compute.packed.pe"]) == (point, ())
+    # A selector's nested choices are the engine's to name too.
+    sized = explorer.attempt(
+        base, {"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16}
+    )
+    assert isinstance(sized, Accepted)
+    _, reach = explorer.reopen(sized.point, ["hidden.transport"])
+    assert "hidden.transport.fifo.buffer.depth" in reach
+
+
+def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest() -> None:
+    explorer, point = seam()
+    prior = {
+        **explorer.chosen(explorer.baseline(point)),
+        "first.compute.packed.reducer": "compressor",
+        "second.compute.packed.pe": 3,  # no divisor of four: not viable
+    }
+    settled = explorer.settle(point, prior)
+    chosen = explorer.chosen(settled)
+    assert chosen["first.compute.packed.reducer"] == "compressor"
+    assert chosen["second.compute.packed.pe"] == 1  # its baseline
+    assert explorer.choices(settled) == ()
+    # Only the members named, where named.
+    first = explorer.settle(point, prior, ("first",))
+    assert {explorer.member_of(key) for key in explorer.chosen(first)} == {"first"}
+
+
+def test_set_clears_a_stored_choice_the_change_makes_invalid_then_settles() -> None:
+    """Pumping on at SIMD 2, then SIMD replaced by 1: the engine refuses the attempt,
+    naming the pumping choice; ``set`` clears it with the change, and settling finds it
+    forced off, nothing to store."""
+    explorer, point = seam()
+    base = explorer.baseline(point)
+    pumped = explorer.set(
+        base, {"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True}
+    )
+    assert isinstance(pumped, Accepted)
+    refused = explorer.attempt(pumped.point, {"first.compute.packed.simd": 1})
+    assert isinstance(refused, Refused)
+    assert "pumping requires SIMD >= 2" in refused.why["first.compute.packed.compute_pumping"]
+    replaced = explorer.set(pumped.point, {"first.compute.packed.simd": 1})
+    assert isinstance(replaced, Accepted)
+    chosen = explorer.chosen(replaced.point)
+    assert chosen["first.compute.packed.simd"] == 1
+    assert "first.compute.packed.compute_pumping" not in chosen
+    assert explorer.choices(replaced.point) == ()
+    # A change of the change's own key that is not taken is refused.
+    assert isinstance(explorer.set(base, {"first.compute.packed.pe": 3}), Refused)
+
+
+def test_a_held_choice_a_change_reaches_must_settle_back_or_the_change_is_refused() -> None:
+    explorer, point = seam()
+    pumped = explorer.set(
+        explorer.baseline(point),
+        {"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True},
+    )
+    assert isinstance(pumped, Accepted)
+    explorer.held["first.compute.packed.compute_pumping"] = True
+    refused = explorer.set(pumped.point, {"first.compute.packed.simd": 1})
+    assert isinstance(refused, Refused)
+    assert refused.why == {
+        "first.compute.packed.compute_pumping": "held to True by pinned for this run, now "
+        "False after the change"
+    }
+    # Reached and still viable, it comes back: SIMD 4 keeps pumping viable.
+    kept = explorer.set(pumped.point, {"first.compute.packed.simd": 4})
+    assert isinstance(kept, Accepted)
+    assert explorer.chosen(kept.point)["first.compute.packed.compute_pumping"] is True
+    with pytest.raises(Unsettled, match="compute_pumping: held to True"):
+        explorer.settle(explorer.reopen(pumped.point, ["first.compute.packed.simd"])[0], {})
+
+
+def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> None:
+    """A strategy changes only what it decides: a reducer an earlier strategy set stays,
+    though the folding strategy reopens every choice of a member; the run records what
+    it reopened (the engine's reach included) and what settling kept and re-baselined."""
+    explorer, point = seam()
+    base = explorer.baseline(point)
+    compressor = explorer.set(base, {"second.compute.packed.reducer": "compressor"})
+    assert isinstance(compressor, Accepted)
+    folded = TargetCycles(12).explore(explorer, compressor.point)
+    chosen = explorer.chosen(folded)
+    assert chosen["second.compute.packed.reducer"] == "compressor"
+    assert folding(explorer, folded) == FOLDED_12
+    (run,) = explorer.runs
+    assert run.strategy == "target_cycles"
+    assert "second.compute.packed.reducer" in run.reopened
+    assert "levels.adapter.input_gen.input_gen.ram_style" in run.reopened
+    assert not any(key.endswith(".transport") for key in run.reopened)
+    assert run.kept["second.compute.packed.reducer"] == "compressor"
+    assert set(run.kept) | set(run.baselined) <= set(run.reopened) | set(chosen)
+    # Again on the folded point: the same folding, nothing new.
+    again = TargetCycles(12).explore(explorer, folded)
+    assert explorer.chosen(again) == chosen
+
+
+def test_a_pin_holds_its_keys_and_a_later_strategy_folds_around_it() -> None:
+    """Pinned first and held (SR6): the target throughput folds the other MatMul and
+    keeps the pinned one; its relax step reaches the pin's bottleneck."""
+    explorer, point = seam()
+    base = explorer.baseline(point)
+    explorer.held.update({"first.compute.packed.pe": 1, "first.compute.packed.simd": 1})
+    strategy = TargetCycles(1)
+    folded = strategy.explore(explorer, base)
+    chosen = explorer.chosen(folded)
+    assert (chosen["first.compute.packed.pe"], chosen["first.compute.packed.simd"]) == (1, 1)
+    # first at 48 cycles binds: second folds to meet it, no faster.
+    assert strategy.relaxed_to == 48
+    assert (chosen["second.compute.packed.pe"], chosen["second.compute.packed.simd"]) == (1, 1)
+    assert "first.compute.packed.pe" not in explorer.runs[-1].reopened
+
+
+def test_the_baseline_strategy_resets_every_choice_not_held() -> None:
+    explorer, point = seam()
+    folded = TargetCycles(12).explore(explorer, explorer.baseline(point))
+    explorer.held["first.compute.packed.simd"] = 4
+    reset = Rebaseline().explore(explorer, folded)
+    assert folding(explorer, reset) == {
+        **{key: 1 for key in FOLDED_12},
+        "first.compute.packed.simd": 4,
+    }
+    assert explorer.chosen(reset) == {
+        **explorer.chosen(explorer.baseline(point)),
+        "first.compute.packed.simd": 4,
+    }
+    assert Rebaseline().report() == {"strategy": "baseline"}
+
+
+def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_it() -> None:
+    """With nothing required open it sets nothing; a FIFO with no depth is a required
+    choice known by membership only, which it refuses, named."""
+    explorer, point = seam()
+    base = explorer.baseline(point)
+    placeholder = DebugPlaceholder()
+    assert explorer.chosen(placeholder.explore(explorer, base)) == explorer.chosen(base)
+    assert placeholder.report() == {"strategy": "placeholder", "set": {}}
+    assert placeholder.label == "DEBUG: set by placeholder"
+    fifo = explorer.attempt(base, {"levels.transport": "fifo"})
+    assert isinstance(fifo, Accepted)
+    with pytest.raises(ExploreError, match="known by membership only: .*levels.transport.fifo"):
+        DebugPlaceholder().explore(explorer, fifo.point)
 
 
 # -- the most throughput within resources -----------------------------------------------------
@@ -396,9 +601,9 @@ def test_the_seam_states_the_root_s_own_resources_once_its_members_do() -> None:
     explorer, point = within_part()
     waiting = explorer.resources(point)
     assert isinstance(waiting, str) and waiting.startswith("waits on ")
-    completed = explorer.complete(point).point
-    used = explorer.cost(completed).used
-    assert used is not None and explorer.resources(completed) == Stated(used, {})
+    base = explorer.baseline(point)
+    used = explorer.cost(base).used
+    assert used is not None and explorer.resources(base) == Stated(used, {})
 
 
 def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
@@ -406,14 +611,14 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
     strategy = MaxThroughput({"dsp": 0.5})
     folded = strategy.explore(explorer, point)
     # Half the part's 10 DSPs: the 6- and 12-cycle points use 8, the 24-cycle one 4.
-    assert explorer.chosen(folded) == {
+    assert folding(explorer, folded) == {
         "first.compute.packed.pe": 1,
         "first.compute.packed.simd": 2,
         "second.compute.packed.pe": 1,
         "second.compute.packed.simd": 2,
     }
-    # The folded point is returned with the rest open, for the explorers after it.
-    assert explorer.choices(folded)
+    # The point is returned settled, as it was costed.
+    assert explorer.choices(folded) == ()
     report = strategy.report()
     assert report["budget"] == {"dsp": 5} and report["kept_budget"] is not None
     assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
@@ -433,21 +638,21 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
 def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_point_once() -> None:
     """The search's folds share what they ask of the seam: each budget tried folds to the
     point ``TargetCycles`` alone folds it to, and its bottleneck and resources are those
-    of that point completed, in fewer attempts than folding and completing each alone."""
+    of that point settled, in fewer attempts than folding and settling each alone."""
     explorer, point = within_part()
     strategy = MaxThroughput({"dsp": 0.5})
     strategy.explore(explorer, point)
+    searched = explorer.attempts
     alone = Seam(MEMBERS, platform=PART)
     for tried in strategy.tried:
         budget = explore_module._UNBOUNDED if tried.cycles is None else tried.cycles
         folder = TargetCycles(budget)
         folded = folder.explore(alone, point)
-        assert explorer.chosen(tried.folded) == alone.chosen(folded)
+        assert explorer.chosen(explorer.settle(tried.folded, {})) == alone.chosen(folded)
         assert tried.relaxed_to == folder.relaxed_to
-        completed = alone.complete(folded).point
-        assert tried.reached == alone.cost(completed).bottleneck
-        assert tried.stated == alone.resources(completed)
-    assert explorer.attempts < alone.attempts
+        assert tried.reached == alone.cost(folded).bottleneck
+        assert tried.stated == alone.resources(folded)
+    assert searched < alone.attempts
 
 
 def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> None:
@@ -546,11 +751,10 @@ def test_max_throughput_budgets_what_is_stated_where_a_member_states_no_resource
     assert isinstance(unstated, dict) and list(unstated) == ["first"]
     assert "not characterised" in unstated["first"]
     # What is stated, without first's: at 6 cycles, second's 4 DSPs of the budget's 5.
-    completed = explorer.complete(folded).point
-    stated = explorer.resources(completed)
+    stated = explorer.resources(folded)
     assert isinstance(stated, Stated) and stated.lower_bound
     assert stated.used == total(
-        used for name, used in explorer.cost(completed).resources.items() if name != "first"
+        used for name, used in explorer.cost(folded).resources.items() if name != "first"
     )
     assert report["used"] == asdict(stated.used) and report["bottleneck"]["cycles"] == 6  # type: ignore[index]
 

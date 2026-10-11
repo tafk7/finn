@@ -554,38 +554,41 @@ verification), `phase_build_hardware` (the partition's IP) and
 `stop_step` name phases or steps. A key the configuration does not declare is
 refused by name.
 
-`kernel_exploration` lists the strategies that choose the KernelOps' open choices
-through the DSE seam, run as written, each with its own parameters:
-`target_throughput` folds the least parallelism that meets `fps` at the target's
-clock (trying each case of an unordered choice, such as a MatMul's core on a DSP58
-part, and stating the bottleneck reached and whether `fps` is met),
+`kernel_exploration` lists the strategies that choose the KernelOps' choices
+through the DSE seam, run as written, each with its own parameters. Every choice the
+partition's body leaves open first takes its baseline, the first viable case its
+kernel lists (the least parallelism; each memory in the explicit style the size of
+what it holds orders first, `auto` last; every transport `direct`); each strategy
+then reopens the choices it decides, explores, and settles the rest back to their
+earlier values (or their baselines where those are no longer valid), and every value
+is saved. `target_throughput` folds the least parallelism that meets `fps` at the
+target's clock (trying each case of an unordered choice, such as a MatMul's core on a
+DSP58 part, and stating the bottleneck reached and whether `fps` is met),
 `max_throughput` the fewest cycles a frame, of every point it tried, whose resources
 (the shell's: its partition, ends and static region) stay within `"within"`, a
 required `{resource: fraction}` of the part's totals (`{"lut": 0.5}`); where a member
 states no resources (a memory pinned `auto`: placed by Vivado, not stated), it
-budgets what is stated, a lower bound, and warns, naming it. `pinned` commits a
-`kernel_choices.json` (`"path"`), `size_fifos` sizes each channel's FIFO from both
-ends' beat patterns at the bottleneck (`direct` where none is needed; `"margin"`
-words added to a FIFO it places, default 0; its memory style left open unless
-`"ram_style"` names one). The
-default list is empty. What no strategy chose stays open, and the completion
-policy `kernel_completion` completes it wherever the partition is costed or
-built, on a copy that is never saved: `baseline` (the default) takes each open
-choice's first viable case, which every kernel lists as its baseline (the least
-parallelism; each memory in the explicit style the size of what it holds orders
-first, `auto` last, a FIFO in FinnLib's own `auto` selection), and when the
-partition is built sizes its FIFOs at that folding; `placeholder`, for debugging, also completes a required choice, and
-says `DEBUG: completed by placeholder` for every value it takes. A required choice
-left open (a FIFO's depth) is refused by name when the partition is built. The
-choices the strategies made are written to `kernel_choices.json`, by graph name
+budgets what is stated, a lower bound, and warns, naming it. `pinned` sets the
+values of a `kernel_choices.json` (`"path"`) and holds them for the rest of the
+list: write it first, so the strategies after it fold around the pins.
+`size_fifos` sizes each channel's FIFO from both ends' beat patterns at the
+bottleneck (`direct` where none is needed; `"margin"` words added to a FIFO it
+places, default 0; its memory style FinnLib's `auto` unless `"ram_style"` names
+one); it goes after the last strategy that changes folding, and a list that folds
+after it is refused, as is a list that changes the design around FIFOs already
+placed without sizing them again. `baseline` resets every value not pinned to its
+baseline; `placeholder`, for debugging, sets each open required choice to its first
+case. The default list is `[{"strategy": "size_fifos"}]`: the baseline folding, its
+FIFOs sized; a list you write replaces it. A required choice left open (a FIFO's
+depth) is refused by name when the partition is built. Every value is written to
+`kernel_choices.json`, by graph name
 (`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"compute.packed.pe": 16}}`:
-a kernel's choices under its node, a channel's under the tensor it carries, where the
-partition's body states them, in graph order: each node's input channels, the node,
-its output channels), and what the exploration found (the strategies, each with the choices it committed, attempts
-and time; every choice with the strategy that made it; every completed value and
-who completed it; whether FIFOs were sized; per-member cycles and buffering, the
-bottleneck, and the shell's resources against the part's, of the point as it is
-built) to `report/kernel_exploration.json`. A point that uses more of a resource
+a kernel's choices under its node, a channel's under the tensor it carries, in graph
+order: each node's input channels, the node, its output channels), and a log of the
+exploration (each strategy with the values it changed, reopened, kept and
+re-baselined, attempts and time; every value with who set it last; the pins; whether
+FIFOs were sized; per-member cycles and buffering, the bottleneck, and the shell's
+resources against the part's) to `report/kernel_exploration.json`. A point that uses more of a resource
 than the part has is a warning naming that resource, never a refusal.
 
 Explicit selections, and a build's configuration, name the frontend

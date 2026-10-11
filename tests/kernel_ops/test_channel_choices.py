@@ -169,11 +169,18 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
 
 
 def test_fresh_clears_the_bodys_channel_choices() -> None:
+    """``fresh`` clears what the body states, nodes' and channels' alike, before the
+    exploration: every value starts again at its baseline."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
     explored = explore_kernel_choices(model, [], fresh=True)
-    assert model.tensors_stating(CHANNEL) == [] and kernel_choices_config(model) == {}
     assert explored.report["fresh"] is True
+    assert sorted(explored.report["baselined"]) == sorted(
+        f"{owner}.{key}" for owner, held in kernel_choices_config(model).items() for key in held
+    )
+    assert {e["by"] for held in explored.report["choices"].values() for e in held.values()} == {
+        "baseline"
+    }
 
 
 def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) -> None:
@@ -191,8 +198,11 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     blank = open_model()
     report = explore_kernel_choices(blank, [Pinned(path)]).report
     assert kernel_choices_config(blank) == config
-    assert report["choices"]["levels"]["transport"] == "pinned"
-    assert report["choices"]["w1"]["source.memstream.ram_style"] == "pinned"
+    # Every value is held, by its owner as the file names it; what it changed is logged
+    # as the pin's.
+    assert report["held"] == config
+    assert report["choices"]["first"]["compute.packed.pe"] == {"value": 2, "by": "pinned"}
+    assert report["choices"]["levels"]["transport"]["value"] == config["levels"]["transport"]
     # A channel's key under its consumer is no Decision of the root: D8's file is
     # refused, named.
     path.write_text(json.dumps({"second": {"x.transport": "direct"}}))

@@ -58,7 +58,7 @@ NETWORKS = [
 
 def config(directory: Path) -> DataflowBuildConfig:
     """The kernel path for ``TARGET`` (Ultra96's part at 5 ns on the ``ip`` shell), its
-    choices the default exploration's (none) and completion's (the baseline)."""
+    choices the default exploration's (the baselines, FIFOs sized: ``[size_fifos]``)."""
     return DataflowBuildConfig(
         output_dir=str(directory),
         target=TargetRequest(part=TARGET.part, period_ns=TARGET.platform.period_ns),

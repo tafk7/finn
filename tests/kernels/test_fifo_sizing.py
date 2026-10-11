@@ -26,9 +26,8 @@ from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel
 from finn.kernels.explore import (
-    Completed,
+    Accepted,
     ExploreError,
-    Ranked,
     Refused,
     Seam,
     SizeFifos,
@@ -48,7 +47,7 @@ from finn.kernels.fifo_sizing import (
 )
 from finn.kernels.input_generator import nest_buffer, nest_geometry
 from kernels import chain
-from kernels.helpers import FULL_DSP48E2, Lanes
+from kernels.helpers import FULL_DSP48E2
 from kernels.xsim import requires_xsim
 
 MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "second")
@@ -223,7 +222,7 @@ def test_a_boundary_and_a_memory_are_not_modelled() -> None:
 # -- the strategy ---------------------------------------------------------------------------
 
 
-def test_size_fifos_proposes_every_open_transport_in_one_batch_and_says_why() -> None:
+def test_size_fifos_proposes_every_transport_in_one_batch_and_says_why() -> None:
     explorer, point = _folded()
     strategy = SizeFifos()
     attempts = explorer.attempts
@@ -235,6 +234,11 @@ def test_size_fifos_proposes_every_open_transport_in_one_batch_and_says_why() ->
     assert {
         key: value for key, value in explorer.chosen(sized).items() if key.endswith(".transport")
     } == {f"{name}.transport": "direct" for name in transports}
+    # It reopened every transport (each stored direct by the fold's settling) and
+    # settled nothing else.
+    (_, run) = explorer.runs
+    assert set(run.reopened) == {f"{name}.transport" for name in transports}
+    assert run.kept == run.baselined == {}
     report = strategy.report()
     assert report["period"] == 12 and report["fifo_bits"] == 0
     assert {name: row["why"] for name, row in strategy.channels().items()} == {
@@ -247,31 +251,43 @@ def test_size_fifos_proposes_every_open_transport_in_one_batch_and_says_why() ->
     }
 
 
-def test_before_folding_it_sizes_at_the_completed_folding() -> None:
-    """Q-B: with no folding chosen, it reads the period and the ends from the copy the
-    seam completes (the baseline folding), commits the transports only, and the seam
-    records what it read."""
-    explorer, point = Seam(MEMBERS, platform=FULL_DSP48E2), design_space(chain.Chain())
+def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unknown() -> None:
+    """No ``before folding`` path: it reads the stored folding (the baseline folding, on a
+    point at its baselines); where a member's cycles wait on an open choice, it refuses,
+    naming it."""
+    explorer = Seam(MEMBERS, platform=FULL_DSP48E2)
+    point = design_space(chain.Chain())
+    base = explorer.baseline(point)
     strategy = SizeFifos()
-    sized = strategy.explore(explorer, point)
-    (read,) = explorer.reads
-    assert read["first.compute.packed.pe"] == 1
-    completed = explorer.cost(explorer.complete(point).point).bottleneck
-    assert completed is not None and strategy.report()["period"] == completed.cycles
-    assert all(key.endswith(".transport") for key in explorer.chosen(sized))
-    assert explorer.chosen(sized)
+    sized = strategy.explore(explorer, base)
+    assert strategy.report()["period"] == explorer.cost(base).bottleneck.cycles  # type: ignore[union-attr]
+    assert {k: v for k, v in explorer.chosen(sized).items() if not k.endswith(".transport")} == {
+        k: v for k, v in explorer.chosen(base).items() if not k.endswith(".transport")
+    }
+    with pytest.raises(
+        ExploreError, match="needs every member's cycles: .*first.compute.packed.pe"
+    ):
+        SizeFifos().explore(explorer, point)
 
-    # A policy that completes nothing leaves the period unknown, and it says so.
-    class Nothing:
-        name = label = "nothing"
 
-        def complete(
-            self, seam: Seam, point: Any, *, sizing: bool = False, members: Any = None
-        ) -> Completed[Any]:
-            return Completed(point, {}, {}, None, ())
-
-    with pytest.raises(ExploreError, match="needs every member's cycles"):
-        SizeFifos().explore(Seam(MEMBERS, platform=FULL_DSP48E2, completion=Nothing()), point)
+def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every transport not held is reopened, its FIFO's depth and style with it, and
+    sized again; a transport held by a pin is not reopened."""
+    explorer, point = _folded()
+    placed = explorer.attempt(
+        point, {"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64}
+    )
+    assert isinstance(placed, Accepted)
+    sized = SizeFifos().explore(explorer, placed.point)
+    assert explorer.chosen(sized)["levels.transport"] == "direct"
+    assert "levels.transport.fifo.buffer.depth" in explorer.runs[-1].reopened
+    explorer.held["levels.transport"] = "fifo"
+    explorer.held["levels.transport.fifo.buffer.depth"] = 64
+    kept = SizeFifos().explore(explorer, placed.point)
+    assert explorer.chosen(kept)["levels.transport.fifo.buffer.depth"] == 64
+    assert not any(key.startswith("levels.") for key in explorer.runs[-1].reopened)
 
 
 def _hidden_needs_eight(channel: Channel, period: int, **options: Any) -> Sized:
@@ -292,14 +308,17 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     chosen = explorer.chosen(found)
     assert chosen["hidden.transport"] == "fifo"
     assert chosen["hidden.transport.fifo.buffer.depth"] == 8
-    # Its style is left open, for the completion (FinnLib's ``auto``) or a later strategy.
-    assert "hidden.transport.fifo.buffer.ram_style" not in chosen
+    # Its style is not proposed: settling gives it its baseline, FinnLib's ``auto``.
+    assert chosen["hidden.transport.fifo.buffer.ram_style"] == "auto"
+    assert explorer.runs[-1].baselined == {"hidden.transport.fifo.buffer.ram_style": "auto"}
     assert strategy.report()["ram_style"] is None
     assert strategy.channels()["hidden"]["bits"] == 8 * 24
     assert strategy.report()["fifo_bits"] == 8 * 24
-    # The rest of the chain explores to the end around it.
-    done = explore(explorer, found, [Ranked(Lanes())])
+    # A fold after it keeps it (no transport is a folding strategy's), and nothing
+    # refuses itself.
+    done = explore(explorer, found, [TargetCycles(12)])
     assert explorer.refusals(done) == {}
+    assert explorer.chosen(done)["hidden.transport.fifo.buffer.depth"] == 8
 
 
 def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPatch) -> None:

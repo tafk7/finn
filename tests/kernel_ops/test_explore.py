@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Exploring a model's KernelOps through the seam: owners, the strategies as a build
-lists them, persistence, replay after a fact change, the report.
+lists them, persistence of every value, replay after a fact change, the report as a log
+of the run, the order checks.
 
 On the Chain as a model (MatMul ``first``, Thresholding ``activate``, MatMul
 ``second``; three rows of four) for Ultra96 without a shell, and an INT8 MatMul
@@ -30,11 +31,13 @@ from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     Accepted,
     Baseline,
+    DebugPlaceholder,
     ExploreError,
     MaxThroughput,
     Pinned,
     Placeholder,
     Ranked,
+    Rebaseline,
     ResourceBudgetWarning,
     Seam,
     SizeFifos,
@@ -53,6 +56,7 @@ from finn.transformation.kernels import (
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 from kernel_ops.models import TARGET, matmul_model
+from kernel_ops.test_builder_phase import TFC_BUILT
 from kernel_ops.test_choose import choices, kernel_model
 
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
@@ -110,9 +114,11 @@ def test_a_spec_names_its_strategy_and_its_parameters() -> None:
         strategy({"strategy": "max_throughput", "within": {"luts": 0.5}})
     with pytest.raises(ValueError, match="unexpected keyword argument 'cycles'"):
         strategy({"strategy": "size_fifos", "cycles": 3})
-    # The placeholder is a completion policy, no strategy.
+    # The debug placeholder and the reset to baselines are strategies, written in the list.
+    assert isinstance(strategy({"strategy": "placeholder"}), DebugPlaceholder)
+    assert isinstance(strategy({"strategy": "baseline"}), Rebaseline)
     with pytest.raises(ValueError, match="names no kernel strategy"):
-        strategy({"strategy": "placeholder"})
+        strategy({"strategy": "complete"})
 
 
 def test_a_build_names_its_completion_policy() -> None:
@@ -195,40 +201,48 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     assert cost.used is None and cost.resources == {}
     assert cost.unstated["x"] == "waits on x.transport"
     assert cost.unstated["activate"] == "waits on activate.ram_style"
-    completed = seam.cost(seam.complete(point).point)
-    assert completed.unstated == {}
-    assert completed.used == sum(completed.resources.values(), Resources())
+    based = seam.cost(seam.baseline(point))
+    assert based.unstated == {}
+    assert based.used == sum(based.resources.values(), Resources())
 
 
-def test_what_no_strategy_chose_is_completed_on_a_copy_and_never_saved() -> None:
-    """With no strategy, nothing is saved: the report lists every value the baseline
-    completion takes, by owner, and the cost of the completed point; hardware
-    generation completes the same values."""
+def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved() -> None:
+    """With no strategy, every choice the body leaves open takes its baseline and is
+    saved: the model holds every value (dense), the report names each as the
+    baseline's, and hardware generation replays the same values, completing nothing."""
     model = kernel_model()
     explored = explore_kernel_choices(model, [])
-    assert choices(model) == {"first": {}, "activate": {}, "second": {}}
     report = explored.report
-    assert report["strategies"] == [] and report["choices"] == {}
-    completed = report["completed"]
+    saved = choices(model)
     # The baseline: the least folding, the adder tree, each memory in the explicit style
-    # its size orders first (the Chain's, all small: LUTRAM; never auto, last).
-    assert completed["first"]["compute.packed.pe"] == {"value": 1, "by": "baseline"}
-    assert completed["first"]["compute.packed.simd"] == {"value": 1, "by": "baseline"}
-    assert completed["first"]["compute.packed.reducer"] == {"value": "tree", "by": "baseline"}
-    assert completed["w1"]["source.memstream.ram_style"]["value"] == "distributed"
-    assert completed["activate"]["ram_style"]["value"] == "distributed"
-    assert completed["activate"]["block_stages"]["value"] == 0
-    assert report["completion"]["open"] == [] and report["bottleneck"] is not None
-    # The transports are sized on the completed copy (at hardware generation, sizing
-    # is the default completion's): a choice of size_fifos, never saved either.
-    assert completed["levels"]["transport"]["by"] == "size_fifos"
-    assert report["fifos"].startswith("sized at completion by baseline: ")
-    assert explored.completed is not None
-    values = {
-        f"{node}.{attribute}": entry["value"]
-        for node, held in completed.items()
+    # its size orders first (the Chain's, all small: LUTRAM; never auto, last), every
+    # transport direct (no size_fifos in the list: nothing sized).
+    assert saved["first"]["compute.packed.pe"] == saved["first"]["compute.packed.simd"] == 1
+    assert saved["first"]["compute.packed.reducer"] == "tree"
+    assert saved["w1"]["source.memstream.ram_style"] == "distributed"
+    assert saved["activate"]["ram_style"] == "distributed"
+    assert saved["activate"]["block_stages"] == 0
+    assert saved["levels"]["transport"] == "direct"
+    assert report["fifos"] == "not sized (no size_fifos in the list): each transport as it was"
+    assert report["strategies"] == [] and report["open"] == [] and report["held"] == {}
+    by = {
+        f"{node}.{attribute}": entry["by"]
+        for node, held in report["choices"].items()
         for attribute, entry in held.items()
     }
+    assert set(by.values()) == {"baseline"} and sorted(by) == sorted(report["baselined"])
+    values = {
+        f"{node}.{attribute}": value
+        for node, held in saved.items()
+        for attribute, value in held.items()
+    }
+    assert {
+        f"{node}.{attribute}": entry["value"]
+        for node, held in report["choices"].items()
+        for attribute, entry in held.items()
+    } == values
+    # Nothing is left to complete, where it is explored or generated.
+    assert report["completed"] == {} and report["completion"] == {"policy": "baseline", "open": []}
     point, _ = configured_root(model, "the chain")
     seam = seam_of(model)[0]
     assert {
@@ -236,37 +250,40 @@ def test_what_no_strategy_chose_is_completed_on_a_copy_and_never_saved() -> None
         for key, value in seam.chosen(point).items()
         for node, attribute in [seam.owner(key) or ("", key)]
     } == values
-    # The point the exploration returns is the committed one: still open.
-    assert explored.point is not explored.completed.point
-    assert inspection.viable(explored.point) != ()
+    assert inspection.viable(explored.point) == ()
+    # Explored again, the body is the same and nothing is baselined.
+    again = explore_kernel_choices(model, []).report
+    assert again["baselined"] == [] and choices(model) == saved
+    assert {e["by"] for held in again["choices"].values() for e in held.values()} == {"saved"}
 
 
-def test_a_strategy_that_reads_completed_values_is_flagged_and_its_choices_saved() -> None:
-    """Q-B: a strategy that reads the completed copy (``Seam.complete``) commits as any
-    other (DSE12); the report flags it, naming what it read."""
-
-    class Reader:
-        strategy = "reader"
-
-        def explore(self, seam: Seam, point: Any) -> Any:
-            seam.complete(point)
-            return point
-
-        def report(self) -> dict[str, object]:
-            return {"strategy": self.strategy}
-
+def test_the_report_logs_what_each_strategy_changed_kept_and_re_baselined() -> None:
+    """A log of the run (provenance is logged, never stored): each value a strategy
+    changed, before and after, how many it reopened and settling kept, the ones settling
+    re-baselined (here each MatMul's pumping, a choice once SIMD is 2), and who set each
+    value last."""
     model = kernel_model()
-    report = explore_kernel_choices(model, [Reader(), SizeFifos()]).report
-    reader, sizing = report["strategies"]
-    assert reader["read_completed"].startswith("read completed choices: ")
-    assert "first.compute.packed.pe" in reader["read_completed"]
-    # Sizing before folding sizes at the completed folding, and its transports are saved.
-    assert sizing["read_completed"].startswith("sized at completed folding (read completed ")
-    assert choices(model)["levels"]["transport"] in ("direct", "fifo")
-    assert {"saved", "size_fifos"} >= {
-        name for held in report["choices"].values() for name in held.values()
-    }
-    assert "first" not in report["choices"] or "compute.packed.pe" not in report["choices"]["first"]
+    report = explore_kernel_choices(
+        model, [TargetThroughput(1_000_000_000 // (5 * 6)), SizeFifos()]
+    ).report
+    target, sizing = report["strategies"]
+    assert target["changed"]["first.compute.packed.pe"] == [1, 2]
+    assert target["changed"]["first.compute.packed.simd"] == [1, 4]
+    assert target["changed"]["first.compute.packed.compute_pumping"] == [None, False]
+    assert target["committed"] == len(target["changed"])
+    assert target["re-baselined"] == [
+        "first.compute.packed.compute_pumping",
+        "second.compute.packed.compute_pumping",
+    ]
+    assert target["reopened"] > target["kept"] > 0 and "held" not in target
+    # Sizing reopens the 6 transports and changes none (the Chain needs no FIFO here).
+    assert (sizing["reopened"], sizing["changed"], sizing["committed"]) == (6, {}, 0)
+    entries = report["choices"]
+    assert entries["first"]["compute.packed.pe"] == {"value": 2, "by": "target_throughput"}
+    assert entries["first"]["compute.packed.reducer"] == {"value": "tree", "by": "baseline"}
+    assert entries["levels"]["transport"] == {"value": "direct", "by": "baseline"}
+    assert report["fifos"] == "sized by size_fifos: 6 channels, 0 FIFOs placed"
+    assert json.loads(json.dumps(report)) == report
 
 
 def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> None:
@@ -279,10 +296,23 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
             }
         )
     )
-    model = kernel_model().transform(ExploreKernelChoices([Pinned(pinned), Ranked(Lanes(2))]))
+    explorer = ExploreKernelChoices([Pinned(pinned), Ranked(Lanes(2))])
+    model = kernel_model().transform(explorer)
     saved = choices(model)
+    # Held for the run: the ranked policy, which reopens everything else, keeps them.
     assert saved["first"]["compute.packed.pe"] == 1 and saved["first"]["compute.packed.simd"] == 2
     assert saved["levels"]["transport.fifo.buffer.depth"] == 8
+    assert explorer.explored is not None
+    report = explorer.explored.report
+    assert report["held"] == {
+        "first": {"compute.packed.pe": 1},
+        "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
+    }
+    assert report["strategies"][0]["held"] == [
+        "first.compute.packed.pe",
+        "levels.transport",
+        "levels.transport.fifo.buffer.depth",
+    ]
     # A whole kernel_choices.json pins another model to the same choices, in one batch:
     # the FIFO and its depth, nested under it, together.
     exported = tmp_path / "kernel_choices.json"
@@ -291,7 +321,7 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
     assert choices(again) == saved
     # What the root does not take is refused, named.
     pinned.write_text(json.dumps({"first": {"compute.packed.pe": 3}}))
-    with pytest.raises(ExploreError, match="first.compute.packed.pe: 3 is not viable"):
+    with pytest.raises(ExploreError, match="first.compute.packed.pe: .*domain-membership"):
         kernel_model().transform(ExploreKernelChoices([Pinned(pinned)]))
     pinned.write_text(json.dumps({"nobody": {"pe": 1}}))
     with pytest.raises(ExploreError, match="nobody.pe"):
@@ -301,6 +331,11 @@ def test_a_pinned_file_is_committed_and_the_rest_explored(tmp_path: Path) -> Non
 #: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the
 #: thresholds' stages.
 AUTO = {"w1": {"source.memstream.ram_style": "auto"}, "activate": {"ram_style": "auto"}}
+
+
+def auto(model: ModelWrapper) -> dict[str, dict[str, object]]:
+    """The values ``model`` holds of ``AUTO``'s keys."""
+    return {node: {key: choices(model)[node][key] for key in AUTO[node]} for node in AUTO}
 
 
 def stated_auto(report: Mapping[str, Any]) -> None:
@@ -313,7 +348,7 @@ def stated_auto(report: Mapping[str, Any]) -> None:
         why.endswith("ram_style auto, placed by Vivado, not stated") for why in reasons.values()
     )
     assert "activate" in reasons
-    assert report["completed"]["w2"]["source.memstream.ram_style"]["value"] == "distributed"
+    assert report["choices"]["w2"]["source.memstream.ram_style"]["value"] == "distributed"
 
 
 def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: Path) -> None:
@@ -328,63 +363,93 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
     model.save(tmp_path / "saved.onnx")
     saved = ModelWrapper(str(tmp_path / "saved.onnx"))
     report = explore_kernel_choices(saved, []).report
-    assert report["dropped"] == {} and {node: choices(saved)[node] for node in AUTO} == AUTO
+    assert report["dropped"] == {} and auto(saved) == AUTO
     stated_auto(report)
     pinned = tmp_path / "kernel_choices.json"
     pinned.write_text(json.dumps(AUTO))
     fresh = kernel_model()
     report = explore_kernel_choices(fresh, [Pinned(pinned)]).report
-    assert {node: choices(fresh)[node] for node in AUTO} == AUTO
+    assert auto(fresh) == AUTO
     assert report["strategies"][0]["committed"] == 2
     stated_auto(report)
 
 
-def test_saved_choices_are_pinned_and_fresh_explores_again() -> None:
+def test_a_strategy_changes_what_it_decides_and_baseline_starts_over() -> None:
+    """Explored again, a saved value is replaced where a strategy decides it (no choice
+    is closed once saved), and kept where none does; ``baseline`` written first resets
+    every value not held."""
     model = kernel_model()
     explore_kernel_choices(model, [Ranked(Lanes(2))])
-    # A strategy fills only open choices: the saved folding stays.
-    resumed = explore_kernel_choices(model, [TargetThroughput(1_000_000_000 // (5 * 3))])
     assert choices(model)["first"]["compute.packed.pe"] == 2
-    assert resumed.report["strategies"][0]["attempts"] == 0
-    # Fresh clears the nodes' choices first: 6 cycles a frame (the activation's) folds
-    # each MatMul to PE 2, SIMD 4.
-    explore_kernel_choices(model, [TargetThroughput(1_000_000_000 // (5 * 6))], fresh=True)
-    assert choices(model)["first"]["compute.packed.pe"] == 2
-    assert choices(model)["first"]["compute.packed.simd"] == 4
+    # 6 cycles a frame (the activation's) folds each MatMul to PE 2, SIMD 4; the reducer,
+    # which it does not decide, stays.
+    compressor = save_choice(model, "second", "compute.packed.reducer", "compressor")
+    resumed = explore_kernel_choices(compressor, [TargetThroughput(1_000_000_000 // (5 * 6))])
+    assert choices(compressor)["first"]["compute.packed.simd"] == 4
+    assert choices(compressor)["second"]["compute.packed.reducer"] == "compressor"
+    assert resumed.report["choices"]["second"]["compute.packed.reducer"]["by"] == "saved"
+    # The baseline strategy, then nothing: every value back at its baseline.
+    explore_kernel_choices(compressor, [Rebaseline()])
+    assert choices(compressor) == choices(explored_at_baseline())
 
 
-def test_every_committed_choice_names_the_strategy_that_made_it() -> None:
-    """The report attributes each choice the model holds after the exploration: to the
-    strategy that committed it, or ``saved`` when the model held it before; each
-    strategy counts its own, and says whether FIFOs were sized. What no strategy chose
-    is completed, never attributed to one."""
+def save_choice(model: ModelWrapper, node: str, key: str, value: object) -> ModelWrapper:
+    """``model`` with ``key`` of ``node`` saved at ``value``, its other choices kept."""
+    op = kernel_op(model, next(each for each in model.graph.node if each.name == node))
+    op.save({**op.choices(), key: value})
+    return model
+
+
+def explored_at_baseline() -> ModelWrapper:
+    """The Chain explored by nothing: every value at its baseline."""
     model = kernel_model()
-    first = explore_kernel_choices(
-        model, [TargetThroughput(1_000_000_000 // (5 * 6)), SizeFifos()]
-    ).report
-    made_by = {
-        (node, attribute): strategy_name
-        for node, held in first["choices"].items()
-        for attribute, strategy_name in held.items()
-    }
-    # Every choice the model saved, and only those, is attributed.
-    assert set(made_by) == {
-        (node, attribute) for node, held in choices(model).items() for attribute in held
-    }
-    assert made_by[("first", "compute.packed.pe")] == "target_throughput"
-    assert made_by[("levels", "transport")] == "size_fifos"
-    assert ("first", "compute.packed.reducer") not in made_by
-    assert first["completed"]["first"]["compute.packed.reducer"]["by"] == "baseline"
-    target, sizing = first["strategies"]
-    assert target["committed"] == sum(v == "target_throughput" for v in made_by.values()) > 0
-    assert sizing["committed"] == sum(v == "size_fifos" for v in made_by.values()) > 0
-    assert "read_completed" not in sizing
-    assert first["fifos"].startswith("sized by size_fifos: ")
-    # Explored again, everything is the model's own: saved, nothing committed.
-    again = explore_kernel_choices(model, [SizeFifos()]).report
-    assert {v for held in again["choices"].values() for v in held.values()} == {"saved"}
-    assert [each["committed"] for each in again["strategies"]] == [0]
-    assert again["fifos"] == "not sized: size_fifos found no open transport (each was saved before)"
+    explore_kernel_choices(model, [])
+    return model
+
+
+def test_a_folding_strategy_after_the_last_size_fifos_is_refused_by_name() -> None:
+    """Sizing goes after the last strategy that folds: a list where one follows it is
+    refused before anything runs, naming both (SR6 Q4)."""
+    model = kernel_model()
+    before = choices(model)
+    with pytest.raises(
+        ExploreError, match=r"target_throughput \(strategy 2\) follows the last size_fifos"
+    ):
+        explore_kernel_choices(model, [SizeFifos(), TargetThroughput(1e6)])
+    assert choices(model) == before
+    with pytest.raises(ExploreError, match=r"baseline \(strategy 3\) follows"):
+        ExploreKernelChoices([TargetThroughput(1e6), SizeFifos(), Rebaseline()]).apply(model)
+    # Sizing last, or a strategy that does not fold after it, runs.
+    explore_kernel_choices(model, [SizeFifos(), DebugPlaceholder()])
+
+
+def test_a_run_that_changes_the_design_around_placed_fifos_without_sizing_after_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A FIFO's depth stays valid when its ends' folding changes (the engine does not
+    flag it), so a run that changes any other choice with a FIFO placed, and sizes no
+    FIFO after, is refused, naming the FIFO. Sized after, or pinned, it runs."""
+    pinned = tmp_path / "fifo.json"
+    pinned.write_text(
+        json.dumps({"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    )
+    placed = kernel_model()
+    explore_kernel_choices(placed, [Pinned(pinned)])
+    assert choices(placed)["levels"]["transport.fifo.buffer.depth"] == 8
+    folding = [TargetThroughput(1_000_000_000 // (5 * 6))]
+    with pytest.raises(
+        KernelOpError,
+        match=r"target_throughput changed the design with FIFOs placed .*levels.transport "
+        r"\(depth 8\)",
+    ):
+        explore_kernel_choices(ModelWrapper(placed.model.__deepcopy__()), folding)
+    sized = ModelWrapper(placed.model.__deepcopy__())
+    explore_kernel_choices(sized, [*folding, SizeFifos()])
+    assert choices(sized)["levels"]["transport"] == "direct"
+    # A FIFO held by a pin is the pin's: the fold around it runs.
+    held = ModelWrapper(placed.model.__deepcopy__())
+    explore_kernel_choices(held, [Pinned(pinned), *folding])
+    assert choices(held)["levels"]["transport.fifo.buffer.depth"] == 8
 
 
 def int8_matmul() -> ModelWrapper:
@@ -440,8 +505,40 @@ def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
         node = key.split(".")[0]
         assert row["taken"] in ("packed", "int8_dsp58") and row["why"]
         assert set(row["folded"]) == {"packed", "int8_dsp58"}
-        assert report["choices"][node]["compute"] == "target_throughput"
-        assert report["choices"][node][f"compute.{row['taken']}.simd"] == "target_throughput"
+        # The core is set by the target throughput where it is not its baseline, packed.
+        held = report["choices"][node]
+        by = "baseline" if row["taken"] == "packed" else "target_throughput"
+        assert held["compute"] == {"value": row["taken"], "by": by}
+        assert held[f"compute.{row['taken']}.simd"]["by"] == "target_throughput"
+
+
+@pytest.mark.slow
+def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_with(
+    tfc: ModelWrapper,
+) -> None:
+    """SR6's check: TFC's body explored by ``[target_throughput 1e6, size_fifos]`` saves
+    the 57 values it was built with when exploration left choices open and the baseline
+    completion completed them (``TFC_BUILT``): the target reopens the folding, the engine
+    widens it to the four input buffers' memories, settling keeps the rest and gives
+    each MatMul's pumping, a choice at SIMD 2 and more, its baseline; sizing places no
+    FIFO."""
+    model = ModelWrapper(tfc.model.__deepcopy__())
+    specs: list[dict[str, Any]] = [
+        {"strategy": "target_throughput", "fps": 1e6},
+        {"strategy": "size_fifos"},
+    ]
+    report = explore_kernel_choices(model, [strategy(spec) for spec in specs]).report
+    assert kernel_choices_config(model) == TFC_BUILT
+    assert sum(map(len, TFC_BUILT.values())) == 57
+    target, sizing = report["strategies"]
+    assert target["re-baselined"] == [
+        f"MatMul_{index}.compute.packed.compute_pumping" for index in range(4)
+    ]
+    assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
+    assert report["completed"] == {} and report["open"] == []
+    # Nothing left to complete where it is built: the configured root is the saved point.
+    point, _ = configured_root(model, "the partition")
+    assert inspection.viable(point) == () and len(inspection.decisions(point)) > 57
 
 
 def test_exploration_reads_a_partitions_body_and_refuses_any_other_node() -> None:
