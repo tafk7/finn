@@ -84,12 +84,11 @@ from finn.shells.pynq.runner import (
 from finn.toolchain.launcher import Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
-    completion,
     explore_kernel_choices,
     kernel_choices_config,
     shell_bottleneck,
 )
-from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
 from kernel_ops.models import (
@@ -280,9 +279,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     }
     assert len(folding) == 12 and {entry["value"] for entry in folding.values()} == {1}
     assert {entry["by"] for entry in folding.values()} == {"saved"}
-    assert report["completed"] == {}
+    assert report["open"] == []
     # The default list sizes every transport at that folding, at its period: on TFC each
-    # direct, as the baseline completion sized them at generation before.
+    # direct.
     (sizing,) = report["strategies"]
     assert sizing["strategy"] == "size_fifos" and sizing["period"] == 50176
     assert {row["transport"] for row in sizing["channels"].values()} == {"direct"}
@@ -307,23 +306,18 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
 
 
 @pytest.mark.slow
-def test_the_debug_placeholder_completes_nothing_on_an_explored_body(
+def test_the_debug_placeholder_sets_nothing_on_tfc(
     source: ModelWrapper, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The exploration stores every value, so the placeholder completion has nothing to
-    take (TFC has no required choice open): it logs no DEBUG value, and the verification
-    passes. The debug placeholder is a strategy now (``placeholder``), written in the
-    list; on TFC it finds nothing required open either."""
+    """The debug placeholder is a strategy (``placeholder``), written in the list: on TFC
+    no required choice is open, so it sets nothing, logs no DEBUG value, and the
+    verification passes."""
     cfg = config(
-        tmp_path,
-        step_options=exploration(
-            kernel_completion="placeholder", kernel_exploration=[{"strategy": "placeholder"}]
-        ),
+        tmp_path, step_options=exploration(kernel_exploration=[{"strategy": "placeholder"}])
     )
     model = explore(source, cfg)
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
-    assert report["completion"]["policy"] == "placeholder" and report["completion"]["open"] == []
-    assert report["completed"] == {} and report["open"] == []
+    assert report["open"] == [] and "completion" not in report and "completed" not in report
     (placeholder,) = report["strategies"]
     assert (placeholder["strategy"], placeholder["set"], placeholder["changed"]) == (
         "placeholder",
@@ -333,12 +327,6 @@ def test_the_debug_placeholder_completes_nothing_on_an_explored_body(
     logged = capsys.readouterr().out
     assert not [line for line in logged.splitlines() if line.startswith("DEBUG:")]
     step_verify_partition(model, cfg)
-
-
-def test_a_completion_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(tmp_path, step_options=exploration(kernel_completion="minimum"))
-    with pytest.raises(ValueError, match="names no kernel completion policy"):
-        step_explore(matmul_model(), cfg)
 
 
 @pytest.mark.slow
@@ -611,10 +599,10 @@ SET_FOLDING = set_folding()
 
 
 def tfc_built() -> dict[str, dict[str, object]]:
-    """Every value TFC_W2A2 is built with at 1,000,000 frames a second, persisted or
-    completed, 57 by graph name (on 8 nodes and 13 tensors): the Zynq landing's baseline
+    """Every value TFC_W2A2 is built with at 1,000,000 frames a second, every one
+    persisted, 57 by graph name (on 8 nodes and 13 tensors): the Zynq landing's baseline
     build's (Ultra96, 5 ns, [target_throughput, size_fifos]), whose choices were all
-    persisted then, and each MatMul's pumping, completed off: the doubled clock is the
+    persisted then, and each MatMul's pumping, at its baseline, off: the doubled clock is the
     shell's, which the kernels no longer read off the platform (SZ11 (e)), so the choice
     is open on pynq too. Each layer's kernel on its node; each channel on its tensor: a
     MultiThreshold's input, a MatMul's activations and weights, the graph's output. Every
@@ -687,7 +675,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert target["committed"] == 10
     made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
     assert (made_by.count("target_throughput"), made_by.count("saved")) == (10, 47)
-    assert report["completed"] == {}
+    assert report["open"] == []
     assert report["fifos"] == "not sized (no size_fifos in the list): each transport as it was"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
     # frame a call), within the budget of 200; the slowest of the other members, the
@@ -710,7 +698,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     """Criterion 3 (FS5): SizeFifos in the chain after the target throughput proposes
     ``direct`` for every TFC channel, says why, and leaves every value as the chain
     without it builds them (TFC's configuration: the target throughput and FIFO
-    sizing, completed by the baseline)."""
+    sizing)."""
     target = {"strategy": "target_throughput", "fps": 1_000_000}
     explored: dict[str, Any] = {}
     for name, specs in (
@@ -728,7 +716,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # Without sizing in the list, every transport keeps its baseline, direct: the same
     # design, every value saved.
     assert sized == plain
-    assert plain_report["completed"] == report["completed"] == {}
+    assert plain_report["open"] == report["open"] == []
     sizing = report["strategies"][1]
     # At the period the input end sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
@@ -821,9 +809,11 @@ def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
     assert shell_bottleneck(model) == explored.cost.bottleneck
     assert shell_bottleneck(model) is not None
-    # Saved choices or none, it is the bottleneck of the point as it is built.
-    fresh = kernel_model()
-    assert shell_bottleneck(fresh) == explore_kernel_choices(fresh, []).cost.bottleneck
+    # On a body made by hand, once its choices are created, it is the bottleneck of the
+    # point as it is built.
+    made = kernel_model()
+    expected = explore_kernel_choices(kernel_model(), []).cost.bottleneck
+    assert shell_bottleneck(made.transform(BaselineChoices())) == expected
 
 
 #: Z0's chain: the Zynq landing's baseline build explored TFC so.
@@ -885,7 +875,7 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     ip_config.tcl makes them (its partition then named StreamingDataflowPartition_1),
     and the partition is Z0's module, with Z0's choices."""
     parent, output = z0_tfc, z0_cut.parent / "output"
-    export = integration(parent, completion("baseline"))
+    export = integration(parent)
     assert [(end.instance, end.tensor, end.port) for end in export.ends] == [
         ("idma0", "Reshape_0_out0", "s_axis_0"),
         ("odma0", "MatMul_3_out0", "m_axis_0"),
@@ -915,14 +905,10 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     # Z0's module, its memories in their explicit baseline styles (SZ18), its thresholds a data
     # file (THRESHOLDS_FILE), and choices.
     node, body, _ = partition_body(parent)
-    point, _ = configured_root(body, node.name, completion("baseline"))
+    point, _ = configured_root(body, node.name)
     assert module_name(point.module) == "finn_partition__c909af9fb6b548ee"
     persisted = json.loads((output / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
-    report = json.loads((output / "report" / "kernel_exploration.json").read_text())
-    for name, held in report["completed"].items():
-        for attribute, entry in held.items():
-            persisted.setdefault(name, {})[attribute] = entry["value"]
     assert persisted == TFC_BUILT
 
 
@@ -1011,7 +997,7 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
         for instance in ("idma0", "odma0")
     }
     ips["partition"] = InstanceIP("xilinx_finn:finn:partition:1.0", (stitched,))
-    export = integration(z0_tfc, completion("baseline"))
+    export = integration(z0_tfc)
     design = block_design(export, ips)
     assert design == Z0_BLOCK_DESIGN.replace("$BUILD", "/BUILD")
     script = project_script(export, design, 16)
@@ -1026,7 +1012,7 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
     """Each end's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
     generation runs no tool), is Z0's code, text for text."""
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
-    export = integration(z0_tfc, completion("baseline"))
+    export = integration(z0_tfc)
     for end in export.ends:
         model = prepare_ip(iodma_model(end), export.part, export.period_ns)
         (node,) = model.graph.node
@@ -1187,7 +1173,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     # The delivered clock against the one asked, the bottleneck the shell root's, its
     # ends included: the input end.
     clock = json.loads((report / "delivered_clock.json").read_text())
-    bottleneck = shell_bottleneck(body, completion("baseline"))
+    bottleneck = shell_bottleneck(body)
     assert bottleneck is not None
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)

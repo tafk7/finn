@@ -9,7 +9,7 @@ builder's kernel-path phases (``phase_convert_to_hardware`` to ``phase_optimize_
 ``ToKernelOps``, inferring as it converts, the cut, the choices and its verification)
 for Ultra96's part on the ``ip`` shell, the target the specs are checked on, to the
 partition's body: the whole network, its boundary the network's. Its root, its choices
-completed as step_verify_partition completes them, runs in XSim
+replayed as the exploration saved them (step_verify_partition's), runs in XSim
 (``finn.harness.ops.check_parity``) on seeded inputs drawn from the graph's annotations,
 random with their extremes, and every output word is checked against the KernelOps'
 ``execute_node`` (the oracle) on the same inputs.
@@ -33,13 +33,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import ExploreOptions
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.harness.ops import boundary_inputs, check_parity, graph_inputs
 from finn.harness.reference import OpSpec
 from finn.platform import TargetRequest
-from finn.transformation.kernels.choose import completion
 from kernel_ops.models import TARGET
 from kernel_ops.specs import conv, matmul, thresholding
 from kernel_ops.tfc import run_steps
@@ -93,13 +91,11 @@ def test_the_kernel_path_takes_the_network_whole(spec: OpSpec, name: str, tmp_pa
 def test_the_network_computes_in_xsim_what_its_kernel_op_computes(
     spec: OpSpec, name: str, tmp_path: Path
 ) -> None:
-    cfg = config(tmp_path / "build")
     _, body = network(spec, name, tmp_path / "build")
     label = f"{spec.op.op_type}-{name}"
     check_parity(
         body,
         tmp_path / "xsim",
         inputs=boundary_inputs(body, zlib.crc32(label.encode())),
-        completion=completion(cfg.options("step_explore", ExploreOptions).kernel_completion),
         label=label,
     )

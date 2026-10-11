@@ -18,8 +18,8 @@ A value guarded by another choice (a core's PE under ``compute``, a FIFO's
 storage under its ``transport``) is found only once a walk takes that choice;
 when every value of a Decision is covered, a walk takes the one under which the
 most values are still uncovered. Decisions whose cases are not enumerable (a
-FIFO's depth: ``inspection.open``) are not walked; a completion policy chooses
-them. A target no walk reaches is reported (``Covering.missed``), never dropped.
+FIFO's depth: ``inspection.open``) are not walked; a strategy chooses them
+(``size_fifos``). A target no walk reaches is reported (``Covering.missed``), never dropped.
 
 The refused side: ``refused_cases`` lists, at a point, each case of an open or
 forced Decision that the configuration refuses, with the codes of the findings

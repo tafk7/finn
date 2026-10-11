@@ -30,12 +30,10 @@ from finn.custom_op.kernels.shell import configured_root, save_channels, shell_r
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     Accepted,
-    Baseline,
     DebugPlaceholder,
     ExploreError,
     MaxThroughput,
     Pinned,
-    Placeholder,
     Ranked,
     Rebaseline,
     Seam,
@@ -49,7 +47,6 @@ from finn.transformation.kernels import (
     ExplorePartition,
     InferKernelTensors,
     ToKernelOps,
-    completion,
     explore_kernel_choices,
     kernel_choices_config,
     strategy,
@@ -128,13 +125,6 @@ def test_a_spec_names_its_strategy_and_its_parameters() -> None:
         strategy({"strategy": "complete"})
 
 
-def test_a_build_names_its_completion_policy() -> None:
-    assert isinstance(completion("baseline"), Baseline)
-    assert isinstance(completion("placeholder"), Placeholder)
-    with pytest.raises(ValueError, match="names no kernel completion policy"):
-        completion("minimum")
-
-
 def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     model = kernel_model()
     explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
@@ -168,8 +158,8 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     assert "each end and its static region" in resources["counted"]
     (ranked,) = report["strategies"]
     assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0
-    # Nothing was left to complete.
-    assert report["completed"] == {} and report["completion"] == {"policy": "baseline", "open": []}
+    # Nothing is left open.
+    assert report["open"] == [] and "completion" not in report and "completed" not in report
     assert json.loads(json.dumps(report)) == report
     # The model replays to the explored point: nothing open, nothing stale.
     root = shell_root(model, model.graph.node)
@@ -226,7 +216,7 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
 def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved() -> None:
     """With no strategy, every choice the body leaves open takes its baseline and is
     saved: the model holds every value (dense), the report names each as the
-    baseline's, and hardware generation replays the same values, completing nothing. On
+    baseline's, and hardware generation replays the same values, nothing open. On
     a body no cut created (``BaselineChoices`` not run), the KernelOps' own choices
     were stored at conversion and its channels' are open: the exploration baselines
     those."""
@@ -277,8 +267,8 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
         for node, held in report["choices"].items()
         for attribute, entry in held.items()
     } == values
-    # Nothing is left to complete, where it is explored or generated.
-    assert report["completed"] == {} and report["completion"] == {"policy": "baseline", "open": []}
+    # Nothing is left open, where it is explored or generated.
+    assert report["open"] == []
     point, _ = configured_root(model, "the chain")
     seam = seam_of(model)[0]
     assert {
@@ -397,7 +387,7 @@ def auto(model: ModelWrapper) -> dict[str, dict[str, object]]:
 
 def stated_auto(report: Mapping[str, Any]) -> None:
     """The report names each memory pinned ``auto`` unstated, Vivado's, and its total a
-    lower bound; the completion takes every other memory explicit."""
+    lower bound; every other memory keeps its explicit baseline."""
     resources = report["resources"]
     assert resources["lower_bound"] and resources["counted"].startswith("a lower bound")
     reasons = resources["unstated"]
@@ -578,9 +568,9 @@ def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
 def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_with(
     tfc: ModelWrapper,
 ) -> None:
-    """SR6's check: TFC's body explored by ``[target_throughput 1e6, size_fifos]`` saves
-    the 57 values it was built with when exploration left choices open and the baseline
-    completion completed them (``TFC_BUILT``): the target reopens the folding, the engine
+    """TFC's body explored by ``[target_throughput 1e6, size_fifos]`` saves the 57 values
+    it was built with when exploration left choices open and a completion policy
+    completed them on a copy (``TFC_BUILT``): the target reopens the folding, the engine
     widens it to the four input buffers' memories, settling keeps the rest and gives
     each MatMul's pumping, a choice at SIMD 2 and more, its baseline; sizing places no
     FIFO."""
@@ -597,8 +587,8 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
         f"MatMul_{index}.compute.packed.compute_pumping" for index in range(4)
     ]
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
-    assert report["completed"] == {} and report["open"] == []
-    # Nothing left to complete where it is built: the configured root is the saved point.
+    assert report["open"] == []
+    # Emission replays the saved point: the configured root is it.
     point, _ = configured_root(model, "the partition")
     assert inspection.viable(point) == () and len(inspection.decisions(point)) > 57
 

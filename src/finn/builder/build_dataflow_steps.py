@@ -61,7 +61,6 @@ from finn.custom_op.partition.kernel_partitions import (
     partition_body,
 )
 from finn.harness.preparation import check_equivalence
-from finn.kernels.explore import Completion
 from finn.platform import refuse_drift
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import BITFILE, BuildPynqBitfile, pynq_row, refuse_stale_bitfile
@@ -70,7 +69,6 @@ from finn.transformation.kernels import (
     EXPLORATION_REPORT,
     ExplorePartition,
     ToKernelOps,
-    completion,
     kernel_choices_config,
     kernel_ops_by_anchor,
     kernel_ops_report,
@@ -415,38 +413,21 @@ class ExploreOptions:
       ``within`` is required), ``{"strategy": "size_fifos", "margin": 0}`` (each
       channel's FIFO from both ends' beat patterns), ``{"strategy": "baseline"}`` (every
       choice not pinned back at its baseline), ``{"strategy": "placeholder"}``
-      (debugging: every open required choice at its first case). Every choice the body
-      leaves open takes its baseline first; each strategy replaces the values it
-      decides, and every value is saved. Pins go first, sizing after the last strategy
-      that folds (a list folding after its last size_fifos is refused). By default
-      ``[{"strategy": "size_fifos"}]`` (SR6): the baseline folding, its FIFOs sized. A
-      list written replaces the default and runs as written: without size_fifos, every
-      transport stays at its baseline, direct.
-    - ``kernel_exploration_fresh``: clear the KernelOps' saved choices before
-      exploring: re-explore from scratch. Otherwise a saved choice is pinned and the
-      exploration fills only open ones.
-    - ``kernel_completion``: the completion policy
-      (finn.transformation.kernels.KERNEL_COMPLETIONS) that completes what no strategy
-      chose, on a copy that is never saved, wherever the partition is costed or built
-      (every step after step_explore reads it here, ``_completion``): ``baseline``,
-      every open choice at its kernel's baseline (its first viable case: the least
-      parallelism, each memory in the explicit style its size orders first, a FIFO in
-      FinnLib's ``auto``) and, when the partition is built, its FIFOs sized at that
-      folding; a required choice (a FIFO's depth) is refused, named. ``placeholder``,
-      for debugging, also takes the first case of a required choice.
-      report/kernel_exploration.json lists every value completed."""
+      (debugging: every open required choice at its first case). Every choice already
+      holds a value, its baseline, stored when it was created (a KernelOp's at
+      conversion, a channel's at the cut); each strategy replaces the values it decides,
+      and every value is saved. Pins go first, sizing after the last strategy that folds
+      (a list folding after its last size_fifos is refused). To start over from the
+      baselines, write ``{"strategy": "baseline"}`` first. By default
+      ``[{"strategy": "size_fifos"}]``: the baseline folding, its FIFOs sized. A list
+      written replaces the default and runs as written: without size_fifos, every
+      transport stays at its baseline, direct. The partition is packaged and built
+      from exactly the values saved: a choice left open (a required one no strategy
+      set) is refused there, by name."""
 
     kernel_exploration: list[dict[str, Any]] = field(
         default_factory=lambda: [{"strategy": "size_fifos"}]
     )
-    kernel_exploration_fresh: bool = False
-    kernel_completion: str = "baseline"
-
-
-def _completion(cfg: DataflowBuildConfig) -> Completion:
-    """The completion policy step_explore's options name (ExploreOptions), which every
-    step that costs or builds the partition completes it by."""
-    return completion(cfg.options("step_explore", ExploreOptions).kernel_completion)
 
 
 def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
@@ -454,28 +435,26 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     (finn.transformation.kernels.ExplorePartition), through the DSE seam by the strategies
     its options' ``kernel_exploration`` lists (ExploreOptions), in order
     (finn.transformation.kernels.strategy: each a spec, {"strategy": name, **parameters}),
-    and save them where they are stated (a kernel's on its node, a channel's on its tensor,
-    finn.channel), the body saved again in its file (explore_kernel_choices): the choices
-    strategies made, never a completed one. What no strategy chose stays open, and its
-    options' ``kernel_completion`` completes it wherever the partition is costed or built. A
-    strategy carries its own objective. Writes report/kernel_exploration.json (the
-    strategies, each with the choices it committed, attempts and time, and the completed
-    values it read; every committed choice with the strategy that made it; the completion
-    policy, every value it completes and the required choices it leaves open; whether FIFOs
-    were sized; the dropped choices with why, per member cycles and buffering and the
-    bottleneck, of the completed point, and the shell's resources against the part's) and
-    kernel_choices.json (the body's choices, sparse, by graph name: a node's or a tensor's,
-    which a "pinned" strategy reads back), and logs what each strategy committed (and where
-    max_throughput's search ended), what the completion completed (each value, for the debug
-    placeholder), whether FIFOs were sized, and a warning for each limitation the
+    and save every value where it is stated (a kernel's on its node, a channel's on its
+    tensor, finn.channel), the body saved again in its file (explore_kernel_choices). Every
+    choice holds its baseline from its creation; each strategy replaces the values it
+    decides, and what no strategy decides keeps its value. A strategy carries its own
+    objective. The values saved are the ones the partition is packaged and built from: a
+    choice left open (a required one no strategy set) is refused there, by name. Writes
+    report/kernel_exploration.json (the strategies, each with the values it changed,
+    before and after, what it reopened, kept and re-baselined, attempts and time; every
+    value with who set it last in this run; the choices left open; whether FIFOs were
+    sized; the dropped choices with why, per member cycles and buffering and the
+    bottleneck, and the shell's resources against the part's) and kernel_choices.json
+    (the body's choices, every one, by graph name: a node's or a tensor's, which a
+    "pinned" strategy reads back), and logs what each strategy changed (and where
+    max_throughput's search ended), each value the debug placeholder set, the required
+    choices left open, whether FIFOs were sized, and a warning for each limitation the
     exploration found (its findings: the shell's resources over the part's, a strategy's
     over its budget, each naming the binding resource; RC5: never a refusal)."""
     options = cfg.options("step_explore", ExploreOptions)
     strategies = [strategy(spec) for spec in options.kernel_exploration]
-    completing = completion(options.kernel_completion)
-    exploring = ExplorePartition(
-        strategies, fresh=options.kernel_exploration_fresh, completion=completing
-    )
+    exploring = ExplorePartition(strategies)
     model = model.transform(exploring)
     explored, body = exploring.explored, exploring.body
     assert explored is not None and body is not None
@@ -486,7 +465,7 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
         json.dump(kernel_choices_config(body), f, indent=2)
     report = explored.report
     for each in report["strategies"]:
-        print(f"Kernel choices: {each['strategy']} committed {each['committed']}")
+        print(f"Kernel choices: {each['strategy']} changed {len(each['changed'])}")
         if each["strategy"] == "max_throughput":
             reached = each["bottleneck"]["cycles"]
             print(
@@ -494,24 +473,14 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
                 f"{each['budget']} ({'fits' if each['fits'] else 'does not fit'}; binding: "
                 f"{each['binding']}; {len(each['tried'])} budgets tried)"
             )
-        if "read_completed" in each:
-            print(f"Kernel choices: {each['strategy']} {each['read_completed']}")
     for finding in explored.findings:
         print(f"Kernel choices: WARNING: {finding.message}")
-    completed = [
-        (f"{node}.{attribute}", entry)
-        for node, held in report["completed"].items()
-        for attribute, entry in held.items()
-    ]
-    policy = report["completion"]
-    print(f"Kernel choices: {policy['policy']} completes {len(completed)}")
-    for name, entry in completed:
-        if entry["by"].startswith("DEBUG"):
-            print(f"{entry['by']}: {name} = {entry['value']!r}")
-    if "refused" in policy:
-        print(f"Kernel choices: the {policy['policy']} completion refuses: {policy['refused']}")
-    if policy.get("open"):
-        print(f"Kernel choices: open, to choose before packaging: {', '.join(policy['open'])}")
+    for node, held in report["choices"].items():
+        for attribute, entry in held.items():
+            if str(entry["by"]).startswith("DEBUG"):
+                print(f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
+    if report["open"]:
+        print(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
     print(f"FIFOs: {report['fifos']}")
     return model
 
@@ -527,8 +496,14 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     after it on the host (CutKernelPartition), before anything explores them. The parent
     graph is the build's model from here on; the partition is named ``partition`` (its
     node, its body partition/partition.onnx, its IP and its block-design instance), and
-    its body carries the target."""
-    return model.transform(CutKernelPartition(_partition_directory(cfg)))
+    its body carries the target and every choice at its baseline: a channel's created
+    here, a KernelOp's re-checked in context, where one stored at conversion that replay
+    drops as stale (the model edited since) is re-baselined and logged, with why."""
+    cut = CutKernelPartition(_partition_directory(cfg))
+    model = model.transform(cut)
+    for key, why in cut.dropped.items():
+        print(f"Kernel choices: {key} dropped as stale at the cut and re-baselined: {why}")
+    return model
 
 
 def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> bool:
@@ -585,16 +560,15 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     """Check the kernel path's partition before a shell builds it, its body opened
     through the parent graph's partition node.
 
-    Always: its choices replay to a configured root, completed by step_explore's
-    ``kernel_completion`` (none stale, none left open, its ports its graph's
-    inputs and outputs in order; configured_root), and it states the configuration's
-    target (refuse_drift). As ``verify_steps`` asks: PARTITION_PYTHON compares the
-    partition's own outputs, with the parent graph executed, against the model the
-    kernel path started from, on each input verify_input_npy states
-    (_verify_partition_python); PARTITION_ELABORATION compiles and elaborates
-    the partition's emitted RTL in XSim, through the build's toolchain."""
+    Always: its choices replay to a configured root (none stale, none left open, its
+    ports its graph's inputs and outputs in order; configured_root), and it states the
+    configuration's target (refuse_drift). As ``verify_steps`` asks: PARTITION_PYTHON
+    compares the partition's own outputs, with the parent graph executed, against the
+    model the kernel path started from, on each input verify_input_npy states
+    (_verify_partition_python); PARTITION_ELABORATION compiles and elaborates the
+    partition's emitted RTL in XSim, through the build's toolchain."""
     node, body, _ = partition_body(model)
-    configured_root(body, node.name, _completion(cfg))
+    configured_root(body, node.name)
     refuse_drift(read_target(body), cfg._resolve_target(), "build")
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         matched = _verify_partition_python(model, cfg)
@@ -605,7 +579,6 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
             ElaboratePartition(
                 directory=Path(directory),
                 toolchain=_tools(cfg, "step_verify_partition"),
-                completion=_completion(cfg),
             )
         )
         print("Verification for kernel_partition_elaboration : SUCCESS")
@@ -624,8 +597,8 @@ def _refuse_drift(
 def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the partition as an IP into ``stitched_ip/``, if STITCHED_IP or OOC_SYNTH
     is asked: PackagePartition on the body the parent graph's partition node opens,
-    named as the partition (its node, ``partition``), its choices completed by
-    step_explore's ``kernel_completion``, with the interface description beside it
+    named as the partition (its node, ``partition``), from the choices its body saves,
+    with the interface description beside it
     (``interface.json``). The body, saved, states its IP (finn.outputs), and a shell's
     integration later in the build takes that IP rather than package it again. With
     OOC_SYNTH the module is synthesized out of context and the IP packages the
@@ -643,7 +616,6 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     if not (stitched or ooc):
         print("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
         return model
-    kernel_completion = _completion(cfg)
     directory = Path(cfg.output_dir) / "stitched_ip"
     toolchain = _tools(cfg, "step_create_stitched_ip")
     node, body, body_file = partition_body(model)
@@ -653,7 +625,6 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
             run_synth=ooc,
             directory=directory,
             toolchain=toolchain,
-            completion=kernel_completion,
         )
     )
     body.save(body_file)
@@ -668,7 +639,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         else:
             frame, stimulus = generated_frame(body), "a generated frame"
         testbench = directory / TESTBENCH_DIR
-        write_testbench(body, testbench, frame, completion=kernel_completion, label=node.name)
+        write_testbench(body, testbench, frame, label=node.name)
         print(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
         if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
             run_testbench(testbench, toolchain=toolchain)
@@ -680,8 +651,8 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     """Build the shell the parent graph states (its partition's target) around the
     partition to a bitfile, if BITFILE is asked, into the output directory: the pynq
     shell's Vivado block design (finn.shells.pynq.runner.BuildPynqBitfile, which refuses
-    a shell without that build), the partition completed by step_explore's
-    ``kernel_completion``, every tool's transcript in logs/step_synthesize_bitfile, and
+    a shell without that build), from the choices the partition saves, every tool's
+    transcript in logs/step_synthesize_bitfile, and
     ``cfg.enable_hw_debug`` its shell option. A parent graph stating another target than
     the configuration's is refused. The parent graph stays the build's model and states
     what was made (finn.outputs: the project, bitfile, hwh, reports and host runtime) and
@@ -695,7 +666,6 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         Path(cfg.output_dir),
         toolchain=_tools(cfg, "step_synthesize_bitfile"),
         enable_hw_debug=cfg.enable_hw_debug,
-        completion=_completion(cfg),
     )
     model = model.transform(building)
     for finding in building.findings:
@@ -709,7 +679,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
     description into report/driver.json, if PYNQ_DRIVER is asked: the PYNQ driver
     (finn.shells.pynq.driver.MakePynqDriver), PL0 set to the clock the bitfile delivers
     (report/delivered_clock.json), the bitfile the build ships (finn.outputs) its
-    default, the partition completed by step_explore's ``kernel_completion``; a bitfile
+    default, from the choices the partition saves; a bitfile
     built from another design than the partition's now is refused, named, and so is a
     parent graph stating another target than the configuration's. The parent graph
     states the description among its reports."""
@@ -717,7 +687,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
         print("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
-    making = MakePynqDriver(Path(cfg.output_dir), completion=_completion(cfg))
+    making = MakePynqDriver(Path(cfg.output_dir))
     model = model.transform(making)
     description = making.description
     returned = ", ".join(
@@ -803,7 +773,7 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     The parent graph states it among its reports (``resources``)."""
     report = Path(cfg.output_dir) / RESOURCES_FILE
     report.parent.mkdir(parents=True, exist_ok=True)
-    stated = shell_resources_report(model, _completion(cfg))
+    stated = shell_resources_report(model)
     report.write_text(json.dumps(stated, indent=2))
     model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "resources": str(report)})
     absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())

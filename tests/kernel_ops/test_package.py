@@ -6,9 +6,9 @@
 The Tcl and the interface names come from the module's ABI
 (``finn.kernels.artifacts.ipxact``, checked as text in
 ``tests/kernels/artifacts/test_ipxact.py``). Here: the partition's module from
-its nodes' choices, completed; that the emitted top is elaborated before Vivado runs (a
-toolchain double stands for Vivado, so these run in the fast gate); and one test
-that packages the Chain (``kernels.chain``) and reads
+its nodes' and channels' saved choices, an open one refused; that the emitted top
+is elaborated before Vivado runs (a toolchain double stands for Vivado, so these run
+in the fast gate); and one test that packages the Chain (``kernels.chain``) and reads
 the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 ``kernel-ops-vivado`` job runs it).
 """
@@ -36,6 +36,7 @@ from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
+from finn.transformation.kernels.cut import BaselineChoices
 from finn.transformation.kernels.hls import HlsAbiRefused
 from finn.transformation.kernels.package import ElaboratePartition, partition_utilization_report
 from kernel_ops.models import configure_partition, kernel_model
@@ -55,22 +56,31 @@ def test_the_partition_packages_its_nodes_choices() -> None:
     ]
 
 
-def test_an_open_choice_is_completed_for_packaging_and_never_saved() -> None:
-    # The adapters' memories are left open: the baseline completion takes their first
-    # case, auto, as configure_partition commits them, on a copy.
+def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
+    # The adapters' memories are left open, made by hand with no cut: emission completes
+    # nothing and refuses each, named; once BaselineChoices has created them (as the cut
+    # does), the body packages as configure_partition commits them.
     model = kernel_model()
-    held = kernel_choices_config(model)
+    with pytest.raises(KernelOpError, match=r"not created: BaselineChoices") as refused:
+        configured_root(model, "sdp_1")
+    assert refused.value.keys and all(key.endswith(".ram_style") for key in refused.value.keys)
+    assert kernel_choices_config(model) == kernel_choices_config(kernel_model())
     _, point = configure_partition(kernel_model())
-    module = configured_root(model, "sdp_1")[0].module
+    module = configured_root(model.transform(BaselineChoices()), "sdp_1")[0].module
     assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
-    assert kernel_choices_config(model) == held
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
-    # A FIFO saved with no depth: the depth is required, so no completion takes one.
-    model = kernel_model()
+    # A FIFO saved with no depth, its style created (BaselineChoices): the depth is
+    # required, and no strategy set it.
+    configure_partition(model := kernel_model())
     save_channels(model, {"levels": {"transport": "fifo"}})
-    with pytest.raises(KernelOpError, match=r"open Decisions.*depth \(required\)") as refused:
+    model = model.transform(BaselineChoices())
+    with pytest.raises(
+        KernelOpError,
+        match=r"open choices, refused at emission: levels.transport.fifo.buffer.depth "
+        r"\(required: run size_fifos or placeholder\)",
+    ) as refused:
         configured_root(model, "sdp_1")
     assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
 

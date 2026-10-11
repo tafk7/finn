@@ -36,13 +36,10 @@ The part and the clock period are the model's build target (``read_target(model)
 ``finn.platform``), which a partition body carries from the graph it was cut from.
 
 The partition's choices are its nodes' and its channels' (each on its tensor,
-``finn.channel``): the root is replayed from them (a stale choice refuses, named),
-a Decision with one viable case is forced, and
-what is open is completed on a copy by the build's completion policy
-(``finn.kernels.explore.Completion``, ``Baseline()`` by default: every open
-choice at its kernel's baseline, the open transports sized on the completed
-copy), which is never stored; a choice the policy leaves open (a required one)
-refuses, named. The body's graph
+``finn.channel``), every one stored where it is created and replaced by the
+exploration: the root is replayed from them (a stale choice refuses, named), a
+Decision with one viable case is forced, and an open choice refuses, named
+(``configured_root``). The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
@@ -105,7 +102,6 @@ from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import member_of
 from finn.kernels.ends import EndContract
-from finn.kernels.explore import Completion
 from finn.kernels.utilization import Resources
 from finn.resources import finnlib_root
 from finn.toolchain import vivado, xsim
@@ -234,13 +230,11 @@ def partition_utilization_report(project: Path) -> Path:
     return reports[0]
 
 
-def ooc_member_resources(
-    model: ModelWrapper, project: Path, completion: Completion | None = None
-) -> dict[str, Any]:
+def ooc_member_resources(model: ModelWrapper, project: Path) -> dict[str, Any]:
     """The out-of-context resources of a partition packaged with ``run_synth`` in
     ``project``, per member of its shell root: the top's ``total``, and each member's
     instances summed (``members``, by member path). The instances are the module's that
-    PackagePartition packaged (``configured_root`` under ``completion``). An instance is
+    PackagePartition packaged (``configured_root``). An instance is
     its member's by its label (``instance_name``), named as the shell root's members;
     an instance no member claims is stated under its netlist name.
     Synthesis flattens small instances into the top: what no reported instance holds is
@@ -249,7 +243,7 @@ def ooc_member_resources(
     context, not placed."""
     report = partition_utilization_report(project)
     paths = shell_root(model, model.graph.node).members
-    point, _ = configured_root(model, "the packaged partition", completion)
+    point, _ = configured_root(model, "the packaged partition")
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
     rows = vivado.hierarchical_utilization(report.read_text())
     members: dict[str, Resources] = {}
@@ -309,10 +303,7 @@ class PackagePartition(Transformation):
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
     build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
     (a flow passes its own, so that one build runs Vivado by one route), by default
-    the machine's (``finn.toolchain.launcher.host_toolchain``); ``completion`` the
-    policy that completes the open choices (``configured_root``), the build's, by
-    default ``Baseline()``, so that a saved model packaged outside the builder
-    completes as the builder's default does.
+    the machine's (``finn.toolchain.launcher.host_toolchain``).
     """
 
     def __init__(
@@ -322,18 +313,16 @@ class PackagePartition(Transformation):
         run_synth: bool = False,
         directory: Path | None = None,
         toolchain: Toolchain | None = None,
-        completion: Completion | None = None,
     ) -> None:
         super().__init__()
         self.ip_name = ip_name
         self.run_synth = run_synth
         self.directory = directory
         self.toolchain = toolchain
-        self.completion = completion
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         built = read_target(model)
-        point, boundary = configured_root(model, self.ip_name, self.completion)
+        point, boundary = configured_root(model, self.ip_name)
         module = point.module
         project = Path(
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
@@ -390,8 +379,7 @@ class ElaboratePartition(Transformation):
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
     ``xelab.log``), a new build directory by default; ``toolchain`` is the
     prepared toolchain the simulator runs in, by default the configured
-    machine's; ``completion`` the policy that completes the open choices
-    (``configured_root``), by default ``Baseline()``. A failed compilation or
+    machine's. A failed compilation or
     elaboration raises ``ToolFailed``, naming the log; a toolchain that selects no
     Vivado (for ``glbl.v``) ``ToolUnavailable``.
     """
@@ -401,15 +389,13 @@ class ElaboratePartition(Transformation):
         *,
         directory: Path | None = None,
         toolchain: Toolchain | None = None,
-        completion: Completion | None = None,
     ):
         super().__init__()
         self.directory = directory
         self.toolchain = toolchain
-        self.completion = completion
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        point, _ = configured_root(model, "the partition", self.completion)
+        point, _ = configured_root(model, "the partition")
         directory = Path(
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()

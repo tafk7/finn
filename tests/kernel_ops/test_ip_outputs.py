@@ -149,8 +149,8 @@ def test_the_hierarchical_report_is_read_by_depth_in_the_devices_units() -> None
 def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
     tmp_path: Path,
 ) -> None:
-    # Its adapters' memories left open: the module is the completed one, as packaged.
-    model = kernel_model()
+    # Its adapters' memories at their baselines: the module is the one packaged.
+    configure_partition(model := kernel_model())
     point, _ = configured_root(model, "chain")
     labels = [label for label, _ in point.module.fragment.instances]
     # Each instance 10 LUTs and its index in FFs; synthesis flattened the last into the

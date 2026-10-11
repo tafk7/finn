@@ -29,13 +29,12 @@ from finn.custom_op.kernels.base import (
 )
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.configure import undecided
-from finn.kernels.explore import Choice, ExploreError, Ranked, RankPolicy
+from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
 from finn.kernels.target import Target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,
-    completion,
 )
 from kernel_ops.models import TARGET, chain_source
 
@@ -161,19 +160,20 @@ def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
 def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> None:
     # Preferring the FIFO transport opens its depth, a domain known by membership only
     # and required: no baseline takes a case of it. The exploration leaves it open
-    # and reports it; hardware generation refuses it, named.
+    # and reports it; emission completes nothing and refuses it, named, with what sets it.
     explore = ExploreKernelChoices([Ranked(Last())])
     model = kernel_model().transform(explore)
     assert explore.explored is not None
     left = explore.explored.report["open"]
     assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
-    assert explore.explored.report["completion"]["open"] == left
-    with pytest.raises(KernelOpError, match=r"to choose before packaging: .*depth \(required\)"):
+    with pytest.raises(KernelOpError, match=r"refused at emission: ") as refused:
         configured_root(model, "the chain")
-    # The debug placeholder takes the first case of a required choice, and refuses one
-    # known by membership only, named.
-    with pytest.raises(KernelOpError, match=r"no case to take .*transport.fifo.buffer.depth"):
-        configured_root(model, "the chain", completion("placeholder"))
+    assert all(key.endswith("transport.fifo.buffer.depth") for key in refused.value.keys)
+    assert str(refused.value).count("(required: run size_fifos or placeholder)") == len(left)
+    # The debug placeholder strategy takes the first case of a required choice, and
+    # refuses one known by membership only, named.
+    with pytest.raises(ExploreError, match=r"no case to take .*transport.fifo.buffer.depth"):
+        kernel_model().transform(ExploreKernelChoices([Ranked(Last()), DebugPlaceholder()]))
 
 
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:

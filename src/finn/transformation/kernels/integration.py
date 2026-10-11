@@ -53,7 +53,6 @@ from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
-from finn.kernels.explore import Completion
 from finn.platform import VIVADO_BLOCK_DESIGN
 
 if TYPE_CHECKING:
@@ -229,12 +228,12 @@ def _aperture(bus: Bus, least: int) -> int:
     return max(1 << widths[0], least)
 
 
-def integration(model: ModelWrapper, completion: Completion | None = None) -> Integration:
+def integration(model: ModelWrapper) -> Integration:
     """The integration export of the kernel path's parent graph ``model``: its partition's
-    shell root, completed by ``completion`` as the build completes it, in its shell's
-    integration (see the module docstring)."""
+    shell root, as emission builds it (``configured_root``), in its shell's integration
+    (see the module docstring)."""
     node, body, _ = partition_body(model)
-    point, boundary = configured_root(body, node.name, completion)
+    point, boundary = configured_root(body, node.name)
     row = point.row
     if row.integration != VIVADO_BLOCK_DESIGN or row.static_region is None:
         raise IntegrationError(

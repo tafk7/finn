@@ -57,7 +57,6 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
 )
 from finn.custom_op.partition.kernel_partitions import OUTPUT_REPORTS, partition_body
-from finn.kernels.explore import Completion
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
 from finn.shells.pynq.runner import STATIC_INSTANCES
@@ -95,7 +94,7 @@ def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
     return max(found)[1] if found else None
 
 
-def _member_instances(parent: ModelWrapper, completion: Completion | None) -> dict[str, str]:
+def _member_instances(parent: ModelWrapper) -> dict[str, str]:
     """Each member of the shell's block design by its key in the report (``partition``,
     ``ends.<channel>``, ``static_region.<ip>``) and its instance name, or the instance's
     prefix where Vivado names it (the reset's, by its clock). A shell without an
@@ -105,7 +104,7 @@ def _member_instances(parent: ModelWrapper, completion: Completion | None) -> di
     row = shell_row(target.shell, target.board)
     if row.integration is None:
         return {"partition": node.name}
-    export = integration(parent, completion)
+    export = integration(parent)
     instances = {"partition": export.partition}
     instances.update({f"ends.{member(end.tensor)}": end.instance for end in export.ends})
     static = row.static_region
@@ -133,19 +132,17 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def shell_resources_report(
-    parent: ModelWrapper, completion: Completion | None = None
-) -> dict[str, Any]:
-    """``report/resources.json`` of the kernel path's parent graph ``parent``, its
-    partition completed by ``completion``: see the module docstring. The reports are the
+def shell_resources_report(parent: ModelWrapper) -> dict[str, Any]:
+    """``report/resources.json`` of the kernel path's parent graph ``parent``: see the
+    module docstring. The reports are the
     ones the parent graph states (``finn.outputs`` ``reports``): ``out_of_context`` and
     ``placed`` of the shell's integration, ``ooc_synth`` of the packaged partition."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     reports = parent.get(OUTPUT_REPORTS) or {}
-    point, _ = configured_root(body, node.name, completion)
+    point, _ = configured_root(body, node.name)
     modelled = shell_resources(point)
-    instances = _member_instances(parent, completion)
+    instances = _member_instances(parent)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}
     totals: dict[str, Resources | None] = {}
     absent: dict[str, str] = {}
@@ -243,7 +240,7 @@ def shell_resources_report(
         "absent": absent,
     }
     if packaged is not None:
-        report["partition_members"] = ooc_member_resources(body, Path(packaged).parent, completion)
+        report["partition_members"] = ooc_member_resources(body, Path(packaged).parent)
     return report
 
 

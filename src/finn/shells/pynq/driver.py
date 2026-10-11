@@ -45,7 +45,6 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_REPORTS,
     partition_body,
 )
-from finn.kernels.explore import Completion
 from finn.shells.pynq import templates
 from finn.shells.pynq.ipgen import data_path
 from finn.shells.pynq.runner import DELIVERED_CLOCK, pynq_row, refuse_stale_bitfile
@@ -317,8 +316,8 @@ class MakePynqDriver(Transformation):
     """The PYNQ driver the kernel path's parent graph's shell's host runtime runs
     (``write_driver``), into driver/ under the output ``directory``, written afresh:
     nothing an earlier build left there stays. Its shell is the target the partition's
-    body states (``pynq_row``); its I/O the partition's integration export's ends, its
-    choices completed by ``completion``; PL0 set to the clock the bitfile delivers
+    body states (``pynq_row``); its I/O the partition's integration export's ends, from
+    the choices the partition saves; PL0 set to the clock the bitfile delivers
     (``delivered_mhz``, report/delivered_clock.json under ``directory``); the bitfile the
     parent graph states (finn.outputs) its default, relative to driver/. A bitfile built
     from another design than the partition's now is refused, named
@@ -327,10 +326,9 @@ class MakePynqDriver(Transformation):
     it (``driver_description``); the parent graph states it among its reports.
     ``description`` holds it."""
 
-    def __init__(self, directory: Path, *, completion: Completion | None = None) -> None:
+    def __init__(self, directory: Path) -> None:
         super().__init__()
         self.directory = Path(directory)
-        self.completion = completion
         self.description: dict[str, Any] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
@@ -338,7 +336,7 @@ class MakePynqDriver(Transformation):
         fclk_mhz = delivered_mhz(self.directory)
         bitfile = shipped_bitfile(model, self.directory)
         refuse_stale_bitfile(model, "pynq_driver")
-        export = integration(model, self.completion)
+        export = integration(model)
         driver = self.directory / DRIVER_DIR
         shutil.rmtree(driver, ignore_errors=True)
         write_driver(export, str(driver), fclk_mhz, os.path.relpath(bitfile, DRIVER_DIR))
