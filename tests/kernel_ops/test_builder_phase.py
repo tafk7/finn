@@ -51,16 +51,19 @@ from finn.builder.build_dataflow_steps import (
     step_synthesize_bitfile,
     step_verify_partition,
 )
-from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
+from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_BITFILE,
+    OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_REPORTS,
     OUTPUT_VLNV,
     OUTPUTS,
+    design_digest,
     partition_body,
 )
 from finn.kernels.artifacts.module import module_name
@@ -1033,6 +1036,7 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.name}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
+            model.set(OUTPUT_MADE_FROM, design_digest(model))
             return model, False
 
     def unchanged(model: ModelWrapper, *args: object, **kwargs: object) -> ModelWrapper:
@@ -1113,8 +1117,12 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     report = output / "report"
     outputs = reread.namespace(OUTPUTS)
     assert Path(outputs["project"]).parent == tmp_path / "build"
+    _, body, _ = partition_body(reread)
     assert {key: value for key, value in outputs.items() if key != "project"} == {
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
+        # The bitfile was built from the body's IP, made from its design as it is now.
+        "bitfile_made_from": design_digest(body),
+        "bitfile_options": {"enable_hw_debug": False},
         "hwh": str(output / "bitfile" / "finn-accel.hwh"),
         "reports": {
             "integration": str(report / "integration.json"),
@@ -1132,8 +1140,8 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     assert sorted(path.name for path in (report / "out_of_context").iterdir()) == [
         f"top_{name}_0_utilization_synth.rpt" for name in ("idma0", "partition", "smartconnect_0")
     ]
-    _, body, _ = partition_body(reread)
     assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert body.get(OUTPUT_MADE_FROM) == design_digest(body)
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
@@ -1240,7 +1248,15 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     assert getCustomOp(node).get_nodeattr("model") == "partition.onnx"
     shipped_body = ModelWrapper(str(deploy / "model" / "partition.onnx"))
     for model in (shipped, shipped_body):
-        assert set(model.namespace(OUTPUTS)) <= {"vlnv", "interfaces", "host_runtime"}
+        assert set(model.namespace(OUTPUTS)) <= {
+            "vlnv",
+            "interfaces",
+            "made_from",
+            "bitfile_made_from",
+            "bitfile_options",
+            "host_runtime",
+        }
+    assert shipped.get(OUTPUT_BITFILE_MADE_FROM) == shipped_body.get(OUTPUT_MADE_FROM)
     image = np.random.default_rng(5).integers(0, 256, size=SHAPE).astype(np.float32)
     name = source.graph.input[0].name
     expected = execute_onnx(source, {name: image})[source.graph.output[0].name]
@@ -1269,3 +1285,46 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     with pytest.raises(ValueError, match="the model states no bitfile"):
         step_make_driver(parent, cfg)
     assert not (Path(cfg.output_dir) / "driver").exists()
+
+
+@pytest.mark.parametrize(
+    "step, output",
+    [(step_make_driver, "pynq_driver"), (step_deployment_package, "deployment_package")],
+)
+def test_a_bitfile_built_from_another_design_is_refused_by_name(
+    tmp_path: Path, step: Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper], output: str
+) -> None:
+    """The driver and the deployment run the bitfile on the partition the model states: a
+    bitfile that states no design it was built from, or another than the partition's
+    now (a choice changed since it was built), is refused, naming the bitfile, the
+    partition and both designs, before anything is written."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    cfg = config(tmp_path, generate_outputs=list(SHELL_OUTPUTS))
+    output_dir = Path(cfg.output_dir)
+    clock = tmp_path / "delivered_clock.json"
+    clock.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
+    bitfile = output_dir / "bitfile" / "finn-accel.bit"
+    parent.set(OUTPUT_BITFILE, str(bitfile))
+    driver = str(output_dir / "report" / "driver.json")
+    parent.set(OUTPUT_REPORTS, {"delivered_clock": str(clock), "driver": driver})
+    with pytest.raises(ValueError, match=rf"{output}: the model's bitfile \(.*\) states no design"):
+        step(parent, cfg)
+    node, body, body_file = partition_body(parent)
+    built_from = design_digest(body)
+    parent.set(OUTPUT_BITFILE_MADE_FROM, built_from)
+    (activate,) = [each for each in body.graph.node if each.name == "activate"]
+    kernel_op(body, activate).save({"deep_pipeline": 1})
+    body.save(body_file)
+    now = design_digest(body)
+    assert now != built_from
+    with pytest.raises(ValueError) as refused:
+        step(parent, cfg)
+    assert str(refused.value) == (
+        f"{output}: the model's bitfile ({bitfile}) is stale: it was built from the design "
+        f"{built_from}, and the partition {node.name}'s design is now {now}; build the "
+        "bitfile again (bitfile)"
+    )
+    assert not (output_dir / "driver").exists() and not (output_dir / "deploy").exists()

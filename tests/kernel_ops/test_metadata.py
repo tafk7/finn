@@ -8,9 +8,11 @@ made of a partition in ``finn.outputs``."""
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
+import numpy as np
 import pytest
-from onnx import helper
+from onnx import StringStringEntryProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
@@ -20,23 +22,29 @@ from finn.custom_op.kernels.base import (
     PLATFORM_FIELDS,
     PLATFORM_KEYS,
     KernelOpError,
+    kernel_op,
     read_target,
     write_target,
 )
+from finn.custom_op.kernels.shell import save_channels
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
+    OUTPUT_BITFILE_MADE_FROM,
+    OUTPUT_BITFILE_OPTIONS,
     OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_PROJECT,
     OUTPUT_REPORTS,
     OUTPUT_VLNV,
+    design_digest,
 )
 from finn.kernels.target import Target
 from finn.platform import resolve_target
 from finn.transformation.kernels import ToKernelOps
-from kernel_ops.models import TARGET, chain_source
+from kernel_ops.models import TARGET, chain_source, configure_partition, kernel_model
 
 
 def entries(model: ModelWrapper) -> dict[str, str]:
@@ -187,14 +195,21 @@ def test_conversion_states_the_target_it_is_given() -> None:
     assert read_target(chain_source().transform(ToKernelOps(zcu104))) == zcu104
 
 
+#: A design digest as ``design_digest`` writes it.
+DIGEST = "sha256:" + "0123456789abcdef" * 4
+
+
 def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
     model = holder()
     made = {
         OUTPUT_IP: "/build/stitch/ip",
         OUTPUT_VLNV: "xilinx_finn:finn:partition:1.0",
         OUTPUT_INTERFACES: {"clk": ["ap_clk"], "s_axis": [["s_axis_0", 32]], "axilite": []},
+        OUTPUT_MADE_FROM: DIGEST,
         OUTPUT_PROJECT: "/build/vivado_zynq_proj",
         OUTPUT_BITFILE: "/out/bitfile/finn-accel.bit",
+        OUTPUT_BITFILE_MADE_FROM: DIGEST,
+        OUTPUT_BITFILE_OPTIONS: {"enable_hw_debug": False},
         OUTPUT_HWH: "/out/bitfile/finn-accel.hwh",
         OUTPUT_REPORTS: {"timing": "/out/report/post_route_timing.rpt"},
         OUTPUT_HOST_RUNTIME: "zynq-iodma",
@@ -211,6 +226,94 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         (OUTPUT_IP, ""),
         (OUTPUT_INTERFACES, ["ap_clk"]),
         (OUTPUT_REPORTS, {"timing": 3}),
+        (OUTPUT_MADE_FROM, "sha1:" + "0" * 40),
+        (OUTPUT_BITFILE_MADE_FROM, DIGEST.upper()),
+        (OUTPUT_BITFILE_OPTIONS, ["enable_hw_debug"]),
     ):
         with pytest.raises(MetadataError, match=f"{key.entry}: cannot store"):
             model.set(key, bad)
+
+
+# -- the design digest: what an artifact was made from (decision SR6, item 8) ------------
+
+
+def chain() -> ModelWrapper:
+    """The Chain as KernelOps for Ultra96 in the Zynq shell, its choices saved."""
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    return model
+
+
+def test_the_design_digest_is_stable_across_save_and_load(tmp_path: Path) -> None:
+    model = chain()
+    digest = design_digest(model)
+    assert digest.startswith("sha256:") and len(digest) == len("sha256:") + 64
+    assert design_digest(model) == digest
+    model.save(str(tmp_path / "chain.onnx"))
+    assert design_digest(ModelWrapper(str(tmp_path / "chain.onnx"))) == digest
+    assert design_digest(ModelWrapper(model.model.SerializeToString())) == digest
+
+
+def test_the_design_digest_ignores_what_a_build_made_and_changes_nothing() -> None:
+    """finn.outputs is what a build made of the design, not the design: stating an IP,
+    its digest or a bitfile leaves the digest as it was, and the digest leaves the
+    model's own entries in place."""
+    model = chain()
+    digest = design_digest(model)
+    model.set(OUTPUT_IP, "/build/stitch/ip")
+    model.set(OUTPUT_MADE_FROM, digest)
+    model.set(OUTPUT_BITFILE, "/out/bitfile/finn-accel.bit")
+    stated = entries(model)
+    assert design_digest(model) == digest
+    assert entries(model) == stated
+
+
+def test_the_design_digest_ignores_orders_that_carry_no_meaning() -> None:
+    """The graph's metadata entries and a node's attributes, in another order, are the
+    same design."""
+    model, reordered = chain(), chain()
+    props = list(reordered.graph.metadata_props)[::-1]
+    del reordered.graph.metadata_props[:]
+    reordered.graph.metadata_props.extend(
+        StringStringEntryProto(key=prop.key, value=prop.value) for prop in props
+    )
+    attributes = list(reordered.graph.node[0].attribute)[::-1]
+    del reordered.graph.node[0].attribute[:]
+    reordered.graph.node[0].attribute.extend(attributes)
+    assert entries(reordered) == entries(model)
+    assert design_digest(reordered) == design_digest(model)
+
+
+def changed_choice(model: ModelWrapper) -> None:
+    (node,) = [node for node in model.graph.node if node.name == "activate"]
+    kernel_op(model, node).save({"deep_pipeline": 1})
+
+
+def changed_channel(model: ModelWrapper) -> None:
+    save_channels(model, {"x": {"adapter.input_gen.input_gen.ram_style": "block"}})
+
+
+def changed_weight(model: ModelWrapper) -> None:
+    weights = next(name for name in ("w1", "w2") if model.get_initializer(name) is not None)
+    values = model.get_initializer(weights)
+    assert values is not None
+    model.set_initializer(weights, np.where(values == 0, 1, 0).astype(values.dtype))
+
+
+def changed_target(model: ModelWrapper) -> None:
+    write_target(model, resolve_target(board="Ultra96", period_ns=4.0, shell="pynq"))
+
+
+@pytest.mark.parametrize(
+    "change",
+    [changed_choice, changed_channel, changed_weight, changed_target],
+    ids=["choice", "channel", "weight", "target"],
+)
+def test_the_design_digest_changes_with_the_design(change: object) -> None:
+    """A kernel's choice, a channel's, a weight or the target changed makes another IP,
+    and another digest."""
+    model = chain()
+    digest = design_digest(model)
+    change(model)  # type: ignore[operator]
+    assert design_digest(model) != digest

@@ -28,7 +28,9 @@ from finn.custom_op.kernels.shell import configured_root, save_channels
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
+    design_digest,
 )
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
@@ -126,7 +128,9 @@ def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
 def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
+    made_from = design_digest(model)
     model = model.transform(PackagePartition("sdp_1", directory=project))
+    assert model.get(OUTPUT_MADE_FROM) == made_from
     # What packaging states of the IP, typed; no flat key.
     assert model.get(OUTPUT_IP) == str(project.resolve() / "ip")
     assert model.get(OUTPUT_VLNV) == "xilinx_finn:finn:sdp_1:1.0"
@@ -212,6 +216,20 @@ def test_a_failed_packaging_run_is_vivados_failure_naming_its_log(tmp_path: Path
     assert (failed.value.tool, failed.value.status) == ("vivado", 1)
     assert failed.value.transcript == project / "package.log"
     assert (failed.value.code, failed.value.errors) == ("licence-unavailable", (NO_LICENCE,))
+
+
+def test_packaging_states_the_design_its_ip_was_made_from(tmp_path: Path) -> None:
+    """Beside the IP, the partition states the digest of the design it was made from: the
+    partition's as it was packaged, which is the same after packaging (finn.outputs is
+    not the design)."""
+    configure_partition(model := kernel_model())
+    made_from = design_digest(model)
+    toolchain = _tools(tmp_path, {"vivado": "mkdir -p ip && touch ip/component.xml\n"})
+    packaged = model.transform(
+        PackagePartition("sdp_1", directory=tmp_path / "project", toolchain=toolchain)
+    )
+    assert packaged.get(OUTPUT_IP) == str((tmp_path / "project" / "ip").resolve())
+    assert packaged.get(OUTPUT_MADE_FROM) == made_from == design_digest(packaged)
 
 
 def test_a_run_that_packages_no_ip_is_vivados_failure(tmp_path: Path) -> None:

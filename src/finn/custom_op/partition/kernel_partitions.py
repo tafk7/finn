@@ -14,12 +14,22 @@ the parent graph holds one such node, and its body is opened through it
 What a build made of a partition is one typed namespace of graph metadata
 (``qonnx.core.metadata``), ``finn.outputs`` (``OUTPUTS``), and no flat key: on the
 partition's body, its packaged IP (directory, VLNV, interface names;
-``PackagePartition``); on the build's model, the parent graph, what the shell's
-integration made (the integration project, the bitfile, the hardware handoff, the
-reports by name, and the host runtime that runs it). A partition's boundary is not
+``PackagePartition``) and the digest of the design it was made from (``made_from``);
+on the build's model, the parent graph, what the shell's integration made (the
+integration project, the bitfile, the hardware handoff, the reports by name, and the
+host runtime that runs it), and the digest of the IP's design and the shell options
+the bitfile was built with. A partition's boundary is not
 stored: what reads it (the integration export and the driver it describes, the
 interface description, the testbench) derives it from the configured root
 (``finn.custom_op.kernels.shell.configured_root``).
+
+An artifact is keyed by the design it was made from, not cleared when the design
+changes: ``design_digest`` is the digest of a model, serialized
+deterministically with ``finn.outputs`` cleared, so it covers the choices, the facts,
+the weights and the target, and nothing a build made. A reader compares the digest an
+artifact states with the body's now: the pynq shell's build packages the partition
+again on a mismatch, and the driver and the deployment refuse a bitfile built from
+another design (decision SR6, item 8).
 
 This module depends on qonnx (and onnx, which qonnx depends on) only, below the
 KernelOps and their transformations, so the builder and the flow import it without
@@ -28,8 +38,14 @@ loading the kernel stack.
 
 from __future__ import annotations
 
-from onnx import NodeProto
-from qonnx.core.metadata import JSON, Namespace
+import copy
+import hashlib
+import re
+from collections.abc import Callable, MutableSequence
+from typing import Any
+
+from onnx import ModelProto, NodeProto
+from qonnx.core.metadata import JSON, Namespace, clear
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
@@ -60,6 +76,14 @@ def _reports(value: object) -> bool:
     return isinstance(value, dict) and all(_named(path) for path in value.values())
 
 
+def _digest(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+
+
+def _options(value: object) -> bool:
+    return isinstance(value, dict)
+
+
 OUTPUT_IP = OUTPUTS.key("ip", str, check=_named, expect="a directory")
 """The packaged IP's directory (its ``component.xml``)."""
 OUTPUT_VLNV = OUTPUTS.key("vlnv", str, check=_named, expect="a VLNV")
@@ -71,18 +95,63 @@ OUTPUT_INTERFACES = OUTPUTS.key(
     expect="interface names by kind (clk, rst, s_axis, m_axis, axilite, ...)",
 )
 """The packaged IP's interface names by kind, as the stitched-IP contract lists them."""
+OUTPUT_MADE_FROM = OUTPUTS.key(
+    "made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
+)
+"""The digest of the design the packaged IP was made from (``design_digest`` of the
+body it was packaged from)."""
 OUTPUT_PROJECT = OUTPUTS.key("project", str, check=_named, expect="a directory")
 """The shell's integration project (the Vivado block design's)."""
 OUTPUT_BITFILE = OUTPUTS.key("bitfile", str, check=_named, expect="a file")
 """The bitfile the shell's integration made."""
 OUTPUT_HWH = OUTPUTS.key("hwh", str, check=_named, expect="a file")
 """The bitfile's hardware handoff."""
+OUTPUT_BITFILE_MADE_FROM = OUTPUTS.key(
+    "bitfile_made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
+)
+"""The digest of the design of the partition's IP the bitfile was built from (the body's
+``made_from`` when the shell's build ran)."""
+OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
+    "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
+)
+"""The shell's build options the bitfile was built with (``shell_options``)."""
 OUTPUT_REPORTS = OUTPUTS.key(
     "reports", JSON, check=_reports, expect="report files by name (synthesis, timing, ...)"
 )
 """The integration's reports by name."""
 OUTPUT_HOST_RUNTIME = OUTPUTS.key("host_runtime", str, check=_named, expect="a host runtime")
 """What runs the bitfile on the host (``finn.platform.ShellRow.host_runtime``)."""
+
+
+def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
+    """Order a repeated field of messages by ``key``, in place."""
+    ordered = [copy.deepcopy(item) for item in sorted(field, key=key)]
+    del field[:]
+    field.extend(ordered)
+
+
+def design_digest(model: ModelWrapper) -> str:
+    """The digest of ``model``'s design: its ``ModelProto`` with ``finn.outputs`` cleared,
+    the orders that carry no meaning made canonical (the model's and the graph's
+    metadata entries, each node's attributes, the initializers, the value infos, the
+    tensors' annotations and their entries), serialized deterministically, as
+    ``sha256:<hex>``. It covers the choices (node attributes, ``finn.channel`` on the
+    tensors), the facts, the weights and the target, and is the same for the model
+    saved and read back. The model is not changed."""
+    proto = ModelProto()
+    proto.CopyFrom(model.model)
+    graph = proto.graph
+    clear(graph.metadata_props, OUTPUTS)
+    _sort(graph.metadata_props, lambda prop: prop.key)
+    _sort(proto.metadata_props, lambda prop: prop.key)
+    for node in graph.node:
+        _sort(node.attribute, lambda attribute: attribute.name)
+    _sort(graph.initializer, lambda tensor: tensor.name)
+    _sort(graph.value_info, lambda info: info.name)
+    for annotation in graph.quantization_annotation:
+        _sort(annotation.quant_parameter_tensor_names, lambda prop: prop.key)
+    _sort(graph.quantization_annotation, lambda annotation: annotation.tensor_name)
+    return "sha256:" + hashlib.sha256(proto.SerializeToString(deterministic=True)).hexdigest()
 
 
 def is_partition(node: NodeProto) -> bool:
@@ -141,16 +210,20 @@ __all__ = [
     "KERNEL_OPS_DOMAIN",
     "OUTPUTS",
     "OUTPUT_BITFILE",
+    "OUTPUT_BITFILE_MADE_FROM",
+    "OUTPUT_BITFILE_OPTIONS",
     "OUTPUT_HOST_RUNTIME",
     "OUTPUT_HWH",
     "OUTPUT_INTERFACES",
     "OUTPUT_IP",
+    "OUTPUT_MADE_FROM",
     "OUTPUT_PROJECT",
     "OUTPUT_REPORTS",
     "OUTPUT_VLNV",
     "PARTITION_DOMAIN",
     "PARTITION_OP",
     "body_file",
+    "design_digest",
     "is_kernel_partition",
     "is_partition",
     "kernel_partition_body",
