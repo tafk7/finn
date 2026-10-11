@@ -35,6 +35,7 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import VerificationStepType
+from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import PREPARATION_REPORT, step_prepare_checkpoint
 from finn.core.containers import container, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
@@ -170,6 +171,7 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
     assert [entry["sub_phase"] for entry in report["sub_phases"]] == [n for n, _ in SUB_PHASES]
     by_name = {entry["sub_phase"]: entry for entry in report["sub_phases"]}
     assert by_name["P2 quantization"]["removed"] == {"Quant": 8}
+    assert by_name["P2 quantization"]["added"] == {"Add": 4, "MultiThreshold": 4}
     assert by_name["P1 io"]["added"] == {"Div": 1, "TopK": 1}
     assert by_name["P4 topology"]["removed"] == by_name["P4 topology"]["added"] == {}
     # P6 is a no-op on TFC: every bound within 3456, float32 holds them.
@@ -188,10 +190,12 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
     ]
     assert report["checkpoint"]["findings"][0]["details"]["nodes"] == ["TopK_0"]
     assert report["equivalence"] == {"draws": 12, "findings": [], "export_rounds": []}
-    log = (output / "build_dataflow.log").read_text()
-    assert "Graph preparation: P2 quantization: -8 Quant, +4 Add, +4 MultiThreshold" in log
-    assert "Verification for graph_preparation_python : SUCCESS" in log
-    assert "Graph preparation:   float-remains (limitation) 1: 1 nodes have a float output" in log
+    # The run's index: the check passed, the checkpoint's one finding by its code.
+    manifest = json.loads((output / MANIFEST_FILE).read_text())
+    assert manifest["outcome"] == {"status": "completed"}
+    assert manifest["verifications"] == {"graph_preparation_python": "pass"}
+    (checked,) = [each for each in manifest["steps"] if each["name"] == "step_prepare_checkpoint"]
+    assert checked["reports"] == [{"path": PREPARATION_REPORT, "findings": {"float-remains": 1}}]
 
 
 def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
@@ -824,8 +828,8 @@ def test_the_builders_checkpoint_refuses_a_blocker_naming_it_in_its_report(
 def _built_from(tmp_path: Path, export: ModelWrapper, prepared_as: ModelWrapper) -> Any:
     """A build of ``export`` that imports it, keeping it as the equivalence's reference,
     takes ``prepared_as`` for the prepared graph, checks it with GRAPH_PREPARATION_PYTHON
-    and records whether a step after the checkpoint ran: its status, its log, its
-    report, and whether that step ran."""
+    and records whether a step after the checkpoint ran: its status, its manifest, its
+    report, whether that step ran, and its log (the rendering, for its wording)."""
     after: list[ModelWrapper] = []
 
     def alter(model: ModelWrapper, cfg: Any) -> ModelWrapper:
@@ -844,8 +848,13 @@ def _built_from(tmp_path: Path, export: ModelWrapper, prepared_as: ModelWrapper)
     )
     status = build_dataflow_cfg(str(tmp_path / "export.onnx"), cfg)
     output = Path(cfg.output_dir)
-    log = (output / "build_dataflow.log").read_text()
-    return status, log, json.loads((output / PREPARATION_REPORT).read_text()), bool(after)
+    return (
+        status,
+        json.loads((output / MANIFEST_FILE).read_text()),
+        json.loads((output / PREPARATION_REPORT).read_text()),
+        bool(after),
+        (output / "build_dataflow.log").read_text(),
+    )
 
 
 def _adding(constant: float, stated: str = "INT8") -> ModelWrapper:
@@ -861,13 +870,17 @@ def _adding(constant: float, stated: str = "INT8") -> ModelWrapper:
 def test_a_builds_equivalence_difference_is_reported_as_a_failure_and_the_build_continues(
     tmp_path: Path,
 ) -> None:
-    status, log, report, continued = _built_from(tmp_path, _adding(1.0), _adding(2.0))
+    status, manifest, report, continued, log = _built_from(tmp_path, _adding(1.0), _adding(2.0))
     assert status == 0 and continued
-    assert "Verification for graph_preparation_python : FAIL" in log
+    assert manifest["outcome"] == {"status": "completed"}
+    assert manifest["verifications"] == {"graph_preparation_python": "fail"}
+    checked = manifest["steps"][-2]
+    assert checked["name"] == "step_prepare_checkpoint"
+    assert checked["findings"] == {"equivalence-unexplained": 1}
+    # The log renders it for a reader: no deviation's predicate ran, the declared named.
     declared = ", ".join(DEVIATIONS)
     assert "reported, not refused; a build runs no deviation's predicate" in log
     assert f"the phase declares {declared}\n" in log
-    assert "equivalence-unexplained (rejection) 1: y: " in log
     assert report["checkpoint"]["findings"] == []
     (found,) = report["equivalence"]["findings"]
     # A difference in a build that continues is no blocker: the check's equivalence is
@@ -880,11 +893,21 @@ def test_a_builds_checkpoint_blocker_still_refuses_beside_an_equivalence_differe
 ) -> None:
     # y = x + 7 over INT3 reaches 10, which INT2 does not hold: unsound by bound, and on
     # the draws the export's x + 1 differs.
-    status, log, report, continued = _built_from(tmp_path, _adding(1.0), _adding(7.0, "INT2"))
+    status, manifest, report, continued, _ = _built_from(
+        tmp_path, _adding(1.0), _adding(7.0, "INT2")
+    )
     assert status != 0 and not continued
-    assert "Verification for graph_preparation_python : FAIL" in log
-    assert "annotation-unsound (blocker) 1: Add_0 (Add) computes y over [3, 10]" in log
+    assert manifest["verifications"] == {"graph_preparation_python": "fail"}
+    outcome = manifest["outcome"]
+    assert (outcome["status"], outcome["step"], outcome["kind"]) == (
+        "failed",
+        "step_prepare_checkpoint",
+        "refusal",
+    )
+    # Refused twice over: by the checkpoint's bound, and by a draw outside INT2.
+    assert outcome["findings"] == {"annotation-unsound": 2}
     assert [f["code"] for f in report["checkpoint"]["findings"]] == ["annotation-unsound"]
+    assert "Add_0 (Add) computes y over [3, 10]" in report["checkpoint"]["findings"][0]["message"]
     assert "equivalence-unexplained" in {f["code"] for f in report["equivalence"]["findings"]}
 
 
@@ -893,17 +916,22 @@ def test_a_builds_sampled_unsound_annotation_refuses_the_graph_naming_it(
 ) -> None:
     # y = x + 0.5 computes what the export does, but INT8 holds none of it: the
     # checkpoint has no bound for a fractional Add, and the draws find it.
-    status, log, report, continued = _built_from(tmp_path, _adding(0.5, "FLOAT32"), _adding(0.5))
+    status, manifest, report, continued, log = _built_from(
+        tmp_path, _adding(0.5, "FLOAT32"), _adding(0.5)
+    )
     assert status != 0 and not continued
     assert "1 blockers: P7 equivalence: annotation-unsound: y is annotated INT8" in (
         capsys.readouterr().err
     )
-    assert "Verification for graph_preparation_python : FAIL" in log
-    assert "annotation-unsound refuses the graph, the rest reported, not refused" in log
-    assert "annotation-unsound (blocker) 1: y is annotated INT8" in log
+    assert manifest["verifications"] == {"graph_preparation_python": "fail"}
+    assert manifest["outcome"]["kind"] == "refusal"
+    assert manifest["outcome"]["findings"] == {"annotation-unsound": 1}
     assert report["checkpoint"]["findings"] == []
     (found,) = report["equivalence"]["findings"]
     assert found["code"] == "annotation-unsound"
+    assert found["message"].startswith("y is annotated INT8")
+    # The log renders it for a reader: the unsound annotation refuses, the rest reported.
+    assert "annotation-unsound refuses the graph, the rest reported, not refused" in log
 
 
 # -- equivalence and the deviations' predicates --------------------------------------------

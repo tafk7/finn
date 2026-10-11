@@ -35,6 +35,7 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
+from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import ExploreOptions, step_create_stitched_ip
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
@@ -329,8 +330,13 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
         enable_build_pdb_debug=False,
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
-    log = (output / "build_dataflow.log").read_text()
-    assert "Verification for stitched_ip_testbench : SUCCESS" in log
+    manifest = json.loads((output / MANIFEST_FILE).read_text())
+    assert manifest["verifications"] == {"stitched_ip_testbench": "pass"}
+    # The testbench's run.sh, run through the build's toolchain, its transcript the step's.
+    (stitched,) = [each for each in manifest["steps"] if each["name"] == "step_create_stitched_ip"]
+    runs = {Path(run["transcript"]).name: run for run in stitched["tools"]}
+    assert runs["run.sh.stdout.log"]["status"] == "completed"
+    assert runs["package.sh.stdout.log"]["status"] == "completed"
     ip = output / "stitched_ip"
     assert (ip / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.

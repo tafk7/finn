@@ -42,6 +42,8 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
+from finn.builder.build_dataflow_manifest import MANIFEST_FILE
+from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import (
     ExploreOptions,
     step_convert_to_hw,
@@ -63,7 +65,6 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
-    OUTPUT_REPORTS,
     OUTPUT_VLNV,
     OUTPUTS,
     design_digest,
@@ -206,10 +207,26 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         str(Path(cfg.output_dir) / "intermediate_models" / "step_prepare_checkpoint.onnx")
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
-    assert (
-        "Verification for graph_preparation_python : SUCCESS"
-        in (Path(cfg.output_dir) / "build_dataflow.log").read_text()
-    )
+    # The run, as its manifest indexes it: every step of the four phases, in order, each
+    # completed (the recorders injected after each belong to no phase), and both
+    # verifications asked passed.
+    manifest = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
+    assert manifest["outcome"] == {"status": "completed"}
+    assert manifest["verifications"] == {
+        "graph_preparation_python": "pass",
+        "kernel_partition_python": "pass",
+    }
+    ran = [step for step in manifest["steps"] if step["phase"] is not None]
+    assert [step["name"] for step in ran] == [
+        *build_dataflow_phase_lookup["phase_prepare_model"],
+        *STEPS,
+    ]
+    assert {step["status"] for step in manifest["steps"]} == {"completed"}
+    indexed = {step["name"]: step for step in ran}
+    assert indexed["step_prepare_checkpoint"]["verifications"] == {
+        "graph_preparation_python": "pass"
+    }
+    assert indexed["step_verify_partition"]["verifications"] == {"kernel_partition_python": "pass"}
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
     converted = seen["step_convert_to_hw"]
@@ -229,9 +246,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         if outcome["op"] is None
         for finding in outcome["findings"]
     } == {"no-kernel-op"}
-    log = (output / "build_dataflow.log").read_text()
-    assert "ToKernelOps: 8 converted (MatMul 4, Thresholding 4); 2 on the host" in log
-    assert "ToKernelOps:   no-kernel-op (limitation) 2: Reshape 1, TopK 1" in log
+    assert indexed["step_convert_to_hw"]["reports"] == [
+        {"path": "report/kernel_ops.json", "findings": {"no-kernel-op": 2}}
+    ]
     # Each KernelOp's own choices are created as it is converted, each at its baseline
     # (28 values on the 8 nodes); a channel's wait for the cut.
     created = kernel_choices_config(converted)
@@ -422,10 +439,12 @@ def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> 
 
 
 def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path: Path) -> None:
-    """The deployment ships the bitfile and the driver the parent graph states, this output
-    directory's: a parent graph stating no driver (its driver step never ran), or another
-    directory's, is refused by name before anything is copied, whatever an earlier
-    build left in driver/."""
+    """The deployment ships the bitfile the parent graph states, this output directory's,
+    and the driver this output directory holds, made from the same design: a parent
+    graph stating no bitfile, or another directory's, an output directory with no
+    driver's description (its driver step never ran), and a driver made from another
+    design are refused by name before anything is copied, whatever an earlier build left
+    in driver/."""
     model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
@@ -436,13 +455,25 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
     with pytest.raises(ValueError, match="the model states no bitfile"):
         step_deployment_package(parent, cfg)
+    elsewhere = tmp_path / "elsewhere" / "bitfile" / "finn-accel.bit"
+    parent.set(OUTPUT_BITFILE, str(elsewhere))
+    with pytest.raises(ValueError, match="the model's bitfile is .*elsewhere.*, not this "):
+        step_deployment_package(parent, cfg)
     parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
-    with pytest.raises(ValueError, match="the model states no pynq_driver"):
+    with pytest.raises(ValueError, match="no driver in this output directory"):
         step_deployment_package(parent, cfg)
-    elsewhere = tmp_path / "elsewhere" / "report" / "driver.json"
-    parent.set(OUTPUT_REPORTS, {"driver": str(elsewhere)})
-    with pytest.raises(ValueError, match="the model's pynq_driver is .*elsewhere.*, not this "):
+    _, body, _ = partition_body(parent)
+    parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
+    earlier = "sha256:" + "0" * 64
+    (output / "report").mkdir()
+    (output / "report" / "driver.json").write_text(json.dumps({"made_from": earlier}))
+    with pytest.raises(ValueError) as refused:
         step_deployment_package(parent, cfg)
+    assert str(refused.value) == (
+        f"deployment_package: the driver in this output directory ({output / 'driver'}) was "
+        f"made from the design {earlier}, and the partition's design is now "
+        f"{design_digest(body)}; make the driver again (pynq_driver)"
+    )
     assert not (output / "deploy").exists()
 
 
@@ -532,6 +563,7 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     report = json.loads((tmp_path / "output" / "report" / "kernel_ops.json").read_text())
     assert report["between_kernel_ops"] == ["flip"]
     assert [record.getMessage() for record in caplog.records if record.name == STEPS_LOG] == [
+        f"wrote {tmp_path / 'output' / 'report' / 'kernel_ops.json'}",
         "ToKernelOps: 2 converted (MatMul 2); 1 on the host; report/kernel_ops.json",
         "ToKernelOps:   no-kernel-op (limitation) 1: Transpose 1",
     ]
@@ -1099,9 +1131,10 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     faked (its tool steps state what they would make; Vivado makes its project's files,
     the timing summary a PS that gives 187.512 MHz for the 200 asked).
 
-    - The parent graph stays the build's model and states what was made, typed, and
-      no flat key; the reports are collected, the delivered clock's with the shell
-      root's bottleneck, ends included.
+    - The parent graph stays the build's model and states what a later step consumes,
+      typed, and no flat key: the bitfile and its handoff, no report; the reports are
+      collected beside them, the delivered clock's with the shell root's bottleneck,
+      ends included.
     - The driver's io_shape_dict is the kernel path's before the runner, the logits
       INT8, and it sets PL0 to the delivered clock; report/driver.json states what it
       takes and returns.
@@ -1145,25 +1178,15 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     reread = ModelWrapper(str(saved))
     output = Path(cfg.output_dir)
     report = output / "report"
-    outputs = reread.namespace(OUTPUTS)
-    assert Path(outputs["project"]).parent == tmp_path / "build"
     _, body, _ = partition_body(reread)
-    assert {key: value for key, value in outputs.items() if key != "project"} == {
+    # The model states the artifacts a later step consumes, no report and no project:
+    # the run's are its manifest's.
+    assert reread.namespace(OUTPUTS) == {
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
         # The bitfile was built from the body's IP, made from its design as it is now.
         "bitfile_made_from": design_digest(body),
         "bitfile_options": {"enable_hw_debug": False},
         "hwh": str(output / "bitfile" / "finn-accel.hwh"),
-        "reports": {
-            "integration": str(report / "integration.json"),
-            "timing": str(report / "post_route_timing.rpt"),
-            "placed": str(report / "placed_utilization.xml"),
-            "out_of_context": str(report / "out_of_context"),
-            "delivered_clock": str(report / "delivered_clock.json"),
-            "driver": str(report / "driver.json"),
-            "resources": str(report / "resources.json"),
-        },
-        "host_runtime": "zynq-iodma",
     }
     assert (output / "bitfile" / "finn-accel.hwh").read_text() == "top.hwh"
     assert (report / "placed_utilization.xml").read_text() == PLACED_HIERARCHY
@@ -1256,6 +1279,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         ],
         "returns": [{"name": "MatMul_3_out0", "element": "INT8", "shape": [1, 10], "dma": "odma0"}],
         "host": {"before": ["Reshape_0"], "after": ["TopK_0"]},
+        "made_from": design_digest(body),
     }
     # The deployment: bitfile, driver, description, and the host's model.
     deploy = output / "deploy"
@@ -1285,7 +1309,6 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
             "made_from",
             "bitfile_made_from",
             "bitfile_options",
-            "host_runtime",
         }
     assert shipped.get(OUTPUT_BITFILE_MADE_FROM) == shipped_body.get(OUTPUT_MADE_FROM)
     image = np.random.default_rng(5).integers(0, 256, size=SHAPE).astype(np.float32)
@@ -1344,8 +1367,7 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     clock.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
     bitfile = output_dir / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(bitfile))
-    driver = str(output_dir / "report" / "driver.json")
-    parent.set(OUTPUT_REPORTS, {"delivered_clock": str(clock), "driver": driver})
+    (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
     with pytest.raises(ValueError, match=rf"{output}: the model's bitfile \(.*\) states no design"):
         step(parent, cfg)
     node, body, body_file = partition_body(parent)
