@@ -160,21 +160,37 @@ def test_the_converted_graph_computes_the_source_graphs_results(second_weights: 
 @pytest.mark.filterwarnings("ignore:\\nNo HW configuration for nodes")
 def test_the_nodes_choices_round_trip_through_apply_config() -> None:
     """The export names nodes and, after them, tensors: ApplyConfig applies the nodes'
-    (a channel's, on its tensor, Pinned reads back: test_explore)."""
+    (a channel's, on its tensor, Pinned reads back: test_explore). Each node holds every
+    choice of its own from conversion on (its baselines); ApplyConfig sets attributes
+    and clears none, so it applies them on nodes holding none."""
     model = inferred()
     first = model.get_customop_wrapper(model.graph.node[0])
     first.save({"compute.packed.pe": 2})
     activate = model.get_customop_wrapper(model.graph.node[1])
-    activate.save({"ram_style": "auto", "ultra_stages": 0})
+    # By hand, a change names what it clears: no block stage under auto.
+    activate.save({"ram_style": "auto", "ultra_stages": 0, "block_stages": None})
     save_channels(model, {"w1": {"transport": "direct"}})
     config = kernel_choices_config(model)
     assert config == {
-        "first": {"compute.packed.pe": 2},
-        "activate": {"ram_style": "auto", "ultra_stages": 0},
+        "first": {
+            "compute.packed.pe": 2,
+            "compute.packed.reducer": "tree",
+            "compute.packed.simd": 1,
+        },
+        "activate": {"deep_pipeline": 0, "pe": 1, "ram_style": "auto", "ultra_stages": 0},
+        "second": {
+            "compute.packed.pe": 1,
+            "compute.packed.reducer": "tree",
+            "compute.packed.simd": 1,
+        },
         "w1": {"transport": "direct"},
     }
     nodes = {name: held for name, held in config.items() if name != "w1"}
-    applied = inferred().transform(ApplyConfig(nodes))
+    blank = inferred()
+    for node in blank.graph.node:
+        op = blank.get_customop_wrapper(node)
+        op.save(dict.fromkeys(op.choices()))
+    applied = blank.transform(ApplyConfig(nodes))
     assert kernel_choices_config(applied) == nodes
 
 

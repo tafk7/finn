@@ -52,7 +52,9 @@ Two kinds of attribute:
 - **semantic**: part of the operation, stated by the graph (Thresholding's
   ``bias``); required, never a choice;
 - **choice**: one per decision key of the op's kernel in its node root,
-  unprefixed (``compute.packed.pe``), sparse, absent meaning open. The ONNX type
+  unprefixed (``compute.packed.pe``), each at its baseline from conversion on
+  (``ToKernelOps``) until a strategy replaces it; absent only on a node no conversion
+  created (made by hand) or for a required choice no strategy has set. The ONNX type
   is the key's value semantics' (``int`` and ``bool``: ``i``, ``str``: ``s``),
   and a selector lists its cases. The node's attributes are the persisted form.
 
@@ -425,8 +427,10 @@ def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
 
 CHANNEL = Namespace("finn.channel", version=1, follow=True)
 """A channel's stated choices, typed metadata of the tensor it carries (qonnx's
-``qonnx.core.metadata``; entries ``finn.channel/transport``), sparse, absent meaning
-open: one key per Decision ``Channel`` declares (``CHANNEL_KEYS``), generated from them
+``qonnx.core.metadata``; entries ``finn.channel/transport``), each at its baseline from
+the cut on (``BaselineChoices``) until a strategy replaces it; absent only on a body no
+cut created or for a required choice (a FIFO's depth) no strategy has set. One key per
+Decision ``Channel`` declares (``CHANNEL_KEYS``), generated from them
 as a KernelOp's schema is from its node root, its type the Decision's value semantics'
 and a selector's values its cases. Stated in a partition's body only
 (``channel_choices``). It follows its tensor into the body the cut makes, and the cut
@@ -692,11 +696,13 @@ class KernelOp(CustomOp):
         """The node root with the node's choices (and ``extra``, by attribute) replayed,
         and those of each parameter channel the node owns, which the initializer's
         tensor states (``channel_choices``)."""
+        return self._replayed({**self.choices(), **(extra or {})})
+
+    def _replayed(self, choices: Mapping[str, object]) -> Kernel:
+        """The node root with ``choices`` (by attribute, in place of the node's) replayed,
+        and those of each parameter channel the node owns."""
         facts = self.facts()
-        wanted = {
-            self.node_key(name): value
-            for name, value in {**self.choices(), **(extra or {})}.items()
-        }
+        wanted = {self.node_key(name): value for name, value in choices.items()}
         names = {key: key.partition(".")[2] for key in wanted}
         for port, tensor in self.owned(facts).items():
             for key, value in channel_choices(self.model(), tensor).items():
@@ -740,7 +746,7 @@ class KernelOp(CustomOp):
                     (name,),
                 )
             merged[name] = value
-        self.point(merged)  # refuses before any write
+        self._replayed(merged)  # refuses before any write; a cleared choice is not replayed
         for name in schema:
             present = get_by_name(self.onnx_node.attribute, name)
             if present is not None:

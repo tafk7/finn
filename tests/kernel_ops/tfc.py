@@ -12,8 +12,9 @@ streamlined graph (``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
 and ``partition_kernel_ops``: the input flatten (a Reshape) before the
 partition and the label select (TopK) after it, both on the host.
 
-Every open kernel choice (folding, memories, transports) is committed on the
-partition's body after the cut, as the build explores it, ranked by hand
+Every kernel choice is created at its baseline, a KernelOp's own at conversion and a
+channel's at the cut; then every one (folding, memories, transports) is set again on the
+partition's body, as the build explores it, ranked by hand
 (``ExploreKernelChoices([Ranked(Lanes(16))])``, ``kernels.helpers.Lanes``): 16 lanes
 where they divide, the whole extent otherwise, every other choice its kernel's baseline.
 
@@ -123,7 +124,8 @@ def streamlined(directory: Path) -> ModelWrapper:
 def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper, str]:
     """The streamlined ``source`` as KernelOps for Ultra96 at 5 ns in the Zynq shell
     (``ULTRA96``), cut once into ``directory``: the parent graph (Reshape, the partition,
-    TopK), the partition's body, every choice open, and the body's file."""
+    TopK), the partition's body, every choice at its baseline (a KernelOp's own created
+    at conversion, a channel's at the cut), and the body's file."""
     model = source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
     parent = partition_kernel_ops(model, directory)
     body_file = getCustomOp(parent.graph.node[1]).get_nodeattr("model")
@@ -150,8 +152,8 @@ def partitioned(directory: Path) -> tuple[ModelWrapper, ModelWrapper, ModelWrapp
 
 def kernel_ops(source: ModelWrapper, directory: Path) -> ModelWrapper:
     """The streamlined ``source``'s partition of KernelOps for Ultra96 at 5 ns in the Zynq
-    shell (``ULTRA96``), cut once into ``directory``: its body, every choice open, as
-    exploration reads it."""
+    shell (``ULTRA96``), cut once into ``directory``: its body, every choice at its
+    baseline, as exploration reads it."""
     return cut(source, directory)[1]
 
 

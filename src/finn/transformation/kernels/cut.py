@@ -12,8 +12,17 @@ it stay on the host. The result is the parent graph, which the build keeps as it
 The partition has one name, ``PARTITION`` (``partition``), for its node, its body's file
 (``<directory>/partition.onnx``), the IP it is packaged as (the shell root's module,
 ``finn_partition``) and the block design's instance; its body carries the parent's
-target. Nothing of the space is read or stored: everything after the cut, exploration
-first, opens the body through the node (``kernel_partitions.partition_body``).
+target. Everything after the cut, exploration first, opens the body through the node
+(``kernel_partitions.partition_body``).
+
+The cut creates the accelerator's design space, so it gives its body's choices their
+baselines (``BaselineChoices``, ``shell.baseline_choices``): the body's shell root is
+built, its nodes' choices (stored at conversion, ``ToKernelOps``) replayed in context,
+and every choice still open with cases that is not required takes its baseline: the
+channels' own, created here, where a channel first has both its ends, and a node's
+choice replay drops as stale (``CutKernelPartition.dropped``, with why). Every value is
+then persisted, a kernel's on its node, a channel's on its tensor (``finn.channel``). A
+required choice (a FIFO's depth) stays open for a strategy.
 
 A channel's stated choices (``finn.channel``, its tensor's metadata) are a partition
 body's only. A model with nodes on the host that states some is refused, by name: the
@@ -43,7 +52,7 @@ from finn.custom_op.kernels.base import (
     clear_channel_choices,
     refuse_outside_body,
 )
-from finn.custom_op.kernels.shell import PARTITION
+from finn.custom_op.kernels.shell import PARTITION, baseline_choices
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     PARTITION_DOMAIN,
@@ -65,9 +74,18 @@ def partition_kernel_ops(model: ModelWrapper, directory: Path) -> ModelWrapper:
     """The parent graph of ``model``: its KernelOps as one StreamingDataflowPartition
     (``PARTITION_DOMAIN``, the domain imported), its body ``model`` attribute a file in
     ``directory``, every other node on the host, and the channel choices its tensors
-    state in the body only (module docstring). KernelOps a host node stands between
-    are refused (``KernelOpError``, naming the host nodes: the partition would depend on
-    itself); a model without KernelOps is returned as it is."""
+    state in the body only (module docstring); the body's choices at their baselines
+    (``BaselineChoices``). KernelOps a host node stands between are refused
+    (``KernelOpError``, naming the host nodes: the partition would depend on itself); a
+    model without KernelOps is returned as it is."""
+    parent = _partition(model, directory)
+    for node in kernel_partition_nodes(parent):
+        _baseline(node)
+    return parent
+
+
+def _partition(model: ModelWrapper, directory: Path) -> ModelWrapper:
+    """``partition_kernel_ops`` before the bodies' baselines."""
     between = between_kernel_ops(model)
     if between:
         raise KernelOpError(
@@ -89,21 +107,51 @@ def partition_kernel_ops(model: ModelWrapper, directory: Path) -> ModelWrapper:
     return parent
 
 
+def _baseline(node: NodeProto) -> dict[str, str]:
+    """The body of the partition ``node`` (its ``model`` file) at its baselines
+    (``BaselineChoices``) and saved again, nothing else changed (no cleanup); the
+    choices replay dropped as stale."""
+    body_file = str(getCustomOp(node).get_nodeattr("model"))
+    body = ModelWrapper(body_file)
+    dropped = baseline_choices(body)
+    body.save(body_file)
+    return dropped
+
+
+class BaselineChoices(Transformation):
+    """Every choice of a partition's body at its baseline where the body leaves it open,
+    persisted, and its nodes' stored choices re-checked in context, a stale one
+    re-baselined (``shell.baseline_choices``): what the cut does to the body it makes,
+    for a body made by hand (a test's, or one ``save_channels`` states choices on).
+    ``dropped`` holds the choices replay dropped as stale, by root key, with why."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dropped: dict[str, str] = {}
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        self.dropped = baseline_choices(model)
+        return model, False
+
+
 class CutKernelPartition(Transformation):
     """Cut the model's KernelOps once into the partition ``PARTITION``, its body saved in
-    ``directory``; see the module docstring. A model whose KernelOps do not form one
-    partition, or that holds a partition already, is refused (``KernelOpError``)."""
+    ``directory`` with every choice at its baseline; see the module docstring. A model
+    whose KernelOps do not form one partition, or that holds a partition already, is
+    refused (``KernelOpError``). ``dropped`` holds the nodes' choices the cut found
+    stale in context and re-baselined, by root key, with why."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
         self.directory = Path(directory)
+        self.dropped: dict[str, str] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         if model.get_nodes_by_op_type(PARTITION_OP):
             raise KernelOpError("the model holds a partition already: the kernel path cuts once")
         self.directory.mkdir(parents=True, exist_ok=True)
         cut = Path(tempfile.mkdtemp(prefix="cut_", dir=self.directory))
-        parent = partition_kernel_ops(model, cut)
+        parent = _partition(model, cut)
         found = kernel_partition_nodes(parent)
         if len(found) != 1:
             raise KernelOpError(
@@ -123,7 +171,8 @@ class CutKernelPartition(Transformation):
         cut.rmdir()
         node.name = PARTITION
         op.set_nodeattr("model", str(body_file))
+        self.dropped = _baseline(node)
         return parent, False
 
 
-__all__ = ["CutKernelPartition", "partition_kernel_ops"]
+__all__ = ["BaselineChoices", "CutKernelPartition", "partition_kernel_ops"]

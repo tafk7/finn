@@ -22,13 +22,14 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.custom_op.kernels as kernel_ops_package
 from finn.custom_op.kernels.base import (
+    CHANNEL,
     PLATFORM_KEYS,
     KernelOpError,
     kernel_op,
     read_target,
     write_target,
 )
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_INTERFACES,
@@ -38,8 +39,14 @@ from finn.custom_op.partition.kernel_partitions import (
     design_digest,
     partition_body,
 )
+from finn.kernels.explore import Seam
 from finn.platform import resolve_target
-from finn.transformation.kernels import PackagePartition
+from finn.transformation.kernels import (
+    InferKernelTensors,
+    PackagePartition,
+    ToKernelOps,
+    kernel_choices_config,
+)
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import (
     Address,
@@ -56,6 +63,7 @@ from kernel_ops.models import (
     kernel_model,
     streamed_w2_model,
 )
+from kernel_ops.tfc import ULTRA96
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls end at a 128-bit port.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
@@ -156,8 +164,9 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
     assert found is node and body_file == str(tmp_path / "partition.onnx")
     # Only the body is left in the directory: the cut's own file is gone.
     assert sorted(path.name for path in tmp_path.iterdir()) == ["partition.onnx"]
-    # The body carries the target, and its nodes as they were: the cut reads and stores
-    # nothing of the space (no boundary facts; its configured root states them).
+    # The body carries the target, and its nodes as they were: of the space the cut
+    # stores only the choices' baselines (no boundary facts; its configured root states
+    # them).
     assert read_target(body) == read_target(parent) == ZYNQ
     assert {item.key for item in body.graph.metadata_props} == {
         item.key for item in model.graph.metadata_props
@@ -339,3 +348,39 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
 
 def test_the_kernel_ops_domain_is_the_registering_package() -> None:
     assert KERNEL_OPS_DOMAIN == kernel_ops_package.__name__
+
+
+#: A TFC KernelOp's own choices at their baselines, as conversion stores them: the
+#: least folding, the adder tree, the thresholds' stages in LUTRAM, no block stage.
+TFC_NODE_BASELINES: dict[str, dict[str, object]] = {
+    "Thresholding": {"block_stages": 0, "deep_pipeline": 0, "pe": 1, "ram_style": "distributed"},
+    "MatMul": {"compute.packed.pe": 1, "compute.packed.reducer": "tree", "compute.packed.simd": 1},
+}
+
+
+def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
+    tfc_streamlined: Path, tmp_path: Path
+) -> None:
+    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices at
+    their baselines (28 values on 8 nodes) and no channel's; the cut creates the
+    channels' (25 values on 13 tensors: transports, the weights' memories, the input
+    buffers' memories) on the body's shell root, where it re-checks the nodes' in
+    context: 53 values, the nodes' the same 28 (none dropped), nothing left open."""
+    model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(ULTRA96))
+    model = model.transform(InferKernelTensors())
+    nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
+    converted = {node.name: kernel_op(model, node).choices() for node in nodes}
+    assert converted == {node.name: TFC_NODE_BASELINES[node.op_type] for node in nodes}
+    assert sum(map(len, converted.values())) == 28
+    assert model.tensors_stating(CHANNEL) == []
+    cutting = CutKernelPartition(tmp_path)
+    _, body, _ = partition_body(model.transform(cutting))
+    assert cutting.dropped == {}
+    config = kernel_choices_config(body)
+    assert {name: config[name] for name in converted} == converted
+    channels = {name: held for name, held in config.items() if name not in converted}
+    assert (len(channels), sum(map(len, channels.values()))) == (13, 25)
+    assert {held["transport"] for held in channels.values()} == {"direct"}
+    root = shell_root(body, body.graph.node)
+    assert root.dropped == {}
+    assert Seam(root.members, root.owners).choices(root.point) == ()

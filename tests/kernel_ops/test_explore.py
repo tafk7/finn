@@ -70,8 +70,10 @@ def seam_of(model: ModelWrapper) -> tuple[Seam, Any]:
 def test_a_choice_names_the_node_or_tensor_that_persists_it() -> None:
     explorer, point = seam_of(kernel_model())
     offered = {choice.key: choice for choice in explorer.choices(point)}
-    assert offered["first.compute.packed.pe"].owner == ("first", "compute.packed.pe")
-    # A channel's choice is its tensor's: an edge's, a graph output's alike.
+    # A kernel's choice is its node's (stored there at conversion); a channel's is its
+    # tensor's: an edge's, a graph output's alike (open on a body no cut created).
+    assert "first.compute.packed.pe" not in offered
+    assert explorer.owner("first.compute.packed.pe") == ("first", "compute.packed.pe")
     assert offered["levels.transport"].owner == ("levels", "transport")
     assert offered["y.transport"].owner == ("y", "transport")
     assert explorer.key("levels", "transport") == "levels.transport"
@@ -87,11 +89,13 @@ def test_a_choice_names_the_node_or_tensor_that_persists_it() -> None:
 
 def test_the_seam_reads_each_member_at_its_path() -> None:
     """Cost and refusals read the root's members by path, and an attempt checks the
-    members its keys belong to."""
+    members its keys belong to. A kernel's cycles are known from conversion on (its own
+    choices at their baselines); a channel's wait on its transport on a body no cut
+    created."""
     explorer, point = seam_of(kernel_model())
     cost = explorer.cost(point)
     assert set(cost.waiting) | set(cost.cycles) == set(explorer.members)
-    assert "first" in cost.waiting
+    assert "first" in cost.cycles and cost.unstated["levels"] == "waits on levels.transport"
     hidden = explorer.cost(point, ("hidden",))
     assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
     assert explorer.refusals(point) == {}
@@ -195,12 +199,13 @@ def test_a_point_over_the_part_s_resources_warns_naming_the_binding_resource() -
 def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     """A member whose resources wait on an open choice (a transport, a memory style, a
     folding) says so, and the seam states no total from the others: a partial sum is
-    never a total. Completed, every member states its own."""
+    never a total. Baselined, every member states its own. On a body no cut created, the
+    kernels state theirs (their choices stored at conversion) and the channels wait."""
     seam, point = seam_of(kernel_model())
     cost = seam.cost(point)
-    assert cost.used is None and cost.resources == {}
+    assert cost.used is None and set(cost.resources) == {"first", "activate", "second"}
     assert cost.unstated["x"] == "waits on x.transport"
-    assert cost.unstated["activate"] == "waits on activate.ram_style"
+    assert "activate" not in cost.unstated
     based = seam.cost(seam.baseline(point))
     assert based.unstated == {}
     assert based.used == sum(based.resources.values(), Resources())
@@ -209,7 +214,10 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
 def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved() -> None:
     """With no strategy, every choice the body leaves open takes its baseline and is
     saved: the model holds every value (dense), the report names each as the
-    baseline's, and hardware generation replays the same values, completing nothing."""
+    baseline's, and hardware generation replays the same values, completing nothing. On
+    a body no cut created (``BaselineChoices`` not run), the KernelOps' own choices
+    were stored at conversion and its channels' are open: the exploration baselines
+    those."""
     model = kernel_model()
     explored = explore_kernel_choices(model, [])
     report = explored.report
@@ -230,7 +238,23 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
         for node, held in report["choices"].items()
         for attribute, entry in held.items()
     }
-    assert set(by.values()) == {"baseline"} and sorted(by) == sorted(report["baselined"])
+    assert set(by.values()) == {"saved", "baseline"}
+    assert sorted(key for key, who in by.items() if who == "baseline") == sorted(
+        report["baselined"]
+    )
+    assert {key.split(".")[0] for key, who in by.items() if who == "saved"} == {
+        "first",
+        "activate",
+        "second",
+    }
+    assert {key.split(".")[0] for key in report["baselined"]} == {
+        "x",
+        "w1",
+        "hidden",
+        "levels",
+        "w2",
+        "y",
+    }
     values = {
         f"{node}.{attribute}": value
         for node, held in saved.items()
@@ -280,7 +304,9 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_re_baselined() -> N
     assert (sizing["reopened"], sizing["changed"], sizing["committed"]) == (6, {}, 0)
     entries = report["choices"]
     assert entries["first"]["compute.packed.pe"] == {"value": 2, "by": "target_throughput"}
-    assert entries["first"]["compute.packed.reducer"] == {"value": "tree", "by": "baseline"}
+    # The reducer, which no strategy decides, keeps the baseline conversion stored; the
+    # transports, on a body no cut created, the exploration's baseline.
+    assert entries["first"]["compute.packed.reducer"] == {"value": "tree", "by": "saved"}
     assert entries["levels"]["transport"] == {"value": "direct", "by": "baseline"}
     assert report["fifos"] == "sized by size_fifos: 6 channels, 0 FIFOs placed"
     assert json.loads(json.dumps(report)) == report
@@ -358,7 +384,10 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
     model = kernel_model()
     for node in model.graph.node:
         if node.name in AUTO:
-            kernel_op(model, node).save(AUTO[node.name])
+            # By hand, a change names what it clears: the thresholds' block stages, stored
+            # at their baseline at conversion, are no choice under auto.
+            cleared: dict[str, object] = {"block_stages": None} if node.name == "activate" else {}
+            kernel_op(model, node).save({**AUTO[node.name], **cleared})
     save_channels(model, {"w1": AUTO["w1"]})
     model.save(tmp_path / "saved.onnx")
     saved = ModelWrapper(str(tmp_path / "saved.onnx"))
@@ -505,9 +534,10 @@ def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
         node = key.split(".")[0]
         assert row["taken"] in ("packed", "int8_dsp58") and row["why"]
         assert set(row["folded"]) == {"packed", "int8_dsp58"}
-        # The core is set by the target throughput where it is not its baseline, packed.
+        # The core is set by the target throughput where it is not its baseline, packed,
+        # which conversion stored.
         held = report["choices"][node]
-        by = "baseline" if row["taken"] == "packed" else "target_throughput"
+        by = "saved" if row["taken"] == "packed" else "target_throughput"
         assert held["compute"] == {"value": row["taken"], "by": by}
         assert held[f"compute.{row['taken']}.simd"]["by"] == "target_throughput"
 

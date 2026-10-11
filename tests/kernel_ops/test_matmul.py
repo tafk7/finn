@@ -3,7 +3,8 @@
 
 """The MatMul KernelOp: facts from the model, the choice schema, persistence and replay.
 
-A node's choice attributes are sparse, absent meaning open; ``save`` takes
+A node's choice attributes are its own choices, each at its baseline once the node is
+converted, absent on a node made by hand until saved; ``save`` takes
 choices, never a point, and a forced Decision is never committed, so it is
 never written; a nested choice applies under its forced selector.
 """
@@ -139,8 +140,13 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
         op(model).save({"compute.packed.pe": 3})
     assert error.value.keys == ("compute.packed.pe",)
     assert op(model).choices()["compute.packed.pe"] == 2
-    # None clears a choice.
-    op(model).save({"compute.packed.simd": None})
+    # None clears a choice; the check replays what is written, so a clear that leaves a
+    # stored choice reading it (pumping reads SIMD) is refused, named, and nothing is
+    # written.
+    with pytest.raises(KernelOpError, match="compute.packed.compute_pumping: .*simd"):
+        op(model).save({"compute.packed.simd": None})
+    assert "compute.packed.simd" in attributes(model)
+    op(model).save({"compute.packed.simd": None, "compute.packed.compute_pumping": None})
     assert "compute.packed.simd" not in attributes(model)
     with pytest.raises(KernelOpError, match="not an 's' value"):
         op(model).save({"compute": 1})

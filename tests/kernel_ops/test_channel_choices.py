@@ -37,7 +37,7 @@ from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partit
 from finn.kernels.channels import Channel
 from finn.kernels.explore import ExploreError, Pinned, Ranked
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
-from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 from kernel_ops.models import EDGE, kernel_model
 from kernel_ops.test_choose import kernel_model as open_model
 from kernel_ops.tfc import LANES
@@ -154,7 +154,9 @@ def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path)
 def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     """Cases 2 and 4: cutting a model of KernelOps, which is a body already, moves its
     channels' choices into the body the cut makes, its boundary's (x, y) too; the parent's copy of
-    a boundary tensor states none, and keeps its datatype."""
+    a boundary tensor states none, and keeps its datatype. The cut keeps every value the
+    model states and gives what it leaves open its baseline (an adapter's memory, a
+    FIFO's style)."""
     model = kernel_model()
     save_channels(model, {"levels": FIFO})
     stated = kernel_choices_config(model)
@@ -164,8 +166,53 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     assert not any(entries(parent, tensor) for tensor in ("x", "y"))
     assert parent.get_tensor_datatype("x") == model.get_tensor_datatype("x")
     _, body, _ = partition_body(parent)
-    assert kernel_choices_config(body) == stated
+    config = kernel_choices_config(body)
+    assert list(config) == list(stated)
+    assert all(config[name].items() >= held.items() for name, held in stated.items())
+    assert config["levels"] == {
+        **FIFO,
+        "adapter.input_gen.input_gen.ram_style": "distributed",
+        "transport.fifo.buffer.ram_style": "auto",
+    }
     assert not shell_root(body, body.graph.node).dropped
+
+
+def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path: Path) -> None:
+    """A body made by hand (the Chain's KernelOps, converted, no cut) states its nodes'
+    choices, created at conversion, and no channel's. ``BaselineChoices`` creates each
+    channel's at its baseline on its tensor, keeps the nodes', and leaves nothing for
+    the exploration to baseline; a node's choice its facts refuse in context (written
+    past ``save``) is dropped, named, and re-baselined, as the cut does."""
+    model = open_model()
+    nodes = kernel_choices_config(model)
+    assert list(nodes) == ["first", "activate", "second"] and not model.tensors_stating(CHANNEL)
+    baselining = BaselineChoices()
+    model = model.transform(baselining)
+    assert baselining.dropped == {}
+    config = kernel_choices_config(model)
+    assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
+    assert {name: config[name] for name in nodes} == nodes
+    assert all(held["transport"] == "direct" for name, held in config.items() if name not in nodes)
+    assert explore_kernel_choices(model, []).report["baselined"] == []
+    first = kernel_op(model, model.graph.node[0])
+    first.set_nodeattr("compute.packed.simd", 2)
+    first.set_nodeattr("compute.packed.pe", 3)
+    model = model.transform(baselining)
+    # Its input buffer's memory, which reads the folding, is stale with it.
+    assert sorted(baselining.dropped) == [
+        "first.compute.packed.pe",
+        "x.adapter.input_gen.input_gen.ram_style",
+    ]
+    assert "domain-membership" in baselining.dropped["first.compute.packed.pe"]
+    first = kernel_op(model, model.graph.node[0])
+    assert first.choices() == {
+        **nodes["first"],
+        "compute.packed.simd": 2,
+        "compute.packed.compute_pumping": 0,
+    }
+    # The cut is the same step: the body it makes from the model holds the same values.
+    parent = model.transform(CutKernelPartition(tmp_path))
+    assert kernel_choices_config(partition_body(parent)[1]) == kernel_choices_config(model)
 
 
 def test_fresh_clears_the_bodys_channel_choices() -> None:
@@ -250,7 +297,9 @@ def test_the_export_refuses_a_node_named_like_a_stating_tensor() -> None:
     model = open_model()
     model.set(CHANNEL_KEYS["transport"], "direct", tensor="hidden")
     (activate,) = [node for node in model.graph.node if node.name == "activate"]
-    assert not kernel_op(model, activate).choices()
+    op = kernel_op(model, activate)
+    op.save(dict.fromkeys(op.choices()))
+    assert not op.choices()
     activate.name = "hidden"
     with pytest.raises(KernelOpError, match="hidden: a node and a tensor are both named hidden"):
         kernel_choices_config(model)
