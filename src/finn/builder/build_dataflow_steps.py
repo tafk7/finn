@@ -25,6 +25,7 @@ deployment package)."""
 import copy
 import dataclasses
 import json
+import logging
 import os
 import shutil
 from dataclasses import dataclass, field
@@ -103,6 +104,10 @@ from finn.transformation.prepare.phase import (
     topology_settled,
 )
 
+#: The steps' lines: the build log's (finn.builder.build_dataflow), the console's from
+#: WARNING (a verification that failed and the build continued, a limitation).
+_LOG = logging.getLogger(__name__)
+
 #: The graph-preparation phase's report, under the output directory.
 PREPARATION_REPORT = "report/graph_preparation.json"
 
@@ -112,6 +117,15 @@ def _tools(cfg: DataflowBuildConfig, step: str) -> Toolchain:
     ``output_dir/logs/<step>`` (``Toolchain.transcripts_in``), passed down with the
     toolchain to each transformation and driver that runs one."""
     return cfg._resolve_toolchain().transcripts_in(Path(cfg.output_dir) / "logs" / step)
+
+
+def _verdict(name: str, passed: bool) -> None:
+    """Log a verification's verdict, ``Verification for <name> : SUCCESS`` or ``FAIL``: a
+    FAIL as a warning, since the build continues with less than it asked."""
+    if passed:
+        _LOG.info(f"Verification for {name} : SUCCESS")
+    else:
+        _LOG.warning(f"Verification for {name} : FAIL")
 
 
 def _preparation_source(cfg: DataflowBuildConfig) -> str:
@@ -169,7 +183,7 @@ def _sub_phase(
         for sign, side in (("-", "removed"), ("+", "added"))
         for op, count in changed[side].items()
     )
-    print(f"Graph preparation: {name}: {counts or 'no node changed'}")
+    _LOG.info(f"Graph preparation: {name}: {counts or 'no node changed'}")
     return model
 
 
@@ -341,29 +355,26 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         unsound = [f for f in equivalence.findings if f.code == "annotation-unsound"]
         blockers += unsound
     _write_preparation_report(cfg, report)
-    print(
+    _LOG.info(
         f"Graph preparation: checkpoint: {len(checked.findings)} findings, {checked.bounded} "
         f"integer outputs bounded; {PREPARATION_REPORT}"
     )
     for line in by_code(checked.findings):
-        print(f"Graph preparation:   {line}")
+        _LOG.info(f"Graph preparation:   {line}")
     if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
-        print(
-            "Verification for graph_preparation_python : "
-            + ("FAIL" if equivalence.findings else "SUCCESS")
-        )
+        _verdict("graph_preparation_python", not equivalence.findings)
         if equivalence.findings:
             declared = ", ".join(DEVIATIONS)
             refused = "annotation-unsound refuses the graph, the rest " if unsound else ""
-            print(
+            _LOG.warning(
                 f"Graph preparation: equivalence: {len(equivalence.findings)} findings on "
                 f"{equivalence.draws} draws, {refused}reported, not refused; a build runs no "
                 f"deviation's predicate, and the phase declares {declared}"
             )
             for line in by_code(equivalence.findings):
-                print(f"Graph preparation:   {line}")
+                _LOG.warning(f"Graph preparation:   {line}")
         for line in by_code(equivalence.rounds):
-            print(f"Graph preparation:   {line}")
+            _LOG.info(f"Graph preparation:   {line}")
     if blockers:
         raise PreparationRefused(blockers)
     return model
@@ -394,7 +405,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     with open(cfg.output_dir + "/report/kernel_ops.json", "w") as f:
         json.dump(report, f, indent=2)
     for line in kernel_ops_summary(conversion.outcomes):
-        print(line)
+        _LOG.info(line)
     refuse_host_between(model, conversion.outcomes)
     return model
 
@@ -465,23 +476,23 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
         json.dump(kernel_choices_config(body), f, indent=2)
     report = explored.report
     for each in report["strategies"]:
-        print(f"Kernel choices: {each['strategy']} changed {len(each['changed'])}")
+        _LOG.info(f"Kernel choices: {each['strategy']} changed {len(each['changed'])}")
         if each["strategy"] == "max_throughput":
             reached = each["bottleneck"]["cycles"]
-            print(
+            _LOG.info(
                 f"Kernel choices: max_throughput reached {reached} cycles a frame within "
                 f"{each['budget']} ({'fits' if each['fits'] else 'does not fit'}; binding: "
                 f"{each['binding']}; {len(each['tried'])} budgets tried)"
             )
     for finding in explored.findings:
-        print(f"Kernel choices: WARNING: {finding.message}")
+        _LOG.warning(f"Kernel choices: {finding.message}")
     for node, held in report["choices"].items():
         for attribute, entry in held.items():
             if str(entry["by"]).startswith("DEBUG"):
-                print(f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
+                _LOG.info(f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
     if report["open"]:
-        print(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
-    print(f"FIFOs: {report['fifos']}")
+        _LOG.info(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
+    _LOG.info(f"FIFOs: {report['fifos']}")
     return model
 
 
@@ -502,7 +513,7 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     cut = CutKernelPartition(_partition_directory(cfg))
     model = model.transform(cut)
     for key, why in cut.dropped.items():
-        print(f"Kernel choices: {key} dropped as stale at the cut and re-baselined: {why}")
+        _LOG.warning(f"Kernel choices: {key} dropped as stale at the cut and re-baselined: {why}")
     return model
 
 
@@ -539,7 +550,7 @@ def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> b
         expected = execute_onnx(source, {source_input: frame}, True)
         mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
         for name in mismatched:
-            print(
+            _LOG.warning(
                 f"kernel_partition_python: input {index}: {name} differs from the source's in "
                 f"{int(np.sum(built[name] != expected[name]))} of {built[name].size} values"
             )
@@ -549,7 +560,7 @@ def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> b
             f"{verify_out_dir}/verify_kernel_partition_python_{index}_{result}.npz",
             **{name: built[name] for name in outputs},
         )
-    print(
+    _LOG.info(
         f"kernel_partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
         f"inputs of {cfg.verify_input_npy}, against the model the kernel path started from"
     )
@@ -572,7 +583,7 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     refuse_drift(read_target(body), cfg._resolve_target(), "build")
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         matched = _verify_partition_python(model, cfg)
-        print("Verification for kernel_partition_python : " + ("SUCCESS" if matched else "FAIL"))
+        _verdict("kernel_partition_python", matched)
     if VerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
         directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
         body.transform(
@@ -581,7 +592,7 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
                 toolchain=_tools(cfg, "step_verify_partition"),
             )
         )
-        print("Verification for kernel_partition_elaboration : SUCCESS")
+        _verdict("kernel_partition_elaboration", True)
     return model
 
 
@@ -614,7 +625,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     stitched = DataflowOutputType.STITCHED_IP in cfg.generate_outputs
     ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
     if not (stitched or ooc):
-        print("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
+        _LOG.info("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
         return model
     directory = Path(cfg.output_dir) / "stitched_ip"
     toolchain = _tools(cfg, "step_create_stitched_ip")
@@ -628,7 +639,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         )
     )
     body.save(body_file)
-    print(f"Packaged IP {node.name} and its interface description in {directory}")
+    _LOG.info(f"Packaged IP {node.name} and its interface description in {directory}")
     if ooc:
         report = partition_utilization_report(directory)
         model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "ooc_synth": str(report)})
@@ -640,10 +651,10 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
             frame, stimulus = generated_frame(body), "a generated frame"
         testbench = directory / TESTBENCH_DIR
         write_testbench(body, testbench, frame, label=node.name)
-        print(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
+        _LOG.info(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
         if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
             run_testbench(testbench, toolchain=toolchain)
-            print("Verification for stitched_ip_testbench : SUCCESS")
+            _verdict("stitched_ip_testbench", True)
     return model
 
 
@@ -659,7 +670,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     what the bitfile was made from (the design's digest, the shell's options); the
     delivered clock's limitations, if any, are logged as warnings (its findings)."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
-        print("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
+        _LOG.info("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.BITFILE)
     building = BuildPynqBitfile(
@@ -669,8 +680,8 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     )
     model = model.transform(building)
     for finding in building.findings:
-        print("WARNING: " + finding.message)
-    print(f"Bitfile written into {building.bitfile.parent}")
+        _LOG.warning(finding.message)
+    _LOG.info(f"Bitfile written into {building.bitfile.parent}")
     return model
 
 
@@ -684,7 +695,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
     parent graph stating another target than the configuration's. The parent graph
     states the description among its reports."""
     if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
-        print("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
+        _LOG.info("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
     making = MakePynqDriver(Path(cfg.output_dir))
@@ -694,7 +705,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
         f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
     )
     driver_dir = os.path.join(cfg.output_dir, DRIVER_DIR)
-    print(
+    _LOG.info(
         f"PYNQ Python driver written into {driver_dir}, at {description['fclk_mhz']} MHz; "
         f"it returns {returned}"
     )
@@ -733,7 +744,7 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     directory's, or a bitfile built from another design than the partition's now
     (refuse_stale_bitfile), is refused by name, and deploy/ is written afresh."""
     if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
-        print("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
+        _LOG.info("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
     pynq_row(model, "deployment_package")
@@ -777,7 +788,9 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     report.write_text(json.dumps(stated, indent=2))
     model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "resources": str(report)})
     absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())
-    print(f"Resources per member written to {report}" + (f"; absent: {absent}" if absent else ""))
+    _LOG.info(
+        f"Resources per member written to {report}" + (f"; absent: {absent}" if absent else "")
+    )
     return model
 
 

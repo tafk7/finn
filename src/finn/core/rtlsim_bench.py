@@ -95,6 +95,7 @@ without Vivado.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,6 +129,8 @@ from finn.resources import finnlib_root
 from finn.toolchain import xsim
 from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.transformation.kernels.hls import built_hls
+
+_LOG = logging.getLogger(__name__)
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
@@ -344,7 +347,8 @@ def measure(
     frames: int = 4,
     cycles: int = 0,
 ) -> Measured:
-    """The cycles of ``frames`` frames streamed back to back, never stalled; printed too.
+    """The cycles of ``frames`` frames streamed back to back, never stalled; its table
+    logged too (INFO).
 
     Each input presents its words ``frames`` times over and each output must
     present its words as many times, checked as ``stream_through`` checks them.
@@ -390,7 +394,7 @@ def measure(
         outputs=tuple(outputs),
         beats={name: tuple(cycles) for name, cycles in beats.items()},
     )
-    print(measured.table(), flush=True)
+    _LOG.info(measured.table())
     return measured
 
 

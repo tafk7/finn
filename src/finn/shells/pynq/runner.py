@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,6 +84,8 @@ from finn.transformation.kernels.choose import EXPLORATION_REPORT, shell_bottlen
 from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
 from finn.transformation.kernels.package import PackagePartition
 from finn.util.basic import make_build_dir
+
+_LOG = logging.getLogger(__name__)
 
 #: The domain of the IODMA_hls node an end's IP is generated from.
 IODMA_DOMAIN = iodma.__name__
@@ -359,7 +362,7 @@ def build_pynq(
             stated, earlier = body.get(OUTPUT_MADE_FROM), body.get(OUTPUT_IP)
             if earlier is None or stated != made_from:
                 if earlier is not None:
-                    print(
+                    _LOG.info(
                         f"{node.name}: its IP ({earlier}) was made from the design "
                         f"{stated or '(not stated)'}, the partition's is now {made_from}: "
                         "packaging it again"

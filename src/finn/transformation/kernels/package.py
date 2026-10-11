@@ -77,6 +77,7 @@ transcript, and a toolchain that selects no Vivado ``ToolUnavailable``.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -108,6 +109,8 @@ from finn.toolchain import vivado, xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
+
+_LOG = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -289,7 +292,7 @@ def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
             f"{label}: the emitted top {emitted.entry_point} contradicts its pins:\n"
             + "\n".join(found)
         )
-    print(
+    _LOG.info(
         f"{label}: slang elaborated {emitted.entry_point} under {len(abi.parameters)} "
         f"parameters, its {len(abi.pins)} ports agree with the pins ({len(files)} files, "
         f"{seconds:.2f} s)"
