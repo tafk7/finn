@@ -15,6 +15,7 @@ the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 
 from __future__ import annotations
 
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import cast
@@ -30,8 +31,14 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_VLNV,
 )
 from finn.kernels.artifacts import build
-from finn.toolchain.launcher import Toolchain
+from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
+from finn.transformation.kernels.hls import HlsAbiRefused
+from finn.transformation.kernels.package import (
+    ElaboratePartition,
+    hierarchical_utilization,
+    partition_utilization_report,
+)
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import NoVivado, reaches_vivado
 
@@ -170,3 +177,81 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     for memory in ("memstream_", "thresholds_"):
         assert any(name.startswith(memory) and name.endswith(".dat") for name in files)
     assert any(name.startswith("finn_partition__") for name in files)
+
+
+# -- what the tools do: ToolUnavailable, ToolFailed (finn.toolchain.launcher) -----------
+
+
+def _tools(tmp_path: Path, scripts: dict[str, str], *, vivado: bool = True) -> Toolchain:
+    """A toolchain whose tools are shell ``scripts`` in a command directory, its Vivado an
+    installation holding ``glbl.v`` (none unless ``vivado``)."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name, body in scripts.items():
+        (tools / name).write_text("#!/bin/sh\n" + body)
+        (tools / name).chmod(0o755)
+    environment = {"PATH": os.defpath}
+    if vivado:
+        installation = tmp_path / "Vivado"
+        (installation / "data/verilog/src").mkdir(parents=True)
+        (installation / "data/verilog/src/glbl.v").write_text("module glbl(); endmodule\n")
+        environment["XILINX_VIVADO"] = str(installation)
+    return Toolchain(Selection(command_dir=str(tools)), environment)
+
+
+#: What Vivado logs when it finds no licence for the part.
+NO_LICENCE = "ERROR: [Common 17-345] A valid license was not found for feature 'Synthesis'"
+
+
+def test_a_failed_packaging_run_is_vivados_failure_naming_its_log(tmp_path: Path) -> None:
+    configure_partition(model := kernel_model())
+    project = tmp_path / "project"
+    toolchain = _tools(tmp_path, {"vivado": f'echo "{NO_LICENCE}" | tee package.log\nexit 1\n'})
+    with pytest.raises(ToolFailed) as failed:
+        model.transform(PackagePartition("sdp_1", directory=project, toolchain=toolchain))
+    assert (failed.value.tool, failed.value.status) == ("vivado", 1)
+    assert failed.value.transcript == project / "package.log"
+    assert (failed.value.code, failed.value.errors) == ("licence-unavailable", (NO_LICENCE,))
+
+
+def test_a_run_that_packages_no_ip_is_vivados_failure(tmp_path: Path) -> None:
+    configure_partition(model := kernel_model())
+    project = tmp_path / "project"
+    toolchain = _tools(tmp_path, {"vivado": "echo done > package.log\n"})
+    with pytest.raises(ToolFailed, match="sdp_1: no IP packaged") as failed:
+        model.transform(PackagePartition("sdp_1", directory=project, toolchain=toolchain))
+    assert (failed.value.status, failed.value.transcript) == (None, project / "package.log")
+    # Nor is a missing or empty utilization report a refusal of the partition.
+    with pytest.raises(ToolFailed, match="one hierarchical utilization report"):
+        partition_utilization_report(project)
+    with pytest.raises(ToolFailed, match="no hierarchical utilization table"):
+        hierarchical_utilization("")
+
+
+def test_elaboration_without_vivado_is_unavailable(tmp_path: Path) -> None:
+    configure_partition(model := kernel_model())
+    toolchain = _tools(tmp_path, {}, vivado=False)
+    with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
+        model.transform(ElaboratePartition(directory=tmp_path / "e", toolchain=toolchain))
+    assert missing.value.tool == "vivado"
+
+
+@pytest.mark.parametrize("tool, log", [("xvlog", "xvlog.log"), ("xelab", "elaborate.log")])
+def test_elaboration_that_fails_is_the_simulators_failure_naming_its_log(
+    tmp_path: Path, tool: str, log: str
+) -> None:
+    configure_partition(model := kernel_model())
+    scripts = {name: "exit 0\n" for name in ("xvlog", "xelab")}
+    scripts[tool] = f'echo "ERROR: [VRFC 10-2989] bad" > {log}\nexit 2\n'
+    directory = tmp_path / "e"
+    with pytest.raises(ToolFailed, match="does not") as failed:
+        model.transform(
+            ElaboratePartition(directory=directory, toolchain=_tools(tmp_path, scripts))
+        )
+    assert (failed.value.tool, failed.value.status) == (tool, 2)
+    assert failed.value.transcript == directory.resolve() / log
+    assert failed.value.errors == ("ERROR: [VRFC 10-2989] bad",)
+
+
+def test_a_refused_hls_product_is_a_refusal() -> None:
+    assert issubclass(HlsAbiRefused, ValueError)

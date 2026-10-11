@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import pytest
 
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import (
     AbiError,
     Bus,
@@ -19,7 +20,9 @@ from finn.kernels.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
-from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData
+from finn.kernels.artifacts.contributions import ContributionError, CopiedSource, GeneratedData
+from finn.kernels.artifacts.interface import InterfaceError
+from finn.kernels.artifacts.ipxact import IpxactError
 from finn.kernels.artifacts.module import (
     Abi,
     BuildError,
@@ -35,6 +38,8 @@ from finn.kernels.artifacts.module import (
     merge,
     module_name,
 )
+from finn.kernels.artifacts.projection import ProjectionError
+from finn.kernels.artifacts.sources import SourceError
 
 CLOCKS = (
     Signal("clk", Direction.IN, 1, Clock()),
@@ -226,3 +231,19 @@ def test_a_register_map_writes_whole_words_at_word_addresses() -> None:
     writes = RegisterMap(((0, 7),))
     kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite", writes),))
     assert kernel.under("activate").exports[0].registers == writes
+
+
+def test_every_artifact_error_is_an_artifact_error() -> None:
+    """One base, which a kernel catches where any artifact error means the module does
+    not form (``kernel-netlist``, ``channel-link``)."""
+    errors = (
+        AbiError,
+        BuildError,
+        ContributionError,
+        SourceError,
+        InterfaceError,
+        IpxactError,
+        ProjectionError,
+    )
+    assert all(issubclass(error, ArtifactError) for error in errors)
+    assert ArtifactError.__bases__ == (Exception,)

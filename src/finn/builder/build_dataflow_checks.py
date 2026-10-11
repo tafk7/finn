@@ -26,6 +26,8 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.platform import BOARDS, Board, TargetRefused, shell_row
+from finn.toolchain import vivado
+from finn.toolchain.launcher import ToolUnavailable
 
 
 class Severity(Enum):
@@ -195,14 +197,13 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
 
 
 def _vivado_release(cfg: DataflowBuildConfig) -> Tuple[Optional[Tuple[int, int]], str]:
-    """The Vivado release the build's own toolchain runs (``Toolchain.probe``), or None
-    and why when none is detected: no Vivado on its route, or its toolchain not
+    """The Vivado release the build's own toolchain runs (``finn.toolchain.vivado.release``),
+    or None and why when none is detected: no Vivado on its route, or its toolchain not
     prepared."""
     try:
-        year, minor = cfg._resolve_toolchain().probe("vivado")
-    except (RuntimeError, OSError) as missing:
+        return vivado.release(cfg._resolve_toolchain()), ""
+    except (ToolUnavailable, RuntimeError, OSError) as missing:
         return None, str(missing)
-    return (year, minor), ""
 
 
 def _vivado_checks(board: Optional[Board], v: Optional[Tuple[int, int]], why: str) -> List[Check]:

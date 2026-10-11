@@ -40,11 +40,13 @@ one part, through the toolchain's HLS frontend, and caches the product under
 its full key, renamed into place under the entry's lock, so a failed or concurrent
 build never publishes a partial product and a second caller waits for the first.
 The key is the request's content, the part and the HLS installation
-(``hls_identity``): a hit never runs the tool. A product (``HlsProduct``) holds the
-exported Verilog with its memory images (``verilog/``), the synthesis reports
-(``report/``), the request it was built from (``request/``) and the run's replay
-script with its output (``synthesize.sh``, ``.stdout.log``, ``.stderr.log``). A
-failed build is kept beside the entry (``<entry>.failed``) and named by the error.
+(``finn.toolchain.launcher.identity`` of the frontend): a hit never runs the tool. A
+product (``HlsProduct``) holds the exported Verilog with its memory images
+(``verilog/``), the synthesis reports (``report/``), the request it was built from
+(``request/``) and the run's replay script with its output (``synthesize.sh``,
+``.stdout.log``, ``.stderr.log``). A failed build is kept beside the entry
+(``<entry>.failed``) and named by the error, a ``ToolFailed`` whose transcript is the
+run's output.
 
 It takes a directory, never a kernel value: ``finn.toolchain`` imports no kernel layer.
 """
@@ -54,6 +56,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -61,7 +64,7 @@ from pathlib import Path
 
 from finn.resources import home, tree_digest
 from finn.resources._store import complete, locked, publish
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, identity
 
 #: The staged request's script, which reads ``$part`` (``finn.kernels.artifacts.hls``).
 REQUEST_SCRIPT = "script.tcl"
@@ -69,30 +72,9 @@ REQUEST_SCRIPT = "script.tcl"
 SYNTHESIS_TIMEOUT = 3 * 3600
 
 
-class HlsFailed(RuntimeError):
-    """A synthesis exited with an error, or left no exported RTL; the message names the
-    kept build and ends with what the tool printed last."""
-
-
 def hls_cache() -> Path:
     """Where HLS products are cached: ``$FINN_HOME/hls``."""
     return home() / "hls"
-
-
-def hls_identity(toolchain: Toolchain) -> str:
-    """The toolchain's HLS installation by what it is, never where it is installed: its
-    release (the ``XILINX_VERSION_DEFAULT`` its ``data/version.sh`` states, ``unstated``
-    without one) and its version file's digest, beside the frontend that runs it."""
-    data = toolchain.hls_installation() / "data"
-    release = "unstated"
-    if (data / "version.sh").is_file():
-        stated = re.search(
-            r"^XILINX_VERSION_DEFAULT=(\S+)$", (data / "version.sh").read_text(), re.MULTILINE
-        )
-        release = stated.group(1) if stated else release
-    version = data / "version.dat"
-    stamp = hashlib.sha256(version.read_bytes()).hexdigest()[:16] if version.is_file() else "none"
-    return f"{toolchain.selection.hls_frontend} {release} {stamp}"
 
 
 def synthesis_key(request: Path, part: str, identity: str) -> str:
@@ -118,19 +100,11 @@ class HlsProduct:
         return self.directory / "report"
 
 
-def _exported(work: Path) -> Path:
-    """The one solution's ``syn`` directory below the run's directory."""
+def _exported(work: Path) -> Path | None:
+    """The one solution's ``syn`` directory below the run's directory; None unless
+    there is exactly one."""
     found = sorted(work.glob("*/*/syn/verilog"))
-    if len(found) != 1:
-        raise HlsFailed(f"{work}: the run left {len(found)} exported RTL directories, not one")
-    return found[0].parent
-
-
-def _tail(path: Path, lines: int = 20) -> str:
-    try:
-        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
-    except OSError:
-        return ""
+    return found[0].parent if len(found) == 1 else None
 
 
 def synthesize(
@@ -145,21 +119,22 @@ def synthesize(
 
     ``name`` names the entry, ``<name>-<key16>`` under ``cache`` (``hls_cache()`` by
     default); ``toolchain`` runs the frontend (the machine's by default). Raises
-    ``HlsFailed`` when the tool fails or leaves no exported RTL."""
+    ``ToolFailed`` when the tool fails or leaves no exported RTL, ``ToolUnavailable``
+    when the toolchain has no HLS installation or frontend to run."""
     toolchain = toolchain or host_toolchain()
     cache = hls_cache() if cache is None else cache
     if not (Path(request) / REQUEST_SCRIPT).is_file():
-        raise HlsFailed(f"{request} holds no {REQUEST_SCRIPT}: it is not a staged request")
-    key = synthesis_key(Path(request), part, hls_identity(toolchain))
+        raise ValueError(f"{request} holds no {REQUEST_SCRIPT}: it is not a staged request")
+    key = synthesis_key(Path(request), part, identity(toolchain, toolchain.hls_frontend()))
     entry_name = f"{name}-{key[:16]}"
     with locked(cache, entry_name) as entry:
         if complete(entry, key):
             return HlsProduct(entry)
         work = Path(tempfile.mkdtemp(dir=cache, prefix=f".{entry_name}."))
+        failed = cache / f"{entry_name}.failed"
         try:
-            _build(Path(request), part, work, toolchain)
+            _build(Path(request), part, work, toolchain, kept=failed)
         except BaseException:
-            failed = cache / f"{entry_name}.failed"
             shutil.rmtree(failed, ignore_errors=True)
             work.rename(failed)
             raise
@@ -167,30 +142,37 @@ def synthesize(
     return HlsProduct(entry)
 
 
-def _build(request: Path, part: str, work: Path, toolchain: Toolchain) -> None:
-    """Run the request in ``work/request`` and collect its product into ``work``."""
+def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: Path) -> None:
+    """Run the request in ``work/request`` and collect its product into ``work``; a
+    failure names the build where it is ``kept`` (``work``, once moved there)."""
     run = work / "request"
     shutil.copytree(request, run)
     driver = run / "synthesize.tcl"
     driver.write_text(f"set part {{{part}}}\nsource {REQUEST_SCRIPT}\n")
     frontend, args = toolchain.hls_command(driver.name)
     replay = work / "synthesize.sh"
+    # What the run printed, where the kept build holds it.
+    transcript = kept / f"{replay.name}.stdout.log"
     try:
         result = toolchain.run(
             frontend, args, cwd=run, timeout=SYNTHESIS_TIMEOUT, check=False, replay=replay
         )
-    except Exception as error:
-        raise HlsFailed(f"HLS did not finish; the build is kept at {work}") from error
+    except (subprocess.SubprocessError, InterruptedError, OSError) as error:
+        raise ToolFailed.of(
+            frontend,
+            getattr(error, "output", None) or b"",
+            transcript=transcript,
+            what=f"it did not finish ({type(error).__name__})",
+        ) from error
     if result.returncode != 0:
-        raise HlsFailed(
-            f"HLS exited with {result.returncode}; the build is kept at {work}:\n"
-            + _tail(Path(f"{replay}.stdout.log"))
-        )
-    try:
-        syn = _exported(run)
-    except HlsFailed as error:
-        raise HlsFailed(
-            f"{error}; the build is kept at {work}:\n" + _tail(Path(f"{replay}.stdout.log"))
+        raise ToolFailed.of_run(frontend, result, transcript=transcript)
+    syn = _exported(run)
+    if syn is None:
+        raise ToolFailed.of(
+            frontend,
+            result.stdout + result.stderr,
+            transcript=transcript,
+            what="the run left no one exported RTL directory",
         )
     # The replay runs where the product is published, not in the temporary directory.
     replay.write_text(
@@ -238,4 +220,5 @@ class CallHLS:
         result = toolchain.run(frontend, args, cwd=self.code_gen_dir, check=False)
         sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
         sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
-        result.check_returncode()
+        if result.returncode != 0:
+            raise ToolFailed.of_run(frontend, result, what=f"{self.tcl_script}")

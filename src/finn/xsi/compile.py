@@ -1,31 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Pure XSI design compilation/discovery; importing this module never loads the bridge."""
-import errno
+"""Pure XSI design compilation/discovery; importing this module never loads the bridge.
+
+Which Vivado compiles and simulates is the toolchain's (``finn.toolchain.vivado``), the
+machine's unless one is given; without one, ``ToolUnavailable``.
+"""
 import json
 import os
-import re
 from pathlib import Path
-from typing import Optional
 
-from finn.toolchain.launcher import host_toolchain, xelab_threads
-from finn.xsi._artifacts import tool_identity, write_record
+from finn.toolchain import vivado
+from finn.toolchain.launcher import ToolFailed, host_toolchain, identity, xelab_threads
+from finn.xsi._artifacts import write_record
 from finn_xsi.srcutil import order_pkg_first
-
-
-def locate_glbl(environ=None) -> Optional[str]:
-    """
-    Tries to determine the glbl.v file path from environment variables.
-    Returns None if it cannot be found.
-    """
-    # Get GLBL from the Vitis environment variable
-    vivado_path = (os.environ if environ is None else environ).get("XILINX_VIVADO", "")
-    if vivado_path:
-        glbl_path = os.path.join(vivado_path, "data", "verilog", "src", "glbl.v")
-        if os.path.isfile(glbl_path):
-            return glbl_path
-    return None
 
 
 def compile_sim_obj(
@@ -40,14 +28,13 @@ def compile_sim_obj(
     cancel=None,
 ):
     toolchain = toolchain or host_toolchain()
-    identity = tool_identity(toolchain)
+    glbl = str(vivado.glbl(toolchain))
+    tool = identity(toolchain, "xelab")
     sim_out_dir = os.fspath(sim_out_dir)
     source_list = list(map(os.fspath, source_list))
     # create a .prj file with the source files
     with open(sim_out_dir + "/rtlsim.prj", "w") as f:
-        glbl = locate_glbl(toolchain.environment)
-        if glbl is not None:
-            f.write(f"verilog work {json.dumps(glbl, ensure_ascii=False)}\n")
+        f.write(f"verilog work {json.dumps(glbl, ensure_ascii=False)}\n")
 
         # extract (unique, by using a set) verilog headers for inclusion
         verilog_headers = {
@@ -100,6 +87,7 @@ def compile_sim_obj(
     ]
 
     cmd_xelab = [
+        "work.glbl",
         "work." + top_module_name,
         "-relax",
         "-prj",
@@ -119,10 +107,8 @@ def compile_sim_obj(
         cmd_xelab.append("-L")
         cmd_xelab.append(lib)
 
-    if locate_glbl(toolchain.environment) is not None:
-        cmd_xelab.insert(0, "work.glbl")
-
-    # check=True so an xelab failure is raised here, not later as a missing xsimk.so
+    # check=True so an xelab failure is raised here (ToolFailed), not later as a missing
+    # xsimk.so
     toolchain.run(
         "xelab",
         cmd_xelab,
@@ -135,25 +121,26 @@ def compile_sim_obj(
     out_so_full_path = sim_out_dir + "/" + out_so_relative_path
 
     if not os.path.isfile(out_so_full_path):
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), out_so_full_path)
+        raise ToolFailed.of(
+            "xelab",
+            transcript=Path(sim_out_dir) / "compile_sim.sh.stdout.log",
+            what=f"it left no {out_so_full_path}",
+        )
 
-    sources = list(source_list)
-    if locate_glbl(toolchain.environment):
-        sources.append(locate_glbl(toolchain.environment))
     write_record(
-        out_so_full_path, kind="design", tool=identity, sources=sources, arguments=cmd_xelab
+        out_so_full_path,
+        kind="design",
+        tool=tool,
+        sources=[*source_list, glbl],
+        arguments=cmd_xelab,
     )
     return (sim_out_dir, out_so_relative_path)
 
 
-def get_simkernel_so(environ=None):
-    vivado_path = (os.environ if environ is None else environ).get("XILINX_VIVADO", "")
-    # xsi kernel lib name depends on Vivado version (renamed in 2024.2)
-    match = re.search(r"\b(20\d{2})\.(1|2)\b", vivado_path)
-    if match is None:
-        raise ValueError("Select XILINX_VIVADO with a recognizable version, or pass a kernel path")
-    year, minor = int(match.group(1)), int(match.group(2))
-    if (year, minor) > (2024, 1):
+def get_simkernel_so(toolchain=None):
+    """The simulation kernel library XSI loads, by the release of the toolchain's Vivado
+    (the machine's by default; ``finn.toolchain.vivado.release``): renamed in 2024.2."""
+    if vivado.release(toolchain or host_toolchain()) > (2024, 1):
         simkernel_so = "libxv_simulator_kernel.so"
     else:
         simkernel_so = "librdi_simulator_kernel.so"

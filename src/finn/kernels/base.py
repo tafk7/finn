@@ -81,6 +81,7 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -446,7 +447,7 @@ class Kernel(Space):
                 *(item.value.under(str(item.node)) for item in self.netlists),
                 Fragment(exports=exports),
             )
-        except BuildError as error:
+        except ArtifactError as error:
             return reject("kernel-netlist", str(error))
 
     @derived
@@ -488,7 +489,7 @@ class Kernel(Space):
                 self.composed_abi,
                 self.fragment,
             )
-        except BuildError as error:
+        except ArtifactError as error:
             return reject("kernel-netlist", str(error))
 
     module = View(

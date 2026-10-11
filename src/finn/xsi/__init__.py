@@ -77,7 +77,7 @@ _ADAPTER_FUNCTIONS = [
 
 def __getattr__(name: str) -> Any:
     """Dynamically wrap finn_xsi.adapter functions."""
-    if name in {"locate_glbl", "compile_sim_obj", "get_simkernel_so"}:
+    if name in {"compile_sim_obj", "get_simkernel_so"}:
         from finn.xsi import compile as compilation  # noqa: PLC0415
 
         return getattr(compilation, name)

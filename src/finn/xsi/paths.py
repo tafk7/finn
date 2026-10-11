@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from finn import resources
+from finn.toolchain.launcher import Toolchain, identity
 
 # Stable, read-only paths to FINN's own sources: the xsi bridge's. Wheels must be
 # unpacked (as pip normally installs them). Generated projects may retain these
@@ -45,24 +46,24 @@ def xsi_source_dir() -> Path:
     return Path(resource_path("xsi"))
 
 
-def xsi_artifact_dir() -> Path:
-    """Directory the compiled ``xsi.so`` for the selected toolchain lives in.
+def xsi_artifact_dir(toolchain: Toolchain) -> Path:
+    """Directory the compiled ``xsi.so`` for ``toolchain`` lives in.
 
-    One directory per Vivado installation and Python ABI, under
-    ``$FINN_HOME/xsi``, so switching between them reuses each build instead of
-    rebuilding. FINN_XSI_BUILD_DIR selects an exact directory instead.
+    One directory per Vivado installation, by what it is (``identity``), and Python
+    ABI, under ``$FINN_HOME/xsi``, so switching between them reuses each build
+    instead of rebuilding. FINN_XSI_BUILD_DIR selects an exact directory instead.
+    ``ToolUnavailable`` when the toolchain selects no Vivado.
     """
     override = os.environ.get("FINN_XSI_BUILD_DIR")
     if override:
         return Path(override)
-    vivado = os.environ.get("XILINX_VIVADO", "")
-    vivado = os.path.realpath(vivado) if vivado else "none"
+    tool = identity(toolchain, "xsim")
     abi = sysconfig.get_config_var("SOABI") or "unknown"
-    key = hashlib.sha256(f"{vivado}\0{abi}".encode()).hexdigest()[:16]
+    key = hashlib.sha256(f"{tool}\0{abi}".encode()).hexdigest()[:16]
     return resources.home() / "xsi" / f"{abi}-{key}"
 
 
-def find_xsi_so() -> Optional[Path]:
-    """Return the compiled extension for the selected toolchain, if it was built."""
-    candidate = xsi_artifact_dir() / "xsi.so"
+def find_xsi_so(toolchain: Toolchain) -> Optional[Path]:
+    """Return the compiled extension for ``toolchain``, if it was built."""
+    candidate = xsi_artifact_dir(toolchain) / "xsi.so"
     return candidate if candidate.is_file() else None

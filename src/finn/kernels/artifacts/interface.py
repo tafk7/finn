@@ -35,6 +35,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -55,7 +56,7 @@ INTERFACE_FILE = "interface.json"
 STREAM_FACTS = ("tensor", "element", "range", "lanes", "beats", "shape", "order")
 
 
-class InterfaceError(Exception):
+class InterfaceError(ArtifactError):
     """Pins and facts that describe no interface."""
 
 

@@ -23,10 +23,11 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Union
 
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.projection import content_digest, digest
 
 
-class ContributionError(Exception):
+class ContributionError(ArtifactError):
     """A contribution names no file it could stand for."""
 
 

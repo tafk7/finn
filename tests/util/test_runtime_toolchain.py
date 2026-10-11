@@ -14,7 +14,13 @@ import time
 from pathlib import Path
 
 from finn.toolchain.hls import CallHLS
-from finn.toolchain.launcher import Selection, Toolchain, run_process
+from finn.toolchain.launcher import (
+    Selection,
+    Toolchain,
+    ToolFailed,
+    ToolUnavailable,
+    run_process,
+)
 
 
 def executable(path, body):
@@ -23,7 +29,7 @@ def executable(path, body):
     return path
 
 
-def test_xelab_compiles_without_native_import(tmp_path):
+def test_xelab_compiles_without_native_import(tmp_path, vivado_installation):
     from finn.xsi.compile import compile_sim_obj  # noqa: PLC0415
 
     tools = tmp_path / "tools"
@@ -37,11 +43,14 @@ def test_xelab_compiles_without_native_import(tmp_path):
     source = tmp_path / "input.sv"
     source.write_text("module top(); endmodule\n")
     modules = set(sys.modules)
+    vivado = vivado_installation(tmp_path / "Vivado")
     directory, relative = compile_sim_obj(
         "top",
         [str(source)],
         str(tmp_path),
-        toolchain=Selection(command_dir=str(tools)).prepare(),
+        toolchain=Selection(command_dir=str(tools)).prepare(
+            {"PATH": os.defpath, "XILINX_VIVADO": str(vivado)}
+        ),
     )
     assert Path(directory, relative).is_file()
     assert Path(directory, relative + ".finn.json").is_file()
@@ -223,11 +232,12 @@ def test_failure_logs_status_and_settings_errors(tmp_path, caplog):
         'import sys; print("useful log"); sys.stderr.write("failure"); sys.exit(7)\n',
     )
     tc = Selection(command_dir=str(tmp_path)).prepare({"SECRET": "do-not-log"})
-    with caplog.at_level("INFO"), pytest.raises(subprocess.CalledProcessError) as exc:
-        tc.run("vivado")
-    assert exc.value.returncode == 7
-    assert exc.value.stdout == b"useful log\n"
-    assert exc.value.stderr == b"failure"
+    with caplog.at_level("INFO"), pytest.raises(ToolFailed) as exc:
+        tc.run("vivado", replay=tmp_path / "run.sh")
+    assert (exc.value.tool, exc.value.status, exc.value.code) == ("vivado", 7, "tool-error")
+    assert exc.value.errors == ("useful log", "failure")
+    assert exc.value.transcript == tmp_path / "run.sh.stdout.log"
+    assert exc.value.transcript.read_bytes() == b"useful log\n"
     assert "do-not-log" not in caplog.text
     assert "result=7" in caplog.text
     script = tmp_path / "bad-settings"
@@ -237,7 +247,7 @@ def test_failure_logs_status_and_settings_errors(tmp_path, caplog):
     script.write_text("sleep 30\n")
     with pytest.raises(RuntimeError, match="capture vendor settings"):
         Selection(settings=(script,)).prepare(timeout=0.1)
-    with pytest.raises(RuntimeError, match="Could not probe"):
+    with pytest.raises(ToolUnavailable, match="missing: not on this toolchain's route"):
         tc.probe("missing")
 
 
@@ -353,7 +363,7 @@ def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
     assert Selection().prepare(named).hls_installation() == hls
     del named["XILINX_HLS"]
     assert Selection().prepare(named).hls_installation() == vitis
-    with pytest.raises(LookupError, match="XILINX_HLS or XILINX_VITIS"):
+    with pytest.raises(ToolUnavailable, match="XILINX_HLS or XILINX_VITIS"):
         Selection().prepare({"PATH": os.defpath}).hls_installation()
 
 

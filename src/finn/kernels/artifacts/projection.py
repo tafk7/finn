@@ -33,6 +33,8 @@ from enum import Enum
 from hashlib import sha256
 from typing import Union
 
+from finn.kernels.artifacts import ArtifactError
+
 #: Bumped when the projection's *shape* changes -- a new tag, a different path
 #: syntax, a changed float encoding.  Every digest is taken over a preimage
 #: that begins with this, so a change of shape changes every digest.
@@ -48,7 +50,7 @@ Projectable = Union[
 ]
 
 
-class ProjectionError(Exception):
+class ProjectionError(ArtifactError):
     """A value has no canonical projection, so it cannot enter a key."""
 
 

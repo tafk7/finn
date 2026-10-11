@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -32,7 +33,7 @@ from finn.kernels.artifacts.build import EmittedModule
 from finn.kernels.artifacts.sources import include_directories
 
 
-class IpxactError(Exception):
+class IpxactError(ArtifactError):
     """A pin the IP-XACT packaging cannot declare."""
 
 

@@ -9,50 +9,59 @@ import os
 from pathlib import Path
 
 from finn import xsi
+from finn.toolchain.launcher import Selection, ToolUnavailable, host_toolchain, identity
 from finn.xsi import paths
 from finn.xsi import setup as xsi_setup
 from finn.xsi._artifacts import write_record
 
 
 @pytest.fixture
-def toolchain(tmp_path, monkeypatch):
-    vivado = tmp_path / "Vivado"
-    vivado.mkdir()
+def toolchain(tmp_path, monkeypatch, vivado_installation):
+    vivado = vivado_installation(tmp_path / "Vivado")
     monkeypatch.setenv("XILINX_VIVADO", str(vivado))
     monkeypatch.setenv("FINN_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("FINN_XSI_BUILD_DIR", raising=False)
-    monkeypatch.setattr(xsi_setup, "check_prerequisites", lambda: [])
+    monkeypatch.setattr(xsi_setup, "check_prerequisites", lambda toolchain: [])
     log = tmp_path / "builds.log"
 
-    def fake_compile(artifact, verbose):
+    def fake_compile(artifact, verbose, toolchain):
         with open(log, "a") as handle:
             handle.write(f"{os.getpid()}\n")
         partial = artifact.with_name(".partial")
         partial.write_bytes(b"native bridge")
         os.replace(partial, artifact)
-        write_record(artifact, kind="bridge", tool=xsi_setup.bridge_identity(), sources=[])
+        write_record(artifact, kind="bridge", tool=identity(toolchain, "xsim"), sources=[])
 
     monkeypatch.setattr(xsi_setup, "_compile", fake_compile)
     return vivado, log
 
 
-def test_artifacts_are_keyed_by_vivado_installation(tmp_path, monkeypatch):
+def test_artifacts_are_keyed_by_vivado_installation(tmp_path, monkeypatch, vivado_installation):
+    """By what the installation is, not where: two releases build apart, and one
+    release installed twice shares its build."""
     monkeypatch.setenv("FINN_HOME", str(tmp_path))
     monkeypatch.delenv("FINN_XSI_BUILD_DIR", raising=False)
-    monkeypatch.setenv("XILINX_VIVADO", "/tools/Xilinx/Vivado/2022.2")
-    first = paths.xsi_artifact_dir()
-    monkeypatch.setenv("XILINX_VIVADO", "/tools/Xilinx/2025.1/Vivado")
-    second = paths.xsi_artifact_dir()
+
+    def directory(path, release):
+        installation = vivado_installation(path, release)
+        return paths.xsi_artifact_dir(
+            Selection().prepare({"PATH": os.defpath, "XILINX_VIVADO": str(installation)})
+        )
+
+    first = directory(tmp_path / "2022.2/Vivado", "2022.2")
+    second = directory(tmp_path / "2025.1/Vivado", "2025.1")
     assert first != second and first.parent == second.parent == tmp_path / "xsi"
+    assert directory(tmp_path / "copy/Vivado", "2025.1") == second
     monkeypatch.setenv("FINN_XSI_BUILD_DIR", str(tmp_path / "exact"))
-    assert paths.xsi_artifact_dir() == tmp_path / "exact"
+    assert paths.xsi_artifact_dir(host_toolchain()) == tmp_path / "exact"
 
 
 def test_missing_toolchain_is_reported_not_skipped(monkeypatch):
     monkeypatch.delenv("XILINX_VIVADO", raising=False)
     assert not xsi.is_available()
-    with pytest.raises(RuntimeError, match="XILINX_VIVADO"):
+    with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
         xsi_setup.ensure_built()
+    assert missing.value.tool == "vivado"
 
 
 def test_first_use_builds_once_and_reuses(toolchain):

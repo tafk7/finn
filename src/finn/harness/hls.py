@@ -30,7 +30,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import TOP, axis_type, include_path, stage_hls
 from finn.kernels.artifacts.module import Leaf
-from finn.toolchain.launcher import Toolchain, host_toolchain, run_process
+from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
@@ -42,8 +42,8 @@ CXXFLAGS = ("-std=c++14", "-O2", "-Wno-unknown-pragmas")
 
 
 class CSimulationFailed(AssertionError):
-    """The top or its driver did not compile, or the driver did not run to its end; the
-    message is what the compiler or the driver printed."""
+    """The driver did not run to its end; the message is what it printed. A verdict:
+    a top or driver that does not compile is the compiler's ``ToolFailed``."""
 
 
 def _streams(leaf: Leaf) -> tuple[Bus, ...]:
@@ -192,7 +192,7 @@ def c_simulate(
         check=False,
     )
     if compiled.returncode != 0:
-        raise CSimulationFailed((compiled.stdout + compiled.stderr).decode(errors="replace"))
+        raise ToolFailed.of_run("g++", compiled, what=f"{request.function} does not compile")
     ran = run_process(
         [str(directory / "csim")], env=toolchain.environment, cwd=directory, check=False
     )

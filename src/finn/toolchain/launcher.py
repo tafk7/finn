@@ -18,10 +18,16 @@ the one way a tool process is started and reaped.
 A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
 so that one build runs every tool through one route; without one, it runs by the
 machine's (``host_toolchain``). Nothing is discovered or activated on import.
+
+A tool's outcome has two errors of its own, whoever runs it: ``ToolUnavailable``
+(a ``LookupError``) when the toolchain names no installation of it or has no such
+tool on its route, and ``ToolFailed`` (a ``RuntimeError``) when it ran and failed.
+``identity`` is an installation by what it is, the one key of what a tool built.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -36,8 +42,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
-from finn.toolchain import host
-from finn.toolchain.vivado import vivado_jobs
+# Modules, not names: finn.toolchain.vivado reads this module's errors in turn.
+from finn.toolchain import host, vivado
 
 StrPath = str | os.PathLike[str]
 
@@ -181,7 +187,7 @@ class Selection:
         if self.hls_frontend is not None and self.hls_frontend not in HLS_FRONTENDS:
             raise ValueError("Unknown HLS frontend: " + self.hls_frontend)
         if self.vivado_jobs is not None:
-            vivado_jobs(self.vivado_jobs)
+            vivado.vivado_jobs(self.vivado_jobs)
 
     def over(self, base: Selection) -> Selection:
         """This selection laid over ``base`` (the machine's): each field it states
@@ -262,6 +268,119 @@ class Selection:
         return Toolchain(self, environment)
 
 
+#: What selects a tool, as a ``ToolUnavailable`` names it.
+SELECTED_BY = (
+    "the host file selects the machine's installation (FINN_XILINX_PATH and "
+    "FINN_XILINX_VERSION in ~/.config/finn/xilinx.env, or the file FINN_XILINX_ENV names; "
+    "scripts/activate.sh, docker/run), and a build configuration's toolchain selects a build's"
+)
+
+
+class ToolUnavailable(LookupError):
+    """No installation of a tool, or no such tool on the toolchain's route: ``tool``
+    names it, ``reason`` what is missing; the message also says what selects it
+    (``SELECTED_BY``)."""
+
+    def __init__(self, tool: str, reason: str) -> None:
+        super().__init__(f"{tool}: {reason}; {SELECTED_BY}")
+        self.tool = tool
+        self.reason = reason
+
+    def __reduce__(self) -> tuple[type[ToolUnavailable], tuple[str, str]]:
+        return (ToolUnavailable, (self.tool, self.reason))
+
+
+#: How many of a failed tool's error lines a ``ToolFailed`` quotes.
+ERROR_LINES = 5
+_ERROR_LINE = re.compile(r"^\s*(ERROR|FATAL|CRITICAL WARNING)\b|\berror:|^Error\b")
+#: What a transcript says when the tool found no licence (Vivado's words, FlexLM's).
+_NO_LICENCE = re.compile(
+    r"valid licen[cs]e was not found|licen[cs]e checkout failed|"
+    r"no licen[cs]e (is )?available|FLEX(net|lm) licensing error",
+    re.IGNORECASE,
+)
+
+
+class ToolFailed(RuntimeError):
+    """A tool that ran and failed: ``tool``, its exit ``status`` (None when it exited
+    cleanly but left nothing of what it was run for, or did not exit), ``transcript``
+    (the log that tells why, when there is one), ``errors`` (the first error lines it
+    printed, else its last lines) and a ``code``: ``licence-unavailable`` when what it
+    printed says no licence was found, else ``tool-error``. ``what`` says what failed."""
+
+    def __init__(
+        self,
+        tool: str,
+        status: int | None = None,
+        transcript: StrPath | None = None,
+        errors: Sequence[str] = (),
+        code: str = "tool-error",
+        what: str = "",
+    ) -> None:
+        self.tool = tool
+        self.status = status
+        self.transcript = None if transcript is None else Path(transcript)
+        self.errors = tuple(errors)
+        self.code = code
+        self.what = what
+        message = f"{tool} failed" + ("" if status is None else f" with exit status {status}")
+        message += f": {what}" if what else ""
+        message += f" ({code})" if code != "tool-error" else ""
+        message += f"; transcript {self.transcript}" if self.transcript is not None else ""
+        super().__init__("\n  ".join((message, *self.errors)))
+
+    def __reduce__(self) -> tuple[type[ToolFailed], tuple[object, ...]]:
+        # Crosses into the parent of a worker process as it was raised.
+        return (
+            ToolFailed,
+            (self.tool, self.status, self.transcript, self.errors, self.code, self.what),
+        )
+
+    @classmethod
+    def of(
+        cls,
+        tool: str,
+        printed: str | bytes = "",
+        *,
+        status: int | None = None,
+        transcript: StrPath | None = None,
+        what: str = "",
+    ) -> ToolFailed:
+        """The failure of ``tool``, read from what it ``printed`` and from its
+        ``transcript`` when that file exists: its first error lines and its code."""
+        if isinstance(printed, bytes):
+            printed = printed.decode(errors="replace")
+        texts = [printed]
+        if transcript is not None and Path(transcript).is_file():
+            texts.append(Path(transcript).read_text(errors="replace"))
+        # A tool's log often repeats what it printed: each line once, in order.
+        lines = list(dict.fromkeys(line.rstrip() for text in texts for line in text.splitlines()))
+        lines = [line for line in lines if line.strip()]
+        errors = [line for line in lines if _ERROR_LINE.search(line)][:ERROR_LINES]
+        if not errors:
+            errors = lines[-ERROR_LINES:]
+        code = "licence-unavailable" if any(map(_NO_LICENCE.search, lines)) else "tool-error"
+        return cls(tool, status=status, transcript=transcript, errors=errors, code=code, what=what)
+
+    @classmethod
+    def of_run(
+        cls,
+        tool: str,
+        result: subprocess.CompletedProcess[bytes],
+        *,
+        transcript: StrPath | None = None,
+        what: str = "",
+    ) -> ToolFailed:
+        """The failure of a run of ``tool`` that exited non-zero (``ToolFailed.of``)."""
+        return cls.of(
+            tool,
+            (result.stdout or b"") + (result.stderr or b""),
+            status=result.returncode,
+            transcript=transcript,
+            what=what,
+        )
+
+
 #: The simulator libraries an XSI simulation loads, by the installation that has
 #: them: the Vivado simulation kernel (``finn_xsi``), and the floating-point
 #: operators HLS-generated code links. docker/finn-toolchain.sh puts the same
@@ -295,7 +414,7 @@ class Toolchain:
         """The argv that runs ``tool`` (a name, not a path) with ``args`` on this
         route: under the command directory when one is selected, behind the
         launcher when there is one. A local tool not on the environment's PATH is
-        ``FileNotFoundError``."""
+        ``ToolUnavailable``."""
         if Path(tool).name != tool:
             raise ValueError("Pass a tool name, not a local executable path")
         selection = self.selection
@@ -306,22 +425,26 @@ class Toolchain:
             not selection.launcher
             and shutil.which(executable, path=self.environment.get("PATH", "")) is None
         ):
-            raise FileNotFoundError(
-                f"{executable} not found (command_dir={selection.command_dir!r})"
+            where = (
+                f"in the command directory {selection.command_dir}"
+                if selection.command_dir
+                else "on the PATH of its environment"
             )
+            raise ToolUnavailable(tool, f"not on this toolchain's route ({where})")
         return [*selection.launcher, executable, *(os.fspath(arg) for arg in args)]
 
     def hls_installation(self) -> Path:
         """The local installation whose HLS C++ headers (``include/``) and C
         simulation libraries (``lnx64/``) code compiled by ``g++`` uses: the
         environment's ``XILINX_HLS``, else ``XILINX_VITIS`` (whose installation
-        carries HLS from 2025.1). ``LookupError`` when it names neither."""
+        carries HLS from 2025.1). ``ToolUnavailable`` when it names neither."""
         for variable in ("XILINX_HLS", "XILINX_VITIS"):
             if self.environment.get(variable):
                 return Path(self.environment[variable])
-        raise LookupError(
-            "This toolchain names no HLS installation (XILINX_HLS or XILINX_VITIS) "
-            "for HLS C++ headers and C simulation libraries"
+        raise ToolUnavailable(
+            "HLS",
+            "this toolchain names no HLS installation (XILINX_HLS or XILINX_VITIS) "
+            "for HLS C++ headers and C simulation libraries",
         )
 
     def simulation_environment(self) -> dict[str, str]:
@@ -354,11 +477,15 @@ class Toolchain:
         cancel: Cancel | None = None,
         check: bool = True,
         replay: StrPath | None = None,
+        transcript: StrPath | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         """Run ``tool`` in the prepared environment, updated by ``env``
-        (``run_process``'s contract otherwise). ``replay`` names a script written
-        before the run that repeats the command by hand, beside which the run's
-        stdout and stderr are kept (``<replay>.stdout.log``, ``.stderr.log``)."""
+        (``run_process``'s contract otherwise; with ``check``, a non-zero exit is
+        ``ToolFailed``). ``replay`` names a script written before the run that repeats
+        the command by hand, beside which the run's stdout and stderr are kept
+        (``<replay>.stdout.log``, ``.stderr.log``). ``transcript`` is the log the tool
+        writes itself (``vivado -log``), which a ``ToolFailed`` names; by default the
+        replay's stdout. A tool not on the route is ``ToolUnavailable``."""
         environment = {**self.environment, **(env or {})}
         command = self.command(tool, *args)
         if replay is not None:
@@ -378,7 +505,7 @@ class Toolchain:
         )
         try:
             result = run_process(
-                command, env=environment, cwd=cwd, timeout=timeout, cancel=cancel, check=check
+                command, env=environment, cwd=cwd, timeout=timeout, cancel=cancel, check=False
             )
         except (subprocess.SubprocessError, InterruptedError, KeyboardInterrupt) as exc:
             if replay is not None:
@@ -388,6 +515,10 @@ class Toolchain:
         if replay is not None:
             Path(str(replay) + ".stdout.log").write_bytes(result.stdout)
             Path(str(replay) + ".stderr.log").write_bytes(result.stderr)
+        if check and result.returncode != 0:
+            if transcript is None and replay is not None:
+                transcript = str(replay) + ".stdout.log"
+            raise ToolFailed.of_run(tool, result, transcript=transcript)
         return result
 
     def _probe_key(self, *what: Hashable) -> tuple[Hashable, ...]:
@@ -395,37 +526,45 @@ class Toolchain:
 
     def probe(self, tool: str, timeout: float = PROBE_TIMEOUT) -> tuple[int, ...]:
         """The tool's AMD release, (year, minor), asked through exactly the execution
-        route; once per selection and PATH in a process. Not a licence test."""
+        route; once per selection and PATH in a process. Not a licence test.
+        ``ToolUnavailable`` when the tool is not on the route, or does not answer
+        with a release."""
         key = self._probe_key("version", tool)
         if key in _VERSIONS:
             return _VERSIONS[key]
+        route = shlex.join(self.selection.launcher) if self.selection.launcher else "local"
         try:
             result = self.run(
                 tool, ["--version" if tool == "vitis-run" else "-version"], timeout=timeout
             )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise RuntimeError(
-                f"Could not probe {tool} through {self.selection.launcher or 'local'}; "
-                "check selection, site wrapper and probe timeout"
+        except (OSError, subprocess.SubprocessError, ToolFailed) as exc:
+            raise ToolUnavailable(
+                tool,
+                f"could not probe it through the {route} route ({exc}); check the "
+                "selection, site wrapper and probe timeout",
             ) from exc
         banner = (result.stdout + result.stderr).decode("utf-8", errors="replace")
         match = re.search(r"(?<!\d)(20\d{2})\.(\d+)\b", banner)
         if not match:
-            raise RuntimeError(f"{tool} did not report a recognizable AMD version")
+            raise ToolUnavailable(tool, "its version probe reports no recognizable AMD release")
         version = tuple(map(int, match.groups()))
         _LOG.info("identity tool=%s version=%s.%s", tool, *version)
         _VERSIONS[key] = version
         return version
 
-    def hls_command(self, script: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, list[str]]:
-        """The selected HLS frontend and its arguments to run ``script``; refused
-        (``ValueError``) when the probed release does not match the frontend."""
-        frontend = self.selection.hls_frontend
-        if frontend is None:
+    def hls_frontend(self) -> str:
+        """The HLS frontend this selection names; ``ValueError`` when it names none."""
+        if self.selection.hls_frontend is None:
             raise ValueError(
                 "This selection names no HLS frontend; state one, or lay it over the "
                 "machine's (host_selection)"
             )
+        return self.selection.hls_frontend
+
+    def hls_command(self, script: str, timeout: float = PROBE_TIMEOUT) -> tuple[str, list[str]]:
+        """The selected HLS frontend and its arguments to run ``script``; refused
+        (``ValueError``) when the probed release does not match the frontend."""
+        frontend = self.hls_frontend()
         version = self.probe(frontend, timeout)
         # These are FINN code-generation constraints, separate from whether a
         # command exists. Preserve the standalone/unified transition deliberately.
@@ -449,6 +588,31 @@ class Toolchain:
             _HLS_CAPABLE.add(capability)
         args = ["--mode", "hls", "--tcl", script] if frontend == "vitis-run" else ["-f", script]
         return frontend, args
+
+
+def identity(toolchain: Toolchain, tool: str) -> str:
+    """The installation ``tool`` runs from, by what it is, never where it is installed:
+    ``tool``, the release its ``data/version.sh`` states (``XILINX_VERSION_DEFAULT``,
+    ``unstated`` without one) and its ``data/version.dat``'s digest (``none`` without
+    one). An HLS frontend's installation is the HLS installation
+    (``Toolchain.hls_installation``), any other tool's Vivado's
+    (``finn.toolchain.vivado.installation``). The one key of what a tool built: the
+    HLS cache's, a compiled XSI design's and the XSI bridge's. Reads two files and
+    runs nothing; ``ToolUnavailable`` when the toolchain names no such installation."""
+    if tool in HLS_FRONTENDS:
+        installation = toolchain.hls_installation()
+    else:
+        installation = vivado.installation(toolchain)
+    data = installation / "data"
+    release = "unstated"
+    if (data / "version.sh").is_file():
+        stated = re.search(
+            r"^XILINX_VERSION_DEFAULT=(\S+)$", (data / "version.sh").read_text(), re.MULTILINE
+        )
+        release = stated.group(1) if stated else release
+    version = data / "version.dat"
+    stamp = hashlib.sha256(version.read_bytes()).hexdigest()[:16] if version.is_file() else "none"
+    return f"{tool} {release} {stamp}"
 
 
 #: The machine setting that names a site command directory: wrappers for

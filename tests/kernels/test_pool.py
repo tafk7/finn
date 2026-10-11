@@ -28,7 +28,7 @@ from finn.harness.hls import c_simulate
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.pool import PoolKernel, element_type
-from finn.toolchain.launcher import host_toolchain
+from finn.toolchain.launcher import ToolUnavailable, host_toolchain
 from kernels.conformance import KERNEL, Sample, _ends, _values, _words, place
 from kernels.specs.pool import max_pool, pool
 from kernels.xsim import requires_hls
@@ -115,7 +115,7 @@ def _c_simulator() -> bool:
     try:
         toolchain.hls_installation()
         toolchain.command("g++")
-    except (LookupError, FileNotFoundError):
+    except ToolUnavailable:
         return False
     return True
 

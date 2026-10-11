@@ -31,6 +31,7 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from typing import Union
 
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -53,7 +54,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 _LABEL = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
-class BuildError(Exception):
+class BuildError(ArtifactError):
     """A module is not well formed, or cannot be emitted."""
 
 
