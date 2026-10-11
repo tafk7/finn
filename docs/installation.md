@@ -466,16 +466,21 @@ builds ahead of time; `--check` only checks prerequisites.
 
 ## Tools and build boundaries
 
-`build_dataflow project/` remains the ordinary public build command. Pending P6
-integration of the private build-engine branch, the archived implementation runs the
-existing model/configuration in a fresh child, with that directory as cwd, in the
+`build_dataflow project/` remains the ordinary public build command. It builds in
+process, starting no child, as `build_dataflow_directory` and `build_dataflow_cfg` do,
+and changes no working directory: the configuration's relative paths (`output_dir`,
+`verify_input_npy`, the preparation's `preprocessing`, a `pinned` strategy's `path`,
+the toolchain's settings scripts and command directory) name files in the project
+directory, resolved when `read_build_config` reads it, and a relative `FINN_BUILD_DIR`
+is relative to the directory the command runs from. Every tool runs in the
 environment of the configuration's toolchain (the machine's when it names none),
-the build directory resolved and the simulator libraries on the loader path
-(`finn.xsi.paths.simulation_environment`) before Python starts. Workers inherit that
-environment. The API `build_dataflow_directory` uses the same boundary.
-`build_dataflow_cfg` remains in-process for custom Python callbacks: callers using
-XSI there must supply its loader environment before interpreter startup. Concurrent
-in-process builds still share stdout and logger state; use separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
+prepared once for the build; the process's own environment is left as it is. The
+command exits 0 when the build completes, 255 when a step fails
+(`build_dataflow_directory` returns -1), and 1 with the traceback when the
+configuration is refused (it raises). A caller that loads XSI in process supplies its
+loader environment before interpreter startup (`docker/finn-toolchain.sh` does for a
+shell). Concurrent in-process builds still share stdout and logger state; use
+separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
 `finn.toolchain.launcher.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a
@@ -498,9 +503,7 @@ file's `FINN_XILINX_VERSION` (`vitis-run` from 2025.1, else `vitis_hls`). A
 build prepares one toolchain (the selection its configuration names,
 `DataflowBuildConfig.toolchain`, or the machine's when it names none, on the
 first step that runs a tool) and passes it to every step that runs a tool
-(HLS synthesis, packaging, simulation, the shell's build);
-`build_dataflow_directory` prepares its build process's environment from the same
-selection. A stated selection is laid over the
+(HLS synthesis, packaging, simulation, the shell's build). A stated selection is laid over the
 machine's (`host_selection(stated=...)`): each field it states wins, and a field
 it leaves `null` (`command_dir`, `hls_frontend`, `vivado_jobs`) is the machine's, so
 stating one field drops none of the others. How many runs Vivado launches at once is

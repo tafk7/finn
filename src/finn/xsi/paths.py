@@ -5,8 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 # ##########################################################################
-"""Installed XSI sources, external, writable native build artifacts, and the
-environment a process that simulates through XSI starts in."""
+"""Installed XSI sources, and external, writable native build artifacts."""
 
 import hashlib
 import os
@@ -68,33 +67,3 @@ def find_xsi_so(toolchain: Toolchain) -> Optional[Path]:
     """Return the compiled extension for ``toolchain``, if it was built."""
     candidate = xsi_artifact_dir(toolchain) / "xsi.so"
     return candidate if candidate.is_file() else None
-
-
-#: The simulator libraries an XSI simulation loads, by the installation that has
-#: them: the Vivado simulation kernel (``finn_xsi``), and the floating-point
-#: operators HLS-generated code links. docker/finn-toolchain.sh puts the same
-#: directories on a native shell's loader path.
-SIMULATION_LIBRARIES = (
-    ("XILINX_VIVADO", "lib/lnx64.o"),
-    ("XILINX_VITIS", "lnx64/tools/fpo_v7_1"),
-    ("XILINX_HLS", "lnx64/tools/fpo_v7_1"),
-)
-
-
-def simulation_environment(toolchain: Toolchain) -> dict[str, str]:
-    """``toolchain``'s environment with the loader path an XSI simulation needs: the
-    simulator libraries of its installations (``SIMULATION_LIBRARIES``, those that
-    exist) ahead of its ``LD_LIBRARY_PATH``. The loader reads the path when a process
-    starts, so this is the environment of a new process that simulates: the build
-    process of ``build_dataflow_directory``, an XSI C++ driver."""
-    environment = dict(toolchain.environment)
-    libraries = [
-        str(Path(environment[variable]) / suffix)
-        for variable, suffix in SIMULATION_LIBRARIES
-        if environment.get(variable) and (Path(environment[variable]) / suffix).is_dir()
-    ]
-    if environment.get("LD_LIBRARY_PATH"):
-        libraries.append(environment["LD_LIBRARY_PATH"])
-    if libraries:
-        environment["LD_LIBRARY_PATH"] = ":".join(libraries)
-    return environment
