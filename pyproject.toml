@@ -56,7 +56,6 @@ test = [
     "onnxoptimizer",
     "pillow",
     "pytest==7.4.4",
-    "pytest-cov==4.1.0",
     "pytest-xdist[setproctitle]==3.2.0",
     "torchvision>=0.23.0,<1",
 ]
