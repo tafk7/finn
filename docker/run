@@ -109,7 +109,7 @@ Options:
   --fpga             grant access to the configured Xilinx toolchain
   --volume SPEC      pass an explicit Compose volume (repeatable)
   --runtime NAME     add image content such as xrt; repeatable
-  --notebook         start the Docker notebook service
+  --notebook         disabled: the notebook service returns with the notebooks
   --rebuild          rebuild image layers without cache
   --no-build         require an existing prepared artifact
   --print            print the resolved request without running it
@@ -146,7 +146,14 @@ while [ "$#" -gt 0 ]; do
         --deps|--deps=*|--dependencies|--venv)
             echo "$1 was removed: the container installs the mounted checkout; see docs/installation.md" >&2
             exit 2 ;;
-        --notebook) NOTEBOOK=1; shift ;;
+        --notebook)
+            # Disabled until the notebooks return: they and the Jupyter
+            # dependency group were removed, so the service cannot start. The
+            # NOTEBOOK paths below and the commented-out `notebook` service in
+            # compose.yaml are kept for that re-integration; to restore it,
+            # set NOTEBOOK=1 here again and uncomment the service.
+            echo "--notebook is disabled until the notebooks return; see docker/README.md" >&2
+            exit 2 ;;
         --rebuild) export FINN_CONTAINER_REBUILD=1; shift ;;
         --no-build) export FINN_CONTAINER_NO_BUILD=1; shift ;;
         --print) PRINT_ONLY=1; shift ;;

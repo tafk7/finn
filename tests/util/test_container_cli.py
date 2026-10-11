@@ -276,3 +276,10 @@ def test_removed_dependency_modes_are_actionable():
         proc = invoke(RUN, option, "value", "--print")
         assert proc.returncode == 2
         assert "installs the mounted checkout" in proc.stderr
+
+
+def test_notebook_service_is_disabled():
+    for args in (("--notebook", "--print"), ("--notebook",)):
+        proc = invoke(RUN, *args)
+        assert proc.returncode == 2
+        assert "--notebook is disabled until the notebooks return" in proc.stderr

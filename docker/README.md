@@ -29,6 +29,8 @@ image's system cache (`/opt/finn/resources`) holds finn-hlslib and the board fil
 `finn-resources list` shows them. Use `--print` to see the normalized request without building or
 running anything. `-n NAME` and `--name NAME` assign the Docker container name;
 `--volume` adds a mount, for example a co-developed QONNX checkout.
+The notebook service (`--notebook`, the `notebook` Compose service) is disabled
+until the notebooks are re-integrated.
 
 ## Prepare artifacts
 

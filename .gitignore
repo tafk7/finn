@@ -61,12 +61,9 @@ tags
 .installed.cfg
 *.egg-info
 
-# Unittest and coverage
-htmlcov/*
-.coverage
+# Unittest
 .tox
 junit.xml
-coverage.xml
 .pytest_cache/
 
 # Build and docs folder/files
