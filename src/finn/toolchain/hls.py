@@ -30,33 +30,33 @@
 """What FINN knows of HLS: its frontends and installation, the command that runs a
 script, the pynq shell's ``CallHLS``, and the kernel system's ``synthesize``.
 
-A selection names its frontend (``FRONTENDS``; the machine's is ``host_frontend``'s),
-and ``command`` refuses one its probed release does not match. ``installation`` is
-where the HLS C++ headers and C simulation libraries are.
+A selection names its frontend (``FRONTENDS``; the machine's comes from
+``host_frontend``), and ``command`` refuses one that does not match its probed release.
+``installation`` is where the HLS C++ headers and C simulation libraries are.
 
 ``CallHLS`` runs an IODMA's generated Tcl script where the pynq shell's IP generation
-wrote it (``finn.shells.pynq.iodma``), replayed by ``ipgen.sh``, its transcript
-``Toolchain.run``'s (in a build, the step's log directory; else beside ``ipgen.sh``).
+wrote it (``finn.shells.pynq.iodma``), with ``ipgen.sh`` as its replay script. Its
+transcript is ``Toolchain.run``'s: in a build, in the step's log directory; else beside
+``ipgen.sh``.
 
-Both read what HLS prints as Vivado's tools print it (``SEVERITY: [HLS N-M] text``):
-``finn.toolchain.vivado.messages`` is their parser too.
+HLS prints messages in the form Vivado's tools use (``SEVERITY: [HLS N-M] text``), so
+both read them with ``finn.toolchain.vivado.messages``.
 
-``synthesize`` builds a staged HLS request (``finn.kernels.artifacts.hls``: a
-directory holding ``script.tcl``, the top and its headers, by relative paths) for
-one part, through the toolchain's HLS frontend, and caches the product under
-``$FINN_HOME/hls`` (``hls_cache``) with the resource store's discipline
-(``finn.resources``): built in a temporary directory beside the entry, marked with
-its full key, renamed into place under the entry's lock, so a failed or concurrent
-build never publishes a partial product and a second caller waits for the first.
-The key is the request's content, the part and the HLS installation
-(``finn.toolchain.launcher.identity`` of the frontend): a hit never runs the tool. A
-product (``HlsProduct``) holds the exported Verilog with its memory images
-(``verilog/``), the synthesis reports (``report/``), the request it was built from
-(``request/``) and the run's replay script with its transcript (``synthesize.sh``,
-``.stdout.log``, ``.stderr.log``, written as the tool runs; in a build too, since the
-product is every build's). A failed build is kept beside the entry
-(``<entry>.failed``) and named by the error, a ``ToolFailed`` whose transcript is the
-run's output.
+``synthesize`` builds a staged HLS request (``finn.kernels.artifacts.hls``: a directory
+holding ``script.tcl``, the top and its headers, by relative paths) for one part with
+the toolchain's HLS frontend, and caches the product under ``$FINN_HOME/hls``
+(``hls_cache``) the way the resource store does (``finn.resources``). The product is
+built in a temporary directory beside the entry, marked with its full key and renamed
+into place under the entry's lock, so a failed or concurrent build never publishes a
+partial product, and a second caller waits for the first. The key is the request's
+content, the part and the HLS installation (``finn.toolchain.launcher.identity`` of the
+frontend); a cache hit runs nothing. A product (``HlsProduct``) holds the exported
+Verilog with its memory images (``verilog/``), the synthesis reports (``report/``), the
+request it was built from (``request/``), and the run's replay script with its
+transcript (``synthesize.sh``, ``.stdout.log``, ``.stderr.log``). The transcript stays
+with the product even in a build, since every build shares the product. A failed build
+is kept beside the entry (``<entry>.failed``), and the ``ToolFailed`` it raises names
+its transcript.
 
 It takes a directory, never a kernel value: ``finn.toolchain`` imports no kernel layer.
 """
@@ -78,7 +78,7 @@ from typing import TYPE_CHECKING
 from finn.resources import home, tree_digest
 from finn.resources._store import complete, locked, publish
 
-# Modules, not names: the launcher reads this module in turn (``FRONTENDS``).
+# Modules, not names: the launcher imports this module in turn (``FRONTENDS``).
 from finn.toolchain import host, launcher
 
 if TYPE_CHECKING:
@@ -120,14 +120,14 @@ def selected_frontend(toolchain: Toolchain) -> str:
 def command(
     toolchain: Toolchain, script: str, timeout: float | None = None
 ) -> tuple[str, list[str]]:
-    """The selected HLS frontend and its arguments to run ``script``, its probes within
-    ``timeout`` (``finn.toolchain.launcher.PROBE_TIMEOUT`` by default); refused
-    (``ValueError``) when the probed release does not match the frontend."""
+    """The selected HLS frontend and its arguments to run ``script``, probing it within
+    ``timeout`` (``finn.toolchain.launcher.PROBE_TIMEOUT`` by default). Raises
+    ``ValueError`` if the probed release does not match the frontend."""
     timeout = launcher.PROBE_TIMEOUT if timeout is None else timeout
     frontend = selected_frontend(toolchain)
     version = toolchain.probe(frontend, timeout)
-    # These are FINN code-generation constraints, separate from whether a
-    # command exists. Preserve the standalone/unified transition deliberately.
+    # The releases FINN's generated scripts support with each frontend, whatever
+    # commands exist: the standalone HLS tools up to 2024.2, the unified vitis-run after.
     supported = {
         "vivado_hls": version <= (2020, 1),
         "vitis_hls": (2020, 1) <= version <= (2024, 2),
@@ -297,8 +297,8 @@ def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: 
 
 
 class CallHLS:
-    """Execute a deliberately selected HLS frontend with child-scoped settings:
-    ``toolchain``'s."""
+    """Run HLS build Tcl scripts with the frontend ``toolchain`` selects, in that
+    toolchain's environment."""
 
     def __init__(self, toolchain: Toolchain):
         self.toolchain = toolchain
