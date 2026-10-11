@@ -114,7 +114,7 @@ OUTPUT_BITFILE_MADE_FROM = OUTPUTS.key(
 OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
     "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
 )
-"""The shell's build options the bitfile was built with (``shell_options``)."""
+"""The shell's build options the bitfile was built with (``enable_hw_debug``)."""
 OUTPUT_REPORTS = OUTPUTS.key(
     "reports", JSON, check=_reports, expect="report files by name (synthesis, timing, ...)"
 )

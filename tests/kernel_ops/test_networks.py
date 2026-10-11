@@ -33,6 +33,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_steps import ExploreOptions
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.harness.ops import boundary_inputs, check_parity, graph_inputs
@@ -99,6 +100,6 @@ def test_the_network_computes_in_xsim_what_its_kernel_op_computes(
         body,
         tmp_path / "xsim",
         inputs=boundary_inputs(body, zlib.crc32(label.encode())),
-        completion=completion(cfg.kernel_completion),
+        completion=completion(cfg.options("step_explore", ExploreOptions).kernel_completion),
         label=label,
     )

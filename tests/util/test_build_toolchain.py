@@ -19,10 +19,14 @@ from qonnx.util.basic import qonnx_make_model
 from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_steps import (
+    ExploreOptions,
+    PrepareIoOptions,
+    PrepareTopologyOptions,
+)
 from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
 from finn.toolchain.vivado import vivado_jobs
-from finn.transformation.prepare import GraphPreparation
 
 pytestmark = pytest.mark.util
 
@@ -130,24 +134,37 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     directory.mkdir()
     cfg = builder_config(
         verify_input_npy="inputs/input.npy",
-        preparation=GraphPreparation(preprocessing="preproc.onnx"),
-        kernel_exploration=[
-            {"strategy": "pinned", "path": "kernel_choices.json"},
-            {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
-            {"strategy": "size_fifos", "margin": 2},
-        ],
+        step_options={
+            "step_prepare_io": PrepareIoOptions(preprocessing="preproc.onnx", topk=1),
+            "step_explore": ExploreOptions(
+                kernel_exploration=[
+                    {"strategy": "pinned", "path": "kernel_choices.json"},
+                    {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
+                    {"strategy": "size_fifos", "margin": 2},
+                ],
+                kernel_completion="placeholder",
+            ),
+            "step_prepare_topology": PrepareTopologyOptions(topology=[]),
+        },
         toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
     )
     (directory / build_dataflow.CONFIG_FILE).write_text(cfg.to_json())
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == str(directory / "out")
     assert read.verify_input_npy == str(directory / "inputs/input.npy")
-    assert read.preparation.preprocessing == str(directory / "preproc.onnx")
-    assert read.kernel_exploration == [
-        {"strategy": "pinned", "path": str(directory / "kernel_choices.json")},
-        {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
-        {"strategy": "size_fifos", "margin": 2},
-    ]
+    # The paths in each step's options (step_options), the rest of them as stated.
+    assert read.options("step_prepare_io", PrepareIoOptions) == PrepareIoOptions(
+        preprocessing=str(directory / "preproc.onnx"), topk=1
+    )
+    assert read.options("step_explore", ExploreOptions) == ExploreOptions(
+        kernel_exploration=[
+            {"strategy": "pinned", "path": str(directory / "kernel_choices.json")},
+            {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
+            {"strategy": "size_fifos", "margin": 2},
+        ],
+        kernel_completion="placeholder",
+    )
+    assert read.options("step_prepare_topology", PrepareTopologyOptions).topology == []
     assert read.toolchain == Selection(
         settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
         command_dir=str(directory / "tools"),
@@ -157,7 +174,8 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     (directory / build_dataflow.CONFIG_FILE).write_text(stated.to_json())
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == "/results" and read.toolchain == Selection(command_dir="")
-    assert read.preparation.preprocessing is None
+    assert read.options("step_prepare_io", PrepareIoOptions).preprocessing is None
+    assert read.step_options == {}
 
 
 def test_a_build_directory_builds_in_process_its_toolchain_prepared_once(

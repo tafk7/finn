@@ -138,9 +138,10 @@ DEFAULT_TOPOLOGY = (
 
 @dataclass(frozen=True)
 class GraphPreparation:
-    """The graph-preparation phase's options (``DataflowBuildConfig.preparation``). In
-    JSON, for TFC: {"preprocessing": "preproc.onnx", "input_datatype": "UINT8",
-    "topk": 1}.
+    """The graph-preparation phase's options, which its sub-phases read. A build states
+    them by its preparation steps' options (finn.builder.build_dataflow_steps: each
+    ``step_prepare_*``'s, in a DataflowBuildConfig's ``step_options``). For TFC:
+    ``GraphPreparation(preprocessing="preproc.onnx", input_datatype="UINT8", topk=1)``.
 
     - ``override_inpsize``: P0, the batch size (an int) or the input's shape (a list)
       qonnx's cleanup sets; None keeps the export's.
@@ -169,7 +170,7 @@ class GraphPreparation:
             unknown = [each for each in getattr(self, name) if each not in RECIPE_TRANSFORMS]
             if unknown:
                 raise ValueError(
-                    f"preparation.{name}: no transform named {', '.join(unknown)} "
+                    f"{name}: no transform named {', '.join(unknown)} "
                     "(finn.transformation.prepare.RECIPE_TRANSFORMS)"
                 )
         if self.input_datatype is not None:
@@ -177,10 +178,10 @@ class GraphPreparation:
                 DataType[self.input_datatype]
             except KeyError:
                 raise ValueError(
-                    f"preparation.input_datatype: {self.input_datatype!r} is no qonnx datatype"
+                    f"input_datatype: {self.input_datatype!r} is no qonnx datatype"
                 ) from None
         if self.topk is not None and self.topk < 1:
-            raise ValueError(f"preparation.topk: {self.topk}; at least 1")
+            raise ValueError(f"topk: {self.topk}; at least 1")
 
 
 def tidied(model: ModelWrapper) -> ModelWrapper:

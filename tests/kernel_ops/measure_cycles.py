@@ -41,7 +41,7 @@ from oracle import capture
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
-from finn.builder.kernel_testbench import boundary_words
+from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.rtlsim_bench import link_stream, measure
 from finn.custom_op.kernels.base import channel_choices
 from finn.custom_op.kernels.shell import ShellRoot, member, save_channels, shell_root

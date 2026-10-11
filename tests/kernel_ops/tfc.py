@@ -6,8 +6,8 @@
 The BNN-PYNQ TFC at two bits (``brevitas_examples``, its weights from the torch
 hub cache), exported by Brevitas with its preprocessing beside it
 (``finn.util.pytorch.ToTensor``, ``exported``), through the builder's
-graph-preparation phase as TFC's build states it (``preparation``: the
-preprocessing merged, the input UINT8, the label select appended) to the
+graph-preparation phase as TFC's build states it (``io_options``, ``preparation``:
+the preprocessing merged, the input UINT8, the label select appended) to the
 streamlined graph (``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
 and ``partition_kernel_ops``: the input flatten (a Reshape) before the
 partition and the label select (TopK) after it, both on the host.
@@ -36,6 +36,7 @@ from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.build_dataflow import resolve_build_steps
 from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_steps import PrepareIoOptions
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
@@ -75,24 +76,35 @@ def exported(directory: Path) -> ModelWrapper:
     return ModelWrapper(str(network))
 
 
-def preparation(directory: Path) -> GraphPreparation:
-    """TFC's graph preparation, its preprocessing model in ``directory``: the images'
-    scaling merged ahead, the input UINT8 (a pixel), the top label selected; the
-    default recipes."""
-    return GraphPreparation(
+def io_options(directory: Path) -> PrepareIoOptions:
+    """TFC's inputs and outputs as its build states them (step_prepare_io's options),
+    its preprocessing model in ``directory``: the images' scaling merged ahead, the
+    input UINT8 (a pixel), the top label selected."""
+    return PrepareIoOptions(
         preprocessing=str(directory / PREPROCESSING), input_datatype="UINT8", topk=1
     )
 
 
+def preparation(directory: Path) -> GraphPreparation:
+    """TFC's graph preparation (``io_options``), the default recipes, as the phase's
+    sub-phases read it."""
+    options = io_options(directory)
+    return GraphPreparation(
+        preprocessing=options.preprocessing,
+        input_datatype=options.input_datatype,
+        topk=options.topk,
+    )
+
+
 def preparation_config(directory: Path, **settings: Any) -> DataflowBuildConfig:
-    """A build of TFC from its export in ``directory`` (``preparation``), its outputs
+    """A build of TFC from its export in ``directory`` (``io_options``), its outputs
     under ``directory / "output"``, for Ultra96 in the Zynq shell at 5 ns, no debugger
     and no intermediate models."""
     return DataflowBuildConfig(
         **{
             "output_dir": str(directory / "output"),
             "target": TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
-            "preparation": preparation(directory),
+            "step_options": {"step_prepare_io": io_options(directory)},
             "enable_build_pdb_debug": False,
             "save_intermediate_models": False,
             **settings,

@@ -4,17 +4,19 @@
 """The kernel path's build configuration: a build of KernelOps (finn.custom_op.kernels)
 from a Brevitas export, through ``build_dataflow``.
 
-It is composed of what the kernel path reads: how the export is prepared
-(``finn.transformation.prepare.GraphPreparation``), its target (a board or a part, the clock
-and the shell, stated once: ``finn.platform.TargetRequest``), its toolchain
-(``finn.toolchain.launcher.Selection``), the outputs it makes, the strategies that explore
-its choices and the policy that completes the rest. What the kernel path does not make,
-it cannot be asked for.
+It is composed of how the build runs, which every step may read: its target (a board or
+a part, the clock and the shell, stated once: ``finn.platform.TargetRequest``), its
+toolchain (``finn.toolchain.launcher.Selection``), the outputs it makes, the checks it
+runs, which steps run; and each step's own options (``step_options``, keyed by step name,
+each step declaring its options type beside it: how the export is prepared, the
+strategies that explore its choices and the policy that completes the rest). What the
+kernel path does not make, it cannot be asked for.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from dataclasses_json import DataClassJsonMixin, Undefined, config
 from dataclasses_json.undefined import UndefinedParameterError
@@ -24,7 +26,9 @@ from finn.kernels.target import Target
 from finn.platform import VIVADO_BLOCK_DESIGN, TargetRequest, shell_row
 from finn.shells.pynq.runner import PynqOptions
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
-from finn.transformation.prepare import GraphPreparation
+
+#: A step's options type (finn.builder.build_dataflow_steps.build_dataflow_step_options).
+StepOptions = TypeVar("StepOptions")
 
 
 def declared(cls: type, name: str) -> Callable[[Any], Any]:
@@ -149,9 +153,11 @@ class DataflowBuildConfig(DataClassJsonMixin):
     """The configuration of a kernel-path build, passed to build_dataflow_cfg, or
     written as ``dataflow_build_config.json`` beside ``model.onnx`` for
     build_dataflow_directory and the ``build_dataflow`` command, where its relative
-    paths name files in that directory (read_build_config). Serialized to and
-    from JSON; reading one refuses a key it does not declare
-    (``UndefinedParameterError``, naming the keys)."""
+    paths name files in that directory (read_build_config). Its fields are how the
+    build runs, and ``step_options`` each step's own. Serialized to and from JSON;
+    reading one, or making one in Python, refuses a key it does not declare, a step in
+    ``step_options`` that takes no options and an option a step does not declare
+    (``UndefinedParameterError``, naming them)."""
 
     # dataclasses_json types the hook None, the value its dataclass_json decorator sets.
     dataclass_json_config = config(undefined=Undefined.RAISE)["dataclasses_json"]  # type: ignore[assignment]
@@ -166,60 +172,11 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest = field(metadata=config(decoder=declared(TargetRequest, "target")))
 
-    #: How the export is prepared (phase_prepare_model), a
-    #: finn.transformation.prepare.GraphPreparation: P0's ``override_inpsize``, P2's
-    #: ``max_multithreshold_bit_width``, P1's ``preprocessing`` (an ONNX model merged
-    #: ahead of the network), ``input_datatype`` and ``topk``, the ``streamlining`` and
-    #: ``topology`` recipes. In JSON, for TFC: {"preprocessing": "preproc.onnx",
-    #: "input_datatype": "UINT8", "topk": 1}. By default the export's own inputs and
-    #: outputs, the default recipes.
-    preparation: GraphPreparation = field(
-        default_factory=GraphPreparation,
-        metadata=config(decoder=declared(GraphPreparation, "preparation")),
-    )
-
     #: What the build makes beside the partition and its reports (DataflowOutputType):
     #: the partition's IP and its out-of-context resources on any shell; the bitfile,
     #: driver and deployment package on a shell that integrates the partition. None by
     #: default.
     generate_outputs: List[DataflowOutputType] = field(default_factory=list)
-
-    #: The exploration (step_explore): the strategies that choose the KernelOps'
-    #: open choices through the DSE seam, run as written, each a spec with its own
-    #: parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
-    #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
-    #: ``{"strategy": "target_throughput", "fps": ..., "relax": true}`` (the least
-    #: parallelism meeting fps at the target's clock), ``{"strategy":
-    #: "max_throughput", "within": {"lut": 0.5}}`` (the fewest cycles a frame whose
-    #: shell's resources stay within the fractions named of the part's; ``within`` is
-    #: required), ``{"strategy": "size_fifos", "margin": 0}`` (each channel's FIFO from
-    #: both ends' beat patterns), ``{"strategy": "baseline"}`` (every choice not pinned
-    #: back at its baseline), ``{"strategy": "placeholder"}`` (debugging: every open
-    #: required choice at its first case). Every choice the body leaves open takes its
-    #: baseline first; each strategy replaces the values it decides, and every value is
-    #: saved. Pins go first, sizing after the last strategy that folds (a list folding
-    #: after its last size_fifos is refused). By default ``[{"strategy": "size_fifos"}]``
-    #: (SR6): the baseline folding, its FIFOs sized. A list written replaces the default
-    #: and runs as written: without size_fifos, every transport stays at its baseline,
-    #: direct.
-    kernel_exploration: List[Dict[str, Any]] = field(
-        default_factory=lambda: [{"strategy": "size_fifos"}]
-    )
-
-    #: Clear the KernelOps' saved choices before exploring: re-explore from scratch.
-    #: Otherwise a saved choice is pinned and the exploration fills only open ones.
-    kernel_exploration_fresh: bool = False
-
-    #: The completion policy (finn.transformation.kernels.KERNEL_COMPLETIONS) that
-    #: completes what no strategy chose, on a copy that is never saved, wherever the
-    #: partition is costed or built: ``baseline``, every open choice at its kernel's
-    #: baseline (its first viable case: the least parallelism, each memory in the
-    #: explicit style its size orders first, a FIFO in FinnLib's ``auto``) and,
-    #: when the partition is built, its FIFOs sized at that folding; a required choice
-    #: (a FIFO's depth) is refused, named. ``placeholder``, for debugging, also takes
-    #: the first case of a required choice. report/kernel_exploration.json lists every
-    #: value completed.
-    kernel_completion: str = "baseline"
 
     #: The checks the build runs beside those it always runs
     #: (VerificationStepType), none by default: step_prepare_checkpoint's,
@@ -241,12 +198,11 @@ class DataflowBuildConfig(DataClassJsonMixin):
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
 
-    #: The options of the target's shell's build, as that build states them; a shell
-    #: without a build (``ip``) takes none. The ``pynq`` shell's
-    #: (finn.shells.pynq.runner.PynqOptions): ``enable_hw_debug``,
-    #: integrated logic analyzers on the ends' streams. In JSON:
-    #: {"enable_hw_debug": true}. None by default.
-    shell_options: Dict[str, Any] = field(default_factory=dict)
+    #: Whether the target's shell's build inserts integrated logic analyzers on the
+    #: ends' streams (the ``pynq`` shell's, finn.shells.pynq.runner.PynqOptions); a
+    #: shell without a build (``ip``) refuses it. The bitfile's record states it
+    #: (finn.outputs ``bitfile_options``).
+    enable_hw_debug: bool = False
 
     #: If given, only run the steps in the list, each a step or phase name of the
     #: kernel path (finn.builder.build_dataflow_phases, finn.builder.build_dataflow_steps)
@@ -281,6 +237,31 @@ class DataflowBuildConfig(DataClassJsonMixin):
         str, List[Callable[[ModelWrapper, "DataflowBuildConfig"], ModelWrapper]]
     ] = field(default_factory=dict)
 
+    #: Each step's own options, by step name: the options type the step declares
+    #: beside it (finn.builder.build_dataflow_steps.build_dataflow_step_options), as an
+    #: instance, or in JSON an object of its fields; a step not named here takes its
+    #: type's defaults, and each step reads its own (``options``). A step that takes no
+    #: options, or an option its type does not declare, is refused by name. In JSON,
+    #: for TFC: {"step_prepare_io": {"preprocessing": "preproc.onnx", "input_datatype":
+    #: "UINT8", "topk": 1}, "step_explore": {"kernel_exploration": [{"strategy":
+    #: "target_throughput", "fps": 1000000}, {"strategy": "size_fifos"}]}}.
+    step_options: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.step_options = {
+            step: _step_options(step, stated) for step, stated in self.step_options.items()
+        }
+
+    def options(self, step: str, kind: type[StepOptions]) -> StepOptions:
+        """The options of the step named ``step``, of the type it declares (``kind``):
+        as ``step_options`` states them, else that type's defaults."""
+        stated = _step_options(step, self.step_options.get(step))
+        if not isinstance(stated, kind):
+            raise TypeError(
+                f"{step} declares {type(stated).__name__} as its options, not {kind.__name__}"
+            )
+        return stated
+
     def _resolve_selection(self) -> Selection:
         """The selection this build runs its tools by: ``toolchain`` laid over the
         machine's (``host_selection``), each field it states winning; unset, the
@@ -302,16 +283,48 @@ class DataflowBuildConfig(DataClassJsonMixin):
         """The build's target (finn.platform.resolve_target), every refusal named."""
         return self.target.resolve()
 
-    def _resolve_shell_options(self) -> Optional[PynqOptions]:
-        """The target's shell's build options (``shell_options``), as its build reads
-        them; None for a shell without a build, which refuses any. Each refusal is a
-        ValueError, named."""
+    def _resolve_shell_build_options(self) -> Optional[PynqOptions]:
+        """The target's shell's build options (``enable_hw_debug``), as its build reads
+        them; None for a shell without a build, which refuses ``enable_hw_debug``. Each
+        refusal is a ValueError, named."""
+        if type(self.enable_hw_debug) is not bool:
+            raise ValueError(f"enable_hw_debug is a bool, not {self.enable_hw_debug!r}")
         target = self._resolve_target()
         if shell_row(target.shell, target.board).integration == VIVADO_BLOCK_DESIGN:
-            return PynqOptions.from_dict(self.shell_options)
-        if self.shell_options:
-            raise ValueError(
-                f"shell_options: the {target.shell!r} shell has no build to take "
-                f"{', '.join(sorted(self.shell_options))}"
-            )
+            return PynqOptions(enable_hw_debug=self.enable_hw_debug)
+        if self.enable_hw_debug:
+            raise ValueError(f"enable_hw_debug: the {target.shell!r} shell has no build to take it")
         return None
+
+
+def _step_options(step: str, stated: Any) -> Any:
+    """The options ``stated`` for the step named ``step`` as the type it declares
+    (finn.builder.build_dataflow_steps.build_dataflow_step_options): an instance as it
+    is, an object of its fields decoded, None as the type's defaults. A step that takes
+    no options, a key its type does not declare (``UndefinedParameterError``) and a value
+    its type refuses (``ValueError``) are refused, named."""
+    # Imported here: the steps module imports this one.
+    from finn.builder.build_dataflow_steps import (  # noqa: PLC0415
+        build_dataflow_step_lookup,
+        build_dataflow_step_options,
+    )
+
+    kind = build_dataflow_step_options.get(step)
+    if kind is None:
+        what = "takes no options" if step in build_dataflow_step_lookup else "is no step"
+        raise UndefinedParameterError(
+            f"step_options: {step} {what}; the steps that take options: "
+            f"{', '.join(build_dataflow_step_options)}"
+        )
+    if stated is None:
+        return kind()
+    if isinstance(stated, kind):
+        return stated
+    if not isinstance(stated, Mapping):
+        raise ValueError(
+            f"step_options.{step}: an object of {kind.__name__}'s fields, not {stated!r}"
+        )
+    try:
+        return declared(kind, f"step_options.{step}")(stated)
+    except ValueError as refused:
+        raise ValueError(f"step_options.{step}: {refused}") from refused

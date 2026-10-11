@@ -39,7 +39,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/transformation/prepare \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
-    src/finn/builder/kernel_testbench.py src/finn/builder/kernel_resources.py \
+    src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
     src/finn/builder/build_dataflow_config.py src/finn/builder/build_dataflow_phases.py \
     src/finn/builder/build_dataflow_steps.py \
@@ -57,7 +57,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.cus
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.toolchain.launcher \
     -m finn.toolchain.xsim \
     -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_phases \
-    -m finn.builder.build_dataflow_steps -m finn.builder.kernel_testbench \
-    -m finn.builder.kernel_resources -m finn.builder.build_dataflow_checks
+    -m finn.builder.build_dataflow_steps -m finn.builder.build_dataflow_testbench \
+    -m finn.builder.build_dataflow_resources -m finn.builder.build_dataflow_checks
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle

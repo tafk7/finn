@@ -33,9 +33,9 @@ The driver its host runtime runs is ``driver``'s.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Mapping
 
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
@@ -82,27 +82,11 @@ STATIC_INSTANCES = {
 
 @dataclass(frozen=True)
 class PynqOptions:
-    """The ``pynq`` shell's build options (``DataflowBuildConfig.shell_options`` on a
+    """The ``pynq`` shell's build options (``DataflowBuildConfig.enable_hw_debug`` on a
     ``pynq`` target). ``enable_hw_debug``: integrated logic analyzers on the ends'
     streams and on the memory interconnect's port to the processor."""
 
     enable_hw_debug: bool = False
-
-    @classmethod
-    def from_dict(cls, options: Mapping[str, Any]) -> "PynqOptions":
-        """The options ``options`` states; an option the build does not have, or a value
-        that is not a bool, is refused by name."""
-        known = [item.name for item in fields(cls)]
-        unknown = sorted(set(options) - set(known))
-        if unknown:
-            raise ValueError(
-                f"the pynq shell's build has no option {', '.join(unknown)} "
-                f"(its options: {', '.join(known)})"
-            )
-        for name, value in options.items():
-            if type(value) is not bool:
-                raise ValueError(f"the pynq shell's {name} is a bool, not {value!r}")
-        return cls(**options)
 
 
 @dataclass(frozen=True)

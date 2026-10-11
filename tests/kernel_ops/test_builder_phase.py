@@ -42,6 +42,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_steps import (
+    ExploreOptions,
     step_convert_to_hw,
     step_create_dataflow_partition,
     step_deployment_package,
@@ -96,7 +97,7 @@ from kernel_ops.models import (
     matmul_model,
 )
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
-from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, partition, preparation
+from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_options, partition
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
@@ -134,6 +135,11 @@ def source(tfc_streamlined: Path) -> ModelWrapper:
 
 #: TFC's target in the builder: Ultra96 in the Zynq shell at 5 ns (``ULTRA96``).
 ULTRA96_PYNQ = TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq")
+
+
+def exploration(**options: Any) -> dict[str, ExploreOptions]:
+    """``step_options`` stating step_explore's ``options`` (ExploreOptions)."""
+    return {"step_explore": ExploreOptions(**options)}
 
 
 def config(directory: Path, **settings: Any) -> DataflowBuildConfig:
@@ -177,7 +183,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
-        preparation=preparation(tmp_path / "export"),
+        step_options={"step_prepare_io": io_options(tmp_path / "export")},
         stop_step="phase_optimize_hardware",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
         verify_steps=[
@@ -306,7 +312,10 @@ def test_the_debug_placeholder_completes_nothing_on_an_explored_body(
     passes. The debug placeholder is a strategy now (``placeholder``), written in the
     list; on TFC it finds nothing required open either."""
     cfg = config(
-        tmp_path, kernel_completion="placeholder", kernel_exploration=[{"strategy": "placeholder"}]
+        tmp_path,
+        step_options=exploration(
+            kernel_completion="placeholder", kernel_exploration=[{"strategy": "placeholder"}]
+        ),
     )
     model = explore(source, cfg)
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
@@ -324,7 +333,7 @@ def test_the_debug_placeholder_completes_nothing_on_an_explored_body(
 
 
 def test_a_completion_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(tmp_path, kernel_completion="minimum")
+    cfg = config(tmp_path, step_options=exploration(kernel_completion="minimum"))
     with pytest.raises(ValueError, match="names no kernel completion policy"):
         step_explore(matmul_model(), cfg)
 
@@ -500,7 +509,7 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     ]
     assert "stitched_ip_testbench, which needs step_create_stitched_ip" in warning.message
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
-        "kernel_testbench_output": [
+        "testbench_output": [
             "verify_steps includes stitched_ip_testbench, which runs the testbench "
             "stitched_ip writes, and generate_outputs does not ask for it"
         ]
@@ -559,10 +568,15 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
 
 
 def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(tmp_path, kernel_exploration=[{"strategy": "fifo_depths"}])
+    cfg = config(
+        tmp_path, step_options=exploration(kernel_exploration=[{"strategy": "fifo_depths"}])
+    )
     with pytest.raises(ValueError, match="names no kernel strategy"):
         step_explore(matmul_model(), cfg)
-    cfg = config(tmp_path, kernel_exploration=[{"strategy": "target_throughput", "fsp": 1}])
+    cfg = config(
+        tmp_path,
+        step_options=exploration(kernel_exploration=[{"strategy": "target_throughput", "fsp": 1}]),
+    )
     with pytest.raises(ValueError, match="unexpected keyword argument 'fsp'"):
         step_explore(matmul_model(), cfg)
 
@@ -644,7 +658,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
     specs = [{"strategy": "target_throughput", "fps": 1_000_000}]
-    cfg = config(tmp_path, kernel_exploration=specs)
+    cfg = config(tmp_path, step_options=exploration(kernel_exploration=specs))
     _, body, _ = partition_body(explore(source, cfg))
     folding = {
         node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
@@ -700,7 +714,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
         ("sized", [target, {"strategy": "size_fifos"}]),
         ("plain", [target]),
     ):
-        cfg = config(tmp_path / name, kernel_exploration=specs)
+        cfg = config(tmp_path / name, step_options=exploration(kernel_exploration=specs))
         explore(source, cfg)
         report = json.loads(
             (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
@@ -841,7 +855,9 @@ def z0_cut(tfc_cache: Path, tfc_streamlined: Path) -> Path:
 
     def cut(directory: Path) -> ModelWrapper:
         source = ModelWrapper(str(tfc_streamlined))
-        return explore(source, config(directory, kernel_exploration=Z0_CHAIN))
+        return explore(
+            source, config(directory, step_options=exploration(kernel_exploration=Z0_CHAIN))
+        )
 
     return built(tfc_cache / "z0" / "parent.onnx", cut)
 
@@ -1100,7 +1116,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     cfg = config(
         tmp_path,
-        kernel_exploration=Z0_CHAIN,
+        step_options=exploration(kernel_exploration=Z0_CHAIN),
         generate_outputs=[
             DataflowOutputType.BITFILE,
             DataflowOutputType.PYNQ_DRIVER,
