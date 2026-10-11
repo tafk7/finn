@@ -38,6 +38,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_steps import PrepareIoOptions
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
@@ -47,7 +48,6 @@ from finn.harness.ops import boundary_inputs, check_parity
 from finn.platform import TargetRequest
 from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
-from finn.transformation.prepare import GraphPreparation
 from kernel_ops.models import convert
 from kernel_ops.specs import conv
 from kernel_ops.specs.base import GENERAL, source
@@ -220,9 +220,11 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
     settings = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
-        preparation=GraphPreparation(
-            preprocessing=str(tmp_path / PREPROCESSING), input_datatype="UINT8", topk=1
-        ),
+        step_options={
+            "step_prepare_io": PrepareIoOptions(
+                preprocessing=str(tmp_path / PREPROCESSING), input_datatype="UINT8", topk=1
+            )
+        },
         verify_steps=[],
         enable_build_pdb_debug=False,
         save_intermediate_models=False,

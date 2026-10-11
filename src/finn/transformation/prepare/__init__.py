@@ -7,7 +7,7 @@ path converts, and its checkpoint.
 ``finn.transformation.prepare.phase`` holds the sub-phases (P0 import, P2
 quantization lowering, P1 the network's inputs and outputs, P3 streamlining, P4
 topology, P6 containers), each over the transforms that own its work, and their
-options (``GraphPreparation``, a DataflowBuildConfig's ``preparation``);
+options (``GraphPreparation``, which a build states by its preparation steps' options);
 ``finn.transformation.prepare.containers`` is P6's rule, which widens the integer
 regions whose bounds pass float32's exact integers;
 ``finn.transformation.prepare.checkpoint`` checks what the phase leaves (P7): its

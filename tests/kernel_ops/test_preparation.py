@@ -837,7 +837,7 @@ def _built_from(tmp_path: Path, export: ModelWrapper, prepared_as: ModelWrapper)
     export.save(str(tmp_path / "export.onnx"))
     cfg = preparation_config(
         tmp_path,
-        preparation=GraphPreparation(),
+        step_options={},
         steps=["step_prepare_import", alter, "step_prepare_checkpoint", record],
         verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
     )

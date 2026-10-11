@@ -35,7 +35,7 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
-from finn.builder.build_dataflow_steps import step_create_stitched_ip
+from finn.builder.build_dataflow_steps import ExploreOptions, step_create_stitched_ip
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
@@ -316,10 +316,14 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
         generate_outputs=[DataflowOutputType.STITCHED_IP],
-        kernel_exploration=[
-            {"strategy": "target_throughput", "fps": 1e6},
-            {"strategy": "size_fifos"},
-        ],
+        step_options={
+            "step_explore": ExploreOptions(
+                kernel_exploration=[
+                    {"strategy": "target_throughput", "fps": 1e6},
+                    {"strategy": "size_fifos"},
+                ]
+            )
+        },
         verify_steps=[VerificationStepType.STITCHED_IP_TESTBENCH],
         verify_input_npy=str(tmp_path / "input.npy"),
         enable_build_pdb_debug=False,

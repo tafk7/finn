@@ -48,7 +48,11 @@ from finn.builder.build_dataflow_config import (
     default_build_dataflow_steps,
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
-from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
+from finn.builder.build_dataflow_steps import (
+    ExploreOptions,
+    PrepareIoOptions,
+    build_dataflow_step_lookup,
+)
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
 #: beside model.onnx.
@@ -294,20 +298,29 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
     """``cfg`` with each relative path it states joined to ``directory``: ``output_dir``,
-    ``verify_input_npy``, the preparation's ``preprocessing`` model, a strategy's
-    ``path`` (``pinned``'s choices file), the toolchain's settings scripts and command
-    directory. An absolute path, and an empty command directory, stay as stated."""
+    ``verify_input_npy``, step_prepare_io's ``preprocessing`` model, a strategy's
+    ``path`` in step_explore's ``kernel_exploration`` (``pinned``'s choices file), the
+    toolchain's settings scripts and command directory. An absolute path, and an empty
+    command directory, stay as stated."""
 
     def resolve(path: str) -> str:
         return os.path.join(directory, path)
 
-    preparation = cfg.preparation
-    if preparation.preprocessing is not None:
-        preparation = replace(preparation, preprocessing=resolve(preparation.preprocessing))
-    exploration = [
-        {**spec, "path": resolve(spec["path"])} if isinstance(spec.get("path"), str) else spec
-        for spec in cfg.kernel_exploration
-    ]
+    step_options = dict(cfg.step_options)
+    io = cfg.options("step_prepare_io", PrepareIoOptions)
+    if io.preprocessing is not None:
+        step_options["step_prepare_io"] = replace(io, preprocessing=resolve(io.preprocessing))
+    explore = cfg.options("step_explore", ExploreOptions)
+    if any(isinstance(spec.get("path"), str) for spec in explore.kernel_exploration):
+        step_options["step_explore"] = replace(
+            explore,
+            kernel_exploration=[
+                {**spec, "path": resolve(spec["path"])}
+                if isinstance(spec.get("path"), str)
+                else spec
+                for spec in explore.kernel_exploration
+            ],
+        )
     toolchain = cfg.toolchain
     if toolchain is not None:
         toolchain = replace(
@@ -321,9 +334,8 @@ def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuild
         cfg,
         output_dir=resolve(cfg.output_dir),
         verify_input_npy=resolve(cfg.verify_input_npy),
-        preparation=preparation,
-        kernel_exploration=exploration,
         toolchain=toolchain,
+        step_options=step_options,
     )
 
 

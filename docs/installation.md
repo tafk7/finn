@@ -524,11 +524,15 @@ Zynq shell (the environment as configured, so `settings` stays empty):
 {
   "output_dir": "output",
   "target": {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq"},
-  "kernel_exploration": [
-    {"strategy": "target_throughput", "fps": 1000000},
-    {"strategy": "size_fifos"}
-  ],
-  "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"]
+  "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
+  "step_options": {
+    "step_explore": {
+      "kernel_exploration": [
+        {"strategy": "target_throughput", "fps": 1000000},
+        {"strategy": "size_fifos"}
+      ]
+    }
+  }
 }
 ```
 
@@ -555,9 +559,13 @@ partition), `phase_optimize_hardware` (their choices and the partition's
 verification), `phase_build_hardware` (the partition's IP) and
 `phase_generate_outputs` (what the shell makes). `steps`, `start_step` and
 `stop_step` name phases or steps. A key the configuration does not declare is
-refused by name.
+refused by name. The top-level fields are how the build runs; each step's own options
+are under `step_options`, by step name, each step declaring its options type beside it
+(`finn.builder.build_dataflow_steps.build_dataflow_step_options`: the preparation
+steps' and `step_explore`'s); a step not named takes its defaults, and a step that takes
+no options, or an option its type does not declare, is refused by name.
 
-`kernel_exploration` lists the strategies that choose the KernelOps' choices
+`step_explore`'s `kernel_exploration` lists the strategies that choose the KernelOps' choices
 through the DSE seam, run as written, each with its own parameters. Every choice the
 partition's body leaves open first takes its baseline, the first viable case its
 kernel lists (the least parallelism; each memory in the explicit style the size of

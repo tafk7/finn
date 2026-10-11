@@ -136,7 +136,7 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
                 )
             )
     try:
-        cfg._resolve_shell_options()
+        cfg._resolve_shell_build_options()
     except ValueError as refused:
         checks.append(
             Check(
@@ -163,7 +163,7 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
     if testbench in cfg.verify_steps and DataflowOutputType.STITCHED_IP not in asked:
         checks.append(
             Check(
-                "kernel_testbench_output",
+                "testbench_output",
                 Severity.ERROR,
                 False,
                 f"verify_steps includes {testbench.value}, which runs the testbench "
