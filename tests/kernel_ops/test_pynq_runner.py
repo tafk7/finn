@@ -304,7 +304,7 @@ def recorded_build(
         parent,
         export,
         tmp_path / "ends",
-        toolchain=cast(Toolchain | None, toolchain),
+        toolchain=cast(Toolchain, toolchain),
         options=options,
     )
     return parent, export, built, seen
@@ -439,17 +439,22 @@ def test_a_build_vivado_made_nothing_of_is_refused(
         collect(str(tmp_path), "sha256:" + "0" * 64)
 
 
-def test_a_build_prepares_its_default_toolchain_once(
+def test_the_bitfile_build_prepares_its_default_toolchain_once_when_made(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """BuildPynqBitfile, made without a toolchain, prepares the machine's once and runs
+    every tool of its build by it; ``build_pynq`` takes the one it is given."""
     prepared: list[FakeVivado] = []
 
     def host_toolchain() -> FakeVivado:
-        prepared.append(FakeVivado())
+        prepared.append(FakeVivado(timing=TIMING_REPORT))
         return prepared[-1]
 
     monkeypatch.setattr(pynq_runner, "host_toolchain", host_toolchain)
-    _, _, _, seen = recorded_build(monkeypatch, tmp_path, None)
+    seen = recorded_tools(monkeypatch, tmp_path)
+    building = BuildPynqBitfile(tmp_path / "output")
+    assert len(prepared) == 1 and building.toolchain is cast(Toolchain, prepared[0])
+    zynq_model(tmp_path).transform(building)
     assert len(prepared) == 1
     assert all(toolchain is prepared[0] for name, toolchain, _ in seen if name in TOOL_STEPS)
     assert len(prepared[0].runs) == 1

@@ -42,6 +42,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2, Root, with_direct_transports
 from kernels.sweeps.rtl_transport import drive_observed
 
@@ -129,7 +130,9 @@ def run(case: Case, evidence: Path) -> None:
         assert form in (ends.sink.form, ends.source.form), (case.label, name, ends)
     stimulus = list(pack(form, VALUES.ravel().tolist(), ELEMENT.bitwidth()))
     expected = list(pack(form, levels.ravel().tolist(), result_bits))
-    top, sources, data = materialize(point.module, evidence / case.label)
+    top, sources, data = materialize(
+        point.module, evidence / case.label, toolchain=host_toolchain()
+    )
     # The writes a kernel holding the written table declares, into the hardware built
     # with the initial one: the same addresses (the same shape and PE), other words.
     written = placed(replace(case, initial=case.written)) if case.written is not None else None

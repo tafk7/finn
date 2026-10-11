@@ -671,7 +671,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
         tmp = state["tmp"]
         return directory.relative_to(tmp) if tmp is not None else Path(directory.name)
 
-    def simulate(sources: Sequence[str | Path], testbench: str, directory: Path) -> None:
+    def simulate(sources: Sequence[str | Path], testbench: str, directory: Path, **_: Any) -> None:
         directory = Path(directory)
         target = designs / where(directory)
         _copy_tree(directory, target)

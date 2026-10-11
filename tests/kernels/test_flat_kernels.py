@@ -25,6 +25,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, point_for
 from kernels.xsim import requires_xsim
 
@@ -298,7 +299,7 @@ def run(requirements, body, tmp_path):
     # The RTL reads its generated data (a THRESHOLDS_FILE) by name, where xsim runs.
     for item in requirements.data:
         (tmp_path / item.path).write_bytes(item.data)
-    simulate(sources, body.replace("@DUT@", dut), tmp_path)
+    simulate(sources, body.replace("@DUT@", dut), tmp_path, toolchain=host_toolchain())
 
 
 def float_bits(value):

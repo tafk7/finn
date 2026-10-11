@@ -56,7 +56,13 @@ from finn.kernels.matmul import datatype_range
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.toolchain import xsim
-from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
+from finn.toolchain.launcher import (
+    Selection,
+    Toolchain,
+    ToolFailed,
+    ToolUnavailable,
+    host_toolchain,
+)
 from finn.toolchain.xsim import TOOLS, available
 from kernels.chain import chain
 from kernels.conformance import Sample, place
@@ -89,13 +95,17 @@ def test_a_stream_the_module_lacks_is_refused_naming_its_ports(
     tmp_path: Path, inputs: dict[str, Words], outputs: dict[str, Words], complaint: str
 ) -> None:
     with pytest.raises(ValueError, match=complaint):
-        stream_through(chain().module, tmp_path, inputs=inputs, outputs=outputs)
+        stream_through(
+            chain().module, tmp_path, inputs=inputs, outputs=outputs, toolchain=host_toolchain()
+        )
     assert not any(tmp_path.iterdir())  # refused before anything was built
 
 
 def test_a_stream_given_no_words_is_an_undriven_input(tmp_path: Path) -> None:
     with pytest.raises(Undriven, match=r"m_axis_0_tready \(stream m_axis_0, given no words\)"):
-        stream_bench(chain().module, tmp_path, inputs=CHAIN_IN, outputs={})
+        stream_bench(
+            chain().module, tmp_path, inputs=CHAIN_IN, outputs={}, toolchain=host_toolchain()
+        )
     assert not any(tmp_path.iterdir())
 
 
@@ -117,11 +127,17 @@ def test_a_leaf_s_held_inputs_are_driven_to_their_declared_values(tmp_path: Path
     leaf = _flat_thresholds().module
     held = dict(leaf.held.inputs)
     assert held["s_axilite_AWVALID"] == 0 and "s_axis_set_tvalid" in held
-    bench = stream_bench(leaf, tmp_path, inputs={}, outputs={})
+    bench = stream_bench(leaf, tmp_path, inputs={}, outputs={}, toolchain=host_toolchain())
     for pin, value in held.items():
         assert re.search(rf"logic (\[\d+:0\] )?{pin} = \d+'h{value:x};", bench.text), pin
     with pytest.raises(ValueError, match="the module holds the streams s_axis"):
-        stream_bench(leaf, tmp_path / "held", inputs={"s_axis": ([1], 8)}, outputs={})
+        stream_bench(
+            leaf,
+            tmp_path / "held",
+            inputs={"s_axis": ([1], 8)},
+            outputs={},
+            toolchain=host_toolchain(),
+        )
 
 
 def test_an_input_the_module_declares_no_value_for_is_refused_naming_it(tmp_path: Path) -> None:
@@ -130,7 +146,13 @@ def test_an_input_the_module_declares_no_value_for_is_refused_naming_it(tmp_path
     leaf = _flat_thresholds().module
     unheld = replace(leaf, held=Held())
     with pytest.raises(Undriven) as refused:
-        stream_bench(unheld, tmp_path, inputs={"s_axis": ([1], 8)}, outputs={"m_axis": ([0], 8)})
+        stream_bench(
+            unheld,
+            tmp_path,
+            inputs={"s_axis": ([1], 8)},
+            outputs={"m_axis": ([0], 8)},
+            toolchain=host_toolchain(),
+        )
     assert str(refused.value).startswith(
         "the testbench has no value for the inputs s_axis_set_tdata (stream s_axis_set, given "
         "no words), s_axis_set_tvalid (stream s_axis_set, given no words): "
@@ -141,7 +163,11 @@ def test_an_input_the_module_declares_no_value_for_is_refused_naming_it(tmp_path
 def test_stimulus_and_expectations_are_files_beside_the_stream_bench(tmp_path: Path) -> None:
     words = list(range(1000))
     bench = stream_bench(
-        chain().module, tmp_path, inputs={"s_axis_0": (words, 6)}, outputs=CHAIN_OUT
+        chain().module,
+        tmp_path,
+        inputs={"s_axis_0": (words, 6)},
+        outputs=CHAIN_OUT,
+        toolchain=host_toolchain(),
     )
     assert (tmp_path / "s_axis_0.input.mem").read_text().split() == [f"{w:02x}" for w in words]
     assert (tmp_path / "m_axis_0.output.mem").read_text().split() == ["0004", "0005"]
@@ -152,7 +178,9 @@ def test_stimulus_and_expectations_are_files_beside_the_stream_bench(tmp_path: P
 def test_the_stream_bench_keeps_each_outputs_words_for_a_decoding(tmp_path: Path) -> None:
     """A word that differs is displayed and counted, not fatal at once: the run fails when
     every output has presented its words, which it writes out first."""
-    bench = stream_bench(chain().module, tmp_path, inputs=CHAIN_IN, outputs=CHAIN_OUT)
+    bench = stream_bench(
+        chain().module, tmp_path, inputs=CHAIN_IN, outputs=CHAIN_OUT, toolchain=host_toolchain()
+    )
     assert "m_axis_0_got[m_axis_0_beats] <= m_axis_0_tdata[15:0];" in bench.text
     assert '$writememh("m_axis_0.received.mem", m_axis_0_got);' in bench.text
     assert f'$fatal(1, "{WORDS_DIFFER}: %0d output words", differing);' in bench.text
@@ -170,9 +198,16 @@ def test_a_tap_reads_a_link_at_its_producers_nets_and_only_when_asked(tmp_path: 
     assert end.instance is not None
     tap = Tap(end, 3, link.lane_bits)
     tapped = stream_bench(
-        module, tmp_path / "tapped", inputs=CHAIN_IN, outputs=CHAIN_OUT, taps={"link_0": tap}
+        module,
+        tmp_path / "tapped",
+        inputs=CHAIN_IN,
+        outputs=CHAIN_OUT,
+        taps={"link_0": tap},
+        toolchain=host_toolchain(),
     )
-    plain = stream_bench(module, tmp_path / "plain", inputs=CHAIN_IN, outputs=CHAIN_OUT)
+    plain = stream_bench(
+        module, tmp_path / "plain", inputs=CHAIN_IN, outputs=CHAIN_OUT, toolchain=host_toolchain()
+    )
     data = f"dut.{instance_net(end.instance, end.data)}"
     assert f"link_0_tapped[link_0_taps] <= {data}[{link.lane_bits - 1}:0];" in tapped.text
     assert f"dut.{instance_net(end.instance, end.valid)} && " in tapped.text
@@ -194,6 +229,7 @@ def test_a_tap_the_module_cannot_present_is_refused(tmp_path: Path) -> None:
             inputs=CHAIN_IN,
             outputs=CHAIN_OUT,
             taps={"link_0": Tap(replace(link.source, instance="nowhere"), 3, 1)},
+            toolchain=host_toolchain(),
         )
     with pytest.raises(ValueError, match="identifier no stream has"):
         stream_bench(
@@ -202,6 +238,7 @@ def test_a_tap_the_module_cannot_present_is_refused(tmp_path: Path) -> None:
             inputs=CHAIN_IN,
             outputs=CHAIN_OUT,
             taps={"m_axis_0": Tap(link.source, 3, 1)},
+            toolchain=host_toolchain(),
         )
     assert not any(tmp_path.iterdir())
     root = next(link for link in module.fragment.links if link.source.instance is None)
@@ -224,7 +261,13 @@ def test_the_watchdog_is_derived_from_the_paced_beats_and_names_each_stream(
     tmp_path: Path, pacing: Pacing
 ) -> None:
     bench = stream_bench(
-        chain().module, tmp_path, inputs=CHAIN_IN, outputs=CHAIN_OUT, pacing=pacing, cycles=12
+        chain().module,
+        tmp_path,
+        inputs=CHAIN_IN,
+        outputs=CHAIN_OUT,
+        pacing=pacing,
+        cycles=12,
+        toolchain=host_toolchain(),
     )
     paced = pacing.input(0).cycles(3) + pacing.output(0).cycles(2)
     budget = RESET_CYCLES + WATCHDOG_MARGIN * (paced + 12) + LATENCY_ALLOWANCE
@@ -256,7 +299,9 @@ def test_a_pumped_module_gets_its_doubled_clock_aligned(tmp_path: Path) -> None:
     module = point.module
     assert module.abi.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)
     words: dict[str, Words] = {name: ([0], 8) for name in inputs}
-    bench = stream_bench(module, tmp_path, inputs=words, outputs={"y_channel": ([0], 8)})
+    bench = stream_bench(
+        module, tmp_path, inputs=words, outputs={"y_channel": ([0], 8)}, toolchain=host_toolchain()
+    )
     # Half the clock's period; each rising edge of ap_clk is one of ap_clk2x.
     assert (
         "always #2.5 begin\n        ap_clk2x = !ap_clk2x;\n        if (ap_clk2x) ap_clk = !ap_clk;"
@@ -277,7 +322,9 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
     assert declared["s_axilite"] == RegisterMap(((0, 0xD), (4, 0x0), (8, 0x2)))
     stimulus = {"s_axis_0": ([0] * (PIXELS * CHANNELS // 4), 16)}
     expected = {"m_axis_0": ([0] * (PIXELS * CHANNELS // 4), 8)}
-    bench = stream_bench(point.module, tmp_path, inputs=stimulus, outputs=expected)
+    bench = stream_bench(
+        point.module, tmp_path, inputs=stimulus, outputs=expected, toolchain=host_toolchain()
+    )
     assert (tmp_path / "s_axilite.writes.mem").read_text().split() == [
         "00000000d",
         "400000000",
@@ -291,6 +338,7 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
         inputs=stimulus,
         outputs=expected,
         registers={"s_axilite": other},
+        toolchain=host_toolchain(),
     )
     assert (tmp_path / "other/s_axilite.writes.mem").read_text().split() == ["000000001"]
     with pytest.raises(
@@ -302,6 +350,7 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
             inputs=stimulus,
             outputs=expected,
             registers={"s_axilite_1": other},
+            toolchain=host_toolchain(),
         )
 
 
@@ -430,6 +479,7 @@ def test_a_stopped_stream_fires_the_watchdog_naming_it_and_its_beat(tmp_path: Pa
             inputs={"s_axis_0": ([1], 6)},
             outputs=CHAIN_OUT,
             pacing=FREE,
+            toolchain=host_toolchain(),
         )
     message = str(failed.value)
     assert "watchdog: m_axis_0 stopped at beat 0 of 2, its last handshake at cycle -1" in message
@@ -460,6 +510,7 @@ def test_words_that_differ_are_raised_as_they_arrived(tmp_path: Path) -> None:
             },
             outputs={"m_axis_0": (wrong, bits * case.pe)},
             pacing=FREE,
+            toolchain=host_toolchain(),
         )
     assert differ.value.received == {"m_axis_0": tuple(words)}
     assert "m_axis_0 word 1: " in str(differ.value)
@@ -493,5 +544,6 @@ def test_writes_its_kernel_does_not_declare_reach_the_memories(
         pacing=pacing,
         registers=registers,
         cycles=point.cycles,
+        toolchain=host_toolchain(),
     )
     assert ELEMENT.bitwidth() == 4

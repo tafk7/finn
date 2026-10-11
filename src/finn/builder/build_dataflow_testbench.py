@@ -54,7 +54,7 @@ from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.toolchain import xsim
-from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
+from finn.toolchain.launcher import Toolchain, ToolFailed, run_process
 from finn.transformation.kernels.package import boundary_facts, free_side
 
 #: The directory of the testbench, beside the packaged IP.
@@ -154,19 +154,27 @@ def write_testbench(
     directory: Path,
     frame: Mapping[str, NDArray[Any]],
     *,
+    toolchain: Toolchain,
     label: str = "the partition",
 ) -> None:
     """Write the XSim testbench of the partition ``body`` into ``directory``, streaming
     ``frame`` (its inputs by tensor) and expecting the body's outputs on it, executed in
     Python; see the module docstring. The module is the one PackagePartition packages
     (``configured_root``), and the watchdog allows the cycles its
-    root states. Nothing is simulated (``run_testbench`` runs it)."""
+    root states. Nothing is simulated (``run_testbench`` runs it); ``toolchain`` synthesizes
+    an HLS leaf's request first, unless the HLS cache holds it
+    (``finn.core.rtlsim_bench.materialize``)."""
     point, boundary = configured_root(body, label)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)
     directory.mkdir(parents=True, exist_ok=True)
     bench = stream_bench(
-        point.module, directory, inputs=inputs, outputs=outputs, cycles=int(point.cycles)
+        point.module,
+        directory,
+        inputs=inputs,
+        outputs=outputs,
+        cycles=int(point.cycles),
+        toolchain=toolchain,
     )
     (directory / "check.sv").write_text("`timescale 1ns/1ps\n" + bench.text)
     relative = [str(Path(source).relative_to(directory)) for source in bench.sources]
@@ -175,9 +183,9 @@ def write_testbench(
     script.chmod(0o755)
 
 
-def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str:
+def run_testbench(directory: Path, *, toolchain: Toolchain) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
-    ``toolchain``'s environment (the machine's by default), a command directory it
+    ``toolchain``'s environment, a command directory it
     selects first on ``PATH``, written into its transcript as it runs: in the
     toolchain's log directory when it has one (``Toolchain.transcript``), else beside
     ``run.sh`` (``run.sh.stdout.log``, ``.stderr.log``). Returns what it printed, which
@@ -186,7 +194,6 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
     a mismatch, any other failure or a timeout
     ``finn.core.rtlsim_bench.SimulationFailed`` with what it printed. A launcher route,
     which runs a tool elsewhere, runs no local script: refused (``ValueError``)."""
-    toolchain = toolchain or host_toolchain()
     selection = toolchain.selection
     if selection.launcher:
         raise ValueError(

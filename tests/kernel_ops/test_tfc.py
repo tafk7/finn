@@ -37,6 +37,7 @@ from finn.custom_op.partition.kernel_partitions import (
 )
 from finn.kernels.configure import commit, undecided
 from finn.kernels.explore import Ranked
+from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
 from kernel_ops.models import DOMAIN
@@ -163,6 +164,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
             outputs={"m_axis_0": (words, bits * expected[0].size)},
             pacing=pacing,
             cycles=FRAMES * root.point.cycles,  # its layers' work, beyond its boundary's beats
+            toolchain=host_toolchain(),
         )
 
 

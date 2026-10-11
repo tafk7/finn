@@ -27,9 +27,15 @@ Only the route lives here: what one tool needs (HLS's frontend and installation,
 XSim's commands, Vivado's installation) is its own module's, ``finn.toolchain.hls``,
 ``xsim`` and ``vivado``.
 
-A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
-so that one build runs every tool through one route; without one, it runs by the
-machine's (``host_toolchain``). Nothing is discovered or activated on import.
+A function that runs a tool requires a prepared ``Toolchain`` (``toolchain=``), so
+that one build runs every tool through one route and nothing runs silently on another
+installation. Only the entry points a user calls default to the machine's
+(``host_toolchain``), prepared once and passed down: ``PackagePartition`` and
+``ElaboratePartition`` and the XSim executor when they are made, the pynq shell's
+``BuildPynqBitfile``, and the command lines (``python -m finn.platform.generate``,
+``python -m finn.xsi.setup``). Nothing is discovered or activated on import, and no
+tool's installation is read from this process's environment but through a
+toolchain's.
 
 A tool's outcome has two errors of its own, whoever runs it: ``ToolUnavailable``
 (a ``LookupError``) when the toolchain names no installation of it or has no such
@@ -686,5 +692,5 @@ def host_selection(
 
 def host_toolchain() -> Toolchain:
     """``host_selection()`` prepared over this process's environment: the
-    toolchain of a transformation called without one."""
+    toolchain an entry point a user calls defaults to (module docstring)."""
     return host_selection().prepare()

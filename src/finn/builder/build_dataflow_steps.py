@@ -650,7 +650,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         else:
             frame, stimulus = generated_frame(body), "a generated frame"
         testbench = directory / TESTBENCH_DIR
-        write_testbench(body, testbench, frame, label=node.name)
+        write_testbench(body, testbench, frame, toolchain=toolchain, label=node.name)
         _LOG.info(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
         if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
             run_testbench(testbench, toolchain=toolchain)

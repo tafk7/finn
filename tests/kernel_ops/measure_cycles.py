@@ -48,6 +48,7 @@ from finn.core.rtlsim_bench import link_stream, measure
 from finn.custom_op.kernels.base import channel_choices
 from finn.custom_op.kernels.shell import ShellRoot, member, save_channels, shell_root
 from finn.harness.toolchain import print_identity
+from finn.toolchain.launcher import host_toolchain
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,7 @@ def measure_partition(
         outputs=outputs,
         frames=frames,
         cycles=root.point.cycles,
+        toolchain=host_toolchain(),
     )
     # The hop out of each layer, by the layer's leaves: its member and what lies under it.
     links = root.point.module.fragment.links
@@ -215,6 +217,7 @@ def measure_partition(
             outputs=alone_out,
             frames=frames,
             cycles=alone_root.point.cycles,
+            toolchain=host_toolchain(),
         )
         recorded[node.name] = dict(alone.beats)
         layers.append(

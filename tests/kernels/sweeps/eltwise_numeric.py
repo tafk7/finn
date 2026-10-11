@@ -52,6 +52,7 @@ from finn.harness.toolchain import print_identity
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP58, Root, with_direct_transports
 from kernels.specs.eltwise import computed
 from kernels.sweeps.rtl_transport import drive_observed
@@ -194,7 +195,9 @@ def run(case: Case, evidence: Path) -> None:
 
     stimulus = {PORTS[name]: packed(name, inputs[name]) for name in inputs}
     wanted = packed("result", expected)
-    top, sources, data = materialize(point.module, evidence / case.label)
+    top, sources, data = materialize(
+        point.module, evidence / case.label, toolchain=host_toolchain()
+    )
     mask = (1 << (case.pe * bits["result"])) - 1
     for stalled in (False, True):
         measured = drive_observed(

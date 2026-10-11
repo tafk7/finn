@@ -172,8 +172,9 @@ LSF's `bsub`, or another HPC model). FINN itself knows nothing of the farm.
 The site states the shim directory once, as the machine setting
 `FINN_TOOL_DIR_OVERRIDE`: the machine's toolchain
 (`finn.toolchain.launcher.host_selection`) takes it as its command directory, and
-every transformation called without a toolchain, as the tests call them, and every
-build whose configuration names none, runs by that toolchain. A build configuration
+every entry point made or run without a toolchain (packaging, the elaboration check,
+the XSim executor, the pynq shell's build, the command lines) and every build whose
+configuration names none runs by that toolchain. A build configuration
 that states its own `toolchain` is laid over the machine's: a `command_dir` it states
 (`{"command_dir": ...}`) wins over the setting, and one it does not state is the
 setting's. A site wrapper owns remote activation, path visibility and the

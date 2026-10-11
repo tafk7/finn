@@ -24,6 +24,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.control import ControlBus
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import (
     FULL_DSP48E2,
     Root,
@@ -187,6 +188,7 @@ def test_the_composed_module_computes_thresholded_dot_products(tmp_path, writabl
         inputs={"in0_V": (activation_words, 3 * SIMD), "in1_V": (weight_words, 3 * SIMD)},
         outputs={"out0_V": (levels, 2)},
         cycles=design.cycles,
+        toolchain=host_toolchain(),
     )
 
 

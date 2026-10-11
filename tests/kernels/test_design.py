@@ -23,6 +23,7 @@ from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.chain import (
     HIDDEN,
     INPUTS,
@@ -197,4 +198,5 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
             )
         },
         cycles=design.cycles,
+        toolchain=host_toolchain(),
     )

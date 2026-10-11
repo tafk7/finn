@@ -14,11 +14,12 @@ import os.path
 from finn.xsi.compile import compile_sim_obj, get_simkernel_so  # noqa: F401
 
 
-def load_sim_obj(sim_out_dir, out_so_relative_path, tracefile=None, simkernel_so=None):
+def load_sim_obj(sim_out_dir, out_so_relative_path, tracefile=None, *, toolchain):
+    """The simulation of the compiled design, on the simulation kernel of
+    ``toolchain``'s Vivado (``get_simkernel_so``)."""
     from finn_xsi.sim_engine import SimEngine  # noqa: PLC0415
 
-    if simkernel_so is None:
-        simkernel_so = get_simkernel_so()
+    simkernel_so = get_simkernel_so(toolchain)
     oldcwd = os.getcwd()
     try:
         os.chdir(sim_out_dir)

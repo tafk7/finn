@@ -31,7 +31,7 @@ from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import TOP, axis_type, include_path, stage_hls
 from finn.kernels.artifacts.module import Leaf
 from finn.toolchain import hls
-from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
+from finn.toolchain.launcher import Toolchain, ToolFailed, run_process
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
@@ -147,7 +147,7 @@ def c_simulate(
     inputs: Mapping[str, Words],
     lasts: Mapping[str, Sequence[bool]],
     outputs: Mapping[str, int],
-    toolchain: Toolchain | None = None,
+    toolchain: Toolchain,
 ) -> dict[str, list[int]]:
     """Each output's words as the C simulation of ``leaf``'s top presents them, given each
     input's ``inputs`` and, for a bus with TLAST, each beat's ``lasts``; ``outputs`` is
@@ -161,7 +161,6 @@ def c_simulate(
     for name in (*inputs, *outputs):
         if name not in names:
             raise ValueError(f"{leaf.name} has no stream {name}; its streams: {sorted(names)}")
-    toolchain = toolchain or host_toolchain()
     staged = stage_hls(request, directory / "request", roots={"finnlib": finnlib_root()})
     for name, (words, _) in inputs.items():
         bus = names[name]

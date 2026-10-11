@@ -3,15 +3,15 @@
 
 """Pure XSI design compilation/discovery; importing this module never loads the bridge.
 
-Which Vivado compiles and simulates is the toolchain's (``finn.toolchain.vivado``), the
-machine's unless one is given; without one, ``ToolUnavailable``.
+Which Vivado compiles and simulates is the toolchain's (``finn.toolchain.vivado``), which
+each function is given; a toolchain that selects none is ``ToolUnavailable``.
 """
 import json
 import os
 from pathlib import Path
 
 from finn.toolchain import vivado
-from finn.toolchain.launcher import ToolFailed, host_toolchain, identity
+from finn.toolchain.launcher import ToolFailed, identity
 from finn.toolchain.xsim import xelab_threads
 from finn.xsi._artifacts import write_record
 from finn_xsi.srcutil import order_pkg_first
@@ -24,11 +24,10 @@ def compile_sim_obj(
     debug=False,
     behav=False,
     *,
-    toolchain=None,
+    toolchain,
     timeout=None,
     cancel=None,
 ):
-    toolchain = toolchain or host_toolchain()
     glbl = str(vivado.glbl(toolchain))
     tool = identity(toolchain, "xelab")
     sim_out_dir = os.fspath(sim_out_dir)
@@ -138,10 +137,10 @@ def compile_sim_obj(
     return (sim_out_dir, out_so_relative_path)
 
 
-def get_simkernel_so(toolchain=None):
+def get_simkernel_so(toolchain):
     """The simulation kernel library XSI loads, by the release of the toolchain's Vivado
-    (the machine's by default; ``finn.toolchain.vivado.release``): renamed in 2024.2."""
-    if vivado.release(toolchain or host_toolchain()) > (2024, 1):
+    (``finn.toolchain.vivado.release``): renamed in 2024.2."""
+    if vivado.release(toolchain) > (2024, 1):
         simkernel_so = "libxv_simulator_kernel.so"
     else:
         simkernel_so = "librdi_simulator_kernel.so"

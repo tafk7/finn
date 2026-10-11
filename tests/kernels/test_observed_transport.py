@@ -9,6 +9,9 @@ import pytest
 from finn.core.rtlsim_pacing import FREE, Pace
 from kernels.sweeps import rtl_transport
 
+#: The toolchain the transport is given: nothing here runs a tool.
+STUB = object()
+
 
 class Port:
     def __init__(self, sim, name):
@@ -82,7 +85,7 @@ class Sim:
 )
 def test_observation_drain_detects_extra_and_missing_outputs(monkeypatch, ticks, error):
     sim = Sim(ticks)
-    monkeypatch.setattr(rtl_transport, "load_sim_obj", lambda *_: sim)
+    monkeypatch.setattr(rtl_transport, "load_sim_obj", lambda *_, toolchain: sim)
     monkeypatch.setattr(rtl_transport, "reset_rtlsim", lambda *_: None)
     monkeypatch.setattr(rtl_transport, "close_rtlsim", lambda *_: None)
     request = {
@@ -94,9 +97,9 @@ def test_observation_drain_detects_extra_and_missing_outputs(monkeypatch, ticks,
     }
     if error:
         with pytest.raises(AssertionError, match=error):
-            rtl_transport._simulate_observed("unused", "unused", request)
+            rtl_transport._simulate_observed("unused", "unused", request, toolchain=STUB)
     else:
-        result = rtl_transport._simulate_observed("unused", "unused", request)
+        result = rtl_transport._simulate_observed("unused", "unused", request, toolchain=STUB)
         assert result["outputs"] == {"out0_V": [0x13]}
         assert result["input_counts"] == {"in0_V": 1}
         assert result["drain_cycles"] == 4000

@@ -25,6 +25,7 @@ from finn.dataflow.gemm import Form
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.abi import abi_pins
 from finn.kernels.target import DspBlock
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import WeightDelivery, full_platform, matmul_assembly
 from kernels.sweeps.rtl_transport import drive_observed
 
@@ -292,7 +293,9 @@ def run(
     directory = evidence / (c.label + "_" + delivery.value + suffix)
     directory.mkdir(parents=True, exist_ok=False)
     # Memory images (INIT_FILE) go where the simulation resolves them.
-    entry_point, sources, data_files = materialize(built.module, directory)
+    entry_point, sources, data_files = materialize(
+        built.module, directory, toolchain=host_toolchain()
+    )
     top, wrapper, observations = _observation_wrapper(
         built.module.abi.pins,
         entry_point,

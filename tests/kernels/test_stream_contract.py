@@ -51,6 +51,7 @@ from finn.kernels.transport import (
     compatibility,
     marker_pairs,
 )
+from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root, with_direct_transports
 from kernels.xsim import requires_xsim
 
@@ -576,4 +577,5 @@ def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
         inputs={"in0_V": (words_in, 4 * PE)},
         outputs={"out0_V": (words_out, 5 * PE)},
         cycles=design.cycles,
+        toolchain=host_toolchain(),
     )

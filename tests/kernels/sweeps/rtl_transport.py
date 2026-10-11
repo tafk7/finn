@@ -43,6 +43,7 @@ import numpy as np
 
 from finn.core.rtlsim_pacing import Pace, Pacing
 from finn.kernels.artifacts.module import RegisterMap
+from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
 
 #: Watchdog budget, in cycles without an accepted output beat.
@@ -351,8 +352,10 @@ class _AxiLiteWriter:
         return updates
 
 
-def _simulate_observed(sim_dir: str, so_rel: str, request: dict[str, Any]) -> dict[str, Any]:
-    sim = load_sim_obj(sim_dir, so_rel)
+def _simulate_observed(
+    sim_dir: str, so_rel: str, request: dict[str, Any], *, toolchain: Toolchain
+) -> dict[str, Any]:
+    sim = load_sim_obj(sim_dir, so_rel, toolchain=toolchain)
     reset_rtlsim(sim)
     for bus, writes in request.get("axilite_writes", {}).items():
         sim.enlist(_AxiLiteWriter(sim.top, bus, [(int(a), int(d)) for a, d in writes]))
@@ -496,6 +499,8 @@ def simulate_once(request_path: str, response_path: str) -> int:
     request = json.loads(Path(request_path).read_text())
     payload: dict[str, object]
     try:
+        # The process's entry: the machine's toolchain, for every tool it runs.
+        toolchain = host_toolchain()
         if "observations" in request:
             scratch = Path(request["work_directory"])
             scratch.mkdir(parents=True, exist_ok=False)
@@ -506,15 +511,16 @@ def simulate_once(request_path: str, response_path: str) -> int:
                 request["sources"],
                 str(scratch),
                 behav=True,
+                toolchain=toolchain,
             )
-            payload = _simulate_observed(sim_dir, so_rel, request)
+            payload = _simulate_observed(sim_dir, so_rel, request, toolchain=toolchain)
             Path(response_path).write_text(json.dumps(payload, indent=2))
             return 0
         with tempfile.TemporaryDirectory() as scratch:
             for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
                 (Path(scratch) / name).write_text(contents)
             sim_dir, so_rel = compile_sim_obj(
-                request["top_module"], request["sources"], scratch, behav=True
+                request["top_module"], request["sources"], scratch, behav=True, toolchain=toolchain
             )
             payload = {
                 "output": _simulate(
@@ -524,6 +530,7 @@ def simulate_once(request_path: str, response_path: str) -> int:
                     request["expected"],
                     pacing=Pacing.from_json(request["pacing"]),
                     label=request["top_module"],
+                    toolchain=toolchain,
                 )
             }
     except Exception as failure:  # noqa: BLE001 - reported across the boundary
@@ -540,8 +547,9 @@ def _simulate(
     *,
     pacing: Pacing,
     label: str,
+    toolchain: Toolchain,
 ) -> list[int]:
-    sim = load_sim_obj(sim_dir, so_rel)
+    sim = load_sim_obj(sim_dir, so_rel, toolchain=toolchain)
     reset_rtlsim(sim)
     # Paced by position, so two inputs also arrive out of step rather than in lockstep.
     for index, (name, values) in enumerate(stimulus.items()):

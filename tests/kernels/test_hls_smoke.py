@@ -33,6 +33,7 @@ from finn.kernels.artifacts.abi import Bus, Clock, Direction, Endpoint, Free, Re
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
 from finn.kernels.artifacts.module import Abi, Composed, Fragment, Leaf, Link, LinkEnd
 from finn.kernels.transport import AxisBeat, AxisSpelling
+from finn.toolchain.launcher import host_toolchain
 from kernels.specs.pool import max_pool
 from kernels.xsim import requires_hls
 
@@ -163,6 +164,7 @@ def test_finnlib_pooling_top_synthesizes_and_streams(mode: str, tmp_path: Path) 
         inputs={"src": words(x)},
         outputs={"dst": words(max_pool(x, WINDOW, WINDOW))},
         pacing=PACINGS[mode],
+        toolchain=host_toolchain(),
     )
 
 
@@ -179,4 +181,5 @@ def test_two_configurations_share_one_netlist(mode: str, tmp_path: Path) -> None
         inputs={"s_axis": words(x)},
         outputs={"m_axis": words(max_pool(max_pool(x, WINDOW, WINDOW), (2, 2), (2, 2)))},
         pacing=pacing,
+        toolchain=host_toolchain(),
     )
