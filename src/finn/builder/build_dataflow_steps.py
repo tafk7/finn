@@ -36,8 +36,8 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
-from finn.builder.kernel_resources import RESOURCES_FILE, shell_resources_report
-from finn.builder.kernel_testbench import (
+from finn.builder.build_dataflow_resources import RESOURCES_FILE, shell_resources_report
+from finn.builder.build_dataflow_testbench import (
     TESTBENCH_DIR,
     generated_frame,
     partition_frame,
@@ -510,7 +510,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     OOC_SYNTH the module is synthesized out of context and the IP packages the
     checkpoint; the parent graph states its hierarchical utilization report among its
     reports (``ooc_synth``), which report/resources.json reads. With STITCHED_IP, the XSim
-    testbench is written into ``stitched_ip/testbench`` (finn.builder.kernel_testbench),
+    testbench is written into ``stitched_ip/testbench`` (finn.builder.build_dataflow_testbench),
     on the partition's inputs from the parent graph executed on the first frame of
     ``verify_input_npy`` when it exists, a generated frame otherwise. It is an output,
     and not run, unless STITCHED_IP_TESTBENCH is among ``verify_steps``: then its run.sh
@@ -806,7 +806,7 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     shell (the partition, each end, each IP of the static region) and their total, as
     the shell root states them (the model), as Vivado synthesized each IP out of
     context, and as placed, from the reports the parent graph states
-    (finn.builder.kernel_resources); a column the build did not make is stated absent.
+    (finn.builder.build_dataflow_resources); a column the build did not make is stated absent.
     The parent graph states it among its reports (``resources``)."""
     report = Path(cfg.output_dir) / RESOURCES_FILE
     report.parent.mkdir(parents=True, exist_ok=True)

@@ -36,7 +36,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_steps import step_create_stitched_ip
-from finn.builder.kernel_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
+from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.custom_op.partition.kernel_partitions import (

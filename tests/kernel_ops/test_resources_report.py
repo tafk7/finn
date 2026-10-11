@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """``report/resources.json``: the resources per member of the shell, by the model, out of
-context and placed (``finn.builder.kernel_resources``).
+context and placed (``finn.builder.build_dataflow_resources``).
 
 The reports are Vivado's formats with invented numbers (``kernel_ops.packaging``'s
 ``UTILIZATION_SYNTH`` and ``PLACED_HIERARCHY``)."""
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from finn.builder.kernel_resources import shell_resources_report
+from finn.builder.build_dataflow_resources import shell_resources_report
 from finn.custom_op.kernels.base import write_target
 from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
 from finn.custom_op.partition.kernel_partitions import partition_body
