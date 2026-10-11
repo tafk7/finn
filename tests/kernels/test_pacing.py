@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The one pacing spec (``finn.core.executors.xsim.pacing``) both RTL drivers take."""
+"""The one pacing spec (``finn.core.rtlsim_pacing``) both RTL drivers take."""
 
 from __future__ import annotations
 
 import pytest
 
-from finn.core.executors.xsim.pacing import FREE, STALLED, Pace, Pacing
+from finn.core.rtlsim_pacing import FREE, STALLED, Pace, Pacing
 
 
 @pytest.mark.parametrize(("burst", "pause"), [(0, 0), (1, -1), (True, 0)])

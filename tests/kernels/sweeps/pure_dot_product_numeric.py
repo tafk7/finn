@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.pacing import FREE, STALLED, Pace, Pacing
+from finn.core.rtlsim_pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel

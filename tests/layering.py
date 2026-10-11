@@ -16,19 +16,21 @@ finn.custom_op.partition.kernel_partitions  <-  finn.custom_op.kernels,
                                                 finn.transformation.kernels, the
                                                 executors, the partition node,
                                                 finn.harness, finn.shells, the flow
-finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels, the XSim
-                                               testbench, the executors, finn.harness,
-                                               finn.shells, the flow
+finn.toolchain  <-  finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels,
+                                                                the XSim testbench, the
+                                                                executors, finn.harness,
+                                                                finn.shells, the flow
 finn.core.space, finn.util  <-  preparation (finn.transformation.qonnx, .streamline,
                                 .prepare)  <-  finn.harness, the flow
 finn.core.containers  <-  finn.custom_op.kernels, preparation, finn.harness, the flow
-finn.kernels, finn.platform, finn.util  <-  finn.platform.generate (the catalog
-                                            generator; nothing imports it)
+finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.generate (the
+                                                            catalog generator; nothing
+                                                            imports it)
 ```
 
 Each row imports every row to its left: the XSim testbench
-(finn.core.executors.xsim, less its executor) builds and simulates a kernel
-module, the executors (finn.core.executors, the XSim executor among them, and
+(finn.core.rtlsim_bench, with finn.core.rtlsim_pacing) builds and simulates a kernel
+module, the executors (finn.core.executor, the XSim executor finn.core.rtlsim_exec, and
 finn.core.onnx_exec, which runs a model with them) run the KernelOps and a
 partition's hardware with it, the partition node (finn.custom_op.partition, less
 kernel_partitions) runs its body with the executors of the run that reached it,
@@ -140,13 +142,24 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
+    # What FINN knows of the external tools it runs: the launcher, the host file, one
+    # module per tool. The standard library only, and one module of util: the resource
+    # store (standard library only), on whose primitives the HLS cache builds.
+    Layer(
+        "toolchain",
+        ("finn.toolchain",),
+        (),
+        (),
+        "tests/kernel_ops",
+        also=("finn.resources",),
+    ),
     # What the flow and the kernel tests build on: helpers, the resource store and
-    # the XSI binding (finn.util and finn.xsi import each other). Below the flow:
-    # no module here imports a flow module.
+    # the XSI binding (finn.xsi runs the simulator through finn.toolchain). Below the
+    # flow: no module here imports a flow module.
     Layer(
         "util",
         ("finn.util", "finn.xsi", "finn.resources"),
-        (),
+        ("toolchain",),
         ANY,
         "tests/kernel_ops",
     ),
@@ -166,32 +179,32 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # The part catalog's generator: a tool above the registry, which runs Vivado
-    # through util's toolchain. Nothing imports it but its tests.
+    # through finn.toolchain. Nothing imports it but its tests.
     Layer(
         "platform.generate",
         ("finn.platform.generate",),
-        ("kernels", "platform", "util"),
+        ("kernels", "platform", "toolchain", "util"),
         (),
         "tests/kernel_ops",
     ),
     # The KernelOps' graph transformations. PackagePartition runs the toolchain
-    # through util.
+    # through finn.toolchain.
     Layer(
         "transformation.kernels",
         ("finn.transformation.kernels",),
-        (*_KERNEL_STACK, "platform", "custom_op.kernels", "partition", "util"),
+        (*_KERNEL_STACK, "platform", "custom_op.kernels", "partition", "toolchain", "util"),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
     # The XSim testbench: a module's sources built (an HLS leaf's product from
     # transformation.kernels' HLS cache), the stream testbench written and simulated
-    # through util's toolchain, cycles measured; and how a simulation paces its streams.
-    # The XSim executor's package, less the executor: it reads no graph, so the kernel
-    # tests simulate with it.
+    # through finn.toolchain, cycles measured; and how a simulation paces its streams.
+    # The XSim executor's testbench and pacing, apart from the executor: it reads no
+    # graph, so the kernel tests simulate with it.
     Layer(
         "xsim",
-        ("finn.core.executors.xsim",),
-        (*_KERNEL_STACK, "util", "transformation.kernels"),
+        ("finn.core.rtlsim_bench", "finn.core.rtlsim_pacing"),
+        (*_KERNEL_STACK, "toolchain", "util", "transformation.kernels"),
         (),
         "tests/kernel_ops",
     ),
@@ -203,8 +216,8 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "executors",
         (
-            "finn.core.executors",
-            "finn.core.executors.xsim.executor",
+            "finn.core.executor",
+            "finn.core.rtlsim_exec",
             "finn.core.onnx_exec",
         ),
         (
@@ -212,6 +225,7 @@ LAYERS: tuple[Layer, ...] = (
             "platform",
             "custom_op.kernels",
             "partition",
+            "toolchain",
             "util",
             "transformation.kernels",
             "xsim",
@@ -244,6 +258,7 @@ LAYERS: tuple[Layer, ...] = (
             "platform",
             "custom_op.kernels",
             "partition",
+            "toolchain",
             "util",
             "transformation.kernels",
             "preparation",
@@ -266,6 +281,7 @@ LAYERS: tuple[Layer, ...] = (
             "platform",
             "custom_op.kernels",
             "partition",
+            "toolchain",
             "util",
             "transformation.kernels",
         ),
@@ -281,6 +297,7 @@ LAYERS: tuple[Layer, ...] = (
             "platform",
             "custom_op.kernels",
             "partition",
+            "toolchain",
             "util",
             "platform.generate",
             "transformation.kernels",
@@ -320,13 +337,14 @@ LAYERS: tuple[Layer, ...] = (
         "tests/dataflow",
     ),
     # The kernel tests need no graph either: the kernel stack, the harness, the XSim
-    # testbench, util for the XSI runtime and the resource store, the space tests'
-    # helpers and the oracle's captures.
+    # testbench, the toolchain, util for the XSI runtime and the resource store, the
+    # space tests' helpers and the oracle's captures.
     Layer(
         "tests.kernels",
         ("kernels",),
         (
             *_KERNEL_STACK,
+            "toolchain",
             "util",
             "harness",
             "xsim",

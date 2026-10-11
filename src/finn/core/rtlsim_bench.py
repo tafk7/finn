@@ -3,7 +3,7 @@
 
 """The XSim testbench: build a module's sources, run a testbench in XSim, stream words
 through a module, and measure its cycles. The XSim executor
-(``finn.core.executors.xsim.executor``) runs a partition's hardware with it.
+(``finn.core.rtlsim_exec``) runs a partition's hardware with it.
 
 ``materialize`` builds a ``module`` into a directory and places each
 memory's INIT_FILE where ``$readmemh`` reads it; an HLS leaf's request is
@@ -34,7 +34,7 @@ never by hand per test:
 - **held inputs** of a leaf module (``Leaf.held``) at their declared values;
 - **each AXIS stream** given words: an input's words presented in order, an
   output's ready, each paced by its ``Pace`` in ``pacing``
-  (``finn.core.executors.xsim.pacing``: by default ``STALLED``, ``FREE`` never
+  (``finn.core.rtlsim_pacing``: by default ``STALLED``, ``FREE`` never
   stalls).
 
 Any other input is refused before anything is written (``Undriven``, naming
@@ -98,7 +98,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
+from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -123,8 +123,8 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.resources import finnlib_root
+from finn.toolchain.launcher import Toolchain, host_toolchain, xelab_threads
 from finn.transformation.kernels.hls import built_hls
-from finn.util.toolchain import Toolchain, machine_toolchain, xelab_threads
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
@@ -228,7 +228,7 @@ def simulate(
     Each tool runs through ``toolchain`` (the machine's by default), whose Vivado
     (XILINX_VIVADO) provides ``glbl.v``. The simulator's output, which the testbench
     may have displayed more in."""
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     vivado = toolchain.environment.get("XILINX_VIVADO")
     if not vivado:
         raise LookupError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")

@@ -20,7 +20,7 @@ from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.builder.kernel_testbench import boundary_words
-from finn.core.executors.xsim.rtl import measure
+from finn.core.rtlsim_bench import measure
 from finn.custom_op.kernels.shell import member, shell_root
 from kernel_ops.measure_cycles import schedule_of
 from kernel_ops.models import configure_partition, kernel_model

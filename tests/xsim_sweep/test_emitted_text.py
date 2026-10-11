@@ -200,7 +200,7 @@ EDITS = [
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     # The testbench and the harness package: both jobs run the testbench writer's or its
     # toolchain's code.
-    ("xsim-rtl", "src/finn/core/executors/xsim/rtl.py", "\nLIMIT = 1\n", BOTH),
+    ("xsim-rtl", "src/finn/core/rtlsim_bench.py", "\nLIMIT = 1\n", BOTH),
     ("harness-toolchain", "src/finn/harness/toolchain.py", "\nLIMIT = 1\n", BOTH),
     ("sweep-script", "scripts/xsim-sweep.sh", "\n# edited\n", BOTH),
     # Not consumed: another kernel's RTL, an unrelated test, a comment in the harness,
@@ -208,7 +208,7 @@ EDITS = [
     ("finnlib-dotp", "finnlib/rtl/linalg/dotp.sv", "\n// edited\n", set()),
     ("unrelated-test", "tests/kernels/test_dotp.py", "\nLIMIT = 1\n", set()),
     # The XSim executor: beside the testbench, imported by no captured job.
-    ("xsim-executor", "src/finn/core/executors/xsim/executor.py", "\nLIMIT = 1\n", set()),
+    ("xsim-executor", "src/finn/core/rtlsim_exec.py", "\nLIMIT = 1\n", set()),
     ("harness-comment", "tests/kernels/conformance.py", "\n# a comment\n", set()),
     # Construction code whose effect is unchanged: its designs are the same.
     ("construction-code", "tests/kernels/helpers.py", "\nLIMIT = 1\n", set()),

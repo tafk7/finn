@@ -43,10 +43,10 @@ from finn.shells.pynq.runner import (
     project_script,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
+from finn.toolchain import hls
+from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
-from finn.util import hls
-from finn.util.toolchain import Selection, Toolchain
 from kernel_ops.models import configure_partition, streamed_w2_model
 from kernel_ops.packaging import FakeVivado, bitfile_default, io_shape_dict
 
@@ -377,11 +377,11 @@ def test_a_build_prepares_its_default_toolchain_once(
 ) -> None:
     prepared: list[FakeVivado] = []
 
-    def machine_toolchain() -> FakeVivado:
+    def host_toolchain() -> FakeVivado:
         prepared.append(FakeVivado())
         return prepared[-1]
 
-    monkeypatch.setattr(pynq_runner, "machine_toolchain", machine_toolchain)
+    monkeypatch.setattr(pynq_runner, "host_toolchain", host_toolchain)
     _, _, _, seen = recorded_build(monkeypatch, tmp_path, None)
     assert len(prepared) == 1
     assert all(toolchain is prepared[0] for name, toolchain, _ in seen if name in TOOL_STEPS)
@@ -427,8 +427,8 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
     vitis_hls.chmod(0o755)
 
     toolchain = HlsToolchain(Selection(hls_frontend="vitis_hls"), {"PATH": f"{tools}:{os.defpath}"})
-    monkeypatch.setattr(pynq_runner, "machine_toolchain", machine_refused)
-    monkeypatch.setattr(hls, "machine_toolchain", machine_refused)
+    monkeypatch.setattr(pynq_runner, "host_toolchain", machine_refused)
+    monkeypatch.setattr(hls, "host_toolchain", machine_refused)
     _, export, _, seen = recorded_build(
         monkeypatch, tmp_path, toolchain, replaced=("PackagePartition", "create_stitched_ip")
     )

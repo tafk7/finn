@@ -51,12 +51,11 @@ from finn.shells.pynq.ipgen import (
     ip_repositories,
     prepare_ip,
 )
+from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.vivado import tcl_quote, vivado_jobs
 from finn.transformation.kernels.integration import IntegratedEnd, Integration
 from finn.transformation.kernels.package import PackagePartition
 from finn.util.basic import make_build_dir
-from finn.util.resources import tcl_quote
-from finn.util.toolchain import Toolchain, machine_toolchain
-from finn.util.vivado import vivado_jobs
 
 #: The domain of the IODMA_hls node an end's IP is generated from.
 IODMA_DOMAIN = iodma.__name__
@@ -267,7 +266,7 @@ def project_script(export: Integration, design: str, jobs: int | None = None) ->
     filled with the export's clock (the period asked, in whole MHz as the template
     takes it), its AXI-Lite and AXI-MM counts, board and part, the block design
     ``design``, and the runs Vivado launches at once (``jobs``, by default the
-    machine's cores, capped: ``finn.util.vivado.vivado_jobs``). The template's debug
+    machine's cores, capped: ``finn.toolchain.vivado.vivado_jobs``). The template's debug
     block stays off: its nets are the HWCustomOp flow's (``debug_lines``)."""
     count = {
         kind: sum(connection.kind == kind for connection in export.connections)
@@ -338,7 +337,7 @@ def build_pynq(
     runs Vivado launches at once; ``options`` the shell's build options;
     ``completion`` the policy that completes the partition's open choices where it is
     packaged (the build's)."""
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     node, body, body_file = partition_body(model)
     ips: dict[str, InstanceIP] = {}
     for instance in _instances(export):

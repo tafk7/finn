@@ -166,7 +166,7 @@ def test_checkout_and_sdist_wheels_have_same_assets_and_work_without_checkout(tm
             python,
             "-I",
             "-c",
-            "from finn.util.resources import resource_path; "
+            "from finn.xsi.paths import resource_path; "
             "from importlib.metadata import version; "
             'print(version("finn")); print(resource_path("xsi"))',
         ],
@@ -200,7 +200,7 @@ def test_two_editable_environments_observe_only_selected_code_and_resources(tmp_
     replacement.replace(asset)
     probe = (
         "import importlib.util; from importlib.metadata import distribution; "
-        "from finn.util.resources import resource_path; from pathlib import Path; "
+        "from finn.xsi.paths import resource_path; from pathlib import Path; "
         'print(importlib.util.find_spec("finn.util.runtime_edit_probe") is not None); '
         'p = Path(resource_path("xsi", "xsi_finn.cpp")); '
         'print("selected resource change" in p.read_text()); '

@@ -59,11 +59,12 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
+        ("finn.toolchain.host", "toolchain"),
         ("finn.harness.ops", "harness"),
-        ("finn.core.executors.xsim.rtl", "xsim"),
-        ("finn.core.executors.xsim", "xsim"),
-        ("finn.core.executors.xsim.executor", "executors"),
-        ("finn.core.executors.python", "executors"),
+        ("finn.core.rtlsim_bench", "xsim"),
+        ("finn.core.rtlsim_pacing", "xsim"),
+        ("finn.core.rtlsim_exec", "executors"),
+        ("finn.core.executor", "executors"),
         ("finn.builder.build_dataflow", "flow"),
         ("kernels.helpers", "tests.kernels"),
     ],
@@ -94,6 +95,10 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("space", "numpy"),
         # util below the flow.
         ("util", "finn.builder.build_dataflow_steps.step_kernel_bitfile"),
+        # The toolchain below util: of FINN, the resource store alone.
+        ("toolchain", "finn.util.basic.make_build_dir"),
+        ("toolchain", "finn.xsi.paths"),
+        ("toolchain", "finn.kernels.base"),
         # The shells below the flow: the builder runs them, never the other way.
         ("shells", "finn.builder.build_dataflow_steps"),
         ("transformation.kernels", "finn.shells.pynq.runner"),
@@ -110,13 +115,13 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         # The XSim testbench: above the kernels and their transformations, below the
         # executors; it reads no graph, so the kernel tests may import it but not the
         # executor.
-        ("kernels", "finn.core.executors.xsim.rtl.simulate"),
-        ("transformation.kernels", "finn.core.executors.xsim.rtl"),
-        ("xsim", "finn.core.executors.xsim.executor.XSim"),
+        ("kernels", "finn.core.rtlsim_bench.simulate"),
+        ("transformation.kernels", "finn.core.rtlsim_bench"),
+        ("xsim", "finn.core.rtlsim_exec.XSim"),
         ("xsim", "finn.core.onnx_exec.execute_onnx"),
         ("xsim", "finn.harness.orders"),
         ("xsim", "finn.custom_op.kernels.base"),
-        ("tests.kernels", "finn.core.executors.xsim.executor.XSim"),
+        ("tests.kernels", "finn.core.rtlsim_exec.XSim"),
         # The executors below the harness: core imports no finn.harness.
         ("executors", "finn.harness.toolchain.finnlib_root"),
         ("executors", "finn.harness.ops"),
@@ -149,8 +154,10 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("transformation.kernels", "finn.util.basic.make_build_dir"),
         ("flow", "finn.transformation.kernels.package.PackagePartition"),
         ("util", "finn_xsi.adapter"),
+        ("util", "finn.toolchain.launcher.Selection"),
+        ("toolchain", "finn.resources._store.locked"),
         ("harness", "finn.kernels.artifacts.build.emit_module"),
-        ("harness", "finn.util.toolchain.machine_toolchain"),
+        ("harness", "finn.toolchain.launcher.host_toolchain"),
         ("harness", "finn.transformation.kernels.package.PackagePartition"),
         # The KernelOps' oracle, read on a model of them.
         ("harness", "finn.custom_op.kernels.base.kernel_op"),
@@ -161,13 +168,13 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("harness", "finn.transformation.kernels.convert.ToKernelOps"),
         # Which ops ONNX Runtime cannot run in float64 (the equivalence check).
         ("harness", "onnxruntime.InferenceSession"),
-        ("flow", "finn.core.executors.xsim.rtl.simulate"),
-        ("tests.kernels", "finn.core.executors.xsim.rtl.stream_through"),
-        ("tests.kernels", "finn.core.executors.xsim.pacing.STALLED"),
-        ("executors", "finn.core.executors.xsim.rtl.stream_out"),
+        ("flow", "finn.core.rtlsim_bench.simulate"),
+        ("tests.kernels", "finn.core.rtlsim_bench.stream_through"),
+        ("tests.kernels", "finn.core.rtlsim_pacing.STALLED"),
+        ("executors", "finn.core.rtlsim_bench.stream_out"),
         ("executors", "finn.custom_op.kernels.shell.configured_root"),
         # Parity: two runs of the executors.
-        ("harness", "finn.core.executors.xsim.executor.XSim"),
+        ("harness", "finn.core.rtlsim_exec.XSim"),
         ("harness", "finn.core.onnx_exec.execute_onnx"),
         # The partition node runs its body under the executors of the run that reached it.
         ("custom_op.partition", "finn.core.onnx_exec.running"),

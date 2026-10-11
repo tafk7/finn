@@ -110,7 +110,7 @@ def test_no_production_planning_module_can_start_a_process(
     """The seam between planning a tool run and performing one.
 
     ``finn.kernels`` and ``finn.dataflow`` produce requirements and requests;
-    the flow runs the tools (through ``finn.util.toolchain``).  That split is what
+    the flow runs the tools (through ``finn.toolchain.launcher``).  That split is what
     lets a remote or containerized executor arrive without editing anything here,
     and an import of ``subprocess`` is how it would quietly stop being true.
 

@@ -17,7 +17,7 @@ are returned.
 What it checks is value and sequence: no timing, no stall pattern, no RTL. A free
 running top (``ap_ctrl_none``) whose processes each take one step a call is what the
 driver calls. It is a check a developer runs before any synthesis, and a separate
-evaluation from the RTL's simulation (``finn.core.executors.xsim.rtl``); no gate decides on it.
+evaluation from the RTL's simulation (``finn.core.rtlsim_bench``); no gate decides on it.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import TOP, axis_type, include_path, stage_hls
 from finn.kernels.artifacts.module import Leaf
-from finn.util.toolchain import Toolchain, machine_toolchain, run_process
+from finn.toolchain.launcher import Toolchain, host_toolchain, run_process
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
@@ -160,7 +160,7 @@ def c_simulate(
     for name in (*inputs, *outputs):
         if name not in names:
             raise ValueError(f"{leaf.name} has no stream {name}; its streams: {sorted(names)}")
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     staged = stage_hls(request, directory / "request", roots={"finnlib": finnlib_root()})
     for name, (words, _) in inputs.items():
         bus = names[name]

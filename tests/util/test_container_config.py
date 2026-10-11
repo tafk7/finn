@@ -29,7 +29,7 @@ FINN_ENV = os.path.join(DOCKER_DIR, "config.py")
 sys.path.insert(0, DOCKER_DIR)
 import config as finn_env  # noqa: E402
 
-from finn.util import machine_file  # noqa: E402
+from finn.toolchain import host as host_file  # noqa: E402
 
 
 def _make_tree(base, layout, version):
@@ -133,7 +133,7 @@ def test_empty_license():
 
 def _inspect(env, tier):
     """Run the real CLI in a clean environment, so nothing leaks in."""
-    # No machine file unless a test names one: the developer's own must not leak in.
+    # No host file unless a test names one: the developer's own must not leak in.
     base = {
         "PATH": os.environ["PATH"],
         "HOME": os.environ.get("HOME", "/tmp"),
@@ -1038,7 +1038,7 @@ def test_native_callers_execute_resolver_in_an_isolated_installation(tmp_path):
         "docker/config.py",
         "docker/xilinx_install.py",
         "docker/finn-toolchain.sh",
-        "src/finn/util/machine_file.py",
+        "src/finn/toolchain/host.py",
     ):
         destination = checkout / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1087,21 +1087,21 @@ def test_native_callers_execute_resolver_in_an_isolated_installation(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# The machine file: ~/.config/finn/xilinx.env, shared with the sbx xilinx kit.
+# The host file: ~/.config/finn/xilinx.env, shared with the sbx xilinx kit.
 # --------------------------------------------------------------------------
 
 
-def _machine_file(tmp_path, text):
+def _host_file(tmp_path, text):
     path = tmp_path / "xilinx.env"
     path.write_text(text)
     return str(path)
 
 
-def test_machine_file_is_read_with_comments(tmp_path):
-    path = _machine_file(
+def test_host_file_is_read_with_comments(tmp_path):
+    path = _host_file(
         tmp_path, "# this machine\n\nFINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION=2025.2\n"
     )
-    assert machine_file.read_file(path) == {
+    assert host_file.read_file(path) == {
         "FINN_XILINX_PATH": "/opt/Xilinx",
         "FINN_XILINX_VERSION": "2025.2",
     }
@@ -1118,19 +1118,19 @@ def test_machine_file_is_read_with_comments(tmp_path):
         ("FINN_XILINX_VERSION", "NAME=value"),
     ],
 )
-def test_machine_file_refuses_what_sbx_would_read_differently(tmp_path, line, complaint):
+def test_host_file_refuses_what_sbx_would_read_differently(tmp_path, line, complaint):
     """The file is also sbx's --kit-args-file, which takes values verbatim and
     refuses undeclared names: anything else must fail here, not in a sandbox."""
-    path = _machine_file(tmp_path, line + "\n")
-    with pytest.raises(machine_file.ConfigError, match=complaint):
-        machine_file.read_file(path)
+    path = _host_file(tmp_path, line + "\n")
+    with pytest.raises(host_file.ConfigError, match=complaint):
+        host_file.read_file(path)
 
 
-def test_machine_file_keys_are_the_kit_arguments():
+def test_host_file_keys_are_the_kit_arguments():
     """The file and the kit's arguments are one vocabulary."""
     kit = (Path(REPO) / "docker/sbx/xilinx/xilinx.yaml").read_text()
     declared = re.findall(r"^  ([A-Z_]+):\n", kit, re.MULTILINE)
-    assert sorted(declared) == sorted(machine_file.KEYS)
+    assert sorted(declared) == sorted(host_file.KEYS)
 
 
 def test_the_kit_takes_a_licence_server_by_name_or_address():
@@ -1144,22 +1144,22 @@ def test_the_kit_takes_a_licence_server_by_name_or_address():
         assert not re.fullmatch(pattern, host), host
 
 
-def test_environment_wins_over_the_machine_file(tmp_path):
-    path = _machine_file(tmp_path, "FINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION=2025.2\n")
-    values = machine_file.settings({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"})
+def test_environment_wins_over_the_host_file(tmp_path):
+    path = _host_file(tmp_path, "FINN_XILINX_PATH=/opt/Xilinx\nFINN_XILINX_VERSION=2025.2\n")
+    values = host_file.settings({"FINN_XILINX_ENV": path, "FINN_XILINX_VERSION": "2026.1"})
     assert values == {"FINN_XILINX_PATH": "/opt/Xilinx", "FINN_XILINX_VERSION": "2026.1"}
 
 
 @pytest.mark.parametrize("licensed", (True, False))
-def test_the_machine_files_licence_reaches_activation(tmp_path, licensed):
+def test_the_host_files_licence_reaches_activation(tmp_path, licensed):
     """scripts/activate.sh evals `inspect --tier build --format sh`: a licence
-    server named in the machine file arrives as XILINXD_LICENSE_FILE (FlexLM's
+    server named in the host file arrives as XILINXD_LICENSE_FILE (FlexLM's
     port@host), and without one the variable is absent and nothing is said."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.1")
     lines = ["FINN_XILINX_PATH=%s" % root, "FINN_XILINX_VERSION=2025.1"]
     if licensed:
         lines += ["FINN_LICENSE_HOST=licsrv.example", "FINN_LICENSE_PORT=2100"]
-    path = _machine_file(tmp_path, "\n".join(lines) + "\n")
+    path = _host_file(tmp_path, "\n".join(lines) + "\n")
     proc = subprocess.run(
         [FINN_ENV, "inspect", "--tier", "build", "--format", "sh"],
         capture_output=True,
@@ -1172,30 +1172,30 @@ def test_the_machine_files_licence_reaches_activation(tmp_path, licensed):
     assert "licen" not in proc.stderr.lower()
 
 
-def test_default_machine_file_location(tmp_path):
+def test_default_host_file_location(tmp_path):
     config = tmp_path / "config" / "finn"
     config.mkdir(parents=True)
     (config / "xilinx.env").write_text("FINN_XILINX_VERSION=2025.2\n")
-    assert machine_file.settings({"XDG_CONFIG_HOME": str(tmp_path / "config")}) == {
+    assert host_file.settings({"XDG_CONFIG_HOME": str(tmp_path / "config")}) == {
         "FINN_XILINX_VERSION": "2025.2"
     }
     home = {"HOME": str(tmp_path / "nobody")}
-    assert machine_file.file_path(home) == str(tmp_path / "nobody/.config/finn/xilinx.env")
-    assert machine_file.settings(home) == {}  # no file: nothing configured
+    assert host_file.file_path(home) == str(tmp_path / "nobody/.config/finn/xilinx.env")
+    assert host_file.settings(home) == {}  # no file: nothing configured
 
 
-def test_a_named_machine_file_must_exist(tmp_path):
-    with pytest.raises(machine_file.ConfigError, match="does not exist"):
-        machine_file.settings({"FINN_XILINX_ENV": str(tmp_path / "missing.env")})
-    assert machine_file.settings({"FINN_XILINX_ENV": ""}) == {}
+def test_a_named_host_file_must_exist(tmp_path):
+    with pytest.raises(host_file.ConfigError, match="does not exist"):
+        host_file.settings({"FINN_XILINX_ENV": str(tmp_path / "missing.env")})
+    assert host_file.settings({"FINN_XILINX_ENV": ""}) == {}
 
 
-def test_build_tier_from_the_machine_file_alone(tmp_path):
+def test_build_tier_from_the_host_file_alone(tmp_path):
     """`docker/run --fpga` with nothing exported: the file supplies the toolchain
     and the licence, composed into FlexLM's PORT@HOST."""
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.2")
     _make_tree(root, "new", "2026.1")
-    path = _machine_file(
+    path = _host_file(
         tmp_path,
         "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2025.2\n"
         "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\nFINN_LICENSE_VENDOR_PORT=2101\n"
@@ -1214,7 +1214,7 @@ def test_build_tier_from_the_machine_file_alone(tmp_path):
 
 def test_an_explicit_licence_variable_wins_over_host_and_port(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.2")
-    path = _machine_file(
+    path = _host_file(
         tmp_path,
         "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2025.2\n"
         "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\n" % root,
@@ -1227,9 +1227,9 @@ def test_an_explicit_licence_variable_wins_over_host_and_port(tmp_path):
     assert data["env"]["XILINXD_LICENSE_FILE"] == "27000@lic.example"
 
 
-def test_dev_tier_ignores_the_machine_file(tmp_path):
+def test_dev_tier_ignores_the_host_file(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.2")
-    path = _machine_file(
+    path = _host_file(
         tmp_path,
         "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2025.2\n"
         "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\n" % root,
@@ -1239,8 +1239,8 @@ def test_dev_tier_ignores_the_machine_file(tmp_path):
     assert not any("XILINX" in key for key in data["env"])
 
 
-def test_a_malformed_machine_file_is_an_error(tmp_path):
-    path = _machine_file(tmp_path, "XILINX_VIVADO=/opt/Xilinx\n")
+def test_a_malformed_host_file_is_an_error(tmp_path):
+    path = _host_file(tmp_path, "XILINX_VIVADO=/opt/Xilinx\n")
     proc = _inspect({"FINN_XILINX_ENV": path}, "dev")
     assert proc.returncode == 3
     assert "not a setting" in proc.stderr
@@ -1331,7 +1331,7 @@ def test_relative_resource_override_becomes_absolute(tmp_path):
 
 def test_dev_container_inputs_carry_the_toolchain_but_not_the_workspace(tmp_path):
     root = _make_tree(str(tmp_path / "Xilinx"), "new", "2025.2")
-    path = _machine_file(
+    path = _host_file(
         tmp_path,
         "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2025.2\n"
         "FINN_LICENSE_HOST=192.0.2.1\nFINN_LICENSE_PORT=2100\n" % root,

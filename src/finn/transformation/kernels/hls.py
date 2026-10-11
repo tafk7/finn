@@ -7,7 +7,7 @@
 source is an ``HlsSource``, each request once), stages each
 (``finn.kernels.artifacts.hls.stage_hls``, FinnLib as FINN resolves it), and takes
 its product from the HLS cache, synthesizing what is missing
-(``finn.util.hls.synthesize``), the requests in parallel, each its own tool
+(``finn.toolchain.hls.synthesize``), the requests in parallel, each its own tool
 process. Each product's exported top is then checked against the leaf's declared
 pins (``finn.kernels.artifacts.rtl.check_abi``): the declaration stays the ABI, and a
 product that contradicts it is refused (``HlsAbiRefused``), as is one the checker
@@ -16,7 +16,7 @@ request's exported Verilog by its top's name.
 
 Every caller that emits a module calls it first: ``PackagePartition`` and
 ``ElaboratePartition`` with the partition's part, the harness with the part it
-simulates (``finn.core.executors.xsim.rtl``). A module without HLS leaves runs nothing.
+simulates (``finn.core.rtlsim_bench``). A module without HLS leaves runs nothing.
 """
 
 from __future__ import annotations
@@ -31,8 +31,8 @@ from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf, Module
 from finn.kernels.artifacts.rtl import Declined, check_abi
-from finn.util.hls import HlsProduct, synthesize
-from finn.util.toolchain import Toolchain, machine_toolchain
+from finn.toolchain.hls import HlsProduct, synthesize
+from finn.toolchain.launcher import Toolchain, host_toolchain
 
 
 class HlsAbiRefused(Exception):
@@ -77,7 +77,7 @@ def built_hls(
     requests = hls_requests(module)
     if not requests:
         return {}
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     roots = {"finnlib": resources.finnlib_root()} if roots is None else roots
     scratch: Path = resources.scratch()  # type: ignore[no-untyped-call]
     scratch.mkdir(parents=True, exist_ok=True)

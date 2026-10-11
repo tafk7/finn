@@ -74,6 +74,8 @@ from finn.shells.pynq.runner import (
     iodma_model,
     project_script,
 )
+from finn.toolchain.launcher import Toolchain
+from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
     completion,
     explore_kernel_choices,
@@ -83,8 +85,6 @@ from finn.transformation.kernels import (
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
-from finn.util.toolchain import Toolchain
-from finn.util.vivado import delivered_clock
 from kernel_ops.models import (
     chain_source,
     configure_partition,

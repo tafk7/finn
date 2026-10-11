@@ -46,7 +46,7 @@ exported Verilog with its memory images (``verilog/``), the synthesis reports
 script with its output (``synthesize.sh``, ``.stdout.log``, ``.stderr.log``). A
 failed build is kept beside the entry (``<entry>.failed``) and named by the error.
 
-It takes a directory, never a kernel value: ``finn.util`` imports no kernel layer.
+It takes a directory, never a kernel value: ``finn.toolchain`` imports no kernel layer.
 """
 
 import hashlib
@@ -61,7 +61,7 @@ from pathlib import Path
 
 from finn.resources import home, tree_digest
 from finn.resources._store import complete, locked, publish
-from finn.util.toolchain import Toolchain, machine_toolchain
+from finn.toolchain.launcher import Toolchain, host_toolchain
 
 #: The staged request's script, which reads ``$part`` (``finn.kernels.artifacts.hls``).
 REQUEST_SCRIPT = "script.tcl"
@@ -146,7 +146,7 @@ def synthesize(
     ``name`` names the entry, ``<name>-<key16>`` under ``cache`` (``hls_cache()`` by
     default); ``toolchain`` runs the frontend (the machine's by default). Raises
     ``HlsFailed`` when the tool fails or leaves no exported RTL."""
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     cache = hls_cache() if cache is None else cache
     if not (Path(request) / REQUEST_SCRIPT).is_file():
         raise HlsFailed(f"{request} holds no {REQUEST_SCRIPT}: it is not a staged request")
@@ -206,7 +206,7 @@ def _build(request: Path, part: str, work: Path, toolchain: Toolchain) -> None:
 
 class CallHLS:
     """Execute a deliberately selected HLS frontend with child-scoped settings:
-    ``toolchain``'s, by default the machine's (``machine_toolchain``)."""
+    ``toolchain``'s, by default the machine's (``host_toolchain``)."""
 
     def __init__(self, toolchain: Toolchain | None = None):
         self.toolchain = toolchain
@@ -222,7 +222,7 @@ class CallHLS:
         self.ipgen_path = path
 
     def build(self, code_gen_dir):
-        toolchain = self.toolchain or machine_toolchain()
+        toolchain = self.toolchain or host_toolchain()
         self.code_gen_dir = os.path.abspath(code_gen_dir)
         frontend, args = toolchain.hls_command(self.tcl_script)
         self.ipgen_script = str(Path(self.code_gen_dir) / "ipgen.sh")

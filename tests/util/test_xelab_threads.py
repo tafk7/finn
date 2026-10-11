@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """xelab's thread count, one rule for every caller: FINN's XSI compilation and the
-kernel harness (finn.core.executors.xsim.rtl.simulate) both elaborate with it, so the
+kernel harness (finn.core.rtlsim_bench.simulate) both elaborate with it, so the
 XSim sweep's FINN_XELAB_MT bounds each of its jobs."""
 
 import pytest
 
-from finn.util.toolchain import xelab_threads
+from finn.toolchain.launcher import xelab_threads
 
 
 @pytest.mark.parametrize(

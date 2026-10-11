@@ -3,7 +3,7 @@
 # ports. The installation itself is a read-only mount of the sandbox (a kit
 # cannot mount host paths).
 #
-# The arguments are FINN's machine file, ~/.config/finn/xilinx.env, which
+# The arguments are FINN's host file, ~/.config/finn/xilinx.env, which
 # docker/run and native activation read too: pass it with --kit-args-file, and
 # select another installed version for one sandbox with
 # --kit-arg FINN_XILINX_VERSION=... . The workload's startup hook resolves

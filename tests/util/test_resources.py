@@ -713,7 +713,7 @@ def test_github_archive_urls():
 
 
 def test_finn_sources_are_resources_a_directory_can_replace(project, tmp_path, monkeypatch):
-    from finn.util.resources import resource_path  # noqa: PLC0415
+    from finn.xsi.paths import resource_path  # noqa: PLC0415
 
     assert resources.status("xsi").state == "package"
     assert Path(resource_path("xsi", "xsi_finn.cpp")).is_file()

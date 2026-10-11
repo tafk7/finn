@@ -29,7 +29,7 @@ history at commit `5dd9df9bc`.
   the images. Build data FINN does not contain (finn-hlslib, board files) is not
   Python: it is declared as [external resources](#external-resources).
 * **Vivado** is always the user's, described once per machine in
-  `~/.config/finn/xilinx.env`, read by one reader, `finn.util.machine_file`.
+  `~/.config/finn/xilinx.env`, read by one reader, `finn.toolchain.host`.
   `docker/xilinx_install.py` locates the installation (both AMD install layouts)
   for `docker/config.py` on the host and for the sbx workload's startup hook,
   FINN's tool launches take the licence from it, and `docker/finn-toolchain.sh`
@@ -163,7 +163,7 @@ part ahead of time.
 ## Running tools on LSF
 
 FINN runs every Xilinx tool through a selected toolchain, whose command directory
-(`finn.util.toolchain.Selection.command_dir`) is an interception hook: the machine
+(`finn.toolchain.launcher.Selection.command_dir`) is an interception hook: the machine
 running FINN still drives the build and pytest, but each `vivado` / `v++` /
 `vitis_hls` / `vitis-run` / `xelab` / `g++` invocation is a deployment-specific shim
 in that directory, which may delegate the heavy subprocess to a compute farm (IBM
@@ -171,7 +171,7 @@ LSF's `bsub`, or another HPC model). FINN itself knows nothing of the farm.
 
 The site states the shim directory once, as the machine setting
 `FINN_TOOL_DIR_OVERRIDE`: the machine's toolchain
-(`finn.util.toolchain.machine_selection`) takes it as its command directory, and
+(`finn.toolchain.launcher.host_selection`) takes it as its command directory, and
 every transformation called without a toolchain, as the tests call them, and every
 build whose configuration names none, runs by that toolchain. A build configuration
 that states its own `toolchain` is laid over the machine's: a `command_dir` it states

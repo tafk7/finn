@@ -8,7 +8,7 @@ from finn.platform import resolve_target
 from finn.shells.pynq import templates
 from finn.shells.pynq.driver import write_pynq_driver_support
 from finn.shells.pynq.ipgen import data_path as shell_data_path
-from finn.util.resources import resource_path
+from finn.xsi.paths import resource_path
 
 assert not os.environ.get("FINN_ROOT")
 work = Path(sys.argv[1])

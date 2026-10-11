@@ -17,7 +17,7 @@ the one way a tool process is started and reaped.
 
 A transformation that runs a tool takes a prepared ``Toolchain`` (``toolchain=``),
 so that one build runs every tool through one route; without one, it runs by the
-machine's (``machine_toolchain``). Nothing is discovered or activated on import.
+machine's (``host_toolchain``). Nothing is discovered or activated on import.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
-from finn.util import machine_file
-from finn.util.vivado import vivado_jobs
+from finn.toolchain import host
+from finn.toolchain.vivado import vivado_jobs
 
 StrPath = str | os.PathLike[str]
 
@@ -156,7 +156,7 @@ class Selection:
     Frontend is requested deliberately, never chosen from executable discovery.
 
     A field that is ``None`` is not stated: the selection a build runs by is the one it
-    states laid over the machine's (``over``, ``machine_selection``), so a field it
+    states laid over the machine's (``over``, ``host_selection``), so a field it
     does not state is the machine's, never a default. The machine states the command
     directory, the HLS frontend and Vivado's jobs, and never settings or a launcher.
     """
@@ -166,7 +166,7 @@ class Selection:
     launcher: tuple[str, ...] = ()
     hls_frontend: str | None = None
     #: How many runs Vivado launches at once (``launch_runs -jobs``); None: the
-    #: machine's cores, at most 16 (``finn.util.vivado.vivado_jobs``).
+    #: machine's cores, at most 16 (``finn.toolchain.vivado.vivado_jobs``).
     vivado_jobs: int | None = None
 
     def __post_init__(self) -> None:
@@ -202,7 +202,7 @@ class Selection:
         a clean base: the system PATH and the user, locale, display, licence and
         ``LD_PRELOAD`` variables) and the resulting environment is kept; without, ``base_env``
         (by default os.environ) is taken as configured. A local route that names no
-        licence gets the machine file's. Raises ``RuntimeError`` when a script fails.
+        licence gets the host file's. Raises ``RuntimeError`` when a script fails.
         """
         if base_env is None:
             if self.settings:
@@ -253,10 +253,10 @@ class Selection:
                 if item
             )
         if not self.launcher:
-            # The machine file's licence server, so that a process which never
+            # The host file's licence server, so that a process which never
             # sourced activate.sh still launches licensed tools. A licence
             # variable already set wins; a site route owns its own.
-            licence = machine_file.license_for(environment, machine_file.settings())
+            licence = host.license_for(environment, host.settings())
             if licence:
                 environment["XILINXD_LICENSE_FILE"] = licence
         return Toolchain(self, environment)
@@ -424,7 +424,7 @@ class Toolchain:
         if frontend is None:
             raise ValueError(
                 "This selection names no HLS frontend; state one, or lay it over the "
-                "machine's (machine_selection)"
+                "machine's (host_selection)"
             )
         version = self.probe(frontend, timeout)
         # These are FINN code-generation constraints, separate from whether a
@@ -461,13 +461,13 @@ COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
 VIVADO_JOBS_SETTING = "FINN_VIVADO_JOBS"
 
 
-def machine_selection(
+def host_selection(
     environ: Mapping[str, str] | None = None, *, stated: Selection | None = None
 ) -> Selection:
     """The selection a tool runs by: this machine's environment as configured
     (``scripts/activate.sh``, ``docker/run``, ``finn-toolchain.sh``; no settings
     script is sourced), under the site command directory ``FINN_TOOL_DIR_OVERRIDE``
-    names, if it names one, with the HLS frontend of the machine file's
+    names, if it names one, with the HLS frontend of the host file's
     ``FINN_XILINX_VERSION`` (``machine_hls_frontend``) and the Vivado jobs
     ``FINN_VIVADO_JOBS`` says, if it says. Each is read here, once a call. A selection
     a caller states (a build configuration's ``toolchain``) is laid over it
@@ -489,11 +489,11 @@ def machine_selection(
 
 
 def machine_hls_frontend(environ: Mapping[str, str] | None = None) -> str:
-    """The HLS frontend of the release the machine file selects
+    """The HLS frontend of the release the host file selects
     (``FINN_XILINX_VERSION``, which the environment may override): ``vitis-run``
     from 2025.1, else ``vitis_hls``, which is also the frontend when it names no
     release. ``ValueError`` when the release is not ``YEAR.MINOR``."""
-    version = machine_file.settings(environ).get("FINN_XILINX_VERSION")
+    version = host.settings(environ).get("FINN_XILINX_VERSION")
     if version is None:
         return "vitis_hls"
     match = re.fullmatch(r"(20\d{2})\.(\d+)", version)
@@ -502,10 +502,10 @@ def machine_hls_frontend(environ: Mapping[str, str] | None = None) -> str:
     return "vitis-run" if tuple(map(int, match.groups())) >= (2025, 1) else "vitis_hls"
 
 
-def machine_toolchain() -> Toolchain:
-    """``machine_selection()`` prepared over this process's environment: the
+def host_toolchain() -> Toolchain:
+    """``host_selection()`` prepared over this process's environment: the
     toolchain of a transformation called without one."""
-    return machine_selection().prepare()
+    return host_selection().prepare()
 
 
 def xelab_threads(environment: Mapping[str, str]) -> str:

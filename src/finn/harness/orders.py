@@ -27,7 +27,7 @@ walked otherwise than declared, its first beat that differs: ``beat 1 carries
 
 The streams are given as the model declares them (``Stream``): a traversal, the
 payload bits of an element, and the tensor's axis names (``d0``, ``d1``, ... by
-default). Pure Python and numpy: the stream testbench (``finn.core.executors.xsim.rtl``)
+default). Pure Python and numpy: the stream testbench (``finn.core.rtlsim_bench``)
 returns the words that arrived (``WordsDiffer``), and its callers, which know the
 model, decode them; an XSI sweep decodes its own collected words alike.
 """

@@ -4,7 +4,7 @@
 """What a simulation runs on: FinnLib as FINN resolves it, Vivado as FINN's toolchain
 selects it, and the revisions a run prints first in its log.
 
-Apart from ``finn.core.executors.xsim.rtl`` so that a job importing only these (a numeric sweep
+Apart from ``finn.core.rtlsim_bench`` so that a job importing only these (a numeric sweep
 driving XSI, an artifact test reading FinnLib) is not keyed by the testbench writer's
 code (``scripts/emitted_text.py`` keys a job by the harness files it imports).
 """
@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from finn.resources import finnlib_root
-from finn.util.toolchain import Toolchain, machine_toolchain
+from finn.toolchain.launcher import Toolchain, host_toolchain
 
 SIMULATOR_TOOLS = ("xvlog", "xelab", "xsim")
 
@@ -27,7 +27,7 @@ def vivado_simulator(toolchain: Toolchain | None = None) -> bool:
     FINN images put tool shims on PATH, so a command being found does not mean a
     Vivado installation is selected: the toolchain must also name one (XILINX_VIVADO).
     """
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     if not toolchain.environment.get("XILINX_VIVADO"):
         return False
     try:

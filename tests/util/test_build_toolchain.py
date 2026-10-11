@@ -18,8 +18,8 @@ from qonnx.util.basic import qonnx_make_model
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.platform import TargetRequest
-from finn.util.toolchain import Selection, machine_selection
-from finn.util.vivado import vivado_jobs
+from finn.toolchain.launcher import Selection, host_selection
+from finn.toolchain.vivado import vivado_jobs
 
 pytestmark = pytest.mark.util
 
@@ -87,10 +87,10 @@ def test_a_stated_selection_drops_none_of_the_machines_fields(monkeypatch):
         command_dir="/site/tools", hls_frontend="vitis-run", vivado_jobs=2
     )
     local = Selection(command_dir="", hls_frontend="vitis_hls")
-    assert machine_selection(stated=local) == Selection(
+    assert host_selection(stated=local) == Selection(
         command_dir="", hls_frontend="vitis_hls", vivado_jobs=8
     )
-    assert machine_selection(stated=Selection()) == machine_selection()
+    assert host_selection(stated=Selection()) == host_selection()
 
 
 def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch):
@@ -176,9 +176,9 @@ def test_vivados_jobs_are_a_machine_setting_of_the_selection(monkeypatch):
         with pytest.raises(ValueError, match="positive number"):
             vivado_jobs(refused)
     no_file = {"FINN_XILINX_ENV": ""}
-    assert machine_selection(no_file).vivado_jobs is None
-    assert machine_selection({**no_file, "FINN_VIVADO_JOBS": "12"}).vivado_jobs == 12
+    assert host_selection(no_file).vivado_jobs is None
+    assert host_selection({**no_file, "FINN_VIVADO_JOBS": "12"}).vivado_jobs == 12
     with pytest.raises(ValueError, match="FINN_VIVADO_JOBS: Vivado's jobs must be a positive"):
-        machine_selection({**no_file, "FINN_VIVADO_JOBS": "0"})
+        host_selection({**no_file, "FINN_VIVADO_JOBS": "0"})
     with pytest.raises(ValueError, match="FINN_VIVADO_JOBS=four is not a number of runs"):
-        machine_selection({**no_file, "FINN_VIVADO_JOBS": "four"})
+        host_selection({**no_file, "FINN_VIVADO_JOBS": "four"})

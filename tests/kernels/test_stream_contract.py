@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Rejected, Unresolved, design_space
 from finn.dataflow import traversal
 from finn.dataflow.tensor import ScalarEncoding, Tensor

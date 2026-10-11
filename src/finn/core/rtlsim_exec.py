@@ -13,7 +13,7 @@ of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
 2. **the words**: each input tensor, as integers of its boundary element (a value
    that is no integer, or one the element does not hold, is refused: ``Unstreamable``),
    presented as the port presents it, one word a beat (``finn.dataflow.traversal.pack``);
-3. **the simulation**: the root's module in XSim (``rtl.stream_out``), paced by
+3. **the simulation**: the root's module in XSim (``rtlsim_bench.stream_out``), paced by
    ``pacing``, every input streamed and each output's words taken as they arrive,
    none expected;
 4. **the tensors**: each output's words read back as the port presents them
@@ -36,7 +36,7 @@ processes (xvlog, xelab, xsim), so runs in one process do not share simulator st
 
 **Links**, when the run returns its full context (``finn.core.onnx_exec.running``):
 each tensor between two kernels of the body is tapped in the simulation, at its
-producer's output, before any adapter (``rtl.Tap``), and read back with the producer's
+producer's output, before any adapter (``rtlsim_bench.Tap``), and read back with the producer's
 traversal and element: the ONNX tensor itself, as its producer presents it. It enters
 the context as the partition node's Python run names a body's tensor,
 ``<node>_<tensor>``, in the container the body's context holds it in, so a hardware run
@@ -61,9 +61,9 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import numpy as np
 import numpy.typing as npt
 
-from finn.core.executors.xsim.pacing import STALLED, Pacing
-from finn.core.executors.xsim.rtl import Receive, SimulationFailed, Tap, Words, stream_out
 from finn.core.onnx_exec import running, window
+from finn.core.rtlsim_bench import Receive, SimulationFailed, Tap, Words, stream_out
+from finn.core.rtlsim_pacing import STALLED, Pacing
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_root, member
 from finn.custom_op.partition.kernel_partitions import kernel_partition_body
@@ -76,9 +76,9 @@ if TYPE_CHECKING:
     from onnx import NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
-    from finn.core.executors.base import Context
+    from finn.core.executor import Context
     from finn.kernels.explore import Completion
-    from finn.util.toolchain import Toolchain
+    from finn.toolchain.launcher import Toolchain
 
 
 class Unstreamable(ValueError):

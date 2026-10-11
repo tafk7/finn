@@ -45,8 +45,8 @@ from qonnx.util.basic import (
     sanitize_quant_values,
 )
 
-from finn.core.executors import Context, Executor, Python, hardware_node, is_partition
-from finn.custom_op.partition.kernel_partitions import body_file
+from finn.core.executor import Context, Executor, Python, hardware_node
+from finn.custom_op.partition.kernel_partitions import body_file, is_partition
 
 #: The executors execute_onnx runs a model with when its caller names none.
 DEFAULT_EXECUTORS: tuple[Executor, ...] = (Python(),)
@@ -114,7 +114,7 @@ def execute_onnx(
     When start_node and end_node are set to None, the whole graph is executed.
     If they are set to particular ONNX nodes, only the subgraph between (and
     including) those nodes is executed.
-    executors (finn.core.executors) run the nodes: for each node, the first
+    executors (finn.core.executor) run the nodes: for each node, the first
     executor that claims it runs it, and qonnx's execute_node runs a node none
     claims. A partition node's body runs under the same executors.
 

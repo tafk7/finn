@@ -11,7 +11,7 @@ the simulation stages off: open a project, add the top with the C++14 flags and 
 include directory per declared header's directory, set the top, open a solution,
 set the part, create the clock, run the request's directives, synthesize. The part
 is the one thing it does not state: it reads ``$part``, which whoever runs it sets
-first (``finn.util.hls``), so the staged request, and its digest, are the same on
+first (``finn.toolchain.hls``), so the staged request, and its digest, are the same on
 every machine and for every part.
 
 A top FINN writes takes each AXIS port as an ``hls::stream`` of ``axis_type``: the

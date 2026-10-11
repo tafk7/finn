@@ -25,10 +25,10 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 import finn.core.onnx_exec as onnx_exec
-from finn.core.executors.xsim.executor import XSim
-from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
 from finn.core.onnx_exec import RanBy
+from finn.core.rtlsim_bench import pack_lanes, stream_through
+from finn.core.rtlsim_exec import XSim
+from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.custom_op.kernels.base import CHANNEL, channel_choices, kernel_op
 from finn.custom_op.kernels.shell import configured_root, member, shell_root
 from finn.custom_op.partition.kernel_partitions import (

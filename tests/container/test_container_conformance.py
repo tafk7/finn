@@ -23,12 +23,12 @@ FINN_ENV = DOCKER_DIR / "config.py"
 sys.path.insert(0, str(DOCKER_DIR))
 import config as finn_env  # noqa: E402
 
-from finn.util import machine_file  # noqa: E402
+from finn.toolchain import host as host_file  # noqa: E402
 
 
 def xilinx_root():
-    """This machine's Xilinx root, from the environment or its machine file."""
-    root = machine_file.settings().get("FINN_XILINX_PATH", "")
+    """This machine's Xilinx root, from the environment or its host file."""
+    root = host_file.settings().get("FINN_XILINX_PATH", "")
     return root if os.path.isdir(root) else None
 
 
@@ -292,7 +292,7 @@ def test_05_sbx_workload_and_xilinx_kit(tmp_path, fpga):
         for tool in ("Vivado", "Vitis"):
             (toolchain / "2025.2" / tool).mkdir(parents=True)
         args += ["--kit", REPO / "docker/sbx/xilinx"]
-        # The machine file is the kit's argument file (docs/installation.md).
+        # The host file is the kit's argument file (docs/installation.md).
         machine = tmp_path / "xilinx.env"
         machine.write_text(
             "FINN_XILINX_PATH=%s\nFINN_XILINX_VERSION=2024.2\n" % toolchain

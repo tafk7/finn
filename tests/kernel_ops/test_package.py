@@ -30,8 +30,8 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_VLNV,
 )
 from finn.kernels.artifacts import build
+from finn.toolchain.launcher import Toolchain
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
-from finn.util.toolchain import Toolchain
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import NoVivado, reaches_vivado
 

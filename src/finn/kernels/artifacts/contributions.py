@@ -10,7 +10,7 @@ module's sources are ordered (``sources.ordered``).
 An ``HlsSource`` is a request, not a file: a top function FINN writes from typed
 values, the FinnLib headers it includes, its clock period and its configuration
 directives. Its product is RTL, synthesized for a part by FINN's toolchain
-(``finn.util.hls``), which ``emit_module`` takes by the request's ``function``
+(``finn.toolchain.hls``), which ``emit_module`` takes by the request's ``function``
 (``finn.kernels.artifacts.build``) and stages as it stages copied sources. The
 part is not in the request: kernels see capabilities, never parts, so the part
 enters at synthesis and in the synthesis key.

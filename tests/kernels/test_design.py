@@ -17,7 +17,7 @@ from pathlib import Path
 
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor

@@ -37,9 +37,9 @@ from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
 from finn.shells.pynq.runner import PynqOptions
+from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config
 from finn.transformation.prepare import GraphPreparation
-from finn.util.toolchain import Selection, Toolchain
 from kernel_ops.tfc import PREPROCESSING, ULTRA96, preparation
 
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}

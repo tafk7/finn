@@ -26,8 +26,8 @@ import numpy.typing as npt
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.rtlsim_bench import pack_lanes, stream_through
+from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus, Clock, Direction, Endpoint, Free, Reset, Signal
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
