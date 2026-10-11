@@ -55,8 +55,8 @@ from kernels.xsim import requires_xsim
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.executors.xsim.pacing import FREE
 from finn.core.onnx_exec import execute_onnx
+from finn.core.rtlsim_pacing import FREE
 from finn.custom_op.kernels.base import write_target
 from finn.custom_op.kernels.shell import configured_root, persist, shell_root
 from finn.harness.ops import (

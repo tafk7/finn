@@ -14,7 +14,7 @@ selector of a single threshold set.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import stream_through
+from finn.core.rtlsim_bench import stream_through
 from finn.core.space import Available, Rejected, Space, design_space, inspection
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor

@@ -33,8 +33,9 @@ OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
 # tens of seconds each) are deselected in either mode, so this step stays at a few
 # minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado slow
-gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/executors \
-    src/finn/core/containers.py src/finn/core/onnx_exec.py \
+gate_ruff src/finn/kernels tests/kernels src/finn/platform \
+    src/finn/core/containers.py src/finn/core/executor.py src/finn/core/onnx_exec.py \
+    src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/transformation/prepare \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
@@ -50,7 +51,8 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/executo
 # and steps, the ip shell's testbench and the resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
     -p finn.transformation.kernels -p finn.transformation.prepare -p finn.harness \
-    -p finn.core.executors -m finn.core.containers -m finn.core.onnx_exec \
+    -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
+    -m finn.core.rtlsim_pacing -m finn.core.containers -m finn.core.onnx_exec \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.toolchain.launcher \
     -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_phases \
     -m finn.builder.build_dataflow_steps -m finn.builder.kernel_testbench \

@@ -11,7 +11,7 @@ import pytest
 from pyslang import ast, syntax
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import simulate
+from finn.core.rtlsim_bench import simulate
 from finn.core.space import (
     DefinitionError,
     Rejected,

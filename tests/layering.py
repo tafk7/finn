@@ -29,8 +29,8 @@ finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.genera
 ```
 
 Each row imports every row to its left: the XSim testbench
-(finn.core.executors.xsim, less its executor) builds and simulates a kernel
-module, the executors (finn.core.executors, the XSim executor among them, and
+(finn.core.rtlsim_bench, with finn.core.rtlsim_pacing) builds and simulates a kernel
+module, the executors (finn.core.executor, the XSim executor finn.core.rtlsim_exec, and
 finn.core.onnx_exec, which runs a model with them) run the KernelOps and a
 partition's hardware with it, the partition node (finn.custom_op.partition, less
 kernel_partitions) runs its body with the executors of the run that reached it,
@@ -199,11 +199,11 @@ LAYERS: tuple[Layer, ...] = (
     # The XSim testbench: a module's sources built (an HLS leaf's product from
     # transformation.kernels' HLS cache), the stream testbench written and simulated
     # through finn.toolchain, cycles measured; and how a simulation paces its streams.
-    # The XSim executor's package, less the executor: it reads no graph, so the kernel
-    # tests simulate with it.
+    # The XSim executor's testbench and pacing, apart from the executor: it reads no
+    # graph, so the kernel tests simulate with it.
     Layer(
         "xsim",
-        ("finn.core.executors.xsim",),
+        ("finn.core.rtlsim_bench", "finn.core.rtlsim_pacing"),
         (*_KERNEL_STACK, "toolchain", "util", "transformation.kernels"),
         (),
         "tests/kernel_ops",
@@ -216,8 +216,8 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "executors",
         (
-            "finn.core.executors",
-            "finn.core.executors.xsim.executor",
+            "finn.core.executor",
+            "finn.core.rtlsim_exec",
             "finn.core.onnx_exec",
         ),
         (

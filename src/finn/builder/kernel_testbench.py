@@ -4,7 +4,7 @@
 """The packaged partition's XSim testbench: one frame streamed through the partition's
 module, its outputs checked against the partition's body executed in Python.
 
-``write_testbench`` writes it with ``finn.core.executors.xsim.rtl``'s stream-testbench writer
+``write_testbench`` writes it with ``finn.core.rtlsim_bench``'s stream-testbench writer
 (``stream_bench``: inputs and outputs stalled, every pin the module declares driven:
 ``ap_clk2x`` aligned to ``ap_clk``, each AXI-Lite bus's declared register writes made
 before any stream, held ports at their values; each output word compared on its
@@ -21,7 +21,7 @@ holds what it needs and nothing of the machine:
 re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
 its ``run.sh`` as its user would, in a toolchain's environment: the build's
 verification step ``stitched_ip_testbench``, which the user asks for, and which fails
-on a mismatch. ``run.sh`` follows ``finn.core.executors.xsim.rtl.simulate``'s commands with the
+on a mismatch. ``run.sh`` follows ``finn.core.rtlsim_bench.simulate``'s commands with the
 directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
@@ -45,8 +45,8 @@ from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.containers import container, held, numpy_type
-from finn.core.executors.xsim.rtl import SimulationFailed, Words, stream_bench
 from finn.core.onnx_exec import execute_onnx
+from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.traversal import pack
@@ -64,7 +64,7 @@ TESTBENCH_DIR = "testbench"
 RUN_SCRIPT = "run.sh"
 
 #: How long ``run_testbench`` lets the script run: three tool runs of at most five
-#: minutes each, as ``finn.core.executors.xsim.rtl.simulate`` allows each.
+#: minutes each, as ``finn.core.rtlsim_bench.simulate`` allows each.
 RUN_TIMEOUT = 900
 
 
@@ -127,7 +127,7 @@ def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[st
 
 def _run_script(top: str, sources: Sequence[str]) -> str:
     """``run.sh``: the XSim executor's simulator commands
-    (``finn.core.executors.xsim.rtl.simulate``), with the testbench directory's own paths
+    (``finn.core.rtlsim_bench.simulate``), with the testbench directory's own paths
     and two ``xelab`` threads."""
     compiled = [source for source in sources if not is_header(source)]
     xvlog = [
@@ -207,7 +207,7 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
     ``toolchain``'s environment (the machine's by default), a command directory it
     selects first on ``PATH``. Returns what it printed, which ends in ``PASS``; a
-    mismatch, a tool's error or a timeout raises ``finn.core.executors.xsim.rtl.SimulationFailed``
+    mismatch, a tool's error or a timeout raises ``finn.core.rtlsim_bench.SimulationFailed``
     with what it printed. A launcher route, which runs a tool elsewhere, runs no local
     script: refused (``ValueError``)."""
     toolchain = toolchain or host_toolchain()

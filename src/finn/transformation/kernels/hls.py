@@ -16,7 +16,7 @@ request's exported Verilog by its top's name.
 
 Every caller that emits a module calls it first: ``PackagePartition`` and
 ``ElaboratePartition`` with the partition's part, the harness with the part it
-simulates (``finn.core.executors.xsim.rtl``). A module without HLS leaves runs nothing.
+simulates (``finn.core.rtlsim_bench``). A module without HLS leaves runs nothing.
 """
 
 from __future__ import annotations

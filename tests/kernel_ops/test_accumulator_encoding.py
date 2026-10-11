@@ -38,7 +38,7 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.dataflow.tensor import ScalarEncoding

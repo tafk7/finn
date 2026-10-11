@@ -17,7 +17,7 @@ are returned.
 What it checks is value and sequence: no timing, no stall pattern, no RTL. A free
 running top (``ap_ctrl_none``) whose processes each take one step a call is what the
 driver calls. It is a check a developer runs before any synthesis, and a separate
-evaluation from the RTL's simulation (``finn.core.executors.xsim.rtl``); no gate decides on it.
+evaluation from the RTL's simulation (``finn.core.rtlsim_bench``); no gate decides on it.
 """
 
 from __future__ import annotations

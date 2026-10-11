@@ -34,8 +34,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import qonnx_make_model
 
-from finn.core.executors import Context, Python
-from finn.core.executors.xsim.executor import Unstreamable, XSim, boundary, links
+from finn.core.executor import Context, Python
 from finn.core.onnx_exec import (
     HardwareRequired,
     InsidePartition,
@@ -44,6 +43,7 @@ from finn.core.onnx_exec import (
     execute_onnx,
     running,
 )
+from finn.core.rtlsim_exec import Unstreamable, XSim, boundary, links
 from finn.custom_op.kernels.shell import PARTITION
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,

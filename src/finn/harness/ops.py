@@ -23,7 +23,7 @@ generates computes what those ops compute, on the same inputs:
    product included); every output must be an integer the boundary's element holds,
    or the hardware cannot present it (``Disagreement``);
 4. **the hardware**: the parent graph run by ``execute_onnx`` with the XSim executor
-   (``finn.core.executors.xsim.executor.XSim``, paced by ``pacing``) alone, the run
+   (``finn.core.rtlsim_exec.XSim``, paced by ``pacing``) alone, the run
    requiring hardware: every graph input streamed at its boundary port in the order
    the port presents, and every output read back from its words. Each output is
    compared with the oracle's word for word, as its port presents both. Words that
@@ -53,10 +53,10 @@ from typing import Any
 import numpy as np
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.executors.xsim.executor import XSim
-from finn.core.executors.xsim.pacing import STALLED, Pacing
-from finn.core.executors.xsim.rtl import WordsDiffer
 from finn.core.onnx_exec import execute_onnx
+from finn.core.rtlsim_bench import WordsDiffer
+from finn.core.rtlsim_exec import XSim
+from finn.core.rtlsim_pacing import STALLED, Pacing
 from finn.custom_op.kernels.base import datatype, kernel_op
 from finn.custom_op.kernels.base import shape as tensor_shape
 from finn.custom_op.kernels.shell import configured_root

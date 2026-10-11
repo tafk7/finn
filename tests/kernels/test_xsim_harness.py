@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The XSim testbench (``finn.core.executors.xsim.rtl``): the stream testbench drives
+"""The XSim testbench (``finn.core.rtlsim_bench``): the stream testbench drives
 every pin from what the module declares, refusing a stream the module does not present
 and an input it declares no value for before anything is built; its stimulus and
 expectations are
@@ -27,8 +27,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.pacing import FREE, STALLED, Pacing
-from finn.core.executors.xsim.rtl import (
+from finn.core.rtlsim_bench import (
     LATENCY_ALLOWANCE,
     RESET_CYCLES,
     WATCHDOG_MARGIN,
@@ -42,6 +41,7 @@ from finn.core.executors.xsim.rtl import (
     stream_bench,
     stream_through,
 )
+from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack as pack_beats
@@ -209,7 +209,7 @@ def test_a_tap_the_module_cannot_present_is_refused(tmp_path: Path) -> None:
 
 
 def test_a_taps_words_end_at_the_first_it_did_not_take(tmp_path: Path) -> None:
-    from finn.core.executors.xsim.rtl import _read_taken  # noqa: PLC0415
+    from finn.core.rtlsim_bench import _read_taken  # noqa: PLC0415
 
     written = tmp_path / "link_0.tapped.mem"
     written.write_text("// memory\n@0\n0a\n1f\nxx\nxx\n")

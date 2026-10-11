@@ -30,8 +30,8 @@ from typing import Any
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import materialize
+from finn.core.rtlsim_bench import materialize
+from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, vector_major

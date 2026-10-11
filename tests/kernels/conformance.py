@@ -25,9 +25,9 @@ each sample it
    outputs unplaced the kernel still states every output element (a
    producer's element never reads its own output channel);
 4. given an ``xsim`` directory, streams random integers in each input's range
-   through the design, free and stalled (``finn.core.executors.xsim.pacing``'s ``FREE`` and
+   through the design, free and stalled (``finn.core.rtlsim_pacing``'s ``FREE`` and
    ``STALLED``; the watchdog counts the root's ``cycles`` too), every pin driven
-   from what the module declares (``finn.core.executors.xsim.rtl``), and compares every output with
+   from what the module declares (``finn.core.rtlsim_bench``), and compares every output with
    ``reference``: each input packed in the order its boundary presents, each
    output in its port's order. Fed by a cyclic source, the design repeats,
    and each output is compared over its first pass. Words that differ are
@@ -86,8 +86,8 @@ from typing import Any
 
 import numpy as np
 
-from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import WordsDiffer, materialize, stream_through
+from finn.core.rtlsim_bench import WordsDiffer, materialize, stream_through
+from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import (
     Available,
     DefinitionError,

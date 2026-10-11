@@ -19,8 +19,8 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.pacing import FREE, STALLED
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.rtlsim_bench import pack_lanes, stream_through
+from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import Rejected, derived, design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step

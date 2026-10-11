@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import simulate
+from finn.core.rtlsim_bench import simulate
 from finn.core.space import design_space
 from finn.dataflow.plan import Step, plan
 from finn.dataflow.schedule import Index, Schedule

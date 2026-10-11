@@ -7,10 +7,10 @@ Nothing here runs Vivado. Each simulation the sweep would run is materialized
 by the job's own code with the simulator replaced by a capture:
 
 - a conformance job (one pytest id of tests/kernels/test_conformance.py) runs
-  under pytest with the testbench's ``simulate`` (``finn.core.executors.xsim.rtl``;
-  ``finn.harness.rtl`` in an older checkout) capturing the simulation
-  directory: the staged module sources (FinnLib's included, copied by
-  content), each memory's INIT_FILE, the testbench ``check.sv`` and the
+  under pytest with the testbench's ``simulate`` (``finn.core.rtlsim_bench``;
+  ``finn.core.executors.xsim.rtl`` or ``finn.harness.rtl`` in an older checkout)
+  capturing the simulation directory: the staged module sources (FinnLib's
+  included, copied by content), each memory's INIT_FILE, the testbench ``check.sv`` and the
   ``$readmemh`` files beside it that carry the stimulus, the expected words and
   each control bus's writes. An HLS leaf's product is not made: the harness's
   ``built_hls`` is replaced too, and each HLS build request is captured instead,
@@ -43,7 +43,7 @@ by ``diff -r`` on what changed beside the hash.
 
 A job's key is a digest of everything its simulation consumes: the captured
 designs, the files of the harness (``finn.harness``), of the XSim testbench
-(``finn.core.executors.xsim``) and of the test tree the job
+(``finn.core.rtlsim_*``) and of the test tree the job
 imports (stimulus and reference code) except construction modules, a numeric sweep's construction
 results, the simulator runtime (``finn.xsi``, ``finn_xsi`` and the modules they
 load) when the job drives XSI, the sweep's own scripts, the pytest
@@ -172,9 +172,9 @@ SWEEP_FILES = (
     "uv.lock",
 )
 # The code a captured job is keyed by when it imports it: the harness package, the XSim
-# testbench's package and the test tree (less its construction modules), whose effect on
-# a simulation the captured designs do not show.
-HARNESS = ("src/finn/harness/", "src/finn/core/executors/xsim/", "tests/")
+# testbench's modules (an older checkout's package) and the test tree (less its
+# construction modules), whose effect on a simulation the captured designs do not show.
+HARNESS = ("src/finn/harness/", "src/finn/core/rtlsim_", "src/finn/core/executors/xsim/", "tests/")
 # Where the jobs' code imports from (the PYTHONPATH of ``_environment``), in order.
 IMPORT_ROOTS = ("src", "tests")
 HASH = re.compile(r"(?<=_)[0-9a-f]{16}(?![0-9A-Za-z])")
@@ -648,8 +648,10 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
 
     # finn is a namespace package: an older checkout's would also import the installed
     # checkout's testbench, so the checkout's own files say which testbench it runs.
-    if (root / "src/finn/core/executors/xsim/rtl.py").is_file():
-        import finn.core.executors.xsim.rtl as rtl  # noqa: PLC0415
+    if (root / "src/finn/core/rtlsim_bench.py").is_file():
+        import finn.core.rtlsim_bench as rtl  # noqa: PLC0415
+    elif (root / "src/finn/core/executors/xsim/rtl.py").is_file():  # before the flat core
+        rtl = importlib.import_module("finn.core.executors.xsim.rtl")
     elif (root / "src/finn/harness/rtl.py").is_file():  # before the executors
         rtl = importlib.import_module("finn.harness.rtl")
     else:  # a checkout from before finn.harness: kernels.xsim simulated

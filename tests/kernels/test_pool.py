@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.executors.xsim.rtl import measure
+from finn.core.rtlsim_bench import measure
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import pack, unreplayed
 from finn.harness.hls import c_simulate

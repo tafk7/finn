@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The pytest side of the XSim testbench (``finn.core.executors.xsim.rtl``): the marker an
+"""The pytest side of the XSim testbench (``finn.core.rtlsim_bench``): the marker an
 XSim test carries, the skip of one that synthesizes an HLS leaf first, and the marker a
 Vivado packaging test carries."""
 

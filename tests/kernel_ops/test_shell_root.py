@@ -24,7 +24,7 @@ from kernels.xsim import requires_xsim
 from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.core.executors.xsim.rtl import pack_lanes, stream_through
+from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import CHANNEL_KEYS, KernelOpError, channel_choices, kernel_op
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root

@@ -7,7 +7,7 @@
 (from ``tests``, FinnLib
 and Vivado selected) builds each partition as the kernel path builds it (the
 Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
-``kernel_ops.tfc``) and measures, with ``finn.core.executors.xsim.rtl.measure``,
+``kernel_ops.tfc``) and measures, with ``finn.core.rtlsim_bench.measure``,
 ``N`` frames streamed back to back, never stalled:
 
 - the **stitched** partition, its root's latency, interval and total, and each
@@ -42,7 +42,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import execute_onnx
 
 from finn.builder.kernel_testbench import boundary_words
-from finn.core.executors.xsim.rtl import link_stream, measure
+from finn.core.rtlsim_bench import link_stream, measure
 from finn.custom_op.kernels.base import channel_choices
 from finn.custom_op.kernels.shell import ShellRoot, member, save_channels, shell_root
 from finn.harness.toolchain import print_identity
