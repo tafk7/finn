@@ -15,6 +15,14 @@ the one way a tool process is started and reaped.
 - ``run_process`` is the process primitive under both: a new process group,
   killed whole on timeout or cancellation.
 
+A tool run's transcript is a pair of files the tool writes as it runs, never held in
+memory and written after: ``<stem>.stdout.log`` and ``<stem>.stderr.log``
+(``transcript_files``). The stem is the one the caller names (``transcript=``); else,
+in a build, a fresh one in the step's log directory (``Toolchain.transcripts``,
+``output_dir/logs/<step>``, which the step states with ``Toolchain.transcripts_in``
+on the toolchain it passes down); else the replay script's. A run with none of them
+(a version probe) is captured in memory.
+
 Only the route lives here: what one tool needs (HLS's frontend and installation,
 XSim's commands, Vivado's installation) is its own module's, ``finn.toolchain.hls``,
 ``xsim`` and ``vivado``.
@@ -32,6 +40,7 @@ tool on its route, and ``ToolFailed`` (a ``RuntimeError``) when it ran and faile
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import os
 import re
@@ -77,6 +86,30 @@ def _child_environment(environment: Mapping[str, str]) -> dict[str, str]:
     }
 
 
+def transcript_files(stem: StrPath) -> tuple[Path, Path]:
+    """The two files of the transcript ``stem``: what the tool printed on its standard
+    output (``<stem>.stdout.log``) and on its standard error (``<stem>.stderr.log``)."""
+    return Path(f"{os.fspath(stem)}.stdout.log"), Path(f"{os.fspath(stem)}.stderr.log")
+
+
+class ToolRun(subprocess.CompletedProcess[bytes]):
+    """A finished run (``subprocess.CompletedProcess``): ``stdout`` and ``stderr`` are
+    what it printed, and ``transcript`` the file its standard output was written to as
+    it ran (``transcript_files``; its standard error beside it), None when the run kept
+    no transcript and was captured in memory."""
+
+    def __init__(
+        self,
+        args: Sequence[str],
+        returncode: int,
+        stdout: bytes,
+        stderr: bytes,
+        transcript: Path | None = None,
+    ) -> None:
+        super().__init__(args, returncode, stdout, stderr)
+        self.transcript = transcript
+
+
 def run_process(
     argv: Sequence[StrPath],
     *,
@@ -85,31 +118,61 @@ def run_process(
     timeout: float | None = None,
     cancel: Cancel | None = None,
     check: bool = True,
-) -> subprocess.CompletedProcess[bytes]:
+    transcript: StrPath | None = None,
+) -> ToolRun:
     """Run argv in a new local process group; reap it on timeout or cancellation.
 
     ``env`` is the child's whole environment (the parent's when None), less Bash's
-    startup hooks; it is copied, and neither cwd nor os.environ is changed. Output
-    is captured as bytes. On a timeout, a cancellation (``InterruptedError``) or an
-    interrupt, the group is killed and the exception carries what the process
-    printed (``output``, ``stderr``); with ``check``, a non-zero exit raises
-    ``CalledProcessError``. A remote wrapper is responsible for cancelling its
-    remote descendants.
+    startup hooks; it is copied, and neither cwd nor os.environ is changed. With a
+    ``transcript`` stem, the process writes its standard output and error straight into
+    the transcript's two files as it runs (``transcript_files``; their directory is
+    made), and what it printed is read back from them when it ends; without, output is
+    captured in memory. Either way the result holds it as bytes. On a timeout, a
+    cancellation (``InterruptedError``) or an interrupt, the group is killed and the
+    exception carries what the process printed (``output``, ``stderr``); with
+    ``check``, a non-zero exit raises ``CalledProcessError``. A remote wrapper is
+    responsible for cancelling its remote descendants.
     """
     command = [os.fspath(arg) for arg in argv]
     if not command:
         raise ValueError("Empty command")
     environment = _child_environment(os.environ if env is None else env)
+    files = None if transcript is None else transcript_files(transcript)
     started = time.monotonic()
-    _LOG.info("command=%s cwd=%s", shlex.join(command), cwd or os.getcwd())
-    proc = subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=environment,
-        start_new_session=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    _LOG.info(
+        "command=%s cwd=%s transcript=%s",
+        shlex.join(command),
+        cwd or os.getcwd(),
+        "none" if files is None else files[0],
     )
+    if files is None:
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=environment,
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    else:
+        files[0].parent.mkdir(parents=True, exist_ok=True)
+        # The child writes the files itself; this process keeps no handle on them.
+        with open(files[0], "wb") as stdout, open(files[1], "wb") as stderr:
+            proc = subprocess.Popen(
+                command,
+                cwd=cwd,
+                env=environment,
+                start_new_session=True,
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+    def printed() -> tuple[bytes, bytes]:
+        # What a run streaming into its transcript printed, read back once it ended.
+        assert files is not None
+        return files[0].read_bytes(), files[1].read_bytes()
+
+    out = err = b""
     try:
         while True:
             if cancel is not None and cancel.is_set():
@@ -122,7 +185,10 @@ def run_process(
                     raise subprocess.TimeoutExpired(command, timeout)
                 wait = min(0.1, remaining)
             try:
-                out, err = proc.communicate(timeout=wait)
+                if files is None:
+                    out, err = proc.communicate(timeout=wait)
+                else:
+                    proc.wait(timeout=wait)
                 break
             except subprocess.TimeoutExpired:
                 continue
@@ -133,7 +199,11 @@ def run_process(
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        out, err = proc.communicate()
+        if files is None:
+            out, err = proc.communicate()
+        else:
+            proc.wait()
+            out, err = printed()
         if isinstance(exc, (subprocess.TimeoutExpired, InterruptedError, KeyboardInterrupt)):
             # Only TimeoutExpired declares them; the others carry them for the same reader.
             setattr(exc, "output", out)
@@ -144,7 +214,9 @@ def run_process(
             type(exc).__name__,
         )
         raise
-    result = subprocess.CompletedProcess(command, proc.returncode, out, err)
+    if files is not None:
+        out, err = printed()
+    result = ToolRun(command, proc.returncode, out, err, None if files is None else files[0])
     _LOG.info(
         "command finished duration=%.3fs result=%s", time.monotonic() - started, proc.returncode
     )
@@ -292,21 +364,18 @@ class ToolUnavailable(LookupError):
 
 #: How many of a failed tool's error lines a ``ToolFailed`` quotes.
 ERROR_LINES = 5
-_ERROR_LINE = re.compile(r"^\s*(ERROR|FATAL|CRITICAL WARNING)\b|\berror:|^Error\b")
-#: What a transcript says when the tool found no licence (Vivado's words, FlexLM's).
-_NO_LICENCE = re.compile(
-    r"valid licen[cs]e was not found|licen[cs]e checkout failed|"
-    r"no licen[cs]e (is )?available|FLEX(net|lm) licensing error",
-    re.IGNORECASE,
-)
+#: An error line of a tool that does not print Vivado's messages (a compiler, a script).
+_ERROR_LINE = re.compile(r"\berror:|^Error\b")
 
 
 class ToolFailed(RuntimeError):
     """A tool that ran and failed: ``tool``, its exit ``status`` (None when it exited
     cleanly but left nothing of what it was run for, or did not exit), ``transcript``
     (the log that tells why, when there is one), ``errors`` (the first error lines it
-    printed, else its last lines) and a ``code``: ``licence-unavailable`` when what it
-    printed says no licence was found, else ``tool-error``. ``what`` says what failed."""
+    printed, by ``finn.toolchain.vivado.messages``: its errors, then its critical
+    warnings; else a compiler's ``error:`` lines; else its last lines) and a ``code``:
+    ``licence-unavailable`` when what it printed says no licence was found, else
+    ``tool-error``. ``what`` says what failed."""
 
     def __init__(
         self,
@@ -356,11 +425,15 @@ class ToolFailed(RuntimeError):
         # A tool's log often repeats what it printed: each line once, in order.
         lines = list(dict.fromkeys(line.rstrip() for text in texts for line in text.splitlines()))
         lines = [line for line in lines if line.strip()]
-        errors = [line for line in lines if _ERROR_LINE.search(line)][:ERROR_LINES]
+        read = vivado.messages(lines)
+        errors = list(read.errors[:ERROR_LINES])
+        if not errors:
+            errors = [line for line in lines if _ERROR_LINE.search(line)][:ERROR_LINES]
         if not errors:
             errors = lines[-ERROR_LINES:]
-        code = "licence-unavailable" if any(map(_NO_LICENCE.search, lines)) else "tool-error"
-        return cls(tool, status=status, transcript=transcript, errors=errors, code=code, what=what)
+        return cls(
+            tool, status=status, transcript=transcript, errors=errors, code=read.code, what=what
+        )
 
     @classmethod
     def of_run(
@@ -371,12 +444,14 @@ class ToolFailed(RuntimeError):
         transcript: StrPath | None = None,
         what: str = "",
     ) -> ToolFailed:
-        """The failure of a run of ``tool`` that exited non-zero (``ToolFailed.of``)."""
+        """The failure of a run of ``tool`` that exited non-zero (``ToolFailed.of``),
+        naming the run's own transcript (``ToolRun.transcript``) when it kept one, else
+        ``transcript``, the log the tool writes itself (``xvlog.log``)."""
         return cls.of(
             tool,
             (result.stdout or b"") + (result.stderr or b""),
             status=result.returncode,
-            transcript=transcript,
+            transcript=getattr(result, "transcript", None) or transcript,
             what=what,
         )
 
@@ -384,20 +459,53 @@ class ToolFailed(RuntimeError):
 @dataclass(frozen=True)
 class Toolchain:
     """A selection with its prepared environment, a read-only snapshot: every tool
-    this toolchain runs starts in it. Made by ``Selection.prepare``."""
+    this toolchain runs starts in it. Made by ``Selection.prepare``.
+
+    ``transcripts`` is the directory a build's step files its runs' transcripts in
+    (``output_dir/logs/<step>``), None outside a build: the step states it on the
+    build's toolchain (``transcripts_in``) and passes that toolchain down to every
+    transformation and driver that runs a tool, as it passes the route."""
 
     selection: Selection
     environment: Mapping[str, str] = field(repr=False)
+    transcripts: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
             self, "environment", MappingProxyType(_child_environment(self.environment))
         )
+        if self.transcripts is not None:
+            object.__setattr__(self, "transcripts", Path(self.transcripts))
 
-    def __reduce__(self) -> tuple[type[Toolchain], tuple[Selection, dict[str, str]]]:
+    def __reduce__(
+        self,
+    ) -> tuple[type[Toolchain], tuple[Selection, dict[str, str], Path | None]]:
         # A read-only mapping does not pickle; a toolchain crosses into worker
         # processes with the transformation that holds it (NodeLocalTransformation).
-        return (Toolchain, (self.selection, dict(self.environment)))
+        return (Toolchain, (self.selection, dict(self.environment), self.transcripts))
+
+    def transcripts_in(self, directory: StrPath | None) -> Toolchain:
+        """This toolchain, its runs' transcripts filed in ``directory`` (a build step's
+        ``output_dir/logs/<step>``; made when a run first writes there); None: kept
+        where each run's caller says (``run``)."""
+        return replace(self, transcripts=None if directory is None else Path(directory))
+
+    def transcript(self, name: str) -> Path | None:
+        """A fresh transcript stem for a run called ``name`` in ``transcripts``:
+        ``<transcripts>/<name>``, else ``<name>.2``, ``.3``, ... when an earlier run of
+        the step took it (claimed by creating its standard output file, so parallel
+        runs never share one). None without a directory."""
+        if self.transcripts is None:
+            return None
+        self.transcripts.mkdir(parents=True, exist_ok=True)
+        for number in itertools.count(1):
+            stem = self.transcripts / (name if number == 1 else f"{name}.{number}")
+            try:
+                with open(transcript_files(stem)[0], "xb"):
+                    return stem
+            except FileExistsError:
+                continue
+        raise AssertionError("unreachable")
 
     def command(self, tool: str, *args: StrPath) -> list[str]:
         """The argv that runs ``tool`` (a name, not a path) with ``args`` on this
@@ -434,14 +542,19 @@ class Toolchain:
         check: bool = True,
         replay: StrPath | None = None,
         transcript: StrPath | None = None,
-    ) -> subprocess.CompletedProcess[bytes]:
+    ) -> ToolRun:
         """Run ``tool`` in the prepared environment, updated by ``env``
         (``run_process``'s contract otherwise; with ``check``, a non-zero exit is
-        ``ToolFailed``). ``replay`` names a script written before the run that repeats
-        the command by hand, beside which the run's stdout and stderr are kept
-        (``<replay>.stdout.log``, ``.stderr.log``). ``transcript`` is the log the tool
-        writes itself (``vivado -log``), which a ``ToolFailed`` names; by default the
-        replay's stdout. A tool not on the route is ``ToolUnavailable``."""
+        ``ToolFailed``, naming the transcript). ``replay`` names a script written before
+        the run that repeats the command by hand. A tool not on the route is
+        ``ToolUnavailable``.
+
+        The tool writes what it prints into its transcript as it runs
+        (``transcript_files``): the stem ``transcript`` when the caller names one; else,
+        when this toolchain files a build step's transcripts, a fresh stem there named
+        after the replay script, or the tool (``transcript``); else the replay's
+        (``<replay>.stdout.log``, ``.stderr.log``). With none, what it prints is
+        captured in memory. The result names the transcript (``ToolRun.transcript``)."""
         environment = {**self.environment, **(env or {})}
         command = self.command(tool, *args)
         if replay is not None:
@@ -453,28 +566,25 @@ class Toolchain:
                 + shlex.join(command)
                 + "\n"
             )
+        if transcript is None:
+            transcript = self.transcript(tool if replay is None else Path(replay).name) or replay
         _LOG.info(
             "route=%s settings=%s tool=%s",
             self.selection.launcher or "local",
             self.selection.settings or "configured environment",
             tool,
         )
-        try:
-            result = run_process(
-                command, env=environment, cwd=cwd, timeout=timeout, cancel=cancel, check=False
-            )
-        except (subprocess.SubprocessError, InterruptedError, KeyboardInterrupt) as exc:
-            if replay is not None:
-                Path(str(replay) + ".stdout.log").write_bytes(getattr(exc, "output", None) or b"")
-                Path(str(replay) + ".stderr.log").write_bytes(getattr(exc, "stderr", None) or b"")
-            raise
-        if replay is not None:
-            Path(str(replay) + ".stdout.log").write_bytes(result.stdout)
-            Path(str(replay) + ".stderr.log").write_bytes(result.stderr)
+        result = run_process(
+            command,
+            env=environment,
+            cwd=cwd,
+            timeout=timeout,
+            cancel=cancel,
+            check=False,
+            transcript=transcript,
+        )
         if check and result.returncode != 0:
-            if transcript is None and replay is not None:
-                transcript = str(replay) + ".stdout.log"
-            raise ToolFailed.of_run(tool, result, transcript=transcript)
+            raise ToolFailed.of_run(tool, result)
         return result
 
     def probe_key(self, *what: Hashable) -> tuple[Hashable, ...]:
@@ -492,7 +602,8 @@ class Toolchain:
             return _VERSIONS[key]
         route = shlex.join(self.selection.launcher) if self.selection.launcher else "local"
         try:
-            result = self.run(
+            # A probe asks a version, and keeps no transcript.
+            result = self.transcripts_in(None).run(
                 tool, ["--version" if tool == "vitis-run" else "-version"], timeout=timeout
             )
         except (OSError, subprocess.SubprocessError, ToolFailed) as exc:

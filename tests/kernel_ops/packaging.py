@@ -157,6 +157,10 @@ class FakeVivado:
         self.timing = timing
         self.selection = Selection()
 
+    def transcripts_in(self, directory: object) -> FakeVivado:
+        """Itself: its runs keep no transcript."""
+        return self
+
     def run(self, tool: str, args: list[str], *, cwd: str, **options: object) -> None:
         self.runs.append((tool, args, (Path(cwd) / args[-1]).read_text()))
         if not self.makes:
@@ -236,6 +240,10 @@ def bitfile_default(script: Path, cwd: Path) -> str:
 class PackagedByStub:
     """A toolchain double for Vivado's packaging: it writes ``ip/component.xml``, as the
     emitted-text tool's stub does, so PackagePartition completes without Vivado."""
+
+    def transcripts_in(self, directory: object) -> PackagedByStub:
+        """Itself: its runs keep no transcript."""
+        return self
 
     def run(self, tool: str, args: object, *, cwd: Path, **options: object) -> None:
         (Path(cwd) / "ip").mkdir(parents=True, exist_ok=True)

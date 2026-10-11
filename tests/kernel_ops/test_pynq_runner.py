@@ -492,6 +492,42 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
         assert dma.get_nodeattr("ipgen_path") == f"{code}/project_{node.name}"
 
 
+def test_an_ends_tools_write_transcripts_not_this_processs_output(
+    tmp_path: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """An end's HLS and Vivado runs (``CallHLS``, ``create_stitched_ip``) write what they
+    print into their transcripts, in the step's log directory, and nothing of it into
+    this process's output (the build log): a failure names the transcript."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for name, body in (
+        ("vitis_hls", "print('HLS SAYS', flush=True)\n" + FAKE_VITIS_HLS),
+        (
+            "vivado",
+            "import sys\n"
+            "if sys.argv[1] == '-version': print('vivado v2024.2'); sys.exit()\n"
+            "print('VIVADO SAYS'); print('ERROR: [BD 41-1] no block design'); sys.exit(1)\n",
+        ),
+    ):
+        (tools / name).write_text("#!" + sys.executable + "\n" + body)
+        (tools / name).chmod(0o755)
+    logs = tmp_path / "logs" / "step_synthesize_bitfile"
+    toolchain = Toolchain(
+        Selection(hls_frontend="vitis_hls"), {"PATH": f"{tools}:{os.defpath}"}
+    ).transcripts_in(logs)
+    end = integration(zynq_model(tmp_path)).ends[0]
+    capfd.readouterr()
+    with pytest.raises(launcher.ToolFailed) as failed:
+        pynq_runner.generate_end_ip(end, ZYNQ.part, 5.0, tmp_path / "ends", toolchain)
+    printed = capfd.readouterr()
+    assert "SAYS" not in printed.out + printed.err
+    assert (logs / "ipgen.sh.stdout.log").read_text().startswith("HLS SAYS\n")
+    assert failed.value.tool == "vivado"
+    assert failed.value.transcript == logs / "make_project.sh.stdout.log"
+    assert failed.value.transcript.read_text().startswith("VIVADO SAYS\n")
+    assert failed.value.errors == ("ERROR: [BD 41-1] no block design",)
+
+
 def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(
     tmp_path: Path,
 ) -> None:

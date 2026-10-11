@@ -180,9 +180,12 @@ def write_testbench(
 def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
     ``toolchain``'s environment (the machine's by default), a command directory it
-    selects first on ``PATH``. Returns what it printed, which ends in ``PASS``. ``xvlog`` or
-    ``xelab`` failing (the script's ``finn.toolchain.xsim.EXIT_STATUS``) raises
-    ``ToolFailed``, naming its log; a mismatch, any other failure or a timeout
+    selects first on ``PATH``, written into its transcript as it runs: in the
+    toolchain's log directory when it has one (``Toolchain.transcript``), else beside
+    ``run.sh`` (``run.sh.stdout.log``, ``.stderr.log``). Returns what it printed, which
+    ends in ``PASS``. ``xvlog`` or ``xelab`` failing (the script's
+    ``finn.toolchain.xsim.EXIT_STATUS``) raises ``ToolFailed``, naming the transcript;
+    a mismatch, any other failure or a timeout
     ``finn.core.rtlsim_bench.SimulationFailed`` with what it printed. A launcher route,
     which runs a tool elsewhere, runs no local script: refused (``ValueError``)."""
     toolchain = toolchain or host_toolchain()
@@ -202,6 +205,7 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
             cwd=directory,
             timeout=RUN_TIMEOUT,
             check=False,
+            transcript=toolchain.transcript(RUN_SCRIPT) or directory / RUN_SCRIPT,
         )
     except subprocess.TimeoutExpired as expired:
         printed = (expired.output or b"") + (expired.stderr or b"")
@@ -210,10 +214,9 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
         ) from expired
     for tool, status in xsim.EXIT_STATUS.items():
         if result.returncode == status:
-            # Each writes its log where it runs (``xvlog.log``, ``xelab.log``).
-            raise ToolFailed.of_run(
-                tool, result, transcript=directory / f"{tool}.log", what=str(directory / RUN_SCRIPT)
-            )
+            # The script's transcript holds the tool's output (each also writes its own
+            # log where it runs, ``xvlog.log``, ``xelab.log``).
+            raise ToolFailed.of_run(tool, result, what=str(directory / RUN_SCRIPT))
     output = result.stdout.decode(errors="replace")
     printed = output + result.stderr.decode(errors="replace")
     if result.returncode != 0 or output.splitlines()[-1:] != ["PASS"]:

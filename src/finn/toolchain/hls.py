@@ -35,7 +35,11 @@ and ``command`` refuses one its probed release does not match. ``installation`` 
 where the HLS C++ headers and C simulation libraries are.
 
 ``CallHLS`` runs an IODMA's generated Tcl script where the pynq shell's IP generation
-wrote it (``finn.shells.pynq.iodma``).
+wrote it (``finn.shells.pynq.iodma``), replayed by ``ipgen.sh``, its transcript
+``Toolchain.run``'s (in a build, the step's log directory; else beside ``ipgen.sh``).
+
+Both read what HLS prints as Vivado's tools print it (``SEVERITY: [HLS N-M] text``):
+``finn.toolchain.vivado.messages`` is their parser too.
 
 ``synthesize`` builds a staged HLS request (``finn.kernels.artifacts.hls``: a
 directory holding ``script.tcl``, the top and its headers, by relative paths) for
@@ -48,8 +52,9 @@ The key is the request's content, the part and the HLS installation
 (``finn.toolchain.launcher.identity`` of the frontend): a hit never runs the tool. A
 product (``HlsProduct``) holds the exported Verilog with its memory images
 (``verilog/``), the synthesis reports (``report/``), the request it was built from
-(``request/``) and the run's replay script with its output (``synthesize.sh``,
-``.stdout.log``, ``.stderr.log``). A failed build is kept beside the entry
+(``request/``) and the run's replay script with its transcript (``synthesize.sh``,
+``.stdout.log``, ``.stderr.log``, written as the tool runs; in a build too, since the
+product is every build's). A failed build is kept beside the entry
 (``<entry>.failed``) and named by the error, a ``ToolFailed`` whose transcript is the
 run's output.
 
@@ -62,10 +67,8 @@ import hashlib
 import logging
 import os
 import re
-import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 from collections.abc import Hashable, Mapping
 from dataclasses import dataclass
@@ -137,7 +140,8 @@ def command(
         )
     capability = toolchain.probe_key("hls-capability", frontend)
     if frontend == "vitis-run" and capability not in _CAPABLE:
-        help_result = toolchain.run(frontend, ["--help"], timeout=timeout)
+        # A capability probe keeps no transcript, as a version probe keeps none.
+        help_result = toolchain.transcripts_in(None).run(frontend, ["--help"], timeout=timeout)
         help_text = (help_result.stdout + help_result.stderr).decode("utf-8", errors="replace")
         if "hls" not in help_text.lower():
             raise RuntimeError("Selected vitis-run does not advertise HLS capability")
@@ -248,11 +252,19 @@ def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: 
     driver.write_text(f"set part {{{part}}}\nsource {REQUEST_SCRIPT}\n")
     frontend, args = command(toolchain, driver.name)
     replay = work / "synthesize.sh"
-    # What the run printed, where the kept build holds it.
-    transcript = kept / f"{replay.name}.stdout.log"
+    # The transcript is the product's, beside its replay, in a build too: the product
+    # is shared by every build, and a cached one runs nothing. A failure names it where
+    # the kept build holds it.
+    transcript = launcher.transcript_files(kept / replay.name)[0]
     try:
         result = toolchain.run(
-            frontend, args, cwd=run, timeout=SYNTHESIS_TIMEOUT, check=False, replay=replay
+            frontend,
+            args,
+            cwd=run,
+            timeout=SYNTHESIS_TIMEOUT,
+            check=False,
+            replay=replay,
+            transcript=replay,
         )
     except (subprocess.SubprocessError, InterruptedError, OSError) as error:
         raise launcher.ToolFailed.of(
@@ -262,7 +274,9 @@ def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: 
             what=f"it did not finish ({type(error).__name__})",
         ) from error
     if result.returncode != 0:
-        raise launcher.ToolFailed.of_run(frontend, result, transcript=transcript)
+        raise launcher.ToolFailed.of(
+            frontend, result.stdout + result.stderr, status=result.returncode, transcript=transcript
+        )
     syn = _exported(run)
     if syn is None:
         raise launcher.ToolFailed.of(
@@ -305,17 +319,11 @@ class CallHLS:
         self.code_gen_dir = os.path.abspath(code_gen_dir)
         frontend, args = command(toolchain, self.tcl_script)
         self.ipgen_script = str(Path(self.code_gen_dir) / "ipgen.sh")
-        # Retain the useful replay artifact. It requires the selected tool's
-        # environment, but contains neither secrets nor an environment snapshot.
-        Path(self.ipgen_script).write_text(
-            "#!/bin/bash\nset -e\ncd "
-            + shlex.quote(self.code_gen_dir)
-            + "\nexec "
-            + shlex.join(toolchain.command(frontend, *args))
-            + "\n"
+        # The replay requires the selected tool's environment, but holds neither
+        # secrets nor an environment snapshot. What the tool prints is its transcript
+        # (Toolchain.run), not this process's output.
+        result = toolchain.run(
+            frontend, args, cwd=self.code_gen_dir, check=False, replay=self.ipgen_script
         )
-        result = toolchain.run(frontend, args, cwd=self.code_gen_dir, check=False)
-        sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
-        sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
         if result.returncode != 0:
             raise launcher.ToolFailed.of_run(frontend, result, what=f"{self.tcl_script}")

@@ -27,7 +27,9 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """What FINN knows of Vivado: the installation a toolchain selects (``installation``,
-``release``, ``glbl``), how many runs it launches at once, and how to read its reports
+``release``, ``glbl``), how many runs it launches at once, how to read what its tools
+print (``messages``: ``SEVERITY: [Tool N-M] text``, the form Vivado, xvlog, xelab, xsim
+and the HLS frontends share; whether no licence was found), and how to read its reports
 (the routed clocks; utilization, as plain counts by resource: ``lut``, ``ff``,
 ``bram36``, ``bram18``, ``uram``, ``dsp``).
 
@@ -41,6 +43,8 @@ from __future__ import annotations
 import os
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -80,6 +84,71 @@ def glbl(toolchain: Toolchain) -> Path:
     if not path.is_file():
         raise launcher.ToolUnavailable("vivado", f"the installation holds no {path}")
     return path
+
+
+#: A message line of Vivado's tools: its severity, its ID (``Common 17-345``, ``VRFC
+#: 10-3180``; some messages have none) and its text.
+_MESSAGE = re.compile(
+    r"^\s*(FATAL_ERROR|FATAL|ERROR|CRITICAL WARNING|WARNING|INFO)\s*:\s*(?:\[([^\]]+)\]\s*)?(.*)$"
+)
+#: The severities that end a run, before the critical warnings that may not.
+ERROR_SEVERITIES = ("FATAL_ERROR", "FATAL", "ERROR")
+#: What a tool prints when it found no licence: Vivado's ``[Common 17-345]`` and its
+#: words, and FlexLM's.
+_NO_LICENCE = re.compile(
+    r"\[Common 17-345\]|valid licen[cs]e was not found|licen[cs]e checkout failed|"
+    r"failed to get a licen[cs]e|no licen[cs]e (is )?available|FLEX(net|lm) licensing error",
+    re.IGNORECASE,
+)
+#: The code of a run that found no licence (``finn.toolchain.launcher.ToolFailed``).
+LICENCE_UNAVAILABLE = "licence-unavailable"
+
+
+@dataclass(frozen=True)
+class Messages:
+    """What a run of a Vivado tool printed, read by ``messages``: ``counts`` by
+    (severity, ID; ``""`` for a message without one), the ``first`` line of each,
+    the ``errors`` (every error line, then every critical warning, each in the order
+    printed), and whether no licence was found (``licence_unavailable``)."""
+
+    counts: Mapping[tuple[str, str], int]
+    first: Mapping[tuple[str, str], str]
+    errors: tuple[str, ...]
+    licence_unavailable: bool
+
+    @property
+    def code(self) -> str:
+        """``LICENCE_UNAVAILABLE`` when no licence was found, else ``tool-error``."""
+        return LICENCE_UNAVAILABLE if self.licence_unavailable else "tool-error"
+
+
+def messages(lines: str | Iterable[str]) -> Messages:
+    """The messages of what a Vivado tool printed (a transcript's text, or its lines):
+    each ``SEVERITY: [Tool N-M] text`` line counted by severity and ID, its errors and
+    critical warnings, and whether it says no licence was found. A suppressed or
+    benign ID is the reader's policy: every message is counted."""
+    if isinstance(lines, str):
+        lines = lines.splitlines()
+    counts: dict[tuple[str, str], int] = {}
+    first: dict[tuple[str, str], str] = {}
+    errors: list[str] = []
+    critical: list[str] = []
+    licence = False
+    for line in lines:
+        line = line.rstrip()
+        licence = licence or _NO_LICENCE.search(line) is not None
+        found = _MESSAGE.match(line)
+        if found is None:
+            continue
+        severity, ident = found.group(1), found.group(2) or ""
+        key = (severity, ident)
+        counts[key] = counts.get(key, 0) + 1
+        first.setdefault(key, line.strip())
+        if severity in ERROR_SEVERITIES:
+            errors.append(line.strip())
+        elif severity == "CRITICAL WARNING":
+            critical.append(line.strip())
+    return Messages(counts, first, (*errors, *critical), licence)
 
 
 #: The most Vivado runs a build launches at once by default (``launch_runs -jobs``):

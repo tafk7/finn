@@ -243,21 +243,59 @@ def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> 
         run_testbench(tmp_path / "PASS", toolchain=remote)
 
 
+def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: Path) -> None:
+    """step_create_stitched_ip passes the build's toolchain down with its log directory,
+    ``output_dir/logs/step_create_stitched_ip``: packaging's Vivado writes its transcript
+    there, not beside its replay in the packaging project."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "vivado").write_text(
+        "#!/bin/sh\necho 'INFO: [IP_Flow 19-234] packaging'\nmkdir -p ip\n"
+        "echo '<stub/>' > ip/component.xml\n"
+    )
+    (tools / "vivado").chmod(0o755)
+    output = tmp_path / "output"
+    cfg = DataflowBuildConfig(
+        output_dir=str(output),
+        target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
+        generate_outputs=[DataflowOutputType.STITCHED_IP],
+        verify_input_npy=str(tmp_path / "absent.npy"),
+    )
+    cfg._toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
+    step_create_stitched_ip(kernel_model().transform(CutKernelPartition(tmp_path / "p")), cfg)
+    logs = output / "logs" / "step_create_stitched_ip"
+    assert sorted(path.name for path in logs.iterdir()) == [
+        "package.sh.stderr.log",
+        "package.sh.stdout.log",
+    ]
+    assert (logs / "package.sh.stdout.log").read_text() == "INFO: [IP_Flow 19-234] packaging\n"
+    assert (output / "stitched_ip" / "package.sh").is_file()
+    assert not (output / "stitched_ip" / "package.sh.stdout.log").exists()
+    # The build's own toolchain is unchanged: each step states its directory.
+    assert cfg._resolve_toolchain().transcripts is None
+
+
 @pytest.mark.parametrize("tool", ["xvlog", "xelab"])
 def test_a_testbench_that_does_not_build_is_the_tools_failure(tmp_path: Path, tool: str) -> None:
     """A run.sh whose compilation or elaboration fails exits with that tool's status
-    (``finn.toolchain.xsim.EXIT_STATUS``): ``ToolFailed`` naming the tool and its log,
-    not a verdict on the partition."""
+    (``finn.toolchain.xsim.EXIT_STATUS``): ``ToolFailed`` naming the tool and the run's
+    transcript (beside run.sh; in a build's step, in its log directory), not a verdict
+    on the partition."""
     (tmp_path / RUN_SCRIPT).write_text(
         f'echo "ERROR: [{tool}] it failed" | tee {tool}.log\nexit {xsim.EXIT_STATUS[tool]}\n'
     )
     toolchain = Toolchain(Selection(), {"PATH": os.defpath})
-    with pytest.raises(ToolFailed) as failed:
-        run_testbench(tmp_path, toolchain=toolchain)
-    assert not isinstance(failed.value, AssertionError)
-    assert (failed.value.tool, failed.value.status) == (tool, xsim.EXIT_STATUS[tool])
-    assert failed.value.transcript == tmp_path / f"{tool}.log"
-    assert failed.value.errors == (f"ERROR: [{tool}] it failed",)
+    logs = tmp_path / "logs" / "step_create_stitched_ip"
+    for tools, transcript in (
+        (toolchain, tmp_path / "run.sh.stdout.log"),
+        (toolchain.transcripts_in(logs), logs / "run.sh.stdout.log"),
+    ):
+        with pytest.raises(ToolFailed) as failed:
+            run_testbench(tmp_path, toolchain=tools)
+        assert not isinstance(failed.value, AssertionError)
+        assert (failed.value.tool, failed.value.status) == (tool, xsim.EXIT_STATUS[tool])
+        assert failed.value.transcript == transcript
+        assert failed.value.errors == (f"ERROR: [{tool}] it failed",)
 
 
 @requires_xsim
