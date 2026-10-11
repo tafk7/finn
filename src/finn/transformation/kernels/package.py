@@ -98,9 +98,9 @@ from finn.kernels.ends import EndContract
 from finn.kernels.explore import Completion
 from finn.kernels.utilization import Resources
 from finn.resources import finnlib_root
+from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
-from finn.util.toolchain import Toolchain, machine_toolchain
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -337,7 +337,7 @@ class PackagePartition(Transformation):
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
     build directory by default; ``toolchain`` the prepared toolchain Vivado runs in
     (a flow passes its own, so that one build runs Vivado by one route), by default
-    the machine's (``finn.util.toolchain.machine_toolchain``); ``completion`` the
+    the machine's (``finn.toolchain.launcher.host_toolchain``); ``completion`` the
     policy that completes the open choices (``configured_root``), the build's, by
     default ``Baseline()``, so that a saved model packaged outside the builder
     completes as the builder's default does.
@@ -367,7 +367,7 @@ class PackagePartition(Transformation):
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
         ).resolve()
         project.mkdir(parents=True, exist_ok=True)
-        toolchain = self.toolchain or machine_toolchain()
+        toolchain = self.toolchain or host_toolchain()
         emitted = emit_module(
             module,
             project / "src",
@@ -433,7 +433,7 @@ class ElaboratePartition(Transformation):
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()
         directory.mkdir(parents=True, exist_ok=True)
-        toolchain = self.toolchain or machine_toolchain()
+        toolchain = self.toolchain or host_toolchain()
         emitted = emit_module(
             point.module,
             directory / "src",

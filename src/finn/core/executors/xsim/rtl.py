@@ -123,8 +123,8 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.resources import finnlib_root
+from finn.toolchain.launcher import Toolchain, host_toolchain, xelab_threads
 from finn.transformation.kernels.hls import built_hls
-from finn.util.toolchain import Toolchain, machine_toolchain, xelab_threads
 
 Words = tuple[Sequence[int], int]
 """A port's words, and the payload bits of each."""
@@ -228,7 +228,7 @@ def simulate(
     Each tool runs through ``toolchain`` (the machine's by default), whose Vivado
     (XILINX_VIVADO) provides ``glbl.v``. The simulator's output, which the testbench
     may have displayed more in."""
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     vivado = toolchain.environment.get("XILINX_VIVADO")
     if not vivado:
         raise LookupError("the toolchain names no Vivado (XILINX_VIVADO) for glbl.v")

@@ -54,8 +54,8 @@ from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.explore import Completion
+from finn.toolchain.launcher import Toolchain, host_toolchain, run_process
 from finn.transformation.kernels.package import boundary_facts, free_side
-from finn.util.toolchain import Toolchain, machine_toolchain, run_process
 
 #: The directory of the testbench, beside the packaged IP.
 TESTBENCH_DIR = "testbench"
@@ -210,7 +210,7 @@ def run_testbench(directory: Path, *, toolchain: Toolchain | None = None) -> str
     mismatch, a tool's error or a timeout raises ``finn.core.executors.xsim.rtl.SimulationFailed``
     with what it printed. A launcher route, which runs a tool elsewhere, runs no local
     script: refused (``ValueError``)."""
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     selection = toolchain.selection
     if selection.launcher:
         raise ValueError(

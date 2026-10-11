@@ -259,7 +259,7 @@ where.
 FINN's own sources in the wheel are the XSI bridge's, in `finn/xsi/src`; the kernels'
 RTL and HLS are FinnLib's (the `finnlib` resource). Look them up by resource name,
 not location: `finn.resources.path("xsi")`; inside FINN,
-`finn.util.resources.resource_path(family, *parts)` does the same. The pynq shell's
+`finn.xsi.paths.resource_path(family, *parts)` does the same. The pynq shell's
 data (its PYNQ driver files and design description) is in `finn/shells/pynq/data`.
 The Python XSI driver lives at `src/finn_xsi/`.
 Editable installations observe changes to these directly. Generated RTL, driver
@@ -477,7 +477,7 @@ environment. The API `build_dataflow_directory` uses the same boundary.
 XSI there must supply its loader environment before interpreter startup. Concurrent
 in-process builds still share stdout and logger state; use separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
-`finn.util.toolchain.Selection` supports explicit local settings scripts or
+`finn.toolchain.launcher.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a
 launcher argv prefix. `Selection.prepare()` snapshots the mapping. With local
 settings and no base mapping, it uses system PATH plus HOME/user/locale/temp/display
@@ -485,13 +485,13 @@ and licence inputs and `LD_PRELOAD` (the image preloads `libudev.so.1`, without
 which Vivado's licence library crashes in `udev_enumerate_scan_devices`). To accept additional base variables, pass a mapping explicitly;
 FINN does not attempt to unsource a previously activated installation. Bash startup
 hooks and exported functions are removed in children. A prepared environment that
-names no licence gets the machine file's (`XILINXD_LICENSE_FILE=PORT@HOST`), except
+names no licence gets the host file's (`XILINXD_LICENSE_FILE=PORT@HOST`), except
 on a launcher route, whose site owns it.
 
 Vendor commands execute with argv, child env and cwd. Probes use the identical
 route and a bounded timeout. Every transformation that runs a tool takes a
 prepared toolchain (`toolchain=`); called without one, it runs by the machine's,
-`finn.util.toolchain.machine_toolchain()`: the environment as configured (no
+`finn.toolchain.launcher.host_toolchain()`: the environment as configured (no
 settings script is sourced), under the site command directory
 `FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the machine
 file's `FINN_XILINX_VERSION` (`vitis-run` from 2025.1, else `vitis_hls`). A
@@ -501,7 +501,7 @@ first step that runs a tool) and passes it to every step that runs a tool
 (HLS synthesis, packaging, simulation, the shell's build);
 `build_dataflow_directory` prepares its build process's environment from the same
 selection. A stated selection is laid over the
-machine's (`machine_selection(stated=...)`): each field it states wins, and a field
+machine's (`host_selection(stated=...)`): each field it states wins, and a field
 it leaves `null` (`command_dir`, `hls_frontend`, `vivado_jobs`) is the machine's, so
 stating one field drops none of the others. How many runs Vivado launches at once is
 the machine setting `FINN_VIVADO_JOBS` (unset: the machine's cores, at most 16), which
@@ -511,7 +511,7 @@ site owns remote activation, path visibility and remote cancellation.
 
 A build configuration may name its toolchain, the HLS frontend included; the
 frontend is never guessed from the executables found: it is the one stated, or the
-machine file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build has a configuration of its own,
+host file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build has a configuration of its own,
 `finn.builder.build_dataflow_config.DataflowBuildConfig`, written as
 `dataflow_build_config.json` beside `model.onnx`, which `build_dataflow` builds. A
 kernel-path build of TFC for Ultra96 in the
@@ -585,7 +585,7 @@ than the part has is a warning naming that resource, never a refusal.
 
 Explicit selections, and a build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the
-machine file's release. Compatibility checks retain the old-HLS (through 2020.1),
+host file's release. Compatibility checks retain the old-HLS (through 2020.1),
 standalone Vitis HLS (2020.1–2024.2), and unified HLS (2025.1+) code-generation
 boundaries. Unified HLS must also advertise HLS in its help; capability discovery
 never chooses a newer tool.

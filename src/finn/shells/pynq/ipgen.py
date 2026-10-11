@@ -31,9 +31,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.shells.pynq.iodma import IODMA_hls
+from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.vivado import tcl_quote
 from finn.util.basic import make_build_dir
-from finn.util.resources import tcl_quote
-from finn.util.toolchain import Toolchain, machine_toolchain
 
 
 def data_path(*parts: str) -> str:
@@ -319,7 +319,7 @@ def create_stitched_ip(
         f.write(tcl_string)
     # create a shell script and call Vivado
     make_project_sh = vivado_stitch_proj_dir + "/make_project.sh"
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     toolchain.probe("vivado")
     args = ["-mode", "batch", "-source", "make_project.tcl"]
     with open(make_project_sh, "w") as f:

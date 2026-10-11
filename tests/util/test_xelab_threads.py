@@ -7,7 +7,7 @@ XSim sweep's FINN_XELAB_MT bounds each of its jobs."""
 
 import pytest
 
-from finn.util.toolchain import xelab_threads
+from finn.toolchain.launcher import xelab_threads
 
 
 @pytest.mark.parametrize(

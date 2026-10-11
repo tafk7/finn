@@ -8,7 +8,7 @@ The one step that touches the filesystem, in two parts:
 - **Codegen.** Every leaf's copied sources are read from named roots
   (``finnlib``), so a module never carries a checkout path, and an HLS leaf's
   request is taken as its product: the Verilog its synthesis exported, from the
-  directory ``built`` names for the request's top (``finn.util.hls``, through
+  directory ``built`` names for the request's top (``finn.toolchain.hls``, through
   ``finn.transformation.kernels.hls.built_hls``), staged below a directory named
   by the top, its top file providing the module, and the memory images beside it
   (``*.dat``) written as data files. Each path is staged once and providers come

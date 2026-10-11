@@ -51,7 +51,7 @@ are explicit build outputs. Run a SIF with the standard tool, for example:
 
 ```bash
 apptainer exec --cleanenv --bind "$PWD:$PWD" --pwd "$PWD" \
-  ./finn.sif python -c 'from finn.util.resources import resource_path; print(resource_path("xsi"))'
+  ./finn.sif python -c 'from finn.xsi.paths import resource_path; print(resource_path("xsi"))'
 ```
 
 Image tags are ``img-<hash>`` of the files in ``docker/image-inputs.txt``, which
@@ -73,8 +73,8 @@ version for one container. `FINN_RESOURCES_*` directories are mounted at their
 own paths.
 
 `docker/config.py` is the single executable Python host resolver for Docker and
-native installation. It reads the machine file (through FINN's reader,
-`src/finn/util/machine_file.py`, which `xilinx_install.py` loads and the sbx
+native installation. It reads the host file (through FINN's reader,
+`src/finn/toolchain/host.py`, which `xilinx_install.py` loads and the sbx
 workload shares) and preserves path/layout probing, licence
 classification, UID/GID handling, shell output and Compose output:
 

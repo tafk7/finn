@@ -58,6 +58,7 @@ from finn.harness.preparation import check_equivalence
 from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, refuse_drift, shell_row
 from finn.shells.pynq.driver import driver_description, write_driver
 from finn.shells.pynq.runner import build_pynq
+from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
     ToKernelOps,
     completion,
@@ -95,7 +96,6 @@ from finn.transformation.prepare.phase import (
     streamlined,
     topology_settled,
 )
-from finn.util.vivado import delivered_clock
 
 #: The graph-preparation phase's report, under the output directory.
 PREPARATION_REPORT = "report/graph_preparation.json"

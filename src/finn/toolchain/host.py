@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The machine file: where this machine's Xilinx tools and licence server are.
+"""The host file: where this machine's Xilinx tools and licence server are.
 
 One file holds a machine's defaults:
 
@@ -22,7 +22,7 @@ or installation (``FINN_XILINX_VERSION=2026.1 ./docker/run --fpga ...``); in sbx
 
 ``FINN_XILINX_ENV`` names another file; set it empty to use none.
 
-This is the one reader. ``finn.util.toolchain`` imports it; the host scripts
+This is the one reader. ``finn.toolchain.launcher`` imports it; the host scripts
 (``docker/xilinx_install.py``, ``docker/config.py``) load it by path from their
 checkout, where FINN may not be installed yet. Standard library only.
 """
@@ -49,11 +49,11 @@ LICENSE_VARIABLES = ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE")
 
 
 class ConfigError(ValueError):
-    """The machine file is missing where named, or is not in the kit's format."""
+    """The host file is missing where named, or is not in the kit's format."""
 
 
 def file_path(environ: Mapping[str, str] | None = None) -> str | None:
-    """The machine file to read, or None."""
+    """The host file to read, or None."""
     environ = os.environ if environ is None else environ
     if "FINN_XILINX_ENV" in environ:
         return environ["FINN_XILINX_ENV"] or None
@@ -64,7 +64,7 @@ def file_path(environ: Mapping[str, str] | None = None) -> str | None:
 
 
 def read_file(path: str) -> dict[str, str]:
-    """Parse a machine file; raise ConfigError on anything sbx would read differently."""
+    """Parse a host file; raise ConfigError on anything sbx would read differently."""
     values: dict[str, str] = {}
     with open(path, "r") as handle:
         for number, line in enumerate(handle, 1):
@@ -92,7 +92,7 @@ def read_file(path: str) -> dict[str, str]:
 
 
 def settings(environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The machine file's values, each overridden by an environment variable of its name."""
+    """The host file's values, each overridden by an environment variable of its name."""
     environ = os.environ if environ is None else environ
     path = file_path(environ)
     values: dict[str, str] = {}

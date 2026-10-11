@@ -13,8 +13,8 @@ import threading
 import time
 from pathlib import Path
 
-from finn.util.hls import CallHLS
-from finn.util.toolchain import Selection, Toolchain, run_process
+from finn.toolchain.hls import CallHLS
+from finn.toolchain.launcher import Selection, Toolchain, run_process
 
 
 def executable(path, body):
@@ -121,8 +121,8 @@ def test_a_toolchain_pickles_as_the_same_read_only_snapshot():
 LICENCE = "2100@licsrv.example"
 
 
-def machine_file_with(tmp_path, monkeypatch, licensed):
-    """This process reads a synthetic machine file and names no licence itself."""
+def host_file_with(tmp_path, monkeypatch, licensed):
+    """This process reads a synthetic host file and names no licence itself."""
     lines = ["FINN_XILINX_VERSION=2025.2"]
     if licensed:
         lines += ["FINN_LICENSE_HOST=licsrv.example", "FINN_LICENSE_PORT=2100"]
@@ -139,11 +139,11 @@ def machine_file_with(tmp_path, monkeypatch, licensed):
 
 
 @pytest.mark.parametrize("licensed", (True, False))
-def test_the_machine_files_licence_reaches_every_launch(tmp_path, monkeypatch, capfd, licensed):
+def test_the_host_files_licence_reaches_every_launch(tmp_path, monkeypatch, capfd, licensed):
     """A process that never sourced activate.sh: every prepared environment carries
-    the machine file's licence server, and so does a process launched in it; without
+    the host file's licence server, and so does a process launched in it; without
     licence lines the variable stays unset and nothing is said."""
-    machine_file_with(tmp_path, monkeypatch, licensed)
+    host_file_with(tmp_path, monkeypatch, licensed)
     settings = tmp_path / "settings64.sh"
     settings.write_text("export CHOICE=selected\n")
     expected = LICENCE if licensed else None
@@ -166,8 +166,8 @@ def test_the_machine_files_licence_reaches_every_launch(tmp_path, monkeypatch, c
 
 
 @pytest.mark.parametrize("variable", ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE"))
-def test_a_licence_in_the_environment_wins_over_the_machine_file(tmp_path, monkeypatch, variable):
-    machine_file_with(tmp_path, monkeypatch, licensed=True)
+def test_a_licence_in_the_environment_wins_over_the_host_file(tmp_path, monkeypatch, variable):
+    host_file_with(tmp_path, monkeypatch, licensed=True)
     monkeypatch.setenv(variable, "27000@lic.example")
     settings = tmp_path / "settings64.sh"
     settings.write_text(":\n")

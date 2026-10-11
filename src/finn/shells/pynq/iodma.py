@@ -33,9 +33,9 @@ from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn import resources
 from finn.shells.pynq import templates
-from finn.util.hls import CallHLS
-from finn.util.resources import tcl_quote
-from finn.util.toolchain import Toolchain
+from finn.toolchain.hls import CallHLS
+from finn.toolchain.launcher import Toolchain
+from finn.toolchain.vivado import tcl_quote
 
 opset_version = 1
 

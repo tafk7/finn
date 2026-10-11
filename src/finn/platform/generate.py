@@ -71,7 +71,7 @@ from finn.kernels.target import DspBlock
 from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
 from finn.platform.architectures import CAP_EVIDENCE, RULES, SERIES, CapEvidence, Rule, rules_digest
 from finn.platform.catalog import DATA, FILES, Record
-from finn.util.toolchain import machine_toolchain
+from finn.toolchain.launcher import host_toolchain
 
 SCRIPT = Path(__file__).resolve().parent / "catalog.tcl"
 
@@ -255,7 +255,7 @@ def parse_devices(texts: Iterable[str]) -> dict[str, DeviceProbe]:
 
 
 def _vivado(work: Path, name: str, args: Sequence[str]) -> subprocess.Popen[bytes]:
-    toolchain = machine_toolchain()
+    toolchain = host_toolchain()
     command = toolchain.command(
         "vivado", "-mode", "batch", "-nojournal", "-nolog", "-source", SCRIPT, "-tclargs", *args
     )

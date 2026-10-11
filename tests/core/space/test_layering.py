@@ -59,6 +59,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.shells.pynq.runner.build_pynq", "shells"),
         ("finn.util.basic", "util"),
         ("finn.xsi.setup", "util"),
+        ("finn.toolchain.host", "toolchain"),
         ("finn.harness.ops", "harness"),
         ("finn.core.executors.xsim.rtl", "xsim"),
         ("finn.core.executors.xsim", "xsim"),
@@ -94,6 +95,10 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("space", "numpy"),
         # util below the flow.
         ("util", "finn.builder.build_dataflow_steps.step_kernel_bitfile"),
+        # The toolchain below util: of FINN, the resource store alone.
+        ("toolchain", "finn.util.basic.make_build_dir"),
+        ("toolchain", "finn.xsi.paths"),
+        ("toolchain", "finn.kernels.base"),
         # The shells below the flow: the builder runs them, never the other way.
         ("shells", "finn.builder.build_dataflow_steps"),
         ("transformation.kernels", "finn.shells.pynq.runner"),
@@ -149,8 +154,10 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("transformation.kernels", "finn.util.basic.make_build_dir"),
         ("flow", "finn.transformation.kernels.package.PackagePartition"),
         ("util", "finn_xsi.adapter"),
+        ("util", "finn.toolchain.launcher.Selection"),
+        ("toolchain", "finn.resources._store.locked"),
         ("harness", "finn.kernels.artifacts.build.emit_module"),
-        ("harness", "finn.util.toolchain.machine_toolchain"),
+        ("harness", "finn.toolchain.launcher.host_toolchain"),
         ("harness", "finn.transformation.kernels.package.PackagePartition"),
         # The KernelOps' oracle, read on a model of them.
         ("harness", "finn.custom_op.kernels.base.kernel_op"),

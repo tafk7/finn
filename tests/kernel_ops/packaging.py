@@ -33,8 +33,8 @@ from finn.kernels.artifacts.abi import (
     Signal,
     StandardProtocol,
 )
+from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import PackagePartition
-from finn.util.toolchain import Selection, Toolchain
 
 
 class ReachedVivado(Exception):

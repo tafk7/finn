@@ -13,7 +13,7 @@ from typing import TypeVar
 import pytest
 
 from finn.harness.toolchain import vivado_simulator
-from finn.util.toolchain import machine_toolchain
+from finn.toolchain.launcher import host_toolchain
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
 
@@ -39,7 +39,7 @@ def requires_vivado(test: _Test) -> _Test:
     ``check-kernels.sh`` deselects ``vivado``, and ``xsim-sweep.sh`` runs it.
     """
     skip = pytest.mark.skipif(
-        not machine_toolchain().environment.get("XILINX_VIVADO"),
+        not host_toolchain().environment.get("XILINX_VIVADO"),
         reason="Vivado is not selected",
     )
     marked: _Test = pytest.mark.vivado(skip(test))  # a dynamic mark is typed Any
@@ -48,7 +48,7 @@ def requires_vivado(test: _Test) -> _Test:
 
 def hls_synthesizer() -> bool:
     """Whether the machine's toolchain selects an HLS frontend and an HLS installation."""
-    toolchain = machine_toolchain()
+    toolchain = host_toolchain()
     frontend = toolchain.selection.hls_frontend
     if frontend is None:
         return False

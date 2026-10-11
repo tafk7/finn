@@ -39,7 +39,7 @@ VIVADO_JOBS_CAP = 16
 def vivado_jobs(requested: "int | None" = None) -> int:
     """The number of runs Vivado launches at once (``launch_runs -jobs``): the
     ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP.
-    The one check of a number of jobs: a positive integer (``finn.util.toolchain.
+    The one check of a number of jobs: a positive integer (``finn.toolchain.launcher.
     Selection.vivado_jobs`` states one through it)."""
     if requested is None:
         return max(1, min(os.cpu_count() or 1, VIVADO_JOBS_CAP))
@@ -124,3 +124,11 @@ def delivered_clock(
             warning += f"; the objective is {objective_fps:,.0f} fps"
         report["warning"] = warning
     return report
+
+
+def tcl_quote(value: object) -> str:
+    """Quote a literal Tcl word, including whitespace and substitution characters."""
+    value = str(value)
+    for char in ("\\", '"', "$", "[", "]"):
+        value = value.replace(char, "\\" + char)
+    return '"' + value.replace("\n", "\\n").replace("\r", "\\r") + '"'

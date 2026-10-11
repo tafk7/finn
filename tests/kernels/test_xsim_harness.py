@@ -54,7 +54,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.matmul import datatype_range
 from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.util.toolchain import Selection, Toolchain
+from finn.toolchain.launcher import Selection, Toolchain
 from kernels.chain import chain
 from kernels.conformance import Sample, place
 from kernels.helpers import FULL_DSP48E2, full_platform, point_for

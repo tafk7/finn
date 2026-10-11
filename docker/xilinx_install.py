@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Where this machine's Xilinx tools are: the machine file and AMD's two layouts.
+"""Where this machine's Xilinx tools are: the host file and AMD's two layouts.
 
-The machine file (``~/.config/finn/xilinx.env``) is read by FINN's one reader,
-``src/finn/util/machine_file.py``, loaded here by path from this checkout
-(``machine_file``): this script runs where FINN may not be installed yet.
+The host file (``~/.config/finn/xilinx.env``) is read by FINN's one reader,
+``src/finn/toolchain/host.py``, loaded here by path from this checkout
+(``host_file``): this script runs where FINN may not be installed yet.
 docker/config.py imports this script on the host, and the sbx workload's
 startup hook runs it from the mounted checkout:
 
@@ -19,22 +19,22 @@ import re
 import sys
 
 
-def _load_machine_file():
+def _load_host_file():
     path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         os.pardir,
         "src",
         "finn",
-        "util",
-        "machine_file.py",
+        "toolchain",
+        "host.py",
     )
-    spec = importlib.util.spec_from_file_location("_finn_machine_file", path)
+    spec = importlib.util.spec_from_file_location("_finn_host", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-machine_file = _load_machine_file()
+host_file = _load_host_file()
 
 
 def warn(msg):
@@ -96,8 +96,8 @@ def main(argv):
         print("usage: xilinx_install.py configured|sh", file=sys.stderr)
         return 2
     try:
-        values = machine_file.settings()
-    except machine_file.ConfigError as exc:
+        values = host_file.settings()
+    except host_file.ConfigError as exc:
         warn(str(exc))
         return 2
     root, version = values.get("FINN_XILINX_PATH"), values.get("FINN_XILINX_VERSION")

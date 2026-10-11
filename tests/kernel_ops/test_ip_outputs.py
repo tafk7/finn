@@ -47,6 +47,7 @@ from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
+from finn.toolchain.launcher import Selection, Toolchain, host_toolchain
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import (
@@ -56,7 +57,6 @@ from finn.transformation.kernels.package import (
     ooc_member_resources,
     stream_order,
 )
-from finn.util.toolchain import Selection, Toolchain, machine_toolchain
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import PackagedByStub, read_back
 from kernel_ops.tfc import SHAPE
@@ -285,7 +285,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     # XILINX_VIVADO set, nothing else of the machine.
     testbench = ip / TESTBENCH_DIR
     assert str(tmp_path) not in (testbench / "run.sh").read_text()
-    environment = dict(machine_toolchain().environment)
+    environment = dict(host_toolchain().environment)
     vivado = environment["XILINX_VIVADO"]
     environment["PATH"] = f"{vivado}/bin:{os.environ['PATH']}"
     ran = subprocess.run(

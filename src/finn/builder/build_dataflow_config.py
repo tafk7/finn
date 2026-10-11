@@ -7,7 +7,7 @@ from a Brevitas export, through ``build_dataflow``.
 It is composed of what the kernel path reads: how the export is prepared
 (``finn.transformation.prepare.GraphPreparation``), its target (a board or a part, the clock
 and the shell, stated once: ``finn.platform.TargetRequest``), its toolchain
-(``finn.util.toolchain.Selection``), the outputs it makes, the strategies that explore
+(``finn.toolchain.launcher.Selection``), the outputs it makes, the strategies that explore
 its choices and the policy that completes the rest. What the kernel path does not make,
 it cannot be asked for.
 """
@@ -23,8 +23,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.kernels.target import Target
 from finn.platform import VIVADO_BLOCK_DESIGN, TargetRequest, shell_row
 from finn.shells.pynq.runner import PynqOptions
+from finn.toolchain.launcher import Selection, Toolchain, host_selection
 from finn.transformation.prepare import GraphPreparation
-from finn.util.toolchain import Selection, Toolchain, machine_selection
 
 
 def declared(cls: type, name: str) -> Callable[[Any], Any]:
@@ -230,7 +230,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
 
     #: The AMD tool installation every tool step of the build runs in, and the
     #: environment of build_dataflow_directory's build process: the machine's
-    #: (finn.util.toolchain.machine_selection), with what this selection states laid
+    #: (finn.toolchain.launcher.host_selection), with what this selection states laid
     #: over it, each field it states winning. How many runs Vivado launches at once
     #: when it builds the shell's bitfile is the selection's ``vivado_jobs``, a machine
     #: setting (``FINN_VIVADO_JOBS``) a build may state over.
@@ -280,9 +280,9 @@ class DataflowBuildConfig(DataClassJsonMixin):
 
     def _resolve_selection(self) -> Selection:
         """The selection this build runs its tools by: ``toolchain`` laid over the
-        machine's (``machine_selection``), each field it states winning; unset, the
+        machine's (``host_selection``), each field it states winning; unset, the
         machine's."""
-        return machine_selection(stated=self.toolchain)
+        return host_selection(stated=self.toolchain)
 
     def _resolve_toolchain(self) -> Toolchain:
         """The prepared toolchain every tool step of this build runs in: the resolved

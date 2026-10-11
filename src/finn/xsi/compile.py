@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from finn.util.toolchain import machine_toolchain, xelab_threads
+from finn.toolchain.launcher import host_toolchain, xelab_threads
 from finn.xsi._artifacts import tool_identity, write_record
 from finn_xsi.srcutil import order_pkg_first
 
@@ -39,7 +39,7 @@ def compile_sim_obj(
     timeout=None,
     cancel=None,
 ):
-    toolchain = toolchain or machine_toolchain()
+    toolchain = toolchain or host_toolchain()
     identity = tool_identity(toolchain)
     sim_out_dir = os.fspath(sim_out_dir)
     source_list = list(map(os.fspath, source_list))

@@ -78,7 +78,7 @@ if TYPE_CHECKING:
 
     from finn.core.executors.base import Context
     from finn.kernels.explore import Completion
-    from finn.util.toolchain import Toolchain
+    from finn.toolchain.launcher import Toolchain
 
 
 class Unstreamable(ValueError):
