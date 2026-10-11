@@ -48,7 +48,13 @@ from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
 from finn.toolchain import xsim
-from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, host_toolchain
+from finn.toolchain.launcher import (
+    Selection,
+    Toolchain,
+    ToolFailed,
+    ToolUnavailable,
+    host_toolchain,
+)
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
@@ -273,6 +279,21 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
     assert not (output / "stitched_ip" / "package.sh.stdout.log").exists()
     # The build's own toolchain is unchanged: each step states its directory.
     assert cfg._resolve_toolchain().transcripts is None
+
+
+def test_a_testbench_without_its_simulator_is_the_tools_absence(tmp_path: Path) -> None:
+    """run.sh's guard (``finn.toolchain.xsim.UNAVAILABLE_STATUS``), before it runs
+    anything: an environment that names no Vivado, or one whose PATH lacks a command of
+    the simulator, is ``ToolUnavailable``, saying which, not a tool's failure."""
+    (tmp_path / RUN_SCRIPT).write_text(xsim.script(["a.sv"], "top", snapshot="s", threads="1"))
+    bare = Toolchain(Selection(), {"PATH": os.defpath})
+    with pytest.raises(ToolUnavailable, match="XILINX_VIVADO is not set"):
+        run_testbench(tmp_path, toolchain=bare)
+    named = Toolchain(Selection(), {"PATH": os.defpath, "XILINX_VIVADO": str(tmp_path)})
+    with pytest.raises(ToolUnavailable, match="xvlog is not on PATH") as missing:
+        run_testbench(tmp_path, toolchain=named)
+    assert missing.value.tool == "xsim"
+    assert not (tmp_path / "xvlog.log").exists()
 
 
 @pytest.mark.parametrize("tool", ["xvlog", "xelab"])

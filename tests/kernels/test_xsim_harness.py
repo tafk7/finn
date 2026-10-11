@@ -391,7 +391,8 @@ def test_simulate_runs_the_tools_of_its_toolchain(tmp_path: Path) -> None:
 def test_a_script_replays_the_commands_simulate_runs(tmp_path: Path) -> None:
     """``finn.toolchain.xsim.script`` (``run.sh``'s commands) writes the words the driver
     runs for ``simulate``: ``glbl.v`` from ``$XILINX_VIVADO``, each of xvlog and xelab
-    exiting with its own status when it fails."""
+    exiting with its own status when it fails, after a guard that exits with its own
+    when ``$XILINX_VIVADO`` or a command is missing."""
     toolchain = _toolchain(tmp_path, "PASS")
     directory = tmp_path / "sim"
     directory.mkdir()
@@ -407,10 +408,18 @@ def test_a_script_replays_the_commands_simulate_runs(tmp_path: Path) -> None:
         threads=xsim.xelab_threads(toolchain.environment),
     )
     lines = text.replace(" \\\n    ", " ").splitlines()
-    assert lines[0].startswith(': "${XILINX_VIVADO:?')
+    assert lines[0].startswith('[ -n "${XILINX_VIVADO:-}" ] || ')
+    assert lines[1].startswith(f"for tool in {' '.join(TOOLS)}; do command -v ")
+    assert all(
+        line.endswith(f"exit {xsim.UNAVAILABLE_STATUS}; }}{end}")
+        for line, end in (
+            (lines[0], ""),
+            (lines[1], "; done"),
+        )
+    )
     glbl = str(tmp_path / "vivado/data/verilog/src/glbl.v")
     written = []
-    for line, status in zip(lines[1:], ("10", "11", "1"), strict=True):
+    for line, status in zip(lines[2:], ("10", "11", "1"), strict=True):
         words = shlex.split(line)
         assert words[-3:] == ["||", "exit", status]
         written.append(
