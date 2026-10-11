@@ -20,14 +20,13 @@ from importlib.util import find_spec
 
 import pytest
 
-#: The HWCustomOp flow, deleted: its ops, analyses and transformations, and its
-#: stitched-IP executor.
+#: The HWCustomOp flow, deleted: its ops, analyses and transformations. Its
+#: stitched-IP executor's name, ``finn.core.rtlsim_exec``, is the XSim executor's now.
 DELETED = (
     "finn.custom_op.fpgadataflow",
     "finn.custom_op.general",
     "finn.analysis",
     "finn.transformation.fpgadataflow",
-    "finn.core.rtlsim_exec",
     "finn.deploy",
 )
 
