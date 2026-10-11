@@ -216,7 +216,7 @@ def test_each_verification_asked_has_a_verdict(tmp_path):
     np.save(tmp_path / "input.npy", np.zeros((1, 2)))
     status, manifest, _ = build_of(
         tmp_path,
-        [named("step_prepare_checkpoint", raising(SimulationFailed("differs")))],
+        [named("step_check_prepared", raising(SimulationFailed("differs")))],
         verify_steps=[
             VerificationStepType.GRAPH_PREPARATION_PYTHON,
             VerificationStepType.PARTITION_PYTHON,

@@ -42,12 +42,12 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import (
+    AddPrePostProcessingOptions,
+    ConvertToChannelsLastOptions,
     ExploreOptions,
-    PrepareImportOptions,
-    PrepareIoOptions,
-    PrepareQuantizationOptions,
-    PrepareStreamliningOptions,
-    PrepareTopologyOptions,
+    QonnxToFinnOptions,
+    StreamlineOptions,
+    TidyUpOptions,
     build_dataflow_step_lookup,
     build_dataflow_step_options,
 )
@@ -84,8 +84,11 @@ def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
     assert cfg.steps is None and cfg.toolchain is None
     # Prepared from the export as exported: its own inputs and outputs, the default
     # recipes.
-    assert cfg.options("step_prepare_io", PrepareIoOptions) == PrepareIoOptions()
-    assert cfg.options("step_prepare_streamlining", PrepareStreamliningOptions).streamlining == (
+    assert (
+        cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions)
+        == AddPrePostProcessingOptions()
+    )
+    assert cfg.options("step_streamline", StreamlineOptions).streamlining == (
         GraphPreparation().streamlining
     )
     assert default_build_dataflow_steps[0] == "phase_prepare_model"
@@ -93,13 +96,13 @@ def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
 
 #: Every option of every step that takes options, none at its default.
 STEP_OPTIONS = {
-    "step_prepare_import": PrepareImportOptions(override_inpsize=[1, 1, 28, 28]),
-    "step_prepare_quantization": PrepareQuantizationOptions(max_multithreshold_bit_width=4),
-    "step_prepare_io": PrepareIoOptions(
+    "step_tidy_up": TidyUpOptions(override_inpsize=[1, 1, 28, 28]),
+    "step_qonnx_to_finn": QonnxToFinnOptions(max_multithreshold_bit_width=4),
+    "step_add_pre_post_processing": AddPrePostProcessingOptions(
         preprocessing="preproc.onnx", input_datatype="UINT8", topk=1
     ),
-    "step_prepare_streamlining": PrepareStreamliningOptions(streamlining=["Streamline"]),
-    "step_prepare_topology": PrepareTopologyOptions(topology=[]),
+    "step_streamline": StreamlineOptions(streamlining=["Streamline"]),
+    "step_convert_to_channels_last": ConvertToChannelsLastOptions(topology=[]),
     "step_explore": ExploreOptions(
         kernel_exploration=[
             {"strategy": "target_throughput", "fps": 1_000_000},
@@ -120,7 +123,7 @@ def test_a_configuration_holds_through_json() -> None:
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
         enable_hw_debug=True,
-        steps=["phase_optimize_hardware", "step_create_stitched_ip"],
+        steps=["phase_optimize_hardware", "step_package_partition"],
         start_step="step_explore",
         stop_step="phase_optimize_hardware",
         save_intermediate_models=False,
@@ -152,11 +155,15 @@ def test_a_configuration_holds_through_json() -> None:
     ]
     # Each step's options under its name, every field stated.
     assert stated["step_options"] == {
-        "step_prepare_import": {"override_inpsize": [1, 1, 28, 28]},
-        "step_prepare_quantization": {"max_multithreshold_bit_width": 4},
-        "step_prepare_io": {"preprocessing": "preproc.onnx", "input_datatype": "UINT8", "topk": 1},
-        "step_prepare_streamlining": {"streamlining": ["Streamline"]},
-        "step_prepare_topology": {"topology": []},
+        "step_tidy_up": {"override_inpsize": [1, 1, 28, 28]},
+        "step_qonnx_to_finn": {"max_multithreshold_bit_width": 4},
+        "step_add_pre_post_processing": {
+            "preprocessing": "preproc.onnx",
+            "input_datatype": "UINT8",
+            "topk": 1,
+        },
+        "step_streamline": {"streamlining": ["Streamline"]},
+        "step_convert_to_channels_last": {"topology": []},
         "step_explore": {
             "kernel_exploration": [
                 {"strategy": "target_throughput", "fps": 1_000_000},
@@ -173,7 +180,7 @@ def test_a_configuration_holds_through_json() -> None:
     for step, options in STEP_OPTIONS.items():
         assert cfg.options(step, type(options)) == options
     with pytest.raises(TypeError, match="step_explore declares ExploreOptions"):
-        cfg.options("step_explore", PrepareIoOptions)
+        cfg.options("step_explore", AddPrePostProcessingOptions)
 
 
 @pytest.mark.parametrize(
@@ -203,13 +210,13 @@ def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
     "options, refused",
     [
         # A step that takes no options, and a name that is no step.
-        ({"step_prepare_containers": {}}, "step_prepare_containers takes no options"),
+        ({"step_widen_containers": {}}, "step_widen_containers takes no options"),
         ({"step_explorer": {}}, "step_explorer is no step"),
         ({"phase_optimize_hardware": {}}, "phase_optimize_hardware is no step"),
         # An option the step's type does not declare.
         (
-            {"step_prepare_quantization": {"max_multithreshold_bitwidth": 8}},
-            "step_options.step_prepare_quantization: .*max_multithreshold_bitwidth",
+            {"step_qonnx_to_finn": {"max_multithreshold_bitwidth": 8}},
+            "step_options.step_qonnx_to_finn: .*max_multithreshold_bitwidth",
         ),
         ({"step_explore": {"strategies": []}}, "step_options.step_explore: .*strategies"),
         # No completion policy and no fresh exploration: every choice is stored where it
@@ -240,18 +247,18 @@ def test_an_undeclared_step_or_option_is_refused_naming_it(
     "options, refused",
     [
         (
-            {"step_prepare_streamlining": {"streamlining": ["Streamline", "Streamlining"]}},
-            "step_prepare_streamlining: streamlining: no transform named Streamlining",
+            {"step_streamline": {"streamlining": ["Streamline", "Streamlining"]}},
+            "step_streamline: streamlining: no transform named Streamlining",
         ),
         (
-            {"step_prepare_topology": {"topology": ["MakeMaxPoolNCHW"]}},
-            "step_prepare_topology: topology: no transform named MakeMaxPoolNCHW",
+            {"step_convert_to_channels_last": {"topology": ["MakeMaxPoolNCHW"]}},
+            "step_convert_to_channels_last: topology: no transform named MakeMaxPoolNCHW",
         ),
         (
-            {"step_prepare_io": {"input_datatype": "UINT33x"}},
-            "step_prepare_io: input_datatype: 'UINT33x' is no qonnx datatype",
+            {"step_add_pre_post_processing": {"input_datatype": "UINT33x"}},
+            "step_add_pre_post_processing: input_datatype: 'UINT33x' is no qonnx datatype",
         ),
-        ({"step_prepare_io": {"topk": 0}}, "step_prepare_io: topk: 0"),
+        ({"step_add_pre_post_processing": {"topk": 0}}, "step_add_pre_post_processing: topk: 0"),
         ({"step_explore": ["size_fifos"]}, "step_explore: an object of ExploreOptions's fields"),
     ],
 )
@@ -404,19 +411,19 @@ def names(cfg: DataflowBuildConfig) -> list[str]:
 def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     """A step inside a phase, or a phase: its first step to start from, its last to
     stop after; the build starts from the model the step before saved."""
-    inside = {**STATED, "start_step": "step_explore", "stop_step": "step_create_stitched_ip"}
+    inside = {**STATED, "start_step": "step_explore", "stop_step": "step_package_partition"}
     cfg = DataflowBuildConfig.from_json(json.dumps(inside))
-    assert names(cfg) == ["step_explore", "step_verify_partition", "step_create_stitched_ip"]
+    assert names(cfg) == ["step_explore", "step_verify_partition", "step_package_partition"]
     assert resolve_step_filename("step_explore", cfg, -1) == (
         "out/intermediate_models/step_create_dataflow_partition.onnx"
     )
     phases = {
         **STATED,
         "start_step": "phase_optimize_hardware",
-        "stop_step": "phase_build_hardware",
+        "stop_step": "phase_emit_hardware",
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(phases))
-    assert names(cfg) == ["step_explore", "step_verify_partition", "step_create_stitched_ip"]
+    assert names(cfg) == ["step_explore", "step_verify_partition", "step_package_partition"]
     assert resolve_step_filename("phase_optimize_hardware", cfg, -1) == (
         "out/intermediate_models/step_create_dataflow_partition.onnx"
     )
@@ -436,7 +443,7 @@ def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase(
         return step
 
     cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "steps": ["step_prepare_checkpoint", "phase_optimize_hardware"]})
+        json.dumps({**STATED, "steps": ["step_check_prepared", "phase_optimize_hardware"]})
     )
     assert cfg.steps is not None
     cfg.steps.append(step_mine)
@@ -445,12 +452,12 @@ def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase(
         "phase_optimize_hardware": [injected("before_phase")],
     }
     cfg.inject_steps_after = {
-        "step_prepare_checkpoint": [injected("after_checkpoint")],
+        "step_check_prepared": [injected("after_checkpoint")],
         "phase_optimize_hardware": [injected("after_phase")],
         "step_mine": [injected("after_mine")],
     }
     assert names(cfg) == [
-        "step_prepare_checkpoint",
+        "step_check_prepared",
         "after_checkpoint",
         "before_phase",
         "step_explore",
@@ -469,11 +476,11 @@ def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase(
 
 def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases() -> None:
     cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "steps": ["phase_build_hardware"], "start_step": "step_explore"})
+        json.dumps({**STATED, "steps": ["phase_emit_hardware"], "start_step": "step_explore"})
     )
     message = (
         "'step_explore' is not one of this build's steps or phases; its steps: "
-        "step_create_stitched_ip; its phases: phase_build_hardware"
+        "step_package_partition; its phases: phase_emit_hardware"
     )
     with pytest.raises(ValueError) as refused:
         resolve_build_steps(cfg)
@@ -567,7 +574,7 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),
         step_options={
-            "step_prepare_io": io_options(directory),
+            "step_add_pre_post_processing": io_options(directory),
             "step_explore": ExploreOptions(
                 kernel_exploration=[{"strategy": "target_throughput", "fps": 1_000_000}]
             ),

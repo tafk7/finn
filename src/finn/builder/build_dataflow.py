@@ -59,8 +59,8 @@ from finn.builder.build_dataflow_manifest import (
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import (
+    AddPrePostProcessingOptions,
     ExploreOptions,
-    PrepareIoOptions,
     build_dataflow_step_lookup,
 )
 from finn.core.space import by_code
@@ -511,7 +511,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
     """``cfg`` with each relative path joined to ``directory``: ``output_dir``,
-    ``verify_input_npy``, step_prepare_io's ``preprocessing`` model, a strategy's
+    ``verify_input_npy``, step_add_pre_post_processing's ``preprocessing`` model, a strategy's
     ``path`` in step_explore's ``kernel_exploration`` (the ``pinned`` choices file), and
     the toolchain's settings scripts and command directory. Absolute paths and an empty
     command directory are kept as they are."""
@@ -520,9 +520,11 @@ def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuild
         return os.path.join(directory, path)
 
     step_options = dict(cfg.step_options)
-    io = cfg.options("step_prepare_io", PrepareIoOptions)
+    io = cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions)
     if io.preprocessing is not None:
-        step_options["step_prepare_io"] = replace(io, preprocessing=resolve(io.preprocessing))
+        step_options["step_add_pre_post_processing"] = replace(
+            io, preprocessing=resolve(io.preprocessing)
+        )
     explore = cfg.options("step_explore", ExploreOptions)
     if any(isinstance(spec.get("path"), str) for spec in explore.kernel_exploration):
         step_options["step_explore"] = replace(

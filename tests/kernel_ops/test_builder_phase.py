@@ -8,7 +8,7 @@ network for Ultra96 in the Zynq shell, through graph preparation, stopping after
 phases: no Vivado. Each step's
 output is recorded as it runs (``inject_steps_after``), and the partition is compared
 with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phases
-(``phase_build_hardware``, ``phase_generate_outputs``) is not a test.
+(``phase_emit_hardware``, ``phase_generate_outputs``) is not a test.
 """
 
 from __future__ import annotations
@@ -46,13 +46,13 @@ from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import (
     ExploreOptions,
+    step_build_bitfile,
     step_convert_to_hw,
     step_create_dataflow_partition,
     step_deployment_package,
     step_explore,
     step_make_driver,
     step_resources_report,
-    step_synthesize_bitfile,
     step_verify_partition,
 )
 from finn.core.space import Finding, FindingKind, finding_record
@@ -190,7 +190,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
-        step_options={"step_prepare_io": io_options(tmp_path / "export")},
+        step_options={"step_add_pre_post_processing": io_options(tmp_path / "export")},
         stop_step="phase_optimize_hardware",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
         verify_steps=[
@@ -204,7 +204,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # The export prepared first, to the streamlined graph the fixture's phase makes, and
     # checked against the export.
     prepared = ModelWrapper(
-        str(Path(cfg.output_dir) / "intermediate_models" / "step_prepare_checkpoint.onnx")
+        str(Path(cfg.output_dir) / "intermediate_models" / "step_check_prepared.onnx")
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
     # The run, as its manifest indexes it: every step of the four phases, in order, each
@@ -223,9 +223,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     ]
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
-    assert indexed["step_prepare_checkpoint"]["verifications"] == {
-        "graph_preparation_python": "pass"
-    }
+    assert indexed["step_check_prepared"]["verifications"] == {"graph_preparation_python": "pass"}
     assert indexed["step_verify_partition"]["verifications"] == {"kernel_partition_python": "pass"}
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
@@ -416,7 +414,7 @@ def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: P
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
-        step_synthesize_bitfile(parent, cfg)
+        step_build_bitfile(parent, cfg)
 
 
 def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> None:
@@ -501,7 +499,7 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
 def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> None:
     verify = [VerificationStepType.PARTITION_ELABORATION]
     cfg = config(
-        tmp_path, steps=["phase_build_hardware", "phase_generate_outputs"], verify_steps=verify
+        tmp_path, steps=["phase_emit_hardware", "phase_generate_outputs"], verify_steps=verify
     )
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
@@ -515,7 +513,7 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     preparation = [VerificationStepType.GRAPH_PREPARATION_PYTHON]
     for steps in (
         {"steps": KERNEL_PATH},
-        {"steps": ["step_prepare_checkpoint", *KERNEL_PATH]},
+        {"steps": ["step_check_prepared", *KERNEL_PATH]},
     ):
         (warning,) = [
             check
@@ -535,7 +533,7 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
     ]
-    assert "stitched_ip_testbench, which needs step_create_stitched_ip" in warning.message
+    assert "stitched_ip_testbench, which needs step_package_partition" in warning.message
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
         "testbench_output": [
             "verify_steps includes stitched_ip_testbench, which runs the testbench "
@@ -572,24 +570,24 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
 def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None:
     """A build's steps are the kernel path's: another name is refused, naming its steps
     and phases, and the default steps are its six phases' steps, in order."""
-    with pytest.raises(ValueError, match="Unknown step or phase: step_streamline") as refused:
-        resolve_build_steps(config(tmp_path, steps=["step_streamline"]))
+    with pytest.raises(ValueError, match="Unknown step or phase: step_hw_codegen") as refused:
+        resolve_build_steps(config(tmp_path, steps=["step_hw_codegen"]))
     assert "step_explore" in str(refused.value)
     assert "phase_optimize_hardware" in str(refused.value)
     assert [step.__name__ for step in resolve_build_steps(config(tmp_path))] == [
-        "step_prepare_import",
-        "step_prepare_quantization",
-        "step_prepare_io",
-        "step_prepare_streamlining",
-        "step_prepare_topology",
-        "step_prepare_containers",
-        "step_prepare_checkpoint",
+        "step_tidy_up",
+        "step_qonnx_to_finn",
+        "step_add_pre_post_processing",
+        "step_streamline",
+        "step_convert_to_channels_last",
+        "step_widen_containers",
+        "step_check_prepared",
         "step_convert_to_hw",
         "step_create_dataflow_partition",
         "step_explore",
         "step_verify_partition",
-        "step_create_stitched_ip",
-        "step_synthesize_bitfile",
+        "step_package_partition",
+        "step_build_bitfile",
         "step_make_driver",
         "step_resources_report",
         "step_deployment_package",
@@ -1164,7 +1162,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         (Path(cfg.output_dir) / stale).write_text("an earlier build's")
     parent = explore(source, cfg)
     for step in (
-        step_synthesize_bitfile,
+        step_build_bitfile,
         step_make_driver,
         step_resources_report,
         step_deployment_package,

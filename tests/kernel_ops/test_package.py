@@ -223,7 +223,7 @@ def test_a_failed_packaging_run_is_vivados_failure_naming_its_transcript(tmp_pat
     configure_partition(model := kernel_model())
     project = tmp_path / "project"
     toolchain = _tools(tmp_path, {"vivado": f'echo "{NO_LICENCE}" | tee package.log\nexit 1\n'})
-    logs = tmp_path / "out" / "logs" / "step_create_stitched_ip"
+    logs = tmp_path / "out" / "logs" / "step_package_partition"
     for tools, transcript in (
         (toolchain, project / "package.sh.stdout.log"),
         (toolchain.transcripts_in(logs), logs / "package.sh.stdout.log"),

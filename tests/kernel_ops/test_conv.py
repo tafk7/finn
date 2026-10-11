@@ -38,7 +38,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import PrepareIoOptions
+from finn.builder.build_dataflow_steps import AddPrePostProcessingOptions
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
@@ -224,7 +224,7 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
         step_options={
-            "step_prepare_io": PrepareIoOptions(
+            "step_add_pre_post_processing": AddPrePostProcessingOptions(
                 preprocessing=str(tmp_path / PREPROCESSING), input_datatype="UINT8", topk=1
             )
         },

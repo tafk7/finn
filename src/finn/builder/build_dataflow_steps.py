@@ -137,7 +137,7 @@ def _reported(path: str | os.PathLike[str]) -> None:
 
 
 def _preparation_source(cfg: DataflowBuildConfig) -> str:
-    """Where step_prepare_import saves the export, the reference for the
+    """Where step_tidy_up saves the export, the reference for the
     GRAPH_PREPARATION_PYTHON check."""
     return cfg.output_dir + "/intermediate_models/graph_preparation_source.onnx"
 
@@ -198,18 +198,18 @@ def _sub_phase(
 
 
 @dataclass(frozen=True)
-class PrepareImportOptions:
-    """Options of step_prepare_import. ``override_inpsize``: the batch size (an int) or
+class TidyUpOptions:
+    """Options of step_tidy_up. ``override_inpsize``: the batch size (an int) or
     the whole input shape (a list) for qonnx's cleanup to set; None keeps the export's."""
 
     override_inpsize: int | list[int] | None = None
 
 
-def step_prepare_import(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_tidy_up(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Run qonnx's cleanup on the export, overriding its input size if the options ask.
     Starts report/graph_preparation.json afresh, and saves the export as the reference
     when GRAPH_PREPARATION_PYTHON is configured."""
-    options = cfg.options("step_prepare_import", PrepareImportOptions)
+    options = cfg.options("step_tidy_up", TidyUpOptions)
     if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
         os.makedirs(os.path.dirname(_preparation_source(cfg)), exist_ok=True)
         model.save(_preparation_source(cfg))
@@ -217,23 +217,23 @@ def step_prepare_import(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelW
 
 
 @dataclass(frozen=True)
-class PrepareQuantizationOptions:
-    """Options of step_prepare_quantization. ``max_multithreshold_bit_width``: the
+class QonnxToFinnOptions:
+    """Options of step_qonnx_to_finn. ``max_multithreshold_bit_width``: the
     widest Quant activation lowered to a MultiThreshold; a wider one stays a Quant.
-    step_prepare_io lowers the preprocessing model with the same limit."""
+    step_add_pre_post_processing lowers the preprocessing model with the same limit."""
 
     max_multithreshold_bit_width: int = 8
 
 
-def step_prepare_quantization(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_qonnx_to_finn(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Lower Quant nodes: activations to MultiThresholds, weights to integers."""
-    options = cfg.options("step_prepare_quantization", PrepareQuantizationOptions)
+    options = cfg.options("step_qonnx_to_finn", QonnxToFinnOptions)
     return _sub_phase(quantization_lowered, model, cfg, _preparation(options))
 
 
 @dataclass(frozen=True)
-class PrepareIoOptions:
-    """Options of step_prepare_io: the network's inputs and outputs. By default, the
+class AddPrePostProcessingOptions:
+    """Options of step_add_pre_post_processing: the network's inputs and outputs. By default, the
     export's own.
 
     - ``preprocessing``: an ONNX model (a QONNX export, such as one of
@@ -253,17 +253,17 @@ class PrepareIoOptions:
         _preparation(self)
 
 
-def step_prepare_io(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Merge the preprocessing model (lowered with step_prepare_quantization's bit-width
+def step_add_pre_post_processing(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Merge the preprocessing model (lowered with step_qonnx_to_finn's bit-width
     limit), set the input datatype and append the TopK, as the options say."""
-    options = cfg.options("step_prepare_io", PrepareIoOptions)
-    quantization = cfg.options("step_prepare_quantization", PrepareQuantizationOptions)
+    options = cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions)
+    quantization = cfg.options("step_qonnx_to_finn", QonnxToFinnOptions)
     return _sub_phase(io_explicit, model, cfg, _preparation(options, quantization))
 
 
 @dataclass(frozen=True)
-class PrepareStreamliningOptions:
-    """Options of step_prepare_streamlining. ``streamlining``: the recipe, names from
+class StreamlineOptions:
+    """Options of step_streamline. ``streamlining``: the recipe, names from
     finn.transformation.prepare.RECIPE_TRANSFORMS, run in order."""
 
     streamlining: list[str] = field(default_factory=lambda: list(DEFAULT_STREAMLINING))
@@ -272,15 +272,15 @@ class PrepareStreamliningOptions:
         _preparation(self)
 
 
-def step_prepare_streamlining(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_streamline(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Run the streamlining recipe."""
-    options = cfg.options("step_prepare_streamlining", PrepareStreamliningOptions)
+    options = cfg.options("step_streamline", StreamlineOptions)
     return _sub_phase(streamlined, model, cfg, _preparation(options))
 
 
 @dataclass(frozen=True)
-class PrepareTopologyOptions:
-    """Options of step_prepare_topology. ``topology``: the recipe, names from
+class ConvertToChannelsLastOptions:
+    """Options of step_convert_to_channels_last. ``topology``: the recipe, names from
     finn.transformation.prepare.RECIPE_TRANSFORMS, run in order."""
 
     topology: list[str] = field(default_factory=lambda: list(DEFAULT_TOPOLOGY))
@@ -289,19 +289,19 @@ class PrepareTopologyOptions:
         _preparation(self)
 
 
-def step_prepare_topology(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_convert_to_channels_last(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Run the topology recipe and infer the data layouts."""
-    options = cfg.options("step_prepare_topology", PrepareTopologyOptions)
+    options = cfg.options("step_convert_to_channels_last", ConvertToChannelsLastOptions)
     return _sub_phase(topology_settled, model, cfg, _preparation(options))
 
 
-def step_prepare_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_widen_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Widen to float64 the integer regions float32 cannot hold exactly, with Casts at
     their edges; the graph's inputs and outputs keep their types. No options."""
     return _sub_phase(containers_exact, model, cfg, GraphPreparation())
 
 
-def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_check_prepared(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Check the prepared graph before the kernel path converts it: its structure, that
     its integer annotations are sound and its containers exact, and what would stay on
     the host (float nodes, Transposes, host nodes between KernelOps). Writes the result
@@ -327,7 +327,7 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         source_file = _preparation_source(cfg)
         if not os.path.isfile(source_file):
             raise FileNotFoundError(
-                f"{source_file}: the export, which step_prepare_import keeps when "
+                f"{source_file}: the export, which step_tidy_up keeps when "
                 "GRAPH_PREPARATION_PYTHON is asked, is not there (did the build start after it?)"
             )
         input_name = model.graph.input[0].name
@@ -337,14 +337,15 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         ):
             raise ValueError(
                 f"graph_preparation_python draws from the prepared input's annotation, and "
-                f"{input_name} states no integer one: state step_prepare_io's input_datatype"
+                f"{input_name} states no integer one: state "
+                "step_add_pre_post_processing's input_datatype"
             )
         # The reference is the export after the import and I/O steps only, with their
         # options (and the preprocessing model lowered with the quantization step's limit).
         options = _preparation(
-            cfg.options("step_prepare_import", PrepareImportOptions),
-            cfg.options("step_prepare_quantization", PrepareQuantizationOptions),
-            cfg.options("step_prepare_io", PrepareIoOptions),
+            cfg.options("step_tidy_up", TidyUpOptions),
+            cfg.options("step_qonnx_to_finn", QonnxToFinnOptions),
+            cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions),
         )
         equivalence = check_equivalence(reference(ModelWrapper(source_file), options), model)
         report["equivalence"] = {
@@ -593,12 +594,12 @@ def _refuse_drift(
 
 
 def _stitched_ip_directory(cfg: DataflowBuildConfig) -> Path:
-    """Where step_create_stitched_ip packages the partition: its IP, interface
+    """Where step_package_partition packages the partition: its IP, interface
     description and testbench, and with OOC_SYNTH its utilization report."""
     return Path(cfg.output_dir) / "stitched_ip"
 
 
-def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the partition as an IP named ``partition`` into ``stitched_ip/``, with its
     interface description (``interface.json``), if STITCHED_IP or OOC_SYNTH is asked.
     The partition's body records the IP, so a shell's integration later in the build
@@ -618,7 +619,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         _LOG.info("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
         return model
     directory = _stitched_ip_directory(cfg)
-    toolchain = _tools(cfg, "step_create_stitched_ip")
+    toolchain = _tools(cfg, "step_package_partition")
     node, body, body_file = partition_body(model)
     body = body.transform(
         PackagePartition(
@@ -647,23 +648,23 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     return model
 
 
-def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_build_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
     directory, if BITFILE is asked. Only the pynq shell has a bitfile build
     (BuildPynqBitfile); ``enable_hw_debug`` is its option. Each tool's transcript goes
-    into logs/step_synthesize_bitfile. Refuses a partition built for another target than
+    into logs/step_build_bitfile. Refuses a partition built for another target than
     the configuration's. The model records the bitfile and its hardware handoff
     (finn.outputs) and what the bitfile was built from. The build's reports, collected
     beside the bitfile under report/ (finn.shells.pynq.runner.REPORTS), and the Vivado
     project are listed under this step in the build's manifest. Any shortfall of the
     delivered clock is logged as a warning."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
-        _LOG.info("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
+        _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.BITFILE)
     building = BuildPynqBitfile(
         Path(cfg.output_dir),
-        toolchain=_tools(cfg, "step_synthesize_bitfile"),
+        toolchain=_tools(cfg, "step_build_bitfile"),
         enable_hw_debug=cfg.enable_hw_debug,
     )
     model = model.transform(building)
@@ -808,19 +809,19 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
 build_dataflow_step_lookup = {
     step.__name__: step
     for step in (
-        step_prepare_import,
-        step_prepare_quantization,
-        step_prepare_io,
-        step_prepare_streamlining,
-        step_prepare_topology,
-        step_prepare_containers,
-        step_prepare_checkpoint,
+        step_tidy_up,
+        step_qonnx_to_finn,
+        step_add_pre_post_processing,
+        step_streamline,
+        step_convert_to_channels_last,
+        step_widen_containers,
+        step_check_prepared,
         step_convert_to_hw,
         step_create_dataflow_partition,
         step_explore,
         step_verify_partition,
-        step_create_stitched_ip,
-        step_synthesize_bitfile,
+        step_package_partition,
+        step_build_bitfile,
         step_make_driver,
         step_resources_report,
         step_deployment_package,
@@ -830,10 +831,10 @@ build_dataflow_step_lookup = {
 #: The options type of each step that has options, by step name, for a configuration's
 #: ``step_options``.
 build_dataflow_step_options: dict[str, type] = {
-    "step_prepare_import": PrepareImportOptions,
-    "step_prepare_quantization": PrepareQuantizationOptions,
-    "step_prepare_io": PrepareIoOptions,
-    "step_prepare_streamlining": PrepareStreamliningOptions,
-    "step_prepare_topology": PrepareTopologyOptions,
+    "step_tidy_up": TidyUpOptions,
+    "step_qonnx_to_finn": QonnxToFinnOptions,
+    "step_add_pre_post_processing": AddPrePostProcessingOptions,
+    "step_streamline": StreamlineOptions,
+    "step_convert_to_channels_last": ConvertToChannelsLastOptions,
     "step_explore": ExploreOptions,
 }

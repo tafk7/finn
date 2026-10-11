@@ -581,7 +581,7 @@ need a shell that integrates the partition, so they are refused on `ip`. The def
 steps: `phase_prepare_model` (the export prepared and checked),
 `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
 partition), `phase_optimize_hardware` (their choices and the partition's
-verification), `phase_build_hardware` (the partition's IP) and
+verification), `phase_emit_hardware` (the partition's IP) and
 `phase_generate_outputs` (what the shell makes). `steps`, `start_step` and
 `stop_step` name phases or steps. A key the configuration does not declare is
 refused by name. The top-level fields are how the build runs; each step's own options

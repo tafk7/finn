@@ -111,12 +111,12 @@ class VerificationStepType(str, Enum):
 #: the one that checks.
 VERIFIED_BY = {
     VerificationStepType.GRAPH_PREPARATION_PYTHON: (
-        "step_prepare_import",
-        "step_prepare_checkpoint",
+        "step_tidy_up",
+        "step_check_prepared",
     ),
     VerificationStepType.PARTITION_PYTHON: ("step_convert_to_hw", "step_verify_partition"),
     VerificationStepType.PARTITION_ELABORATION: ("step_verify_partition",),
-    VerificationStepType.STITCHED_IP_TESTBENCH: ("step_create_stitched_ip",),
+    VerificationStepType.STITCHED_IP_TESTBENCH: ("step_package_partition",),
 }
 
 
@@ -126,7 +126,7 @@ default_build_dataflow_steps = [
     "phase_convert_to_hardware",
     "phase_create_accelerator",
     "phase_optimize_hardware",
-    "phase_build_hardware",
+    "phase_emit_hardware",
     "phase_generate_outputs",
 ]
 
@@ -217,9 +217,10 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: declares (finn.builder.build_dataflow_steps.build_dataflow_step_options), or in
     #: JSON an object of its fields. A step not named here uses its type's defaults.
     #: Naming a step that takes no options, or an option its type does not declare, is
-    #: refused. In JSON, for TFC: {"step_prepare_io": {"preprocessing": "preproc.onnx",
-    #: "input_datatype": "UINT8", "topk": 1}, "step_explore": {"kernel_exploration":
-    #: [{"strategy": "target_throughput", "fps": 1000000}, {"strategy": "size_fifos"}]}}.
+    #: refused. In JSON, for TFC: {"step_add_pre_post_processing": {"preprocessing":
+    #: "preproc.onnx", "input_datatype": "UINT8", "topk": 1}, "step_explore":
+    #: {"kernel_exploration": [{"strategy": "target_throughput", "fps": 1000000},
+    #: {"strategy": "size_fifos"}]}}.
     step_options: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
