@@ -48,6 +48,7 @@ from finn.harness.ops import boundary_inputs, check_parity
 from finn.platform import TargetRequest
 from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
+from finn.transformation.kernels.cut import BaselineChoices
 from kernel_ops.models import convert
 from kernel_ops.specs import conv
 from kernel_ops.specs.base import GENERAL, source
@@ -97,11 +98,12 @@ FOLDED = [
 
 
 def folded(name: str, simd: int, pe: int, directory: Path) -> ModelWrapper:
-    """The single layer ``name``'s body, its SIMD and PE chosen on its node."""
+    """The single layer ``name``'s body, its SIMD and PE chosen on its node by hand, and
+    what that opens (pumping, at SIMD 2 and more) given its baseline (``BaselineChoices``)."""
     body = single_layer(name, directory)
     (node,) = body.graph.node
     kernel_op(body, node).save({"compute.packed.simd": simd, "compute.packed.pe": pe})
-    return body
+    return body.transform(BaselineChoices())
 
 
 @pytest.mark.parametrize(("name", "simd", "pe", "nest"), FOLDED)
@@ -175,7 +177,8 @@ INSIDE = [(2, 2, ("reorder", "markers")), (4, 2, ("width_conversion", "reorder",
 def test_a_window_inside_the_partition_is_its_edges_reorder(
     pe: int, simd: int, steps: tuple[str, ...]
 ) -> None:
-    point, _ = configured_root(thresholded(pe, simd), "inside")
+    # Converted, not cut: its channels' choices created as the cut creates them.
+    point, _ = configured_root(thresholded(pe, simd).transform(BaselineChoices()), "inside")
     assert tuple(hop.step.value for hop in point.a.plan.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels

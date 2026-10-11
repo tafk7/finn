@@ -53,7 +53,6 @@ from finn.dataflow.traversal import pack
 from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.kernels.explore import Completion
 from finn.toolchain import xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain, run_process
 from finn.transformation.kernels.package import boundary_facts, free_side
@@ -155,15 +154,14 @@ def write_testbench(
     directory: Path,
     frame: Mapping[str, NDArray[Any]],
     *,
-    completion: Completion | None = None,
     label: str = "the partition",
 ) -> None:
     """Write the XSim testbench of the partition ``body`` into ``directory``, streaming
     ``frame`` (its inputs by tensor) and expecting the body's outputs on it, executed in
     Python; see the module docstring. The module is the one PackagePartition packages
-    (``configured_root`` under ``completion``), and the watchdog allows the cycles its
+    (``configured_root``), and the watchdog allows the cycles its
     root states. Nothing is simulated (``run_testbench`` runs it)."""
-    point, boundary = configured_root(body, label, completion)
+    point, boundary = configured_root(body, label)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)
     directory.mkdir(parents=True, exist_ok=True)

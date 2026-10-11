@@ -99,10 +99,6 @@ The strategies, each an objective and its constraints searched through the seam:
 A strategy that changes folding (``folds``) after the last ``SizeFifos`` leaves its
 depths stale: the engine keeps a stored depth valid when its ends' folding changes,
 so the order is the exploration's to check (``finn.transformation.kernels``).
-
-``Completion``, ``Baseline()`` and ``Placeholder()`` complete a point on a copy where
-it is generated from a model that leaves choices open (``configured_root``); no
-strategy reads a completed copy.
 """
 
 from __future__ import annotations
@@ -337,10 +333,8 @@ class Seam:
     """The seam over the points of one root: its ``members`` by path (whose cost it
     reads); for each member, by path, the owner that persists its choices (a graph
     name: a kernel's node, a channel's tensor); the
-    ``platform`` its kernels are built for (its clock, which a throughput reads); and
-    the ``completion`` policy that completes a point on a copy where it is generated
-    from a model that leaves choices open (``Baseline()`` unless the build names
-    another; no strategy reads one). ``attempts`` counts the attempts made through it;
+    ``platform`` its kernels are built for (its clock, which a throughput reads).
+    ``attempts`` counts the attempts made through it;
     ``held`` holds the keys pinned for the run, with their values; ``runs`` records
     each strategy's run, in order."""
 
@@ -349,14 +343,12 @@ class Seam:
         members: Sequence[str],
         owners: Mapping[str, str] | None = None,
         platform: Platform | None = None,
-        completion: Completion | None = None,
     ) -> None:
         self.members = tuple(members)
         self._members = frozenset(self.members)
         self.owners = MappingProxyType(dict(owners or {}))
         self._paths = {owner: path for path, owner in self.owners.items()}
         self.platform = platform
-        self.completion: Completion = Baseline() if completion is None else completion
         self.attempts = 0
         self.held: dict[str, object] = {}
         self.runs: list[Run] = []
@@ -863,155 +855,6 @@ def _first_case(seam: Seam, point: S, choice: Choice, cases: Sequence[object]) -
             return outcome.point, case
         refusals.append(f"{case!r}: " + _reasons(outcome.why))
     raise ExploreError(f"{choice.key}: no case is accepted: " + "; ".join(refusals))
-
-
-# -- completion ----------------------------------------------------------------------------
-
-
-@dataclass
-class Completed(Generic[S]):
-    """A point completed on a copy, never stored: the copy (``point``), each value the
-    completion committed on it by key, in order (``values``), who made each
-    (``made_by``: the policy, or ``size_fifos`` for a transport it sized at hardware
-    generation), the sizing's report when it sized, and the open choices it leaves
-    (``open``: the required ones the policy does not complete, and any known by
-    membership only)."""
-
-    point: S
-    values: dict[str, object]
-    made_by: dict[str, str]
-    sizing: dict[str, Any] | None
-    open: tuple[Choice, ...]
-
-
-class Completion(Protocol):
-    """A completion policy: what completes the open choices of a point, on a copy,
-    where it is costed (``sizing=False``) or generated (``sizing=True``), the choices of
-    ``members`` alone where named (where a strategy reads one member's cost, never with
-    ``sizing``). ``label`` is what the report and the build log say of a value it
-    completed."""
-
-    name: str
-    label: str
-
-    def complete(
-        self,
-        seam: Seam,
-        point: S,
-        *,
-        sizing: bool = False,
-        members: Collection[str] | None = None,
-    ) -> Completed[S]: ...
-
-
-class Baseline:
-    """The default completion: the first viable case, in its domain's order, of every
-    open choice that is not required, in rank order (an enclosing choice before the
-    ones it guards; a case the seam refuses is passed over for the next). Each kernel
-    lists its cases baseline first, so this is every kernel's baseline: on a folding
-    domain the least parallelism compatible.
-
-    At hardware generation (``sizing``) it first completes every other choice, then
-    sizes the open transports on that copy (``SizeFifos``: the FIFOs follow the
-    completed folding; where a required choice leaves a member's cycles unknown,
-    nothing is sized), then completes what is left. Where it is costed, a transport
-    takes its first case, ``direct``. A required choice stays open, for hardware
-    generation to refuse by name. With ``members``, only their choices are completed,
-    and ``open`` names only theirs."""
-
-    name = "baseline"
-    label = "baseline"
-
-    def complete(
-        self,
-        seam: Seam,
-        point: S,
-        *,
-        sizing: bool = False,
-        members: Collection[str] | None = None,
-    ) -> Completed[S]:
-        if sizing and members is not None:
-            raise ExploreError("a completion that sizes FIFOs completes every member")
-        before = set(seam.chosen(point))
-        made_by: dict[str, str] = {}
-        report: dict[str, Any] | None = None
-        if sizing:
-            point = self._first_cases(seam, point, skip_transports=True)
-            sizer = SizeFifos()
-            if sizer.transports(seam, point) and seam.cost(point).bottleneck is not None:
-                sized, held = sizer.search(seam, point), seam.chosen(point)
-                made_by = dict.fromkeys(
-                    (key for key in seam.chosen(sized) if key not in held), sizer.strategy
-                )
-                point, report = sized, sizer.report()
-        point = self._first_cases(seam, point, members=members)
-        values = {key: value for key, value in seam.chosen(point).items() if key not in before}
-        made_by = {key: made_by.get(key, self.label) for key in values}
-        left = seam.choices(point)
-        if members is not None:
-            left = tuple(choice for choice in left if seam.member_of(choice.key) in members)
-        return Completed(point, values, made_by, report, left)
-
-    def takes(self, choice: Choice) -> bool:
-        """Whether it completes ``choice``: one with cases to take, not required."""
-        return choice.cases is not None and not choice.required
-
-    def _first_cases(
-        self,
-        seam: Seam,
-        point: S,
-        *,
-        skip_transports: bool = False,
-        members: Collection[str] | None = None,
-    ) -> S:
-        while True:
-            offered = [
-                choice
-                for choice in seam.choices(point)
-                if self.takes(choice) and (members is None or seam.member_of(choice.key) in members)
-            ]
-            if skip_transports and offered:
-                declared = seam.declared(point)
-                offered = [
-                    choice
-                    for choice in offered
-                    if _transport(seam, point, choice, declared) is None
-                ]
-            if not offered:
-                return point
-            choice = offered[0]
-            point = _first_accepted(seam, point, choice, choice.cases or ())
-
-
-class Placeholder(Baseline):
-    """The debug completion: ``Baseline``, and also the first viable case of a required
-    choice, so that a design can be generated while the strategy that should make that
-    choice does not exist yet. A required choice known by membership only (a FIFO's
-    depth that no strategy sized) has no first case: it refuses it, by name. Every
-    value it completes is reported ``DEBUG: completed by placeholder``."""
-
-    name = "placeholder"
-    label = "DEBUG: completed by placeholder"
-
-    def complete(
-        self,
-        seam: Seam,
-        point: S,
-        *,
-        sizing: bool = False,
-        members: Collection[str] | None = None,
-    ) -> Completed[S]:
-        completed = super().complete(seam, point, sizing=sizing, members=members)
-        if completed.open:
-            raise ExploreError(
-                "the placeholder has no case to take for a choice known by membership "
-                "only, which no strategy chose: "
-                + ", ".join(choice.key for choice in completed.open)
-            )
-        return completed
-
-    def takes(self, choice: Choice) -> bool:
-        return choice.cases is not None
 
 
 # -- resetting and the debug placeholder ---------------------------------------------------
@@ -2131,18 +1974,14 @@ def _member(point: object, path: str) -> Any:
 
 __all__ = [
     "Accepted",
-    "Baseline",
     "Bottleneck",
     "Choice",
-    "Completed",
-    "Completion",
     "Cost",
     "DebugPlaceholder",
     "ExploreError",
     "Explorer",
     "MaxThroughput",
     "Pinned",
-    "Placeholder",
     "RankPolicy",
     "Ranked",
     "Rebaseline",

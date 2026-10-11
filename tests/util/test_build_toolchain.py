@@ -142,7 +142,6 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
                     {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
                     {"strategy": "size_fifos", "margin": 2},
                 ],
-                kernel_completion="placeholder",
             ),
             "step_prepare_topology": PrepareTopologyOptions(topology=[]),
         },
@@ -162,7 +161,6 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
             {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
             {"strategy": "size_fifos", "margin": 2},
         ],
-        kernel_completion="placeholder",
     )
     assert read.options("step_prepare_topology", PrepareTopologyOptions).topology == []
     assert read.toolchain == Selection(

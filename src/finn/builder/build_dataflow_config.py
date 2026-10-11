@@ -9,8 +9,8 @@ a part, the clock and the shell, stated once: ``finn.platform.TargetRequest``), 
 toolchain (``finn.toolchain.launcher.Selection``), the outputs it makes, the checks it
 runs, which steps run; and each step's own options (``step_options``, keyed by step name,
 each step declaring its options type beside it: how the export is prepared, the
-strategies that explore its choices and the policy that completes the rest). What the
-kernel path does not make, it cannot be asked for.
+strategies that replace the baselines its choices are created with). What the kernel
+path does not make, it cannot be asked for.
 """
 
 from collections.abc import Mapping

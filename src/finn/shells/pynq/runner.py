@@ -69,7 +69,6 @@ from finn.custom_op.partition.kernel_partitions import (
     design_digest,
     partition_body,
 )
-from finn.kernels.explore import Completion
 from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.pynq import iodma, templates
 from finn.shells.pynq.ipgen import (
@@ -342,7 +341,6 @@ def build_pynq(
     toolchain: Toolchain | None = None,
     jobs: int | None = None,
     options: PynqOptions = PynqOptions(),
-    completion: Completion | None = None,
 ) -> PynqBuilt:
     """Build the kernel path's parent graph ``model`` in the Zynq block design of its
     integration export ``export`` (see the module docstring): the ends' IPs (their
@@ -351,9 +349,7 @@ def build_pynq(
     design as it is now), the project (a new build directory), Vivado run on it, and
     what it made collected. ``toolchain`` is the
     prepared toolchain every tool runs through, by default the machine's; ``jobs`` the
-    runs Vivado launches at once; ``options`` the shell's build options;
-    ``completion`` the policy that completes the partition's open choices where it is
-    packaged (the build's)."""
+    runs Vivado launches at once; ``options`` the shell's build options."""
     toolchain = toolchain or host_toolchain()
     node, body, body_file = partition_body(model)
     made_from = design_digest(body)
@@ -368,9 +364,7 @@ def build_pynq(
                         f"{stated or '(not stated)'}, the partition's is now {made_from}: "
                         "packaging it again"
                     )
-                body = body.transform(
-                    PackagePartition(node.name, toolchain=toolchain, completion=completion)
-                )
+                body = body.transform(PackagePartition(node.name, toolchain=toolchain))
                 body.save(body_file)
             vlnv, ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
             if vlnv is None or ip is None:
@@ -508,8 +502,7 @@ class BuildPynqBitfile(Transformation):
     states was made from another design) and the shell options it was built with
     (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's;
     Vivado launches as many runs at once as its selection says (``vivado_jobs``).
-    ``enable_hw_debug`` inserts integrated logic analyzers (``PynqOptions``);
-    ``completion`` completes the partition's open choices where it is built. ``bitfile``
+    ``enable_hw_debug`` inserts integrated logic analyzers (``PynqOptions``). ``bitfile``
     and ``clock`` hold the bitfile's path and the delivered clock's report, ``findings``
     its limitations."""
 
@@ -519,13 +512,11 @@ class BuildPynqBitfile(Transformation):
         *,
         toolchain: Toolchain | None = None,
         enable_hw_debug: bool = False,
-        completion: Completion | None = None,
     ) -> None:
         super().__init__()
         self.directory = Path(directory)
         self.toolchain = toolchain
         self.options = PynqOptions(enable_hw_debug=enable_hw_debug)
-        self.completion = completion
         self.bitfile = self.directory / BITFILE
         self.clock: dict[str, Any] = {}
         self.findings: tuple[Finding, ...] = ()
@@ -533,8 +524,8 @@ class BuildPynqBitfile(Transformation):
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         pynq_row(model, "bitfile")
         _, body, body_file = partition_body(model)
-        bottleneck = shell_bottleneck(body, self.completion)
-        export = integration(model, self.completion)
+        bottleneck = shell_bottleneck(body)
+        export = integration(model)
         reports = {name: self.directory / path for name, path in REPORTS.items()}
         hwh = self.directory / HWH
         for directory in (reports["integration"].parent, self.bitfile.parent):
@@ -548,7 +539,6 @@ class BuildPynqBitfile(Transformation):
             toolchain=toolchain,
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
-            completion=self.completion,
         )
         shutil.copy(built.bitfile, self.bitfile)
         shutil.copy(built.hwh, hwh)

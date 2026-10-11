@@ -37,7 +37,7 @@ from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform import IP_ROW, ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
-from kernel_ops.models import MATMUL, kernel_model
+from kernel_ops.models import MATMUL, configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96
 
 PYNQ_ROW = shell_row("pynq", "Ultra96")
@@ -142,6 +142,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     model = kernel_model()
     pumped = {**MATMUL, "compute.packed.compute_pumping": True}
     kernel_op(model, model.graph.node[0]).save(pumped)
+    configure_partition(model)
     point, _ = configured_root(model, "chain")
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments

@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The DSE seam over a root: choices, attempts, cost, the operations that keep a point
-complete (baseline, reopen, settle, set), the completion policy, and the strategies that
-search it.
+complete (baseline, reopen, settle, set), and the strategies that search it.
 
 On the Chain (``kernels.chain``: MatMul ``first``, Thresholding ``activate`` at a
 fixed PE, MatMul ``second``; three rows of four), nothing chosen, its platform at
@@ -33,12 +32,10 @@ from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
     Accepted,
-    Baseline,
     Bottleneck,
     DebugPlaceholder,
     ExploreError,
     MaxThroughput,
-    Placeholder,
     Ranked,
     Rebaseline,
     Refused,
@@ -398,65 +395,18 @@ def test_a_target_throughput_is_a_cycles_budget_at_the_platform_s_clock() -> Non
         TargetThroughput(1000).explore(Seam(MEMBERS), point)
 
 
-def test_the_baseline_completes_every_choice_but_a_required_one_on_a_copy() -> None:
-    explorer, point = seam()
-    completed = Baseline().complete(explorer, point)
-    # The point is unchanged; the copy holds the baseline: each kernel's first case.
-    assert explorer.chosen(point) == {}
-    assert completed.values == explorer.chosen(completed.point)
-    assert completed.values["first.compute.packed.pe"] == 1
-    assert completed.values["first.compute.packed.reducer"] == "tree"
-    # Where it is costed, a transport takes its first case.
-    assert {value for key, value in completed.values.items() if key.endswith("transport")} == {
-        "direct"
-    }
-    assert set(completed.made_by.values()) == {"baseline"} and completed.sizing is None
-    assert completed.open == () and explorer.cost(completed.point).bottleneck is not None
-    # A FIFO chosen with no depth: the depth is required, so it is left open, named.
-    fifo = explorer.attempt(point, {"levels.transport": "fifo"})
-    assert isinstance(fifo, Accepted)
-    left = Baseline().complete(explorer, fifo.point).open
-    assert [(choice.key, choice.required) for choice in left] == [
-        ("levels.transport.fifo.buffer.depth", True)
-    ]
-
-
-def test_the_debug_placeholder_refuses_a_required_choice_it_has_no_case_for() -> None:
-    explorer, point = seam()
-    completed = Placeholder().complete(explorer, point)
-    assert set(completed.made_by.values()) == {"DEBUG: completed by placeholder"}
-    fifo = explorer.attempt(point, {"levels.transport": "fifo"})
-    assert isinstance(fifo, Accepted)
-    with pytest.raises(ExploreError, match="no case to take .*levels.transport.fifo.buffer.depth"):
-        Placeholder().complete(explorer, fifo.point)
-
-
-def test_at_hardware_generation_the_baseline_sizes_fifos_at_the_completed_folding() -> None:
-    explorer, point = seam()
-    completed = Baseline().complete(explorer, point, sizing=True)
-    assert completed.sizing is not None and completed.sizing["strategy"] == "size_fifos"
-    transports = {key for key in completed.values if key.endswith(".transport")}
-    assert transports and {completed.made_by[key] for key in transports} == {"size_fifos"}
-    # The period sized at is the completed point's bottleneck.
-    cost = explorer.cost(completed.point)
-    assert cost.bottleneck is not None and completed.sizing["period"] == cost.bottleneck.cycles
-    assert completed.open == ()
-    # Every other value is the baseline's, as where it is costed.
-    costed = Baseline().complete(explorer, point)
-    assert {k: v for k, v in completed.values.items() if k not in transports} == {
-        k: v for k, v in costed.values.items() if not k.endswith(".transport")
-    }
-
-
 # -- keeping a point complete -------------------------------------------------------------
 
 
 def test_the_baseline_takes_each_open_choice_s_first_viable_case_and_leaves_required_ones() -> None:
-    """``Seam.baseline`` stores what the costing completion takes on a copy: each kernel's
-    first case, every transport ``direct``; a required choice stays open."""
+    """``Seam.baseline`` stores each kernel's first case, every transport ``direct``; a
+    required choice stays open."""
     explorer, point = seam()
     base = explorer.baseline(point)
-    assert explorer.chosen(base) == Baseline().complete(explorer, point).values
+    values = explorer.chosen(base)
+    assert values["first.compute.packed.pe"] == 1
+    assert values["first.compute.packed.reducer"] == "tree"
+    assert {value for key, value in values.items() if key.endswith("transport")} == {"direct"}
     assert explorer.choices(base) == () and explorer.cost(base).bottleneck is not None
     fifo = explorer.attempt(base, {"levels.transport": "fifo"})
     assert isinstance(fifo, Accepted)
@@ -622,7 +572,7 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
 # -- the most throughput within resources -----------------------------------------------------
 
 #: The Chain's part: its totals, of which a budget is a fraction. At each budget of cycles
-#: the Chain folds to (``TargetCycles``), completed: 6 cycles, 482 LUT and 8 DSP; 12,
+#: the Chain folds to (``TargetCycles``), settled: 6 cycles, 482 LUT and 8 DSP; 12,
 #: 379 and 8; 24, 331 and 4; 48 (the least parallelism), 328 and 2.
 PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, uram=0, dsp=10))
 

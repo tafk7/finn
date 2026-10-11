@@ -63,16 +63,15 @@ from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_options
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
 
-def test_the_kernel_path_builds_on_ip_sizes_fifos_and_completes_by_baseline() -> None:
+def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
     assert cfg.generate_outputs == [] and cfg.verify_steps == []
     assert cfg.step_options == {}
-    # The default exploration sizes the FIFOs at the baseline folding (SR6); a list
-    # written replaces it.
+    # The default exploration sizes the FIFOs at the baseline folding; a list written
+    # replaces it.
     explore = cfg.options("step_explore", ExploreOptions)
     assert explore.kernel_exploration == [{"strategy": "size_fifos"}]
-    assert explore.kernel_completion == "baseline"
     stated: dict[str, Any] = {"step_explore": {"kernel_exploration": []}}
     written = DataflowBuildConfig.from_json(json.dumps({**STATED, "step_options": stated}))
     assert written.options("step_explore", ExploreOptions).kernel_exploration == []
@@ -106,8 +105,6 @@ STEP_OPTIONS = {
             {"strategy": "target_throughput", "fps": 1_000_000},
             {"strategy": "size_fifos"},
         ],
-        kernel_exploration_fresh=True,
-        kernel_completion="placeholder",
     ),
 }
 
@@ -165,8 +162,6 @@ def test_a_configuration_holds_through_json() -> None:
                 {"strategy": "target_throughput", "fps": 1_000_000},
                 {"strategy": "size_fifos"},
             ],
-            "kernel_exploration_fresh": True,
-            "kernel_completion": "placeholder",
         },
     }
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
@@ -217,6 +212,16 @@ def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
             "step_options.step_prepare_quantization: .*max_multithreshold_bitwidth",
         ),
         ({"step_explore": {"strategies": []}}, "step_options.step_explore: .*strategies"),
+        # No completion policy and no fresh exploration: every choice is stored where it
+        # is created, and the baseline strategy starts over.
+        (
+            {"step_explore": {"kernel_completion": "baseline"}},
+            "step_options.step_explore: .*kernel_completion",
+        ),
+        (
+            {"step_explore": {"kernel_exploration_fresh": True}},
+            "step_options.step_explore: .*kernel_exploration_fresh",
+        ),
     ],
 )
 def test_an_undeclared_step_or_option_is_refused_naming_it(

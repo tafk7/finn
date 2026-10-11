@@ -10,10 +10,10 @@ the same inputs: random integers of each input's datatype, seeded, and its extre
 
 The points are drawn from the node's shell root (``finn.harness.points.covering``
 of the op's own kernel Decisions, decision KT10): each case of each Decision once, each
-ordered domain at its extremes; the rest (transports, adapter memories, FIFO depths)
-completed as packaging completes them. A handful of simulations an op, stalled, and
-the first point of each op free running too (conformance runs both; one point an op
-each way, not every point twice).
+ordered domain at its extremes; the rest (transports, adapter memories) at the
+baselines the cut gives them (``CutKernelPartition``), as packaging replays them. A
+handful of simulations an op, stalled, and the first point of each op free running too
+(conformance runs both; one point an op each way, not every point twice).
 
 **The platform as an axis** (P3): the points above are on the Ultra96 target that
 ``kernel_ops.models`` builds for (DSP48E2, no UltraRAM). One point an op is on a Versal
@@ -70,6 +70,7 @@ from finn.harness.reference import platform_rows
 from finn.kernels.configure import commit
 from finn.kernels.target import DspBlock, Target
 from finn.transformation.kernels import InferKernelTensors
+from finn.transformation.kernels.cut import BaselineChoices
 from kernel_ops.models import TARGET, matmul_model, thresholding_model
 
 # -- the models ------------------------------------------------------------------------
@@ -260,7 +261,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
     UltraRAM takes initial contents (``uram_init``)."""
     assert VERSAL.platform.dsp is DspBlock.DSP58 and VERSAL.platform.uram
     assert VERSAL.platform.uram_init
-    model = persisted(matmul(VERSAL), ON_VERSAL["matmul"])
+    model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(BaselineChoices())
     point, _ = configured_root(model, "versal")
     assert type(point.first.compute).__name__ == "Int8Dsp58DotpKernel"
     styles = {

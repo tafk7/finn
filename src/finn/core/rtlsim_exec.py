@@ -7,9 +7,8 @@
 of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
 
 1. **the point**: the body's shell root, its nodes' and its tensors' channel choices
-   replayed and the rest
-   completed by ``completion`` (``Baseline()`` by default), and its boundary
-   (``configured_root``): each graph input and output at its port;
+   replayed, and its boundary (``configured_root``, which refuses an open choice): each
+   graph input and output at its port;
 2. **the words**: each input tensor, as integers of its boundary element (a value
    that is no integer, or one the element does not hold, is refused: ``Unstreamable``),
    presented as the port presents it, one word a beat (``finn.dataflow.traversal.pack``);
@@ -27,7 +26,7 @@ as a tensor: ``pack`` of an output gives back its words, and words that are no t
 hardware's words.
 
 Its options are the executor's, never the graph's: ``pacing`` (``STALLED`` by default),
-``completion``, ``toolchain`` (the machine's by default), ``directory`` (where each run
+``toolchain`` (the machine's by default), ``directory`` (where each run
 writes its testbench and simulates, a directory of its own for each partition node it
 runs: ``<directory>/<node>``, ``<node>.1``, ...; a fresh build directory by default)
 and ``cache``, the HLS cache ``materialize`` takes an HLS leaf's product from. Nothing
@@ -77,7 +76,6 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
     from finn.core.executor import Context
-    from finn.kernels.explore import Completion
     from finn.toolchain.launcher import Toolchain
 
 
@@ -122,7 +120,6 @@ class XSim:
     """Runs a partition of KernelOps as its hardware, in XSim (module docstring)."""
 
     pacing: Pacing = STALLED
-    completion: Completion | None = None
     toolchain: Toolchain | None = None
     directory: Path | None = None
     cache: Path | None = None
@@ -137,7 +134,7 @@ class XSim:
         assert body is not None, f"{node.name}: XSim runs a partition of KernelOps"
         run = running()
         reached = {tensor for inner in window(body, None, run.end_node) for tensor in inner.output}
-        point, streams = boundary(body, node, self.completion)
+        point, streams = boundary(body, node)
         tapped = links(body, point, reached) if run.full_context else ()
         cycles = point.query(type(point).cycles)
         inputs: dict[str, Words] = {}
@@ -257,13 +254,11 @@ def _read(
     return found
 
 
-def boundary(
-    body: ModelWrapper, node: NodeProto, completion: Completion | None = None
-) -> tuple[Any, tuple[Stream, ...]]:
+def boundary(body: ModelWrapper, node: NodeProto) -> tuple[Any, tuple[Stream, ...]]:
     """The body's configured root point (``configured_root``) and its boundary ports,
     each with the tensor it carries in the parent graph: the partition node's inputs and
     outputs, by position, are its body's graph inputs and outputs."""
-    point, ports = configured_root(body, node.name, completion)
+    point, ports = configured_root(body, node.name)
     # As the partition op maps them: its i-th input is its body's i-th graph input.
     outer = {body.graph.input[index].name: name for index, name in enumerate(node.input)}
     outputs = {item.name for item in body.graph.output}

@@ -313,7 +313,7 @@ def explored(
 
 
 def pumping(name: str) -> dict[str, object]:
-    """What the ip shell's doubled clock opens on each of TFC's MatMuls, completed off,
+    """What the ip shell's doubled clock opens on each of TFC's MatMuls, its baseline off,
     by graph name: on its node, its kernel's pumping; on its weights' tensor, their
     memory's."""
     if re.fullmatch(r"MatMul_\d+", name):
@@ -323,25 +323,22 @@ def pumping(name: str) -> dict[str, object]:
     return {}
 
 
-def built(model: ModelWrapper, report: dict[str, Any]) -> dict[str, dict[str, object]]:
-    """Every value the partition is built with, persisted or completed, by graph name
-    (a node or a tensor)."""
-    found = {node: dict(held) for node, held in kernel_choices_config(model).items()}
-    for node, held in report["completed"].items():
-        found.setdefault(node, {}).update({key: entry["value"] for key, entry in held.items()})
-    return found
+def built(model: ModelWrapper) -> dict[str, dict[str, object]]:
+    """Every value the partition is built with, every one persisted, by graph name (a
+    node or a tensor)."""
+    return {node: dict(held) for node, held in kernel_choices_config(model).items()}
 
 
 @pytest.mark.slow
 def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrapper) -> None:
     ip_model, ip = explored(tfc, 1e6, ULTRA96_IP, sizing=True)
     model, report = explored(tfc, 1e6, sizing=True)
-    # The ends change no choice: persisted alike, and completed alike, each MatMul's
-    # pumping off on both (the doubled clock is the shell's, admitted by its root, and
-    # no kernel reads it off the platform); 57 values on 8 nodes and 13 tensors.
+    # The ends change no choice: persisted alike, each MatMul's pumping off on both (the
+    # doubled clock is the shell's, admitted by its root, and no kernel reads it off the
+    # platform); 57 values on 8 nodes and 13 tensors.
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
-    values = built(model, report)
-    assert built(ip_model, ip) == values
+    values = built(model)
+    assert built(ip_model) == values
     assert all(values[name].items() >= pumping(name).items() for name in values)
     assert (len(values), sum(map(len, values.values()))) == (21, 57)
     persisted = kernel_choices_config(model).values()
@@ -453,12 +450,10 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
     assert read_target(ip_model) == ULTRA96_IP
     assert kernel_choices_config(ip_model) == kernel_choices_config(zynq_model)
     # The doubled clock opens each MatMul's pumping, which the Zynq shell forces off:
-    # the completion completes it off, so every value the partition is built with is
-    # the Zynq shell's.
-    in_zynq = built(zynq_model, zynq)
-    assert built(ip_model, ip) == {
-        name: {**held, **pumping(name)} for name, held in in_zynq.items()
-    }
+    # its baseline is off, so every value the partition is built with is the Zynq
+    # shell's.
+    in_zynq = built(zynq_model)
+    assert built(ip_model) == {name: {**held, **pumping(name)} for name, held in in_zynq.items()}
     # Every member's cycles but the ended channels', whose ends are the Zynq shell's.
     cycles = {name: row["cycles"] for name, row in ip["members"].items()}
     in_shell = {name: row["cycles"] for name, row in zynq["members"].items()}

@@ -414,7 +414,7 @@ ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 def with_adapter_memories(point: S, ram_style: str | None = None) -> S:
     """Each open adapter input_gen's memory takes ``ram_style``, or where None its
     baseline, the first viable case (an explicit style, by the size the buffer holds),
-    as the completion takes it. Each channel's adapter, its one viable chain, is forced."""
+    as ``Seam.baseline`` takes it. Each channel's adapter, its one viable chain, is forced."""
     styles = undecided(point, ADAPTER_RAM_STYLES)
     if not styles:
         return point
@@ -439,7 +439,7 @@ class Lanes:
     ordered choice of integers at ``lanes`` where that case is viable, otherwise at its
     largest viable case; every other choice, and every choice with no ``lanes``, in its
     domain's order, the kernel's baseline first. A test that needs a choice made on
-    purpose states it so; ``Lanes()`` ranks as the baseline completion takes."""
+    purpose states it so; ``Lanes()`` ranks as the baseline takes."""
 
     def __init__(self, lanes: int | None = None) -> None:
         self.lanes = lanes

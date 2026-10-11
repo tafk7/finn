@@ -13,9 +13,9 @@ generates computes what those ops compute, on the same inputs:
    saved under ``directory``, its tensors' channel choices moved into the body; the
    hardware checked is the partition a build ships;
 2. **the point**: the body's shell root, its nodes' persisted choices and its tensors'
-   channel choices replayed and the rest completed by ``completion`` (``Baseline()``
-   by default), as packaging builds it (``configured_root``): a chosen design point is
-   the choices saved on the nodes and the tensors;
+   channel choices replayed, as packaging builds it (``configured_root``, which refuses
+   an open choice): a chosen design point is the choices saved on the nodes and the
+   tensors, every one stored where it was created (at conversion and at the cut);
 3. **the oracle**: each graph output as the nodes' ``execute_node`` computes it, the
    model run by ``finn.core.onnx_exec.execute_onnx`` with its default executor
    (``Python()``) on the inputs as integers (int64, which hold every value of a type
@@ -64,7 +64,6 @@ from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import pack
 from finn.harness.orders import Integers, Reference, Stream, decode
-from finn.kernels.explore import Completion
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import free_side
 
@@ -127,7 +126,6 @@ def check_parity(
     inputs: Mapping[str, Integers],
     reference: Reference | None = None,
     pacing: Pacing = STALLED,
-    completion: Completion | None = None,
     label: str = "parity",
 ) -> None:
     """Check the hardware of ``model``'s KernelOp nodes, cut as a build cuts them, against
@@ -136,7 +134,7 @@ def check_parity(
     hardware computed otherwise), ``SimulationFailed`` or ``Disagreement``."""
     parent = model.transform(CutKernelPartition(directory))
     _, body, _ = partition_body(parent)
-    point, boundary = configured_root(body, label, completion)
+    point, boundary = configured_root(body, label)
     expected = dict(execute_onnx(model, inputs) if reference is None else reference(inputs))
     outputs = {item.name for item in model.graph.output}
     if set(expected) != outputs:
@@ -155,7 +153,7 @@ def check_parity(
                     f" which the boundary's {end.element} does not hold"
                 )
             checked[tensor] = pack(end.form, values.ravel(), end.element.bits)
-    hardware = XSim(pacing=pacing, completion=completion, directory=directory)
+    hardware = XSim(pacing=pacing, directory=directory)
     found = execute_onnx(parent, inputs, executors=(hardware,), require_hardware=True)
     # XSim's outputs are its words read back (an element presented twice with two values
     # is refused there), so packing them again gives back the words that arrived.

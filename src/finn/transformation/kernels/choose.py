@@ -12,8 +12,8 @@ once (``shell_root``: their kernels, the channels between them and the channels 
 boundary; the nodes' and the channels' saved choices replayed, a stale one dropped with
 why; members named as the graph, ``MatMul_0``), gives every choice the body leaves open
 its baseline (``Seam.baseline``: what ``BaselineChoices`` does, a no-op on a body the
-cut created; on a body made by hand, after ``fresh``, or for a choice replay dropped as
-stale, the report names what it baselined), runs the strategies in order through one ``Seam``
+cut created; on a body made by hand, or for a choice replay dropped as stale, the report
+names what it baselined), runs the strategies in order through one ``Seam``
 (``finn.kernels.explore``), each reopening the choices it decides, exploring and
 settling, from the point the one before returned, and then:
 
@@ -27,7 +27,8 @@ settling, from the point the one before returned, and then:
   anything runs (``refuse_folding_after_sizing``);
 - persists every value of the point where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
-  a required choice no strategy set stays open, and hardware generation refuses it;
+  a required choice no strategy set stays open, and emission refuses it by name
+  (``configured_root``);
 - keeps what it found (``explored``): the point, its cost and the report, a log of this
   run: the choices the body left open and the baseline took (``baselined``); each
   strategy with every value it changed (``changed``: before and after, by owner), how
@@ -43,10 +44,6 @@ settling, from the point the one before returned, and then:
   compare; and every limitation the run found (``findings``: the strategies' and the
   resources'), in the report where each was found. Who set a value is logged here,
   never stored in the model.
-
-Until the build's completion policy goes, ``completion`` (``Baseline()`` by default)
-still completes the point on a copy for the report (``completion``, ``completed``):
-on a settled point it has nothing left to complete but a required choice.
 
 The resources are the shell root's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
@@ -74,9 +71,8 @@ channels its ends (none: the ``ip`` shell). Where a channel has an end, the repo
 has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
 
-``fresh`` clears the nodes' choices and the channel choices the body's tensors state
-before the root is built: every choice starts at its baseline (the ``baseline``
-strategy does the same within a list, the pins kept).
+To start over from the kernels' baselines, a list writes the ``baseline`` strategy
+first: every choice not held back at its baseline.
 
 A strategy is written as a spec, ``{"strategy": name, **parameters}``
 (``strategy(spec)``, the names ``KERNEL_STRATEGIES``), as a build configuration
@@ -84,8 +80,7 @@ lists them: ``[{"strategy": "target_throughput", "fps": 1000000}, {"strategy":
 "size_fifos"}]``, or ``[{"strategy": "max_throughput", "within": {"lut": 0.5}},
 {"strategy": "size_fifos"}]``. A list runs as written: nothing is appended, and nothing is
 read from anywhere else. Pins go first, held for the run; sizing after the last
-strategy that folds. A completion policy is named (``completion(name)``, the names
-``KERNEL_COMPLETIONS``): ``baseline`` unless the build names another.
+strategy that folds.
 """
 
 from __future__ import annotations
@@ -99,7 +94,7 @@ from typing import TYPE_CHECKING, Any
 from qonnx.transformation.base import Transformation
 
 from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
-from finn.custom_op.kernels.base import KernelOpError, clear_channel_choices, kernel_op, read_target
+from finn.custom_op.kernels.base import KernelOpError, read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
     admission_refusal,
@@ -111,17 +106,13 @@ from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partit
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
-    Baseline,
     Bottleneck,
-    Completed,
-    Completion,
     Cost,
     DebugPlaceholder,
     ExploreError,
     Explorer,
     MaxThroughput,
     Pinned,
-    Placeholder,
     Rebaseline,
     Seam,
     SizeFifos,
@@ -153,23 +144,6 @@ choice at its first case)."""
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
 
-KERNEL_COMPLETIONS: Mapping[str, Callable[[], Completion]] = {
-    "baseline": Baseline,
-    "placeholder": Placeholder,
-}
-"""The completion policies a build names: ``baseline`` (every open choice that is not
-required at its kernel's baseline, the default), ``placeholder`` (also the required
-ones, for debugging)."""
-
-
-def completion(name: str) -> Completion:
-    """The completion policy ``name`` names (``KERNEL_COMPLETIONS``)."""
-    if name not in KERNEL_COMPLETIONS:
-        raise ValueError(
-            f"{name!r} names no kernel completion policy (one of {sorted(KERNEL_COMPLETIONS)})"
-        )
-    return KERNEL_COMPLETIONS[name]()
-
 
 def strategy(spec: Mapping[str, Any]) -> Explorer:
     """The strategy ``spec`` writes: ``{"strategy": name, **parameters}``."""
@@ -188,14 +162,11 @@ def strategy(spec: Mapping[str, Any]) -> Explorer:
 @dataclass(frozen=True)
 class Explored:
     """An exploration's result: the point of the shell root (every value, settled after
-    the last strategy), its completion by the build's policy on a copy (None where the
-    policy refused; on a settled point it completes no more than a required choice),
-    the cost of the completed point, the report (JSON values), and every limitation
+    the last strategy), its cost, the report (JSON values), and every limitation
     the run found (``findings``: each strategy's, then the resources'), never a
     refusal (RC5)."""
 
     point: Any
-    completed: Completed[Any] | None
     cost: Cost
     report: Mapping[str, Any]
     findings: tuple[Finding, ...] = ()
@@ -340,7 +311,7 @@ def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[s
 
 
 def _fifo_storage(seam: Seam, point: Any) -> dict[str, dict[str, object]]:
-    """Each FIFO's memory style on the completed ``point``, by the graph name (a node or a
+    """Each FIFO's memory style on ``point``, by the graph name (a node or a
     tensor) and key that would persist it, beside the storage the RTL selects for it
     (FinnLib's ``auto``: shift, distributed, block or ultra) and what it uses."""
     found: dict[str, dict[str, object]] = {}
@@ -376,18 +347,6 @@ def _by_owner(seam: Seam, values: Mapping[str, object]) -> dict[str, dict[str, o
         node, attribute = seam.owner(key) or ("", key)
         found.setdefault(node, {})[attribute] = value
     return found
-
-
-def _completed_by_owner(seam: Seam, completed: Completed[Any]) -> dict[str, dict[str, object]]:
-    """Each completed value by the graph name and key that would persist it, with who
-    completed it."""
-    return _by_owner(
-        seam,
-        {
-            key: {"value": value, "by": completed.made_by[key]}
-            for key, value in completed.values.items()
-        },
-    )
 
 
 def _fifos(
@@ -482,13 +441,9 @@ def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
 def explore_kernel_choices(
     model: ModelWrapper,
     strategies: Sequence[Explorer],
-    *,
-    fresh: bool = False,
-    completion: Completion | None = None,
 ) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategies`` and every
-    value persisted, the point completed by ``completion`` (``Baseline()`` by default)
-    for its report, on the shell root of the model's target; see the module docstring."""
+    value persisted, on the shell root of the model's target; see the module docstring."""
     if not model.graph.node:
         raise KernelOpError("no KernelOp to explore")
     others = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
@@ -499,14 +454,9 @@ def explore_kernel_choices(
         )
     refuse_folding_after_sizing(strategies)
     nodes = list(model.graph.node)
-    if fresh:
-        for node in nodes:
-            op = kernel_op(model, node)
-            op.save(dict.fromkeys(op.choices()))
-        clear_channel_choices(model)
     started = time.perf_counter()
     root = shell_root(model, nodes)
-    seam = Seam(root.members, root.owners, read_target(model).platform, completion)
+    seam = Seam(root.members, root.owners, read_target(model).platform)
     saved = seam.chosen(root.point)
     # A choice the body leaves open takes its baseline before the strategies run.
     point = seam.baseline(root.point)
@@ -575,14 +525,7 @@ def explore_kernel_choices(
             + ", ".join(f"{_owned(seam, key)} (depth {depth})" for key, depth in fifos.items())
             + " would keep depths sized at another folding; run size_fifos after it"
         )
-    completed: Completed[Any] | None = None
-    completion_report: dict[str, object] = {"policy": seam.completion.name}
-    try:
-        completed = seam.completion.complete(seam, point, sizing=True)
-    except ExploreError as error:
-        completion_report["refused"] = str(error)
-    costed = point if completed is None else completed.point
-    unadmitted = admission_refusal(costed)
+    unadmitted = admission_refusal(point)
     if unadmitted:
         raise KernelOpError(
             f"the explored point is refused by the {root.row.shell!r} shell: "
@@ -594,24 +537,17 @@ def explore_kernel_choices(
         _owned(seam, choice.key) + (" (required)" if choice.required else "")
         for choice in seam.choices(point)
     ]
-    if completed is not None:
-        completion_report["open"] = [
-            _owned(seam, choice.key) + (" (required)" if choice.required else "")
-            for choice in completed.open
-        ]
-        if completed.sizing is not None:
-            completion_report["sizing"] = completed.sizing
-    cost = seam.cost(costed)
+    cost = seam.cost(point)
     resources, over_part = _resources_report(
         cost,
-        shell_resources(costed),
+        shell_resources(point),
         seam.platform,
         part_report(read_target(model).part),
         root.row.caveat,
     )
     ends: dict[str, object] = {}
     if root.ends and not cost.waiting and not cost.refused:
-        ends = {"ends": _end_rows(costed, root.ends), "memory_latency": MEMORY_LATENCY}
+        ends = {"ends": _end_rows(point, root.ends), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(point)
     report = {
         "strategies": explorers,
@@ -621,11 +557,8 @@ def explore_kernel_choices(
         ),
         "held": _by_owner(seam, seam.held),
         "open": left,
-        "completion": completion_report,
-        "completed": {} if completed is None else _completed_by_owner(seam, completed),
-        "fifo_storage": _fifo_storage(seam, costed),
+        "fifo_storage": _fifo_storage(seam, point),
         "fifos": _fifos(strategies, explorers, [_owned(seam, key) for key in _placed(seam, point)]),
-        "fresh": fresh,
         "dropped": dict(root.dropped),
         **_cost_report(seam, cost, resources),
         **ends,
@@ -634,46 +567,30 @@ def explore_kernel_choices(
     found = tuple(
         finding for explorer in strategies for finding in getattr(explorer, "findings", ())
     )
-    return Explored(point, completed, cost, report, (*found, *over_part))
+    return Explored(point, cost, report, (*found, *over_part))
 
 
-def shell_bottleneck(
-    model: ModelWrapper, completion: Completion | None = None
-) -> Bottleneck | None:
+def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
     """The slowest members of a partition model of KernelOps' shell root, ends included,
-    and their cycles a frame, its saved choices replayed and completed as hardware
-    generation completes them, by ``completion`` (``Baseline()`` by default; None where
-    a member's cycles wait on a choice the policy leaves open)."""
+    and their cycles a frame, its saved choices replayed (None where a member's cycles
+    wait on a choice left open)."""
     root = shell_root(model, model.graph.node)
-    seam = Seam(root.members, root.owners, read_target(model).platform, completion)
-    return seam.cost(seam.completion.complete(seam, root.point, sizing=True).point).bottleneck
+    seam = Seam(root.members, root.owners, read_target(model).platform)
+    return seam.cost(root.point).bottleneck
 
 
 class ExploreKernelChoices(Transformation):
     """A partition body's KernelOps explored by ``strategies``, in order, and every value
-    saved, the point completed by ``completion`` for the report, on the shell root of the
-    model's target; ``explored`` holds the result (``explore_kernel_choices``)."""
+    saved, on the shell root of the model's target; ``explored`` holds the result
+    (``explore_kernel_choices``)."""
 
-    def __init__(
-        self,
-        strategies: Sequence[Explorer],
-        *,
-        fresh: bool = False,
-        completion: Completion | None = None,
-    ) -> None:
+    def __init__(self, strategies: Sequence[Explorer]) -> None:
         super().__init__()
         self.strategies = tuple(strategies)
-        self.fresh = fresh
-        self.completion = completion
         self.explored: Explored | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        self.explored = explore_kernel_choices(
-            model,
-            self.strategies,
-            fresh=self.fresh,
-            completion=self.completion,
-        )
+        self.explored = explore_kernel_choices(model, self.strategies)
         return model, False
 
 
@@ -684,28 +601,15 @@ class ExplorePartition(Transformation):
     body saved again in its file, as the cut saved it; the parent graph itself
     unchanged. ``explored`` holds the result and ``body`` the body as saved."""
 
-    def __init__(
-        self,
-        strategies: Sequence[Explorer],
-        *,
-        fresh: bool = False,
-        completion: Completion | None = None,
-    ) -> None:
+    def __init__(self, strategies: Sequence[Explorer]) -> None:
         super().__init__()
         self.strategies = tuple(strategies)
-        self.fresh = fresh
-        self.completion = completion
         self.explored: Explored | None = None
         self.body: ModelWrapper | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         _, body, body_file = partition_body(model)
-        self.explored = explore_kernel_choices(
-            body,
-            self.strategies,
-            fresh=self.fresh,
-            completion=self.completion,
-        )
+        self.explored = explore_kernel_choices(body, self.strategies)
         body.save(body_file)
         self.body = body
         return model, False
@@ -718,12 +622,10 @@ EXPLORATION_REPORT = "report/kernel_exploration.json"
 
 __all__ = [
     "EXPLORATION_REPORT",
-    "KERNEL_COMPLETIONS",
     "KERNEL_STRATEGIES",
     "ExploreKernelChoices",
     "ExplorePartition",
     "Explored",
-    "completion",
     "explore_kernel_choices",
     "refuse_folding_after_sizing",
     "shell_bottleneck",

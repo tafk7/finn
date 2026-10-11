@@ -146,7 +146,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, member_of, undecided
 from finn.kernels.ends import END, EndContract, EndOffer
-from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
+from finn.kernels.explore import Seam
 from finn.kernels.target import Platform
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -624,18 +624,18 @@ def _shell_root(
     return ShellRoot(point, owners, dropped | stray, tuple(ports.items()), members, ends, row)
 
 
-def configured_root(
-    model: ModelWrapper, label: str, completion: Completion | None = None
-) -> tuple[Any, tuple[tuple[str, str], ...]]:
+def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[str, str], ...]]:
     """A partition model's shell root point (``shell_root``, in the shell of its
-    target), replayed from its nodes and its tensors' channel choices (a Decision with
-    one viable case is forced, nothing to commit) and completed by ``completion``
-    (``Baseline()`` by default) on a copy, as hardware generation builds it (the
-    shell's ends, if it offers any, sizing the boundary transports as the exploration
-    did), and its boundary (tensor, port).
-    A stale choice, a choice the completion leaves open (a required one), a point the
-    shell does not admit (``admission_refusal``), or graph inputs and outputs out of
-    port order refuse, named."""
+    target), replayed from its nodes' and its tensors' channel choices (a Decision with
+    one viable case is forced, nothing to commit), the point emission builds, and its
+    boundary (tensor, port). Every choice is stored where it is created (a KernelOp's
+    at conversion, a channel's at the cut) and replaced by the strategies, so nothing
+    is completed here. A stale choice; an open choice, each by name: one no case of
+    which is viable (each case's reason), a required one no strategy set ("required:
+    run size_fifos or placeholder"), any other one never baselined ("not created:
+    BaselineChoices"); a point the shell does not admit
+    (``admission_refusal``); or graph inputs and outputs out of port order refuse,
+    named."""
     root = shell_root(model, model.graph.node)
     if root.dropped:
         raise KernelOpError(
@@ -643,19 +643,25 @@ def configured_root(
             + "; ".join(f"{key}: {why}" for key, why in root.dropped.items()),
             tuple(root.dropped),
         )
-    policy = Baseline() if completion is None else completion
-    seam = Seam(root.members, root.owners, read_target(model).platform, policy)
-    try:
-        completed = policy.complete(seam, root.point, sizing=True)
-    except ExploreError as error:
-        raise KernelOpError(f"{label}: the {policy.name} completion refuses: {error}") from error
-    point = completed.point
+    point = root.point
     open_keys = undecided(point, "*")
     if open_keys:
-        required = {choice.key for choice in completed.open if choice.required}
-        named = [key + (" (required)" if key in required else "") for key in open_keys]
+        required = {item.key for item in inspection.decisions(point) if item.required}
+        unviable = {
+            item.key: "; ".join(f"{case}: {why}" for case, why in item.refused.items())
+            for item in inspection.viable(point)
+            if not item.cases
+        }
+        named = [
+            f"{key}: no case is viable: {unviable[key]}"
+            if key in unviable
+            else f"{key} (required: run size_fifos or placeholder)"
+            if key in required
+            else f"{key} (not created: BaselineChoices)"
+            for key in open_keys
+        ]
         raise KernelOpError(
-            f"{label}: open Decisions, to choose before packaging: " + ", ".join(named),
+            f"{label}: open choices, refused at emission: " + "; ".join(named),
             tuple(open_keys),
         )
     unadmitted = admission_refusal(point)

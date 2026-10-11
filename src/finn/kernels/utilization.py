@@ -434,7 +434,7 @@ def memory_styles(size: object) -> Domain[str]:
     """A memory's style: the explicit styles first, in its kernel's preference for the
     ``size`` in bits the memory holds (block RAM first from ``BLOCK_FIRST_BITS``, LUTRAM
     first below; UltraRAM after both), then ``auto``, last: Vivado's placement, which
-    states nothing (``auto_unstated``), so no completion takes it while an explicit style
+    states nothing (``auto_unstated``), so no baseline takes it while an explicit style
     is viable. Unordered: the order is a baseline, not a scale."""
 
     def accepts(*, candidate: str, size: int) -> bool:

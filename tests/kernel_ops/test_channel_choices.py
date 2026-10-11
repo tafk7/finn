@@ -30,12 +30,13 @@ from finn.custom_op.kernels.base import (
     CHANNEL_KEYS,
     KernelOpError,
     channel_choices,
+    clear_channel_choices,
     kernel_op,
 )
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.kernels.channels import Channel
-from finn.kernels.explore import ExploreError, Pinned, Ranked
+from finn.kernels.explore import ExploreError, Pinned, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 from kernel_ops.models import EDGE, kernel_model
@@ -215,19 +216,22 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert kernel_choices_config(partition_body(parent)[1]) == kernel_choices_config(model)
 
 
-def test_fresh_clears_the_bodys_channel_choices() -> None:
-    """``fresh`` clears what the body states, nodes' and channels' alike, before the
-    exploration: every value starts again at its baseline."""
+def test_the_baseline_strategy_resets_the_bodys_channel_choices_too() -> None:
+    """To start over, a list writes the ``baseline`` strategy first: what the body
+    states, nodes' and channels' alike, goes back to its baseline, the values a body
+    stating nothing is baselined to."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
-    explored = explore_kernel_choices(model, [], fresh=True)
-    assert explored.report["fresh"] is True
-    assert sorted(explored.report["baselined"]) == sorted(
-        f"{owner}.{key}" for owner, held in kernel_choices_config(model).items() for key in held
-    )
-    assert {e["by"] for held in explored.report["choices"].values() for e in held.values()} == {
-        "baseline"
-    }
+    explored = explore_kernel_choices(model, [Rebaseline()])
+    (reset,) = explored.report["strategies"]
+    assert reset["strategy"] == "baseline" and reset["changed"]
+    cleared = kernel_model()
+    for node in cleared.graph.node:
+        op = kernel_op(cleared, node)
+        op.save(dict.fromkeys(op.choices()))
+    clear_channel_choices(cleared)
+    explore_kernel_choices(cleared, [])
+    assert kernel_choices_config(model) == kernel_choices_config(cleared)
 
 
 def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) -> None:
