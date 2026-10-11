@@ -48,13 +48,14 @@ from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, Toolchain, host_toolchain
+from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import (
     boundary_facts,
     free_side,
-    hierarchical_utilization,
     ooc_member_resources,
+    resources_of,
     stream_order,
 )
 from kernel_ops.models import configure_partition, kernel_model
@@ -130,7 +131,13 @@ REPORT = """\
 
 
 def test_the_hierarchical_report_is_read_by_depth_in_the_devices_units() -> None:
-    assert hierarchical_utilization(REPORT) == [
+    rows = hierarchical_utilization(REPORT)
+    assert rows[0] == (
+        0,
+        "top",
+        {"lut": 120, "ff": 90, "bram36": 1, "bram18": 1, "uram": 0, "dsp": 2},
+    )
+    assert [(depth, name, resources_of(counts)) for depth, name, counts in rows] == [
         (0, "top", Resources(lut=120, ff=90, bram18=3, dsp=2)),
         (1, "u_first", Resources(lut=70, ff=50, bram18=2, dsp=2)),
         (2, "inner", Resources(lut=30, ff=10)),

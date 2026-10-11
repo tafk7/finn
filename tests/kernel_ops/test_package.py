@@ -32,13 +32,10 @@ from finn.custom_op.partition.kernel_partitions import (
 )
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
+from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
 from finn.transformation.kernels.hls import HlsAbiRefused
-from finn.transformation.kernels.package import (
-    ElaboratePartition,
-    hierarchical_utilization,
-    partition_utilization_report,
-)
+from finn.transformation.kernels.package import ElaboratePartition, partition_utilization_report
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import NoVivado, reaches_vivado
 

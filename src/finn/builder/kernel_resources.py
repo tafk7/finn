@@ -12,11 +12,11 @@ total, up to three columns:
   out-of-context characterisation;
 - ``out_of_context``: Vivado's synthesis of each IP alone. On a shell with an
   integration, the integration's per-IP runs (``<run>_utilization_synth.rpt``, read by
-  ``utilization_synth``), each run its instance's (``_member_instances``); on ``ip``, the
-  partition packaged with OOC_SYNTH, its hierarchical report's top
-  (``package.hierarchical_utilization``);
-- ``placed``: the routed design's hierarchical report (``placed_hierarchy``), each
-  instance below the block design's top its member's. ``ip`` is not placed.
+  ``finn.toolchain.vivado.utilization_synth``), each run its instance's
+  (``_member_instances``); on ``ip``, the partition packaged with OOC_SYNTH, its
+  hierarchical report's top (``vivado.hierarchical_utilization``);
+- ``placed``: the routed design's hierarchical report (``vivado.placed_hierarchy``),
+  each instance below the block design's top its member's. ``ip`` is not placed.
 
 A column the build did not make is ``null`` for every member, and ``absent`` says why.
 ``caveat`` is the shell row's for the board (``finn.platform.ShellRow.caveat``): on a
@@ -41,7 +41,6 @@ halves (a RAMB36 is two), URAMs and DSPs.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import fields
 from pathlib import Path
@@ -61,77 +60,12 @@ from finn.kernels.explore import Completion
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
 from finn.shells.pynq.runner import STATIC_INSTANCES
+from finn.toolchain import vivado
 from finn.transformation.kernels.integration import integration
-from finn.transformation.kernels.package import (
-    REPORT_COLUMNS,
-    hierarchical_utilization,
-    ooc_member_resources,
-    resources_of,
-)
+from finn.transformation.kernels.package import ooc_member_resources, resources_of
 
 #: The report's file, under the output directory.
 RESOURCES_FILE = "report/resources.json"
-
-#: A flat utilization report's rows by the resource they count; the first row of each
-#: name counts (later sections repeat primitive names).
-_SITE_TYPES = {
-    "CLB LUTs": "lut",
-    "Slice LUTs": "lut",
-    "CLB Registers": "ff",
-    "Slice Registers": "ff",
-    "RAMB36/FIFO": "bram36",
-    "RAMB18": "bram18",
-    "URAM": "uram",
-    "DSPs": "dsp",
-}
-
-
-def utilization_synth(text: str) -> Resources:
-    """The resources of Vivado's flat ``report_utilization`` of one synthesized IP (a
-    ``<run>_utilization_synth.rpt``): its LUTs, registers, block RAM tiles, URAMs and
-    DSPs, each the first row of its site type."""
-    counts: dict[str, int] = {}
-    for line in text.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.split("|")[1:-1]]
-        if len(cells) < 2:
-            continue
-        site = cells[0].rstrip("*").strip()
-        key = _SITE_TYPES.get(site) or ("dsp" if site.startswith("DSP48") else None)
-        if key is not None and key not in counts and cells[1].isdigit():
-            counts[key] = int(cells[1])
-    if "lut" not in counts:
-        raise ValueError("no LUT row in the utilization report")
-    return resources_of(counts)
-
-
-def placed_hierarchy(text: str) -> list[tuple[int, str, Resources]]:
-    """The rows of Vivado's ``report_utilization -hierarchical -format xml``, in order:
-    each instance's depth (the top 0), its name and its resources."""
-    table = ET.fromstring(text).find(".//table")
-    if table is None:
-        raise ValueError("no hierarchical utilization table in the report")
-    header: list[str] = []
-    rows: list[tuple[int, str, Resources]] = []
-    for row in table.findall("tablerow"):
-        heads = [cell.get("contents", "") for cell in row.findall("tableheader")]
-        if heads:
-            header = heads
-            continue
-        cells = [cell.get("contents", "") for cell in row.findall("tablecell")]
-        if not cells:
-            continue
-        counts: dict[str, int] = {}
-        for column, cell in zip(header, cells, strict=True):
-            key = "dsp" if column.startswith("DSP") else REPORT_COLUMNS.get(column)
-            if key is not None:
-                counts[key] = counts.get(key, 0) + int(cell)
-        name = cells[0]
-        rows.append(((len(name) - len(name.lstrip(" "))) // 2, name.strip(), resources_of(counts)))
-    if not rows:
-        raise ValueError("no rows in the hierarchical utilization table")
-    return rows
 
 
 def _counts(resources: Resources | None) -> dict[str, int] | None:
@@ -236,7 +170,7 @@ def shell_resources_report(
         for path in sorted(Path(runs).glob("*_utilization_synth.rpt")):
             name = path.name[: -len("_utilization_synth.rpt")]
             name = name[len("top_") :] if name.startswith("top_") else name
-            counted = utilization_synth(path.read_text())
+            counted = resources_of(vivado.utilization_synth(path.read_text()))
             owner = _instance_of(name.removesuffix("_0"), instances)
             if owner is None:
                 unclaimed = unclaimed + counted
@@ -247,9 +181,9 @@ def shell_resources_report(
             columns[key]["out_of_context"] = per_member.get(key)
         totals["out_of_context"] = sum(per_member.values(), unclaimed)
     elif packaged is not None:
-        rows = hierarchical_utilization(Path(packaged).read_text())
-        columns["partition"]["out_of_context"] = rows[0][2]
-        totals["out_of_context"] = rows[0][2]
+        rows = vivado.hierarchical_utilization(Path(packaged).read_text())
+        columns["partition"]["out_of_context"] = resources_of(rows[0][2])
+        totals["out_of_context"] = resources_of(rows[0][2])
     else:
         totals["out_of_context"] = None
         absent["out_of_context"] = (
@@ -259,12 +193,12 @@ def shell_resources_report(
     # Placed: the routed design's hierarchy, each instance below the block design's top.
     placed = reports.get("placed")
     if placed is not None:
-        rows = placed_hierarchy(Path(placed).read_text())
-        for _, name, counted in [row for row in rows if row[0] == 2]:
+        rows = vivado.placed_hierarchy(Path(placed).read_text())
+        for _, name, counts in [row for row in rows if row[0] == 2]:
             owner = _instance_of(name, instances)
             if owner is not None:
-                columns[owner]["placed"] = counted
-        totals["placed"] = rows[0][2]
+                columns[owner]["placed"] = resources_of(counts)
+        totals["placed"] = resources_of(rows[0][2])
     else:
         totals["placed"] = None
         absent["placed"] = (
@@ -312,9 +246,4 @@ def shell_resources_report(
     return report
 
 
-__all__ = [
-    "RESOURCES_FILE",
-    "placed_hierarchy",
-    "shell_resources_report",
-    "utilization_synth",
-]
+__all__ = ["RESOURCES_FILE", "shell_resources_report"]

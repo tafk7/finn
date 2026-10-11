@@ -208,19 +208,8 @@ def interface_description(
     }
 
 
-#: A hierarchical utilization report's column, by the resource it counts
-#: (``Resources``); RAMB36 counts two RAMB18 halves (``resources_of``).
-REPORT_COLUMNS = {
-    "Total LUTs": "lut",
-    "FFs": "ff",
-    "RAMB36": "bram36",
-    "RAMB18": "bram18",
-    "URAM": "uram",
-}
-
-
 def resources_of(counts: Mapping[str, int]) -> Resources:
-    """The resources a utilization report counts, by resource (``REPORT_COLUMNS``'s
+    """The resources a utilization report counts, by resource (``finn.toolchain.vivado``'s
     names): a RAMB36 (``bram36``) is two RAMB18 halves."""
     found = dict(counts)
     bram18 = 2 * found.pop("bram36", 0) + found.pop("bram18", 0)
@@ -240,38 +229,6 @@ def partition_utilization_report(project: Path) -> Path:
     return reports[0]
 
 
-def hierarchical_utilization(text: str) -> list[tuple[int, str, Resources]]:
-    """The rows of Vivado's text ``report_utilization -hierarchical``, in order: each
-    instance's depth (the top 0), its name and its resources. The DSP column is the one
-    whose header starts with ``DSP`` (``DSP Blocks``, ``DSP48 Blocks``). ``ToolFailed``
-    when the report holds no such table."""
-    rows: list[tuple[int, str, Resources]] = []
-    header: list[str] | None = None
-    indent = 0
-    for line in text.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = line.split("|")[1:-1]
-        names = [cell.strip() for cell in cells]
-        if header is None:
-            if names[:2] == ["Instance", "Module"]:
-                header = names
-            continue
-        counts: dict[str, int] = {}
-        for column, cell in zip(header, names, strict=True):
-            key = "dsp" if column.startswith("DSP") else REPORT_COLUMNS.get(column)
-            if key is not None:
-                counts[key] = counts.get(key, 0) + int(cell)
-        name = cells[0]
-        depth = len(name) - len(name.lstrip())
-        if not rows:
-            indent = depth
-        rows.append(((depth - indent) // 2, names[0], resources_of(counts)))
-    if not rows:
-        raise ToolFailed("vivado", what="no hierarchical utilization table in the report")
-    return rows
-
-
 def ooc_member_resources(
     model: ModelWrapper, project: Path, completion: Completion | None = None
 ) -> dict[str, Any]:
@@ -289,18 +246,19 @@ def ooc_member_resources(
     paths = shell_root(model, model.graph.node).members
     point, _ = configured_root(model, "the packaged partition", completion)
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
-    rows = hierarchical_utilization(report.read_text())
+    rows = vivado.hierarchical_utilization(report.read_text())
     members: dict[str, Resources] = {}
     reported = set()
-    for depth, instance, counted in rows[1:]:
+    for depth, instance, counts in rows[1:]:
         if depth != 1:
             continue
+        counted = resources_of(counts)
         reported.add(instance)
         label = labels.get(instance)
         path = None if label is None else member_of(paths, label)
         key = path or instance
         members[key] = members[key] + counted if key in members else counted
-    total = vars(rows[0][2])
+    total = vars(resources_of(rows[0][2]))
     claimed = sum(members.values(), Resources())
     return {
         "report": report.name,
@@ -492,11 +450,9 @@ class ElaboratePartition(Transformation):
 
 
 __all__ = [
-    "REPORT_COLUMNS",
     "ElaboratePartition",
     "PackagePartition",
     "boundary_facts",
-    "hierarchical_utilization",
     "ooc_member_resources",
     "partition_utilization_report",
     "resources_of",

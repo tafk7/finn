@@ -27,7 +27,9 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """What FINN knows of Vivado: the installation a toolchain selects (``installation``,
-``release``, ``glbl``), how many runs it launches at once, and how to read its reports.
+``release``, ``glbl``), how many runs it launches at once, and how to read its reports
+(the routed clocks; utilization, as plain counts by resource: ``lut``, ``ff``,
+``bram36``, ``bram18``, ``uram``, ``dsp``).
 
 Every reader of "which Vivado" reads it here, through a toolchain, never from this
 process's environment; each raises ``finn.toolchain.launcher.ToolUnavailable`` when
@@ -38,6 +40,7 @@ from __future__ import annotations
 
 import os
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -173,6 +176,110 @@ def delivered_clock(
             warning += f"; the objective is {objective_fps:,.0f} fps"
         report["warning"] = warning
     return report
+
+
+#: A hierarchical utilization report's column, by the resource it counts; a DSP column
+#: is any whose header starts with ``DSP`` (``DSP Blocks``, ``DSP48 Blocks``).
+REPORT_COLUMNS = {
+    "Total LUTs": "lut",
+    "FFs": "ff",
+    "RAMB36": "bram36",
+    "RAMB18": "bram18",
+    "URAM": "uram",
+}
+
+#: A flat utilization report's rows by the resource they count; the first row of each
+#: name counts (later sections repeat primitive names).
+_SITE_TYPES = {
+    "CLB LUTs": "lut",
+    "Slice LUTs": "lut",
+    "CLB Registers": "ff",
+    "Slice Registers": "ff",
+    "RAMB36/FIFO": "bram36",
+    "RAMB18": "bram18",
+    "URAM": "uram",
+    "DSPs": "dsp",
+}
+
+
+def _counted(header: list[str], cells: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for column, cell in zip(header, cells, strict=True):
+        key = "dsp" if column.startswith("DSP") else REPORT_COLUMNS.get(column)
+        if key is not None:
+            counts[key] = counts.get(key, 0) + int(cell)
+    return counts
+
+
+def hierarchical_utilization(text: str) -> list[tuple[int, str, dict[str, int]]]:
+    """The rows of the text ``report_utilization -hierarchical``, in order: each
+    instance's depth (the top 0), its name and its counts. ``ToolFailed`` when the
+    report holds no such table."""
+    rows: list[tuple[int, str, dict[str, int]]] = []
+    header: list[str] | None = None
+    indent = 0
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = line.split("|")[1:-1]
+        names = [cell.strip() for cell in cells]
+        if header is None:
+            if names[:2] == ["Instance", "Module"]:
+                header = names
+            continue
+        name = cells[0]
+        depth = len(name) - len(name.lstrip())
+        if not rows:
+            indent = depth
+        rows.append(((depth - indent) // 2, names[0], _counted(header, names)))
+    if not rows:
+        raise launcher.ToolFailed("vivado", what="no hierarchical utilization table in the report")
+    return rows
+
+
+def placed_hierarchy(text: str) -> list[tuple[int, str, dict[str, int]]]:
+    """The rows of ``report_utilization -hierarchical -format xml``, in order: each
+    instance's depth (the top 0), its name and its counts. ``ValueError`` when the
+    report holds no table, or no row."""
+    table = ET.fromstring(text).find(".//table")
+    if table is None:
+        raise ValueError("no hierarchical utilization table in the report")
+    header: list[str] = []
+    rows: list[tuple[int, str, dict[str, int]]] = []
+    for row in table.findall("tablerow"):
+        heads = [cell.get("contents", "") for cell in row.findall("tableheader")]
+        if heads:
+            header = heads
+            continue
+        cells = [cell.get("contents", "") for cell in row.findall("tablecell")]
+        if not cells:
+            continue
+        name = cells[0]
+        depth = (len(name) - len(name.lstrip(" "))) // 2
+        rows.append((depth, name.strip(), _counted(header, cells)))
+    if not rows:
+        raise ValueError("no rows in the hierarchical utilization table")
+    return rows
+
+
+def utilization_synth(text: str) -> dict[str, int]:
+    """The counts of the flat ``report_utilization`` of one synthesized IP (a
+    ``<run>_utilization_synth.rpt``): its LUTs, registers, block RAM tiles, URAMs and
+    DSPs, each the first row of its site type. ``ValueError`` without a LUT row."""
+    counts: dict[str, int] = {}
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.split("|")[1:-1]]
+        if len(cells) < 2:
+            continue
+        site = cells[0].rstrip("*").strip()
+        key = _SITE_TYPES.get(site) or ("dsp" if site.startswith("DSP48") else None)
+        if key is not None and key not in counts and cells[1].isdigit():
+            counts[key] = int(cells[1])
+    if "lut" not in counts:
+        raise ValueError("no LUT row in the utilization report")
+    return counts
 
 
 def tcl_quote(value: object) -> str:
