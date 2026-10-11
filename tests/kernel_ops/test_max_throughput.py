@@ -72,7 +72,7 @@ def explored(
 def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> None:
     """Half a percent of the part's LUTs (352) on ip: the fastest fold does not fit, the
     least parallelism does, and bisection between them keeps the least budget that
-    fits. The report states the point against the budget, read from completed costs."""
+    fits. The report states the point against the budget, read from settled costs."""
     report = explored(kernel_model(), TARGET, within(0.005), fresh=True)
     searched, sized = report["strategies"]
     assert searched["within"] == {"lut": 0.005} and searched["budget"] == {"lut": 352}
@@ -89,7 +89,13 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
     assert used == report["resources"]["shell"]["partition"]
     assert searched["binding"] == "lut" and searched["ratio"] == {"lut": round(321 / 352, 4)}
     assert searched["monotone"] and searched["departures"] == []
-    assert searched["read_completed"].startswith("read completed choices: ")
+    # It reopened the folding and settled the rest back: it changed the folding alone.
+    assert searched["reopened"] > searched["kept"] > 0
+    assert {key.rpartition(".")[2] for key in searched["changed"]} <= {
+        "pe",
+        "simd",
+        "compute_pumping",
+    }
     assert sized["strategy"] == "size_fifos" and sized["fifo_bits"] == 0
 
 
@@ -110,8 +116,6 @@ def searched_tfc(
     # the total after the search, NOTE §4.2), so the report's total is the search's.
     assert sized["fifo_bits"] == 0
     assert searched["used"] == used and searched["fits"] and used["lut"] <= budget
-    # What it committed it chose from completed costs, and the report says so.
-    assert searched["read_completed"].startswith("read completed choices: ")
     assert searched["binding"] == "lut" and searched["ratio"] == {
         "lut": round(used["lut"] / budget, 4)
     }
@@ -183,7 +187,8 @@ def test_where_nothing_fits_the_search_warns_and_keeps_the_least_parallelism() -
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48
     assert not searched["monotone"]
     assert searched["departures"] == ["no budget uses more than budget 1: lut 9882 > 9838"]
-    assert kernel_choices_config(model) and searched["committed"] > 0
+    # The least parallelism is every MatMul's baseline: nothing changed, every value saved.
+    assert kernel_choices_config(model) and searched["committed"] == 0
     assert sized["fifo_bits"] > 0
     assert report["resources"]["used"]["lut"] > searched["used"]["lut"] == 9882
 
