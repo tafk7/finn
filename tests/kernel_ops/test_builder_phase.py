@@ -232,8 +232,8 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
     assert seen["step_verify_partition"].graph.node[1].name == "partition"
     # The partition's body: the one tfc.py makes by hand, every choice it left open saved
-    # at its baseline (the default exploration is none: the exploration stores every
-    # baseline, and the partition is built from them).
+    # at its baseline and its FIFOs sized (the default exploration, [size_fifos]: the
+    # exploration stores every value, and the partition is built from them).
     _, body = partition(source, tmp_path / "by_hand")
     assert [node.op_type for node in built.graph.node] == ["Thresholding", "MatMul"] * 4
 
@@ -263,6 +263,13 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert len(folding) == 12 and {entry["value"] for entry in folding.values()} == {1}
     assert {entry["by"] for entry in folding.values()} == {"baseline"}
     assert report["completed"] == {}
+    # The default list sizes every transport at that folding, at its period: on TFC each
+    # direct, as the baseline completion sized them at generation before.
+    (sizing,) = report["strategies"]
+    assert sizing["strategy"] == "size_fifos" and sizing["period"] == 50176
+    assert {row["transport"] for row in sizing["channels"].values()} == {"direct"}
+    assert len(sizing["channels"]) == 13
+    assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The verification the configuration asked for, through the partition node: on each
     # of the three inputs, the partition's own output (the last MatMul's INT8 logits, not
     # the parent's label), the parent graph executed with it, equals the streamlined

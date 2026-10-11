@@ -52,11 +52,22 @@ from kernel_ops.tfc import PREPROCESSING, ULTRA96, preparation
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
 
-def test_the_kernel_path_builds_on_ip_explores_nothing_and_completes_by_baseline() -> None:
+def test_the_kernel_path_builds_on_ip_sizes_fifos_and_completes_by_baseline() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
     assert cfg.generate_outputs == [] and cfg.verify_steps == []
-    assert cfg.kernel_exploration == [] and cfg.kernel_completion == "baseline"
+    # The default exploration sizes the FIFOs at the baseline folding (SR6); a list
+    # written replaces it.
+    assert cfg.kernel_exploration == [{"strategy": "size_fifos"}]
+    assert cfg.kernel_completion == "baseline"
+    assert (
+        DataflowBuildConfig.from_json(
+            json.dumps({**STATED, "kernel_exploration": []})
+        ).kernel_exploration
+        == []
+    )
+    # Each configuration has its own list.
+    assert cfg.kernel_exploration is not DataflowBuildConfig(**STATED).kernel_exploration
     assert cfg.steps is None and cfg.toolchain is None
     # Prepared from the export as exported: its own inputs and outputs, the default
     # recipes.

@@ -192,9 +192,18 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: "max_throughput", "within": {"lut": 0.5}}`` (the fewest cycles a frame whose
     #: shell's resources stay within the fractions named of the part's; ``within`` is
     #: required), ``{"strategy": "size_fifos", "margin": 0}`` (each channel's FIFO from
-    #: both ends' beat patterns). None by default: what no strategy chooses stays open,
-    #: and kernel_completion completes it.
-    kernel_exploration: List[Dict[str, Any]] = field(default_factory=list)
+    #: both ends' beat patterns), ``{"strategy": "baseline"}`` (every choice not pinned
+    #: back at its baseline), ``{"strategy": "placeholder"}`` (debugging: every open
+    #: required choice at its first case). Every choice the body leaves open takes its
+    #: baseline first; each strategy replaces the values it decides, and every value is
+    #: saved. Pins go first, sizing after the last strategy that folds (a list folding
+    #: after its last size_fifos is refused). By default ``[{"strategy": "size_fifos"}]``
+    #: (SR6): the baseline folding, its FIFOs sized. A list written replaces the default
+    #: and runs as written: without size_fifos, every transport stays at its baseline,
+    #: direct.
+    kernel_exploration: List[Dict[str, Any]] = field(
+        default_factory=lambda: [{"strategy": "size_fifos"}]
+    )
 
     #: Clear the KernelOps' saved choices before exploring: re-explore from scratch.
     #: Otherwise a saved choice is pinned and the exploration fills only open ones.
