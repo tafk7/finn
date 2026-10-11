@@ -4,8 +4,9 @@
 """Exploring a model's kernel choices through the DSE seam, and saving them.
 
 ``ExploreKernelChoices(strategies)`` explores a partition's body, the model of
-KernelOps the kernel path's cut made (``CutKernelPartition``; the build opens it through
-the parent graph's node, ``partition_body``), so which KernelOps go together is the
+KernelOps the kernel path's cut made (``CutKernelPartition``; ``ExplorePartition``, the
+build's, explores it through the parent graph's node, ``partition_body``, and saves it
+in its file), so which KernelOps go together is the
 cut's alone: a model holding any other node is refused. It builds the body's shell root
 once (``shell_root``: their kernels, the channels between them and the channels on its
 boundary; the nodes' and the channels' saved choices replayed, a stale one dropped with
@@ -103,7 +104,7 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
     shell_root,
 )
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
@@ -651,10 +652,51 @@ class ExploreKernelChoices(Transformation):
         return model, False
 
 
+class ExplorePartition(Transformation):
+    """The kernel path's parent graph's partition explored through its node: its body
+    opened through the partition node (``partition_body``), its KernelOps explored by
+    ``strategies``, in order, every value saved (``explore_kernel_choices``), and the
+    body saved again in its file, as the cut saved it; the parent graph itself
+    unchanged. ``explored`` holds the result and ``body`` the body as saved."""
+
+    def __init__(
+        self,
+        strategies: Sequence[Explorer],
+        *,
+        fresh: bool = False,
+        completion: Completion | None = None,
+    ) -> None:
+        super().__init__()
+        self.strategies = tuple(strategies)
+        self.fresh = fresh
+        self.completion = completion
+        self.explored: Explored | None = None
+        self.body: ModelWrapper | None = None
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        _, body, body_file = partition_body(model)
+        self.explored = explore_kernel_choices(
+            body,
+            self.strategies,
+            fresh=self.fresh,
+            completion=self.completion,
+        )
+        body.save(body_file)
+        self.body = body
+        return model, False
+
+
+#: Where the build writes the exploration's report (``Explored.report``), under its
+#: output directory; the bitfile's build reads the throughput asked from it.
+EXPLORATION_REPORT = "report/kernel_exploration.json"
+
+
 __all__ = [
+    "EXPLORATION_REPORT",
     "KERNEL_COMPLETIONS",
     "KERNEL_STRATEGIES",
     "ExploreKernelChoices",
+    "ExplorePartition",
     "Explored",
     "completion",
     "explore_kernel_choices",

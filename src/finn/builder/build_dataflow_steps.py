@@ -72,9 +72,10 @@ from finn.shells.pynq.runner import build_pynq
 from finn.toolchain.launcher import Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
+    EXPLORATION_REPORT,
+    ExplorePartition,
     ToKernelOps,
     completion,
-    explore_kernel_choices,
     kernel_choices_config,
     kernel_ops_by_anchor,
     kernel_ops_report,
@@ -457,9 +458,9 @@ def _completion(cfg: DataflowBuildConfig) -> Completion:
 
 
 def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Explore the partition's KernelOps, its body opened through the parent graph's
-    partition node (partition_body), through the DSE seam by the strategies its options'
-    ``kernel_exploration`` lists (ExploreOptions), in order
+    """Explore the partition's KernelOps through the parent graph's partition node
+    (finn.transformation.kernels.ExplorePartition), through the DSE seam by the strategies
+    its options' ``kernel_exploration`` lists (ExploreOptions), in order
     (finn.transformation.kernels.strategy: each a spec, {"strategy": name, **parameters}),
     and save them where they are stated (a kernel's on its node, a channel's on its tensor,
     finn.channel), the body saved again in its file (explore_kernel_choices): the choices
@@ -479,13 +480,14 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     options = cfg.options("step_explore", ExploreOptions)
     strategies = [strategy(spec) for spec in options.kernel_exploration]
     completing = completion(options.kernel_completion)
-    _, body, body_file = partition_body(model)
-    explored = explore_kernel_choices(
-        body, strategies, fresh=options.kernel_exploration_fresh, completion=completing
+    exploring = ExplorePartition(
+        strategies, fresh=options.kernel_exploration_fresh, completion=completing
     )
-    body.save(body_file)
+    model = model.transform(exploring)
+    explored, body = exploring.explored, exploring.body
+    assert explored is not None and body is not None
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-    with open(cfg.output_dir + "/report/kernel_exploration.json", "w") as f:
+    with open(os.path.join(cfg.output_dir, EXPLORATION_REPORT), "w") as f:
         json.dump(explored.report, f, indent=2)
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(body), f, indent=2)

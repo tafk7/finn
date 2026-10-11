@@ -20,7 +20,9 @@ the partition, the parent graph's one ``StreamingDataflowPartition``
 at conversion, a channel's at the cut); ``ExploreKernelChoices`` explores the choices
 of a partition's body (the KernelOps the cut put together) through the DSE seam
 (``finn.kernels.explore``) by a list of strategies (``strategy``: one from its spec),
-each replacing the values it decides, and saves every value; a completion policy
+each replacing the values it decides, and saves every value (``ExplorePartition``, the
+build's, through the parent graph's partition node, the body saved in its file); a
+completion policy
 (``completion``: one by its name) completes what a model leaves open wherever a
 partition is costed or built, never saved;
 ``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
@@ -34,10 +36,12 @@ partition, from its ends.
 """
 
 from finn.transformation.kernels.choose import (
+    EXPLORATION_REPORT,
     KERNEL_COMPLETIONS,
     KERNEL_STRATEGIES,
     Explored,
     ExploreKernelChoices,
+    ExplorePartition,
     completion,
     explore_kernel_choices,
     shell_bottleneck,
@@ -57,10 +61,12 @@ from finn.transformation.kernels.infer import InferKernelTensors, infer_node
 from finn.transformation.kernels.package import ElaboratePartition, PackagePartition
 
 __all__ = [
+    "EXPLORATION_REPORT",
     "KERNEL_COMPLETIONS",
     "KERNEL_STRATEGIES",
     "ElaboratePartition",
     "ExploreKernelChoices",
+    "ExplorePartition",
     "Explored",
     "InferKernelTensors",
     "Outcome",
