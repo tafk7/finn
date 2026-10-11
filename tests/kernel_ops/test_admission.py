@@ -208,4 +208,7 @@ def test_a_refused_node_between_kernel_ops_is_a_host_node_there() -> None:
     assert [outcome.op for outcome in conversion.outcomes] == ["MatMul", None, "MatMul"]
     assert between_kernel_ops(converted) == ("mt",)
     report = kernel_ops_report(converted, conversion.outcomes)
-    assert kernel_ops_summary(report)[1:] == ["ToKernelOps:   threshold-order (rejection) 1: mt"]
+    assert report["on_host"] == report["between_kernel_ops"] == ["mt"]
+    assert kernel_ops_summary(conversion.outcomes)[1:] == [
+        "ToKernelOps:   threshold-order (rejection) 1: mt"
+    ]

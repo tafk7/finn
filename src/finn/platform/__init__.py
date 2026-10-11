@@ -6,7 +6,7 @@ them (``resolve_target``).
 
 Kernels never import this package. They read the capabilities it resolves
 (``finn.kernels.target.Platform``) from the model. Every refusal is a
-``TargetRefused`` with a name.
+``TargetRefused`` carrying its finding, by code.
 """
 
 from finn.platform.boards import BOARDS, Board

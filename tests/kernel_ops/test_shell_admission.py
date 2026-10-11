@@ -26,7 +26,7 @@ from kernels.helpers import with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
 import finn.custom_op.kernels.shell as shell
-from finn.core.space import composite, design_space
+from finn.core.space import composite, design_space, finding_text
 from finn.core.space.errors import ValueUnavailableError
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
 from finn.custom_op.kernels.shell import Shell, admission_refusal, configured_root, shell_root
@@ -86,7 +86,8 @@ def thresholdings(count: int, row: ShellRow) -> Any:
 def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
     point = thresholdings(8, PYNQ_ROW)
     assert [end.control_buses for end in point.x.placed_end + point.y.placed_end] == [1, 1]
-    assert admission_refusal(point) == (
+    (found,) = admission_refusal(point)
+    assert finding_text(found) == (
         "interfaces: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
         "the partition presents 8 and its ends 2"
     )
@@ -97,12 +98,12 @@ def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine()
 
 
 def test_seven_and_two_ends_fill_the_budget() -> None:
-    assert admission_refusal(thresholdings(7, PYNQ_ROW)) is None
+    assert admission_refusal(thresholdings(7, PYNQ_ROW)) == ()
 
 
 def test_the_ip_shell_admits_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
-    assert admission_refusal(point) is None
+    assert admission_refusal(point) == ()
     assert point.x.placed_end == ()
     ports = [pin.name for pin in point.module.abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
@@ -122,10 +123,15 @@ def test_a_shell_root_of_kernel_ops_counts_its_ends() -> None:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
         root = shell_root(model, model.graph.node, name="chain")
         assert root.row == narrow
-        with pytest.raises(KernelOpError, match="refused by the 'pynq' shell"):
+        with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:
             explore_kernel_choices(model, [])
-        with pytest.raises(KernelOpError, match="takes 1 AXI-Lite buses; the partition presents 0"):
+        with pytest.raises(
+            KernelOpError, match="takes 1 AXI-Lite buses; the partition presents 0"
+        ) as packaged:
             configured_root(model, "chain")
+    # Each refusal carries the shell's findings, by code.
+    for refused in (explored, packaged):
+        assert [f.code for f in refused.value.findings] == ["interface-budget-exceeded"]
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:

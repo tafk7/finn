@@ -24,7 +24,7 @@ from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import inspection
+from finn.core.space import FindingKind, finding_record, inspection
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.shell import configured_root, save_channels, shell_root
 from finn.custom_op.partition.kernel_partitions import partition_body
@@ -38,7 +38,6 @@ from finn.kernels.explore import (
     Placeholder,
     Ranked,
     Rebaseline,
-    ResourceBudgetWarning,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -96,7 +95,10 @@ def test_the_seam_reads_each_member_at_its_path() -> None:
     explorer, point = seam_of(kernel_model())
     cost = explorer.cost(point)
     assert set(cost.waiting) | set(cost.cycles) == set(explorer.members)
-    assert "first" in cost.cycles and cost.unstated["levels"] == "waits on levels.transport"
+    assert "first" in cost.cycles
+    assert [(f.code, f.owner) for f in cost.unstated["levels"]] == [
+        ("decision-unassigned", "levels.transport")
+    ]
     hidden = explorer.cost(point, ("hidden",))
     assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
     assert explorer.refusals(point) == {}
@@ -174,27 +176,34 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     assert inspection.viable(root.point) == () and not root.dropped
 
 
-def test_a_point_over_the_part_s_resources_warns_naming_the_binding_resource() -> None:
+def test_a_point_over_the_part_s_resources_is_a_finding_naming_the_binding_resource() -> None:
     """Whichever strategy chose it, a point whose shell uses more than the part has is a
-    warning naming the binding resource (its highest share), never a refusal (RC5):
-    the choices are saved and the report states each resource over."""
+    limitation naming the binding resource (its highest share), in the result and the
+    report, never a refusal (RC5) and never a Python warning: the choices are saved and
+    the report states each resource over."""
     # Block RAM for the thresholds' stages, which Lanes(2) puts two of in block RAM.
     small = replace(
         TARGET.platform, resources=Resources(lut=100_000, ff=100_000, bram18=1_000, dsp=3)
     )
     model = kernel_model(replace(TARGET, platform=small))
-    with pytest.warns(ResourceBudgetWarning, match="most of dsp: dsp 4 of 3"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
+    (found,) = explored.findings
+    assert (found.kind, found.code) == (FindingKind.LIMITATION, "resources-over-part")
+    assert "most of dsp: dsp 4 of 3" in found.message
+    assert dict(found.details)["binding"] == "dsp"
     resources = explored.report["resources"]
     assert resources["binding"] == "dsp"
     assert resources["over"] == {"dsp": {"used": 4, "platform": 3}}
-    assert resources["warning"].startswith("the point uses more than the platform's part has")
+    assert resources["findings"] == [finding_record(found)]
+    assert found.message.startswith("the point uses more than the platform's part has")
     assert choices(model)["first"]["compute.packed.pe"] == 2
     # Within the part: the binding resource is named, and nothing is over.
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", ResourceBudgetWarning)
-        within = explore_kernel_choices(kernel_model(), [Ranked(Lanes(2))]).report["resources"]
-    assert (within["binding"], within["over"], within["warning"]) == ("dsp", {}, None)
+    within = explore_kernel_choices(kernel_model(), [Ranked(Lanes(2))])
+    resources = within.report["resources"]
+    assert (resources["binding"], resources["over"], resources["findings"]) == ("dsp", {}, [])
+    assert within.findings == ()
 
 
 def test_resources_are_a_total_only_once_every_member_states_them() -> None:
@@ -205,7 +214,9 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     seam, point = seam_of(kernel_model())
     cost = seam.cost(point)
     assert cost.used is None and set(cost.resources) == {"first", "activate", "second"}
-    assert cost.unstated["x"] == "waits on x.transport"
+    assert [(f.code, f.owner) for f in cost.unstated["x"]] == [
+        ("decision-unassigned", "x.transport")
+    ]
     assert "activate" not in cost.unstated
     based = seam.cost(seam.baseline(point))
     assert based.unstated == {}
@@ -391,7 +402,8 @@ def stated_auto(report: Mapping[str, Any]) -> None:
     assert resources["lower_bound"] and resources["counted"].startswith("a lower bound")
     reasons = resources["unstated"]
     assert len(reasons) == 2 and all(
-        why.endswith("ram_style auto, placed by Vivado, not stated") for why in reasons.values()
+        any(f["message"].endswith("ram_style auto, placed by Vivado, not stated") for f in why)
+        for why in reasons.values()
     )
     assert "activate" in reasons
     assert report["choices"]["w2"]["source.memstream.ram_style"]["value"] == "distributed"

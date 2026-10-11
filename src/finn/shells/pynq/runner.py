@@ -53,6 +53,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.util.basic import qonnx_make_model
 
 from finn import resources
+from finn.core.space import Finding, FindingKind, finding_record
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
@@ -78,7 +79,7 @@ from finn.shells.pynq.ipgen import (
     prepare_ip,
 )
 from finn.toolchain.launcher import Toolchain, host_toolchain
-from finn.toolchain.vivado import delivered_clock, tcl_quote, vivado_jobs
+from finn.toolchain.vivado import PL_CLOCKS, delivered_clock, tcl_quote, vivado_jobs
 from finn.transformation.kernels.choose import EXPLORATION_REPORT, shell_bottleneck
 from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
 from finn.transformation.kernels.package import PackagePartition
@@ -442,6 +443,51 @@ def objective_fps(directory: Path) -> float | None:
     return asked[0] if asked else None
 
 
+def delivered_clock_findings(clock: dict[str, Any], timing_report: str) -> tuple[Finding, ...]:
+    """The limitations of a delivered clock (``finn.toolchain.vivado.delivered_clock``), for
+    report/delivered_clock.json: no PL clock in the routed design's timing report
+    (``clock-unknown``), or a delivered period other than the one asked, slower
+    (``clock-below-asked``) or faster (``clock-above-asked``) than asked (the shell's PS
+    gives its nearest clock to the request), with both numbers, the frames a second at
+    each and the objective where the report states them. Never a refusal."""
+    period = clock["target_period_ns"]
+    if "delivered_period_ns" not in clock:
+        return (
+            Finding(
+                FindingKind.LIMITATION,
+                "clock-unknown",
+                "delivered_clock",
+                f"no PL clock ({', '.join(PL_CLOCKS)}) in {timing_report}: its clock summary "
+                f"lists {clock['clocks']}",
+            ),
+        )
+    delivered, mhz = clock["delivered_period_ns"], clock["delivered_mhz"]
+    # The report states periods to the picosecond.
+    if abs(delivered - period) < 0.0005:
+        return ()
+    message = (
+        f"the shell delivers {clock['clock']} at {delivered} ns ({mhz} MHz), "
+        f"not the {period} ns asked"
+    )
+    if "bottleneck_cycles" in clock:
+        message += (
+            f": {clock['bottleneck_cycles']} cycles a frame give "
+            f"{clock['fps_at_delivered']:,.0f} fps at it, {clock['fps_at_target']:,.0f} at "
+            "the clock asked"
+        )
+    if "objective_fps" in clock:
+        message += f"; the objective is {clock['objective_fps']:,.0f} fps"
+    return (
+        Finding(
+            FindingKind.LIMITATION,
+            "clock-below-asked" if delivered > period else "clock-above-asked",
+            "delivered_clock",
+            message,
+            (("asked_period_ns", period), ("delivered_period_ns", delivered)),
+        ),
+    )
+
+
 class BuildPynqBitfile(Transformation):
     """The Zynq block design's bitfile around the kernel path's parent graph's partition
     (``build_pynq``), from the partition's integration export, written as
@@ -451,7 +497,8 @@ class BuildPynqBitfile(Transformation):
     IP's out-of-context synthesis utilization (report/out_of_context/), and the
     delivered clock beside the one asked, with the shell root's bottleneck, ends
     included, and the throughput the exploration asked (``objective_fps``)
-    (report/delivered_clock.json). The shell, board, part and clock are the target the
+    (report/delivered_clock.json), with its limitations (``delivered_clock_findings``,
+    the report's ``findings``). The shell, board, part and clock are the target the
     partition's body states (``pynq_row``); the ends' scratch models are kept in
     ``ends/`` beside the body's file.
 
@@ -463,7 +510,8 @@ class BuildPynqBitfile(Transformation):
     Vivado launches as many runs at once as its selection says (``vivado_jobs``).
     ``enable_hw_debug`` inserts integrated logic analyzers (``PynqOptions``);
     ``completion`` completes the partition's open choices where it is built. ``bitfile``
-    and ``clock`` hold the bitfile's path and the delivered clock's report."""
+    and ``clock`` hold the bitfile's path and the delivered clock's report, ``findings``
+    its limitations."""
 
     def __init__(
         self,
@@ -480,6 +528,7 @@ class BuildPynqBitfile(Transformation):
         self.completion = completion
         self.bitfile = self.directory / BITFILE
         self.clock: dict[str, Any] = {}
+        self.findings: tuple[Finding, ...] = ()
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         pynq_row(model, "bitfile")
@@ -514,6 +563,8 @@ class BuildPynqBitfile(Transformation):
             None if bottleneck is None else bottleneck.cycles,
             objective_fps(self.directory) if bottleneck is not None else None,
         )
+        self.findings = delivered_clock_findings(self.clock, built.timing)
+        self.clock["findings"] = [finding_record(finding) for finding in self.findings]
         reports["delivered_clock"].write_text(json.dumps(self.clock, indent=2))
         model.set(OUTPUT_PROJECT, built.project)
         model.set(OUTPUT_BITFILE, str(self.bitfile))
@@ -561,6 +612,7 @@ __all__ = [
     "build_pynq",
     "collect",
     "debug_lines",
+    "delivered_clock_findings",
     "generate_end_ip",
     "iodma_model",
     "objective_fps",

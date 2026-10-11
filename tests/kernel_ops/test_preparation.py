@@ -814,8 +814,9 @@ def test_the_builders_checkpoint_refuses_a_blocker_naming_it_in_its_report(
         {"w": "INT3", "y": "INT4"},
     )
     cfg = preparation_config(tmp_path)
-    with pytest.raises(PreparationRefused, match="annotation-unsound: MatMul_0"):
+    with pytest.raises(PreparationRefused, match="annotation-unsound: MatMul_0") as refused:
         step_prepare_checkpoint(model, cfg)
+    assert codes(refused.value.findings) == [("annotation-unsound", FindingKind.BLOCKER)]
     report = json.loads((Path(cfg.output_dir) / PREPARATION_REPORT).read_text())
     assert [f["code"] for f in report["checkpoint"]["findings"]] == ["annotation-unsound"]
 
@@ -866,10 +867,12 @@ def test_a_builds_equivalence_difference_is_reported_as_a_failure_and_the_build_
     declared = ", ".join(DEVIATIONS)
     assert "reported, not refused; a build runs no deviation's predicate" in log
     assert f"the phase declares {declared}\n" in log
-    assert "equivalence-unexplained (blocker) 1: y: " in log
+    assert "equivalence-unexplained (rejection) 1: y: " in log
     assert report["checkpoint"]["findings"] == []
     (found,) = report["equivalence"]["findings"]
-    assert found["code"] == "equivalence-unexplained"
+    # A difference in a build that continues is no blocker: the check's equivalence is
+    # false there (a rejection), and the build reports it (FAIL) and goes on.
+    assert (found["code"], found["kind"]) == ("equivalence-unexplained", "rejection")
 
 
 def test_a_builds_checkpoint_blocker_still_refuses_beside_an_equivalence_difference(
@@ -949,7 +952,7 @@ def test_topk_affine_explains_the_values_of_a_label_select_whose_scale_was_dropp
     export = selecting([helper.make_node("Mul", ["x", "two"], ["s"], name="Mul_0")])
     made = selecting([helper.make_node("Identity", ["x"], ["s"], name="Identity_0")])
     assert codes(check_equivalence(export, made).findings) == [
-        ("equivalence-unexplained", FindingKind.BLOCKER)
+        ("equivalence-unexplained", FindingKind.REJECTION)
     ]
     assert check_equivalence(export, made, {"topk-affine": topk_affine}).findings == ()
 
@@ -963,7 +966,7 @@ def test_sign_at_zero_explains_a_sign_turned_threshold_at_zero() -> None:
         {"t": [[0.0]]},
     )
     assert codes(check_equivalence(export, made).findings) == [
-        ("equivalence-unexplained", FindingKind.BLOCKER)
+        ("equivalence-unexplained", FindingKind.REJECTION)
     ]
     assert check_equivalence(export, made, {"sign-at-zero": sign_at_zero}).findings == ()
 
@@ -975,7 +978,7 @@ def test_threshold_float32_explains_a_threshold_one_rounding_from_the_exports() 
     export = thresholding(float(np.nextafter(np.float32(3), np.float32(4))))
     made = thresholding(3.0)
     assert codes(check_equivalence(export, made).findings) == [
-        ("equivalence-unexplained", FindingKind.BLOCKER)
+        ("equivalence-unexplained", FindingKind.REJECTION)
     ]
     explained = {"threshold-float32": threshold_float32}
     assert check_equivalence(export, made, explained).findings == ()

@@ -114,13 +114,13 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Unresolved,
     View,
     composite,
     constraint,
     default_semantics,
     derived,
     design_space,
+    finding_text,
     inspection,
     reject,
 )
@@ -144,7 +144,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.configure import chosen, describe, member_of, undecided
+from finn.kernels.configure import chosen, member_of, undecided
 from finn.kernels.ends import END, EndContract, EndOffer
 from finn.kernels.explore import Baseline, Completion, ExploreError, Seam
 from finn.kernels.target import Platform
@@ -590,8 +590,8 @@ def _shell_root(
     if fanned:
         raise KernelOpError(
             f"{name}: a channel has one consumer, and fan-out is not designed yet (a channel "
-            "that forks): "
-            + "; ".join(f"{each.owner}: {each.code}: {each.message}" for each in fanned)
+            "that forks): " + "; ".join(map(finding_text, fanned)),
+            findings=fanned,
         )
     declared = _channels(model, nodes, ops, owned, ports)
     owners = _owners(nodes, declared)
@@ -659,8 +659,12 @@ def configured_root(
             tuple(open_keys),
         )
     unadmitted = admission_refusal(point)
-    if unadmitted is not None:
-        raise KernelOpError(f"{label}: refused by the {root.row.shell!r} shell: {unadmitted}")
+    if unadmitted:
+        raise KernelOpError(
+            f"{label}: refused by the {root.row.shell!r} shell: "
+            + "; ".join(map(finding_text, unadmitted)),
+            findings=unadmitted,
+        )
     ports = dict(root.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}
     inputs = [item.name for item in model.graph.input if item.name not in initializers]
@@ -674,27 +678,22 @@ def configured_root(
     return point, root.boundary
 
 
-def shell_resources(point: Shell) -> ShellResources | str:
+def shell_resources(point: Shell) -> ShellResources | tuple[Finding, ...]:
     """``point``'s resources by member and their total (``Shell.resources_by_member``), a
-    point of a shell root; or why it states none: a member that states none, or the
-    open choices they wait on."""
+    point of a shell root; or why it states none, its findings: a member that states
+    none, or the open choices they wait on (each ``decision-unassigned``)."""
     answer = point.query(type(point).by_member)
     if isinstance(answer, Available):
         found: ShellResources = answer.value
         return found
-    if isinstance(answer, Unresolved):
-        awaited = dict.fromkeys(
-            item.owner for item in answer.findings if item.code == "decision-unassigned"
-        )
-        return "waits on " + ", ".join(awaited)
-    return describe([answer])
+    return answer.findings
 
 
-def admission_refusal(point: Shell) -> str | None:
-    """Why the shell refuses ``point``, a point of a shell root (``Shell.interfaces``),
-    or ``None``: admitted, or not decided far enough to say."""
+def admission_refusal(point: Shell) -> tuple[Finding, ...]:
+    """Why the shell refuses ``point``, a point of a shell root (``Shell.interfaces``):
+    its findings, none where it is admitted or not decided far enough to say."""
     admitted = inspection.admission(point)
-    return describe([admitted]) if isinstance(admitted, Rejected) else None
+    return admitted.findings if isinstance(admitted, Rejected) else ()
 
 
 def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, object]) -> None:

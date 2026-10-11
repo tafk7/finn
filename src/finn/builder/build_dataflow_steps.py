@@ -49,7 +49,7 @@ from finn.builder.build_dataflow_testbench import (
     write_testbench,
 )
 from finn.core.onnx_exec import execute_onnx
-from finn.core.space import finding_record
+from finn.core.space import by_code, finding_record
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
@@ -92,7 +92,6 @@ from finn.transformation.prepare import (
     census,
     checkpoint,
     reference,
-    summary,
 )
 from finn.transformation.prepare.phase import (
     DEFAULT_STREAMLINING,
@@ -348,8 +347,8 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         f"Graph preparation: checkpoint: {len(checked.findings)} findings, {checked.bounded} "
         f"integer outputs bounded; {PREPARATION_REPORT}"
     )
-    for line in summary(checked.findings):
-        print(line)
+    for line in by_code(checked.findings):
+        print(f"Graph preparation:   {line}")
     if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
         print(
             "Verification for graph_preparation_python : "
@@ -363,10 +362,10 @@ def step_prepare_checkpoint(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
                 f"{equivalence.draws} draws, {refused}reported, not refused; a build runs no "
                 f"deviation's predicate, and the phase declares {declared}"
             )
-            for line in summary(equivalence.findings):
-                print(line)
-        for line in summary(equivalence.rounds):
-            print(line)
+            for line in by_code(equivalence.findings):
+                print(f"Graph preparation:   {line}")
+        for line in by_code(equivalence.rounds):
+            print(f"Graph preparation:   {line}")
     if blockers:
         raise PreparationRefused(blockers)
     return model
@@ -396,7 +395,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
     with open(cfg.output_dir + "/report/kernel_ops.json", "w") as f:
         json.dump(report, f, indent=2)
-    for line in kernel_ops_summary(report):
+    for line in kernel_ops_summary(conversion.outcomes):
         print(line)
     refuse_host_between(model, conversion.outcomes)
     return model
@@ -468,8 +467,9 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     kernel_choices.json (the body's choices, sparse, by graph name: a node's or a tensor's,
     which a "pinned" strategy reads back), and logs what each strategy committed (and where
     max_throughput's search ended), what the completion completed (each value, for the debug
-    placeholder), whether FIFOs were sized, and a warning naming the binding resource where
-    the shell's resources exceed the part's (RC5: never a refusal)."""
+    placeholder), whether FIFOs were sized, and a warning for each limitation the
+    exploration found (its findings: the shell's resources over the part's, a strategy's
+    over its budget, each naming the binding resource; RC5: never a refusal)."""
     options = cfg.options("step_explore", ExploreOptions)
     strategies = [strategy(spec) for spec in options.kernel_exploration]
     completing = completion(options.kernel_completion)
@@ -496,8 +496,8 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
             )
         if "read_completed" in each:
             print(f"Kernel choices: {each['strategy']} {each['read_completed']}")
-    if report["resources"]["warning"] is not None:
-        print(f"Kernel choices: WARNING: {report['resources']['warning']}")
+    for finding in explored.findings:
+        print(f"Kernel choices: WARNING: {finding.message}")
     completed = [
         (f"{node}.{attribute}", entry)
         for node, held in report["completed"].items()
@@ -686,7 +686,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     the configuration's is refused. The parent graph stays the build's model and states
     what was made (finn.outputs: the project, bitfile, hwh, reports and host runtime) and
     what the bitfile was made from (the design's digest, the shell's options); the
-    delivered clock's warning, if any, is logged."""
+    delivered clock's limitations, if any, are logged as warnings (its findings)."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         print("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
         return model
@@ -698,8 +698,8 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         completion=_completion(cfg),
     )
     model = model.transform(building)
-    if "warning" in building.clock:
-        print("WARNING: " + building.clock["warning"])
+    for finding in building.findings:
+        print("WARNING: " + finding.message)
     print(f"Bitfile written into {building.bitfile.parent}")
     return model
 

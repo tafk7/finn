@@ -110,7 +110,8 @@ def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tup
     if outside and not admit:
         raise KernelOpError(
             f"{op.label}: its reference is not exact for its facts: "
-            + "; ".join(f"{finding.code}: {finding.message}" for finding in outside)
+            + "; ".join(f"{finding.code}: {finding.message}" for finding in outside),
+            findings=outside,
         )
     if outside:
         return outside

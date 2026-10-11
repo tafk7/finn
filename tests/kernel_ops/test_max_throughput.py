@@ -26,6 +26,7 @@ of cycles. R3's budgets (``{lut: 0.5}``, ``0.07`` and ``0.2``) are its record's 
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,8 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.space import FindingKind
 from finn.custom_op.kernels.base import write_target
-from finn.kernels.explore import ResourceBudgetWarning, UnstatedResourcesWarning
 from finn.kernels.target import Target
 from finn.kernels.utilization import Resources, total
 from finn.platform import resolve_target
@@ -169,19 +170,25 @@ def test_in_the_zynq_shell_the_search_costs_the_shell_s_total() -> None:
     assert searched["binding"] == "lut" and searched["fits"]
 
 
-def test_where_nothing_fits_the_search_warns_and_keeps_the_least_parallelism() -> None:
+def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism() -> None:
     """A tenth of the part's LUTs on pynq is less than the shell's static region alone:
-    neither the fastest fold nor the least parallelism fits. The search warns, naming
-    the binding resource, and keeps the least parallelism; the point is explored and
+    neither the fastest fold nor the least parallelism fits. The search states it (a
+    ``resource-budget`` limitation, in its report and the result), naming the binding
+    resource, and keeps the least parallelism; the point is explored and
     saved all the same (RC5). Here the least parallelism uses more LUTs than the fastest
     fold (a wider end), a departure the report states. FIFOs join after the search:
     sizing places one on the output, so the report's total is above the search's."""
     model = kernel_model()
     write_target(model, ULTRA96)
     strategies = [strategy(spec) for spec in within(0.1)]
-    with pytest.warns(ResourceBudgetWarning, match="most of lut: lut 9882 of 7056"):
-        report = explore_kernel_choices(model, strategies, fresh=True).report
+    result = explore_kernel_choices(model, strategies, fresh=True)
+    report = result.report
     searched, sized = report["strategies"]
+    (budget,) = searched["findings"]
+    assert (budget["kind"], budget["code"]) == ("limitation", "resource-budget")
+    assert "most of lut: lut 9882 of 7056" in budget["message"]
+    assert budget["details"] == {"binding": "lut", "over": ("lut",)}
+    assert [finding.code for finding in result.findings][0] == "resource-budget"
     assert [row["cycles"] for row in searched["tried"]] == [1, None]
     assert searched["fits"] is False and searched["binding"] == "lut"
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48
@@ -211,39 +218,46 @@ def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: Model
 # -- over the part --------------------------------------------------------------------------
 
 
-def test_a_point_over_the_part_warns_naming_the_binding_resource() -> None:
+def test_a_point_over_the_part_is_a_finding_naming_the_binding_resource() -> None:
     """Whichever strategy chose it: the Chain at its fastest (target_throughput 2e8, a
     cycle a frame at 5 ns, relaxed to 3) uses 669 LUT, more than a part of 500 has; a
-    warning names the binding resource, and the point is explored and saved all the
+    limitation names the binding resource, and the point is explored and saved all the
     same (RC5)."""
     small = Resources(lut=500, ff=141120, bram18=432, uram=0, dsp=360)
     part = replace(TARGET, platform=replace(TARGET.platform, resources=small))
-    with pytest.warns(ResourceBudgetWarning, match="most of lut: lut 669 of 500"):
-        report = explored(
-            kernel_model(), part, [{"strategy": "target_throughput", "fps": 2e8}], fresh=True
-        )
+    report = explored(
+        kernel_model(), part, [{"strategy": "target_throughput", "fps": 2e8}], fresh=True
+    )
     resources = report["resources"]
     assert report["bottleneck"]["cycles"] == 3
     assert resources["binding"] == "lut" and list(resources["over"]) == ["lut"]
     assert resources["over"]["lut"] == {"used": 669, "platform": 500}
-    assert resources["warning"].startswith("the point uses more than the platform's part has")
+    (over,) = resources["findings"]
+    assert (over["kind"], over["code"]) == ("limitation", "resources-over-part")
+    assert over["message"].startswith("the point uses more than the platform's part has")
+    assert "most of lut: lut 669 of 500" in over["message"]
 
 
 def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound(tmp_path: Path) -> None:
-    """A compressor reducer pinned on ``first`` states no resources (RC5: rank and warn):
-    the search budgets what is stated and warns, naming it, and the report's total is
-    a lower bound, naming it too."""
+    """A compressor reducer pinned on ``first`` states no resources (RC5: rank and state
+    it): the search budgets what is stated and says so (a ``resources-unstated``
+    limitation, its member's findings the causes), naming it, and the report's total is
+    a lower bound, naming it too, with its findings."""
     pinned = tmp_path / "compressor.json"
     pinned.write_text('{"first": {"compute.packed.reducer": "compressor"}}')
     model = ModelWrapper(kernel_model().model.__deepcopy__())
     write_target(model, TARGET)
     specs = [{"strategy": "pinned", "path": str(pinned)}, *within(0.005)]
-    with pytest.warns(UnstatedResourcesWarning, match=r"\bfirst .*compressor"):
-        report = explore_kernel_choices(
-            model, [strategy(spec) for spec in specs], fresh=True
-        ).report
+    result = explore_kernel_choices(model, [strategy(spec) for spec in specs], fresh=True)
+    report = result.report
     searched = report["strategies"][1]
     assert searched["lower_bound"] is True and list(searched["unstated"]) == ["first"]
+    assert all(record["code"] for record in searched["unstated"]["first"])
+    (unstated,) = [f for f in result.findings if f.code == "resources-unstated"]
+    assert unstated.kind is FindingKind.LIMITATION and unstated.owner == "max_throughput"
+    assert re.search(r"\bfirst .*compressor", unstated.message)
+    assert dict(unstated.details)["members"] == ("first",) and unstated.causes
+    assert searched["findings"][0]["code"] == "resources-unstated"
     resources = report["resources"]
     assert resources["lower_bound"] is True and resources["shell"] is None
     assert list(resources["unstated"]) == ["first"]

@@ -26,7 +26,6 @@ from finn.transformation.prepare.checkpoint import (
     DEVIATIONS,
     PreparationRefused,
     checkpoint,
-    summary,
 )
 from finn.transformation.prepare.phase import (
     RECIPE_TRANSFORMS,
@@ -48,5 +47,4 @@ __all__ = [
     "checkpoint",
     "prepared",
     "reference",
-    "summary",
 ]

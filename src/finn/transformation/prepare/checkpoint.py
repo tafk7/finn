@@ -50,7 +50,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.containers import container, exact_up_to, matmul_partial_sums
 from finn.core.containers import name as container_name
-from finn.core.space import Finding, FindingKind
+from finn.core.space import Finding, FindingKind, finding_text
 from finn.util.graph import between
 
 OWNER = "P7 checkpoint"
@@ -587,13 +587,13 @@ def remaining(model: ModelWrapper, anchors: Collection[tuple[str, str]]) -> list
 
 
 class PreparationRefused(ValueError):
-    """The prepared graph breaks a guarantee the kernel path relies on: its blockers,
-    each named."""
+    """The prepared graph breaks a guarantee the kernel path relies on: its blockers
+    (``findings``), each named."""
 
-    def __init__(self, blockers: Iterable[Finding]) -> None:
-        self.blockers = tuple(blockers)
-        named = "; ".join(f"{f.owner}: {f.code}: {f.message}" for f in self.blockers)
-        super().__init__(f"graph preparation: {len(self.blockers)} blockers: {named}")
+    def __init__(self, findings: Iterable[Finding]) -> None:
+        self.findings = tuple(findings)
+        named = "; ".join(map(finding_text, self.findings))
+        super().__init__(f"graph preparation: {len(self.findings)} blockers: {named}")
 
 
 @dataclass(frozen=True)
@@ -617,16 +617,3 @@ def checkpoint(model: ModelWrapper, anchors: Collection[tuple[str, str]]) -> Che
     bounded = bounds(model)
     findings = (*structure(model, anchors), *bounded.findings, *remaining(model, anchors))
     return Checkpoint(tuple(findings), bounded.bounded, bounded.unbounded)
-
-
-def summary(findings: Iterable[Finding]) -> list[str]:
-    """One line per finding code for a build's log: its kind, how many, and the first
-    message."""
-    by_code: dict[tuple[str, str], list[Finding]] = {}
-    for finding in findings:
-        by_code.setdefault((finding.code, finding.kind.value), []).append(finding)
-    return [
-        f"Graph preparation:   {code} ({kind}) {len(found)}: {found[0].message}"
-        + (f"; and {len(found) - 1} more" if len(found) > 1 else "")
-        for (code, kind), found in by_code.items()
-    ]

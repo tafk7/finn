@@ -183,11 +183,15 @@ class KernelOpError(ValueError):
     when there is something to name: a node's choice attributes (``compute.packed.pe``),
     a channel's keys (``transport``, or ``<tensor>.<key>`` where a node's point or
     packaging names the owner), or the tensors whose channel choices are refused
-    whole."""
+    whole. ``findings`` are the refusal's reasons where they have codes (the kernels'
+    findings, the shell's, a conversion's): what a reader of the build asserts on."""
 
-    def __init__(self, message: str, keys: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, message: str, keys: tuple[str, ...] = (), findings: Iterable[Finding] = ()
+    ) -> None:
         super().__init__(message)
         self.keys = keys
+        self.findings = tuple(findings)
 
 
 class FactUnstated(KernelOpError):
@@ -848,7 +852,7 @@ class KernelOp(CustomOp):
         kernel = getattr(BIND_CACHE.inputs(self.facts()), self.member)
         answer = kernel.query(getattr(type(kernel), name))
         if not isinstance(answer, Available):
-            raise KernelOpError(f"{self.label}: {describe([answer])}")
+            raise KernelOpError(f"{self.label}: {describe([answer])}", findings=answer.findings)
         return answer.value
 
 
