@@ -634,7 +634,8 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
         for node, held in kernel_choices_config(body).items()
     }
-    assert folding == SET_FOLDING
+    # Every value is saved: the channels' too, which state no folding.
+    assert {node: each for node, each in folding.items() if each} == SET_FOLDING
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
     (target,) = report["strategies"]
     assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
