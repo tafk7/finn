@@ -35,7 +35,7 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
-from finn.builder.build_dataflow_steps import step_kernel_stitched_ip
+from finn.builder.build_dataflow_steps import step_create_stitched_ip
 from finn.builder.kernel_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
@@ -199,7 +199,7 @@ def test_the_testbench_is_an_output_run_only_by_its_verification_step(
             verify_input_npy=str(tmp_path / "absent.npy"),
         )
         cfg._toolchain = cast(Toolchain, stub)
-        step_kernel_stitched_ip(parent, cfg)
+        step_create_stitched_ip(parent, cfg)
         testbench = output / "stitched_ip" / TESTBENCH_DIR
         assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
         assert (testbench / RUN_SCRIPT).is_file()
@@ -267,7 +267,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     ip = output / "stitched_ip"
     assert (ip / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.
-    parent = ModelWrapper(str(output / "intermediate_models" / "step_kernel_stitched_ip.onnx"))
+    parent = ModelWrapper(str(output / "intermediate_models" / "step_create_stitched_ip.onnx"))
     _, body, _ = partition_body(parent)
     point, _ = configured_root(body, "partition")
     described = json.loads((ip / "interface.json").read_text())

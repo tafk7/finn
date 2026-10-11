@@ -91,8 +91,8 @@ class VerificationStepType(str, Enum):
     """The checks a build runs beside those it always runs, as asked: none by
     default, since no build re-verifies the partition's computation (its KernelOps'
     ``execute_node`` is the reference, and the harness checks the hardware against
-    it). step_prepare_checkpoint runs the prepared graph's; step_verify_kernel_partition
-    the partition's; step_kernel_stitched_ip its testbench's. The Python checks
+    it). step_prepare_checkpoint runs the prepared graph's; step_verify_partition
+    the partition's; step_create_stitched_ip its testbench's. The Python checks
     (GRAPH_PREPARATION_PYTHON, PARTITION_PYTHON) report a failure as FAIL and the
     build continues, but for a prepared annotation a drawn value breaks, which
     refuses the graph; the RTL checks (PARTITION_ELABORATION, STITCHED_IP_TESTBENCH)
@@ -125,14 +125,12 @@ VERIFIED_BY = {
         ("phase_graph_preparation", "step_prepare_checkpoint"),
     ),
     VerificationStepType.PARTITION_PYTHON: (
-        ("phase_kernel_path", "step_kernel_ops"),
-        ("phase_kernel_path", "step_verify_kernel_partition"),
+        ("phase_kernel_path", "step_convert_to_hw"),
+        ("phase_kernel_path", "step_verify_partition"),
     ),
-    VerificationStepType.PARTITION_ELABORATION: (
-        ("phase_kernel_path", "step_verify_kernel_partition"),
-    ),
+    VerificationStepType.PARTITION_ELABORATION: (("phase_kernel_path", "step_verify_partition"),),
     VerificationStepType.STITCHED_IP_TESTBENCH: (
-        ("phase_kernel_outputs", "step_kernel_stitched_ip"),
+        ("phase_kernel_outputs", "step_create_stitched_ip"),
     ),
 }
 
@@ -189,7 +187,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: default.
     generate_outputs: List[DataflowOutputType] = field(default_factory=list)
 
-    #: The exploration (step_kernel_choices): the strategies that choose the KernelOps'
+    #: The exploration (step_explore): the strategies that choose the KernelOps'
     #: open choices through the DSE seam, run as written, each a spec with its own
     #: parameters (finn.transformation.kernels.KERNEL_STRATEGIES):
     #: ``{"strategy": "pinned", "path": ...}`` (a kernel_choices.json),
@@ -219,7 +217,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
 
     #: The checks the build runs beside those it always runs
     #: (VerificationStepType), none by default: step_prepare_checkpoint's,
-    #: step_verify_kernel_partition's, and step_kernel_stitched_ip's testbench.
+    #: step_verify_partition's, and step_create_stitched_ip's testbench.
     verify_steps: List[VerificationStepType] = field(default_factory=list)
 
     #: The .npy file of inputs PARTITION_PYTHON runs the partition and the source on,

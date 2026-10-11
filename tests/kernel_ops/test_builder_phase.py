@@ -42,14 +42,14 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_steps import (
-    step_kernel_bitfile,
-    step_kernel_choices,
-    step_kernel_deployment_package,
-    step_kernel_driver,
-    step_kernel_ops,
-    step_kernel_partition,
-    step_kernel_resources,
-    step_verify_kernel_partition,
+    step_convert_to_hw,
+    step_create_dataflow_partition,
+    step_deployment_package,
+    step_explore,
+    step_make_driver,
+    step_resources_report,
+    step_synthesize_bitfile,
+    step_verify_partition,
 )
 from finn.custom_op.kernels.base import KernelOpError, read_target, write_target
 from finn.custom_op.kernels.shell import configured_root
@@ -100,10 +100,10 @@ from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, partition, preparation
 
 #: The phase's steps, in the order they run.
 STEPS = (
-    "step_kernel_ops",
-    "step_kernel_partition",
-    "step_kernel_choices",
-    "step_verify_kernel_partition",
+    "step_convert_to_hw",
+    "step_create_dataflow_partition",
+    "step_explore",
+    "step_verify_partition",
 )
 
 
@@ -112,9 +112,9 @@ def explore(source: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     cut once, its body's choices explored and saved."""
     model = source
     for step in (
-        step_kernel_ops,
-        step_kernel_partition,
-        step_kernel_choices,
+        step_convert_to_hw,
+        step_create_dataflow_partition,
+        step_explore,
     ):
         model = step(model, cfg)
     return model
@@ -194,7 +194,7 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     )
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
-    converted = seen["step_kernel_ops"]
+    converted = seen["step_convert_to_hw"]
     assert read_target(converted) == ULTRA96
     kernel_ops = [node.op_type for node in converted.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     assert kernel_ops == ["Thresholding", "MatMul"] * 4
@@ -219,7 +219,7 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # Cut once, before the exploration: the build's model is the parent graph, the input
     # flatten and the label select on the host around one partition, named partition,
     # whose body is its file; the exploration reads and saves the body.
-    parent = seen["step_kernel_partition"]
+    parent = seen["step_create_dataflow_partition"]
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Reshape", "Reshape_0"),
         ("StreamingDataflowPartition", "partition"),
@@ -227,7 +227,7 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     ]
     _, built, body_file = partition_body(parent)
     assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
-    assert seen["step_verify_kernel_partition"].graph.node[1].name == "partition"
+    assert seen["step_verify_partition"].graph.node[1].name == "partition"
     # The partition's body: the one tfc.py makes by hand, with no choice saved (the
     # default exploration is none: the baseline completion completes every choice
     # where the partition is built, never saved).
@@ -293,13 +293,13 @@ def test_the_debug_placeholder_completion_says_so_for_every_value_it_takes(
     assert len(debug) == sum(entry["by"].startswith("DEBUG") for entry in entries) == 40
     assert "DEBUG: completed by placeholder: MatMul_0.compute.packed.pe = 1" in debug
     # The verification completes it the same way, and it passes.
-    step_verify_kernel_partition(model, cfg)
+    step_verify_partition(model, cfg)
 
 
 def test_a_completion_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
     cfg = config(tmp_path, kernel_completion="minimum")
     with pytest.raises(ValueError, match="names no kernel completion policy"):
-        step_kernel_choices(matmul_model(), cfg)
+        step_explore(matmul_model(), cfg)
 
 
 @pytest.mark.slow
@@ -312,26 +312,26 @@ def test_the_verification_refuses_a_partition_for_another_target(
     with pytest.raises(
         TargetRefused, match="target-drift: .*period_ns: the model states 5.0, the build 4.0"
     ):
-        step_verify_kernel_partition(parent, cfg)
+        step_verify_partition(parent, cfg)
 
 
 def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: Path) -> None:
-    """The configuration's target, resolved, is the one step_kernel_ops states in the
+    """The configuration's target, resolved, is the one step_convert_to_hw states in the
     model: the shell it names, ``ip`` unless one is; on ``ip`` a board names its part
     and the target states none, so naming the board or its part is the same target."""
     # The Chain's shapes inferred, as a streamlined graph's are: else its
     # MultiThreshold stays, between the MatMuls.
-    converted = step_kernel_ops(chain_source().transform(InferShapes()), config(tmp_path))
+    converted = step_convert_to_hw(chain_source().transform(InferShapes()), config(tmp_path))
     assert read_target(converted) == ULTRA96
     on_ip = config(tmp_path, target=TargetRequest(board="Ultra96", period_ns=5.0))
     assert on_ip._resolve_target() == resolve_target(part=ULTRA96.part, period_ns=5.0)
     assert (on_ip._resolve_target().shell, on_ip._resolve_target().board) == ("ip", None)
     asserted = TargetRequest(board="Ultra96", part="xczu3eg-sbva484-1-i", period_ns=5.0)
     with pytest.raises(TargetRefused, match="board-part-mismatch"):
-        step_kernel_ops(chain_source(), config(tmp_path, target=asserted))
+        step_convert_to_hw(chain_source(), config(tmp_path, target=asserted))
     xrt = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0, shell="xrt")
     with pytest.raises(TargetRefused, match="unsupported-shell: 'xrt'"):
-        step_kernel_ops(chain_source(), config(tmp_path, target=xrt))
+        step_convert_to_hw(chain_source(), config(tmp_path, target=xrt))
 
 
 def failed_checks(cfg: Any) -> dict[str, list[str]]:
@@ -366,7 +366,7 @@ def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: P
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
-        step_kernel_bitfile(parent, cfg)
+        step_synthesize_bitfile(parent, cfg)
 
 
 def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> None:
@@ -402,14 +402,14 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "driver").mkdir(parents=True)
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
     with pytest.raises(ValueError, match="the model states no bitfile"):
-        step_kernel_deployment_package(parent, cfg)
+        step_deployment_package(parent, cfg)
     parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
     with pytest.raises(ValueError, match="the model states no pynq_driver"):
-        step_kernel_deployment_package(parent, cfg)
+        step_deployment_package(parent, cfg)
     elsewhere = tmp_path / "elsewhere" / "report" / "driver.json"
     parent.set(OUTPUT_REPORTS, {"driver": str(elsewhere)})
     with pytest.raises(ValueError, match="the model's pynq_driver is .*elsewhere.*, not this "):
-        step_kernel_deployment_package(parent, cfg)
+        step_deployment_package(parent, cfg)
     assert not (output / "deploy").exists()
 
 
@@ -470,7 +470,7 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
     ]
     assert (
-        "stitched_ip_testbench, which needs phase_kernel_outputs or step_kernel_stitched_ip"
+        "stitched_ip_testbench, which needs phase_kernel_outputs or step_create_stitched_ip"
         in warning.message
     )
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
@@ -492,7 +492,7 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     converts, named with its findings, after the report is written: not at
     partitioning, which would find the partition depending on itself."""
     with pytest.raises(KernelOpError) as refused:
-        step_kernel_ops(host_between_source(), config(tmp_path))
+        step_convert_to_hw(host_between_source(), config(tmp_path))
     assert str(refused.value) == (
         "1 host nodes sit between KernelOps, so a partition of the KernelOps would depend "
         "on itself: flip (ToKernelOps: no-kernel-op: no KernelOp binds onnx.Transpose)"
@@ -520,10 +520,10 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
 def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
     cfg = config(tmp_path, kernel_exploration=[{"strategy": "fifo_depths"}])
     with pytest.raises(ValueError, match="names no kernel strategy"):
-        step_kernel_choices(matmul_model(), cfg)
+        step_explore(matmul_model(), cfg)
     cfg = config(tmp_path, kernel_exploration=[{"strategy": "target_throughput", "fsp": 1}])
     with pytest.raises(ValueError, match="unexpected keyword argument 'fsp'"):
-        step_kernel_choices(matmul_model(), cfg)
+        step_explore(matmul_model(), cfg)
 
 
 def set_folding() -> dict[str, dict[str, int]]:
@@ -1080,10 +1080,10 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         (Path(cfg.output_dir) / stale).write_text("an earlier build's")
     parent = explore(source, cfg)
     for step in (
-        step_kernel_bitfile,
-        step_kernel_driver,
-        step_kernel_resources,
-        step_kernel_deployment_package,
+        step_synthesize_bitfile,
+        step_make_driver,
+        step_resources_report,
+        step_deployment_package,
     ):
         parent = step(parent, cfg)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
@@ -1242,13 +1242,13 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
     with pytest.raises(ValueError, match="the model states no delivered clock"):
-        step_kernel_driver(parent, cfg)
+        step_make_driver(parent, cfg)
     report = tmp_path / "delivered_clock.json"
     report.write_text(json.dumps({"target_period_ns": 5.0, "warning": "no PL clock in it"}))
     parent.set(OUTPUT_REPORTS, {"delivered_clock": str(report)})
     with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
-        step_kernel_driver(parent, cfg)
+        step_make_driver(parent, cfg)
     report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
     with pytest.raises(ValueError, match="the model states no bitfile"):
-        step_kernel_driver(parent, cfg)
+        step_make_driver(parent, cfg)
     assert not (Path(cfg.output_dir) / "driver").exists()

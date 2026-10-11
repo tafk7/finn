@@ -292,11 +292,11 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
 
 def test_a_start_step_the_build_does_not_have_is_named_with_its_steps() -> None:
     """A default build's steps are its phases: a step inside one is no start_step."""
-    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "start_step": "step_kernel_choices"}))
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "start_step": "step_explore"}))
     with pytest.raises(AssertionError) as refused:
-        resolve_step_filename("step_kernel_choices", cfg, -1)
+        resolve_step_filename("step_explore", cfg, -1)
     assert str(refused.value) == (
-        "start_step 'step_kernel_choices' is not one of this build's steps: "
+        "start_step 'step_explore' is not one of this build's steps: "
         "phase_graph_preparation, phase_kernel_path, phase_kernel_outputs"
     )
 
@@ -329,7 +329,7 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     (directory / "dataflow_build_config.json").write_text(cfg.to_json())
     assert build_dataflow_directory(str(directory)) == 0
     output = tmp_path / "output"
-    built = ModelWrapper(str(output / "intermediate_models" / "step_verify_kernel_partition.onnx"))
+    built = ModelWrapper(str(output / "intermediate_models" / "step_verify_partition.onnx"))
     _, body, _ = partition_body(built)
     assert read_target(body) == resolve_target(part=ULTRA96.part, period_ns=5.0)
     assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(body)

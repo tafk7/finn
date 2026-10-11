@@ -20,14 +20,12 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_steps import (
-    step_kernel_bitfile,
-    step_kernel_choices,
-    step_kernel_deployment_package,
-    step_kernel_driver,
-    step_kernel_ops,
-    step_kernel_partition,
-    step_kernel_resources,
-    step_kernel_stitched_ip,
+    step_convert_to_hw,
+    step_create_dataflow_partition,
+    step_create_stitched_ip,
+    step_deployment_package,
+    step_explore,
+    step_make_driver,
     step_prepare_checkpoint,
     step_prepare_containers,
     step_prepare_import,
@@ -35,7 +33,9 @@ from finn.builder.build_dataflow_steps import (
     step_prepare_quantization,
     step_prepare_streamlining,
     step_prepare_topology,
-    step_verify_kernel_partition,
+    step_resources_report,
+    step_synthesize_bitfile,
+    step_verify_partition,
 )
 
 #: A step a phase runs, or one a build configuration injects.
@@ -83,8 +83,8 @@ def _execute_step(step_fn: _Step, model: ModelWrapper, cfg: DataflowBuildConfig)
     first and those ``cfg.inject_steps_after`` names after it, each one's model saved
     as an intermediate model if ``cfg.save_intermediate_models``, and each one timed
     (``recorded_step_times``). Injection names a phase or a step inside one:
-    ``inject_steps_after={"step_kernel_choices": [my_func]}`` runs ``my_func`` after
-    ``step_kernel_choices`` inside ``phase_kernel_path`` too."""
+    ``inject_steps_after={"step_explore": [my_func]}`` runs ``my_func`` after
+    ``step_explore`` inside ``phase_kernel_path`` too."""
     step_name = step_fn.__name__
     for injected_step in cfg.inject_steps_before.get(step_name, []):
         model = _timed(injected_step, model, cfg)
@@ -133,35 +133,36 @@ def phase_kernel_path(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWra
     """Phase: the kernel path, from a prepared model to a partition of KernelOps.
 
     Internal steps:
-    - step_kernel_ops: State the build target in the model, rewrite to KernelOps,
+    - step_convert_to_hw: State the build target in the model, rewrite to KernelOps,
       every tensor inferred as it goes
-    - step_kernel_partition: The KernelOps cut once into one partition, the rest on the host
-    - step_kernel_choices: Commit the partition's open choices by the configured strategies
-    - step_verify_kernel_partition: Check the partition (and what verify_steps asks)
+    - step_create_dataflow_partition: The KernelOps cut once into one partition, the
+      rest on the host
+    - step_explore: Commit the partition's open choices by the configured strategies
+    - step_verify_partition: Check the partition (and what verify_steps asks)
 
     Returns the parent graph: the host's nodes and the partition node, whose body
     holds the KernelOps, their choices committed."""
-    model = _execute_step(step_kernel_ops, model, cfg)
-    model = _execute_step(step_kernel_partition, model, cfg)
-    model = _execute_step(step_kernel_choices, model, cfg)
-    model = _execute_step(step_verify_kernel_partition, model, cfg)
+    model = _execute_step(step_convert_to_hw, model, cfg)
+    model = _execute_step(step_create_dataflow_partition, model, cfg)
+    model = _execute_step(step_explore, model, cfg)
+    model = _execute_step(step_verify_partition, model, cfg)
     return model
 
 
 def phase_kernel_outputs(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Phase: the outputs the configuration asks (generate_outputs).
 
-    Internal steps (each but step_kernel_resources checks generate_outputs):
-    - step_kernel_stitched_ip: The partition's IP, its description, resources, testbench
-    - step_kernel_bitfile: The shell built around the partition, to a bitfile
-    - step_kernel_driver: The driver of the shell's host runtime
-    - step_kernel_resources: The resources per member of the shell
-    - step_kernel_deployment_package: The bitfile and driver, packaged"""
-    model = _execute_step(step_kernel_stitched_ip, model, cfg)
-    model = _execute_step(step_kernel_bitfile, model, cfg)
-    model = _execute_step(step_kernel_driver, model, cfg)
-    model = _execute_step(step_kernel_resources, model, cfg)
-    model = _execute_step(step_kernel_deployment_package, model, cfg)
+    Internal steps (each but step_resources_report checks generate_outputs):
+    - step_create_stitched_ip: The partition's IP, its description, resources, testbench
+    - step_synthesize_bitfile: The shell built around the partition, to a bitfile
+    - step_make_driver: The driver of the shell's host runtime
+    - step_resources_report: The resources per member of the shell
+    - step_deployment_package: The bitfile and driver, packaged"""
+    model = _execute_step(step_create_stitched_ip, model, cfg)
+    model = _execute_step(step_synthesize_bitfile, model, cfg)
+    model = _execute_step(step_make_driver, model, cfg)
+    model = _execute_step(step_resources_report, model, cfg)
+    model = _execute_step(step_deployment_package, model, cfg)
     return model
 
 
