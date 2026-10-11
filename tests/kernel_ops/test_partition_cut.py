@@ -33,7 +33,9 @@ from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
+    design_digest,
     partition_body,
 )
 from finn.platform import resolve_target
@@ -327,7 +329,10 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         "finn.outputs/ip",
         "finn.outputs/vlnv",
         "finn.outputs/interfaces",
+        "finn.outputs/made_from",
     }
+    # The design the IP was made from: the body's, which packaging leaves unchanged.
+    assert packaged.get(OUTPUT_MADE_FROM) == design_digest(body) == design_digest(packaged)
     # Typed metadata is the graph's; a flat key would be the model's.
     assert list(packaged.model.metadata_props) == []
 

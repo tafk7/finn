@@ -13,8 +13,11 @@ The runner (``build_pynq``):
   design instantiates it (``ipgen.create_stitched_ip``, named as the end's instance:
   ``xilinx_finn:finn:<instance>:1.0`` with the pins ``IODMA_PINS`` names);
 - packages the partition (``PackagePartition``: its body states its IP in
-  ``finn.outputs``), unless its body already states the IP this build packaged
-  (``STITCHED_IP`` or ``OOC_SYNTH``: the partition is packaged once);
+  ``finn.outputs``), unless its body already states an IP made from the body's design
+  as it is now (``made_from`` equal to ``design_digest`` of the body: ``STITCHED_IP`` or
+  ``OOC_SYNTH`` packaged it earlier in the build, and the partition is packaged once);
+  an IP made from another design (a choice, a fact or a weight changed since) is
+  packaged again, and the build says so;
 - writes the block design (``block_design``) from the export's instances and
   connections into ``templates.custom_zynq_shell_template``, unchanged; the
   template's own debug block names nets of the HWCustomOp flow's partitions and stays
@@ -22,7 +25,8 @@ The runner (``build_pynq``):
   (``debug_lines``);
 - runs Vivado on it and collects what it made (``PynqBuilt``): the bitfile, its
   hardware handoff, the routed timing report, the template's ``impl_1`` hierarchical
-  utilization report and each IP's out-of-context synthesis report.
+  utilization report and each IP's out-of-context synthesis report, with the digest of
+  the partition's design its IP was made from.
 
 The driver its host runtime runs is ``driver``'s.
 """
@@ -40,7 +44,9 @@ from qonnx.util.basic import qonnx_make_model
 from finn import resources
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
+    design_digest,
     partition_body,
 )
 from finn.kernels.explore import Completion
@@ -112,15 +118,17 @@ class InstanceIP:
 class PynqBuilt:
     """What Vivado made of the block design: the ``project`` directory, the
     ``bitfile``, its hardware handoff (``hwh``), the routed ``timing`` summary, the
-    template's ``impl_1`` hierarchical utilization report (``placed``) and each IP's
+    template's ``impl_1`` hierarchical utilization report (``placed``), each IP's
     out-of-context synthesis utilization report by its run (``out_of_context``,
-    ``top_<instance>_0`` for the instances)."""
+    ``top_<instance>_0`` for the instances), and the digest of the partition's design
+    its IP was made from (``made_from``, ``design_digest``)."""
 
     project: str
     bitfile: str
     hwh: str
     timing: str
     placed: str
+    made_from: str
     out_of_context: dict[str, str] = field(default_factory=dict)
 
 
@@ -289,9 +297,10 @@ def project_script(export: Integration, design: str, jobs: int | None = None) ->
     )
 
 
-def collect(project: str) -> PynqBuilt:
-    """What Vivado made in ``project`` (the template's project); a bitfile or hardware
-    handoff not there is refused, pointing at the project's logs."""
+def collect(project: str, made_from: str) -> PynqBuilt:
+    """What Vivado made in ``project`` (the template's project), from the partition's IP
+    made from the design ``made_from``; a bitfile or hardware handoff not there is
+    refused, pointing at the project's logs."""
     root = Path(project)
     runs = root / f"{PROJECT}.runs"
     bitfile = runs / "impl_1" / "top_wrapper.bit"
@@ -314,6 +323,7 @@ def collect(project: str) -> PynqBuilt:
         hwh=str(hwh),
         timing=str(runs / "impl_1" / "top_wrapper_timing_summary_routed.rpt"),
         placed=str(root / "synth_report.xml"),
+        made_from=made_from,
         out_of_context=out_of_context,
     )
 
@@ -331,18 +341,27 @@ def build_pynq(
     """Build the kernel path's parent graph ``model`` in the Zynq block design of its
     integration export ``export`` (see the module docstring): the ends' IPs (their
     scratch models saved in ``directory``) and the partition's (its body saved with
-    its IP stated, or the IP the body states already), the project (a new build
-    directory), Vivado run on it, and what it made collected. ``toolchain`` is the
+    its IP stated, or the IP the body states already when it was made from the body's
+    design as it is now), the project (a new build directory), Vivado run on it, and
+    what it made collected. ``toolchain`` is the
     prepared toolchain every tool runs through, by default the machine's; ``jobs`` the
     runs Vivado launches at once; ``options`` the shell's build options;
     ``completion`` the policy that completes the partition's open choices where it is
     packaged (the build's)."""
     toolchain = toolchain or host_toolchain()
     node, body, body_file = partition_body(model)
+    made_from = design_digest(body)
     ips: dict[str, InstanceIP] = {}
     for instance in _instances(export):
         if instance == export.partition:
-            if body.get(OUTPUT_IP) is None:
+            stated, earlier = body.get(OUTPUT_MADE_FROM), body.get(OUTPUT_IP)
+            if earlier is None or stated != made_from:
+                if earlier is not None:
+                    print(
+                        f"{node.name}: its IP ({earlier}) was made from the design "
+                        f"{stated or '(not stated)'}, the partition's is now {made_from}: "
+                        "packaging it again"
+                    )
                 body = body.transform(
                     PackagePartition(node.name, toolchain=toolchain, completion=completion)
                 )
@@ -366,7 +385,7 @@ def build_pynq(
         cwd=project,
         replay=project + "/synth_project.sh",
     )
-    return collect(project)
+    return collect(project, made_from)
 
 
 __all__ = [

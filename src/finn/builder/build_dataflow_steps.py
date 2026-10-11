@@ -20,6 +20,7 @@ its out-of-context resources), then the target's shell's (its bitfile, driver an
 deployment package)."""
 
 import copy
+import dataclasses
 import json
 import os
 import shutil
@@ -49,11 +50,14 @@ from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
+    OUTPUT_BITFILE_MADE_FROM,
+    OUTPUT_BITFILE_OPTIONS,
     OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
     OUTPUT_IP,
     OUTPUT_PROJECT,
     OUTPUT_REPORTS,
+    design_digest,
     partition_body,
 )
 from finn.harness.preparation import check_equivalence
@@ -549,7 +553,11 @@ def _pynq_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper
     (report/post_route_timing.rpt), the template's impl_1 hierarchical utilization
     (report/placed_utilization.xml), each IP's out-of-context synthesis utilization
     (report/out_of_context/), and the delivered clock beside the one asked, with the
-    shell root's bottleneck, ends included (report/delivered_clock.json)."""
+    shell root's bottleneck, ends included (report/delivered_clock.json). The parent
+    graph states the bitfile with the digest of the partition's design its IP was made
+    from (``bitfile_made_from``; the runner packages the partition again when the IP the
+    body states was made from another design) and the shell options it was built with
+    (``bitfile_options``)."""
     kernel_completion = completion(cfg.kernel_completion)
     _, body, _ = partition_body(model)
     bottleneck = shell_bottleneck(body, kernel_completion)
@@ -602,6 +610,8 @@ def _pynq_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper
     print(f"Bitfile written into {bitfile_dir}")
     model.set(OUTPUT_PROJECT, built.project)
     model.set(OUTPUT_BITFILE, str(bitfile))
+    model.set(OUTPUT_BITFILE_MADE_FROM, built.made_from)
+    model.set(OUTPUT_BITFILE_OPTIONS, dataclasses.asdict(options))
     model.set(OUTPUT_HWH, str(hwh))
     stated = {name: str(path) for name, path in reports.items()}
     model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), **stated})
@@ -615,7 +625,8 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     partition to a bitfile, if BITFILE is asked, by its integration (the one with a
     bitfile build: the pynq shell's Vivado block design, _pynq_bitfile), the partition
     completed by ``cfg.kernel_completion``. The parent graph stays the build's model and states what
-    was made (finn.outputs: the project, bitfile, hwh, reports and host runtime). Vivado
+    was made (finn.outputs: the project, bitfile, hwh, reports and host runtime) and
+    what the bitfile was made from (the design's digest, the shell's options). Vivado
     launches as many runs at once as the toolchain's selection says
     (``Selection.vivado_jobs``), and the shell's build takes ``cfg.shell_options``."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
@@ -654,14 +665,37 @@ def _shipped_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Path:
     return Path(bitfile).relative_to(Path(cfg.output_dir))
 
 
+def _refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
+    """Refuse, for ``output``, a bitfile the parent graph states that was not built from
+    its partition's design as it is now: the digest it states (``bitfile_made_from``)
+    is not ``design_digest`` of the body, or it states none."""
+    node, body, _ = partition_body(model)
+    bitfile: str | None = model.get(OUTPUT_BITFILE)
+    stated, now = model.get(OUTPUT_BITFILE_MADE_FROM), design_digest(body)
+    if stated is None:
+        raise ValueError(
+            f"{output}: the model's bitfile ({bitfile}) states no design "
+            "it was built from (finn.outputs bitfile_made_from); build the bitfile again "
+            "(bitfile)"
+        )
+    if stated != now:
+        raise ValueError(
+            f"{output}: the model's bitfile ({bitfile}) is stale: it was "
+            f"built from the design {stated}, and the partition {node.name}'s design is now "
+            f"{now}; build the bitfile again (bitfile)"
+        )
+
+
 def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Write the driver the parent graph's shell's host runtime runs (the PYNQ driver,
     finn.shells.pynq.driver.write_driver) into driver/, if PYNQ_DRIVER is asked: its I/O the
     partition's integration export's ends, PL0 set to the clock the bitfile delivers
     (report/delivered_clock.json), and the bitfile the build ships (finn.outputs) its
-    default, relative to driver/. report/driver.json states that bitfile, what the
-    driver takes and returns, by name, element and shape, and the host's nodes before
-    and after it (driver_description); the parent graph states it among its reports.
+    default, relative to driver/; a bitfile built from another design than the
+    partition's now is refused, named (_refuse_stale_bitfile). report/driver.json states
+    that bitfile, what the driver takes and returns, by name, element and shape, and the
+    host's nodes before and after it (driver_description); the parent graph states it
+    among its reports.
     driver/ is written afresh: nothing an earlier build left there stays."""
     if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         print("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
@@ -671,6 +705,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
         raise ValueError(f"pynq_driver: no driver for the {row.integration!r} integration")
     fclk_mhz = _delivered_mhz(model)
     bitfile = _shipped_bitfile(model, cfg)
+    _refuse_stale_bitfile(model, "pynq_driver")
     export = integration(model, completion(cfg.kernel_completion))
     driver_dir = os.path.join(cfg.output_dir, "driver")
     shutil.rmtree(driver_dir, ignore_errors=True)
@@ -721,7 +756,8 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     the driver's description (deploy/driver.json, report/driver.json). It ships the
     bitfile and the driver the parent graph states (finn.outputs), which this output
     directory's bitfile and driver steps made: a model stating neither, or another
-    directory's, is refused by name, and deploy/ is written afresh."""
+    directory's, or a bitfile built from another design than the partition's now
+    (_refuse_stale_bitfile), is refused by name, and deploy/ is written afresh."""
     if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         print("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
@@ -746,6 +782,7 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
                 f"deployment_package: the model's {name} is {stated}, not this output "
                 f"directory's ({expected})"
             )
+    _refuse_stale_bitfile(model, "deployment_package")
     deploy = output / "deploy"
     shutil.rmtree(deploy, ignore_errors=True)
     shutil.copytree(output / "bitfile", deploy / "bitfile")

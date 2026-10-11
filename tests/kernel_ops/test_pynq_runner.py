@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,11 +25,13 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.custom_op.kernels.base import write_target
+from finn.custom_op.kernels.base import kernel_op, write_target
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
+    design_digest,
     partition_body,
 )
 from finn.platform import resolve_target
@@ -227,11 +230,13 @@ def recorded_build(
     replaced: tuple[str, ...] = (*TOOL_STEPS, "prepare_ip"),
     options: PynqOptions = PynqOptions(),
     packaged: Path | None = None,
+    since: Callable[[ModelWrapper], None] | None = None,
 ) -> tuple[ModelWrapper, Integration, Any, list[tuple[str, object, tuple[object, ...]]]]:
     """build_pynq over the Chain, the ``replaced`` steps replaced by recorders of what
     each is given: the parent graph, its export, what the runner collected, and each
     recorded step's name, toolchain and arguments, in order. With ``packaged``, the
-    body already states that IP, as STITCHED_IP leaves it."""
+    body already states that IP, made from its design, as STITCHED_IP leaves it; then
+    ``since`` changes the body after it was packaged."""
     seen: list[tuple[str, object, tuple[object, ...]]] = []
 
     class RecordedPackaging(Transformation):
@@ -244,6 +249,7 @@ def recorded_build(
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.args[0]}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
+            model.set(OUTPUT_MADE_FROM, design_digest(model))
             return model, False
 
     def recorder(name: str) -> object:
@@ -273,6 +279,9 @@ def recorded_build(
         _, body, body_file = partition_body(parent)
         body.set(OUTPUT_IP, str(packaged))
         body.set(OUTPUT_VLNV, "xilinx_finn:finn:partition:1.0")
+        body.set(OUTPUT_MADE_FROM, design_digest(body))
+        if since is not None:
+            since(body)
         body.save(body_file)
     export = integration(parent)
     built = build_pynq(
@@ -314,9 +323,11 @@ def test_a_build_generates_each_ends_ip_packages_the_partition_and_runs_vivado(
         sides = [memory, end.tensor] if end.contract.direction == "in" else [end.tensor, memory]
         assert [scratch.graph.input[0].name, scratch.graph.output[0].name] == sides
         assert scratch.get_tensor_datatype(memory) == end.contract.element.dtype
-    # The partition's body, saved, states its IP typed and no flat key.
+    # The partition's body, saved, states its IP typed, made from its design, and no flat
+    # key; the build states that design too.
     _, body, _ = partition_body(parent)
     assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
+    assert body.get(OUTPUT_MADE_FROM) == design_digest(body) == built.made_from
     assert list(body.model.metadata_props) == []
     # One Vivado run, of the project's Tcl: the block design of the IPs it generated.
     ((tool, args, script),) = vivado.runs
@@ -338,18 +349,57 @@ def test_a_build_generates_each_ends_ip_packages_the_partition_and_runs_vivado(
 def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A body that states its IP (STITCHED_IP or OOC_SYNTH packaged it) is instantiated
-    as it is: the partition is packaged once in a build."""
+    """A body that states its IP made from its design as it is (STITCHED_IP or OOC_SYNTH
+    packaged it) is instantiated as it is: the partition is packaged once in a build."""
     vivado = FakeVivado()
     earlier = tmp_path / "stitched_ip" / "ip"
-    _, export, _, seen = recorded_build(monkeypatch, tmp_path, vivado, packaged=earlier)
+    parent, export, built, seen = recorded_build(monkeypatch, tmp_path, vivado, packaged=earlier)
     assert "PackagePartition" not in [name for name, _, _ in seen]
+    _, body, _ = partition_body(parent)
+    assert (body.get(OUTPUT_IP), body.get(OUTPUT_MADE_FROM)) == (str(earlier), built.made_from)
+    assert built.made_from == design_digest(body)
     ips = {
         **built_ips(tmp_path),
         "partition": InstanceIP("xilinx_finn:finn:partition:1.0", (str(earlier),)),
     }
     ((_, _, script),) = vivado.runs
     assert block_design(export, ips) in script
+
+
+def changed_choice(body: ModelWrapper) -> None:
+    """The threshold kernel's pipeline deepened: a choice changed since packaging."""
+    (node,) = [node for node in body.graph.node if node.name == "activate"]
+    kernel_op(body, node).save({"deep_pipeline": 1})
+
+
+def unstated(body: ModelWrapper) -> None:
+    """The IP's design not stated: packaged by no PackagePartition of this flow."""
+    body.delete(OUTPUT_MADE_FROM)
+
+
+@pytest.mark.parametrize("since", [changed_choice, unstated], ids=["choice", "unstated"])
+def test_an_ip_made_from_another_design_is_packaged_again(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    since: Callable[[ModelWrapper], None],
+) -> None:
+    """A body whose IP was made from another design than its own now (a choice changed
+    since it was packaged), or states none, is packaged again, and the build says so:
+    the block design instantiates the new IP, and the body states it, made from its
+    design now."""
+    vivado = FakeVivado()
+    earlier = tmp_path / "stitched_ip" / "ip"
+    parent, export, built, seen = recorded_build(
+        monkeypatch, tmp_path, vivado, packaged=earlier, since=since
+    )
+    assert [name for name, _, _ in seen].count("PackagePartition") == 1
+    _, body, _ = partition_body(parent)
+    assert body.get(OUTPUT_IP) == str(tmp_path / "packaged" / "ip")
+    assert body.get(OUTPUT_MADE_FROM) == design_digest(body) == built.made_from
+    ((_, _, script),) = vivado.runs
+    assert block_design(export, built_ips(tmp_path)) in script
+    assert f"partition: its IP ({earlier}) was made from the design " in capsys.readouterr().out
 
 
 def test_the_debug_option_reaches_the_block_design(
@@ -369,7 +419,7 @@ def test_a_build_vivado_made_nothing_of_is_refused(
     with pytest.raises(RuntimeError, match="Vivado made no bitfile or hardware handoff"):
         recorded_build(monkeypatch, tmp_path, FakeVivado(makes=False))
     with pytest.raises(RuntimeError, match="check the logs under"):
-        collect(str(tmp_path))
+        collect(str(tmp_path), "sha256:" + "0" * 64)
 
 
 def test_a_build_prepares_its_default_toolchain_once(

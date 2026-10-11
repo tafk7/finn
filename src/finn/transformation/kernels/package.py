@@ -17,7 +17,9 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   a ``register`` block);
 - on the partition model, its directory, VLNV and interface names, typed
   (``finn.outputs``: ``OUTPUT_IP``, ``OUTPUT_VLNV``, ``OUTPUT_INTERFACES``), as the
-  shells read them.
+  shells read them, and the digest of the design it was made from (``OUTPUT_MADE_FROM``,
+  ``design_digest`` of the partition model): a shell reuses the IP only while the
+  partition's digest is still that one.
 
 The Tcl, the VLNV and the interface names are emitted by
 ``finn.kernels.artifacts.ipxact`` from the module's pins; this module supplies
@@ -89,7 +91,9 @@ from finn.custom_op.kernels.shell import configured_root, member, shell_root
 from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
+    OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
+    design_digest,
 )
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
@@ -414,6 +418,7 @@ class PackagePartition(Transformation):
         model.set(OUTPUT_IP, str(project / "ip"))
         model.set(OUTPUT_VLNV, vlnv(self.ip_name))
         model.set(OUTPUT_INTERFACES, interface_names(pins))
+        model.set(OUTPUT_MADE_FROM, design_digest(model))
         return model, False
 
 
