@@ -241,12 +241,11 @@ class DataflowBuildConfig(DataClassJsonMixin):
         default=None, metadata=config(decoder=declared(Selection, "toolchain"))
     )
 
-    #: The options of the target's shell's build, as that build states them; a shell
-    #: without a build (``ip``) takes none. The ``pynq`` shell's
-    #: (finn.shells.pynq.runner.PynqOptions): ``enable_hw_debug``,
-    #: integrated logic analyzers on the ends' streams. In JSON:
-    #: {"enable_hw_debug": true}. None by default.
-    shell_options: Dict[str, Any] = field(default_factory=dict)
+    #: Whether the target's shell's build inserts integrated logic analyzers on the
+    #: ends' streams (the ``pynq`` shell's, finn.shells.pynq.runner.PynqOptions); a
+    #: shell without a build (``ip``) refuses it. The bitfile's record states it
+    #: (finn.outputs ``bitfile_options``).
+    enable_hw_debug: bool = False
 
     #: If given, only run the steps in the list, each a step or phase name of the
     #: kernel path (finn.builder.build_dataflow_phases, finn.builder.build_dataflow_steps)
@@ -303,15 +302,14 @@ class DataflowBuildConfig(DataClassJsonMixin):
         return self.target.resolve()
 
     def _resolve_shell_options(self) -> Optional[PynqOptions]:
-        """The target's shell's build options (``shell_options``), as its build reads
-        them; None for a shell without a build, which refuses any. Each refusal is a
-        ValueError, named."""
+        """The target's shell's build options (``enable_hw_debug``), as its build reads
+        them; None for a shell without a build, which refuses ``enable_hw_debug``. Each
+        refusal is a ValueError, named."""
+        if type(self.enable_hw_debug) is not bool:
+            raise ValueError(f"enable_hw_debug is a bool, not {self.enable_hw_debug!r}")
         target = self._resolve_target()
         if shell_row(target.shell, target.board).integration == VIVADO_BLOCK_DESIGN:
-            return PynqOptions.from_dict(self.shell_options)
-        if self.shell_options:
-            raise ValueError(
-                f"shell_options: the {target.shell!r} shell has no build to take "
-                f"{', '.join(sorted(self.shell_options))}"
-            )
+            return PynqOptions(enable_hw_debug=self.enable_hw_debug)
+        if self.enable_hw_debug:
+            raise ValueError(f"enable_hw_debug: the {target.shell!r} shell has no build to take it")
         return None

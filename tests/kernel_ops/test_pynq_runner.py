@@ -178,22 +178,6 @@ def test_vivados_jobs_are_the_builds(
     assert f"launch_runs -to_step write_bitstream impl_1 -jobs {expected}\n" in script
 
 
-@pytest.mark.parametrize(
-    "options, refused",
-    [
-        ({"enable_debug": True}, "the pynq shell's build has no option enable_debug"),
-        ({"enable_hw_debug": 1}, "the pynq shell's enable_hw_debug is a bool, not 1"),
-    ],
-)
-def test_an_option_the_pynq_build_does_not_take_is_refused(
-    options: dict[str, Any], refused: str
-) -> None:
-    with pytest.raises(ValueError, match=refused):
-        PynqOptions.from_dict(options)
-    assert PynqOptions.from_dict({}) == PynqOptions(enable_hw_debug=False)
-    assert PynqOptions.from_dict({"enable_hw_debug": True}).enable_hw_debug
-
-
 #: The steps of a build that run a tool, each given the build's toolchain.
 TOOL_STEPS = ("hls_synth_ip", "create_stitched_ip", "PackagePartition")
 #: The order they run in, the block design's: each input end's IP (HLS synthesis,

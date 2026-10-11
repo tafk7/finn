@@ -101,7 +101,7 @@ def test_a_configuration_holds_through_json() -> None:
         toolchain=Selection(
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
-        shell_options={"enable_hw_debug": True},
+        enable_hw_debug=True,
         steps=["phase_optimize_hardware", "step_create_stitched_ip"],
         start_step="step_explore",
         stop_step="phase_optimize_hardware",
@@ -142,8 +142,8 @@ def test_a_configuration_holds_through_json() -> None:
     }
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
     assert stated["toolchain"]["vivado_jobs"] == 4
-    # Debug cores are an option of the pynq shell's build (SZ7).
-    assert stated["shell_options"] == {"enable_hw_debug": True}
+    # Debug cores are an option of the pynq shell's build (SZ7), upstream's flat field.
+    assert stated["enable_hw_debug"] is True
     assert cfg._resolve_shell_options() == PynqOptions(enable_hw_debug=True)
 
 
@@ -151,10 +151,9 @@ def test_a_configuration_holds_through_json() -> None:
     "key",
     [
         # The board is the target's; the toolchain's selection states Vivado's jobs
-        # (SZ7); debug cores are the pynq shell's build's option (shell_options).
+        # (SZ7).
         "board",
         "vivado_jobs",
-        "enable_hw_debug",
     ],
 )
 def test_an_undeclared_key_is_refused_naming_it(key: str) -> None:
@@ -191,25 +190,24 @@ def test_a_preparation_the_phase_cannot_run_is_refused_naming_it(
 
 
 @pytest.mark.parametrize(
-    "shell, options, refused",
+    "shell, debug, refused",
     [
-        ("ip", {"enable_hw_debug": True}, "the 'ip' shell has no build to take enable_hw_debug"),
-        ("pynq", {"enable_debug": True}, "the pynq shell's build has no option enable_debug"),
-        ("pynq", {"enable_hw_debug": "yes"}, "the pynq shell's enable_hw_debug is a bool"),
+        ("ip", True, "enable_hw_debug: the 'ip' shell has no build to take it"),
+        ("pynq", "yes", "enable_hw_debug is a bool, not 'yes'"),
     ],
 )
-def test_shell_options_the_shells_build_does_not_take_are_refused(
-    shell: str, options: dict[str, object], refused: str
+def test_hw_debug_the_shells_build_does_not_take_is_refused(
+    shell: str, debug: object, refused: str
 ) -> None:
-    """Before the build: the configuration's check names the option its shell refuses."""
+    """Before the build: the configuration's check names what its shell refuses."""
     target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
     cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "target": target, "shell_options": options})
+        json.dumps({**STATED, "target": target, "enable_hw_debug": debug})
     )
     with pytest.raises(ValueError, match=refused):
         cfg._resolve_shell_options()
     (check,) = [
-        check for check in run_all_config_checks(cfg).checks if check.name == "kernel_shell_options"
+        check for check in run_all_config_checks(cfg).checks if check.name == "kernel_hw_debug"
     ]
     assert (check.severity, check.passed) == (Severity.ERROR, False)
     assert refused in check.message

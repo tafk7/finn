@@ -89,8 +89,8 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
     """The checks of a kernel-path build that its configuration's type does not make
     impossible: its target resolves (finn.platform.resolve_target); the shell outputs
     it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
-    ``ip``), and each output those it is made from (OUTPUT_NEEDS); the shell's build
-    takes its shell_options; the verification input exists, the testbench a
+    ``ip``), and each output those it is made from (OUTPUT_NEEDS); enable_hw_debug
+    only on a shell with a build; the verification input exists, the testbench a
     verification runs is asked for, and the steps each verification needs run
     (VERIFIED_BY)."""
     checks = []
@@ -140,12 +140,11 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
     except ValueError as refused:
         checks.append(
             Check(
-                "kernel_shell_options",
+                "kernel_hw_debug",
                 Severity.ERROR,
                 False,
                 str(refused),
-                "State only the options the target's shell's build takes (pynq: "
-                "enable_hw_debug), or none",
+                "State enable_hw_debug only for a shell with a build (pynq), as a bool",
             )
         )
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(

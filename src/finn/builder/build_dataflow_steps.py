@@ -637,7 +637,7 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     was made (finn.outputs: the project, bitfile, hwh, reports and host runtime) and
     what the bitfile was made from (the design's digest, the shell's options). Vivado
     launches as many runs at once as the toolchain's selection says
-    (``Selection.vivado_jobs``), and the shell's build takes ``cfg.shell_options``."""
+    (``Selection.vivado_jobs``), and the shell's build takes ``cfg.enable_hw_debug``."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         print("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
         return model
