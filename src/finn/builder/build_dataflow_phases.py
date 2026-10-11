@@ -13,13 +13,13 @@ build_dataflow_phase_lookup: dict[str, list[str]] = {
     # Bring the export into FINN's form and clean it for the compiler without changing
     # its computation (finn.transformation.prepare), then check the prepared graph.
     "phase_prepare_model": [
-        "step_prepare_import",
-        "step_prepare_quantization",
-        "step_prepare_io",
-        "step_prepare_streamlining",
-        "step_prepare_topology",
-        "step_prepare_containers",
-        "step_prepare_checkpoint",
+        "step_tidy_up",
+        "step_qonnx_to_finn",
+        "step_add_pre_post_processing",
+        "step_streamline",
+        "step_convert_to_channels_last",
+        "step_widen_containers",
+        "step_check_prepared",
     ],
     # Record the target in the model and convert the graph's nodes to KernelOps.
     "phase_convert_to_hardware": ["step_convert_to_hw"],
@@ -28,11 +28,11 @@ build_dataflow_phase_lookup: dict[str, list[str]] = {
     # Choose the partition's parameters with the configured strategies, then check it.
     "phase_optimize_hardware": ["step_explore", "step_verify_partition"],
     # Generate the partition's HDL and package it as an IP.
-    "phase_build_hardware": ["step_create_stitched_ip"],
+    "phase_emit_hardware": ["step_package_partition"],
     # Make the outputs the configuration asks for: bitfile, driver, resources report,
     # deployment package.
     "phase_generate_outputs": [
-        "step_synthesize_bitfile",
+        "step_build_bitfile",
         "step_make_driver",
         "step_resources_report",
         "step_deployment_package",

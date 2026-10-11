@@ -20,9 +20,9 @@ from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_steps import (
+    AddPrePostProcessingOptions,
+    ConvertToChannelsLastOptions,
     ExploreOptions,
-    PrepareIoOptions,
-    PrepareTopologyOptions,
 )
 from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
@@ -135,7 +135,9 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     cfg = builder_config(
         verify_input_npy="inputs/input.npy",
         step_options={
-            "step_prepare_io": PrepareIoOptions(preprocessing="preproc.onnx", topk=1),
+            "step_add_pre_post_processing": AddPrePostProcessingOptions(
+                preprocessing="preproc.onnx", topk=1
+            ),
             "step_explore": ExploreOptions(
                 kernel_exploration=[
                     {"strategy": "pinned", "path": "kernel_choices.json"},
@@ -143,7 +145,7 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
                     {"strategy": "size_fifos", "margin": 2},
                 ],
             ),
-            "step_prepare_topology": PrepareTopologyOptions(topology=[]),
+            "step_convert_to_channels_last": ConvertToChannelsLastOptions(topology=[]),
         },
         toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
     )
@@ -152,9 +154,9 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     assert read.output_dir == str(directory / "out")
     assert read.verify_input_npy == str(directory / "inputs/input.npy")
     # The paths in each step's options (step_options), the rest of them as stated.
-    assert read.options("step_prepare_io", PrepareIoOptions) == PrepareIoOptions(
-        preprocessing=str(directory / "preproc.onnx"), topk=1
-    )
+    assert read.options(
+        "step_add_pre_post_processing", AddPrePostProcessingOptions
+    ) == AddPrePostProcessingOptions(preprocessing=str(directory / "preproc.onnx"), topk=1)
     assert read.options("step_explore", ExploreOptions) == ExploreOptions(
         kernel_exploration=[
             {"strategy": "pinned", "path": str(directory / "kernel_choices.json")},
@@ -162,7 +164,9 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
             {"strategy": "size_fifos", "margin": 2},
         ],
     )
-    assert read.options("step_prepare_topology", PrepareTopologyOptions).topology == []
+    assert (
+        read.options("step_convert_to_channels_last", ConvertToChannelsLastOptions).topology == []
+    )
     assert read.toolchain == Selection(
         settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
         command_dir=str(directory / "tools"),
@@ -172,7 +176,10 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     (directory / build_dataflow.CONFIG_FILE).write_text(stated.to_json())
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == "/results" and read.toolchain == Selection(command_dir="")
-    assert read.options("step_prepare_io", PrepareIoOptions).preprocessing is None
+    assert (
+        read.options("step_add_pre_post_processing", AddPrePostProcessingOptions).preprocessing
+        is None
+    )
     assert read.step_options == {}
 
 

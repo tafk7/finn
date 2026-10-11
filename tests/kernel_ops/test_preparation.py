@@ -36,7 +36,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import VerificationStepType
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_steps import PREPARATION_REPORT, step_prepare_checkpoint
+from finn.builder.build_dataflow_steps import PREPARATION_REPORT, step_check_prepared
 from finn.core.containers import container, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
@@ -164,7 +164,7 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
     )
     assert build_dataflow_cfg(str(tfc_directory / EXPORT), cfg) == 0
     output = Path(cfg.output_dir)
-    made = ModelWrapper(str(output / "intermediate_models" / "step_prepare_checkpoint.onnx"))
+    made = ModelWrapper(str(output / "intermediate_models" / "step_check_prepared.onnx"))
     # The graph the kernel path's fixtures read, byte for byte.
     assert made.model.SerializeToString() == Path(tfc_streamlined).read_bytes()
     report = json.loads((output / PREPARATION_REPORT).read_text())
@@ -194,7 +194,7 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
     assert manifest["verifications"] == {"graph_preparation_python": "pass"}
-    (checked,) = [each for each in manifest["steps"] if each["name"] == "step_prepare_checkpoint"]
+    (checked,) = [each for each in manifest["steps"] if each["name"] == "step_check_prepared"]
     assert checked["reports"] == [{"path": PREPARATION_REPORT, "findings": {"float-remains": 1}}]
 
 
@@ -819,7 +819,7 @@ def test_the_builders_checkpoint_refuses_a_blocker_naming_it_in_its_report(
     )
     cfg = preparation_config(tmp_path)
     with pytest.raises(PreparationRefused, match="annotation-unsound: MatMul_0") as refused:
-        step_prepare_checkpoint(model, cfg)
+        step_check_prepared(model, cfg)
     assert codes(refused.value.findings) == [("annotation-unsound", FindingKind.BLOCKER)]
     report = json.loads((Path(cfg.output_dir) / PREPARATION_REPORT).read_text())
     assert [f["code"] for f in report["checkpoint"]["findings"]] == ["annotation-unsound"]
@@ -843,7 +843,7 @@ def _built_from(tmp_path: Path, export: ModelWrapper, prepared_as: ModelWrapper)
     cfg = preparation_config(
         tmp_path,
         step_options={},
-        steps=["step_prepare_import", alter, "step_prepare_checkpoint", record],
+        steps=["step_tidy_up", alter, "step_check_prepared", record],
         verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
     )
     status = build_dataflow_cfg(str(tmp_path / "export.onnx"), cfg)
@@ -875,7 +875,7 @@ def test_a_builds_equivalence_difference_is_reported_as_a_failure_and_the_build_
     assert manifest["outcome"] == {"status": "completed"}
     assert manifest["verifications"] == {"graph_preparation_python": "fail"}
     checked = manifest["steps"][-2]
-    assert checked["name"] == "step_prepare_checkpoint"
+    assert checked["name"] == "step_check_prepared"
     assert checked["findings"] == {"equivalence-unexplained": 1}
     # The log renders it for a reader: no deviation's predicate ran, the declared named.
     declared = ", ".join(DEVIATIONS)
@@ -901,7 +901,7 @@ def test_a_builds_checkpoint_blocker_still_refuses_beside_an_equivalence_differe
     outcome = manifest["outcome"]
     assert (outcome["status"], outcome["step"], outcome["kind"]) == (
         "failed",
-        "step_prepare_checkpoint",
+        "step_check_prepared",
         "refusal",
     )
     # Refused twice over: by the checkpoint's bound, and by a draw outside INT2.

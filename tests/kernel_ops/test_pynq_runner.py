@@ -620,7 +620,7 @@ def test_an_ends_tools_write_transcripts_not_this_processs_output(
     ):
         (tools / name).write_text("#!" + sys.executable + "\n" + body)
         (tools / name).chmod(0o755)
-    logs = tmp_path / "logs" / "step_synthesize_bitfile"
+    logs = tmp_path / "logs" / "step_build_bitfile"
     toolchain = Toolchain(
         Selection(hls_frontend="vitis_hls"), {"PATH": f"{tools}:{os.defpath}"}
     ).transcripts_in(logs)

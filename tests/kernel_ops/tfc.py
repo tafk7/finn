@@ -36,7 +36,7 @@ from qonnx.custom_op.registry import getCustomOp
 
 from finn.builder.build_dataflow import resolve_build_steps
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import PrepareIoOptions
+from finn.builder.build_dataflow_steps import AddPrePostProcessingOptions
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
@@ -76,11 +76,11 @@ def exported(directory: Path) -> ModelWrapper:
     return ModelWrapper(str(network))
 
 
-def io_options(directory: Path) -> PrepareIoOptions:
-    """TFC's inputs and outputs as its build states them (step_prepare_io's options),
+def io_options(directory: Path) -> AddPrePostProcessingOptions:
+    """TFC's inputs and outputs as its build states them (step_add_pre_post_processing's options),
     its preprocessing model in ``directory``: the images' scaling merged ahead, the
     input UINT8 (a pixel), the top label selected."""
-    return PrepareIoOptions(
+    return AddPrePostProcessingOptions(
         preprocessing=str(directory / PREPROCESSING), input_datatype="UINT8", topk=1
     )
 
@@ -104,7 +104,7 @@ def preparation_config(directory: Path, **settings: Any) -> DataflowBuildConfig:
         **{
             "output_dir": str(directory / "output"),
             "target": TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
-            "step_options": {"step_prepare_io": io_options(directory)},
+            "step_options": {"step_add_pre_post_processing": io_options(directory)},
             "enable_build_pdb_debug": False,
             "save_intermediate_models": False,
             **settings,

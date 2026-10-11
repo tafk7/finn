@@ -15,7 +15,7 @@ differs passes only where the predicate of a declared deviation explains it
 (``Explanation``, keyed by its code); the predicates are the test harness's, so a
 build, which has none, finds every difference (``equivalence-unexplained``, a
 rejection: the check's equivalence is false there). What a finding stops is its
-caller's: the kernel gate fails on any. A build (``step_prepare_checkpoint``) reports
+caller's: the kernel gate fails on any. A build (``step_check_prepared``) reports
 them as a failed verification and continues, but for ``annotation-unsound``, a blocker
 as the checkpoint's own, which it refuses.
 

@@ -100,7 +100,7 @@ def test_where_a_runs_transcript_goes(tmp_path):
     captured = plain.run("vivado")
     assert (captured.transcript, captured.stdout) == (None, b"hello\n")
 
-    logs = tmp_path / "out" / "logs" / "step_create_stitched_ip"
+    logs = tmp_path / "out" / "logs" / "step_package_partition"
     step = plain.transcripts_in(logs)
     assert (step.selection, step.environment, plain.transcripts) == (
         plain.selection,
@@ -143,7 +143,7 @@ def test_a_failure_in_a_step_names_its_transcript_with_its_error_lines(tmp_path)
         "print('ERROR: [Synth 8-439] module foo not found')\n"
         "raise SystemExit(1)\n",
     )
-    logs = tmp_path / "logs" / "step_synthesize_bitfile"
+    logs = tmp_path / "logs" / "step_build_bitfile"
     with pytest.raises(ToolFailed) as failed:
         toolchain(tmp_path / "tools").transcripts_in(logs).run(
             "vivado", cwd=tmp_path, replay=tmp_path / "synth_project.sh"

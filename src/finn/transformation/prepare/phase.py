@@ -127,7 +127,7 @@ DEFAULT_STREAMLINING = (
     "AbsorbScalarMulAddIntoTopK",
 )
 
-#: P4's default recipe: ``step_streamline``'s topology after lowering convolutions.
+#: P4's default recipe: finn-dev's ``step_streamline``'s topology after lowering convolutions.
 DEFAULT_TOPOLOGY = (
     "MakeMaxPoolNHWC",
     "AbsorbTransposeIntoMultiThreshold",
@@ -140,7 +140,7 @@ DEFAULT_TOPOLOGY = (
 class GraphPreparation:
     """The graph-preparation phase's options, which its sub-phases read. A build states
     them by its preparation steps' options (finn.builder.build_dataflow_steps: each
-    ``step_prepare_*``'s, in a DataflowBuildConfig's ``step_options``). For TFC:
+    preparation step's, in a DataflowBuildConfig's ``step_options``). For TFC:
     ``GraphPreparation(preprocessing="preproc.onnx", input_datatype="UINT8", topk=1)``.
 
     - ``override_inpsize``: P0, the batch size (an int) or the input's shape (a list)

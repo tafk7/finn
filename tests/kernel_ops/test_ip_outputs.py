@@ -36,7 +36,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_steps import ExploreOptions, step_create_stitched_ip
+from finn.builder.build_dataflow_steps import ExploreOptions, step_package_partition
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
@@ -214,7 +214,7 @@ def test_the_testbench_is_an_output_run_only_by_its_verification_step(
             verify_input_npy=str(tmp_path / "absent.npy"),
         )
         cfg._toolchain = cast(Toolchain, stub)
-        step_create_stitched_ip(parent, cfg)
+        step_package_partition(parent, cfg)
         testbench = output / "stitched_ip" / TESTBENCH_DIR
         assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
         assert (testbench / RUN_SCRIPT).is_file()
@@ -251,8 +251,8 @@ def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> 
 
 
 def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: Path) -> None:
-    """step_create_stitched_ip passes the build's toolchain down with its log directory,
-    ``output_dir/logs/step_create_stitched_ip``: packaging's Vivado writes its transcript
+    """step_package_partition passes the build's toolchain down with its log directory,
+    ``output_dir/logs/step_package_partition``: packaging's Vivado writes its transcript
     there, not beside its replay in the packaging project."""
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -269,8 +269,8 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
         verify_input_npy=str(tmp_path / "absent.npy"),
     )
     cfg._toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
-    step_create_stitched_ip(kernel_model().transform(CutKernelPartition(tmp_path / "p")), cfg)
-    logs = output / "logs" / "step_create_stitched_ip"
+    step_package_partition(kernel_model().transform(CutKernelPartition(tmp_path / "p")), cfg)
+    logs = output / "logs" / "step_package_partition"
     assert sorted(path.name for path in logs.iterdir()) == [
         "package.sh.stderr.log",
         "package.sh.stdout.log",
@@ -307,7 +307,7 @@ def test_a_testbench_that_does_not_build_is_the_tools_failure(tmp_path: Path, to
         f'echo "ERROR: [{tool}] it failed" | tee {tool}.log\nexit {xsim.EXIT_STATUS[tool]}\n'
     )
     toolchain = Toolchain(Selection(), {"PATH": os.defpath})
-    logs = tmp_path / "logs" / "step_create_stitched_ip"
+    logs = tmp_path / "logs" / "step_package_partition"
     for tools, transcript in (
         (toolchain, tmp_path / "run.sh.stdout.log"),
         (toolchain.transcripts_in(logs), logs / "run.sh.stdout.log"),
@@ -354,14 +354,14 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["verifications"] == {"stitched_ip_testbench": "pass"}
     # The testbench's run.sh, run through the build's toolchain, its transcript the step's.
-    (stitched,) = [each for each in manifest["steps"] if each["name"] == "step_create_stitched_ip"]
+    (stitched,) = [each for each in manifest["steps"] if each["name"] == "step_package_partition"]
     runs = {Path(run["transcript"]).name: run for run in stitched["tools"]}
     assert runs["run.sh.stdout.log"]["status"] == "completed"
     assert runs["package.sh.stdout.log"]["status"] == "completed"
     ip = output / "stitched_ip"
     assert (ip / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.
-    parent = ModelWrapper(str(output / "intermediate_models" / "step_create_stitched_ip.onnx"))
+    parent = ModelWrapper(str(output / "intermediate_models" / "step_package_partition.onnx"))
     _, body, _ = partition_body(parent)
     point, _ = configured_root(body, "partition")
     described = json.loads((ip / "interface.json").read_text())
