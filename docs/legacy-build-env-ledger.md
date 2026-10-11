@@ -12,7 +12,7 @@ machine settings.
 | --- | --- | --- |
 | `FINN_HOME` | `finn.resources.home()`: fetched resources, XSI builds, the default build directory | `tests/util/test_resources.py` |
 | `FINN_RESOURCES_<NAME>`, `FINN_RESOURCES_DIR`, `FINN_RESOURCES_SYSTEM_CACHE`, `FINN_RESOURCES_FILES`, `FINN_RESOURCES_OFFLINE`, `FINN_RESOURCES_<NAME>_URL` | `finn.resources`: per-resource directory overrides, cache roots, project declaration files, offline mode and source URL overrides. Defaults are the pins and digests in `finn/resources.toml`, fetched on first use. The retired `FINN_HLSLIB_PATH` and `FINN_BOARD_FILES_PATH` select nothing. | `tests/util/test_resources.py` |
-| `FINN_BUILD_DIR` | `finn.resources.scratch()` (default `$FINN_HOME/build`): `make_build_dir`, the build's report, the build process's environment. Allocation creates it on demand, never on import. | `tests/util/test_resources.py`, `tests/util/test_runtime_installation.py` |
+| `FINN_BUILD_DIR` | `finn.resources.scratch()` (default `$FINN_HOME/build`): `make_build_dir`, the build's report; a relative one is relative to the working directory. Allocation creates it on demand, never on import. | `tests/util/test_resources.py`, `tests/util/test_runtime_installation.py` |
 | `FINN_TOOL_DIR_OVERRIDE` | `finn.toolchain.launcher.host_selection()`: the site command directory of the machine's toolchain, which every transformation called without a toolchain and every build runs by, a stated selection laid over it. A stated selection's `command_dir` wins. | `tests/util/test_tool_route.py`, `tests/util/test_build_toolchain.py` |
 | `FINN_VIVADO_JOBS` | `finn.toolchain.launcher.host_selection()`: how many runs Vivado launches at once (`Selection.vivado_jobs`; unset, the machine's cores, at most 16). A stated selection's `vivado_jobs` wins. | `tests/util/test_build_toolchain.py` |
 | The host file's `FINN_XILINX_*`, `FINN_LICENSE_*`, `PLATFORM_REPO_PATHS` | `finn.toolchain.host`: the installation `activate.sh` and `docker/run` select, the licence a local tool launch gets, and (`FINN_XILINX_VERSION`) the machine toolchain's HLS frontend. | `tests/util/test_tool_route.py`, `tests/util/test_container_config.py` |
@@ -25,7 +25,7 @@ shell setup and the container entrypoint use it only to find the checkout.
 
 | Mechanism | Current consumers | Gate for further removal |
 | --- | --- | --- |
-| Loader path before Python starts | XSI's simulation kernel and floating-point libraries: `finn.xsi.paths.simulation_environment` for `build_dataflow_directory`'s build process; `docker/finn-toolchain.sh` for native shells; the image's loader settings. | Fresh-worker XSI experiment passes correctness, loader, cleanup, cancellation and timing tests on supported installations. |
+| Loader path before Python starts | XSI's simulation kernel and floating-point libraries: `docker/finn-toolchain.sh` for native shells; the image's loader settings. No build loads XSI in process: its simulators run as tool processes in the build's toolchain. | Fresh-worker XSI experiment passes correctness, loader, cleanup, cancellation and timing tests on supported installations. |
 | Remaining native compatibility | The numeric sweeps' live-object simulation (`finn.xsi`, `finn_xsi`) still uses current interfaces. Imports of simulation consumers no longer load native libraries; compilation/discovery is pure Python. | Installation-validate before changing the binding. |
 | Vendor header/library interpretation | `XILINX_VIVADO` read ambiently by `xsi/setup.py` and `xsi/paths.py`; the build's configuration check probes the release through the build's `Toolchain` | These should read the selected `Toolchain`. |
 | Native bridge/design reuse | `.finn.json` records cover artifact/tool/source/header/ABI/compile inputs. | Real AMD compatibility, concurrent reuse and functional-equivalence evidence. |
@@ -38,10 +38,11 @@ explicit mounts; entrypoint work is limited to UID/home/PATH/exec. Native activa
 selects scratch without creating it. Normal Python imports do not install packages,
 select another checkout or create build storage.
 
-`build_dataflow_directory`/`build_dataflow` isolate cwd and compatibility in a fresh
-interpreter. `build_dataflow_cfg` intentionally supports in-process custom callbacks
-and retains global logging/stdout limitations. Its XSI
-callers must start Python with the required loader environment. Switching native
+`build_dataflow_directory`/`build_dataflow` build in process, as `build_dataflow_cfg`
+does, without changing the working directory: a build directory's configuration has
+its relative paths resolved against it when read. In-process builds retain global
+logging/stdout limitations. XSI callers must start Python with the required loader
+environment. Switching native
 vendor libraries in an already-running interpreter and concurrent differently
 configured XSI sessions remain unsupported. Use independent prepared processes;
 no fork of an interpreter with vendor libraries loaded is claimed as isolation.

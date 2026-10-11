@@ -2,24 +2,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """One toolchain per build: the selection a build configuration names, laid over the
-machine's (or the machine's when it names none), prepared once, which also prepares
-build_dataflow_directory's build process. No Vivado and no Vitis HLS."""
+machine's (or the machine's when it names none), prepared once, in the process that
+builds; a build directory's configuration, its relative paths naming the directory's
+files. No Vivado and no Vitis HLS."""
 
 from __future__ import annotations
 
 import pytest
 
 import json
-import subprocess
+import os
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
+from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
 from finn.toolchain.vivado import vivado_jobs
+from finn.transformation.prepare import GraphPreparation
 
 pytestmark = pytest.mark.util
 
@@ -119,50 +122,79 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
     assert DataflowBuildConfig.from_json(unset.to_json()) == unset
 
 
-#: The parent's toolchain variables: none, or another Vivado than the selected one.
-PARENT_TOOLCHAINS = {
-    "clean": {},
-    "stale": {"XILINX_VIVADO": "/parent/Vivado"},
-}
-
-
-@pytest.mark.parametrize("parent", sorted(PARENT_TOOLCHAINS))
-def test_the_build_process_runs_in_the_configured_selection(monkeypatch, tmp_path, parent):
-    """build_dataflow_directory prepares its build process's environment from the
-    selection its JSON configuration names: the settings script sourced over the
-    parent's environment, the selected Vivado's simulator libraries on the loader path."""
-    vivado = tmp_path / "Vivado"
-    (vivado / "lib/lnx64.o").mkdir(parents=True)
-    settings = tmp_path / "settings64.sh"
-    settings.write_text(f"export XILINX_VIVADO={vivado}\nexport SELECTED_BY_SETTINGS=1\n")
-    selection = Selection(settings=(str(settings),), hls_frontend="vitis-run")
+def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
+    """read_build_config resolves each relative path a build directory's configuration
+    states against the directory, so it names the same file from any working directory;
+    an absolute path, and an empty command directory, stay as stated."""
     directory = tmp_path / "build"
     directory.mkdir()
+    cfg = builder_config(
+        verify_input_npy="inputs/input.npy",
+        preparation=GraphPreparation(preprocessing="preproc.onnx"),
+        kernel_exploration=[
+            {"strategy": "pinned", "path": "kernel_choices.json"},
+            {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
+            {"strategy": "size_fifos", "margin": 2},
+        ],
+        toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
+    )
+    (directory / build_dataflow.CONFIG_FILE).write_text(cfg.to_json())
+    read = build_dataflow.read_build_config(str(directory))
+    assert read.output_dir == str(directory / "out")
+    assert read.verify_input_npy == str(directory / "inputs/input.npy")
+    assert read.preparation.preprocessing == str(directory / "preproc.onnx")
+    assert read.kernel_exploration == [
+        {"strategy": "pinned", "path": str(directory / "kernel_choices.json")},
+        {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
+        {"strategy": "size_fifos", "margin": 2},
+    ]
+    assert read.toolchain == Selection(
+        settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
+        command_dir=str(directory / "tools"),
+    )
+    # Absolute as stated, unset, or the empty command directory: unchanged.
+    stated = builder_config(output_dir="/results", toolchain=Selection(command_dir=""))
+    (directory / build_dataflow.CONFIG_FILE).write_text(stated.to_json())
+    read = build_dataflow.read_build_config(str(directory))
+    assert read.output_dir == "/results" and read.toolchain == Selection(command_dir="")
+    assert read.preparation.preprocessing is None
+
+
+def test_a_build_directory_builds_in_process_its_toolchain_prepared_once(
+    monkeypatch, tmp_path, capsys
+):
+    """build_dataflow_directory builds in the calling process, its working directory and
+    environment unchanged: the toolchain its configuration names (a settings script the
+    configuration states relative to the build directory) is prepared once, for the
+    whole build, and kept off os.environ; a relative FINN_BUILD_DIR is the caller's."""
+    directory = tmp_path / "build"
+    directory.mkdir()
+    (directory / "settings64.sh").write_text("export SELECTED_BY_SETTINGS=1\n")
     (directory / "model.onnx").write_bytes(identity_model().model.SerializeToString())
-    cfg = builder_config(toolchain=selection)
-    (directory / "dataflow_build_config.json").write_text(cfg.to_json())
-    monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "finn_build"))
-    monkeypatch.setenv("FINN_RESOURCES_FINNLIB", "/parent/finnlib")
-    for variable in ("XILINX_VIVADO", "XILINX_VITIS", "XILINX_HLS"):
-        monkeypatch.delenv(variable, raising=False)
-    for variable, value in PARENT_TOOLCHAINS[parent].items():
-        monkeypatch.setenv(variable, value)
-    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
-    children = []
+    cfg = builder_config(toolchain=Selection(settings=("settings64.sh",)), steps=[])
+    (directory / build_dataflow.CONFIG_FILE).write_text(cfg.to_json())
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    monkeypatch.chdir(caller)
+    monkeypatch.setenv("FINN_BUILD_DIR", "scratch")
+    monkeypatch.delenv("SELECTED_BY_SETTINGS", raising=False)
+    prepared = []
+    prepare = Selection.prepare
 
-    def run(argv, cwd, env):
-        children.append((cwd, env))
-        return subprocess.CompletedProcess(argv, 0)
+    def counted(selection, *args, **kwargs):
+        prepared.append(prepare(selection, *args, **kwargs))
+        return prepared[-1]
 
-    monkeypatch.setattr(build_dataflow.subprocess, "run", run)
-    assert build_dataflow.build_dataflow_directory(str(directory)) == 0
-    ((cwd, env),) = children
-    assert cwd == str(directory)
-    assert env["SELECTED_BY_SETTINGS"] == "1"
-    assert env["XILINX_VIVADO"] == str(vivado)
-    assert env["LD_LIBRARY_PATH"] == str(vivado / "lib/lnx64.o")
-    assert env["FINN_BUILD_DIR"] == str(tmp_path / "finn_build")
-    assert env["FINN_RESOURCES_FINNLIB"] == "/parent/finnlib"
+    monkeypatch.setattr(Selection, "prepare", counted)
+    environment = dict(os.environ)
+    assert build_dataflow.build_dataflow_directory("../build") == 0
+    (toolchain,) = prepared
+    assert toolchain.environment["SELECTED_BY_SETTINGS"] == "1"
+    assert os.path.samefile(os.getcwd(), caller) and dict(os.environ) == environment
+    assert (directory / "out/time_per_step.json").is_file()
+    scratch = (caller / "scratch").resolve()
+    assert resources.scratch() == scratch
+    assert f"Intermediate outputs will be generated in {scratch}" in capsys.readouterr().out
 
 
 def test_vivados_jobs_are_a_machine_setting_of_the_selection(monkeypatch):

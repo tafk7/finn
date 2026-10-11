@@ -22,7 +22,6 @@ from finn.toolchain.launcher import (
     ToolUnavailable,
     run_process,
 )
-from finn.xsi.paths import simulation_environment
 
 
 def executable(path, body):
@@ -326,39 +325,6 @@ def test_frontend_availability_does_not_override_compatibility(tmp_path):
         hls.command(tc, "build.tcl")
 
 
-def test_the_simulation_environment_loads_the_simulator_libraries_in_workers(tmp_path):
-    """The simulator libraries that exist come first on the loader path, ahead of
-    the environment's own, in a new process and the workers it starts; the
-    toolchain's environment is left as it was."""
-    vivado, vitis = tmp_path / "Vivado", tmp_path / "Vitis"
-    (vivado / "lib/lnx64.o").mkdir(parents=True)
-    vitis.mkdir()  # no floating-point operator libraries: not on the path
-    env = {
-        "PATH": os.defpath,
-        "XILINX_VIVADO": str(vivado),
-        "XILINX_VITIS": str(vitis),
-        "LD_LIBRARY_PATH": "/parent/lib",
-    }
-    toolchain = Selection().prepare(env)
-    child = simulation_environment(toolchain)
-    assert child["LD_LIBRARY_PATH"] == f"{vivado}/lib/lnx64.o:/parent/lib"
-    assert toolchain.environment["LD_LIBRARY_PATH"] == "/parent/lib"
-    result = run_process(
-        [
-            sys.executable,
-            "-c",
-            "import multiprocessing,os; "
-            'p=multiprocessing.Process(target=lambda: print(os.environ["LD_LIBRARY_PATH"])); '
-            "p.start(); p.join()",
-        ],
-        env=child,
-    )
-    assert result.stdout.decode().strip() == child["LD_LIBRARY_PATH"]
-    assert "LD_LIBRARY_PATH" not in simulation_environment(
-        Selection().prepare({"PATH": os.defpath})
-    )
-
-
 def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
     installed, vitis = tmp_path / "hls", tmp_path / "vitis"
     named = {"PATH": os.defpath, "XILINX_HLS": str(installed), "XILINX_VITIS": str(vitis)}
@@ -370,7 +336,11 @@ def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
 
 
 @pytest.mark.slow
-def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
+def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tmp_path):
+    """build_dataflow_directory builds in this process, its working directory and
+    environment unchanged, the configuration's relative output directory in the build
+    directory; 0 on success, -1 for a failed step, a raise for a refused configuration.
+    The build_dataflow command exits 0, 255 (the -1) and 1 (the traceback)."""
     import onnx  # noqa: PLC0415
     import onnx.helper as oh  # noqa: PLC0415
 
@@ -385,19 +355,32 @@ def test_public_build_entry_point_preserves_cwd_and_failure_status(tmp_path):
         "steps": [],
         "enable_build_pdb_debug": False,
     }
-    (project / "dataflow_build_config.json").write_text(json.dumps(config))
+
+    def state(*steps):
+        (project / "dataflow_build_config.json").write_text(json.dumps({**config, "steps": steps}))
+        return project
+
+    def command(*steps):
+        return subprocess.run(
+            [str(Path(sys.executable).parent / "build_dataflow"), str(state(*steps))],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+
     cwd, env = os.getcwd(), dict(os.environ)
-    assert build_dataflow_directory(str(project)) == 0
+    assert build_dataflow_directory(str(state())) == 0
     assert (project / "output/time_per_step.json").is_file()
     assert os.getcwd() == cwd and dict(os.environ) == env
-    config["steps"] = ["not_a_step"]
-    (project / "dataflow_build_config.json").write_text(json.dumps(config))
-    proc = subprocess.run(
-        [str(Path(sys.executable).parent / "build_dataflow"), str(project)],
-        cwd=tmp_path,
-        capture_output=True,
-    )
-    assert proc.returncode != 0
+    # A step that fails on an empty model: no partition to explore.
+    assert build_dataflow_directory(str(state("step_explore"))) == -1
+    with pytest.raises(ValueError, match="Unknown step or phase: not_a_step"):
+        build_dataflow_directory(str(state("not_a_step")))
+    assert os.getcwd() == cwd
+    assert command().returncode == 0
+    assert command("step_explore").returncode == 255
+    refused = command("not_a_step")
+    assert refused.returncode == 1
+    assert b"ValueError: Unknown step or phase: not_a_step" in refused.stderr
     assert os.getcwd() == cwd and dict(os.environ) == env
 
 

@@ -31,10 +31,10 @@ import json
 import logging
 import os
 import pdb  # NOQA
-import subprocess
 import sys
 import time
 import traceback
+from dataclasses import replace
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
@@ -49,7 +49,6 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
-from finn.xsi.paths import simulation_environment
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
 #: beside model.onnx.
@@ -293,18 +292,60 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
         log_file_handler.close()
 
 
+def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
+    """``cfg`` with each relative path it states joined to ``directory``: ``output_dir``,
+    ``verify_input_npy``, the preparation's ``preprocessing`` model, a strategy's
+    ``path`` (``pinned``'s choices file), the toolchain's settings scripts and command
+    directory. An absolute path, and an empty command directory, stay as stated."""
+
+    def resolve(path: str) -> str:
+        return os.path.join(directory, path)
+
+    preparation = cfg.preparation
+    if preparation.preprocessing is not None:
+        preparation = replace(preparation, preprocessing=resolve(preparation.preprocessing))
+    exploration = [
+        {**spec, "path": resolve(spec["path"])} if isinstance(spec.get("path"), str) else spec
+        for spec in cfg.kernel_exploration
+    ]
+    toolchain = cfg.toolchain
+    if toolchain is not None:
+        toolchain = replace(
+            toolchain,
+            settings=tuple(map(resolve, toolchain.settings)),
+            command_dir=resolve(toolchain.command_dir)
+            if toolchain.command_dir
+            else toolchain.command_dir,
+        )
+    return replace(
+        cfg,
+        output_dir=resolve(cfg.output_dir),
+        verify_input_npy=resolve(cfg.verify_input_npy),
+        preparation=preparation,
+        kernel_exploration=exploration,
+        toolchain=toolchain,
+    )
+
+
 def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
-    """The build configuration a build directory states: its CONFIG_FILE. A directory
-    without one is refused, naming the file."""
+    """The build configuration a build directory states: its CONFIG_FILE, each relative
+    path in it resolved against the directory (``_resolved_against``), so that it names
+    the same file from whatever directory the build runs. A directory without one is
+    refused, naming the file."""
     path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
     with open(path) as f:
-        return DataflowBuildConfig.from_json(f.read())
+        cfg = DataflowBuildConfig.from_json(f.read())
+    return _resolved_against(cfg, os.path.abspath(path_to_cfg_dir))
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):
-    """Best-effort build a dataflow accelerator from the specified directory.
+    """Best-effort build a dataflow accelerator from the specified directory, in this
+    process (build_dataflow_cfg), its working directory unchanged: the configuration's
+    relative paths name files in the directory (read_build_config), and a relative
+    FINN_BUILD_DIR the caller's. Returns build_dataflow_cfg's result, 0 or -1 for a
+    failed step; a configuration it refuses raises.
 
     :param path_to_cfg_dir: Directory containing the model and build config
 
@@ -319,33 +360,13 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     assert os.path.isdir(path_to_cfg_dir), "Directory not found: " + path_to_cfg_dir
     onnx_filename = path_to_cfg_dir + "/model.onnx"
     assert os.path.isfile(onnx_filename), "ONNX not found: " + onnx_filename
-    cfg = read_build_config(path_to_cfg_dir)
-    # Isolate cwd and the pre-start native loader environment for this worker
-    # tree, from the toolchain the configuration selects, prepared over this
-    # environment so that the child keeps FINN's own settings beside the tools'.
-    # The build directory is resolved here, where a relative FINN_BUILD_DIR
-    # means what it says. Relative config paths retain their historical
-    # directory semantics.
-    scratch = resources.scratch()
-    scratch.mkdir(parents=True, exist_ok=True)
-    toolchain = cfg._resolve_selection().prepare({**os.environ, "FINN_BUILD_DIR": str(scratch)})
-    child = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; from finn.builder.build_dataflow import "
-            "build_dataflow_cfg, read_build_config; "
-            "sys.exit(build_dataflow_cfg('model.onnx', read_build_config('.')))",
-        ],
-        cwd=path_to_cfg_dir,
-        env=simulation_environment(toolchain),
-    )
-    return child.returncode
+    return build_dataflow_cfg(onnx_filename, read_build_config(path_to_cfg_dir))
 
 
 def main():
     """Entry point for dataflow builds. Invokes `build_dataflow_directory` using
-    command line arguments"""
+    command line arguments, and exits with its result: 0, or 255 for a failed step
+    (its -1); a configuration it refuses raises, exiting 1 with the traceback."""
 
     def cli(path_to_cfg_dir: str):
         """Build the model and configuration in path_to_cfg_dir."""

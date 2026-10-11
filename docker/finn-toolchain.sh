@@ -98,9 +98,7 @@ elif [ "${FINN_ENV_APPLIED:-}" != "1" ]; then
     #                           HLS-generated code links against
     #
     # These lived in the entrypoint once, which meant `docker exec` and
-    # `sbx exec` sessions ran without them. FINN's own processes take the
-    # same directories from finn.xsi.paths (SIMULATION_LIBRARIES,
-    # simulation_environment).
+    # `sbx exec` sessions ran without them.
     # ---------------------------------------------------------------------
     for _finn_dir in \
         "${XILINX_VIVADO:-}/lib/lnx64.o" \

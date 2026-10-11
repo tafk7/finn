@@ -148,7 +148,8 @@ default_build_dataflow_steps = [
 class DataflowBuildConfig(DataClassJsonMixin):
     """The configuration of a kernel-path build, passed to build_dataflow_cfg, or
     written as ``dataflow_build_config.json`` beside ``model.onnx`` for
-    build_dataflow_directory and the ``build_dataflow`` command. Serialized to and
+    build_dataflow_directory and the ``build_dataflow`` command, where its relative
+    paths name files in that directory (read_build_config). Serialized to and
     from JSON; reading one refuses a key it does not declare
     (``UndefinedParameterError``, naming the keys)."""
 
@@ -231,8 +232,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: STITCHED_IP_TESTBENCH runs it.
     verify_input_npy: str = "input.npy"
 
-    #: The AMD tool installation every tool step of the build runs in, and the
-    #: environment of build_dataflow_directory's build process: the machine's
+    #: The AMD tool installation every tool step of the build runs in: the machine's
     #: (finn.toolchain.launcher.host_selection), with what this selection states laid
     #: over it, each field it states winning. How many runs Vivado launches at once
     #: when it builds the shell's bitfile is the selection's ``vivado_jobs``, a machine
