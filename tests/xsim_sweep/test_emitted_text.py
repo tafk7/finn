@@ -202,6 +202,9 @@ EDITS = [
     # toolchain's code.
     ("xsim-rtl", "src/finn/core/rtlsim_bench.py", "\nLIMIT = 1\n", BOTH),
     ("harness-toolchain", "src/finn/harness/toolchain.py", "\nLIMIT = 1\n", BOTH),
+    # XSim's driver: the simulator's commands, which the conformance job's simulate runs
+    # and the XSI runtime's elaboration reads its threads from.
+    ("xsim-driver", "src/finn/toolchain/xsim.py", "\nLIMIT = 1\n", BOTH),
     ("sweep-script", "scripts/xsim-sweep.sh", "\n# edited\n", BOTH),
     # Not consumed: another kernel's RTL, an unrelated test, a comment in the harness,
     # FINN code no design reaches.

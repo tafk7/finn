@@ -12,11 +12,15 @@ from typing import TypeVar
 
 import pytest
 
-from finn.harness.toolchain import vivado_simulator
-from finn.toolchain import vivado
+from finn.toolchain import vivado, xsim
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
+
+
+def vivado_simulator() -> bool:
+    """Whether the machine's toolchain can simulate (``finn.toolchain.xsim.available``)."""
+    return xsim.available(host_toolchain())
 
 
 def requires_xsim(test: _Test) -> _Test:

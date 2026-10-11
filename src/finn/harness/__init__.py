@@ -6,8 +6,8 @@ transformations and below the flow.
 
 The stream testbench and its pacing are the XSim executor's
 (``finn.core.rtlsim_bench``, ``finn.core.rtlsim_pacing``); ``finn.harness.toolchain``
-resolves what a simulation runs on (FinnLib as FINN resolves it, Vivado through FINN's toolchain)
-and the revisions a run prints; ``finn.harness.ops`` checks the hardware a model of
+resolves what a simulation runs on (FinnLib as FINN resolves it) and the revisions a
+run prints; ``finn.harness.ops`` checks the hardware a model of
 KernelOp nodes generates against their oracle, ``execute_node``, at the ops'
 boundary (PRINCIPLES 8), as two runs of the model: in XSim and in Python;
 ``finn.harness.reference`` checks a KernelOp's pattern and

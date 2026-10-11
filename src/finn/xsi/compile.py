@@ -11,7 +11,8 @@ import os
 from pathlib import Path
 
 from finn.toolchain import vivado
-from finn.toolchain.launcher import ToolFailed, host_toolchain, identity, xelab_threads
+from finn.toolchain.launcher import ToolFailed, host_toolchain, identity
+from finn.toolchain.xsim import xelab_threads
 from finn.xsi._artifacts import write_record
 from finn_xsi.srcutil import order_pkg_first
 

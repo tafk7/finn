@@ -43,7 +43,7 @@ by ``diff -r`` on what changed beside the hash.
 
 A job's key is a digest of everything its simulation consumes: the captured
 designs, the files of the harness (``finn.harness``), of the XSim testbench
-(``finn.core.rtlsim_*``) and of the test tree the job
+(``finn.core.rtlsim_*``), of XSim's driver (``finn.toolchain.xsim``) and of the test tree the job
 imports (stimulus and reference code) except construction modules, a numeric sweep's construction
 results, the simulator runtime (``finn.xsi``, ``finn_xsi`` and the modules they
 load) when the job drives XSI, the sweep's own scripts, the pytest
@@ -172,9 +172,16 @@ SWEEP_FILES = (
     "uv.lock",
 )
 # The code a captured job is keyed by when it imports it: the harness package, the XSim
-# testbench's modules (an older checkout's package) and the test tree (less its
-# construction modules), whose effect on a simulation the captured designs do not show.
-HARNESS = ("src/finn/harness/", "src/finn/core/rtlsim_", "src/finn/core/executors/xsim/", "tests/")
+# testbench's modules (an older checkout's package), XSim's driver (the simulator's
+# commands and flags) and the test tree (less its construction modules), whose effect
+# on a simulation the captured designs do not show.
+HARNESS = (
+    "src/finn/harness/",
+    "src/finn/core/rtlsim_",
+    "src/finn/core/executors/xsim/",
+    "src/finn/toolchain/xsim.py",
+    "tests/",
+)
 # Where the jobs' code imports from (the PYTHONPATH of ``_environment``), in order.
 IMPORT_ROOTS = ("src", "tests")
 HASH = re.compile(r"(?<=_)[0-9a-f]{16}(?![0-9A-Za-z])")

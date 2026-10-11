@@ -63,7 +63,8 @@ hierarchical utilization report is read per member of the shell root by
 ``ooc_member_resources``.
 
 ``ElaboratePartition`` is a check, not a build step: it emits the same module and
-compiles and elaborates it in XSim (``xvlog``, ``xelab``), so that RTL which does
+compiles and elaborates it in XSim (``xvlog``, ``xelab``; ``finn.toolchain.xsim``,
+with the flags every simulation elaborates with), so that RTL which does
 not compile, or a top whose instances do not elaborate (a port width, a parameter
 out of range, a missing source), is refused before a shell spends its run on it.
 It simulates nothing: it says nothing about the values the RTL computes.
@@ -103,7 +104,7 @@ from finn.kernels.ends import EndContract
 from finn.kernels.explore import Completion
 from finn.kernels.utilization import Resources
 from finn.resources import finnlib_root
-from finn.toolchain import vivado
+from finn.toolchain import vivado, xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
@@ -380,7 +381,7 @@ class ElaboratePartition(Transformation):
     unchanged. See the module docstring for what it checks.
 
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
-    ``elaborate.log``), a new build directory by default; ``toolchain`` is the
+    ``xelab.log``), a new build directory by default; ``toolchain`` is the
     prepared toolchain the simulator runs in, by default the configured
     machine's; ``completion`` the policy that completes the open choices
     (``configured_root``), by default ``Baseline()``. A failed compilation or
@@ -413,39 +414,15 @@ class ElaboratePartition(Transformation):
             roots={"finnlib": finnlib_root()},
             built=built_hls(point.module, read_target(model).part, toolchain=toolchain),
         )
-        glbl = vivado.glbl(toolchain)
         sources = [str(emitted.directory / path) for path in emitted.sources]
-        # Relaxed, as FINN's own flow elaborates (finn.xsi: ``xelab -relax``).
-        commands = {
-            "xvlog": [
-                "--sv",
-                "--relax",
-                "--log",
-                "xvlog.log",
-                *(f"--include={include}" for include in include_directories(sources)),
-                *(source for source in sources if not is_header(source)),
-                str(glbl),
-            ],
-            "xelab": [
-                f"work.{emitted.entry_point}",
-                "work.glbl",
-                "--relax",
-                "-L",
-                "unisims_ver",
-                "--log",
-                "elaborate.log",
-                "--snapshot",
-                "partition",
-            ],
-        }
-        for tool, args in commands.items():
-            result = toolchain.run(tool, args, cwd=directory, check=False)
-            if result.returncode != 0:
-                log = directory / ("xvlog.log" if tool == "xvlog" else "elaborate.log")
-                fails = "compile" if tool == "xvlog" else "elaborate"
-                raise ToolFailed.of_run(
-                    tool, result, transcript=log, what=f"{emitted.entry_point} does not {fails}"
-                )
+        xsim.elaborate(
+            toolchain,
+            directory,
+            [source for source in sources if not is_header(source)],
+            emitted.entry_point,
+            includes=include_directories(sources),
+            snapshot="partition",
+        )
         return model, False
 
 

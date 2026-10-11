@@ -233,7 +233,7 @@ def test_elaboration_without_vivado_is_unavailable(tmp_path: Path) -> None:
     assert missing.value.tool == "vivado"
 
 
-@pytest.mark.parametrize("tool, log", [("xvlog", "xvlog.log"), ("xelab", "elaborate.log")])
+@pytest.mark.parametrize("tool, log", [("xvlog", "xvlog.log"), ("xelab", "xelab.log")])
 def test_elaboration_that_fails_is_the_simulators_failure_naming_its_log(
     tmp_path: Path, tool: str, log: str
 ) -> None:

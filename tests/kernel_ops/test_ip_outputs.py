@@ -47,7 +47,8 @@ from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
-from finn.toolchain.launcher import Selection, Toolchain, host_toolchain
+from finn.toolchain import xsim
+from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, host_toolchain
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
@@ -240,6 +241,23 @@ def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> 
     remote = Toolchain(Selection(launcher=("site",)), {"PATH": os.defpath})
     with pytest.raises(ValueError, match="launcher route runs tools elsewhere"):
         run_testbench(tmp_path / "PASS", toolchain=remote)
+
+
+@pytest.mark.parametrize("tool", ["xvlog", "xelab"])
+def test_a_testbench_that_does_not_build_is_the_tools_failure(tmp_path: Path, tool: str) -> None:
+    """A run.sh whose compilation or elaboration fails exits with that tool's status
+    (``finn.toolchain.xsim.EXIT_STATUS``): ``ToolFailed`` naming the tool and its log,
+    not a verdict on the partition."""
+    (tmp_path / RUN_SCRIPT).write_text(
+        f'echo "ERROR: [{tool}] it failed" | tee {tool}.log\nexit {xsim.EXIT_STATUS[tool]}\n'
+    )
+    toolchain = Toolchain(Selection(), {"PATH": os.defpath})
+    with pytest.raises(ToolFailed) as failed:
+        run_testbench(tmp_path, toolchain=toolchain)
+    assert not isinstance(failed.value, AssertionError)
+    assert (failed.value.tool, failed.value.status) == (tool, xsim.EXIT_STATUS[tool])
+    assert failed.value.transcript == tmp_path / f"{tool}.log"
+    assert failed.value.errors == (f"ERROR: [{tool}] it failed",)
 
 
 @requires_xsim
