@@ -64,6 +64,7 @@ from finn.harness.preparation import check_equivalence
 from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, refuse_drift, shell_row
 from finn.shells.pynq.driver import driver_description, write_driver
 from finn.shells.pynq.runner import build_pynq
+from finn.toolchain.launcher import Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
     ToKernelOps,
@@ -105,6 +106,13 @@ from finn.transformation.prepare.phase import (
 
 #: The graph-preparation phase's report, under the output directory.
 PREPARATION_REPORT = "report/graph_preparation.json"
+
+
+def _tools(cfg: DataflowBuildConfig, step: str) -> Toolchain:
+    """The build's toolchain for ``step``: every tool it runs writes its transcript into
+    ``output_dir/logs/<step>`` (``Toolchain.transcripts_in``), passed down with the
+    toolchain to each transformation and driver that runs one."""
+    return cfg._resolve_toolchain().transcripts_in(Path(cfg.output_dir) / "logs" / step)
 
 
 def _preparation_source(cfg: DataflowBuildConfig) -> str:
@@ -456,7 +464,7 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
         body.transform(
             ElaboratePartition(
                 directory=Path(directory),
-                toolchain=cfg._resolve_toolchain(),
+                toolchain=_tools(cfg, "step_verify_partition"),
                 completion=completion(cfg.kernel_completion),
             )
         )
@@ -516,13 +524,14 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         return model
     kernel_completion = completion(cfg.kernel_completion)
     directory = Path(cfg.output_dir) / "stitched_ip"
+    toolchain = _tools(cfg, "step_create_stitched_ip")
     node, body, body_file = partition_body(model)
     body = body.transform(
         PackagePartition(
             node.name,
             run_synth=ooc,
             directory=directory,
-            toolchain=cfg._resolve_toolchain(),
+            toolchain=toolchain,
             completion=kernel_completion,
         )
     )
@@ -541,7 +550,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         write_testbench(body, testbench, frame, completion=kernel_completion, label=node.name)
         print(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
         if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
-            run_testbench(testbench, toolchain=cfg._resolve_toolchain())
+            run_testbench(testbench, toolchain=toolchain)
             print("Verification for stitched_ip_testbench : SUCCESS")
     return model
 
@@ -567,7 +576,7 @@ def _pynq_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper
     report_dir.mkdir(parents=True, exist_ok=True)
     bitfile_dir.mkdir(parents=True, exist_ok=True)
     (report_dir / "integration.json").write_text(json.dumps(export.report(), indent=2))
-    toolchain = cfg._resolve_toolchain()
+    toolchain = _tools(cfg, "step_synthesize_bitfile")
     options = cfg._resolve_shell_options()
     if options is None:
         raise ValueError(

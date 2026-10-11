@@ -103,13 +103,18 @@ def test_a_tool_that_exits_non_zero_is_failed_naming_its_transcript(tmp_path):
     tool(tmp_path / "tools", "vivado", "print('ERROR: it broke'); raise SystemExit(3)\n")
     with pytest.raises(ToolFailed) as failed:
         toolchain(tmp_path / "tools").run(
-            "vivado", cwd=tmp_path, replay=tmp_path / "run.sh", transcript=tmp_path / "own.log"
+            "vivado", cwd=tmp_path, replay=tmp_path / "run.sh", transcript=tmp_path / "own"
         )
     assert (failed.value.status, failed.value.errors) == (3, ("ERROR: it broke",))
-    assert failed.value.transcript == tmp_path / "own.log"  # the tool's own log, if named
-    assert (tmp_path / "run.sh.stdout.log").read_text() == "ERROR: it broke\n"
+    # The transcript the caller names, over the replay's.
+    assert failed.value.transcript == tmp_path / "own.stdout.log"
+    assert failed.value.transcript.read_text() == "ERROR: it broke\n"
+    assert not (tmp_path / "run.sh.stdout.log").exists()
     result = toolchain(tmp_path / "tools").run("vivado", check=False)
-    assert result.returncode == 3
+    assert (result.returncode, result.transcript) == (3, None)
+    # A run that kept no transcript names the tool's own log, if its caller gives one.
+    own = ToolFailed.of_run("vivado", result, transcript=tmp_path / "vivado.log")
+    assert own.transcript == tmp_path / "vivado.log"
 
 
 # -- one Vivado lookup -------------------------------------------------------------------

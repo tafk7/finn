@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from importlib.resources import files
 from pathlib import Path
 from shutil import copytree
@@ -350,8 +349,7 @@ def create_stitched_ip(
         check=False,
         replay=Path(project) / "make_project.sh",
     )
-    sys.stdout.write(result.stdout.decode("utf-8", errors="replace"))
-    sys.stderr.write(result.stderr.decode("utf-8", errors="replace"))
+    # What Vivado printed is its transcript (Toolchain.run), not this process's output.
     if result.returncode != 0:
         raise ToolFailed.of_run(
             "vivado",

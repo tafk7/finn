@@ -110,7 +110,7 @@ def compile_sim_obj(
 
     # check=True so an xelab failure is raised here (ToolFailed), not later as a missing
     # xsimk.so
-    toolchain.run(
+    ran = toolchain.run(
         "xelab",
         cmd_xelab,
         cwd=sim_out_dir,
@@ -124,7 +124,7 @@ def compile_sim_obj(
     if not os.path.isfile(out_so_full_path):
         raise ToolFailed.of(
             "xelab",
-            transcript=Path(sim_out_dir) / "compile_sim.sh.stdout.log",
+            transcript=ran.transcript,
             what=f"it left no {out_so_full_path}",
         )
 

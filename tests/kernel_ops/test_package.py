@@ -204,15 +204,23 @@ def _tools(tmp_path: Path, scripts: dict[str, str], *, vivado: bool = True) -> T
 NO_LICENCE = "ERROR: [Common 17-345] A valid license was not found for feature 'Synthesis'"
 
 
-def test_a_failed_packaging_run_is_vivados_failure_naming_its_log(tmp_path: Path) -> None:
+def test_a_failed_packaging_run_is_vivados_failure_naming_its_transcript(tmp_path: Path) -> None:
+    """Outside a build the transcript is beside the replay (``package.sh``); in a build's
+    step, in its log directory."""
     configure_partition(model := kernel_model())
     project = tmp_path / "project"
     toolchain = _tools(tmp_path, {"vivado": f'echo "{NO_LICENCE}" | tee package.log\nexit 1\n'})
-    with pytest.raises(ToolFailed) as failed:
-        model.transform(PackagePartition("sdp_1", directory=project, toolchain=toolchain))
-    assert (failed.value.tool, failed.value.status) == ("vivado", 1)
-    assert failed.value.transcript == project / "package.log"
-    assert (failed.value.code, failed.value.errors) == ("licence-unavailable", (NO_LICENCE,))
+    logs = tmp_path / "out" / "logs" / "step_create_stitched_ip"
+    for tools, transcript in (
+        (toolchain, project / "package.sh.stdout.log"),
+        (toolchain.transcripts_in(logs), logs / "package.sh.stdout.log"),
+    ):
+        with pytest.raises(ToolFailed) as failed:
+            model.transform(PackagePartition("sdp_1", directory=project, toolchain=tools))
+        assert (failed.value.tool, failed.value.status) == ("vivado", 1)
+        assert failed.value.transcript == transcript
+        assert transcript.read_text() == NO_LICENCE + "\n"
+        assert (failed.value.code, failed.value.errors) == ("licence-unavailable", (NO_LICENCE,))
 
 
 def test_packaging_states_the_design_its_ip_was_made_from(tmp_path: Path) -> None:
@@ -235,7 +243,8 @@ def test_a_run_that_packages_no_ip_is_vivados_failure(tmp_path: Path) -> None:
     toolchain = _tools(tmp_path, {"vivado": "echo done > package.log\n"})
     with pytest.raises(ToolFailed, match="sdp_1: no IP packaged") as failed:
         model.transform(PackagePartition("sdp_1", directory=project, toolchain=toolchain))
-    assert (failed.value.status, failed.value.transcript) == (None, project / "package.log")
+    transcript = project / "package.sh.stdout.log"
+    assert (failed.value.status, failed.value.transcript) == (None, transcript)
     # Nor is a missing or empty utilization report a refusal of the partition.
     with pytest.raises(ToolFailed, match="one hierarchical utilization report"):
         partition_utilization_report(project)

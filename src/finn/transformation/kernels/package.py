@@ -359,18 +359,20 @@ class PackagePartition(Transformation):
                 run_synth=self.run_synth,
             )
         )
-        transcript = project / "package.log"
-        # A run that fails is ToolFailed, naming Vivado's log.
-        toolchain.run(
+        log = project / "package.log"
+        # A run that fails is ToolFailed, naming its transcript (in a build, the step's
+        # log directory; else beside package.sh).
+        ran = toolchain.run(
             "vivado",
-            ["-mode", "batch", "-nojournal", "-log", transcript.name, "-source", "package.tcl"],
+            ["-mode", "batch", "-nojournal", "-log", log.name, "-source", "package.tcl"],
             cwd=project,
             replay=project / "package.sh",
-            transcript=transcript,
         )
         if not (project / "ip" / "component.xml").is_file():
             raise ToolFailed.of(
-                "vivado", transcript=transcript, what=f"{self.ip_name}: no IP packaged"
+                "vivado",
+                transcript=getattr(ran, "transcript", None) or log,
+                what=f"{self.ip_name}: no IP packaged",
             )
         described = interface_description(model, point, boundary, self.ip_name)
         (project / INTERFACE_FILE).write_text(json.dumps(described, indent=2) + "\n")
