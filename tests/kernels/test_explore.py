@@ -13,13 +13,21 @@ fixed PE, MatMul ``second``; three rows of four), nothing chosen, its platform a
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
 
 import finn.kernels.explore as explore_module
-from finn.core.space import derived, design_space
+from finn.core.space import (
+    Finding,
+    FindingKind,
+    derived,
+    design_space,
+    finding_record,
+    finding_text,
+)
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
@@ -34,13 +42,11 @@ from finn.kernels.explore import (
     Ranked,
     Rebaseline,
     Refused,
-    ResourceBudgetWarning,
     Seam,
     Stated,
     TargetCycles,
     TargetThroughput,
     Unsettled,
-    UnstatedResourcesWarning,
     explore,
 )
 from finn.kernels.matmul import MatMulKernel
@@ -84,13 +90,30 @@ def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> N
     assert "first.compute" not in offered and "w1.source" not in offered
 
 
+def said(why: Any) -> str:
+    """Every finding of a refusal's ``why``, as text."""
+    return "; ".join(finding_text(finding) for found in why.values() for finding in found)
+
+
 def test_an_attempt_is_refused_for_a_forced_decision_or_a_case_that_is_not_viable() -> None:
+    """The seam's own refusals are findings too, each owned by the key it refuses."""
     explorer, point = seam()
     forced = explorer.attempt(point, {"first.compute": "int8_dsp58"})
-    assert isinstance(forced, Refused) and "forced to 'packed'" in forced.why["first.compute"]
+    assert isinstance(forced, Refused)
+    (found,) = forced.why["first.compute"]
+    assert (found.kind, found.code, found.owner) == (
+        FindingKind.REJECTION,
+        "forced",
+        "first.compute",
+    )
+    assert "forced to 'packed'" in found.message
     three = explorer.attempt(point, {"first.compute.packed.pe": 3})
-    assert isinstance(three, Refused) and "3 is not viable" in three.why["first.compute.packed.pe"]
-    assert isinstance(explorer.attempt(point, {"nowhere.pe": 1}), Refused)
+    assert isinstance(three, Refused)
+    (found,) = three.why["first.compute.packed.pe"]
+    assert found.code == "case-not-viable" and "3 is not viable" in found.message
+    nowhere = explorer.attempt(point, {"nowhere.pe": 1})
+    assert isinstance(nowhere, Refused)
+    assert [f.code for f in nowhere.why["nowhere.pe"]] == ["not-a-decision"]
 
 
 def test_an_attempt_replaces_a_stored_value_but_never_a_held_one() -> None:
@@ -103,7 +126,16 @@ def test_an_attempt_replaces_a_stored_value_but_never_a_held_one() -> None:
     explorer.held["y.transport"] = "direct"
     held = explorer.attempt(direct.point, {"y.transport": "fifo"})
     assert isinstance(held, Refused)
-    assert held.why == {"y.transport": "held to 'direct' by pinned for this run"}
+    assert held.why == {
+        "y.transport": (
+            Finding(
+                FindingKind.REJECTION,
+                "held",
+                "y.transport",
+                "held to 'direct' by pinned for this run",
+            ),
+        )
+    }
     assert isinstance(explorer.attempt(direct.point, {"y.transport": "direct"}), Accepted)
 
 
@@ -117,7 +149,7 @@ def test_an_attempt_replacing_what_forces_a_choice_may_set_it_in_the_same_batch(
     assert isinstance(outcome, Accepted)
     assert explorer.chosen(outcome.point)["first.compute.packed.compute_pumping"] is True
     alone = explorer.attempt(base, {"first.compute.packed.compute_pumping": True})
-    assert isinstance(alone, Refused) and "forced to False" in "".join(alone.why.values())
+    assert isinstance(alone, Refused) and "forced to False" in said(alone.why)
 
 
 def test_an_attempt_that_leaves_a_decision_without_a_viable_case_is_refused() -> None:
@@ -127,7 +159,7 @@ def test_an_attempt_that_leaves_a_decision_without_a_viable_case_is_refused() ->
     batch = {"first.compute.packed.simd": 1, "first.compute.packed.compute_pumping": True}
     outcome = explorer.attempt(point, batch)
     assert isinstance(outcome, Refused)
-    assert "dotp-pumping" in "".join(outcome.why.values())
+    assert "dotp-pumping" in said(outcome.why)
     assert isinstance(explorer.attempt(point, {**batch, "first.compute.packed.simd": 2}), Accepted)
 
 
@@ -150,7 +182,8 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_an_attempt() -
     depth = offered["levels.transport.fifo.buffer.depth"]
     assert depth.cases is None and depth.ordered and depth.required
     small = explorer.attempt(fifo.point, {depth.key: 1})
-    assert isinstance(small, Refused) and "domain-membership" in small.why[depth.key]
+    assert isinstance(small, Refused)
+    assert "domain-membership" in [finding.code for finding in small.why[depth.key]]
     sized = explorer.attempt(fifo.point, {depth.key: 16})
     assert isinstance(sized, Accepted)
     # The FIFO sits before the input adapter that makes second's markers, so the
@@ -481,7 +514,9 @@ def test_set_clears_a_stored_choice_the_change_makes_invalid_then_settles() -> N
     assert isinstance(pumped, Accepted)
     refused = explorer.attempt(pumped.point, {"first.compute.packed.simd": 1})
     assert isinstance(refused, Refused)
-    assert "pumping requires SIMD >= 2" in refused.why["first.compute.packed.compute_pumping"]
+    assert "pumping requires SIMD >= 2" in said(
+        {key: why for key, why in refused.why.items() if key.endswith("compute_pumping")}
+    )
     replaced = explorer.set(pumped.point, {"first.compute.packed.simd": 1})
     assert isinstance(replaced, Accepted)
     chosen = explorer.chosen(replaced.point)
@@ -502,10 +537,9 @@ def test_a_held_choice_a_change_reaches_must_settle_back_or_the_change_is_refuse
     explorer.held["first.compute.packed.compute_pumping"] = True
     refused = explorer.set(pumped.point, {"first.compute.packed.simd": 1})
     assert isinstance(refused, Refused)
-    assert refused.why == {
-        "first.compute.packed.compute_pumping": "held to True by pinned for this run, now "
-        "False after the change"
-    }
+    ((key, (found,)),) = refused.why.items()
+    assert (key, found.code, found.owner) == ("first.compute.packed.compute_pumping", "held", key)
+    assert found.message == "held to True by pinned for this run, now False after the change"
     # Reached and still viable, it comes back: SIMD 4 keeps pumping viable.
     kept = explorer.set(pumped.point, {"first.compute.packed.simd": 4})
     assert isinstance(kept, Accepted)
@@ -600,7 +634,9 @@ def within_part() -> tuple[Seam, Any]:
 def test_the_seam_states_the_root_s_own_resources_once_its_members_do() -> None:
     explorer, point = within_part()
     waiting = explorer.resources(point)
-    assert isinstance(waiting, str) and waiting.startswith("waits on ")
+    # Not yet: why, its findings (the open choices it waits on).
+    assert isinstance(waiting, tuple) and waiting
+    assert {finding.code for finding in waiting} == {"decision-unassigned"}
     base = explorer.baseline(point)
     used = explorer.cost(base).used
     assert used is not None and explorer.resources(base) == Stated(used, {})
@@ -665,13 +701,23 @@ def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> 
     assert [tried.cycles for tried in both.tried] == [1]
 
 
-def test_max_throughput_warns_and_keeps_the_least_parallelism_where_nothing_fits() -> None:
+def test_max_throughput_states_and_keeps_the_least_parallelism_where_nothing_fits() -> None:
+    """Never a refusal and never a Python warning (RC5): a ``resource-budget``
+    limitation, in its ``findings`` and its report, naming the binding resource."""
     explorer, point = within_part()
     strategy = MaxThroughput({"dsp": 0.1, "lut": 1.0})
-    with pytest.warns(ResourceBudgetWarning, match="most of dsp: dsp 2 of 1"):
-        folded = strategy.explore(explorer, point)
+    folded = strategy.explore(explorer, point)
     assert explorer.chosen(folded)["first.compute.packed.simd"] == 1
+    (found,) = strategy.findings
+    assert (found.kind, found.code, found.owner) == (
+        FindingKind.LIMITATION,
+        "resource-budget",
+        "max_throughput",
+    )
+    assert "most of dsp: dsp 2 of 1" in found.message
+    assert dict(found.details)["binding"] == "dsp"
     report = strategy.report()
+    assert report["findings"] == [finding_record(found)]
     assert report["fits"] is False and report["binding"] == "dsp"
     assert [tried.cycles for tried in strategy.tried] == [1, None]
 
@@ -737,19 +783,23 @@ def test_max_throughput_keeps_the_tie_on_cycles_that_uses_the_least(
 def test_max_throughput_budgets_what_is_stated_where_a_member_states_no_resources() -> None:
     """A member that states no resources (here a compressor reducer, whose resources are
     not characterised) is allowed (RC5): the budget is checked against the members that
-    state theirs, a lower bound, and it warns, naming the member and why."""
+    state theirs, a lower bound, and it states so (``resources-unstated``), naming the
+    member and why, its findings the causes."""
     explorer, point = within_part()
     pinned = explorer.attempt(point, {"first.compute.packed.reducer": "compressor"})
     assert isinstance(pinned, Accepted)
     strategy = MaxThroughput({"dsp": 0.5})
-    with pytest.warns(UnstatedResourcesWarning, match="lower bound.*first .*compressor"):
-        folded = strategy.explore(explorer, pinned.point)
+    folded = strategy.explore(explorer, pinned.point)
+    (found,) = strategy.findings
+    assert found.code == "resources-unstated" and found.kind is FindingKind.LIMITATION
+    assert re.search("lower bound.*first .*compressor", found.message)
+    assert found.causes == strategy.unstated()["first"]
     assert explorer.chosen(folded)["first.compute.packed.reducer"] == "compressor"
     report = strategy.report()
     assert report["lower_bound"] is True and report["fits"] is True
     unstated = report["unstated"]
     assert isinstance(unstated, dict) and list(unstated) == ["first"]
-    assert "not characterised" in unstated["first"]
+    assert "not characterised" in " ".join(record["message"] for record in unstated["first"])
     # What is stated, without first's: at 6 cycles, second's 4 DSPs of the budget's 5.
     stated = explorer.resources(folded)
     assert isinstance(stated, Stated) and stated.lower_bound

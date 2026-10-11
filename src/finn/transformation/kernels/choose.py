@@ -19,7 +19,7 @@ settling, from the point the one before returned, and then:
 
 - refuses a point a member refuses (``Seam.refusals``) or its shell does not admit
   (``admission_refusal``: its AXI-Lite buses, memory ports and doubled clock against
-  the shell's row), by name;
+  the shell's row), by name (a ``KernelOpError`` carrying their findings);
 - refuses a run where a strategy changed anything but the transports with FIFOs placed
   before it and no ``size_fifos`` after it, naming the FIFOs: the engine keeps a
   stored depth valid when its ends' folding changes, so the run checks it. A list
@@ -40,7 +40,9 @@ settling, from the point the one before returned, and then:
   ``auto`` is FinnLib's, not Vivado's); whether FIFOs were sized; the dropped choices
   with why, per member cycles, buffering and resources, the bottleneck, and the
   shell's resources against the platform's, ``resources``), so an outer search can
-  compare. Who set a value is logged here, never stored in the model.
+  compare; and every limitation the run found (``findings``: the strategies' and the
+  resources'), in the report where each was found. Who set a value is logged here,
+  never stored in the model.
 
 Until the build's completion policy goes, ``completion`` (``Baseline()`` by default)
 still completes the point on a copy for the report (``completion``, ``completed``):
@@ -51,7 +53,8 @@ statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kern
 and its channels, boundary channels included), each end and its static region, and
 their sum, ``used``; where members state none (a memory pinned ``auto``, which
 Vivado places), ``used`` is the sum of those that
-do, a lower bound (``lower_bound``), each other named with why (``unstated``), and the
+do, a lower bound (``lower_bound``), each other named with why (``unstated``, its
+findings), and the
 ends and the static region are not counted. The ends' and the static region's are out
 of context, which the report says with how far that overstates the placed shell; the
 ``ip`` shell has neither, so its sum is its partition's. The platform's are its part's totals
@@ -61,9 +64,10 @@ device's SLRs, on a reduced die of several SLRs each SLR's site capacity under t
 totals as a cap with which caps are proven or inferred, the devices that share them)
 and where they come from (``source``);
 ``share`` is the fraction of each the shell uses, ``binding`` the one it uses most of,
-and ``over`` each it uses more of than the part has. A point over the part is a warning
-(``ResourceBudgetWarning``, and the report's ``warning``) naming the binding resource,
-whichever strategy chose it: the report ranks and warns, and refuses nothing (RC5).
+and ``over`` each it uses more of than the part has. A point over the part is a
+limitation (``resources-over-part``, in the result's and the resources' ``findings``)
+naming the binding resource, whichever strategy chose it: the report ranks and states
+it, and refuses nothing (RC5).
 
 The shell is the model's target's (``shell_root``): its row offers the boundary
 channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
@@ -87,7 +91,6 @@ strategy that folds. A completion policy is named (``completion(name)``, the nam
 from __future__ import annotations
 
 import time
-import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from functools import reduce
@@ -95,7 +98,7 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn.core.space import Available
+from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
 from finn.custom_op.kernels.base import KernelOpError, clear_channel_choices, kernel_op, read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
@@ -120,7 +123,6 @@ from finn.kernels.explore import (
     Pinned,
     Placeholder,
     Rebaseline,
-    ResourceBudgetWarning,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -188,12 +190,15 @@ class Explored:
     """An exploration's result: the point of the shell root (every value, settled after
     the last strategy), its completion by the build's policy on a copy (None where the
     policy refused; on a settled point it completes no more than a required choice),
-    the cost of the completed point, and the report (JSON values)."""
+    the cost of the completed point, the report (JSON values), and every limitation
+    the run found (``findings``: each strategy's, then the resources'), never a
+    refusal (RC5)."""
 
     point: Any
     completed: Completed[Any] | None
     cost: Cost
     report: Mapping[str, Any]
+    findings: tuple[Finding, ...] = ()
 
 
 RESOURCES_COUNTED = (
@@ -233,19 +238,21 @@ def resources_exact(platform: Platform | None) -> str:
 
 def _resources_report(
     cost: Cost,
-    split: ShellResources | str,
+    split: ShellResources | tuple[Finding, ...],
     platform: Platform | None,
     part: Mapping[str, object],
     caveat: str | None,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], tuple[Finding, ...]]:
     """The shell's resources by member and their sum against the platform's part totals;
     where members state none, the sum of those that do, a lower bound (``lower_bound``),
-    and each that does not, with why (``unstated``); the part's facts with their source
-    (``part_report``); ``exact`` names the shell row's ``caveat`` for its board, if any."""
+    and each that does not, with why, its findings (``unstated``); the part's facts with
+    their source (``part_report``); ``exact`` names the shell row's ``caveat`` for its
+    board, if any; and the limitation where the shell uses more than the part has
+    (``findings``, also returned)."""
     unstated = dict(cost.unstated)
-    if isinstance(split, str) and not unstated:
+    if not isinstance(split, ShellResources) and not unstated:
         unstated["shell"] = split
-    stated = None if isinstance(split, str) or unstated else split
+    stated = None if not isinstance(split, ShellResources) or unstated else split
     lower_bound = stated is None and bool(cost.unstated)
     used = stated.total if stated is not None else None
     if lower_bound:
@@ -267,7 +274,8 @@ def _resources_report(
             key: {"used": count, "platform": limit}
             for key, (count, limit) in over(used, available).items()
         }
-    return {
+    findings = _over_part(most, exceeded)
+    report: dict[str, object] = {
         "used": None if used is None else asdict(used),
         "shell": None
         if stated is None
@@ -277,27 +285,39 @@ def _resources_report(
             "static_region": {name: asdict(each) for name, each in stated.static_region},
         },
         "lower_bound": lower_bound,
-        "unstated": unstated,
+        "unstated": {
+            name: [finding_record(finding) for finding in why] for name, why in unstated.items()
+        },
         "platform": None if totals is None else asdict(totals),
         "part": dict(part),
         "share": share,
         "binding": most,
         "over": exceeded,
-        "warning": _over_warning(most, exceeded),
+        "findings": [finding_record(finding) for finding in findings],
         "counted": RESOURCES_LOWER_BOUND if lower_bound else RESOURCES_COUNTED,
         "exact": exact if caveat is None else f"{exact}; {caveat}",
     }
+    return report, findings
 
 
-def _over_warning(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> str | None:
-    """What the report warns of where the shell uses more than the part has (RC5): the
-    binding resource, and each resource over with its count and the part's."""
+def _over_part(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> tuple[Finding, ...]:
+    """What the report states where the shell uses more than the part has (RC5): a
+    ``resources-over-part`` limitation naming the binding resource, and each resource
+    over with its count and the part's."""
     if not exceeded:
-        return None
+        return ()
     counts = ", ".join(
         f"{key} {each['used']} of {each['platform']}" for key, each in exceeded.items()
     )
-    return f"the point uses more than the platform's part has, most of {most}: {counts}"
+    return (
+        Finding(
+            FindingKind.LIMITATION,
+            "resources-over-part",
+            ExploreKernelChoices.__name__,
+            f"the point uses more than the platform's part has, most of {most}: {counts}",
+            (("binding", most), ("over", tuple(exceeded))),
+        ),
+    )
 
 
 def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
@@ -543,7 +563,10 @@ def explore_kernel_choices(
     if refused:
         raise KernelOpError(
             "the explored point is refused: "
-            + "; ".join(f"{name}: {why}" for name, why in refused.items())
+            + "; ".join(
+                f"{name}: " + "; ".join(map(finding_text, why)) for name, why in refused.items()
+            ),
+            findings=tuple(finding for why in refused.values() for finding in why),
         )
     if stale is not None:
         name, fifos = stale
@@ -560,9 +583,11 @@ def explore_kernel_choices(
         completion_report["refused"] = str(error)
     costed = point if completed is None else completed.point
     unadmitted = admission_refusal(costed)
-    if unadmitted is not None:
+    if unadmitted:
         raise KernelOpError(
-            f"the explored point is refused by the {root.row.shell!r} shell: {unadmitted}"
+            f"the explored point is refused by the {root.row.shell!r} shell: "
+            + "; ".join(map(finding_text, unadmitted)),
+            findings=unadmitted,
         )
     persist(model, root, point)
     left = [
@@ -577,7 +602,7 @@ def explore_kernel_choices(
         if completed.sizing is not None:
             completion_report["sizing"] = completed.sizing
     cost = seam.cost(costed)
-    resources = _resources_report(
+    resources, over_part = _resources_report(
         cost,
         shell_resources(costed),
         seam.platform,
@@ -606,10 +631,10 @@ def explore_kernel_choices(
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
-    warning = resources["warning"]
-    if isinstance(warning, str):
-        warnings.warn(warning, ResourceBudgetWarning, stacklevel=2)
-    return Explored(point, completed, cost, report)
+    found = tuple(
+        finding for explorer in strategies for finding in getattr(explorer, "findings", ())
+    )
+    return Explored(point, completed, cost, report, (*found, *over_part))
 
 
 def shell_bottleneck(

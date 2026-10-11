@@ -247,7 +247,8 @@ def test_the_shell_root_s_resources_are_its_partition_s_its_ends_and_its_static_
 
 def test_a_shell_root_waits_for_its_members_resources() -> None:
     waiting = shell_resources(chain_root().point)
-    assert isinstance(waiting, str) and waiting.startswith("waits on ")
+    assert isinstance(waiting, tuple) and waiting
+    assert {finding.code for finding in waiting} == {"decision-unassigned"}
 
 
 def test_the_ip_shell_offers_no_end() -> None:

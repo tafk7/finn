@@ -506,7 +506,9 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     clock = json.loads((output / DELIVERED_CLOCK).read_text())
     assert clock == building.clock
     assert (clock["delivered_mhz"], clock["objective_fps"]) == (187.512, 1000)
-    assert "warning" in clock and "bottleneck_cycles" in clock
+    assert "bottleneck_cycles" in clock
+    assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
+    assert [finding.code for finding in building.findings] == ["clock-below-asked"]
 
 
 def test_the_throughput_asked_is_read_from_the_explorations_report(tmp_path: Path) -> None:

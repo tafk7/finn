@@ -12,7 +12,7 @@ from dataclasses import replace
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space
+from finn.core.space import FindingKind, Rejected, design_space
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
 from finn.kernels.memstream import MemStreamKernel
@@ -331,7 +331,15 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
     other: Target = resolve_target(board="ZCU104", period_ns=4.0)
     with pytest.raises(TargetRefused) as refused:
         refuse_drift(stated, other, "build")
+    # The refusal carries its one finding, its code the message's first word.
+    (found,) = refused.value.findings
+    assert (found.kind, found.code, found.owner) == (
+        FindingKind.REJECTION,
+        "target-drift",
+        "finn.platform",
+    )
     message = str(refused.value)
+    assert message == f"target-drift: {found.message}"
     assert message.startswith("target-drift: the model's target is not the build's: part: ")
     for name in ("part", "shell", "board", "period_ns", "uram", "resources"):
         assert f"{name}: the model states" in message

@@ -13,10 +13,11 @@ outputs, element for element, on draws from its input's annotation, the domain t
 build states (``drawn_inputs``: extremes, random, corners). An output element that
 differs passes only where the predicate of a declared deviation explains it
 (``Explanation``, keyed by its code); the predicates are the test harness's, so a
-build, which has none, finds every difference (``equivalence-unexplained``). Every
-finding is a blocker to the check's caller: the kernel gate fails on one. A build
-(``step_prepare_checkpoint``) reports them as a failed verification and continues, but
-for ``annotation-unsound``, which it refuses.
+build, which has none, finds every difference (``equivalence-unexplained``, a
+rejection: the check's equivalence is false there). What a finding stops is its
+caller's: the kernel gate fails on any. A build (``step_prepare_checkpoint``) reports
+them as a failed verification and continues, but for ``annotation-unsound``, a blocker
+as the checkpoint's own, which it refuses.
 
 Both graphs run with qonnx's sanitization off (``SANITIZE_QUANT_TENSORS=0``), so
 that rounding an integer-annotated tensor cannot hide a value that is not an integer;
@@ -110,8 +111,8 @@ def _unsanitized() -> Iterator[None]:
             os.environ["SANITIZE_QUANT_TENSORS"] = stated
 
 
-def _finding(code: str, message: str, **details: object) -> Finding:
-    return Finding(FindingKind.BLOCKER, code, OWNER, message, tuple(details.items()))
+def _finding(kind: FindingKind, code: str, message: str, **details: object) -> Finding:
+    return Finding(kind, code, OWNER, message, tuple(details.items()))
 
 
 def observe(
@@ -138,6 +139,7 @@ def unexplained(draw: Draw, explains: Mapping[str, Explanation]) -> list[Finding
         if expected.shape != computed.shape:
             found.append(
                 _finding(
+                    FindingKind.REJECTION,
                     "equivalence-unexplained",
                     f"{computed_item.name}: the export gives shape {expected.shape}, the "
                     f"prepared graph {computed.shape}",
@@ -153,6 +155,7 @@ def unexplained(draw: Draw, explains: Mapping[str, Explanation]) -> list[Finding
             declared = ", ".join(DEVIATIONS)
             found.append(
                 _finding(
+                    FindingKind.REJECTION,
                     "equivalence-unexplained",
                     f"{computed_item.name}: {int(differs.sum())} values differ from the "
                     f"export's and no predicate explains them; first at {first}: the export "
@@ -178,6 +181,7 @@ def unsound(draw: Draw) -> list[Finding]:
             held = np.asarray(values)
             found.append(
                 _finding(
+                    FindingKind.BLOCKER,
                     "annotation-unsound",
                     f"{name} is annotated {datatype.name} and holds values over "
                     f"[{held.min()}, {held.max()}] on a draw",

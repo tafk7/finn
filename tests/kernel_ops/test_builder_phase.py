@@ -52,6 +52,7 @@ from finn.builder.build_dataflow_steps import (
     step_synthesize_bitfile,
     step_verify_partition,
 )
+from finn.core.space import Finding, FindingKind, finding_record
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
@@ -76,6 +77,7 @@ from finn.shells.pynq.runner import (
     DELIVERED_CLOCK,
     InstanceIP,
     block_design,
+    delivered_clock_findings,
     iodma_model,
     project_script,
 )
@@ -776,12 +778,12 @@ clk_pl_0  {0.000 2.667}        5.333           187.512
 
 def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) -> None:
     """TFC's case: 196 cycles a frame at the 187.512 MHz the shell delivers for 5 ns asked
-    give 956,694 frames a second, against the 1e6 its exploration asked: a warning with
-    both numbers."""
+    give 956,694 frames a second, against the 1e6 its exploration asked: a limitation
+    with both numbers (a finding, never a Python warning)."""
     report = tmp_path / "timing.rpt"
     report.write_text(TIMING_REPORT)
     clock = delivered_clock(str(report), 5.0, 196, 1_000_000)
-    assert {key: value for key, value in clock.items() if key != "warning"} == {
+    assert clock == {
         "clock": "clk_pl_0",
         "target_period_ns": 5.0,
         "delivered_period_ns": 5.333,
@@ -791,22 +793,27 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
         "fps_at_delivered": 956693.9,
         "objective_fps": 1_000_000,
     }
-    assert clock["warning"] == (
+    (below,) = delivered_clock_findings(clock, str(report))
+    assert (below.kind, below.code) == (FindingKind.LIMITATION, "clock-below-asked")
+    assert below.message == (
         "the shell delivers clk_pl_0 at 5.333 ns (187.512 MHz), not the 5.0 ns asked: "
         "196 cycles a frame give 956,694 fps at it, 1,020,408 at the clock asked; "
         "the objective is 1,000,000 fps"
     )
-    # The clock asked, delivered: no warning; without a partition, the clock alone.
-    assert "warning" not in delivered_clock(str(report), 5.333, 196)
-    assert set(delivered_clock(str(report), 5.0)) == {
-        "clock",
-        "target_period_ns",
-        "delivered_period_ns",
-        "delivered_mhz",
-        "warning",
-    }
+    assert dict(below.details) == {"asked_period_ns": 5.0, "delivered_period_ns": 5.333}
+    # The clock asked, delivered: nothing to state; without a partition, the clock alone.
+    assert delivered_clock_findings(delivered_clock(str(report), 5.333, 196), str(report)) == ()
+    alone = delivered_clock(str(report), 5.0)
+    assert set(alone) == {"clock", "target_period_ns", "delivered_period_ns", "delivered_mhz"}
+    (below,) = delivered_clock_findings(alone, str(report))
+    assert below.message.endswith("not the 5.0 ns asked")
+    (above,) = delivered_clock_findings(delivered_clock(str(report), 6.0), str(report))
+    assert above.code == "clock-above-asked"
     report.write_text("no clock summary")
-    assert "no PL clock" in delivered_clock(str(report), 5.0)["warning"]
+    unknown = delivered_clock(str(report), 5.0)
+    assert unknown == {"target_period_ns": 5.0, "clocks": []}
+    (found,) = delivered_clock_findings(unknown, str(report))
+    assert found.code == "clock-unknown" and "no PL clock" in found.message
 
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
@@ -1185,6 +1192,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     assert (clock["delivered_mhz"], clock["bottleneck_cycles"]) == (187.512, bottleneck.cycles)
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
     assert clock["objective_fps"] == 1_000_000
+    assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     # The resources per member: Z7's model of TFC; the fake reports' counts.
     stated = json.loads((report / "resources.json").read_text())
     assert (stated["shell"], stated["absent"]) == ("pynq", {})
@@ -1310,7 +1318,10 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     with pytest.raises(ValueError, match=f"pynq_driver: no delivered clock \\({report}\\)"):
         step_make_driver(parent, cfg)
     report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({"target_period_ns": 5.0, "warning": "no PL clock in it"}))
+    unknown = finding_record(
+        Finding(FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it")
+    )
+    report.write_text(json.dumps({"target_period_ns": 5.0, "clocks": [], "findings": [unknown]}))
     with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
         step_make_driver(parent, cfg)
     report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))

@@ -118,8 +118,9 @@ LAYERS: tuple[Layer, ...] = (
         "containers", ("finn.core.containers",), (), ("numpy", "onnx", "qonnx"), "tests/kernel_ops"
     ),
     # The platform registry: parts, boards and shell rows, resolved to the capabilities
-    # kernels read. The shell root reads its shell's row.
-    Layer("platform", ("finn.platform",), ("kernels",), (), "tests/kernel_ops"),
+    # kernels read. The shell root reads its shell's row. A refusal carries its finding
+    # (the engine's reason type).
+    Layer("platform", ("finn.platform",), ("space", "kernels"), (), "tests/kernel_ops"),
     # What is read and built of a partition (kernel_partitions): below both its writers
     # (the cut, PackagePartition) and its readers (the KernelOps, whose channel choices a
     # partition's body states; the builder, the integration export, the shell's build,

@@ -296,7 +296,8 @@ def delivered_mhz(directory: Path) -> float:
         )
     clock = json.loads(report.read_text())
     if "delivered_mhz" not in clock:
-        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {clock['warning']}")
+        known = "; ".join(finding["message"] for finding in clock.get("findings", ()))
+        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {known}")
     return float(clock["delivered_mhz"])
 
 

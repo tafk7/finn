@@ -14,7 +14,7 @@ one root (a shell root, its members its channels and kernels, each at its path:
   depth), whether that order is one (``Domain.ordered``), and why each other case
   is not viable. A forced Decision is never a choice.
 - ``attempt(point, {key: value, ...})``: ``Accepted(point')`` or
-  ``Refused({key: why})``. A batch is accepted when (1) no key is forced or held (a
+  ``Refused({key: findings})``. A batch is accepted when (1) no key is forced or held (a
   pin of this run, ``held``) to another value, and every value of an open choice is
   one of its viable cases (a membership-only value, or a value replacing a stored
   one, is its domain's to check), (2) the engine accepts the batch atomically
@@ -23,14 +23,18 @@ one root (a shell root, its members its channels and kernels, each at its path:
   refuses it, named), (3) it leaves no Decision without a viable case, and (4) no
   member a key of the batch belongs to refuses itself (its ``admission``, as far as
   it is decided). Viable is not feasible: a refusal names why, so an explorer can
-  recover. An attempt replaces a stored value; it never clears what the change
-  invalidates (``set`` does).
+  recover: the engine's findings (``finn.core.space.Finding``), or the seam's own
+  (``SEAM_CODES``: ``not-a-decision``, ``held``, ``forced``, ``case-not-viable``,
+  ``request-refused``, ``refused-together``, ``inapplicable``,
+  ``decision-no-viable-case``), each owned by its key. An attempt replaces a stored
+  value; it never clears what the change invalidates (``set`` does).
 - ``cost(point)``: each member's cycles a frame, buffering and resources, as the
   kernels and channels export them (``CYCLES``, ``BUFFERING``, ``RESOURCES``); the
   bottleneck, every member tied at the most cycles, once every member's cycles are
   known; and the resources used, once every member states its own. A member whose
   cycles wait on open choices names them, and a member that states no resources
-  says why (its memory style open, a memory in ``auto``, or no model of its leaf).
+  says why (its memory style open, a memory in ``auto``, or no model of its leaf), by
+  its findings.
 
 Beside them, ``resources(point)`` is what the root uses as far as it is stated: its
 own ``RESOURCES`` (on a shell root, its partition's, its ends' and its static region's
@@ -104,7 +108,6 @@ strategy reads a completed copy.
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
@@ -116,16 +119,20 @@ from typing import Any, Generic, Protocol, TypeVar
 from finn.core.space import (
     Available,
     ConfigurationError,
+    Finding,
+    FindingKind,
     Inapplicable,
     Rejected,
     RequestError,
     Space,
     Unresolved,
+    finding_record,
+    finding_text,
     inspection,
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
 from finn.kernels.channels import Channel
-from finn.kernels.configure import chosen, describe, member_of
+from finn.kernels.configure import chosen, member_of
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import Sized, size
 from finn.kernels.target import Platform
@@ -177,9 +184,10 @@ class Accepted(Generic[S]):
 @dataclass
 class Refused:
     """An attempt the configuration refuses: why, by key (one of the batch, or a
-    Decision the batch leaves without a viable case, or a member that refuses itself)."""
+    Decision the batch leaves without a viable case, or a member that refuses itself),
+    its findings."""
 
-    why: Mapping[str, str]
+    why: Mapping[str, tuple[Finding, ...]]
 
 
 @dataclass(frozen=True)
@@ -195,15 +203,16 @@ class Cost:
     """What a point costs, by member: the clock cycles a frame takes (``cycles``), the
     bits its stages hold (``buffering``) and what it uses of the device (``resources``)
     where known; for a member whose cycles are not known yet, the open Decisions they
-    wait on (``waiting``), or why they are refused; for a member that states no
-    resources, why (``unstated``)."""
+    wait on (``waiting``), or why they are refused, its findings; for a member that
+    states no resources, why (``unstated``), its findings (an open Decision's
+    ``decision-unassigned`` where it waits on one)."""
 
     cycles: Mapping[str, int]
     buffering: Mapping[str, int]
     waiting: Mapping[str, tuple[str, ...]]
-    refused: Mapping[str, str]
+    refused: Mapping[str, tuple[Finding, ...]]
     resources: Mapping[str, Resources]
-    unstated: Mapping[str, str]
+    unstated: Mapping[str, tuple[Finding, ...]]
 
     @property
     def used(self) -> Resources | None:
@@ -229,11 +238,11 @@ class Stated:
     """What a root uses of the device as far as it is stated (``Seam.resources``):
     ``used``, the root's own statement where ``unstated`` is empty; otherwise the sum of
     the members that state theirs, a lower bound, and each member that does not, with
-    why. A lower bound counts members only: what the root adds of its own (a shell's
-    ends and static region) is not counted while a member states none."""
+    why, its findings. A lower bound counts members only: what the root adds of its own
+    (a shell's ends and static region) is not counted while a member states none."""
 
     used: Resources
-    unstated: Mapping[str, str]
+    unstated: Mapping[str, tuple[Finding, ...]]
 
     @property
     def lower_bound(self) -> bool:
@@ -275,6 +284,53 @@ class Unsettled(ExploreError):
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
+
+#: The codes of the seam's own refusals, each owned by the key it refuses.
+SEAM_CODES = frozenset(
+    {
+        "not-a-decision",
+        "held",
+        "forced",
+        "case-not-viable",
+        "request-refused",
+        "refused-together",
+        "inapplicable",
+        "decision-no-viable-case",
+    }
+)
+
+
+def _refusal(key: str, code: str, message: str) -> tuple[Finding, ...]:
+    """The seam's own reason for refusing ``key`` (``SEAM_CODES``), owned by the key."""
+    return (Finding(FindingKind.REJECTION, code, key, message),)
+
+
+def _text(key: str, findings: Iterable[Finding]) -> str:
+    """Why ``key`` is refused, as text for a message: the seam's own reason by its message,
+    the engine's by owner, code and message."""
+    return "; ".join(
+        finding.message
+        if finding.owner == key and finding.code in SEAM_CODES
+        else finding_text(finding)
+        for finding in findings
+    )
+
+
+def _reasons(why: Mapping[str, Iterable[Finding]]) -> str:
+    """Each key's reasons as text (``_text``), in ``why``'s order."""
+    return "; ".join(f"{key}: {_text(key, found)}" for key, found in why.items())
+
+
+def _findings_of(result: object) -> tuple[Finding, ...]:
+    """The findings of a query's answer that is not a value; none of a value."""
+    if isinstance(result, (Inapplicable, Rejected, Unresolved)):
+        return result.findings
+    return ()
+
+
+def _records(why: Mapping[str, Iterable[Finding]]) -> dict[str, list[dict[str, Any]]]:
+    """Each key's findings as JSON's values (``finding_record``), for a report."""
+    return {key: [finding_record(finding) for finding in found] for key, found in why.items()}
 
 
 class Seam:
@@ -381,23 +437,27 @@ class Seam:
         infos = self._info(point)
         batch = self._typed(batch)
         offered = {choice.key: choice for choice in self.choices(point)}
-        why: dict[str, str] = {}
+        why: dict[str, tuple[Finding, ...]] = {}
         forced: dict[str, object] | None = None
         for key, value in batch.items():
             choice = offered.get(key)
             held = self.held.get(key, _ABSENT)
             if key not in infos:
-                why[key] = "not a Decision of this root"
+                why[key] = _refusal(key, "not-a-decision", "not a Decision of this root")
             elif held is not _ABSENT and held != value:
-                why[key] = f"held to {held!r} by pinned for this run"
+                why[key] = _refusal(key, "held", f"held to {held!r} by pinned for this run")
             elif choice is None:
                 if forced is None:
                     forced = {item.key: item.value for item in inspection.forced(point)}
                 if key in forced:
-                    why[key] = f"forced to {forced[key]!r}, never a choice"
+                    why[key] = _refusal(key, "forced", f"forced to {forced[key]!r}, never a choice")
             elif choice.cases is not None and value not in choice.cases:
                 reason = choice.refused.get(str(value)) or choice.refused.get(repr(value))
-                why[key] = f"{value!r} is not viable" + (f": {reason}" if reason else "")
+                why[key] = _refusal(
+                    key,
+                    "case-not-viable",
+                    f"{value!r} is not viable" + (f": {reason}" if reason else ""),
+                )
         if why and forced is not None and set(why) <= set(forced) and len(why) < len(batch):
             # A key forced here may be a choice once the rest of the batch replaces what
             # forces it (pumping, once SIMD is 2): it is forced only if it still is there.
@@ -416,20 +476,26 @@ class Seam:
                 *(point.field(infos[key].reference).clear() for key in clear),
             )
         except (RequestError, ConfigurationError) as error:
-            return Refused(dict.fromkeys(batch, str(error)))
+            return Refused({key: _refusal(key, "request-refused", str(error)) for key in batch})
         if not report.accepted:
             for outcome in report.outcomes:
                 if outcome.status == "refused":
-                    result = outcome.result
+                    found = _findings_of(outcome.result)
                     why[outcome.owner] = (
-                        "inapplicable" if isinstance(result, Inapplicable) else describe([result])
+                        _refusal(outcome.owner, "inapplicable", "inapplicable")
+                        if isinstance(outcome.result, Inapplicable) or not found
+                        else found
                     )
-            return Refused(why or dict.fromkeys(batch, "refused together"))
+            return Refused(
+                why or {key: _refusal(key, "refused-together", "refused together") for key in batch}
+            )
         configured = report.instance
         for item in inspection.viable(configured):
             if not item.cases:
                 detail = "; ".join(f"{case}: {reason}" for case, reason in item.refused.items())
-                why[item.key] = f"no case is viable: {detail}"
+                why[item.key] = _refusal(
+                    item.key, "decision-no-viable-case", f"no case is viable: {detail}"
+                )
         touched = dict.fromkeys(self.member_of(key) for key in batch)
         why |= self.refusals(configured, (name for name in touched if name is not None))
         return Refused(why) if why else Accepted(configured)
@@ -465,7 +531,9 @@ class Seam:
                 raise ExploreError(
                     "reopening is refused: "
                     + "; ".join(
-                        f"{outcome.owner}: {describe([outcome.result])}" for outcome in refused
+                        f"{outcome.owner}: "
+                        + "; ".join(map(finding_text, _findings_of(outcome.result)))
+                        for outcome in refused
                     )
                 )
             clear |= reach
@@ -513,7 +581,7 @@ class Seam:
                     raise Unsettled(
                         choice.key,
                         f"held to {held!r} by pinned for this run, refused after the "
-                        "change: " + "; ".join(f"{k}: {w}" for k, w in outcome.why.items()),
+                        "change: " + _reasons(outcome.why),
                     )
                 point, kept[choice.key] = outcome.point, held
                 continue
@@ -559,7 +627,7 @@ class Seam:
         try:
             return Accepted(self.settle(replaced.point, prior))
         except Unsettled as error:
-            return Refused({error.key: error.why})
+            return Refused({error.key: _refusal(error.key, "held", error.why)})
 
     def _replace(self, point: S, changes: Mapping[str, object]) -> Accepted[S] | Refused:
         """``set`` without the settle: the point the change and the clears of what it
@@ -613,16 +681,18 @@ class Seam:
                 return path
         return None
 
-    def refusals(self, point: Space, members: Iterable[str] | None = None) -> dict[str, str]:
+    def refusals(
+        self, point: Space, members: Iterable[str] | None = None
+    ) -> dict[str, tuple[Finding, ...]]:
         """Every member that refuses itself (its ``admission``, as far as it is decided),
-        with why: what ``attempt`` checks for the members a batch commits a choice of,
-        by default for all of them (a choice reaches its neighbours: a kernel's folding
-        changes its channels' plans)."""
-        found: dict[str, str] = {}
+        with why, its findings: what ``attempt`` checks for the members a batch commits a
+        choice of, by default for all of them (a choice reaches its neighbours: a kernel's
+        folding changes its channels' plans)."""
+        found: dict[str, tuple[Finding, ...]] = {}
         for name in self.members if members is None else members:
             admitted = inspection.admission(_member(point, name))
             if isinstance(admitted, Rejected):
-                found[name] = describe([admitted])
+                found[name] = admitted.findings
         return found
 
     def cost(self, point: Space, members: Iterable[str] | None = None) -> Cost:
@@ -632,9 +702,9 @@ class Seam:
         cycles: dict[str, int] = {}
         buffering: dict[str, int] = {}
         waiting: dict[str, tuple[str, ...]] = {}
-        refused: dict[str, str] = {}
+        refused: dict[str, tuple[Finding, ...]] = {}
         resources: dict[str, Resources] = {}
-        unstated: dict[str, str] = {}
+        unstated: dict[str, tuple[Finding, ...]] = {}
         for name in self.members if members is None else members:
             member = _member(point, name)
             exports = type(member).exports
@@ -644,37 +714,35 @@ class Seam:
             used = member.query(exports[RESOURCES])
             if isinstance(used, Available):
                 resources[name] = used.value
-            elif isinstance(used, Unresolved):
-                unstated[name] = "waits on " + ", ".join(_awaited(used))
             else:
-                unstated[name] = describe([used])
+                unstated[name] = used.findings
             answer = member.query(exports[CYCLES])
             if isinstance(answer, Available):
                 cycles[name] = answer.value
             elif isinstance(answer, Unresolved):
                 waiting[name] = _awaited(answer)
             else:
-                refused[name] = describe([answer])
+                refused[name] = answer.findings
         return Cost(cycles, buffering, waiting, refused, resources, unstated)
 
-    def resources(self, point: Space) -> Stated | str:
+    def resources(self, point: Space) -> Stated | tuple[Finding, ...]:
         """What the root uses of the device as far as it is stated (``Stated``): its own
         ``RESOURCES``, exact (a shell root's is its partition's, its ends' and its static
         region's sum, ``finn.custom_op.kernels.shell``, where ``Cost.used`` is its
         members' alone, the partition's; on the ``ip`` shell they are equal); or, where
         members state none, the sum of those that do, a lower bound, naming the others
-        (``Stated.unstated``); or why it states nothing: the open choices it waits on,
-        or a refusal of the root's own."""
+        (``Stated.unstated``); or why it states nothing, its findings: the open choices
+        it waits on, or a refusal of the root's own."""
         root: Any = point
         answer = root.query(type(root).exports[RESOURCES])
         if isinstance(answer, Available):
             return Stated(answer.value, {})
         if isinstance(answer, Unresolved):
-            return "waits on " + ", ".join(_awaited(answer))
+            return answer.findings
         cost = self.cost(point)
         if cost.unstated:
             return Stated(total(cost.resources.values()), dict(cost.unstated))
-        return describe([answer])
+        return _findings_of(answer)
 
     def chosen(self, point: Space) -> dict[str, object]:
         """Every Decision ``point`` commits, by key: the choices made on purpose."""
@@ -694,7 +762,9 @@ class Seam:
 
 class Explorer(Protocol):
     """Explores from ``point`` and returns the point it keeps; ``report`` says what it
-    did (its parameters and findings, as JSON values)."""
+    did (its parameters and findings, as JSON values). An explorer that finds the point
+    it keeps short of what it was asked (``MaxThroughput``: over its budget) states it
+    in ``findings`` too, never a refusal (RC5)."""
 
     def explore(self, seam: Seam, point: S) -> S: ...
 
@@ -791,7 +861,7 @@ def _first_case(seam: Seam, point: S, choice: Choice, cases: Sequence[object]) -
         outcome = seam.attempt(point, {choice.key: case})
         if isinstance(outcome, Accepted):
             return outcome.point, case
-        refusals.append(f"{case!r}: " + "; ".join(f"{k}: {w}" for k, w in outcome.why.items()))
+        refusals.append(f"{case!r}: " + _reasons(outcome.why))
     raise ExploreError(f"{choice.key}: no case is accepted: " + "; ".join(refusals))
 
 
@@ -1042,7 +1112,7 @@ class Pinned:
         seam.declared(point)  # the Decisions read, so that values are typed as they take them
         wanted = seam._typed(wanted)
         refused = {
-            key: f"held to {seam.held[key]!r} by an earlier pin"
+            key: _refusal(key, "held", f"held to {seam.held[key]!r} by an earlier pin")
             for key, value in wanted.items()
             if key in seam.held and seam.held[key] != value
         }
@@ -1069,8 +1139,8 @@ class Pinned:
         return {"strategy": self.strategy, "path": self.path}
 
 
-def _named(why: Mapping[str, str]) -> str:
-    return "; ".join(f"{key}: {reason}" for key, reason in sorted(why.items()))
+def _named(why: Mapping[str, tuple[Finding, ...]]) -> str:
+    return _reasons(dict(sorted(why.items())))
 
 
 # -- throughput ----------------------------------------------------------------------------
@@ -1247,9 +1317,7 @@ class TargetCycles:
                 probe, {choice.key: (choice.cases or ())[0] for choice in usable}
             )
             if isinstance(outcome, Refused):
-                return "its scaling axes' first cases are refused: " + "; ".join(
-                    f"{k}: {w}" for k, w in outcome.why.items()
-                )
+                return "its scaling axes' first cases are refused: " + _reasons(outcome.why)
             axes += usable
             probe = outcome.point
 
@@ -1305,7 +1373,7 @@ class TargetCycles:
                 point, ("case", choice.key, case), lambda: seam.attempt(point, {choice.key: case})
             )
             if isinstance(outcome, Refused):
-                refused[str(case)] = "; ".join(f"{k}: {w}" for k, w in outcome.why.items())
+                refused[str(case)] = _reasons(outcome.why)
                 continue
             folded = self._fold(seam, outcome.point, name, budget)
             if folded.cycles is None:
@@ -1327,7 +1395,7 @@ class TargetCycles:
             cycles = min(folded.cycles or 0 for folded in folds.values())
             why = f"no case meets the budget of {budget}; the fewest cycles, {cycles}"
         tied = [case for case, folded in folds.items() if folded.cycles == cycles]
-        used: dict[object, Resources | str] = {}
+        used: dict[object, Resources | tuple[Finding, ...]] = {}
         if len(tied) > 1:
             used = {case: self._member_resources(seam, folds[case].point, name) for case in tied}
             tied, how = _lightest(tied, used, seam.platform)
@@ -1347,11 +1415,12 @@ class TargetCycles:
         }
         return folds[taken]
 
-    def _member_resources(self, seam: Seam, point: S, name: str) -> Resources | str:
+    def _member_resources(self, seam: Seam, point: S, name: str) -> Resources | tuple[Finding, ...]:
         """What member ``name`` uses at ``point``, or else with its own open choices
-        settled (where its resources wait on them), or why it states none."""
+        settled (where its resources wait on them), or why it states none, its
+        findings."""
 
-        def find() -> Resources | str:
+        def find() -> Resources | tuple[Finding, ...]:
             cost = seam.cost(point, (name,))
             if name in cost.resources:
                 return cost.resources[name]
@@ -1373,12 +1442,23 @@ def _settled_bottleneck(
     cost = seam.cost(settled)
     if cost.bottleneck is not None:
         return cost.bottleneck, None
-    unknown = {**{k: "waits on " + ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
-    return None, "; ".join(f"{name}: {why}" for name, why in unknown.items())
+    return None, _unknown(cost, "waits on ")
+
+
+def _unknown(cost: Cost, waits: str = "") -> str:
+    """Why ``cost``'s bottleneck is not known, as text: each member whose cycles wait on
+    open choices, naming them (after ``waits``), or are refused, with why."""
+    unknown = {
+        **{name: waits + ", ".join(keys) for name, keys in cost.waiting.items()},
+        **{name: "; ".join(map(finding_text, why)) for name, why in cost.refused.items()},
+    }
+    return "; ".join(f"{name}: {why}" for name, why in unknown.items())
 
 
 def _lightest(
-    cases: Sequence[object], used: Mapping[object, Resources | str], platform: Platform | None
+    cases: Sequence[object],
+    used: Mapping[object, Resources | tuple[Finding, ...]],
+    platform: Platform | None,
 ) -> tuple[list[object], str]:
     """``cases`` lightest first, and how they were ordered: against the part's totals
     where the platform states them (the highest share first, then the next), otherwise
@@ -1422,8 +1502,13 @@ def _lightest(
     return [*least, *rest, *unstated], how
 
 
-def _resources_row(used: Resources | str) -> dict[str, int] | str:
-    return used if isinstance(used, str) else {name: getattr(used, name) for name in RESOURCE_NAMES}
+def _resources_row(
+    used: Resources | tuple[Finding, ...],
+) -> dict[str, int] | list[dict[str, Any]]:
+    """A member's resources for a report, or why it states none, its findings' records."""
+    if isinstance(used, Resources):
+        return {name: getattr(used, name) for name in RESOURCE_NAMES}
+    return [finding_record(finding) for finding in used]
 
 
 class TargetThroughput(TargetCycles):
@@ -1529,8 +1614,9 @@ class MaxThroughput:
 
     A member that states no resources (a compressor reducer, a memory pinned ``auto``, a
     kernel with no model) is
-    allowed: the budget is checked against what is stated, a lower bound, and it warns
-    once (``UnstatedResourcesWarning``), naming each such member and why.
+    allowed: the budget is checked against what is stated, a lower bound, and it says so
+    once (a ``resources-unstated`` limitation in ``findings``), naming each such member,
+    its findings the causes.
 
     Its folds share what they ask of the seam (``_Asked``): a budget whose fold agrees
     with an earlier budget's on its first members reaches the same points there without
@@ -1538,7 +1624,8 @@ class MaxThroughput:
     budget's point is the one ``TargetCycles`` alone folds it to.
 
     It refuses nothing (RC5): where even the least parallelism does not fit, it returns
-    that point and warns, naming the binding resource. ``report`` states the budget,
+    that point and states it (a ``resource-budget`` limitation in ``findings``), naming
+    the binding resource. ``findings`` are in its ``report`` too. ``report`` states the budget,
     the budget whose point it kept (``kept_budget``, ``None`` for no budget), the
     bottleneck reached, the resources against the budget (``lower_bound`` where members
     state none, ``unstated`` naming them), the binding resource (the highest
@@ -1565,6 +1652,7 @@ class MaxThroughput:
         self.kept: _Tried | None = None
         self.fastest: int | None = None
         self.departures: list[str] = []
+        self.findings: tuple[Finding, ...] = ()
 
     def explore(self, seam: Seam, point: S) -> S:
         platform = seam.platform
@@ -1576,7 +1664,7 @@ class MaxThroughput:
             name: floor(fraction * getattr(platform.resources, name))
             for name, fraction in self.within.items()
         }
-        self.tried, self.departures = [], []
+        self.tried, self.departures, self.findings = [], [], ()
         return seam.run(
             point,
             _folding(seam, point),
@@ -1606,23 +1694,33 @@ class MaxThroughput:
         self.kept = kept
         self.departures = self._departures()
         unstated = self.unstated()
+        found = []
         if unstated:
-            warnings.warn(
-                "max_throughput: the budget is checked against a lower bound; these "
-                "members state no resources: "
-                + "; ".join(f"{name} ({why})" for name, why in unstated.items()),
-                UnstatedResourcesWarning,
-                stacklevel=2,
+            found.append(
+                Finding(
+                    FindingKind.LIMITATION,
+                    "resources-unstated",
+                    self.strategy,
+                    "max_throughput: the budget is checked against a lower bound; these "
+                    "members state no resources: "
+                    + "; ".join(
+                        f"{name} ({'; '.join(map(finding_text, why))})"
+                        for name, why in unstated.items()
+                    ),
+                    (("members", tuple(unstated)),),
+                    tuple(dict.fromkeys(cause for why in unstated.values() for cause in why)),
+                )
             )
         if not kept.fits:
-            warnings.warn(self.warning(), ResourceBudgetWarning, stacklevel=2)
+            found.append(self.over_budget())
+        self.findings = tuple(found)
         folded: S = kept.folded
         return folded
 
-    def unstated(self) -> dict[str, str]:
-        """Each member that states no resources at some point tried, with why (the first
-        why found)."""
-        found: dict[str, str] = {}
+    def unstated(self) -> dict[str, tuple[Finding, ...]]:
+        """Each member that states no resources at some point tried, with why, its
+        findings (the first found)."""
+        found: dict[str, tuple[Finding, ...]] = {}
         for tried in self.tried:
             for name, why in tried.stated.unstated.items():
                 found.setdefault(name, why)
@@ -1638,14 +1736,20 @@ class MaxThroughput:
         """The resource the kept point uses most of against its budget."""
         return None if self.kept is None else binding(self.kept.used, self.budget)
 
-    def warning(self) -> str:
-        """What it warns of where even the least parallelism does not fit."""
+    def over_budget(self) -> Finding:
+        """What it states where even the least parallelism does not fit: a
+        ``resource-budget`` limitation naming the binding resource and each resource over
+        its budget."""
         assert self.kept is not None
         exceeded = over(self.kept.used, self.budget)
-        return (
+        return Finding(
+            FindingKind.LIMITATION,
+            "resource-budget",
+            self.strategy,
             "max_throughput: even the least parallelism uses more than the budget, most "
             f"of {self.binding()}: "
-            + ", ".join(f"{name} {count} of {limit}" for name, (count, limit) in exceeded.items())
+            + ", ".join(f"{name} {count} of {limit}" for name, (count, limit) in exceeded.items()),
+            (("binding", self.binding()), ("over", tuple(exceeded))),
         )
 
     def report(self) -> dict[str, object]:
@@ -1668,13 +1772,14 @@ class MaxThroughput:
                 for name, limit in self.budget.items()
             },
             "lower_bound": None if kept is None else kept.stated.lower_bound,
-            "unstated": {} if kept is None else dict(kept.stated.unstated),
+            "unstated": {} if kept is None else _records(kept.stated.unstated),
             "binding": self.binding(),
             "fits": None if kept is None else kept.fits,
             "fastest": self.fastest,
             "tried": [tried.row(self.budget) for tried in self.tried],
             "monotone": not self.departures,
             "departures": self.departures,
+            "findings": [finding_record(finding) for finding in self.findings],
         }
 
     def _try(
@@ -1704,13 +1809,11 @@ class MaxThroughput:
         cost = seam.cost(settled)
         reached, used = cost.bottleneck, seam.resources(settled)
         if reached is None:
-            unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
+            raise ExploreError("max_throughput needs every member's cycles: " + _unknown(cost))
+        if not isinstance(used, Stated):
             raise ExploreError(
-                "max_throughput needs every member's cycles: "
-                + "; ".join(f"{name}: {why}" for name, why in unknown.items())
+                "max_throughput needs the root's resources: " + "; ".join(map(finding_text, used))
             )
-        if isinstance(used, str):
-            raise ExploreError(f"max_throughput needs the root's resources: {used}")
         return reached, used
 
     def _departures(self) -> list[str]:
@@ -1743,16 +1846,6 @@ class MaxThroughput:
             if more:
                 found.append(f"{label} uses more than budget {tighter.cycles}: " + ", ".join(more))
         return found
-
-
-class ResourceBudgetWarning(UserWarning):
-    """A point whose resources exceed a budget or the platform's part: a warning, never a
-    refusal (RC5), naming the binding resource."""
-
-
-class UnstatedResourcesWarning(UserWarning):
-    """A budget checked against a lower bound: members that state no resources, each
-    named with why. A warning, never a refusal (RC5)."""
 
 
 #: ``TargetCycles``' budget for no budget at all: every member at its least parallelism.
@@ -1872,11 +1965,7 @@ class SizeFifos:
         cost = seam.cost(point)
         bottleneck = cost.bottleneck
         if bottleneck is None:
-            unknown = {**{k: ", ".join(v) for k, v in cost.waiting.items()}, **cost.refused}
-            raise ExploreError(
-                "sizing FIFOs needs every member's cycles: "
-                + "; ".join(f"{name}: {why}" for name, why in unknown.items())
-            )
+            raise ExploreError("sizing FIFOs needs every member's cycles: " + _unknown(cost))
         self.period = bottleneck.cycles
         transports = self.transports(seam, point)
         proposals: dict[str, _Proposal] = {}
@@ -1916,13 +2005,10 @@ class SizeFifos:
                     if proposals[channel].placed and (
                         key == channel or key.startswith(f"{channel}.")
                     ):
-                        proposals[channel].refused = f"{key}: {why}"
+                        proposals[channel].refused = f"{key}: {_text(key, why)}"
                         dropped = True
             if not dropped:
-                raise ExploreError(
-                    "sizing FIFOs: refused: "
-                    + "; ".join(f"{k}: {w}" for k, w in sorted(outcome.why.items()))
-                )
+                raise ExploreError("sizing FIFOs: refused: " + _named(outcome.why))
         return point
 
     def report(self) -> dict[str, object]:
@@ -2061,8 +2147,8 @@ __all__ = [
     "Ranked",
     "Rebaseline",
     "Refused",
-    "ResourceBudgetWarning",
     "Run",
+    "SEAM_CODES",
     "Seam",
     "Settled",
     "SizeFifos",
@@ -2070,6 +2156,5 @@ __all__ = [
     "TargetCycles",
     "TargetThroughput",
     "Unsettled",
-    "UnstatedResourcesWarning",
     "explore",
 ]

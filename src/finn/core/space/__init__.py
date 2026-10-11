@@ -59,7 +59,9 @@ from .results import (
     Rejected,
     Unresolved,
     ViewAssessment,
+    by_code,
     finding_record,
+    finding_text,
     reject,
     require_value,
 )
@@ -122,7 +124,9 @@ __all__ = [
     "ConstraintAssessment",
     "ReadinessAssessment",
     "ViewAssessment",
+    "by_code",
     "finding_record",
+    "finding_text",
     "reject",
     "require_value",
     # Configuration revisions and selections

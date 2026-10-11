@@ -20,7 +20,7 @@ import pytest
 import finn.kernels.explore as explore_module
 from finn import resources
 from finn.core.rtlsim_bench import simulate as simulate_rtl
-from finn.core.space import design_space
+from finn.core.space import Finding, FindingKind, design_space
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
@@ -330,6 +330,11 @@ def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPat
         assert chosen["hidden.transport.fifo.buffer.ram_style"] == style
 
 
+MARKERS = Finding(
+    FindingKind.REJECTION, "fifo-markers", "hidden.transport.fifo", "what arrives carries markers"
+)
+
+
 def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.MonkeyPatch) -> None:
     _, point = _folded()
 
@@ -337,7 +342,7 @@ def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.Mo
         def attempt(self, point: Any, batch: Any) -> Any:
             if batch.get("hidden.transport") == "fifo":
                 self.attempts += 1
-                return Refused({"hidden": "fifo-markers: what arrives carries markers"})
+                return Refused({"hidden": (MARKERS,)})
             return super().attempt(point, batch)
 
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
@@ -347,8 +352,9 @@ def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.Mo
     assert refusing.chosen(found)["hidden.transport"] == "direct"
     row = strategy.channels()["hidden"]
     assert row["transport"] == "direct" and row["bits"] == 0
-    assert (
-        row["why"] == "least 8 words; refused: hidden: fifo-markers: what arrives carries markers"
+    assert row["why"] == (
+        "least 8 words; refused: hidden: hidden.transport.fifo: fifo-markers: what arrives "
+        "carries markers"
     )
 
 

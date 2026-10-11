@@ -465,7 +465,7 @@ def test_every_part_resolves_or_is_refused_by_name(committed: Catalog) -> None:
         try:
             target = resolve_target(part=each.name, period_ns=5.0)
         except TargetRefused as error:
-            refused[f"{error.name}: {each.device.family}"] += 1
+            refused[f"{error.findings[0].code}: {each.device.family}"] += 1
             continue
         platform = target.platform
         assert target.part == each.name and platform.resources == each.device.resources

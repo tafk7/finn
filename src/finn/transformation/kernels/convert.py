@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import copy
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -67,7 +68,7 @@ from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
-from finn.core.space import Finding, FindingKind, finding_record
+from finn.core.space import Finding, FindingKind, by_code, finding_record, finding_text
 from finn.custom_op.kernels.base import (
     FactUnstated,
     KernelOp,
@@ -393,48 +394,63 @@ def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dic
     }
 
 
-def kernel_ops_summary(report: dict[str, Any]) -> list[str]:
+def kernel_ops_summary(outcomes: tuple[Outcome, ...]) -> list[str]:
     """A conversion's lines for a build's log: what converted, by op, and how many nodes
-    stay on the host; then one line per finding code, its nodes counted by op type for
-    ``no-kernel-op``, named otherwise."""
-    converted = report["converted"]
+    stay on the host; then one line per finding code (``by_code``), counted by node, its
+    nodes counted by op type for ``no-kernel-op``, named otherwise."""
+    converted = Counter(outcome.op for outcome in outcomes if outcome.op is not None)
+    on_host = sum(len(outcome.nodes) for outcome in outcomes if outcome.op is None)
     lines = [
         f"ToKernelOps: {sum(converted.values())} converted ("
         + ", ".join(f"{op} {count}" for op, count in sorted(converted.items()))
-        + f"); {len(report['on_host'])} on the host; report/kernel_ops.json"
+        + f"); {on_host} on the host; report/kernel_ops.json"
     ]
-    by_code: dict[tuple[str, str], list[tuple[str, dict[str, Any]]]] = {}
-    for outcome in report["outcomes"]:
-        for finding in outcome["findings"]:
-            key = (finding["code"], finding["kind"])
-            by_code.setdefault(key, []).extend((node, finding) for node in outcome["nodes"])
-    for (code, kind), found in by_code.items():
-        if code == "no-kernel-op":
-            counted = Counter(finding["details"]["op_type"] for _, finding in found)
-            named = ", ".join(f"{op} {count}" for op, count in counted.most_common())
-        else:
-            named = ", ".join(node for node, _ in found)
-        lines.append(f"ToKernelOps:   {code} ({kind}) {len(found)}: {named}")
+    found = [
+        (node, finding)
+        for outcome in outcomes
+        for finding in outcome.findings
+        for node in outcome.nodes
+    ]
+    nodes: dict[Finding, list[str]] = {}
+    for node, finding in found:
+        nodes.setdefault(finding, []).append(node)
+
+    def named(findings: Sequence[Finding]) -> str:
+        if findings[0].code == "no-kernel-op":
+            counted = Counter(str(dict(finding.details)["op_type"]) for finding in findings)
+            return ", ".join(f"{op} {count}" for op, count in counted.most_common())
+        return ", ".join(node for finding in dict.fromkeys(findings) for node in nodes[finding])
+
+    lines += [f"ToKernelOps:   {line}" for line in by_code((f for _, f in found), named)]
     return lines
 
 
 def refuse_host_between(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> None:
     """Refuse KernelOps with host nodes between them (``between_kernel_ops``), each
     named with its findings: the partition the build makes next would depend on
-    itself."""
+    itself. The refusal's findings are one ``host-between`` for each such node, its
+    outcome's findings its causes."""
     between = between_kernel_ops(model)
     if not between:
         return
     findings = {node: outcome.findings for outcome in outcomes for node in outcome.nodes}
     named = "; ".join(
-        f"{node} ("
-        + ", ".join(f"{f.owner}: {f.code}: {f.message}" for f in findings.get(node, ()))
-        + ")"
-        for node in between
+        f"{node} (" + ", ".join(map(finding_text, findings.get(node, ()))) + ")" for node in between
     )
     raise KernelOpError(
         f"{len(between)} host nodes sit between KernelOps, so a partition of the KernelOps "
-        f"would depend on itself: {named}"
+        f"would depend on itself: {named}",
+        findings=tuple(
+            Finding(
+                FindingKind.BLOCKER,
+                "host-between",
+                ToKernelOps.__name__,
+                f"{node} sits on the host between KernelOps",
+                (("node", node),),
+                findings.get(node, ()),
+            )
+            for node in between
+        ),
     )
 
 

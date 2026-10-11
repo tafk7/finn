@@ -207,16 +207,13 @@ def delivered_clock(
     """The clock the routed design delivers (a PL clock of the timing report's clock
     summary) beside the period asked, and, given the partition's bottleneck
     ``cycles`` a frame, the frames a second at each; ``objective_fps`` is the
-    throughput asked. A delivered period other than the one asked is a ``warning``
-    with both numbers (the shell's PS gives its nearest clock to the request)."""
+    throughput asked. Where the summary lists no PL clock, the period asked and the
+    clocks it lists. Facts only: the shell's build states what they fall short of
+    (``finn.shells.pynq.runner.delivered_clock_findings``)."""
     clocks = parse_clock_summary(timing_report)
     name = next((clock for clock in PL_CLOCKS if clock in clocks), None)
     if name is None:
-        return {
-            "target_period_ns": period_ns,
-            "warning": f"no PL clock ({', '.join(PL_CLOCKS)}) in {timing_report}: "
-            f"its clock summary lists {sorted(clocks)}",
-        }
+        return {"target_period_ns": period_ns, "clocks": sorted(clocks)}
     delivered, mhz = clocks[name]["period_ns"], clocks[name]["mhz"]
     report: dict[str, Any] = {
         "clock": name,
@@ -230,20 +227,6 @@ def delivered_clock(
         report["fps_at_delivered"] = round(mhz * 1e6 / cycles, 1)
     if objective_fps is not None:
         report["objective_fps"] = objective_fps
-    # The report states periods to the picosecond.
-    if abs(delivered - period_ns) >= 0.0005:
-        warning = (
-            f"the shell delivers {name} at {delivered} ns ({mhz} MHz), "
-            f"not the {period_ns} ns asked"
-        )
-        if cycles is not None:
-            warning += (
-                f": {cycles} cycles a frame give {report['fps_at_delivered']:,.0f} fps at it, "
-                f"{report['fps_at_target']:,.0f} at the clock asked"
-            )
-        if objective_fps is not None:
-            warning += f"; the objective is {objective_fps:,.0f} fps"
-        report["warning"] = warning
     return report
 
 

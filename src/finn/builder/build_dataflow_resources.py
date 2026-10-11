@@ -48,6 +48,7 @@ from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.space import finding_text
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
@@ -158,7 +159,7 @@ def shell_resources_report(
             columns[key]["model"] = stated.get(key)
         totals["model"] = modelled.total
     else:
-        absent["model"] = modelled
+        absent["model"] = "; ".join(map(finding_text, modelled))
         totals["model"] = None
 
     # Out of context: the integration's per-IP runs, or the packaged partition's.

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import types
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
@@ -89,15 +89,40 @@ def _finding_sort_key(finding: Finding) -> tuple[object, ...]:
 
 
 def finding_record(finding: Finding) -> dict[str, Any]:
-    """A finding as JSON's values: its kind, code, owner, message and details (its
-    causes are not recorded)."""
+    """A finding as JSON's values: its kind, code, owner, message, details and causes,
+    each cause a record of its own."""
     return {
         "kind": finding.kind.value,
         "code": finding.code,
         "owner": finding.owner,
         "message": finding.message,
         "details": dict(finding.details),
+        "causes": [finding_record(cause) for cause in finding.causes],
     }
+
+
+def finding_text(finding: Finding) -> str:
+    """A finding as one line of text: ``owner: code: message``."""
+    return f"{finding.owner}: {finding.code}: {finding.message}"
+
+
+def _first_message(found: Sequence[Finding]) -> str:
+    more = f"; and {len(found) - 1} more" if len(found) > 1 else ""
+    return found[0].message + more
+
+
+def by_code(
+    findings: Iterable[Finding], named: Callable[[Sequence[Finding]], str] = _first_message
+) -> list[str]:
+    """One line per finding code and kind, in the order each is first found: ``code
+    (kind) count: text``, where the text is ``named`` of the code's findings, by default
+    the first one's message and how many more there are. A caller adds its own prefix."""
+    found: dict[tuple[str, FindingKind], list[Finding]] = {}
+    for finding in findings:
+        found.setdefault((finding.code, finding.kind), []).append(finding)
+    return [
+        f"{code} ({kind.value}) {len(each)}: {named(each)}" for (code, kind), each in found.items()
+    ]
 
 
 def ordered_findings(findings: Iterable[Finding]) -> tuple[Finding, ...]:
@@ -369,8 +394,10 @@ __all__ = [
     "ViewAssessment",
     "assess_constraints",
     "assess_view",
+    "by_code",
     "constraint_result",
     "finding_record",
+    "finding_text",
     "merged_findings",
     "ordered_findings",
     "owned_result",
