@@ -67,7 +67,8 @@ def test_the_kernel_path_builds_on_ip_sizes_fifos_and_completes_by_baseline() ->
         == []
     )
     # Each configuration has its own list.
-    assert cfg.kernel_exploration is not DataflowBuildConfig(**STATED).kernel_exploration
+    other = DataflowBuildConfig.from_json(json.dumps(STATED))
+    assert cfg.kernel_exploration is not other.kernel_exploration
     assert cfg.steps is None and cfg.toolchain is None
     # Prepared from the export as exported: its own inputs and outputs, the default
     # recipes.
