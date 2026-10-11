@@ -66,30 +66,29 @@ from finn.builder.build_dataflow_steps import (
 from finn.core.space import by_code
 from finn.toolchain.launcher import ToolFailed, ToolUnavailable
 
-#: The file a build directory states its configuration in (build_dataflow_directory),
-#: beside model.onnx.
+#: The configuration file of a build directory (build_dataflow_directory), next to
+#: model.onnx.
 CONFIG_FILE = "dataflow_build_config.json"
 
 #: The build log, in the output directory.
 LOG_FILE = "build_dataflow.log"
 
-#: The runner's own logger: its lines (the build's paths, each step it runs, the
-#: outcome) are the console's at INFO; every other logger's only from WARNING.
+#: The runner's logger. The console shows its INFO lines (the build's paths, each step
+#: it runs, the outcome); from other loggers, only warnings and above.
 _LOG = logging.getLogger(__name__)
 
-#: A record with this ``extra`` goes to the build log only, unless ``verbose`` (a
-#: refusal's traceback).
+#: Pass as ``extra`` to send a record to the build log only, unless ``verbose`` (used
+#: for a refusal's traceback).
 FILE_ONLY = {"finn_console": False}
 
-#: The step running now, stamped on every record of the build: module-level, not a
-#: context variable, since a step's thread pool (the HLS pool) does not inherit
-#: context.
+#: The step running now, stamped on every log record. A module global, not a context
+#: variable, because a step's thread pool (HLS synthesis) does not inherit context.
 _step = "-"
 
 
 class _StepStamp(logging.Filter):
-    """Stamps each record with the step running when it was made (``step``); a captured
-    warning's text loses the line end warnings.formatwarning gives it."""
+    """Stamps each record with the running step (``step``), and strips the trailing
+    newline warnings.formatwarning adds to a captured warning."""
 
     def filter(self, record):
         record.step = _step
@@ -99,9 +98,9 @@ class _StepStamp(logging.Filter):
 
 
 class _Console(logging.Filter):
-    """What a build shows on its console: with ``verbose``, what the log file has;
-    otherwise the runner's lines, and every logger's warnings, refusals and failures.
-    INFO and below go to stdout, WARNING and above to stderr (``errors``)."""
+    """Selects what the build's console shows: with ``verbose``, everything the log file
+    has; otherwise the runner's lines and every logger's warnings and errors. INFO and
+    below go to stdout, WARNING and above to stderr (``errors``)."""
 
     def __init__(self, verbose: bool, errors: bool):
         super().__init__()
@@ -128,14 +127,14 @@ class _ConsoleFormat(logging.Formatter):
 
 @contextlib.contextmanager
 def _build_log(cfg):
-    """The build's log for the ``with`` block: FINN's loggers (``finn``) and Python's
-    warnings (``py.warnings``, captured through ``logging.captureWarnings``) to
-    ``LOG_FILE`` in ``cfg.output_dir``, every line with its level, step and logger, and
-    to the console (_Console). ``finn`` logs from INFO, the level of the records the
-    build's manifest is collected from (_indexed); a level its caller set is the one
-    the log file and the console show (INFO, unless set). No stream is swapped: a third
-    party's print reaches the console as printed. The handlers, the levels and the
-    warnings hook are restored after, so a notebook's own logging is left as it was."""
+    """Set up the build's log for the ``with`` block. FINN's loggers (``finn``) and
+    Python's warnings (``py.warnings``, captured through ``logging.captureWarnings``) go
+    to ``LOG_FILE`` in ``cfg.output_dir``, each line with its level, step and logger,
+    and to the console (_Console). ``finn`` logs from INFO, the level the build's
+    manifest is collected from (_indexed); a level the caller set is the one the log
+    file and the console show (INFO if none is set). No stream is redirected, so a
+    third-party print reaches the console unchanged. The handlers, levels and warnings
+    hook are restored afterwards, leaving a notebook's own logging as it was."""
     global _step
     os.makedirs(cfg.output_dir, exist_ok=True)
     stamp = _StepStamp()
@@ -156,10 +155,10 @@ def _build_log(cfg):
         for logger in loggers:
             logger.addHandler(handler)
     for logger in loggers:
-        # Not also to the root's handlers (a notebook's), which would say it twice.
+        # Not also to the root's handlers (a notebook's), which would print each line twice.
         logger.propagate = False
-    # FINN logs from INFO for the build, whose manifest is collected from INFO records
-    # (ManifestHandler); a level its caller set above INFO is the log's and console's.
+    # FINN logs from INFO, since the manifest is collected from INFO records
+    # (ManifestHandler); a level the caller set above INFO filters the log and console.
     shown = loggers[0].level or logging.INFO
     if shown > logging.INFO:
         for handler in handlers:
@@ -167,7 +166,7 @@ def _build_log(cfg):
                 lambda record: record.levelno >= shown or record.name == "py.warnings"
             )
     loggers[0].setLevel(min(shown, logging.INFO))
-    # Not if the caller captures warnings already: its hook stays as it is.
+    # Leave the warnings hook alone if the caller already captures warnings.
     capture = warnings.showwarning is not getattr(logging, "_showwarning", None)
     if capture:
         logging.captureWarnings(True)
@@ -188,8 +187,8 @@ def _build_log(cfg):
 
 def _failure_kind(error: BaseException) -> str:
     """The kind of a failed step's error: ``tool-unavailable`` (``ToolUnavailable``),
-    ``tool-failed`` (``ToolFailed``), ``refusal`` (any error carrying ``findings``),
-    ``verdict`` (an ``AssertionError`` of its own type), else ``bug``."""
+    ``tool-failed`` (``ToolFailed``), ``refusal`` (an error with ``findings``),
+    ``verdict`` (a subclass of ``AssertionError``: a failed verification), else ``bug``."""
     if isinstance(error, ToolUnavailable):
         return "tool-unavailable"
     if isinstance(error, ToolFailed):
@@ -202,11 +201,11 @@ def _failure_kind(error: BaseException) -> str:
 
 
 def _log_failure(step: str, error: BaseException) -> str:
-    """Log a failed step's error by its kind (_failure_kind; the traceback in the log
-    file each time), and return the kind: a tool unavailable (the tool and what selects
-    it); a tool that ran and failed (its transcript and error lines); a refusal (its
-    findings' number and one line per code); a verdict (``Verification for <step> :
-    FAIL``); anything else, a bug, with its traceback on the console too."""
+    """Log a failed step's error according to its kind (_failure_kind), and return the
+    kind; the traceback always goes to the log file. A tool unavailable names the tool
+    and what selects it; a tool failure its transcript and error lines; a refusal the
+    number of findings and one line per code; a verdict ``Verification for <step> :
+    FAIL``. Anything else is a bug, and its traceback is shown on the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
     if kind in ("tool-unavailable", "tool-failed"):
@@ -241,12 +240,11 @@ _PHASE_OF = {step: phase for phase, steps in build_dataflow_phase_lookup.items()
 
 
 def _expanded_steps(cfg: DataflowBuildConfig):
-    """The build's steps in the order they run (``cfg.steps``, else
-    default_build_dataflow_steps), each phase expanded into its steps
-    (finn.builder.build_dataflow_phases), and the steps ``inject_steps_before`` and
-    ``inject_steps_after`` name around each step or phase placed; with each phase's
-    first and last index in that list. A name neither a step nor a phase is refused,
-    naming both."""
+    """The build's steps in run order (``cfg.steps``, else default_build_dataflow_steps),
+    with each phase expanded into its steps and the ``inject_steps_before`` and
+    ``inject_steps_after`` functions placed around each step or phase. Also returns
+    each phase's first and last index in that list. Refuses an unknown name, listing
+    the steps and phases."""
     steps = cfg.steps
     if steps is None:
         steps = default_build_dataflow_steps
@@ -284,8 +282,8 @@ def _expanded_steps(cfg: DataflowBuildConfig):
 
 def _step_index(name: str, steps_as_fxns, phase_spans, last: bool) -> int:
     """The index of the step ``name`` in the build's expanded steps; for a phase, of its
-    first step, or its last if ``last``. A name the build does not run is refused,
-    naming the build's steps and phases."""
+    first step, or its last if ``last``. Refuses a name the build does not run, listing
+    its steps and phases."""
     if name in phase_spans:
         return phase_spans[name][1 if last else 0]
     step_names = [step_fn.__name__ for step_fn in steps_as_fxns]
@@ -298,10 +296,10 @@ def _step_index(name: str, steps_as_fxns, phase_spans, last: bool) -> int:
 
 
 def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
-    """The build's steps, as functions in the order they run: every phase expanded into
-    its steps (finn.builder.build_dataflow_phases), the injected steps placed, and, if
-    ``partial``, only those from ``cfg.start_step`` to ``cfg.stop_step``. Either may name
-    a step, or a phase: its first step to start from, its last to stop after."""
+    """The build's steps as functions in run order, phases expanded and injected steps
+    placed. If ``partial``, only those from ``cfg.start_step`` to ``cfg.stop_step``;
+    either may name a phase, meaning its first step to start from or its last to stop
+    after."""
     steps_as_fxns, phase_spans = _expanded_steps(cfg)
     if partial:
         if cfg.start_step is None:
@@ -317,8 +315,8 @@ def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
 
 
 def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
-    """The intermediate model of the step ``step_delta`` after ``step_name`` (a step, or
-    a phase: its first step) in the build's steps."""
+    """The intermediate model file of the step ``step_delta`` places after ``step_name``
+    (for a phase, its first step) in the build's steps."""
     steps_as_fxns, phase_spans = _expanded_steps(cfg)
     step_no = _step_index(step_name, steps_as_fxns, phase_spans, last=False) + step_delta
     assert step_no >= 0, "Invalid step+delta combination"
@@ -329,14 +327,14 @@ def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: 
 
 
 def _run_build_steps(model, cfg, build_dataflow_steps, manifest=None):
-    """Run the resolved build steps in order, in the build's log (_build_log), each
-    record stamped with its step, and each step's start and end, and the outcome,
-    in the build's ``manifest`` (finn.builder.build_dataflow_manifest), if given.
+    """Run the resolved build steps in order, each log record stamped with its step, and
+    record each step's start and end, and the outcome, in the build's ``manifest``
+    (finn.builder.build_dataflow_manifest), if given.
 
-    Writes time_per_step.json: the seconds each step took, by name. Returns 0 on
-    success and -1 on the first failing step, its failure logged first (_log_failure)
-    and recorded in the manifest; then the postmortem debugger, if
-    ``enable_build_pdb_debug`` and stdin is a terminal.
+    Writes time_per_step.json, the seconds each step took. Returns 0 on success, or -1
+    at the first failing step after logging its failure (_log_failure), recording it in
+    the manifest, and starting the postmortem debugger if ``enable_build_pdb_debug`` is
+    set and stdin is a terminal.
     """
     global _step
     step_num = 1
@@ -392,10 +390,10 @@ def _run_build_steps(model, cfg, build_dataflow_steps, manifest=None):
 
 
 def _identity(cfg: DataflowBuildConfig) -> dict:
-    """The build's identity as the configuration states it, before its checks, for its
-    manifest: FINN's revision, the toolchain's selection (the configuration's over the
-    machine's) and the target, each None where it cannot be known; the model and the
-    Vivado release are added as the build reads them."""
+    """The build's identity for its manifest, from the configuration before its checks:
+    FINN's revision, the toolchain's selection (the configuration's over the machine's)
+    and the target, each None where it cannot be known. The model and the Vivado release
+    are added later, as the build reads them."""
     try:
         selection = asdict(cfg._resolve_selection())
     except ValueError:
@@ -422,8 +420,9 @@ def _identity(cfg: DataflowBuildConfig) -> dict:
 
 
 def _asked_verifications(cfg: DataflowBuildConfig) -> dict:
-    """Each verification ``cfg.verify_steps`` asks, by name, with the step that concludes
-    it (VERIFIED_BY's last); one that is no verification is left to the checks."""
+    """Each verification ``cfg.verify_steps`` asks for, by name, with the step that
+    concludes it (the last in VERIFIED_BY). A name that is not a verification is skipped;
+    the configuration checks report it."""
     asked = {}
     for each in cfg.verify_steps:
         try:
@@ -437,7 +436,7 @@ def _asked_verifications(cfg: DataflowBuildConfig) -> dict:
 @contextlib.contextmanager
 def _indexed(cfg: DataflowBuildConfig):
     """The build's manifest (``MANIFEST_FILE`` in the output directory) for the ``with``
-    block, written at once, its records collected from FINN's loggers (ManifestHandler)."""
+    block, written at once and filled from FINN's log records (ManifestHandler)."""
     manifest = Manifest(cfg.output_dir, _identity(cfg), _asked_verifications(cfg))
     handler = ManifestHandler(manifest)
     logger = logging.getLogger("finn")
@@ -451,13 +450,12 @@ def _indexed(cfg: DataflowBuildConfig):
 
 def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     """Best-effort build a dataflow accelerator using the given configuration, through
-    the kernel path's steps (finn.builder.build_dataflow_steps).
+    the steps of finn.builder.build_dataflow_steps.
 
-    The build's log (``LOG_FILE`` in the output directory, and the console) and its
-    manifest (``MANIFEST_FILE``, finn.builder.build_dataflow_manifest) exist before
-    anything else is done (_build_log, _indexed): the configuration checks are logged,
-    each failed one at its severity, and listed in the manifest; a configuration
-    refused is logged and recorded before it raises.
+    The build log (``LOG_FILE`` in the output directory, and the console) and the
+    manifest (``MANIFEST_FILE``, finn.builder.build_dataflow_manifest) are set up first
+    (_build_log, _indexed), so the configuration checks are logged and listed in the
+    manifest too, and a refused configuration is logged and recorded before it raises.
 
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
@@ -512,11 +510,11 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
 
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
-    """``cfg`` with each relative path it states joined to ``directory``: ``output_dir``,
+    """``cfg`` with each relative path joined to ``directory``: ``output_dir``,
     ``verify_input_npy``, step_prepare_io's ``preprocessing`` model, a strategy's
-    ``path`` in step_explore's ``kernel_exploration`` (``pinned``'s choices file), the
-    toolchain's settings scripts and command directory. An absolute path, and an empty
-    command directory, stay as stated."""
+    ``path`` in step_explore's ``kernel_exploration`` (the ``pinned`` choices file), and
+    the toolchain's settings scripts and command directory. Absolute paths and an empty
+    command directory are kept as they are."""
 
     def resolve(path: str) -> str:
         return os.path.join(directory, path)
@@ -555,10 +553,9 @@ def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuild
 
 
 def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
-    """The build configuration a build directory states: its CONFIG_FILE, each relative
-    path in it resolved against the directory (``_resolved_against``), so that it names
-    the same file from whatever directory the build runs. A directory without one is
-    refused, naming the file."""
+    """Read a build directory's CONFIG_FILE, with its relative paths resolved against
+    the directory (``_resolved_against``) so that they name the same files wherever the
+    build runs. Refuses a directory without one."""
     path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
@@ -569,10 +566,10 @@ def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
 
 def build_dataflow_directory(path_to_cfg_dir: str):
     """Best-effort build a dataflow accelerator from the specified directory, in this
-    process (build_dataflow_cfg), its working directory unchanged: the configuration's
-    relative paths name files in the directory (read_build_config), and a relative
-    FINN_BUILD_DIR the caller's. Returns build_dataflow_cfg's result, 0 or -1 for a
-    failed step; a configuration it refuses raises.
+    process and without changing the working directory: the configuration's relative
+    paths name files in the directory (read_build_config), and a relative
+    FINN_BUILD_DIR is relative to the caller's. Returns build_dataflow_cfg's result: 0,
+    or -1 for a failed step. A refused configuration raises.
 
     :param path_to_cfg_dir: Directory containing the model and build config
 
@@ -593,7 +590,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
 def main():
     """Entry point for dataflow builds. Invokes `build_dataflow_directory` using
     command line arguments, and exits with its result: 0, or 255 for a failed step
-    (its -1); a configuration it refuses raises, exiting 1 with the traceback."""
+    (its -1). A refused configuration raises, exiting 1 with the traceback."""
 
     def cli(path_to_cfg_dir: str):
         """Build the model and configuration in path_to_cfg_dir."""

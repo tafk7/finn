@@ -1,42 +1,45 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's resources per member of the shell (``report/resources.json``).
+"""The build's resources report, ``report/resources.json``: resources per member of the
+shell.
 
-``shell_resources_report`` states, for each member of the partition's shell root (the
-partition, each end by its boundary channel, each IP of the static region) and their
-total, up to three columns:
+``shell_resources_report`` lists each member of the partition's shell (the partition,
+each end by its boundary channel, each IP of the static region) and their total, in up
+to three columns:
 
-- ``model``: what the shell root states (``finn.custom_op.kernels.shell.shell_resources``):
-  the partition's kernels from their RTL's fits, each end and each static IP from its
-  out-of-context characterisation;
+- ``model``: the shell root's own figures (``finn.custom_op.kernels.shell.shell_resources``):
+  the partition's kernels from their RTL's fitted models, each end and each static IP
+  from its out-of-context characterisation;
 - ``out_of_context``: Vivado's synthesis of each IP alone. On a shell with an
-  integration, the integration's per-IP runs (``<run>_utilization_synth.rpt``, read by
-  ``finn.toolchain.vivado.utilization_synth``), each run its instance's
-  (``_member_instances``); on ``ip``, the partition packaged with OOC_SYNTH, its
-  hierarchical report's top (``vivado.hierarchical_utilization``);
+  integration, these are the integration's per-IP runs (``<run>_utilization_synth.rpt``,
+  read by ``finn.toolchain.vivado.utilization_synth``), matched to members by instance
+  name (``_member_instances``). On ``ip``, it is the top row of the hierarchical report
+  of the partition packaged with OOC_SYNTH (``vivado.hierarchical_utilization``);
 - ``placed``: the routed design's hierarchical report (``vivado.placed_hierarchy``),
-  each instance below the block design's top its member's. ``ip`` is not placed.
+  each instance directly below the block design's top counted to its member. ``ip`` is
+  not placed.
 
-A column the build did not make is ``null`` for every member, and ``absent`` says why.
-``caveat`` is the shell row's for the board (``finn.platform.ShellRow.caveat``): on a
-board the shell was not built and timed on, the ends' and static region's ``model``
-counts are carried over from where they were characterised; ``null`` otherwise.
-A member a column does not list (the placed design lists no row for the processor and
-its reset) is ``null`` there. ``unattributed`` is each column's total less its members'
-sum: what the report lists outside the members, or what no member's row holds. The
-placed column's can be negative: Vivado's hierarchical report can count its children
-above its top row (TFC on Ultra96: the members' LUTs 3 above it), and the difference is
-stated as it falls, not clipped.
+A column the build did not produce is ``null`` for every member, and ``absent`` says
+why. A member a column has no row for (the placed design has none for the processor and
+its reset) is ``null`` there. ``caveat`` is the shell row's note for the board
+(``finn.platform.ShellRow.caveat``), or ``null``: on a board the shell was not built and
+timed on, the ``model`` figures of the ends and static region are carried over from
+where they were characterised.
+
+``unattributed`` is each column's total minus the sum of its members: what the report
+counts outside the members. It is not clipped, and can be negative in the placed
+column, because Vivado's hierarchical report can count children above their top row
+(TFC on Ultra96: the members' LUTs exceed it by 3).
 
 When the partition was synthesized out of context (OOC_SYNTH), ``partition_members``
-is its split by member of the shell root (``package.ooc_member_resources``):
-synthesis flattens small instances into the module's top, and what no reported
-instance holds is stated ``unattributed`` there, the instances with no row
-``unreported_instances``; the hierarchy is not kept.
+splits it by member of the shell root (``package.ooc_member_resources``). Synthesis
+flattens small instances into the module's top and does not keep the hierarchy: what no
+reported instance holds is listed as ``unattributed`` there, and the instances without
+a row as ``unreported_instances``.
 
-Every count is in ``finn.kernels.utilization.Resources``' units: LUTs, FFs, RAMB18
-halves (a RAMB36 is two), URAMs and DSPs.
+All counts are in ``finn.kernels.utilization.Resources`` units: LUTs, FFs, RAMB18
+halves (a RAMB36 counts two), URAMs and DSPs.
 """
 
 from __future__ import annotations
@@ -77,15 +80,15 @@ def _counts(resources: Resources | None) -> dict[str, int] | None:
 
 
 def _less(total: Resources, parts: list[Resources]) -> dict[str, int]:
-    """``total`` less the sum of ``parts``, each count as it falls (synthesis and
+    """``total`` minus the sum of ``parts``, per resource and not clipped (synthesis and
     placement may count a parent below its children's sum)."""
     claimed = sum(parts, Resources())
     return {f.name: getattr(total, f.name) - getattr(claimed, f.name) for f in fields(total)}
 
 
 def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
-    """The member whose instance ``name`` is, or begins (an IP's own runs and
-    sub-instances: ``axi_interconnect_0_imp_auto_ds``), by the longest instance."""
+    """The member whose instance is ``name``, or a prefix of it (an IP's own runs and
+    sub-instances, such as ``axi_interconnect_0_imp_auto_ds``); the longest match wins."""
     found = [
         (len(instance), key)
         for key, instance in instances.items()
@@ -95,10 +98,10 @@ def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
 
 
 def _member_instances(parent: ModelWrapper) -> dict[str, str]:
-    """Each member of the shell's block design by its key in the report (``partition``,
-    ``ends.<channel>``, ``static_region.<ip>``) and its instance name, or the instance's
-    prefix where Vivado names it (the reset's, by its clock). A shell without an
-    integration names its partition alone, by its node."""
+    """Each member of the shell's block design by its report key (``partition``,
+    ``ends.<channel>``, ``static_region.<ip>``), with its instance name, or the prefix of
+    a name Vivado chooses (the reset's, after its clock). A shell without an integration
+    has the partition alone, by its node's name."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     row = shell_row(target.shell, target.board)
@@ -133,11 +136,11 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) -> dict[str, Any]:
-    """``report/resources.json`` of the kernel path's parent graph ``parent``: see the
-    module docstring. ``reports`` are the ones the build made, by name: ``out_of_context``
-    (a directory) and ``placed`` of the shell's integration
-    (``finn.shells.pynq.runner.REPORTS``), ``ooc_synth`` of the packaged partition; a
-    column whose report is not given is absent."""
+    """``report/resources.json`` for the parent graph ``parent`` (see the module
+    docstring), from the ``reports`` the build made, by name: the shell integration's
+    ``out_of_context`` (a directory) and ``placed`` (``finn.shells.pynq.runner.REPORTS``),
+    and the packaged partition's ``ooc_synth``. A column whose report is not given is
+    absent."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
     point, _ = configured_root(body, node.name)
@@ -147,7 +150,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     totals: dict[str, Resources | None] = {}
     absent: dict[str, str] = {}
 
-    # The model: the shell root's statements, by member.
+    # The model column: the shell root's figures, by member.
     if isinstance(modelled, ShellResources):
         stated: dict[str, Resources | None] = {"partition": modelled.partition}
         stated.update({f"ends.{key}": value for key, value in modelled.ends})
@@ -188,7 +191,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
             "no out-of-context synthesis: ask bitfile on a shell with an integration, or ooc_synth"
         )
 
-    # Placed: the routed design's hierarchy, each instance below the block design's top.
+    # Placed: the routed design's hierarchy, each instance directly below the top.
     placed = reports.get("placed")
     if placed is not None:
         rows = vivado.placed_hierarchy(Path(placed).read_text())

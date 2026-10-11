@@ -3,10 +3,9 @@
 
 """Configuration check system for FINN builds - catches incompatibilities early.
 
-What a DataflowBuildConfig's build refuses or warns of before its first step: the kernel
-path's own checks (``kernel_path_checks``) and the Vivado release its board's row
-requires, against the release its toolchain runs (``run_all_config_checks`` runs both).
-A check is a ``Check`` of a ``Severity``.
+Before its first step, a build checks its configuration (``run_all_config_checks``):
+the build's own checks (``kernel_path_checks``), and the Vivado release its board
+requires against the release its toolchain runs.
 """
 
 import importlib
@@ -76,8 +75,8 @@ def _check(
 
 
 def _resolved_step_names(cfg: DataflowBuildConfig) -> set[str] | None:
-    """The names of the steps the build runs (steps, start_step, stop_step), or None
-    when they cannot be resolved (the build then fails on its own when it starts)."""
+    """The names of the steps the build runs (steps, start_step, stop_step), or None if
+    they cannot be resolved; the build then fails on its own when it starts."""
     try:
         # imported lazily via importlib (rather than a top-level import) since
         # build_dataflow imports the checks, and a top-level import back
@@ -89,13 +88,10 @@ def _resolved_step_names(cfg: DataflowBuildConfig) -> set[str] | None:
 
 
 def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
-    """The checks of a kernel-path build that its configuration's type does not make
-    impossible: its target resolves (finn.platform.resolve_target); the shell outputs
-    it asks for (SHELL_OUTPUTS) need a shell that integrates the partition (not
-    ``ip``), and each output those it is made from (OUTPUT_NEEDS); enable_hw_debug
-    only on a shell with a build; the verification input exists, the testbench a
-    verification runs is asked for, and the steps each verification needs run
-    (VERIFIED_BY)."""
+    """Check a build's configuration before its first step: the target, the outputs
+    and the shell they need, ``enable_hw_debug``, and the verification inputs and steps.
+    Returns one Check per problem; an empty list means the configuration is
+    consistent."""
     checks = []
     try:
         target = cfg._resolve_target()
@@ -199,9 +195,9 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
 
 
 def _vivado_release(cfg: DataflowBuildConfig) -> Tuple[Optional[Tuple[int, int]], str]:
-    """The Vivado release the build's own toolchain runs (``finn.toolchain.vivado.release``),
-    or None and why when none is detected: no Vivado on its route, or its toolchain not
-    prepared."""
+    """The Vivado release the build's toolchain runs (``finn.toolchain.vivado.release``),
+    or None and the reason if none is detected: no Vivado on its route, or the
+    toolchain could not be prepared."""
     try:
         return vivado.release(cfg._resolve_toolchain()), ""
     except (ToolUnavailable, RuntimeError, OSError) as missing:
@@ -209,9 +205,9 @@ def _vivado_release(cfg: DataflowBuildConfig) -> Tuple[Optional[Tuple[int, int]]
 
 
 def _vivado_checks(board: Optional[Board], v: Optional[Tuple[int, int]], why: str) -> List[Check]:
-    """Whether ``v``, the Vivado release detected (None: none, for the reason ``why``),
-    meets the release ``board``'s row requires (``Board.vivado``); no check for a board
-    without a requirement, or no board."""
+    """Check that ``v``, the detected Vivado release (None if none was found, for the
+    reason ``why``), meets the release ``board`` requires (``Board.vivado``). No check
+    without a board or a requirement."""
     if board is None or board.vivado is None:
         return []
     needed = f"{board.vivado[0]}.{board.vivado[1]}"
@@ -228,16 +224,16 @@ def _vivado_checks(board: Optional[Board], v: Optional[Tuple[int, int]], why: st
 
 
 def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
-    """Run all configuration checks of a kernel-path build and return the report: the
-    Vivado release its board needs, and the kernel path's own checks
-    (kernel_path_checks). The report states the release the build's toolchain runs."""
+    """Run all configuration checks of a build and return the report: the Vivado
+    release its board needs, and kernel_path_checks. The report records the release the
+    build's toolchain runs."""
     v, why = _vivado_release(cfg)
     board = None
     try:
         name = cfg._resolve_target().board
         board = BOARDS[name] if name is not None else None
     except TargetRefused:
-        pass  # kernel_path_checks names it
+        pass  # kernel_path_checks reports it
     checks = _vivado_checks(board, v, why) + kernel_path_checks(cfg)
     return Report(timestamp=datetime.now().isoformat(), vivado_version=v, checks=checks)
 
@@ -283,7 +279,7 @@ _LEVELS = {
 
 
 def log_report(report: Report) -> None:
-    """Log the report: its text (format_report) at INFO, then each failed check at its
+    """Log the report's text (format_report) at INFO, then each failed check at its
     severity, with its suggestion."""
     _LOG.info(format_report(report))
     for c in report.checks:

@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-# A module, not names: the launcher reads this module in turn (``vivado_jobs``).
+# A module, not names: the launcher imports this module in turn (``vivado_jobs``).
 from finn.toolchain import launcher
 
 if TYPE_CHECKING:
@@ -160,8 +160,7 @@ VIVADO_JOBS_CAP = 16
 def vivado_jobs(requested: int | None = None) -> int:
     """The number of runs Vivado launches at once (``launch_runs -jobs``): the
     ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP.
-    The one check of a number of jobs: a positive integer (``finn.toolchain.launcher.
-    Selection.vivado_jobs`` states one through it)."""
+    Raises ValueError unless ``requested`` is a positive integer."""
     if requested is None:
         return max(1, min(os.cpu_count() or 1, VIVADO_JOBS_CAP))
     if type(requested) is not int or requested < 1:
@@ -204,11 +203,11 @@ def delivered_clock(
     cycles: int | None = None,
     objective_fps: float | None = None,
 ) -> dict[str, Any]:
-    """The clock the routed design delivers (a PL clock of the timing report's clock
-    summary) beside the period asked, and, given the partition's bottleneck
-    ``cycles`` a frame, the frames a second at each; ``objective_fps`` is the
-    throughput asked. Where the summary lists no PL clock, the period asked and the
-    clocks it lists. Facts only: the shell's build states what they fall short of
+    """The clock the routed design delivers (a PL clock in the timing report's clock
+    summary) beside the period asked, and, given the partition's bottleneck ``cycles``
+    a frame, the frames a second at each; ``objective_fps`` is the throughput asked. If
+    the summary lists no PL clock, the period asked and the clocks it lists. These are
+    facts only: the shell's build judges any shortfall
     (``finn.shells.pynq.runner.delivered_clock_findings``)."""
     clocks = parse_clock_summary(timing_report)
     name = next((clock for clock in PL_CLOCKS if clock in clocks), None)

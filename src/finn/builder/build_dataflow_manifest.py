@@ -2,39 +2,38 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The build's manifest, ``report/build.json``: the index of one run of
-``build_dataflow_cfg``. A machine reads the exit code, then the manifest, then the
-reports it lists, and never the build's log (decision SR7).
+``build_dataflow_cfg``. A program reads the exit code, then the manifest, then the
+reports it lists, and never the build's log.
 
-There are two indexes, each of its own (SR3 item 4, SR7 item 1): the model indexes the
-design and the artifacts a later step consumes (``finn.outputs``); the manifest indexes
-the run:
+The model and the manifest index different things: the model indexes the design and
+the artifacts a later step uses (``finn.outputs``); the manifest indexes the run:
 
 - ``identity``: what ran it: FINN's revision where it is known (``finn_revision``), the
   toolchain's selection, the Vivado release the configuration checks probed, the
   target, the model read and the output directory;
-- ``configuration_checks``: upstream's report (``config_check_report.json``), its
-  counts, and each check that failed;
+- ``configuration_checks``: the configuration check report
+  (``config_check_report.json``), its counts, and each check that failed;
 - ``steps``: each step run, in order, with its phase (None for a step no phase lists),
   its ``status`` (``running``, ``completed``, ``failed``), its ``seconds``, the
-  ``reports`` it wrote (each with the findings it states, by code), its tool runs
-  (``tools``: each with its transcript, status, seconds, exit status and messages by
-  severity), its ``findings`` by code (its reports'), and its
-  ``verifications`` with their verdicts;
-- ``verifications``: each verification the configuration asked, by name, and its
-  verdict: ``pass``, ``fail``, ``error`` (its step failed otherwise before it
+  ``reports`` it wrote (each with its findings by code), its tool runs (``tools``: each
+  with its transcript, status, seconds, exit status and messages by severity), its
+  ``findings`` by code (summed over its reports), and its ``verifications`` with their
+  verdicts;
+- ``verifications``: each verification the configuration asked for, by name, and its
+  verdict: ``pass``, ``fail``, ``error`` (its step failed in another way before it
   concluded) or ``not-run``;
 - ``outcome``: None while the build runs; then ``completed``; ``failed``, with the
   step, the error's ``kind`` (``refusal``, ``tool-unavailable``, ``tool-failed``,
   ``verdict``, ``bug``), its type and message, and a refusal's findings by code; or
   ``refused`` before the first step (the configuration), with the error.
 
-It is rewritten whenever it changes, atomically (a temporary file renamed over it), so
-a build stopped at any point leaves the last state it reached: a killed build's step
-stays ``running``. What a step did is stated in log records the build's
-``ManifestHandler`` collects: a report written (``REPORT``), a verdict
-(``VERIFICATION``), a tool run (``finn.toolchain.launcher.TOOL_RUN``). Nothing of a
-report is copied but its findings' counts. A path inside the output directory is
-stated relative to it.
+The file is rewritten atomically (a temporary file renamed over it) whenever it
+changes, so a build stopped at any point leaves the last state it reached; a killed
+build's step stays ``running``. Steps report what they did in log records, which the
+build's ``ManifestHandler`` collects: a report written (``REPORT``), a verdict
+(``VERIFICATION``), a tool run (``finn.toolchain.launcher.TOOL_RUN``). Of a report,
+only its findings' counts are copied. Paths inside the output directory are written
+relative to it.
 """
 
 from __future__ import annotations
@@ -56,9 +55,9 @@ from finn.toolchain.launcher import TOOL_RUN, transcript_files
 #: The manifest's file, under the output directory.
 MANIFEST_FILE = "report/build.json"
 
-#: The ``extra`` key of a record stating a report a step wrote: its path.
+#: The ``extra`` key of a log record for a report a step wrote: its path.
 REPORT = "finn_report"
-#: The ``extra`` key of a record stating a verification's verdict: ``{"name",
+#: The ``extra`` key of a log record for a verification's verdict: ``{"name",
 #: "passed"}``.
 VERIFICATION = "finn_verification"
 
@@ -69,7 +68,7 @@ PASS, FAIL, ERROR, NOT_RUN = "pass", "fail", "error", "not-run"
 def finn_revision() -> dict[str, Any] | None:
     """The FINN revision running: the one an installed FINN recorded when it was built
     (``finn/_build_info.json``), else its git checkout's (``revision``, and ``dirty``:
-    whether a tracked file differs); None when neither is known. Read once a process."""
+    whether a tracked file differs); None if neither is known. Read once per process."""
     package = Path(__file__).resolve().parents[1]
     recorded = package / "_build_info.json"
     if recorded.is_file():
@@ -95,9 +94,9 @@ def finn_revision() -> dict[str, Any] | None:
 
 
 def findings_by_code(value: Any) -> dict[str, int]:
-    """The findings a report states, by code: each finding record
+    """A report's findings counted by code: each finding record
     (``finn.core.space.finding_record``) in a list under a ``findings`` key, at any depth
-    of the report but inside another finding."""
+    of the report except inside another finding."""
     counts: Counter[str] = Counter()
 
     def walk(node: Any) -> None:
@@ -150,9 +149,10 @@ def _summed(*counts: Mapping[str, int]) -> dict[str, int]:
 
 
 class Manifest:
-    """``report/build.json`` of the build into ``output_dir``, written as it changes
-    (see the module docstring). ``identity`` is its identity so far; ``asked`` the
-    verifications the configuration asks, each with the step that concludes it."""
+    """The ``report/build.json`` of the build into ``output_dir``, written whenever it
+    changes (see the module docstring). ``identity`` is the build's identity so far;
+    ``asked`` the verifications the configuration asks for, each with the step that
+    concludes it."""
 
     def __init__(
         self,
@@ -188,7 +188,7 @@ class Manifest:
         """Write the manifest as it is now: a temporary file beside it, renamed over it."""
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            # One writer a process (the lock); the file's mode the process's umask's.
+            # One writer per process (the lock); the file gets the process's umask mode.
             temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}")
             with open(temporary, "w") as f:
                 json.dump(self.state, f, indent=2)
@@ -202,8 +202,8 @@ class Manifest:
             self.write()
 
     def configuration_checks(self, report: Any, path: str) -> None:
-        """The configuration checks' ``report`` (``build_dataflow_checks.Report``), saved
-        as ``path``'s JSON beside it: its counts and each check that failed."""
+        """Record the configuration checks' ``report`` (``build_dataflow_checks.Report``),
+        saved as JSON beside ``path``: its counts and each check that failed."""
         failed = [check for check in report.checks if not check.passed]
         with self._lock:
             self.state["configuration_checks"] = {
@@ -240,7 +240,8 @@ class Manifest:
             self.write()
 
     def report(self, path: str | os.PathLike[str]) -> None:
-        """A report the running step wrote (again, if it is listed), with its findings."""
+        """Record a report the running step wrote, with its findings; a report written
+        again replaces its entry."""
         with self._lock:
             step = self._step
             if step is None:
@@ -252,7 +253,7 @@ class Manifest:
             self.write()
 
     def verification(self, name: str, verdict: str) -> None:
-        """A verification's verdict, in the running step."""
+        """Record a verification's verdict, in the running step."""
         with self._lock:
             if self._step is not None:
                 self._step["verifications"][name] = verdict
@@ -260,8 +261,8 @@ class Manifest:
             self.write()
 
     def tool_run(self, fields: Mapping[str, Any]) -> None:
-        """A tool run's start, or its end (``finn.toolchain.launcher.TOOL_RUN``), in the
-        running step; a run that ended is given its messages."""
+        """Record a tool run's start or end (``finn.toolchain.launcher.TOOL_RUN``) in the
+        running step; at its end, add its messages by severity."""
         with self._lock:
             run = fields["run"]
             if fields.get("status") == "running":
@@ -290,9 +291,10 @@ class Manifest:
     def failed(
         self, step: str, kind: str, error: BaseException, findings: Mapping[str, int]
     ) -> None:
-        """The build failed in ``step`` with ``error`` of ``kind``: the outcome, and each
-        verification asked that the step concludes and had not: ``fail`` for a verdict,
-        else ``error``. A refusal's ``findings`` are the outcome's."""
+        """Record that the build failed in ``step`` with ``error`` of ``kind``. Each
+        verification asked for that this step concludes, and that has no verdict yet,
+        becomes ``fail`` for a verdict, else ``error``. A refusal's ``findings`` go into
+        the outcome."""
         with self._lock:
             for name, verdict in self.state["verifications"].items():
                 if verdict == NOT_RUN and self._concluded_by.get(name) == step:
@@ -307,7 +309,7 @@ class Manifest:
             self.write()
 
     def refused(self, error: BaseException) -> None:
-        """The build refused before its first step, with ``error``."""
+        """Record that the build was refused before its first step, with ``error``."""
         with self._lock:
             self.state["outcome"] = {
                 "status": "refused",
@@ -317,7 +319,7 @@ class Manifest:
 
 
 class ManifestHandler(logging.Handler):
-    """Collects what a build's records state for its ``manifest``: the reports written
+    """Collects into ``manifest`` what a build's log records carry: the reports written
     (``REPORT``), the verdicts (``VERIFICATION``) and the tool runs
     (``finn.toolchain.launcher.TOOL_RUN``)."""
 

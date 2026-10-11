@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build's phases: each a name for a list of steps of finn.builder.build_dataflow_steps,
-run in that order. A DataflowBuildConfig's ``steps``, ``start_step``, ``stop_step`` and
-``inject_steps_before``/``inject_steps_after`` may name a phase wherever they name a step;
-build_dataflow expands each phase into its steps, so every step is run, injected around,
-saved, timed, started from and stopped at as one step of the build."""
+"""The build's phases. Each phase names a list of steps of finn.builder.build_dataflow_steps,
+run in that order. A configuration's ``steps``, ``start_step``, ``stop_step`` and
+``inject_steps_before``/``inject_steps_after`` can name a phase wherever they name a step.
+build_dataflow expands each phase into its steps, so each step is still run, injected
+around, saved, timed, started from and stopped at on its own."""
 
-#: The build's phases by name, in the order a build runs them, each the names of its
-#: steps in order.
+#: The build's phases by name, in the order a build runs them, each with its steps in
+#: order.
 build_dataflow_phase_lookup: dict[str, list[str]] = {
-    # The export in FINN's form, cleaned for the compiler, its computation unchanged
-    # (finn.transformation.prepare); the prepared graph checked.
+    # Bring the export into FINN's form and clean it for the compiler without changing
+    # its computation (finn.transformation.prepare), then check the prepared graph.
     "phase_prepare_model": [
         "step_prepare_import",
         "step_prepare_quantization",
@@ -21,15 +21,16 @@ build_dataflow_phase_lookup: dict[str, list[str]] = {
         "step_prepare_containers",
         "step_prepare_checkpoint",
     ],
-    # The target stated in the model; the graph's nodes rewritten to KernelOps.
+    # Record the target in the model and convert the graph's nodes to KernelOps.
     "phase_convert_to_hardware": ["step_convert_to_hw"],
-    # The KernelOps cut once into one partition, the rest on the host.
+    # Cut the KernelOps into one partition; the other nodes stay on the host.
     "phase_create_accelerator": ["step_create_dataflow_partition"],
-    # The partition's choices explored by the configured strategies; the partition checked.
+    # Choose the partition's parameters with the configured strategies, then check it.
     "phase_optimize_hardware": ["step_explore", "step_verify_partition"],
-    # The partition's IP: its HDL rendered and packaged.
+    # Generate the partition's HDL and package it as an IP.
     "phase_build_hardware": ["step_create_stitched_ip"],
-    # The outputs the configuration asks: bitfile, driver, resources, deployment package.
+    # Make the outputs the configuration asks for: bitfile, driver, resources report,
+    # deployment package.
     "phase_generate_outputs": [
         "step_synthesize_bitfile",
         "step_make_driver",
