@@ -583,10 +583,10 @@ class Decision(ValueDecl[T], Generic[T]):
     whose fact does not hold is refused with that finding, at a commitment and
     when forcing reads its viability. ``ordered=True`` states that listed values
     are in an order (a domain states its own, ``divisors_of``); otherwise they
-    are unordered. ``required=True`` states that the choice has no safe baseline:
-    its first case is no default a completion may take. It does not change what
-    the Decision accepts or how it evaluates; inspection reports it
-    (``DecisionInfo.required``), for the explorer and the generator that read it.
+    are unordered. ``required=True`` marks a choice with no safe default: a flow
+    that sets each choice to its first case leaves this one open. It changes
+    nothing in how the Decision accepts or evaluates values;
+    ``inspection.decisions`` reports it (``DecisionInfo.required``).
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
@@ -609,7 +609,7 @@ class Decision(ValueDecl[T], Generic[T]):
     domain: Domain[T]
     explicit: ValueSemantics[T] | None
     resolved: bool
-    # No safe baseline: no completion takes its first case (``required=True``).
+    # ``required=True``: no safe default; left open when choices are set to their first case.
     required: bool
     # Where this Decision supplies a formal (for the shared-decision rule).
     sites: list[str]

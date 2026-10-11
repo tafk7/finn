@@ -72,9 +72,9 @@ class DecisionInfo(Generic[T]):
 
     ``space_type`` is the Space class whose scope declares it (a candidate's, for a
     choice nested under a Decision over nodes); ``ordered``, whether its domain
-    states an order of its cases (``Domain.ordered``); ``required``, whether it
-    has no safe baseline (``Decision(required=True)``): no completion takes its
-    first case.
+    states an order of its cases (``Domain.ordered``); ``required``: the Decision
+    has no safe default (``Decision(required=True)``), so setting choices to their
+    first case leaves it open.
     """
 
     reference: DecisionHandle[T]
