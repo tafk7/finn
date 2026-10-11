@@ -236,6 +236,13 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
         (f"Im2Col_{layer}", f"MatMul_{layer}") for layer in range(6)
     ]
     assert not [node for node in model.graph.node if node.op_type == "Im2Col"]
+    # Each KernelOp's own choices created as it converts, each at its baseline: 59 values
+    # on CNV's 17 KernelOps (SR6).
+    converted = [
+        kernel_op(model, node) for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN
+    ]
+    assert len(converted) == 17
+    assert sum(len(op.choices()) for op in converted) == 59
     assert between_kernel_ops(model) == (
         "MaxPoolNHWC_0",
         "MaxPoolNHWC_1",

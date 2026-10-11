@@ -28,7 +28,6 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import CHANNEL_KEYS, KernelOpError, channel_choices, kernel_op
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.configure import chosen, commit
 from finn.kernels.explore import Ranked, SizeFifos
 from finn.transformation.kernels import (
@@ -275,13 +274,13 @@ def test_a_tensor_read_more_than_once_is_refused_by_name(case: str) -> None:
 
 @pytest.mark.parametrize("case", FAN_OUT)
 def test_a_build_stops_at_its_first_shell_root_naming_the_tensor(case: str, tmp_path: Path) -> None:
-    """The cut accepts the KernelOps (their partition's body keeps hidden read more than
-    once), and the build's first shell root, exploration's, refuses it by name."""
+    """The cut partitions the KernelOps (their partition's body keeps hidden read more than
+    once), and the build's first shell root, the cut's, where the channels' choices are
+    created, refuses it by name."""
     output, named = FAN_OUT[case]
     model = fan_out_source(output=output).transform(ToKernelOps(TARGET))
-    _, body, _ = partition_body(model.transform(CutKernelPartition(tmp_path)))
     with pytest.raises(KernelOpError, match=f"partition: .*{named}"):
-        explore_kernel_choices(body, [])
+        model.transform(CutKernelPartition(tmp_path))
 
 
 def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:

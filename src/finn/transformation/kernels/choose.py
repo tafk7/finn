@@ -10,7 +10,9 @@ cut's alone: a model holding any other node is refused. It builds the body's she
 once (``shell_root``: their kernels, the channels between them and the channels on its
 boundary; the nodes' and the channels' saved choices replayed, a stale one dropped with
 why; members named as the graph, ``MatMul_0``), gives every choice the body leaves open
-its baseline (``Seam.baseline``), runs the strategies in order through one ``Seam``
+its baseline (``Seam.baseline``: what ``BaselineChoices`` does, a no-op on a body the
+cut created; on a body made by hand, after ``fresh``, or for a choice replay dropped as
+stale, the report names what it baselined), runs the strategies in order through one ``Seam``
 (``finn.kernels.explore``), each reopening the choices it decides, exploring and
 settling, from the point the one before returned, and then:
 

@@ -15,7 +15,9 @@ leave out;
 answering from their kernels (``infer_node``, the step on one node, which
 ``ToKernelOps`` shares); ``cut.CutKernelPartition`` cuts the KernelOps once into
 the partition, the parent graph's one ``StreamingDataflowPartition``
-(``finn.custom_op.partition``); ``ExploreKernelChoices`` explores the choices
+(``finn.custom_op.partition``), and gives its body's choices their baselines
+(``cut.BaselineChoices``, also for a body made by hand: a KernelOp's own are created
+at conversion, a channel's at the cut); ``ExploreKernelChoices`` explores the choices
 of a partition's body (the KernelOps the cut put together) through the DSE seam
 (``finn.kernels.explore``) by a list of strategies (``strategy``: one from its spec),
 each replacing the values it decides, and saves every value; a completion policy

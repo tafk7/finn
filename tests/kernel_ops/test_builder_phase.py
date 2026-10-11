@@ -220,8 +220,13 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     log = (output / "build_dataflow.log").read_text()
     assert "ToKernelOps: 8 converted (MatMul 4, Thresholding 4); 2 on the host" in log
     assert "ToKernelOps:   no-kernel-op (limitation) 2: Reshape 1, TopK 1" in log
-    # No choice is saved yet.
-    assert kernel_choices_config(converted) == {}
+    # Each KernelOp's own choices are created as it is converted, each at its baseline
+    # (28 values on the 8 nodes); a channel's wait for the cut.
+    created = kernel_choices_config(converted)
+    assert list(created) == [
+        node.name for node in converted.graph.node if node.domain == KERNEL_OPS_DOMAIN
+    ]
+    assert sum(map(len, created.values())) == 28
     # Cut once, before the exploration: the build's model is the parent graph, the input
     # flatten and the label select on the host around one partition, named partition,
     # whose body is its file; the exploration reads and saves the body.
@@ -255,7 +260,8 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         ("MatMul_3_out0", "iodma_hls"),
     ]
     assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(built)
-    # Every folding at its first viable case, one lane: the baseline's, every value saved.
+    # Every folding at its first viable case, one lane: the baseline's, stored at
+    # conversion, every value saved.
     report = json.loads((output / "report" / "kernel_exploration.json").read_text())
     folding = {
         f"{node}.{attribute}": entry
@@ -264,7 +270,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         if attribute.endswith(("pe", "simd"))
     }
     assert len(folding) == 12 and {entry["value"] for entry in folding.values()} == {1}
-    assert {entry["by"] for entry in folding.values()} == {"baseline"}
+    assert {entry["by"] for entry in folding.values()} == {"saved"}
     assert report["completed"] == {}
     # The default list sizes every transport at that folding, at its period: on TFC each
     # direct, as the baseline completion sized them at generation before.
@@ -658,11 +664,12 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert (target["cases"], target["unfolded"], target["met"]) == ({}, {}, True)
     # Of TFC's 57 choices, every one saved: the target throughput changes the folding off
     # its baseline (6 of 12) and gives each MatMul's pumping, a choice at SIMD 2 and
-    # more, its baseline; the rest keep the baselines the body took first, transports
-    # direct (no size_fifos in the list). The report names who set each.
+    # more, its baseline; the rest keep the baselines stored at their creation (a node's
+    # at conversion, a channel's at the cut), transports direct (no size_fifos in the
+    # list). The report names who set each.
     assert target["committed"] == 10
     made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
-    assert (made_by.count("target_throughput"), made_by.count("baseline")) == (10, 47)
+    assert (made_by.count("target_throughput"), made_by.count("saved")) == (10, 47)
     assert report["completed"] == {}
     assert report["fifos"] == "not sized (no size_fifos in the list): each transport as it was"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a

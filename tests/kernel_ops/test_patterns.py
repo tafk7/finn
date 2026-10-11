@@ -21,7 +21,7 @@ from qonnx.util.basic import qonnx_make_model
 
 import finn.custom_op.kernels as domain
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import KernelOp, KernelOpError, Match
+from finn.custom_op.kernels.base import KernelOp, KernelOpError, Match, kernel_op
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.transformation.kernels import Outcome, kernel_ops_by_anchor
 from kernel_ops.models import convert
@@ -159,7 +159,14 @@ def test_a_positive_graph_converts_with_its_attributes(case: str) -> None:
     (node,) = model.graph.node
     assert (node.domain, node.op_type) == ("finn.custom_op.kernels", op)
     assert (node.name, node.input, node.output) == (source.name, source.input, source.output)
-    assert {a.name: helper.get_attribute_value(a) for a in node.attribute} == attributes
+    # Its semantic attributes, the match's; beside them its own choices, each stored at
+    # its baseline as it is converted.
+    kernel = kernel_op(model, node)
+    stated = {a.name: helper.get_attribute_value(a) for a in node.attribute}
+    assert {name: value for name, value in stated.items() if name not in kernel.schema()} == (
+        attributes
+    )
+    assert kernel.choices() and set(kernel.choices()) == set(stated) - set(attributes)
     assert conversion.outcomes == (Outcome((source.name,), op),)
 
 

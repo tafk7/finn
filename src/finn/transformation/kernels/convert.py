@@ -15,7 +15,9 @@ containers), and the kernels asked whether they admit it on its inputs as the no
 before it state them (``KernelOp.admission``: the kernel's admission and each
 Decision with no viable case). An admitted node is rewritten, keeping its name,
 inputs and outputs, and its outputs are stated as its kernel derives them for the
-nodes that follow; a refused one stays on the host, as
+nodes that follow; its own choices are created then, each at its baseline, stored as
+its attributes (``baseline_kernel_op``; its channels' wait for the cut, where a channel
+first has both its ends). A refused node stays on the host, as
 it was, and is inferred like any host node. The KernelOps are the domain's
 (``finn.custom_op.kernels.__all__``), each found by its ``anchor``, the domain
 and op type of the node its pattern starts from; its ``match`` says what it
@@ -71,10 +73,12 @@ from finn.custom_op.kernels.base import (
     KernelOp,
     KernelOpError,
     Match,
+    kernel_op,
     unstated,
     write_target,
 )
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.target import Target
 from finn.transformation.kernels.infer import infer_node
 from finn.util.graph import between, upstream
@@ -174,6 +178,7 @@ class ToKernelOps(Transformation):
                 if not refused:
                     labels = tuple(_label(model.graph.node[i]) for i in subgraph.indices)
                     model, converted = trial, op.op_type
+                    baseline_kernel_op(model, model.graph.node[index])
                     break
                 findings.extend(refused)
             if moved:
@@ -338,6 +343,30 @@ def _trial(
     return trial, tuple(dict.fromkeys(flat))
 
 
+def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object]:
+    """The KernelOp ``node``'s own choices at their baselines, stored as its attributes:
+    its node root with the choices it states replayed, every open choice with cases that
+    is not required at its first viable case the seam accepts, in rank order
+    (``Seam.baseline``, its members the kernel and the node's channels), and the
+    kernel's values saved (``KernelOp.save``). Its channels' choices are not stored
+    here: a channel has both its ends only in a partition's shell root, where the cut
+    gives them their baselines (``baseline_choices``). Returns the node's choices."""
+    op = kernel_op(model, node)
+    ports = tuple(port for port in (*op.ports, *op.outputs) if port is not None)
+    seam = Seam((op.member, *ports), {op.member: node.name})
+    try:
+        point = seam.baseline(op.point())
+    except ExploreError as error:
+        raise KernelOpError(f"{op.label}: no baseline: {error}") from error
+    own = {
+        attribute: value
+        for key, value in seam.chosen(point).items()
+        if (attribute := op.attribute(key)) is not None
+    }
+    op.save(own)
+    return op.choices()
+
+
 def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:
     """The host nodes on a path that leaves the KernelOps and re-enters them, in graph
     order: a partition of every KernelOp would depend on itself through them. Graph
@@ -412,6 +441,7 @@ def refuse_host_between(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> N
 __all__ = [
     "Outcome",
     "ToKernelOps",
+    "baseline_kernel_op",
     "between_kernel_ops",
     "kernel_ops_by_anchor",
     "kernel_ops_report",

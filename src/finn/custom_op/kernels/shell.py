@@ -58,7 +58,9 @@ and budgets.
   are stated in a partition's body only: the model's nodes are all KernelOps, or a
   tensor that states some is refused, by name (``refuse_outside_body``). Nothing is
   written: ``persist`` writes a configured point's choices back, each owner's whole
-  (a node's or a tensor's), which clears the dropped ones; ``save_channels`` states
+  (a node's or a tensor's), which clears the dropped ones; ``baseline_choices`` gives
+  every choice a body leaves open its baseline and persists it (the cut's, and
+  ``BaselineChoices``' for a body made by hand); ``save_channels`` states
   channels' choices on their tensors, checked by replaying the root, which alone
   holds both of a channel's ends;
 - **admission** (``Shell.interfaces``): what the module presents, within what the
@@ -781,6 +783,22 @@ def persist(model: ModelWrapper, root: ShellRoot, point: Shell) -> dict[str, dic
     return held_by
 
 
+def baseline_choices(model: ModelWrapper) -> dict[str, str]:
+    """Every choice of a partition's body, ``model``, at its baseline where the body
+    leaves it open, and persisted, each owner's whole (``persist``): the shell root of
+    its KernelOps built, their stored choices replayed in context, and every open
+    choice with cases that is not required given its first viable case the seam
+    accepts, in rank order (``Seam.baseline``). The channels' choices are created here
+    (a channel has both its ends only in the shell root), and the nodes' own are
+    re-checked: one replay drops as stale is re-baselined. Returns the dropped choices,
+    by root key, with why, as replay reports them. A required choice (a FIFO's depth)
+    stays open."""
+    root = shell_root(model, model.graph.node)
+    seam = Seam(root.members, root.owners, read_target(model).platform)
+    persist(model, root, seam.baseline(root.point))
+    return dict(root.dropped)
+
+
 __all__ = [
     "PARTITION",
     "SHELLS",
@@ -791,6 +809,7 @@ __all__ = [
     "ShellResources",
     "ShellRoot",
     "admission_refusal",
+    "baseline_choices",
     "configured_root",
     "persist",
     "save_channels",

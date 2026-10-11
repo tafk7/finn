@@ -5,9 +5,10 @@
 
 FINN's ``extract_model_config_to_json`` reads every attribute through
 ``get_nodeattr``, which answers an absent choice with its default, so an open
-choice would come back as a value. This export is sparse: each KernelOp node's
-choices as its node holds them, each channel's as its tensor states them
-(``finn.channel``), absent ones absent, in graph order: each node's input channels
+choice would come back as a value. This export is what the body states: each
+KernelOp node's choices as its node holds them, each channel's as its tensor states
+them (``finn.channel``), absent ones absent (on a body the cut created, every choice
+but a required one no strategy set), in graph order: each node's input channels
 not yet written (a parameter it owns among them), the node, its output channels. A
 node and a tensor never share a name in a partition's body (its shell root refuses
 it, and this export too, by raw name, on a body no root has seen), so
