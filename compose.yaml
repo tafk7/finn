@@ -27,20 +27,23 @@ services:
     <<: *common
     profiles: [fpga]
 
-  notebook:
-    <<: *common
-    profiles: [notebook]
-    environment:
-      JUPYTER_PORT: ${JUPYTER_PORT:-8888}
-      NETRON_PORT: ${NETRON_PORT:-8081}
-    ports:
-      - "${JUPYTER_PORT:-8888}:${JUPYTER_PORT:-8888}"
-      - "${NETRON_PORT:-8081}:${NETRON_PORT:-8081}"
-    command:
-      - jupyter
-      - notebook
-      - --no-browser
-      - --ip=0.0.0.0
-      - --port
-      - "${JUPYTER_PORT:-8888}"
-      - notebooks
+  # The notebook service is disabled until the notebooks return (they and the
+  # Jupyter dependency group were removed); docker/run --notebook refuses.
+  # Kept for re-integration: uncomment it, and re-enable --notebook in docker/run.
+  # notebook:
+  #   <<: *common
+  #   profiles: [notebook]
+  #   environment:
+  #     JUPYTER_PORT: ${JUPYTER_PORT:-8888}
+  #     NETRON_PORT: ${NETRON_PORT:-8081}
+  #   ports:
+  #     - "${JUPYTER_PORT:-8888}:${JUPYTER_PORT:-8888}"
+  #     - "${NETRON_PORT:-8081}:${NETRON_PORT:-8081}"
+  #   command:
+  #     - jupyter
+  #     - notebook
+  #     - --no-browser
+  #     - --ip=0.0.0.0
+  #     - --port
+  #     - "${JUPYTER_PORT:-8888}"
+  #     - notebooks
