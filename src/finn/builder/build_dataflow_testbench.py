@@ -4,34 +4,33 @@
 """The packaged partition's XSim testbench: one frame streamed through the partition's
 module, its outputs checked against the partition's body executed in Python.
 
-``write_testbench`` writes it with ``finn.core.rtlsim_bench``'s stream-testbench writer
-(``stream_bench``: inputs and outputs stalled, every pin the module declares driven:
-``ap_clk2x`` aligned to ``ap_clk``, each AXI-Lite bus's declared register writes made
-before any stream, held ports at their values; each output word compared on its
-payload bits; a watchdog from the beats and the model's cycles) into a directory that
-holds what it needs and nothing of the machine:
+``write_testbench`` writes it with the stream testbench of ``finn.core.rtlsim_bench``
+(``stream_bench``). That testbench stalls inputs and outputs, drives every pin the
+module declares (``ap_clk2x`` aligned to ``ap_clk``, each AXI-Lite bus's register writes
+before any stream, held ports at their values), compares each output word on its
+payload bits, and sets a watchdog from the beats and the model's cycles. The directory
+holds everything the testbench needs and nothing from the build machine:
 
-- ``check.sv``, the testbench, and its stimulus and expected words in ``*.mem`` files;
-- ``module/``, the module's sources, and each memory's INIT_FILE beside the testbench;
-- ``run.sh``, which compiles, elaborates and runs it with Vivado's simulator found on
-  PATH (``xvlog``, ``xelab``, ``xsim``), ``glbl.v`` from ``$XILINX_VIVADO``, and exits
-  0 printing ``PASS`` when every output word matched; a failed compilation or
-  elaboration exits with its own status (``finn.toolchain.xsim.EXIT_STATUS``), and so
-  does an environment without them (``UNAVAILABLE_STATUS``), before anything runs.
+- ``check.sv``, the testbench, with its stimulus and expected words in ``*.mem`` files;
+- ``module/``, the module's sources, with each memory's INIT_FILE beside the testbench;
+- ``run.sh``, which compiles, elaborates and runs it with Vivado's simulator from PATH
+  (``xvlog``, ``xelab``, ``xsim``) and ``glbl.v`` from ``$XILINX_VIVADO``, and exits 0
+  printing ``PASS`` when every output word matched. A failed compilation or elaboration
+  exits with its own status (``finn.toolchain.xsim.EXIT_STATUS``), and so does an
+  environment without the simulator (``UNAVAILABLE_STATUS``), before anything runs.
 
-``write_testbench`` simulates nothing: the testbench is an output, and no build
-re-verifies the partition's computation (PRINCIPLES §8). ``run_testbench`` runs it,
-its ``run.sh`` as its user would, in a toolchain's environment: the build's
-verification step ``stitched_ip_testbench``, which the user asks for, and which fails
-on a mismatch. ``run.sh``'s commands are XSim's driver's (``finn.toolchain.xsim.script``),
-which ``finn.core.rtlsim_bench.simulate`` runs, with the directory's own paths.
+``write_testbench`` simulates nothing: the testbench is an output, and a build does not
+re-verify the partition's computation. ``run_testbench`` runs ``run.sh`` as a user
+would, in a toolchain's environment. It is the verification step
+``stitched_ip_testbench``, which runs only when asked and fails on a mismatch.
+``run.sh`` holds the same commands ``finn.core.rtlsim_bench.simulate`` runs
+(``finn.toolchain.xsim.script``), with the directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
-each beat's elements, packed lane zero lowest. The frame is the partition's inputs:
-``partition_frame`` executes the parent graph, its partition node running its body, on
-a source input (``verify_input_npy``'s first), or ``generated_frame`` draws each input
-from its datatype.
+each beat's elements, packed with lane zero lowest. The frame holds the partition's
+inputs: ``partition_frame`` executes the parent graph on a source input (the first in
+``verify_input_npy``), or ``generated_frame`` draws each input from its datatype.
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ TESTBENCH_DIR = "testbench"
 RUN_SCRIPT = "run.sh"
 
 #: How long ``run_testbench`` lets the script run: three tool runs of at most five
-#: minutes each, as ``finn.core.rtlsim_bench.simulate`` allows each.
+#: minutes each, the limit ``finn.core.rtlsim_bench.simulate`` gives each.
 RUN_TIMEOUT = 900
 
 
@@ -76,8 +75,8 @@ def boundary_words(
     context: Mapping[str, Any],
     label: str,
 ) -> tuple[dict[str, Words], dict[str, Words]]:
-    """Each boundary port's words of the frame in ``context``, inputs then outputs, as the
-    port's channel end presents them (the end no kernel of the partition owns)."""
+    """Each boundary port's words for the frame in ``context``, inputs then outputs, as
+    the port's channel end presents them (the end no kernel of the partition owns)."""
     inputs, outputs = boundary_facts(model, point, boundary, label)
     found: tuple[dict[str, Words], dict[str, Words]] = ({}, {})
     for side, facts in zip(found, (inputs, outputs), strict=True):
@@ -92,9 +91,9 @@ def boundary_words(
 
 
 def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]]:
-    """One frame of the partition's inputs, each drawn uniformly from its datatype's
-    integers (seeded), held by the input's container (finn.core.containers: the
-    export's float32, or float64 where graph preparation widened the region)."""
+    """One frame of the partition's inputs, each drawn uniformly (seeded) from its
+    datatype's integers and stored in the input's container type (finn.core.containers:
+    float32 as exported, or float64 where graph preparation widened the region)."""
     rng = np.random.default_rng(seed)
     frame: dict[str, NDArray[Any]] = {}
     for name in graph_inputs(body):
@@ -112,9 +111,9 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
 
 
 def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[str, NDArray[Any]]:
-    """The partition's inputs on ``source_input``, one frame of the source model's input
-    (reshaped to the parent graph's input): the parent graph executed, its partition
-    node running its body (``kernel_partitions.partition_body``)."""
+    """The partition's inputs for ``source_input``, one frame of the source model's
+    input reshaped to the parent graph's input: the parent graph is executed, its
+    partition node running its body (``kernel_partitions.partition_body``)."""
     node, body, _ = partition_body(parent)
     shape = parent.get_tensor_shape(parent.graph.input[0].name)
     if shape is None:
@@ -158,12 +157,12 @@ def write_testbench(
     toolchain: Toolchain,
     label: str = "the partition",
 ) -> None:
-    """Write the XSim testbench of the partition ``body`` into ``directory``, streaming
-    ``frame`` (its inputs by tensor) and expecting the body's outputs on it, executed in
-    Python; see the module docstring. The module is the one PackagePartition packages
-    (``configured_root``), and the watchdog allows the cycles its
-    root states. Nothing is simulated (``run_testbench`` runs it); ``toolchain`` synthesizes
-    an HLS leaf's request first, unless the HLS cache holds it
+    """Write the XSim testbench of the partition ``body`` into ``directory`` (see the
+    module docstring). It streams ``frame`` (the inputs by tensor name) and expects the
+    body's outputs for it, executed in Python. The module is the one PackagePartition
+    packages (``configured_root``), and the watchdog allows the cycles the root reports.
+    Nothing is simulated here (``run_testbench`` does that); ``toolchain`` synthesizes
+    any HLS leaf first, unless the HLS cache holds it
     (``finn.core.rtlsim_bench.materialize``)."""
     point, boundary = configured_root(body, label)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
@@ -186,17 +185,17 @@ def write_testbench(
 
 def run_testbench(directory: Path, *, toolchain: Toolchain) -> str:
     """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
-    ``toolchain``'s environment, a command directory it
-    selects first on ``PATH``, written into its transcript as it runs: in the
-    toolchain's log directory when it has one (``Toolchain.transcript``), else beside
-    ``run.sh`` (``run.sh.stdout.log``, ``.stderr.log``). Returns what it printed, which
-    ends in ``PASS``. An environment that names no Vivado or lacks one of the
-    simulator's commands (the script's ``finn.toolchain.xsim.UNAVAILABLE_STATUS``)
-    raises ``ToolUnavailable``; ``xvlog`` or ``xelab`` failing (its
-    ``finn.toolchain.xsim.EXIT_STATUS``) ``ToolFailed``, naming the transcript;
-    a mismatch, any other failure or a timeout
-    ``finn.core.rtlsim_bench.SimulationFailed`` with what it printed. A launcher route,
-    which runs a tool elsewhere, runs no local script: refused (``ValueError``)."""
+    ``toolchain``'s environment with the selected command directory first on ``PATH``.
+    Its output goes to a transcript as it runs: in the toolchain's log directory if it
+    has one (``Toolchain.transcript``), else beside ``run.sh`` (``run.sh.stdout.log``,
+    ``.stderr.log``). Returns what it printed, which ends in ``PASS``.
+
+    Raises ``ToolUnavailable`` if the environment names no Vivado or lacks a simulator
+    command (``finn.toolchain.xsim.UNAVAILABLE_STATUS``); ``ToolFailed``, naming the
+    transcript, if ``xvlog`` or ``xelab`` fails (``finn.toolchain.xsim.EXIT_STATUS``);
+    and ``finn.core.rtlsim_bench.SimulationFailed``, with the output, on a mismatch, any
+    other failure or a timeout. A launcher route runs tools elsewhere and cannot run a
+    local script, so it raises ``ValueError``."""
     selection = toolchain.selection
     if selection.launcher:
         raise ValueError(
