@@ -14,7 +14,7 @@ import os
 import pickle
 import sys
 
-from finn.toolchain import vivado
+from finn.toolchain import hls, vivado
 from finn.toolchain.hls import synthesize
 from finn.toolchain.launcher import (
     Selection,
@@ -95,7 +95,7 @@ def test_a_tool_not_on_the_route_is_unavailable(tmp_path):
     with pytest.raises(ToolUnavailable, match=f"in the command directory {tmp_path}"):
         toolchain(tmp_path).run("vivado")
     with pytest.raises(ToolUnavailable, match="XILINX_HLS or XILINX_VITIS") as missing:
-        toolchain().hls_installation()
+        hls.installation(toolchain())
     assert missing.value.tool == "HLS"
 
 

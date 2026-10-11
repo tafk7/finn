@@ -49,6 +49,7 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
 from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
+from finn.xsi.paths import simulation_environment
 
 #: The file a build directory states its configuration in (build_dataflow_directory),
 #: beside model.onnx.
@@ -337,7 +338,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
             "sys.exit(build_dataflow_cfg('model.onnx', read_build_config('.')))",
         ],
         cwd=path_to_cfg_dir,
-        env=toolchain.simulation_environment(),
+        env=simulation_environment(toolchain),
     )
     return child.returncode
 

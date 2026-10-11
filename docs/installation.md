@@ -471,7 +471,7 @@ integration of the private build-engine branch, the archived implementation runs
 existing model/configuration in a fresh child, with that directory as cwd, in the
 environment of the configuration's toolchain (the machine's when it names none),
 the build directory resolved and the simulator libraries on the loader path
-(`Toolchain.simulation_environment()`) before Python starts. Workers inherit that
+(`finn.xsi.paths.simulation_environment`) before Python starts. Workers inherit that
 environment. The API `build_dataflow_directory` uses the same boundary.
 `build_dataflow_cfg` remains in-process for custom Python callbacks: callers using
 XSI there must supply its loader environment before interpreter startup. Concurrent

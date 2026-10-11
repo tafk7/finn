@@ -12,7 +12,7 @@ from typing import TypeVar
 
 import pytest
 
-from finn.toolchain import vivado, xsim
+from finn.toolchain import hls, vivado, xsim
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
 
 _Test = TypeVar("_Test", bound=Callable[..., object])
@@ -65,7 +65,7 @@ def hls_synthesizer() -> bool:
         return False
     try:
         toolchain.command(frontend)
-        toolchain.hls_installation()
+        hls.installation(toolchain)
     except ToolUnavailable:
         return False
     return True
