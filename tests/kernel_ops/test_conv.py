@@ -4,7 +4,7 @@
 """Conv beyond its spec (``kernel_ops.specs.conv``): the window
 reaches the hardware as its image channel's reorder, and CNV's convolutions convert.
 
-- A single convolution through the builder's kernel-path phase: the image enters once,
+- A single convolution through the builder's kernel-path phases: the image enters once,
   in row-major order (the boundary presents the frame, not the patches: ``unreplayed``),
   and the image channel's adapter is an ``input_gen`` whose nest is the window's
   (``FM_SIZE = H * W * C'``, ``DIMS = (OH, OW, N / PE, KH, KW * C')``, ``COEFS = (W *
@@ -38,7 +38,6 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_phases import phase_graph_preparation, phase_kernel_path
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
@@ -53,7 +52,7 @@ from kernel_ops.models import convert
 from kernel_ops.specs import conv
 from kernel_ops.specs.base import GENERAL, source
 from kernel_ops.test_networks import config
-from kernel_ops.tfc import PREPROCESSING, ULTRA96
+from kernel_ops.tfc import PREPROCESSING, ULTRA96, run_steps
 
 CNV_SHAPE = (1, 3, 32, 32)
 CNV_EXPORT = "cnv_w2a2.onnx"
@@ -80,9 +79,9 @@ def test_the_kernel_op_conv_and_onnxs_conv_never_resolve_to_each_other() -> None
 
 
 def single_layer(name: str, directory: Path) -> ModelWrapper:
-    """The positive graph ``name`` through the kernel-path phase: the partition's body."""
+    """The positive graph ``name`` through the kernel-path phases: the partition's body."""
     source = conv.SPEC.positive[name]().transform(InferShapes())
-    _, body, _ = partition_body(phase_kernel_path(source, config(directory)))
+    _, body, _ = partition_body(run_steps(source, config(directory)))
     return body
 
 
@@ -227,8 +226,9 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
         verify_steps=[],
         enable_build_pdb_debug=False,
         save_intermediate_models=False,
+        steps=["phase_prepare_model"],
     )
-    prepared = phase_graph_preparation(cnv_exported(tmp_path), settings)
+    prepared = run_steps(cnv_exported(tmp_path), settings)
     conversion = ToKernelOps(ULTRA96)
     model = prepared.transform(conversion)
     windowed = [outcome for outcome in conversion.outcomes if outcome.op == "Conv"]

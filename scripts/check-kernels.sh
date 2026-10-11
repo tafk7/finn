@@ -47,7 +47,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
 # finn.toolchain.launcher: the toolchain packaging takes (PackagePartition's toolchain=).
 # finn.shells.pynq's runner and driver; its IODMA and IP generation are annotated, not
 # strictly checked: frozen extractions of the HWCustomOp flow's.
-# finn.builder's kernel path: its configuration, its checks, phases (and their step runner)
+# finn.builder's kernel path: its configuration, its checks, phases
 # and steps, the ip shell's testbench and the resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
     -p finn.transformation.kernels -p finn.transformation.prepare -p finn.harness \

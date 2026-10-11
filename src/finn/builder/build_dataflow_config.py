@@ -117,32 +117,28 @@ class VerificationStepType(str, Enum):
     STITCHED_IP_TESTBENCH = "stitched_ip_testbench"
 
 
-#: The steps each verification needs to run, each a step or its phase: the one that
-#: keeps its reference, and the one that checks.
+#: The steps each verification needs to run: the one that keeps its reference, and
+#: the one that checks.
 VERIFIED_BY = {
     VerificationStepType.GRAPH_PREPARATION_PYTHON: (
-        ("phase_graph_preparation", "step_prepare_import"),
-        ("phase_graph_preparation", "step_prepare_checkpoint"),
+        "step_prepare_import",
+        "step_prepare_checkpoint",
     ),
-    VerificationStepType.PARTITION_PYTHON: (
-        ("phase_kernel_path", "step_convert_to_hw"),
-        ("phase_kernel_path", "step_verify_partition"),
-    ),
-    VerificationStepType.PARTITION_ELABORATION: (("phase_kernel_path", "step_verify_partition"),),
-    VerificationStepType.STITCHED_IP_TESTBENCH: (
-        ("phase_kernel_outputs", "step_create_stitched_ip"),
-    ),
+    VerificationStepType.PARTITION_PYTHON: ("step_convert_to_hw", "step_verify_partition"),
+    VerificationStepType.PARTITION_ELABORATION: ("step_verify_partition",),
+    VerificationStepType.STITCHED_IP_TESTBENCH: ("step_create_stitched_ip",),
 }
 
 
-#: The steps of a kernel-path build, from a Brevitas export: the graph-preparation
-#: phase (the export to a streamlined graph, checked), the kernel-path phase (the
-#: target, KernelOps, their choices, the partition, its verification), then the
-#: outputs its shell makes.
+#: The steps of a kernel-path build, from a Brevitas export: its phases
+#: (finn.builder.build_dataflow_phases), in order.
 default_build_dataflow_steps = [
-    "phase_graph_preparation",
-    "phase_kernel_path",
-    "phase_kernel_outputs",
+    "phase_prepare_model",
+    "phase_convert_to_hardware",
+    "phase_create_accelerator",
+    "phase_optimize_hardware",
+    "phase_build_hardware",
+    "phase_generate_outputs",
 ]
 
 
@@ -169,7 +165,7 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest = field(metadata=config(decoder=declared(TargetRequest, "target")))
 
-    #: How the export is prepared (phase_graph_preparation), a
+    #: How the export is prepared (phase_prepare_model), a
     #: finn.transformation.prepare.GraphPreparation: P0's ``override_inpsize``, P2's
     #: ``max_multithreshold_bit_width``, P1's ``preprocessing`` (an ONNX model merged
     #: ahead of the network), ``input_datatype`` and ``topk``, the ``streamlining`` and
@@ -249,11 +245,11 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: default_build_dataflow_steps.
     steps: Optional[List[Any]] = None
 
-    #: If given, start from this step or phase, loading the intermediate model saved
-    #: before it (save_intermediate_models must be enabled).
+    #: If given, start from this step, or a phase's first step, loading the
+    #: intermediate model saved before it (save_intermediate_models must be enabled).
     start_step: Optional[str] = None
 
-    #: If given, stop after this step or phase.
+    #: If given, stop after this step, or a phase's last step.
     stop_step: Optional[str] = None
 
     #: Whether each step's model is saved under intermediate_models.

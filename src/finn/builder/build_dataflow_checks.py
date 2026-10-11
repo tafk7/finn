@@ -177,14 +177,14 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
         return checks
     for each in cfg.verify_steps:
         vstep = VerificationStepType(each)
-        unmet = [" or ".join(either) for either in VERIFIED_BY[vstep] if not resolved & set(either)]
+        unmet = [step for step in VERIFIED_BY[vstep] if step not in resolved]
         if unmet:
             checks.append(
                 Check(
                     "verify_step_prereq",
                     Severity.WARNING,
                     False,
-                    f"verify_steps includes {vstep.value}, which needs {'; '.join(unmet)} "
+                    f"verify_steps includes {vstep.value}, which needs {', '.join(unmet)} "
                     "in the resolved build steps (steps/start_step/stop_step). That "
                     "verification would silently never run",
                     "Include those steps in steps, adjust start_step/stop_step so they run, "

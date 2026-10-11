@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The builder's kernel-path phase (``phase_kernel_path``) on TFC_W2A2, up to its partition.
+"""The builder's kernel-path phases (``KERNEL_PATH``) on TFC_W2A2, up to its partition.
 
 ``build_dataflow_cfg`` runs a DataflowBuildConfig's default steps from the exported
 network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
-phase: no Vivado. Each step's
+phases: no Vivado. Each step's
 output is recorded as it runs (``inject_steps_after``), and the partition is compared
-with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phase
-(``phase_kernel_outputs``) is not a test.
+with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phases
+(``phase_build_hardware``, ``phase_generate_outputs``) is not a test.
 """
 
 from __future__ import annotations
@@ -96,9 +96,12 @@ from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, 
 from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, partition, preparation
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
-# test that runs the phase's steps on it takes about ten seconds more.
+# test that runs the phases' steps on it takes about ten seconds more.
 
-#: The phase's steps, in the order they run.
+#: The builder's phases from the prepared graph to the verified partition.
+KERNEL_PATH = ["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"]
+
+#: Their steps, in the order they run.
 STEPS = (
     "step_convert_to_hw",
     "step_create_dataflow_partition",
@@ -145,7 +148,7 @@ def config(directory: Path, **settings: Any) -> DataflowBuildConfig:
 
 
 @pytest.mark.slow
-def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
+def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     source: ModelWrapper, tfc_export: Path, tmp_path: Path
 ) -> None:
     seen: dict[str, ModelWrapper] = {}
@@ -172,7 +175,7 @@ def test_the_phase_runs_its_steps_in_order_to_the_partition_tfc_makes_by_hand(
     cfg = config(
         tmp_path,
         preparation=preparation(tmp_path / "export"),
-        stop_step="phase_kernel_path",
+        stop_step="phase_optimize_hardware",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
         verify_steps=[
             VerificationStepType.GRAPH_PREPARATION_PYTHON,
@@ -436,7 +439,9 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
 
 def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> None:
     verify = [VerificationStepType.PARTITION_ELABORATION]
-    cfg = config(tmp_path, steps=["phase_kernel_outputs"], verify_steps=verify)
+    cfg = config(
+        tmp_path, steps=["phase_build_hardware", "phase_generate_outputs"], verify_steps=verify
+    )
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
     ]
@@ -448,8 +453,8 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     # from a prepared model, or from the checkpoint alone, never checks it.
     preparation = [VerificationStepType.GRAPH_PREPARATION_PYTHON]
     for steps in (
-        {"steps": ["phase_kernel_path"]},
-        {"steps": ["step_prepare_checkpoint", "phase_kernel_path"]},
+        {"steps": KERNEL_PATH},
+        {"steps": ["step_prepare_checkpoint", *KERNEL_PATH]},
     ):
         (warning,) = [
             check
@@ -459,20 +464,17 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
             if check.name == "verify_step_prereq"
         ]
         assert "graph_preparation_python, which needs" in warning.message
-    cfg = config(tmp_path, verify_steps=preparation, stop_step="phase_graph_preparation")
+    cfg = config(tmp_path, verify_steps=preparation, stop_step="phase_prepare_model")
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
     python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
     testbench = [VerificationStepType.STITCHED_IP_TESTBENCH]
-    cfg = config(tmp_path, steps=["phase_kernel_path"], verify_steps=testbench)
+    cfg = config(tmp_path, steps=KERNEL_PATH, verify_steps=testbench)
     (warning,) = [
         check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
     ]
-    assert (
-        "stitched_ip_testbench, which needs phase_kernel_outputs or step_create_stitched_ip"
-        in warning.message
-    )
+    assert "stitched_ip_testbench, which needs step_create_stitched_ip" in warning.message
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
         "kernel_testbench_output": [
             "verify_steps includes stitched_ip_testbench, which runs the testbench "
@@ -506,14 +508,29 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
 
 
 def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None:
-    """A build's steps are the kernel path's: another name is refused, and the default
-    steps are its three phases."""
-    with pytest.raises(ValueError, match="Unknown step or phase: step_streamline"):
+    """A build's steps are the kernel path's: another name is refused, naming its steps
+    and phases, and the default steps are its six phases' steps, in order."""
+    with pytest.raises(ValueError, match="Unknown step or phase: step_streamline") as refused:
         resolve_build_steps(config(tmp_path, steps=["step_streamline"]))
+    assert "step_explore" in str(refused.value)
+    assert "phase_optimize_hardware" in str(refused.value)
     assert [step.__name__ for step in resolve_build_steps(config(tmp_path))] == [
-        "phase_graph_preparation",
-        "phase_kernel_path",
-        "phase_kernel_outputs",
+        "step_prepare_import",
+        "step_prepare_quantization",
+        "step_prepare_io",
+        "step_prepare_streamlining",
+        "step_prepare_topology",
+        "step_prepare_containers",
+        "step_prepare_checkpoint",
+        "step_convert_to_hw",
+        "step_create_dataflow_partition",
+        "step_explore",
+        "step_verify_partition",
+        "step_create_stitched_ip",
+        "step_synthesize_bitfile",
+        "step_make_driver",
+        "step_resources_report",
+        "step_deployment_package",
     ]
 
 

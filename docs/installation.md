@@ -545,9 +545,14 @@ synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
 packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); with
 `ooc_synth`, also the partition per member, what synthesis flattened
 `unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
-need a shell that integrates the partition, so they are refused on `ip`. The default steps are `phase_kernel_path` (the KernelOps, their
-choices, the partition and its verification) and `phase_kernel_outputs` (what the
-shell makes). A key the configuration does not declare is refused by name.
+need a shell that integrates the partition, so they are refused on `ip`. The default steps are the build's phases, each a list of
+steps: `phase_prepare_model` (the export prepared and checked),
+`phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
+partition), `phase_optimize_hardware` (their choices and the partition's
+verification), `phase_build_hardware` (the partition's IP) and
+`phase_generate_outputs` (what the shell makes). `steps`, `start_step` and
+`stop_step` name phases or steps. A key the configuration does not declare is
+refused by name.
 
 `kernel_exploration` lists the strategies that choose the KernelOps' open choices
 through the DSE seam, run as written, each with its own parameters:

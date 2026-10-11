@@ -3,16 +3,18 @@
 
 """The kernel path's steps, each a ``(model, DataflowBuildConfig) -> model`` function,
 registered by name in ``build_dataflow_step_lookup`` for a DataflowBuildConfig's ``steps``
-(finn.builder.build_dataflow_config). Its phases (finn.builder.build_dataflow_phases) run
+(finn.builder.build_dataflow_config). Its phases (finn.builder.build_dataflow_phases) name
 them in order.
 
-``phase_graph_preparation`` takes a Brevitas export to the streamlined graph the kernel
+``phase_prepare_model`` takes a Brevitas export to the streamlined graph the kernel
 path converts, by the sub-phases of finn.transformation.prepare, and checks what it
-leaves before anything converts it (its checkpoint, P7). ``phase_kernel_path`` takes
-that graph to a partition of KernelOps
+leaves before anything converts it (its checkpoint, P7). ``phase_convert_to_hardware``,
+``phase_create_accelerator`` and ``phase_optimize_hardware`` take that graph to a
+partition of KernelOps
 (finn.custom_op.kernels): the KernelOps bind kernels to RTL from the model's facts and
 the build's target, so there is no specialization, folding config or per-node IP
-generation. ``phase_kernel_outputs`` then makes the outputs the configuration asks:
+generation. ``phase_build_hardware`` and ``phase_generate_outputs`` then make the
+outputs the configuration asks:
 the partition's own on any shell (its packaged IP, interface description and testbench;
 its out-of-context resources), then the target's shell's (its bitfile, driver and
 deployment package)."""

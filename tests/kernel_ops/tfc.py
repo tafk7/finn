@@ -33,8 +33,8 @@ from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
+from finn.builder.build_dataflow import resolve_build_steps
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_phases import phase_graph_preparation
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
@@ -99,11 +99,20 @@ def preparation_config(directory: Path, **settings: Any) -> DataflowBuildConfig:
     )
 
 
+def run_steps(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """``model`` through the steps ``cfg`` names (its phases expanded,
+    finn.builder.build_dataflow.resolve_build_steps), in memory: no model read or saved
+    between them."""
+    for step in resolve_build_steps(cfg):
+        model = step(model, cfg)
+    return model
+
+
 def prepared(export: ModelWrapper, directory: Path) -> ModelWrapper:
     """``export``, TFC exported into ``directory`` (``exported``), through the builder's
-    graph-preparation phase (``phase_graph_preparation``) as its build states it: the
+    graph-preparation phase (``phase_prepare_model``) as its build states it: the
     streamlined graph, checked. The phase's report goes under ``directory / "output"``."""
-    return phase_graph_preparation(export, preparation_config(directory))
+    return run_steps(export, preparation_config(directory, steps=["phase_prepare_model"]))
 
 
 def streamlined(directory: Path) -> ModelWrapper:
@@ -123,7 +132,7 @@ def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapp
 
 def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The streamlined ``source`` by hand through the kernel path, as the builder's
-    kernel-path phase runs it: the parent graph (Reshape, the partition, TopK) and the
+    kernel-path phases run it: the parent graph (Reshape, the partition, TopK) and the
     partition's body, cut first, then every choice committed at 16 lanes (``LANES``) and
     the body saved again in its file."""
     parent, body, body_file = cut(source, directory)

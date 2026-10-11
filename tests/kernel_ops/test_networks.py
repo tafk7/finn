@@ -5,13 +5,14 @@
 
 A positive graph of an op's spec (``kernel_ops.specs``), which every platform row admits
 (``tests/kernel_ops/test_reference.py``), is a network of one op. It goes through the
-builder's kernel-path phase (``phase_kernel_path``: ``ToKernelOps``, inferring as it
-converts, the choices, the cut and its verification) for Ultra96's part on the ``ip`` shell, the
-target the specs are checked on, to the partition's body: the whole network, its
-boundary the network's. Its root, its choices completed as the phase's verification completes them,
-runs in XSim (``finn.harness.ops.check_parity``) on seeded inputs drawn from the
-graph's annotations, random with their extremes, and every output word is checked
-against the KernelOps' ``execute_node`` (the oracle) on the same inputs.
+builder's kernel-path phases (``phase_convert_to_hardware`` to ``phase_optimize_hardware``:
+``ToKernelOps``, inferring as it converts, the cut, the choices and its verification)
+for Ultra96's part on the ``ip`` shell, the target the specs are checked on, to the
+partition's body: the whole network, its boundary the network's. Its root, its choices
+completed as step_verify_partition completes them, runs in XSim
+(``finn.harness.ops.check_parity``) on seeded inputs drawn from the graph's annotations,
+random with their extremes, and every output word is checked against the KernelOps'
+``execute_node`` (the oracle) on the same inputs.
 
 Lean (KT10): two graphs an op, one simulation each. MatMul: unsigned activations over
 k = 64 with weights stored, and weights streamed as a second graph input. Thresholding:
@@ -32,7 +33,6 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_phases import phase_kernel_path
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.harness.ops import boundary_inputs, check_parity, graph_inputs
@@ -41,6 +41,7 @@ from finn.platform import TargetRequest
 from finn.transformation.kernels.choose import completion
 from kernel_ops.models import TARGET
 from kernel_ops.specs import conv, matmul, thresholding
+from kernel_ops.tfc import run_steps
 
 NETWORKS = [
     pytest.param(spec, name, id=f"{spec.op.op_type}-{name}")
@@ -62,22 +63,22 @@ def config(directory: Path) -> DataflowBuildConfig:
         output_dir=str(directory),
         target=TargetRequest(part=TARGET.part, period_ns=TARGET.platform.period_ns),
         generate_outputs=[],
-        steps=["phase_kernel_path"],
+        steps=["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"],
         enable_build_pdb_debug=False,
     )
 
 
 def network(spec: OpSpec, name: str, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The positive graph ``name`` as a network, and the partition's body the builder's
-    kernel-path phase cuts of it."""
+    kernel-path phases cut of it."""
     source = spec.positive[name]().transform(InferShapes())
-    _, body, _ = partition_body(phase_kernel_path(source, config(directory)))
+    _, body, _ = partition_body(run_steps(source, config(directory)))
     return source, body
 
 
 @pytest.mark.parametrize(("spec", "name"), NETWORKS)
 def test_the_kernel_path_takes_the_network_whole(spec: OpSpec, name: str, tmp_path: Path) -> None:
-    """The phase's partition is the whole network: one KernelOp, the network's inputs
+    """The phases' partition is the whole network: one KernelOp, the network's inputs
     and outputs its boundary, the target stated."""
     source, body = network(spec, name, tmp_path)
     assert [node.op_type for node in body.graph.node] == [spec.op.op_type]

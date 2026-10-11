@@ -9,15 +9,20 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
+import onnx
 import pytest
 from dataclasses_json.undefined import UndefinedParameterError
+from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.builder.build_dataflow import (
+    build_dataflow_cfg,
     build_dataflow_directory,
     read_build_config,
+    resolve_build_steps,
     resolve_step_filename,
 )
 from finn.builder.build_dataflow_checks import (
@@ -33,6 +38,8 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
     default_build_dataflow_steps,
 )
+from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
+from finn.builder.build_dataflow_steps import build_dataflow_step_lookup
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
@@ -54,7 +61,7 @@ def test_the_kernel_path_builds_on_ip_explores_nothing_and_completes_by_baseline
     # Prepared from the export as exported: its own inputs and outputs, the default
     # recipes.
     assert cfg.preparation == GraphPreparation()
-    assert default_build_dataflow_steps[0] == "phase_graph_preparation"
+    assert default_build_dataflow_steps[0] == "phase_prepare_model"
 
 
 def test_a_configuration_holds_through_json() -> None:
@@ -83,9 +90,9 @@ def test_a_configuration_holds_through_json() -> None:
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
         shell_options={"enable_hw_debug": True},
-        steps=["phase_kernel_path"],
-        start_step="phase_kernel_path",
-        stop_step="phase_kernel_path",
+        steps=["phase_optimize_hardware", "step_create_stitched_ip"],
+        start_step="step_explore",
+        stop_step="phase_optimize_hardware",
         save_intermediate_models=False,
         enable_build_pdb_debug=False,
         verbose=True,
@@ -290,15 +297,159 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
     ]
 
 
-def test_a_start_step_the_build_does_not_have_is_named_with_its_steps() -> None:
-    """A default build's steps are its phases: a step inside one is no start_step."""
-    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "start_step": "step_explore"}))
-    with pytest.raises(AssertionError) as refused:
-        resolve_step_filename("step_explore", cfg, -1)
-    assert str(refused.value) == (
-        "start_step 'step_explore' is not one of this build's steps: "
-        "phase_graph_preparation, phase_kernel_path, phase_kernel_outputs"
+def test_the_default_steps_are_the_phases_each_a_list_of_every_step_once() -> None:
+    assert default_build_dataflow_steps == list(build_dataflow_phase_lookup)
+    in_phases = [step for steps in build_dataflow_phase_lookup.values() for step in steps]
+    assert in_phases == list(build_dataflow_step_lookup)
+
+
+def names(cfg: DataflowBuildConfig) -> list[str]:
+    """The names of the steps ``cfg``'s build runs, in order."""
+    return [step.__name__ for step in resolve_build_steps(cfg)]
+
+
+def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
+    """A step inside a phase, or a phase: its first step to start from, its last to
+    stop after; the build starts from the model the step before saved."""
+    inside = {**STATED, "start_step": "step_explore", "stop_step": "step_create_stitched_ip"}
+    cfg = DataflowBuildConfig.from_json(json.dumps(inside))
+    assert names(cfg) == ["step_explore", "step_verify_partition", "step_create_stitched_ip"]
+    assert resolve_step_filename("step_explore", cfg, -1) == (
+        "out/intermediate_models/step_create_dataflow_partition.onnx"
     )
+    phases = {
+        **STATED,
+        "start_step": "phase_optimize_hardware",
+        "stop_step": "phase_build_hardware",
+    }
+    cfg = DataflowBuildConfig.from_json(json.dumps(phases))
+    assert names(cfg) == ["step_explore", "step_verify_partition", "step_create_stitched_ip"]
+    assert resolve_step_filename("phase_optimize_hardware", cfg, -1) == (
+        "out/intermediate_models/step_create_dataflow_partition.onnx"
+    )
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_prepare_model"}))
+    assert names(cfg) == build_dataflow_phase_lookup["phase_prepare_model"]
+
+
+def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase() -> None:
+    def step_mine(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+        return model
+
+    def injected(name: str) -> Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper]:
+        def step(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+            return model
+
+        step.__name__ = name
+        return step
+
+    cfg = DataflowBuildConfig.from_json(
+        json.dumps({**STATED, "steps": ["step_prepare_checkpoint", "phase_optimize_hardware"]})
+    )
+    assert cfg.steps is not None
+    cfg.steps.append(step_mine)
+    cfg.inject_steps_before = {
+        "step_verify_partition": [injected("before_verify")],
+        "phase_optimize_hardware": [injected("before_phase")],
+    }
+    cfg.inject_steps_after = {
+        "step_prepare_checkpoint": [injected("after_checkpoint")],
+        "phase_optimize_hardware": [injected("after_phase")],
+        "step_mine": [injected("after_mine")],
+    }
+    assert names(cfg) == [
+        "step_prepare_checkpoint",
+        "after_checkpoint",
+        "before_phase",
+        "step_explore",
+        "before_verify",
+        "step_verify_partition",
+        "after_phase",
+        "step_mine",
+        "after_mine",
+    ]
+    # A phase's span holds what is injected around it; an injected step is a step.
+    cfg.start_step, cfg.stop_step = "phase_optimize_hardware", "phase_optimize_hardware"
+    assert names(cfg)[0] == "before_phase" and names(cfg)[-1] == "after_phase"
+    cfg.start_step, cfg.stop_step = "before_verify", "step_verify_partition"
+    assert names(cfg) == ["before_verify", "step_verify_partition"]
+
+
+def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases() -> None:
+    cfg = DataflowBuildConfig.from_json(
+        json.dumps({**STATED, "steps": ["phase_build_hardware"], "start_step": "step_explore"})
+    )
+    message = (
+        "'step_explore' is not one of this build's steps or phases; its steps: "
+        "step_create_stitched_ip; its phases: phase_build_hardware"
+    )
+    with pytest.raises(ValueError) as refused:
+        resolve_build_steps(cfg)
+    assert str(refused.value) == message
+    with pytest.raises(ValueError) as refused:
+        resolve_step_filename("step_explore", cfg, -1)
+    assert str(refused.value) == message
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
+    with pytest.raises(ValueError, match="'phase_kernel' is not one of this build's") as refused:
+        resolve_build_steps(cfg)
+    assert "step_deployment_package" in str(refused.value)
+    assert "phase_generate_outputs" in str(refused.value)
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "steps": ["phase_kernel"]}))
+    with pytest.raises(ValueError, match="Unknown step or phase: phase_kernel; the steps: "):
+        resolve_build_steps(cfg)
+
+
+def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One loop runs every step of a phase: each step's model saved and its time
+    written by its name; a later build starts from a step inside the phase."""
+    ran: list[str] = []
+
+    def recorded(name: str) -> Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper]:
+        def step(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+            ran.append(name)
+            return model
+
+        step.__name__ = name
+        return step
+
+    for name in ("step_one", "step_two", "step_three"):
+        monkeypatch.setitem(build_dataflow_step_lookup, name, recorded(name))
+    monkeypatch.setitem(
+        build_dataflow_phase_lookup, "phase_test", ["step_one", "step_two", "step_three"]
+    )
+    source = tmp_path / "model.onnx"
+    onnx.save(
+        helper.make_model(
+            helper.make_graph(
+                [helper.make_node("Identity", ["x"], ["y"])],
+                "identity",
+                [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])],
+                [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])],
+            ),
+            opset_imports=[helper.make_opsetid("", 13)],
+        ),
+        source,
+    )
+    cfg = DataflowBuildConfig(
+        output_dir=str(tmp_path / "output"),
+        target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
+        steps=["phase_test"],
+        stop_step="step_two",
+        inject_steps_after={"step_one": [recorded("step_injected")]},
+        enable_build_pdb_debug=False,
+    )
+    assert build_dataflow_cfg(str(source), cfg) == 0
+    assert ran == ["step_one", "step_injected", "step_two"]
+    output = tmp_path / "output"
+    assert list(json.loads((output / "time_per_step.json").read_text())) == ran
+    saved = sorted(path.name for path in (output / "intermediate_models").iterdir())
+    assert saved == ["step_injected.onnx", "step_one.onnx", "step_two.onnx"]
+    ran.clear()
+    cfg.start_step, cfg.stop_step = "step_three", None
+    assert build_dataflow_cfg(str(source), cfg) == 0
+    assert ran == ["step_three"]
+    assert list(json.loads((output / "time_per_step.json").read_text())) == ["step_three"]
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:

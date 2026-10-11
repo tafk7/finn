@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Graph preparation (``finn.transformation.prepare``, ``phase_graph_preparation``): the
+"""Graph preparation (``finn.transformation.prepare``, ``phase_prepare_model``): the
 export to the streamlined graph the kernel path converts, and its checkpoint (P7).
 
 TFC_W2A2 through the builder's phase from its export: the graph its fixture reads,
@@ -157,7 +157,7 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
 ) -> None:
     cfg = preparation_config(
         tfc_directory,
-        steps=["phase_graph_preparation"],
+        steps=["phase_prepare_model"],
         verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
         save_intermediate_models=True,
     )
