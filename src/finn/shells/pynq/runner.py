@@ -31,9 +31,11 @@ The runner (``build_pynq``):
 ``BuildPynqBitfile`` is the build as a transformation of the kernel path's parent graph:
 it reads the shell, board, part and clock from the target its partition's body states
 (``pynq_row`` refuses a shell without this build), runs ``build_pynq``, collects the
-bitfile and its reports into the output directory it is given, and records them in the
-parent graph (``finn.outputs``) with what the bitfile was made from. ``refuse_stale_bitfile``
-refuses a bitfile made from another design than the partition's now.
+bitfile and its reports into the output directory it is given, and records the bitfile
+and its hardware handoff in the parent graph (``finn.outputs``) with what the bitfile was
+made from; its reports are found beside it (``bitfile_directory``, ``REPORTS``).
+``refuse_stale_bitfile`` refuses a bitfile made from another design than the partition's
+now.
 
 The driver its host runtime runs is ``driver``'s.
 """
@@ -60,12 +62,9 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
-    OUTPUT_HOST_RUNTIME,
     OUTPUT_HWH,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
-    OUTPUT_PROJECT,
-    OUTPUT_REPORTS,
     OUTPUT_VLNV,
     design_digest,
     partition_body,
@@ -391,9 +390,9 @@ def build_pynq(
 
 
 #: Where ``BuildPynqBitfile`` collects what the build made, under the output directory
-#: it is given: the bitfile and its hardware handoff, and the reports the parent graph
-#: states (``finn.outputs`` ``reports``) by name. The driver reads the delivered clock
-#: from its report (``DELIVERED_CLOCK``).
+#: it is given: the bitfile and its hardware handoff, and its reports by name. The
+#: driver reads the delivered clock from its report (``DELIVERED_CLOCK``), the resources
+#: report the placed and out-of-context utilization (``bitfile_directory``).
 BITFILE = Path("bitfile") / "finn-accel.bit"
 HWH = Path("bitfile") / "finn-accel.hwh"
 REPORTS = {
@@ -404,6 +403,16 @@ REPORTS = {
     "delivered_clock": Path("report") / "delivered_clock.json",
 }
 DELIVERED_CLOCK = REPORTS["delivered_clock"]
+
+
+def bitfile_directory(model: ModelWrapper) -> Path | None:
+    """The output directory the bitfile the parent graph ``model`` states was collected
+    into (``BuildPynqBitfile``'s; the bitfile is its ``BITFILE``), where its reports are
+    (``REPORTS``); None when the model states no bitfile."""
+    bitfile = model.get(OUTPUT_BITFILE)
+    if bitfile is None:
+        return None
+    return Path(bitfile).parents[len(BITFILE.parts) - 1]
 
 
 def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
@@ -498,8 +507,9 @@ class BuildPynqBitfile(Transformation):
     partition's body states (``pynq_row``); the ends' scratch models are kept in
     ``ends/`` beside the body's file.
 
-    The parent graph states what was made (``finn.outputs``: the project, bitfile, hwh,
-    reports and host runtime), the digest of the partition's design its IP was made from
+    The parent graph states the bitfile and its hardware handoff (``finn.outputs``; the
+    reports beside them: ``bitfile_directory``), the digest of the partition's design its
+    IP was made from
     (``bitfile_made_from``; the runner packages the partition again when the IP the body
     states was made from another design) and the shell options it was built with
     (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's
@@ -559,15 +569,10 @@ class BuildPynqBitfile(Transformation):
         self.findings = delivered_clock_findings(self.clock, built.timing)
         self.clock["findings"] = [finding_record(finding) for finding in self.findings]
         reports["delivered_clock"].write_text(json.dumps(self.clock, indent=2))
-        model.set(OUTPUT_PROJECT, built.project)
         model.set(OUTPUT_BITFILE, str(self.bitfile))
         model.set(OUTPUT_BITFILE_MADE_FROM, built.made_from)
         model.set(OUTPUT_BITFILE_OPTIONS, dataclasses.asdict(self.options))
         model.set(OUTPUT_HWH, str(hwh))
-        stated = {name: str(path) for name, path in reports.items()}
-        model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), **stated})
-        if export.host_runtime is not None:
-            model.set(OUTPUT_HOST_RUNTIME, export.host_runtime)
         return model, False
 
 
@@ -601,6 +606,7 @@ __all__ = [
     "InstanceIP",
     "PynqBuilt",
     "PynqOptions",
+    "bitfile_directory",
     "block_design",
     "build_pynq",
     "collect",

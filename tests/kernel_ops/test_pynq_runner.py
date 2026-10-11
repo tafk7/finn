@@ -34,7 +34,6 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
-    OUTPUT_REPORTS,
     OUTPUT_VLNV,
     OUTPUTS,
     design_digest,
@@ -54,9 +53,11 @@ from finn.shells.pynq.runner import (
     BITFILE,
     DELIVERED_CLOCK,
     HWH,
+    REPORTS,
     BuildPynqBitfile,
     InstanceIP,
     PynqOptions,
+    bitfile_directory,
     block_design,
     build_pynq,
     collect,
@@ -489,21 +490,18 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
         "odma0.onnx",
     ]
     report = output / "report"
-    outputs = built.namespace(OUTPUTS)
-    assert Path(outputs.pop("project")).parent == tmp_path / "build"
-    assert outputs == {
+    # The model states what a later step consumes: the bitfile, its hardware handoff and
+    # what it was made from; its reports are beside it, by the output directory's
+    # convention (REPORTS).
+    assert built.namespace(OUTPUTS) == {
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
         "bitfile_made_from": design_digest(body),
         "bitfile_options": {"enable_hw_debug": True},
         "hwh": str(output / "bitfile" / "finn-accel.hwh"),
-        "reports": {
-            "integration": str(report / "integration.json"),
-            "timing": str(report / "post_route_timing.rpt"),
-            "placed": str(report / "placed_utilization.xml"),
-            "out_of_context": str(report / "out_of_context"),
-            "delivered_clock": str(report / "delivered_clock.json"),
-        },
-        "host_runtime": "zynq-iodma",
+    }
+    assert bitfile_directory(built) == output
+    assert {name: (output / path).exists() for name, path in REPORTS.items()} == {
+        name: True for name in REPORTS
     }
     assert building.bitfile == output / BITFILE
     assert (output / BITFILE).read_text() == "top_wrapper.bit"
@@ -710,9 +708,9 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     """MakePynqDriver writes the driver afresh into driver/ under the output directory it
     is given and its description into report/driver.json: its shell the target the
     partition's body states, PL0 the clock the delivered-clock report there states, the
-    bitfile the parent graph states its default; the parent graph states the
-    description among its reports. Without the report, or on the ip shell, it is refused
-    before anything is written."""
+    bitfile the parent graph states its default; the description states the design the
+    driver was made from, and the parent graph is left as it was. Without the report, or
+    on the ip shell, it is refused before anything is written."""
     parent = zynq_model(tmp_path)
     output = tmp_path / "output"
     _, body, _ = partition_body(parent)
@@ -741,9 +739,12 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     assert (
         description
         == making.description
-        == driver_description(integration(parent), 187.512, str(BITFILE), [], [])
+        == {
+            **driver_description(integration(parent), 187.512, str(BITFILE), [], []),
+            "made_from": design_digest(body),
+        }
     )
-    assert made.get(OUTPUT_REPORTS) == {"driver": str(output / DRIVER_REPORT)}
+    assert made.namespace(OUTPUTS) == parent.namespace(OUTPUTS)
     model = streamed_w2_model()
     write_target(model, resolve_target(part=ZYNQ.part, period_ns=5.0))
     configure_partition(model)

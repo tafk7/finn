@@ -11,25 +11,26 @@ body is one. The kernel path cuts its model once (``finn.transformation.kernels.
 the parent graph holds one such node, and its body is opened through it
 (``partition_body``).
 
-What a build made of a partition is one typed namespace of graph metadata
-(``qonnx.core.metadata``), ``finn.outputs`` (``OUTPUTS``), and no flat key: on the
-partition's body, its packaged IP (directory, VLNV, interface names;
+What a build made of a partition that a later step consumes is one typed namespace of
+graph metadata (``qonnx.core.metadata``), ``finn.outputs`` (``OUTPUTS``), and no flat
+key: on the partition's body, its packaged IP (directory, VLNV, interface names;
 ``PackagePartition``) and the digest of the design it was made from (``made_from``);
-on the build's model, the parent graph, what the shell's integration made (the
-integration project, the bitfile, the hardware handoff, the reports by name, and the
-host runtime that runs it), and the digest of the IP's design and the shell options
-the bitfile was built with. A partition's boundary is not
-stored: what reads it (the integration export and the driver it describes, the
-interface description, the testbench) derives it from the configured root
-(``finn.custom_op.kernels.shell.configured_root``).
+on the build's model, the parent graph, the bitfile the shell's integration made and
+its hardware handoff, with the digest of the IP's design and the shell options the
+bitfile was built with. The run's own record (its reports, the tools' projects and
+transcripts) is the build's manifest's, not the model's
+(``finn.builder.build_dataflow_manifest``; decision SR3, item 4). A partition's
+boundary is not stored: what reads it (the integration export and the driver it
+describes, the interface description, the testbench) derives it from the configured
+root (``finn.custom_op.kernels.shell.configured_root``).
 
 An artifact is keyed by the design it was made from, not cleared when the design
 changes: ``design_digest`` is the digest of a model, serialized
 deterministically with ``finn.outputs`` cleared, so it covers the choices, the facts,
 the weights and the target, and nothing a build made. A reader compares the digest an
 artifact states with the body's now: the pynq shell's build packages the partition
-again on a mismatch, and the driver and the deployment refuse a bitfile built from
-another design (decision SR6, item 8).
+again on a mismatch, the driver and the deployment refuse a bitfile built from another
+design, and the deployment a driver made from another (decision SR6, item 8).
 
 This module depends on qonnx (and onnx, which qonnx depends on) only, below the
 KernelOps and their transformations, so the builder and the flow import it without
@@ -72,10 +73,6 @@ def _interface_names(value: object) -> bool:
     return isinstance(value, dict) and all(isinstance(names, list) for names in value.values())
 
 
-def _reports(value: object) -> bool:
-    return isinstance(value, dict) and all(_named(path) for path in value.values())
-
-
 def _digest(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
 
@@ -100,8 +97,6 @@ OUTPUT_MADE_FROM = OUTPUTS.key(
 )
 """The digest of the design the packaged IP was made from (``design_digest`` of the
 body it was packaged from)."""
-OUTPUT_PROJECT = OUTPUTS.key("project", str, check=_named, expect="a directory")
-"""The shell's integration project (the Vivado block design's)."""
 OUTPUT_BITFILE = OUTPUTS.key("bitfile", str, check=_named, expect="a file")
 """The bitfile the shell's integration made."""
 OUTPUT_HWH = OUTPUTS.key("hwh", str, check=_named, expect="a file")
@@ -115,12 +110,6 @@ OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
     "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
 )
 """The shell's build options the bitfile was built with (``enable_hw_debug``)."""
-OUTPUT_REPORTS = OUTPUTS.key(
-    "reports", JSON, check=_reports, expect="report files by name (synthesis, timing, ...)"
-)
-"""The integration's reports by name."""
-OUTPUT_HOST_RUNTIME = OUTPUTS.key("host_runtime", str, check=_named, expect="a host runtime")
-"""What runs the bitfile on the host (``finn.platform.ShellRow.host_runtime``)."""
 
 
 def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
@@ -212,13 +201,10 @@ __all__ = [
     "OUTPUT_BITFILE",
     "OUTPUT_BITFILE_MADE_FROM",
     "OUTPUT_BITFILE_OPTIONS",
-    "OUTPUT_HOST_RUNTIME",
     "OUTPUT_HWH",
     "OUTPUT_INTERFACES",
     "OUTPUT_IP",
     "OUTPUT_MADE_FROM",
-    "OUTPUT_PROJECT",
-    "OUTPUT_REPORTS",
     "OUTPUT_VLNV",
     "PARTITION_DOMAIN",
     "PARTITION_OP",

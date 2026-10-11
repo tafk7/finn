@@ -50,8 +50,9 @@ def declared(cls: type, name: str) -> Callable[[Any], Any]:
 
 
 class DataflowOutputType(str, Enum):
-    """What a kernel-path build makes beside its partition and reports. The values are
-    what ``finn.outputs`` records.
+    """What a kernel-path build makes beside its partition and reports. The model
+    records what a later step consumes (``finn.outputs``: the packaged IP, the bitfile);
+    the build's manifest indexes the run (``report/build.json``).
 
     The partition's own, on every shell: ``stitched_ip``, the shell root's packaged IP
     with its interface description and its XSim testbench, written and not run (the

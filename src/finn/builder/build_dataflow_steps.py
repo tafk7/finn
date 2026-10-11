@@ -41,6 +41,7 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
+from finn.builder.build_dataflow_manifest import REPORT, VERIFICATION
 from finn.builder.build_dataflow_resources import RESOURCES_FILE, shell_resources_report
 from finn.builder.build_dataflow_testbench import (
     TESTBENCH_DIR,
@@ -57,15 +58,21 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_BITFILE,
     OUTPUT_HWH,
     OUTPUT_IP,
-    OUTPUT_PROJECT,
-    OUTPUT_REPORTS,
+    design_digest,
     partition_body,
 )
 from finn.harness.preparation import check_equivalence
 from finn.platform import refuse_drift
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
-from finn.shells.pynq.runner import BITFILE, BuildPynqBitfile, pynq_row, refuse_stale_bitfile
-from finn.toolchain.launcher import Toolchain
+from finn.shells.pynq.runner import (
+    BITFILE,
+    REPORTS,
+    BuildPynqBitfile,
+    bitfile_directory,
+    pynq_row,
+    refuse_stale_bitfile,
+)
+from finn.toolchain.launcher import Toolchain, ToolFailed
 from finn.transformation.kernels import (
     EXPLORATION_REPORT,
     ExplorePartition,
@@ -121,11 +128,20 @@ def _tools(cfg: DataflowBuildConfig, step: str) -> Toolchain:
 
 def _verdict(name: str, passed: bool) -> None:
     """Log a verification's verdict, ``Verification for <name> : SUCCESS`` or ``FAIL``: a
-    FAIL as a warning, since the build continues with less than it asked."""
+    FAIL as a warning, since the build continues with less than it asked. The build's
+    manifest records it (finn.builder.build_dataflow_manifest.VERIFICATION)."""
+    verdict = {VERIFICATION: {"name": name, "passed": passed}}
     if passed:
-        _LOG.info(f"Verification for {name} : SUCCESS")
+        _LOG.info(f"Verification for {name} : SUCCESS", extra=verdict)
     else:
-        _LOG.warning(f"Verification for {name} : FAIL")
+        _LOG.warning(f"Verification for {name} : FAIL", extra=verdict)
+
+
+def _reported(path: str | os.PathLike[str]) -> None:
+    """Log a report the step wrote (``wrote <path>``), which the build's manifest lists
+    under the step with the findings it states
+    (finn.builder.build_dataflow_manifest.REPORT)."""
+    _LOG.info(f"wrote {path}", extra={REPORT: os.fspath(path)})
 
 
 def _preparation_source(cfg: DataflowBuildConfig) -> str:
@@ -147,6 +163,7 @@ def _write_preparation_report(cfg: DataflowBuildConfig, report: dict[str, Any]) 
     path = Path(cfg.output_dir) / PREPARATION_REPORT
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2))
+    _reported(path)
 
 
 def _preparation(*stated: Any) -> GraphPreparation:
@@ -404,6 +421,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
     with open(cfg.output_dir + "/report/kernel_ops.json", "w") as f:
         json.dump(report, f, indent=2)
+    _reported(cfg.output_dir + "/report/kernel_ops.json")
     for line in kernel_ops_summary(conversion.outcomes):
         _LOG.info(line)
     refuse_host_between(model, conversion.outcomes)
@@ -472,6 +490,7 @@ def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
     with open(os.path.join(cfg.output_dir, EXPLORATION_REPORT), "w") as f:
         json.dump(explored.report, f, indent=2)
+    _reported(os.path.join(cfg.output_dir, EXPLORATION_REPORT))
     with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
         json.dump(kernel_choices_config(body), f, indent=2)
     report = explored.report
@@ -605,6 +624,12 @@ def _refuse_drift(
     refuse_drift(read_target(body), cfg._resolve_target(), f"{output.value} build")
 
 
+def _stitched_ip_directory(cfg: DataflowBuildConfig) -> Path:
+    """Where step_create_stitched_ip packages the partition: its IP, interface
+    description and testbench, and with OOC_SYNTH its utilization report."""
+    return Path(cfg.output_dir) / "stitched_ip"
+
+
 def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the partition as an IP into ``stitched_ip/``, if STITCHED_IP or OOC_SYNTH
     is asked: PackagePartition on the body the parent graph's partition node opens,
@@ -613,8 +638,8 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     (``interface.json``). The body, saved, states its IP (finn.outputs), and a shell's
     integration later in the build takes that IP rather than package it again. With
     OOC_SYNTH the module is synthesized out of context and the IP packages the
-    checkpoint; the parent graph states its hierarchical utilization report among its
-    reports (``ooc_synth``), which report/resources.json reads. With STITCHED_IP, the XSim
+    checkpoint; its hierarchical utilization report, in ``stitched_ip/``, is the step's
+    in the build's manifest, and report/resources.json reads it there. With STITCHED_IP, the XSim
     testbench is written into ``stitched_ip/testbench`` (finn.builder.build_dataflow_testbench),
     on the partition's inputs from the parent graph executed on the first frame of
     ``verify_input_npy`` when it exists, a generated frame otherwise. It is an output,
@@ -627,7 +652,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     if not (stitched or ooc):
         _LOG.info("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
         return model
-    directory = Path(cfg.output_dir) / "stitched_ip"
+    directory = _stitched_ip_directory(cfg)
     toolchain = _tools(cfg, "step_create_stitched_ip")
     node, body, body_file = partition_body(model)
     body = body.transform(
@@ -641,8 +666,7 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     body.save(body_file)
     _LOG.info(f"Packaged IP {node.name} and its interface description in {directory}")
     if ooc:
-        report = partition_utilization_report(directory)
-        model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "ooc_synth": str(report)})
+        _reported(partition_utilization_report(directory))
     if stitched:
         if os.path.isfile(cfg.verify_input_npy):
             frame = partition_frame(model, np.load(cfg.verify_input_npy)[0])
@@ -666,9 +690,11 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     transcript in logs/step_synthesize_bitfile, and
     ``cfg.enable_hw_debug`` its shell option. A parent graph stating another target than
     the configuration's is refused. The parent graph stays the build's model and states
-    what was made (finn.outputs: the project, bitfile, hwh, reports and host runtime) and
-    what the bitfile was made from (the design's digest, the shell's options); the
-    delivered clock's limitations, if any, are logged as warnings (its findings)."""
+    the bitfile and its hardware handoff (finn.outputs) and what the bitfile was made
+    from (the design's digest, the shell's options); its reports, collected beside it
+    under report/ (finn.shells.pynq.runner.REPORTS), are the step's in the build's
+    manifest, as is the Vivado project, its run's working directory. The delivered
+    clock's limitations, if any, are logged as warnings (its findings)."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         _LOG.info("BITFILE not in requested outputs, skipping step_synthesize_bitfile.")
         return model
@@ -679,6 +705,8 @@ def step_synthesize_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
         enable_hw_debug=cfg.enable_hw_debug,
     )
     model = model.transform(building)
+    for report in REPORTS.values():
+        _reported(Path(cfg.output_dir) / report)
     for finding in building.findings:
         _LOG.warning(finding.message)
     _LOG.info(f"Bitfile written into {building.bitfile.parent}")
@@ -692,14 +720,15 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
     (report/delivered_clock.json), the bitfile the build ships (finn.outputs) its
     default, from the choices the partition saves; a bitfile
     built from another design than the partition's now is refused, named, and so is a
-    parent graph stating another target than the configuration's. The parent graph
-    states the description among its reports."""
+    parent graph stating another target than the configuration's. The description states
+    the design the driver was made from (``made_from``), which the deployment checks."""
     if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
         _LOG.info("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
     making = MakePynqDriver(Path(cfg.output_dir))
     model = model.transform(making)
+    _reported(Path(cfg.output_dir) / DRIVER_REPORT)
     description = making.description
     returned = ", ".join(
         f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
@@ -713,7 +742,7 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
 
 
 #: The finn.outputs keys a deployed model does not carry: paths on the build's machine.
-_MACHINE_PATHS = (OUTPUT_IP, OUTPUT_PROJECT, OUTPUT_BITFILE, OUTPUT_HWH, OUTPUT_REPORTS)
+_MACHINE_PATHS = (OUTPUT_IP, OUTPUT_BITFILE, OUTPUT_HWH)
 
 
 def _host_model(model: ModelWrapper, directory: Path) -> Path:
@@ -739,33 +768,47 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     """Package the bitfile and the driver for deployment, if DEPLOYMENT_PACKAGE is asked,
     with the host's part of the parent graph as a model (deploy/model/, _host_model) and
     the driver's description (deploy/driver.json, report/driver.json). It ships the
-    bitfile and the driver the parent graph states (finn.outputs), which this output
-    directory's bitfile and driver steps made: a model stating neither, or another
-    directory's, or a bitfile built from another design than the partition's now
-    (refuse_stale_bitfile), is refused by name, and deploy/ is written afresh."""
+    bitfile the parent graph states (finn.outputs), which this output directory's bitfile
+    step made, and the driver this output directory holds (driver/, its description
+    report/driver.json), which its driver step made from the same design: a model stating
+    no bitfile, or another directory's, an output directory with no driver, a bitfile
+    built from another design than the partition's now (refuse_stale_bitfile), and a
+    driver made from another design than it are refused by name, and deploy/ is written
+    afresh."""
     if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         _LOG.info("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
     pynq_row(model, "deployment_package")
     output = Path(cfg.output_dir)
-    made = {
-        "bitfile": (model.get(OUTPUT_BITFILE), output / BITFILE),
-        "pynq_driver": ((model.get(OUTPUT_REPORTS) or {}).get("driver"), output / DRIVER_REPORT),
-    }
-    for name, (stated, expected) in made.items():
-        if stated is None:
-            raise ValueError(
-                f"deployment_package: the model states no {name} (finn.outputs): the "
-                "deployment ships the bitfile and the driver its build made; ask bitfile "
-                "and pynq_driver with it"
-            )
-        if Path(stated) != expected:
-            raise ValueError(
-                f"deployment_package: the model's {name} is {stated}, not this output "
-                f"directory's ({expected})"
-            )
+    stated = model.get(OUTPUT_BITFILE)
+    if stated is None:
+        raise ValueError(
+            "deployment_package: the model states no bitfile (finn.outputs): the "
+            "deployment ships the bitfile and the driver its build made; ask bitfile "
+            "and pynq_driver with it"
+        )
+    if Path(stated) != output / BITFILE:
+        raise ValueError(
+            f"deployment_package: the model's bitfile is {stated}, not this output "
+            f"directory's ({output / BITFILE})"
+        )
+    if not (output / DRIVER_REPORT).is_file():
+        raise ValueError(
+            f"deployment_package: no driver in this output directory ({output / DRIVER_REPORT}):"
+            " the deployment ships the bitfile and the driver its build made; ask "
+            "pynq_driver with it"
+        )
     refuse_stale_bitfile(model, "deployment_package")
+    _, body, _ = partition_body(model)
+    made_from = json.loads((output / DRIVER_REPORT).read_text()).get("made_from")
+    now = design_digest(body)
+    if made_from != now:
+        raise ValueError(
+            f"deployment_package: the driver in this output directory ({output / DRIVER_DIR}) "
+            f"was made from the design {made_from}, and the partition's design is now {now}; "
+            "make the driver again (pynq_driver)"
+        )
     deploy = output / "deploy"
     shutil.rmtree(deploy, ignore_errors=True)
     shutil.copytree(output / BITFILE.parent, deploy / BITFILE.parent)
@@ -779,14 +822,25 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     """Write report/resources.json: the resources of each member of the partition's
     shell (the partition, each end, each IP of the static region) and their total, as
     the shell root states them (the model), as Vivado synthesized each IP out of
-    context, and as placed, from the reports the parent graph states
-    (finn.builder.build_dataflow_resources); a column the build did not make is stated absent.
-    The parent graph states it among its reports (``resources``)."""
+    context, and as placed (finn.builder.build_dataflow_resources), from the reports
+    the build made: those collected beside the bitfile the parent graph states
+    (finn.shells.pynq.runner.REPORTS: ``placed``, ``out_of_context``), and with
+    OOC_SYNTH the packaged partition's in stitched_ip/ (``ooc_synth``). A column the
+    build did not make is stated absent."""
     report = Path(cfg.output_dir) / RESOURCES_FILE
     report.parent.mkdir(parents=True, exist_ok=True)
-    stated = shell_resources_report(model)
+    reports: dict[str, Path] = {}
+    built = bitfile_directory(model)
+    if built is not None:
+        reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
+    if DataflowOutputType.OOC_SYNTH in cfg.generate_outputs:
+        try:
+            reports["ooc_synth"] = partition_utilization_report(_stitched_ip_directory(cfg))
+        except ToolFailed:
+            pass  # not synthesized into this output directory: the column is absent
+    stated = shell_resources_report(model, reports)
     report.write_text(json.dumps(stated, indent=2))
-    model.set(OUTPUT_REPORTS, {**(model.get(OUTPUT_REPORTS) or {}), "resources": str(report)})
+    _reported(report)
     absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())
     _LOG.info(
         f"Resources per member written to {report}" + (f"; absent: {absent}" if absent else "")
