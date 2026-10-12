@@ -33,10 +33,8 @@ memory: the mapping itself is synthesis's to show.
   refuses the case (``threshold-saturation``).
 - **MatMul**: INT8 activations and weights at their extremes, against ``execute_node``
   itself: exact integer arithmetic, as the hardware's accumulator is, on the oracle's
-  integer inputs (``test_matmul_execute_node_is_exact_beyond_float32``). Where ONNX's
-  MatMul in the operands' container would round instead, the op's domain step refuses
-  the node (``matmul-container-exceeded``); the ONNX side is
-  ``tests/kernel_ops/test_reference.py``'s.
+  integer inputs (``test_matmul_execute_node_is_exact_beyond_float32``). The ONNX side,
+  which FINN executes with exact integers too, is ``tests/kernel_ops/test_reference.py``'s.
 
 The specs of the kernels these ops bind are ``kernels.specs.matmul`` and
 ``kernels.specs.thresholding``.
@@ -198,9 +196,7 @@ def test_matmul_execute_node_is_the_integer_product_on_the_parity_inputs() -> No
 
 def test_matmul_execute_node_is_exact_beyond_float32() -> None:
     """With INT16 operands over k = 1024 the sums pass 2**24, where a float32 product
-    rounds: the reference is the integer product the hardware computes. (Its domain
-    step refuses such a node in float32, ``matmul-container-exceeded``; this one is made
-    by hand.)"""
+    rounds: the reference is the integer product the hardware computes."""
     k = 1024
     weights = np.full((k, 1), 32767, dtype=np.int64)
     weights[1::2] = 32765

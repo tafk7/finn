@@ -3,9 +3,9 @@
 
 """The ONNX entry: a KernelOp's pattern and reference against the ONNX it covers.
 
-PRINCIPLES 8 and KT6: a KernelOp's ``execute_node`` (with ``normalize_inputs``
-before it) is the computational reference for the nodes its pattern covers, and
-must equal their ONNX semantics, exactly, on every node the op converts (KT27).
+A KernelOp's ``execute_node`` (with ``normalize_inputs`` before it) is the
+computational reference for the nodes its pattern covers, and must equal their ONNX
+semantics, exactly, on every node the op converts.
 Nothing in a build re-checks it; this module does, offline, from a spec of the op
 (``OpSpec``, in ``tests/``):
 
@@ -16,37 +16,36 @@ Nothing in a build re-checks it; this module does, offline, from a spec of the o
   2. the kernels' admission on every platform row the repository declares
      (``platform_rows``: each architecture rule of the part catalog,
      ``finn.platform.architectures``, with each shell the kernel path builds for it),
-     by ``ToKernelOps`` on each row's target
-     (``coverage``): the rows
-     that convert the graph whole, and the kernels' refusals on the others, by
+     by ``ToKernelOps`` on each row's target (``coverage``): the rows that convert
+     the graph whole, and the kernels' refusals on the others, by
      owner and code. Where no row admits it, the graph is a **gap**, what the
      no-new-kernels rule marks: not a failure, its ``Coverage`` the record of why,
      and its values unchecked, since no conversion executes it. Otherwise the
      values are checked on the spec's target, or the first row that admits the
      graph where that target does not:
   3. on seeded random inputs and on inputs at the extremes, both drawn from each
-     graph input's annotation (``finn.util.draws.drawn_inputs``), the KernelOps' ``execute_node``
-     computes what qonnx's execution of the graph computes (``observe``,
-     ``check_values``), every output element equal; any difference is
+     graph input's annotation (``finn.util.draws.drawn_inputs``), the KernelOps'
+     ``execute_node`` computes what FINN's execution of the graph computes
+     (``observe``, ``check_values``), every output element equal; any difference is
      ``Unequal``;
   4. inference is sound: each KernelOp output's annotation holds every value
      observed there (``check_sound``).
 - **negative graphs**, each with a finding code: ``match`` leaves the model
   unchanged, and ``ToKernelOps`` leaves the anchor's node on the host with that
-  code among its findings (``check_negative``): a pattern's, the domain step's
-  (``KernelOp.exact``: a node where ONNX could compute other values than the
-  reference), or the kernels'.
+  code among its findings (``check_negative``): a pattern's or the kernels'.
 
-The inputs are the integers of each annotation that the input's container holds
-(``finn.util.draws``): a value the container cannot hold is not one ONNX's
-execution of the graph speaks of. ONNX's execution gets them in that container (the
-export's float32, or float64 where graph preparation widened the region); the
-reference gets them as int64.
+The inputs are the integers of each annotation, as int64 (``finn.util.draws``), and
+both sides get them as they are. FINN's execution of the graph
+(``finn.core.onnx_exec``) computes integers exactly, as the reference and the
+hardware do: a standard node whose annotated integers pass what float32 holds exactly
+computes in float64. Its annotations decide that, so the graph is annotated first as
+graph preparation annotates it (qonnx's ``InferDataTypes``): a spec states only its
+inputs' annotations.
 
 A ``Coverage``'s ``record`` is its JSON form, for a report to collect. A nested
 pattern's positive graph (several nodes, Conv's Im2Col and MatMul) is
 compared whole. Not here: the generated network through the kernel path into XSim
-(T2) is the tests', since the harness does not import the flow's builder.
+is the tests', since the harness does not import the flow's builder.
 """
 
 from __future__ import annotations
@@ -59,10 +58,11 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
-from qonnx.core.onnx_exec import execute_onnx
+from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
 import finn.custom_op.kernels as kernel_ops
+from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.harness.ops import executed
@@ -70,7 +70,7 @@ from finn.kernels.target import Target
 from finn.platform import BOARDS, IP, ROWS, part, resolve_target
 from finn.platform.architectures import RULES
 from finn.transformation.kernels.convert import ToKernelOps
-from finn.util.draws import Integers, as_held, drawn_inputs
+from finn.util.draws import Integers, drawn_inputs
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -82,7 +82,7 @@ Graph = Callable[[], "ModelWrapper"]
 @dataclass(frozen=True)
 class Observed:
     """One draw of a positive graph: the ``source`` and its conversion, the ``inputs``
-    (integers, by graph input), and every tensor's values as qonnx's execution of the
+    (integers, by graph input), and every tensor's values as FINN's execution of the
     source computes them (``onnx``) and as the KernelOps' ``execute_node`` do
     (``reference``)."""
 
@@ -247,10 +247,11 @@ def check_negative(op: type[KernelOp], model: ModelWrapper, code: str, target: T
 def observe(
     source: ModelWrapper, conversion: ModelWrapper, inputs: Mapping[str, Integers]
 ) -> Observed:
-    """``source`` executed by qonnx on ``inputs`` in their containers, and its
-    conversion's KernelOps' ``execute_node`` on them as integers."""
-    source = source.transform(InferShapes())
-    onnx = execute_onnx(source, as_held(source, inputs), return_full_exec_context=True)
+    """``source``, annotated (module docstring), executed by FINN's execution on
+    ``inputs``, and its conversion's KernelOps' ``execute_node`` on them, both on the
+    integers as they are."""
+    source = source.transform(InferShapes()).transform(InferDataTypes())  # type: ignore[no-untyped-call]
+    onnx = execute_onnx(source, inputs, return_full_exec_context=True)
     return Observed(source, conversion, inputs, onnx, executed(conversion, inputs))
 
 

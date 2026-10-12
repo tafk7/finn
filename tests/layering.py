@@ -22,10 +22,8 @@ finn.toolchain  <-  finn.util (with finn.xsi, finn.resources)  <-  finn.transfor
                                                                 finn.shells, the flow
 finn.core.space, finn.util  <-  preparation (finn.transformation.qonnx, .streamline,
                                 .prepare)  <-  the flow
-finn.dataflow, finn.core.containers  <-  the draws (finn.util.draws)  <-  finn.harness,
-                                                                     the flow
-finn.core.space, the draws, preparation  <-  finn.analysis  <-  the flow
-finn.core.containers  <-  finn.custom_op.kernels, preparation, finn.harness, the flow
+finn.dataflow  <-  the draws (finn.util.draws)  <-  finn.analysis, finn.harness, the flow
+finn.core.space, the draws, the executors  <-  finn.analysis  <-  the flow
 finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.generate (the
                                                             catalog generator; nothing
                                                             imports it)
@@ -114,12 +112,6 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernels",
         also=("finn.resources",),
     ),
-    # Containers: the ONNX element types execution holds a tensor's values in, and the
-    # integers each holds exactly. The KernelOps' domain step, graph preparation's
-    # container widening, and the harness's draws read the one table.
-    Layer(
-        "containers", ("finn.core.containers",), (), ("numpy", "onnx", "qonnx"), "tests/kernel_ops"
-    ),
     # The platform registry: parts, boards and shell rows, resolved to the capabilities
     # kernels read. The shell root reads its shell's row. A refusal carries its finding
     # (the engine's reason type).
@@ -142,7 +134,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "custom_op.kernels",
         ("finn.custom_op.kernels",),
-        (*_KERNEL_STACK, "platform", "containers", "partition"),
+        (*_KERNEL_STACK, "platform", "partition"),
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -167,12 +159,12 @@ LAYERS: tuple[Layer, ...] = (
         ANY,
         "tests/kernel_ops",
     ),
-    # A graph's inputs drawn from their annotations and held in their containers: what
-    # the harness and the analyses run a graph on, and the testbench reads its inputs by.
+    # A graph's inputs drawn from their annotations, as int64: what the harness and the
+    # analyses run a graph on, and the testbench reads its inputs by.
     Layer(
         "draws",
         ("finn.util.draws",),
-        ("dataflow", "containers"),
+        ("dataflow",),
         ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -186,19 +178,8 @@ LAYERS: tuple[Layer, ...] = (
             "finn.transformation.streamline",
             "finn.transformation.prepare",
         ),
-        ("util", "containers"),
+        ("util",),
         ("numpy", "onnx", "qonnx"),
-        "tests/kernel_ops",
-    ),
-    # Analysis passes: generic functions of a graph returning their findings, which no
-    # build step runs. Neither the harness nor the builder: what a finding stops is the
-    # caller's. The equivalence analysis runs the export in float64 as preparation's
-    # widening holds it, and asks ONNX Runtime which ops it cannot run there.
-    Layer(
-        "analysis",
-        ("finn.analysis",),
-        ("space", "containers", "preparation", "draws"),
-        ("numpy", "onnxruntime", "qonnx"),
         "tests/kernel_ops",
     ),
     # The part catalog's generator: a tool above the registry, which runs Vivado
@@ -267,6 +248,17 @@ LAYERS: tuple[Layer, ...] = (
         ("qonnx",),
         "tests/kernel_ops",
     ),
+    # Analysis passes: generic functions of a graph returning their findings, which no
+    # build step runs. Neither the harness nor the builder: what a finding stops is the
+    # caller's. The equivalence analysis runs both graphs with FINN's execution (the
+    # executors' finn.core.onnx_exec), which computes integers exactly.
+    Layer(
+        "analysis",
+        ("finn.analysis",),
+        ("space", "draws", "executors"),
+        ("numpy", "qonnx"),
+        "tests/kernel_ops",
+    ),
     # The kernel harness: what checks a kernel's hardware (the hardware against its
     # KernelOps' oracle, execute_node, on a model of them: two runs of the executors) and
     # a KernelOp's reference against qonnx's execution of the ONNX it covers, on the
@@ -283,7 +275,6 @@ LAYERS: tuple[Layer, ...] = (
             "toolchain",
             "util",
             "transformation.kernels",
-            "containers",
             "draws",
             "xsim",
             "executors",
@@ -330,7 +321,6 @@ LAYERS: tuple[Layer, ...] = (
             "xsim",
             "executors",
             "custom_op.partition",
-            "containers",
             "shells",
         ),
         ANY,

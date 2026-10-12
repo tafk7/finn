@@ -10,9 +10,9 @@ import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
 from qonnx.util.basic import qonnx_make_model
 
+from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel

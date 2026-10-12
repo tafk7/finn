@@ -8,9 +8,9 @@ TFC_W2A2 through the builder's phase from its export: the graph its fixture read
 equivalent to the export (``finn.analysis.equivalence``), its initializers held by their
 annotations (``finn.analysis.initializers``), and unchanged when prepared again; CNV_W2A2
 equivalent and held alike (slow: preparing CNV takes about a minute). On
-hand-made graphs: the widening of integer regions to float64, and the equivalence
-analysis with preparation's declared deviations, whose predicates are this file's
-(``EXPLAINS``).
+hand-made graphs: a wide layer, past what float32 holds exactly, converted and exact,
+and the equivalence analysis with preparation's declared deviations, whose predicates
+are this file's (``EXPLAINS``).
 """
 
 from __future__ import annotations
@@ -28,26 +28,19 @@ import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
+from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.analysis.equivalence import (
-    DEVIATIONS,
-    Draw,
-    Explanation,
-    equivalence_with,
-    float64_refused,
-    in_float64,
-)
+from finn.analysis.equivalence import DEVIATIONS, Draw, Explanation, equivalence_with
 from finn.analysis.initializers import annotated_initializers
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import PREPARATION_REPORT, build_dataflow_phases
-from finn.core.containers import container, exact_up_to, matmul_partial_sums
+from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
 from finn.platform import TargetRequest
@@ -55,11 +48,9 @@ from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.prepare import (
     SUB_PHASES,
     GraphPreparation,
-    census,
     prepared,
     reference,
 )
-from finn.transformation.prepare.containers import exact_containers, magnitudes, widened_regions
 from finn.transformation.prepare.phase import streamlined
 from finn.transformation.streamline.extract_multithreshold_scale_bias import (
     ExtractMultiThresholdScaleBias,
@@ -157,7 +148,7 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     )
     assert build_dataflow_cfg(str(tfc_directory / EXPORT), cfg) == 0
     output = Path(cfg.output_dir)
-    made = ModelWrapper(str(output / "intermediate_models" / "step_widen_containers.onnx"))
+    made = ModelWrapper(str(output / "intermediate_models" / "step_convert_to_channels_last.onnx"))
     # The graph the kernel path's fixtures read, byte for byte.
     assert made.model.SerializeToString() == Path(tfc_streamlined).read_bytes()
     report = json.loads((output / PREPARATION_REPORT).read_text())
@@ -168,14 +159,6 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     assert by_name["P2 quantization"]["added"] == {"Add": 4, "MultiThreshold": 4}
     assert by_name["P1 io"]["added"] == {"Div": 1, "TopK": 1}
     assert by_name["P4 topology"]["removed"] == by_name["P4 topology"]["added"] == {}
-    # The widening changes nothing on TFC: float32 holds every magnitude it reaches.
-    assert by_name["P6 containers"] == {
-        "sub_phase": "P6 containers",
-        "removed": {},
-        "added": {},
-        "annotations_changed": {},
-        "containers_changed": {},
-    }
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
     phase = [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
@@ -224,7 +207,7 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     made = ModelWrapper(str(tfc_streamlined))
     reference_graph = reference(export, preparation(tfc_directory))
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
-    assert checked == {"draws": 12, "findings": (), "rounds": ()}
+    assert checked == {"draws": 12, "findings": ()}
     # The streamlined TFC: the input flatten, four MultiThreshold and MatMul layers, the
     # label select; INT2 activations, and each MatMul's exact range as qonnx's interval
     # rule states it (G3a, qonnx b7bc357): INT10 for the 784-wide first layer, INT8 after.
@@ -242,12 +225,12 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     for node in made.graph.node:
         if node.op_type == "MultiThreshold":
             assert made.get_tensor_datatype(node.output[0]) == DataType["INT2"]
-    # The export's float32 containers throughout (nothing widened), but ONNX's INT64
-    # shapes and indices and the thresholds, which streamlining computes and stores in
-    # float64 (ONNX gives them no type).
+    # The export's float32 throughout, but ONNX's INT64 shapes and indices and the
+    # thresholds, which streamlining computes and stores in float64 (ONNX gives them no
+    # type).
     thresholds = {node.input[1] for node in made.graph.node if node.op_type == "MultiThreshold"}
     held = {
-        name: container(made, name)
+        name: _element_type(made, name)
         for node in made.graph.node
         for name in (*node.input, *node.output)
     }
@@ -256,7 +239,16 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
         TensorProto.FLOAT,
         TensorProto.INT64,  # the input flatten's shape, TopK's k and its indices
     }
-    assert widened_regions(made) == set()
+
+
+def _element_type(model: ModelWrapper, tensor: str) -> int:
+    """``tensor``'s ONNX element type: an initializer's data type, else its value info's."""
+    for init in model.graph.initializer:
+        if init.name == tensor:
+            return int(init.data_type)
+    info = model.get_tensor_valueinfo(tensor)
+    assert info is not None, tensor
+    return int(info.type.tensor_type.elem_type)
 
 
 def test_tfc_prepared_initializers_hold_their_annotations(tfc_streamlined: Path) -> None:
@@ -275,15 +267,12 @@ def test_cnv_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     cnv_export: Path, cnv_streamlined: Path
 ) -> None:
     """CNV_W2A2 as TFC: equivalent to its export on every draw, its annotations sound, and
-    its integer-annotated initializers (its nine MatMuls' weights, INT2) held. ONNX
-    Runtime has no float64 Conv, so where the export rounds is not checked, and named."""
+    its integer-annotated initializers (its nine MatMuls' weights, INT2) held."""
     export = ModelWrapper(str(cnv_export))
     made = ModelWrapper(str(cnv_streamlined))
     reference_graph = reference(export, preparation(cnv_export.parent))
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
-    assert (checked["draws"], checked["findings"]) == (12, ())
-    ((code, details),) = [(f.code, dict(f.details)) for f in checked["rounds"]]
-    assert (code, details["ops"]) == ("export-rounds-unchecked", ("Conv",))
+    assert checked == {"draws": 12, "findings": ()}
     held = made.analysis(annotated_initializers)
     weights = [node.input[1] for node in made.graph.node if node.op_type == "MatMul"]
     assert len(weights) == 9 and sorted(held["checked"]) == sorted(weights)
@@ -311,25 +300,26 @@ def graph(
     outputs: Sequence[str],
     initializers: Mapping[str, Any] = {},
     annotations: Mapping[str, str] = {},
-    container: int = TensorProto.FLOAT,
 ) -> ModelWrapper:
     """``nodes`` over ``inputs`` (shape and annotation each) to ``outputs``, the
-    initializers and further annotations given, shapes inferred, every tensor in
-    ``container``."""
+    initializers and further annotations given, shapes inferred, every tensor float32."""
     model = ModelWrapper(
         qonnx_make_model(
             helper.make_graph(
                 list(nodes),
                 "g",
-                [helper.make_tensor_value_info(n, container, s) for n, (s, _) in inputs.items()],
-                [helper.make_tensor_value_info(name, container, None) for name in outputs],
+                [
+                    helper.make_tensor_value_info(n, TensorProto.FLOAT, s)
+                    for n, (s, _) in inputs.items()
+                ],
+                [helper.make_tensor_value_info(name, TensorProto.FLOAT, None) for name in outputs],
             ),
             opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(GENERAL, 1)],
         )
     )
     for name, values in initializers.items():
-        # An int64 array stays one (a shape, TopK's k); the rest are float32, ONNX's
-        # container for them.
+        # An int64 array stays one (a shape, TopK's k); the rest are float32, as an
+        # export holds them.
         if not (isinstance(values, np.ndarray) and values.dtype == np.int64):
             values = np.asarray(values, dtype=np.float32)
         model.set_initializer(name, values)
@@ -339,9 +329,6 @@ def graph(
             model.set_tensor_datatype(name, DataType[stated])
     for name, stated in annotations.items():
         model.set_tensor_datatype(name, DataType[stated])
-    if container != TensorProto.FLOAT:
-        for item in (*model.graph.value_info, *model.graph.output):
-            item.type.tensor_type.elem_type = container
     return model
 
 
@@ -356,22 +343,36 @@ def _node(op: str, inputs: list[str], domain: str = "", **attributes: Any) -> An
 UNARY = {"x": ([1, 2], "INT3")}
 """One INT3 input of two elements."""
 
-# -- containers ----------------------------------------------------------------------------
+# -- a wide layer -------------------------------------------------------------------------
 
+K = 2304
 #: An INT8 layer over k 2304 with spread weights: partial sums up to 127 * 128 * 2304,
-#: past 2**24.
-SPREAD = np.random.default_rng(2304).integers(-128, 128, size=(2304, 3)).astype(np.float32)
-#: Thresholds that bring the wide sums to UINT2.
-WIDE_THRESHOLDS = np.array([[-(2.0**24), 0.0, 2.0**24]] * 3)
+#: past 2**24, which float32 holds exactly.
+SPREAD = np.random.default_rng(2304).integers(-128, 128, size=(K, 3)).astype(np.float32)
 
 
-def _wide_and_narrow() -> ModelWrapper:
-    """Two layers: ``a`` (x INT8 over k 2304, the spread weights, then thresholds to
-    UINT2: ``ya``), whose partial sums pass 2**24; a float scale of its sum (``scaled``,
-    a float output); and ``b`` (z INT2 over k 4, ``yb``), within float32's integers.
-    Annotated by qonnx's rule, as P5 leaves a graph."""
+def _quant(source: str, output: str) -> Any:
+    """qonnx's Quant of ``source`` to INT8, at unit scale: an export's quantizer."""
+    return helper.make_node(
+        "Quant",
+        [source, "one", "zero", "eight"],
+        [output],
+        name=f"Quant_{output}",
+        domain=GENERAL,
+        narrow=0,
+        signed=1,
+        rounding_mode="ROUND",
+    )
+
+
+def _wide_layer(thresholds: npt.NDArray[np.float64], exported: bool) -> ModelWrapper:
+    """``MatMul_a`` (x INT8 over k 2304, the spread weights: ``sa``), thresholds to UINT2
+    (``ya``) and a float scale of the sums (``scaled``). ``exported``: as an export
+    holds it, the input and the weights through their own Quant nodes; else as
+    preparation leaves it, the input annotated and the weights integers. Annotated by
+    qonnx's rule; the thresholds stored in float64, as streamlining stores them."""
     nodes = [
-        helper.make_node("MatMul", ["x", "wa"], ["sa"], name="MatMul_a"),
+        helper.make_node("MatMul", ["q" if exported else "x", "wa"], ["sa"], name="MatMul_a"),
         helper.make_node(
             "MultiThreshold",
             ["sa", "ta"],
@@ -381,265 +382,59 @@ def _wide_and_narrow() -> ModelWrapper:
             out_dtype="UINT2",
         ),
         helper.make_node("Mul", ["sa", "half"], ["scaled"], name="Mul_a"),
-        helper.make_node("MatMul", ["z", "wb"], ["yb"], name="MatMul_b"),
     ]
+    initializers: dict[str, Any] = {"ta": thresholds, "half": np.asarray(0.5)}
+    if exported:
+        nodes = [_quant("x", "q"), _quant("wf", "wa"), *nodes]
+        initializers.update({"wf": SPREAD, "one": 1.0, "zero": 0.0, "eight": 8.0})
+    else:
+        initializers["wa"] = SPREAD
     model = graph(
         nodes,
-        {"x": ([2, 2304], "INT8"), "z": ([2, 4], "INT2")},
-        ["ya", "scaled", "yb"],
-        {"wa": SPREAD, "ta": WIDE_THRESHOLDS, "half": np.asarray(0.5), "wb": np.eye(4, 2)},
-        {"wa": "INT8", "wb": "INT2"},
+        {"x": ([2, K], None if exported else "INT8")},
+        ["ya", "scaled"],
+        initializers,
+        {} if exported else {"wa": "INT8"},
     )
+    model.set_initializer("ta", thresholds)
     return model.transform(InferDataTypes())  # type: ignore[no-untyped-call]
 
 
-def _containers(model: ModelWrapper) -> dict[str, int | None]:
-    named = {name for node in model.graph.node for name in (*node.input, *node.output)}
-    return {name: container(model, name) for name in sorted(named) if name}
-
-
-def _edges(model: ModelWrapper) -> list[tuple[str, int, list[int] | None]]:
-    return [
-        (item.name, item.type.tensor_type.elem_type, model.get_tensor_shape(item.name))
-        for item in (*model.graph.input, *model.graph.output)
-    ]
-
-
-def _past_their_containers(model: ModelWrapper) -> set[str]:
-    """The integer tensors whose magnitudes (``magnitudes``) pass the integers their
-    containers hold exactly."""
-    return {
-        tensor
-        for tensor, reached in magnitudes(model).items()
-        if (limit := exact_up_to(container(model, tensor))) is not None and reached > limit
-    }
-
-
-@pytest.mark.parametrize("owned", [True, False], ids=["initializer", "channel"])
-def test_the_widening_and_matmuls_domain_step_part_at_one_bound(owned: bool) -> None:
-    """One bound for both (``finn.core.containers.matmul_partial_sums``): INT8
-    activations against a column of magnitudes summing to 2**17 reach 2**24, the last
-    integer float32 holds, so nothing is widened and MatMul's domain step accepts it;
-    one more step past it and the widening takes the MatMul's region to float64, which
-    the domain step refuses in float32 (``matmul-container-exceeded``). Weights an
-    initializer (all -128, then one 1 more), or on a channel (INT8, k 1024, then
-    1025)."""
-    for k, past in ((1024, False), (1025, True)):
-        if owned:
-            weights = np.full((k, 1), -128.0)
-            if past:
-                weights[-1] = 1.0
-            assert matmul_partial_sums(128, k, 128, weights) == 2**24 + past * 128
-            initializers: dict[str, Any] = {"w": weights}
-            inputs = {"x": ([1, k], "INT8")}
-        else:
-            assert matmul_partial_sums(128, k, 128) == 128 * 128 * k
-            initializers = {}
-            inputs = {"x": ([1, k], "INT8"), "w": ([k, 1], "INT8")}
-        model = graph(
-            [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-            inputs,
-            ["y"],
-            initializers,
-            {"w": "INT8", "y": "INT32"},
-        )
-        assert ("y" in widened_regions(model)) is past
-        conversion = ToKernelOps(TARGET)
-        copy.deepcopy(model).transform(conversion)
-        (outcome,) = conversion.outcomes
-        found = [f.code for f in outcome.findings]
-        assert ("matmul-container-exceeded" in found) is past, found
-
-
-def test_the_widening_takes_only_the_region_that_needs_it_and_casts_only_at_its_edges() -> None:
-    """The wide layer's region (its input, weights, sums and the thresholds' output it is
-    tied to) in float64; the narrow layer and the float arithmetic in float32; a Cast
-    where the wide region's sum enters the float Mul (annotated FLOAT32 from there) and
-    at the graph's input and output, which keep their containers."""
-    source = _wide_and_narrow()
-    assert source.get_tensor_datatype("sa") == DataType["INT26"]
-    made = exact_containers(copy.deepcopy(source))
-    assert _edges(made) == _edges(source)
-    held = _containers(made)
-    assert {name for name, each in held.items() if each == TensorProto.DOUBLE} == {
-        "x_double",
-        "wa",
-        "sa",
-        "ya_double",
-    }
-    assert held["ta"] == TensorProto.FLOAT  # a MultiThreshold's thresholds are untyped
-    narrow = {"z", "wb", "yb"}
-    assert {name: held[name] for name in narrow} == dict.fromkeys(narrow, TensorProto.FLOAT)
-    casts = [
-        (list(node.input), list(node.output), helper.get_attribute_value(node.attribute[0]))
-        for node in made.graph.node
-        if node.op_type == "Cast"
-    ]
-    assert sorted(casts) == [
-        (["sa"], ["sa_float"], TensorProto.FLOAT),
-        (["x"], ["x_double"], TensorProto.DOUBLE),
-        (["ya_double"], ["ya"], TensorProto.FLOAT),
-    ]
-    # The report's census names what was widened, and the Casts added.
-    changed = census(source, made)
-    assert changed["containers_changed"] == {
-        "sa": ["FLOAT", "DOUBLE"],
-        "wa": ["FLOAT", "DOUBLE"],
-    }
-    assert (changed["added"], changed["removed"]) == ({"Cast": 3}, {})
-    assert made.get_tensor_datatype("x_double") == DataType["INT8"]
-    assert made.get_tensor_datatype("sa_float") == DataType["FLOAT32"]  # into float arithmetic
-    assert np.asarray(made.get_initializer("wa")).dtype == np.float64
-    # The wide sums exactly, where float32 rounds them; the float output as before.
-    x = (127 * np.where(SPREAD[:, :1].T > 0, 1, -1)).repeat(2, axis=0)
-    x[1, 0] -= 1  # an odd sum past 2**24
-    inputs = {"x": x.astype(np.float32), "z": np.ones((2, 4), dtype=np.float32)}
-    exact = (x @ SPREAD.astype(np.int64))[..., 0]
-    assert np.abs(exact).max() > 2**24
-    for model, rounds in ((source, True), (made, False)):
-        context = execute_onnx(model, inputs, return_full_exec_context=True)
-        assert np.array_equal(np.asarray(context["sa"])[..., 0], exact) is not rounds
-    assert np.array_equal(
-        execute_onnx(made, inputs)["scaled"], execute_onnx(source, inputs)["scaled"]
-    )
-    # The wide sums past float32's integers before, every container exact after; the
-    # widening on its own output changes nothing.
-    assert _past_their_containers(source) == {"sa"}
-    assert _past_their_containers(made) == set()
-    again = exact_containers(copy.deepcopy(made))
-    assert again.model.SerializeToString() == made.model.SerializeToString()
-
-
-def test_an_int8_matmul_over_k_2304_with_spread_weights_converts_once_widened() -> None:
-    """The outcome the widening changes: in float32 the domain step refuses the wide
-    layer (ONNX would round its sums, ``matmul-container-exceeded``); in float64 it
-    converts."""
-    source = _wide_and_narrow()
-    for model, wide in ((source, False), (exact_containers(copy.deepcopy(source)), True)):
-        conversion = ToKernelOps(TARGET)
-        copy.deepcopy(model).transform(conversion)
-        made = {outcome.nodes[0]: outcome for outcome in conversion.outcomes}
-        assert (made["MatMul_b"].op, made["MultiThreshold_a"].op) == ("MatMul", "Thresholding")
-        assert made["MatMul_a"].op == ("MatMul" if wide else None)
-        found = [f.code for f in made["MatMul_a"].findings]
-        assert found == ([] if wide else ["matmul-container-exceeded"])
-
-
-def test_a_quantizers_integer_output_enters_a_widened_region_through_a_cast() -> None:
-    """Quant computes in float32 alone (qonnx's ``intquant``): its integer output stays
-    there, and a Cast takes it into the region. No change to qonnx is needed while a
-    quantizer is at most 24 bits wide, which float32 holds."""
-    nodes = [
-        helper.make_node(
-            "Quant",
-            ["f", "one", "zero", "eight"],
-            ["q"],
-            name="Quant_0",
-            domain=GENERAL,
-            narrow=0,
-            signed=1,
-            rounding_mode="ROUND",
-        ),
-        helper.make_node("MatMul", ["q", "w"], ["y"], name="MatMul_0"),
-    ]
-    model = graph(
-        nodes,
-        {"f": ([1, 2304], None)},
-        ["y"],
-        {"one": 1.0, "zero": 0.0, "eight": 8.0, "w": SPREAD},
-        {"q": "INT8", "w": "INT8", "y": "INT26"},
-    )
-    made = exact_containers(model)
-    (quant,) = [node for node in made.graph.node if node.op_type == "Quant"]
-    assert container(made, quant.output[0]) == TensorProto.FLOAT
-    casts = [(list(n.input), list(n.output)) for n in made.graph.node if n.op_type == "Cast"]
-    assert sorted(casts) == [(["q_float"], ["q"]), (["y_double"], ["y"])]
-    assert container(made, "q") == TensorProto.DOUBLE
-    f = np.full((1, 2304), 127.0, dtype=np.float32) * np.where(SPREAD[:, 0] > 0, 1, -1)
-    assert execute_onnx(made, {"f": f})["y"][0, 0] == 127 * np.abs(SPREAD[:, 0]).sum()
-
-
-def test_past_2_53_a_region_is_widened_and_its_matmul_stays_on_the_host() -> None:
-    """INT24 activations times INT24 weights over k 4096 reach 2**58: float64 holds them
-    no more than float32 does. The region is widened as far as float64 goes, the widened
-    sum and the graph's output (which keeps float32) stay past their containers, and
-    MatMul's domain step leaves the node on the host (``matmul-container-exceeded``)."""
-    model = graph(
-        [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-        {"x": ([1, 4096], "INT24"), "w": ([4096, 2], "INT24")},
-        ["y"],
-        annotations={"y": "INT60"},
-    )
-    made = exact_containers(model)
-    assert container(made, "y_double") == TensorProto.DOUBLE
-    assert _past_their_containers(made) == {"y_double", "y"}
+def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
+    """INT8 times INT8 over k 2304: one sum is odd and past 2**24, where float32 rounds it
+    down, and channel 0's top threshold sits at it, so float32 would change the
+    thresholded output. FINN's execution computes the sums exactly, so the layer converts
+    to KernelOps (MatMul, Thresholding), and its export, its prepared graph and its
+    KernelOps graph agree: the exact sums, the exact thresholded output, and the float
+    scale of the sums as the export computes it."""
+    x = (127 * np.where(SPREAD[:, :1].T > 0, 1, -1)).repeat(2, axis=0).astype(np.int64)
+    x[1, 0] -= 1
+    exact = x @ SPREAD.astype(np.int64)
+    odd = int(exact[1, 0])
+    assert odd > 2**24 and odd % 2 == 1 and int(np.float32(odd)) != odd
+    thresholds = np.array([[-(2.0**24), 0.0, 2.0**24]] * 3)
+    thresholds[0, 2] = odd
+    ya = (exact[..., None] >= thresholds[0]).sum(-1)
+    export, made = _wide_layer(thresholds, True), _wide_layer(thresholds, False)
+    assert export.get_tensor_datatype("q") == DataType["INT8"]
+    assert made.get_tensor_datatype("sa") == DataType["INT26"]
     conversion = ToKernelOps(TARGET)
-    copy.deepcopy(made).transform(conversion)
-    (outcome,) = [each for each in conversion.outcomes if each.nodes[0] == "MatMul_0"]
-    assert outcome.op is None
-    assert "matmul-container-exceeded" in [f.code for f in outcome.findings]
-
-
-def test_where_the_export_rounds_its_integers_the_equivalence_names_the_tensor() -> None:
-    """The G1-G2 record's open item, which containers make possible: an exported wide
-    layer (a Quant, then a MatMul over k 2304) computes in float32, and an odd sum past
-    2**24 rounds; the export run in float64 does not. The tensor is named
-    (``export-rounds``, a limitation); the prepared graph, widened, is exact up to
-    the graph's output, which keeps float32."""
-    weights = np.full((2304, 1), 127.0)
-    weights[-1] = 126  # 127 * the column's sum is odd, past 2**24
-    export = graph(
-        [
-            helper.make_node(
-                "Quant",
-                ["f", "one", "zero", "eight"],
-                ["q"],
-                name="Quant_0",
-                domain=GENERAL,
-                narrow=0,
-                signed=1,
-                rounding_mode="ROUND",
-            ),
-            helper.make_node("MatMul", ["q", "w"], ["y"], name="MatMul_0"),
-        ],
-        {"f": ([2, 2304], None)},
-        ["y"],
-        {"one": 1.0, "zero": 0.0, "eight": 8.0, "w": weights},
-    )
-    made = graph(
-        [helper.make_node("MatMul", ["f", "w"], ["y"], name="MatMul_0")],
-        {"f": ([2, 2304], "INT8")},
-        ["y"],
-        {"w": weights},
-        {"w": "INT8"},
-    ).transform(InferDataTypes())  # type: ignore[no-untyped-call]
-    made = exact_containers(made)
-    checked = made.analysis(equivalence_with(export, seeds=1))
-    assert checked["findings"] == ()
-    ((tensor, kind),) = [
-        (dict(f.details)["tensor"], f.kind) for f in checked["rounds"] if f.code == "export-rounds"
-    ]
-    assert (tensor, kind) == ("y", FindingKind.LIMITATION)
-
-
-def test_an_export_onnx_runtime_cannot_run_in_float64_skips_that_run_named() -> None:
-    """ONNX Runtime has no float64 Conv: the equivalence check's float64 run of an export
-    with one (CNV's) is skipped, not run narrower, and named as a limitation
-    (``export-rounds-unchecked``, the op and its node); the rest of the check runs."""
-    weights = np.arange(-4.0, 5.0).reshape(1, 1, 3, 3)
-    export = graph(
-        [helper.make_node("Conv", ["x", "w"], ["y"], name="Conv_0", pads=[1, 1, 1, 1])],
-        {"x": ([1, 1, 4, 4], "INT8")},
-        ["y"],
-        {"w": weights},
-        {"w": "INT8"},
-    )
-    assert float64_refused(in_float64(export)) == {"Conv": ("Conv_0",)}
-    checked = copy.deepcopy(export).analysis(equivalence_with(export, seeds=1))
-    assert (checked["draws"], checked["findings"]) == (3, ())
-    ((code, kind, details),) = [(f.code, f.kind, dict(f.details)) for f in checked["rounds"]]
-    assert (code, kind) == ("export-rounds-unchecked", FindingKind.LIMITATION)
-    assert details == {"ops": ("Conv",), "nodes": ("Conv_0",)}
+    kernel_ops = copy.deepcopy(made).transform(conversion)
+    ops = {outcome.nodes[0]: outcome.op for outcome in conversion.outcomes}
+    assert (ops["MatMul_a"], ops["MultiThreshold_a"]) == ("MatMul", "Thresholding")
+    # qonnx's default execution rounds the odd sum, and the output with it.
+    rounded = qonnx_execute(made, {"x": x.astype(np.float32)}, True)
+    assert not np.array_equal(np.asarray(rounded["ya"]), ya)
+    scaled = None
+    for model in (export, made, kernel_ops):
+        context = execute_onnx(model, {"x": x}, return_full_exec_context=True)
+        assert np.array_equal(np.asarray(context["sa"]), exact)
+        assert np.array_equal(np.asarray(context["ya"]), ya)
+        scaled = context["scaled"] if scaled is None else scaled
+        assert np.array_equal(context["scaled"], scaled)
+    # The equivalence analysis on its draws: nothing found.
+    checked = made.analysis(equivalence_with(export, EXPLAINS, seeds=1))
+    assert checked == {"draws": 3, "findings": ()}
 
 
 def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test() -> None:

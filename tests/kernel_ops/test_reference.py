@@ -17,14 +17,13 @@ from typing import Any
 
 import numpy as np
 import pytest
-from onnx import TensorProto
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
+from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.transformation.infer_shapes import InferShapes
 
 import finn.custom_op.kernels as domain
-from finn.core.space import FindingKind
+from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels import MatMul
 from finn.custom_op.kernels.base import Match, kernel_op, write_target
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
@@ -98,22 +97,6 @@ def test_out_dtype_is_not_read() -> None:
     assert model.get_tensor_datatype("y") == DataType["INT2"]
 
 
-def test_the_domain_step_refuses_a_matmul_whose_sums_its_container_cannot_hold() -> None:
-    """The pattern matches an INT32 MatMul in float32; its domain step refuses it, a plain
-    refusal, the bound and the container named."""
-    model = matmul.matmul("INT32", "INT32", np.eye(4))
-    assert MatMul.match(model, model.graph.node[0]) == Match((model.graph.node[0],), {})
-    _, conversion = converted(model, TARGET)
-    ((finding,),) = [outcome.findings for outcome in conversion.outcomes]
-    assert (finding.kind, finding.owner, finding.code) == (
-        FindingKind.REJECTION,
-        "MatMul",
-        "matmul-container-exceeded",
-    )
-    details = dict(finding.details)
-    assert (details["bound"], details["container"], details["limit"]) == (2**31, "FLOAT", 2**24)
-
-
 # -- the platform rows and the gap records ------------------------------------------------
 
 
@@ -180,33 +163,30 @@ def test_a_positive_graph_some_rows_admit_records_which() -> None:
     assert not covered.gap
 
 
-@pytest.mark.parametrize("container", [TensorProto.FLOAT, TensorProto.DOUBLE])
-def test_a_float_matmuls_reference_is_onnxs_float_matmul_in_its_container(container: int) -> None:
-    """KT18: the reference covers every input domain ONNX's MatMul does. On float operands
-    it computes in their container, as ONNX does: bit for bit where every partial sum is
+def test_a_float_matmuls_reference_is_onnxs_float_matmul() -> None:
+    """The reference covers every input domain ONNX's MatMul does. On float operands it
+    computes in their element type, as ONNX does: bit for bit where every partial sum is
     exact (quarters over a short k), so that no order of a float sum can differ; to
     float rounding on normal draws (ONNX leaves that order open). A float MatMul stays on
     the host by the kernels' refusal (``matmul-arithmetic``), not the op's."""
     rng = np.random.default_rng(0)
-    dtype = np.float32 if container == TensorProto.FLOAT else np.float64
     for scale, exactly in ((0.25, True), (None, False)):
         if scale is None:
             weights, x = rng.standard_normal((16, 5)), rng.standard_normal((1, 3, 16))
         else:
             weights = rng.integers(-64, 64, size=(16, 5)) * scale
             x = rng.integers(-64, 64, size=(1, 3, 16)) * scale
-        source = matmul.matmul("FLOAT32", "FLOAT32", weights, rows=3, container=container)
+        source = matmul.matmul("FLOAT32", "FLOAT32", weights, rows=3)
         source = source.transform(InferShapes())
-        expected = execute_onnx(source, {"x": x.astype(dtype)})["y"]
+        expected = execute_onnx(source, {"x": x.astype(np.float32)})["y"]
         model = by_hand(source)
-        context: dict[str, Any] = {"x": x.astype(dtype), "w": model.get_initializer("w")}
+        context: dict[str, Any] = {"x": x.astype(np.float32), "w": model.get_initializer("w")}
         kernel_op(model, model.graph.node[0]).execute_node(context, model.graph)
-        assert context["y"].dtype == dtype
+        assert context["y"].dtype == np.float32
         if exactly:
             assert np.array_equal(context["y"], expected)
         else:
-            tolerance = 1e-5 if dtype == np.float32 else 1e-12
-            assert np.allclose(context["y"], expected, rtol=tolerance)
+            assert np.allclose(context["y"], expected, rtol=1e-5)
     _, conversion = converted(source, TARGET)
     (outcome,) = conversion.outcomes
     assert outcome.op is None
@@ -271,15 +251,18 @@ def wide() -> tuple[ModelWrapper, dict[str, Any]]:
     return source, {"x": x}
 
 
-def test_a_difference_from_onnx_fails_where_float32_rounds() -> None:
-    """A node the domain step refuses, made by hand: the reference is exact, ONNX's
-    float32 MatMul rounds, and the harness admits no difference."""
+def test_onnx_and_the_reference_agree_where_float32_would_round() -> None:
+    """Past 2**24 qonnx's default execution rounds the float32 MatMul; FINN's execution
+    computes it in float64, so ONNX's values are the exact integers the reference
+    computes, and the harness finds no difference."""
     source, inputs = wide()
-    observed = observe(source, by_hand(source), inputs)
     exact = inputs["x"] @ np.asarray(source.get_initializer("w"), dtype=np.int64)
-    assert np.array_equal(observed.reference["y"], exact)  # the reference is exact
-    with pytest.raises(Unequal, match="values differ from ONNX's; first at"):
-        check_values(observed)
+    rounded = qonnx_execute(source.transform(InferShapes()), {"x": inputs["x"].astype(np.float32)})
+    assert not np.array_equal(rounded["y"], exact)  # float32 rounds here
+    observed = observe(source, by_hand(source), inputs)
+    assert np.array_equal(observed.reference["y"], exact)
+    assert np.array_equal(observed.onnx["y"], exact)
+    check_values(observed)
 
 
 def test_a_reference_one_off_fails_where_float32_is_exact() -> None:
@@ -324,15 +307,16 @@ def test_a_graph_converted_otherwise_than_its_spec_states_is_caught() -> None:
         check_positive(batched, "batched", TARGET)
 
 
-def test_the_draws_are_seeded_extreme_and_held_by_float32() -> None:
+def test_the_draws_are_seeded_extreme_int64() -> None:
+    """INT32's extremes are drawn as they are, int64, though float32 holds neither's
+    neighbours exactly: execution takes the integers as given."""
     source = thresholding.SPEC.positive["int32"]()
     extremes, uniform, corners = drawn_inputs(source, 3)
     for first, again in zip(drawn_inputs(source, 3), (extremes, uniform, corners), strict=True):
         assert np.array_equal(first["x"], again["x"])
     for draw in (extremes, uniform, corners):
         x = draw["x"]
-        assert np.array_equal(x.astype(np.float32).astype(np.int64), x)
+        assert x.dtype == np.int64
         assert x.min() >= -(2**31) and x.max() <= 2**31 - 1
-    # INT32's greatest, 2**31 - 1, is not a float32: its nearest below is.
-    assert extremes["x"][1].tolist() == [2**31 - 128] * 4
-    assert set(np.unique(corners["x"])) == {-(2**31), 2**31 - 128}
+    assert extremes["x"][1].tolist() == [2**31 - 1] * 4
+    assert set(np.unique(corners["x"])) == {-(2**31), 2**31 - 1}

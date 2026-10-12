@@ -9,16 +9,14 @@ resolves it) once, in the one place ``read_target(model)`` reads it, the model's
 model does not import it yet (inserting a node never raises a model's import), and
 visits the nodes in graph order, inferring as it converts (``infer_node``, the step
 ``InferKernelTensors`` runs on each node). A node a KernelOp's pattern matches is
-tried as that KernelOp: its inputs normalized, its domain step taken
-(``KernelOp.exact``: its reference exact against ONNX on the node's facts and
-containers), and the kernels asked whether they admit it on its inputs as the nodes
-before it state them (``KernelOp.admission``: the kernel's admission and each
-Decision with no viable case). An admitted node is rewritten, keeping its name,
-inputs and outputs, and its outputs are stated as its kernel derives them for the
-nodes that follow; its own choices are created then, each at its baseline, stored as
-its attributes (``baseline_kernel_op``; its channels' wait for the cut, where a channel
-first has both its ends). A refused node stays on the host, as
-it was, and is inferred like any host node. The KernelOps are the domain's
+tried as that KernelOp: its inputs normalized, and the kernels asked whether they
+admit it on its inputs as the nodes before it state them (``KernelOp.admission``: the
+kernel's admission and each Decision with no viable case). An admitted node is
+rewritten, keeping its name, inputs and outputs, and its outputs are stated as its
+kernel derives them for the nodes that follow; its own choices are created then, each
+at its baseline, stored as its attributes (``baseline_kernel_op``; its channels' wait
+for the cut, where a channel first has both its ends). A refused node stays on the
+host, as it was, and is inferred like any host node. The KernelOps are the domain's
 (``finn.custom_op.kernels.__all__``), each found by its ``anchor``, the domain
 and op type of the node its pattern starts from; its ``match`` says what it
 covers, or why not (``finn.custom_op.kernels.base``). Matches are tried largest
@@ -44,9 +42,8 @@ first. The walk then goes on past the new node: the covered nodes are gone. Its
 No outcome is silent: ``ToKernelOps.outcomes`` holds one ``Outcome`` for each node
 it visits, the KernelOp it became or, for a node left on the host, the findings
 (``finn.core.space.Finding``) that say why: ``no-kernel-op`` where no KernelOp
-anchors on the op, a pattern's findings where its match refuses the node, the
-domain step's where ONNX's execution of the node could differ from the KernelOp's
-reference (MatMul's ``matmul-container-exceeded``), ``fact-unstated`` where binding
+anchors on the op, a pattern's findings where its match refuses the node,
+``fact-unstated`` where binding
 reads a fact the graph does not state, and the kernels' findings, by their codes,
 where they refuse it (a refused Decision by why each of its cases is refused). A
 conversion covering several nodes is one outcome naming each of them.
@@ -309,9 +306,9 @@ def _trial(
 ) -> tuple[ModelWrapper, tuple[Finding, ...]]:
     """A copy of the model with the nodes ``match`` covers converted by it, one node at
     the anchor's place, named as the anchor, on the set's boundary tensors, its
-    interior tensors removed, and why it is refused: nothing when its domain step and
-    the kernels admit it, its outputs then stated; else the domain step's findings or
-    the kernels', a refused Decision by its cases' (an unstated fact is
+    interior tensors removed, and why it is refused: nothing when the kernels admit it,
+    its outputs then stated; else the kernels' findings, a refused Decision by its
+    cases' (an unstated fact is
     ``fact-unstated``). A copy, so that a refused trial leaves ``model`` as it was:
     normalizing a KernelOp's inputs rewrites them. A contradiction raises."""
     trial = copy.deepcopy(model)

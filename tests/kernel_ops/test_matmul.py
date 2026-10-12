@@ -16,13 +16,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from onnx import TensorProto, helper
+from onnx import helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 
 import finn.custom_op.kernels as domain
+from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, channel_choices
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
@@ -213,15 +213,10 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
 
 def test_a_matmul_no_core_admits_is_refused_while_its_choices_are_open() -> None:
     """INT32 activations: the packed core's DSP input is too narrow and the INT8 core
-    needs a DSP58, so the ``compute`` Decision has no viable case on the facts alone.
-    Held in float64, as graph preparation widens them: float32 would round their partial
-    sums, which the domain step refuses first."""
+    needs a DSP58, so the ``compute`` Decision has no viable case on the facts alone."""
     model = matmul_model(annotate=(), infer=False)
     for name in ("x", "w"):
         model.set_tensor_datatype(name, DataType["INT32"])
-    for info in (*model.graph.input, *model.graph.value_info, *model.graph.output):
-        info.type.tensor_type.elem_type = TensorProto.DOUBLE
-    model.set_initializer("w", model.get_initializer("w").astype(np.float64))
     (problem,) = op(model.transform(InferKernelTensors())).verify_node()
     assert problem.startswith("first: matmul.compute: decision-no-viable-case: no case is viable: ")
     assert "dotp-activation-width" in problem and "dotp-target" in problem
