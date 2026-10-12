@@ -52,7 +52,7 @@ from finn.custom_op.partition.kernel_partitions import (
     kernel_partition_body,
 )
 from finn.dataflow.traversal import pack, vector_major
-from finn.transformation.kernels.cut import CutKernelPartition, partition_kernel_ops
+from finn.transformation.kernels.cut import CutKernelPartition
 from finn.util.draws import boundary_inputs
 from kernel_ops.models import configure_partition, kernel_model, thresholding_model
 
@@ -159,7 +159,7 @@ def chain_partition(directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The Chain as KernelOps, configured, and the parent graph of its one partition."""
     source = kernel_model()
     configure_partition(source)
-    return source, partition_kernel_ops(source, directory)
+    return source, source.transform(CutKernelPartition(directory))
 
 
 def test_the_default_executor_runs_a_kernel_partition_and_its_kernel_ops(tmp_path: Path) -> None:

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's partitioning (``partition_kernel_ops``): its KernelOps one
+"""The kernel path's cut (``CutKernelPartition``) between host ops: its KernelOps one
 StreamingDataflowPartition of the partition domain, its body a model of KernelOps, the
 graph's other ops left on the host.
 
@@ -28,7 +28,7 @@ from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import CHANNEL, KernelOpError, channel_choices
 from finn.custom_op.kernels.shell import configured_root, member, save_channels, shell_root
 from finn.kernels.configure import commit
-from finn.transformation.kernels.cut import partition_kernel_ops
+from finn.transformation.kernels.cut import CutKernelPartition
 from kernel_ops.models import configure_partition, kernel_model
 
 
@@ -78,7 +78,7 @@ def partitioned(tmp_path: Path) -> tuple[ModelWrapper, ModelWrapper, dict[str, d
     configure_partition(source)
     channels = moved_out(source)
     source = on_the_host(source)
-    parent = partition_kernel_ops(source, tmp_path)
+    parent = source.transform(CutKernelPartition(tmp_path))
     body_file = getCustomOp(parent.graph.node[1]).get_nodeattr("model")
     body = ModelWrapper(body_file)
     save_channels(body, channels)
@@ -90,7 +90,7 @@ def test_the_kernel_ops_become_one_partition_between_the_host_ops(tmp_path: Path
     source, parent, _ = partitioned(tmp_path)
     assert [(node.op_type, node.name) for node in parent.graph.node] == [
         ("Identity", "flatten"),
-        ("StreamingDataflowPartition", "GenericPartition_kernels"),
+        ("StreamingDataflowPartition", "partition"),
         ("Identity", "select"),
     ]
     sdp = getCustomOp(parent.graph.node[1])
@@ -147,14 +147,15 @@ def test_a_host_op_between_kernel_ops_refuses(tmp_path: Path) -> None:
     moved_out(source)
     source = on_the_host(source, between=True)
     with pytest.raises(KernelOpError, match="1 host nodes sit between KernelOps") as refused:
-        partition_kernel_ops(source, tmp_path)
+        source.transform(CutKernelPartition(tmp_path))
     assert str(refused.value).endswith(": copy")
 
 
-def test_a_graph_without_kernel_ops_is_left_alone(tmp_path: Path) -> None:
+def test_a_graph_without_kernel_ops_refuses(tmp_path: Path) -> None:
     x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])
     y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
     graph = helper.make_graph([helper.make_node("Identity", ["x"], ["y"])], "host", [x], [y])
     model = ModelWrapper(helper.make_model(graph))
-    parent = partition_kernel_ops(model, tmp_path)
-    assert [node.op_type for node in parent.graph.node] == ["Identity"]
+    with pytest.raises(KernelOpError, match="holds no KernelOps: there is nothing to cut"):
+        model.transform(CutKernelPartition(tmp_path / "cut"))
+    assert not (tmp_path / "cut").exists()

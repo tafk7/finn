@@ -9,7 +9,7 @@ reference. ``check_parity`` checks that the hardware a model of KernelOp nodes
 generates computes what those ops compute, on the same inputs:
 
 1. **the cut**: the model cut as a build cuts it (``CutKernelPartition``, the build's
-   one cut, ``partition_kernel_ops``): a parent graph of one partition node, its body
+   one cut): a parent graph of one partition node, its body
    saved under ``directory``, its tensors' channel choices moved into the body; the
    hardware checked is the partition a build ships;
 2. **the point**: the body's shell root, its nodes' persisted choices and its tensors'
