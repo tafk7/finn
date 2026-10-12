@@ -306,7 +306,8 @@ def step_target_throughput(
     kernels folded to that. Writes report/step_target_throughput.json, with the
     bottleneck reached and whether it meets the target. The partition's body records
     ``target_fps`` (finn.transformation.kernels.OBJECTIVE_FPS), the objective
-    step_build_bitfile reports the delivered clock against."""
+    step_build_bitfile reports the delivered clock against, until a later step that may
+    change the folding (FOLDING_STEPS) removes it."""
     strategy = TargetThroughput(target_fps, relax=relax_target_fps)
     _explore(model, cfg, "step_target_throughput", strategy)
     return model

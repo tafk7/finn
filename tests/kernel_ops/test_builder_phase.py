@@ -46,6 +46,7 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
+    FOLDING_STEPS,
     KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
@@ -654,6 +655,38 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     parent.save(str(saved))
     step_build_bitfile(ModelWrapper(str(saved)), cfg)
     assert ObjectiveSeen.seen == [None, 1000.0, 1000.0]
+
+
+def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every step that may change the folding (FOLDING_STEPS) other than the target
+    throughput removes the body's objective: the bitfile states no target its final
+    folding was not explored for."""
+    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(ObjectiveSeen, "seen", [])
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps(CHAIN_PINS))
+    settings: dict[str, dict[str, Any]] = {
+        "step_pin_choices": {"kernel_choices_file": pins},
+        "step_max_throughput": {"max_throughput_within": {"lut": 0.5}},
+        "step_baseline_choices": {},
+    }
+    cfg = config(tmp_path)
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
+    others = [step for step in FOLDING_STEPS if step is not step_target_throughput]
+    assert [step.__name__ for step in others] == list(settings)
+    for folding in others:
+        parent = step_target_throughput(parent, cfg, target_fps=1000.0)
+        parent = folding(parent, cfg, **settings[folding.__name__])
+        _, body, _ = partition_body(parent)
+        assert body.get(OBJECTIVE_FPS) is None, folding.__name__
+        step_build_bitfile(parent, cfg)
+    assert ObjectiveSeen.seen == [None] * len(others)
 
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:

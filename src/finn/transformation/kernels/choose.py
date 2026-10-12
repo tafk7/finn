@@ -29,7 +29,8 @@ settles, and then:
 - records the pins held, those the body recorded and those the strategy pinned, in the
   body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
   the body holds them: a pin holds for the build, and re-baselining keeps it; and a
-  target throughput's frames a second (``OBJECTIVE_FPS``);
+  target throughput's frames a second (``OBJECTIVE_FPS``), which another strategy that
+  may change the folding removes (``FOLDING``);
 - keeps what it found (``explored``): the point, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
@@ -106,7 +107,9 @@ from finn.kernels.explore import (
     Bottleneck,
     Cost,
     Explorer,
+    MaxThroughput,
     Pinned,
+    Rebaseline,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -138,7 +141,13 @@ them (``Seam.held``), so a pin holds for the build. Absent where nothing is pinn
 
 OBJECTIVE_FPS = CHOICES.key("objective_fps", float)
 """The frames a second a target throughput explored the body to (``TargetThroughput``),
-which a shell's build reports its delivered clock against. Absent where none did."""
+which a shell's build reports its delivered clock against. Absent where none did, or
+where another strategy that may change the folding (``FOLDING``) explored it since."""
+
+#: The strategies other than a target throughput that may change the kernels' folding
+#: (the build's FOLDING_STEPS run them): each removes the body's ``OBJECTIVE_FPS``, which
+#: no longer names the throughput its folding was explored for.
+FOLDING = (Pinned, MaxThroughput, Rebaseline)
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
@@ -478,6 +487,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         model.set(HELD, _by_owner(seam, seam.held))
     if isinstance(strategy, TargetThroughput):
         model.set(OBJECTIVE_FPS, strategy.fps)
+    elif isinstance(strategy, FOLDING):
+        model.delete(OBJECTIVE_FPS)
     left = [
         _owned(seam, choice.key) + (" (required)" if choice.required else "")
         for choice in seam.choices(point)

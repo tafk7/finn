@@ -620,7 +620,8 @@ and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`
 the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
 logic analyzers on the ends' streams, refused on `ip`); its clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
-it (`finn.choices/objective_fps`). The build's manifest records the steps it runs, and
+it (`finn.choices/objective_fps`), and none where a later step that may change the folding
+(a pin, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
 each setting with its value or default and its readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
 their place (`configuration.target: ...`).
