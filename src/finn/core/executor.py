@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, is_partition
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, is_partition
 
 if TYPE_CHECKING:
     from onnx import NodeProto

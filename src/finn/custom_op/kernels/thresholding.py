@@ -52,20 +52,10 @@ from qonnx.analysis.tensor_value_summary import (
     initializer_value_summary,
 )
 
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import datatype, known_shape, rows, shape
 from finn.core.space import Finding, Rejected
-from finn.custom_op.kernels.base import (
-    KernelOp,
-    KernelOpError,
-    Match,
-    Shapes,
-    datatype,
-    known_shape,
-    node_attributes,
-    refused,
-    rows,
-    shape,
-    unstated,
-)
+from finn.custom_op.kernels.base import KernelOp, Match, Shapes, node_attributes, refused, unstated
 from finn.custom_op.kernels.cache import Facts
 from finn.dataflow.datatypes import (
     DatatypeError,

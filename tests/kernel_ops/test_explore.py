@@ -24,10 +24,13 @@ from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.annotations.choices import HELD
+from finn.core.graph.annotations.platform import read_target, write_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import partition_body
 from finn.core.space import FindingKind, finding_record, inspection
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, save_channels, shell_root
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     Accepted,
     ExploreError,
@@ -41,7 +44,6 @@ from finn.kernels.explore import (
 from finn.kernels.utilization import Resources
 from finn.platform import resolve_target
 from finn.transformation.kernels import (
-    HELD,
     ExploreKernelChoices,
     InferKernelTensors,
     ToKernelOps,

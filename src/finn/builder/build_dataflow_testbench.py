@@ -46,10 +46,10 @@ import numpy as np
 from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.partition import partition_body
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_root
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.traversal import pack
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
@@ -110,7 +110,7 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
 def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[str, NDArray[Any]]:
     """The partition's inputs for ``source_input``, one frame of the source model's
     input reshaped to the parent graph's input: the parent graph is executed, its
-    partition node running its body (``kernel_partitions.partition_body``)."""
+    partition node running its body (``finn.core.graph.partition.partition_body``)."""
     node, body, _ = partition_body(parent)
     shape = parent.get_tensor_shape(parent.graph.input[0].name)
     if shape is None:

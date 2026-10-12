@@ -33,8 +33,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.custom_op.kernels.base import read_target
-from finn.custom_op.partition.kernel_partitions import partition_body
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import partition_body
 from finn.harness.ops import check_parity
 from finn.harness.reference import OpSpec
 from finn.platform import TargetRequest

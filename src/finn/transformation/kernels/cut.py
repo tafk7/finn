@@ -13,7 +13,7 @@ The partition has one name, ``PARTITION`` (``partition``), for its node, its bod
 (``<directory>/partition.onnx``), the IP it is packaged as (the shell root's module,
 ``finn_partition``) and the block design's instance; its body carries the parent's
 target. Everything after the cut, exploration first, opens the body through the node
-(``kernel_partitions.partition_body``).
+(``finn.core.graph.partition.partition_body``).
 
 The cut creates the accelerator's design space, so it gives its body's choices their
 baselines (``BaselineChoices``, ``shell.baseline_choices``): the body's shell root is
@@ -48,18 +48,10 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 
-from finn.custom_op.kernels.base import (
-    CHANNEL,
-    KernelOpError,
-    clear_channel_choices,
-    refuse_outside_body,
-)
+from finn.core.graph.annotations.channel import CHANNEL, clear_channel_choices, refuse_outside_body
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, PARTITION_DOMAIN, PARTITION_OP
 from finn.custom_op.kernels.shell import PARTITION, baseline_choices
-from finn.custom_op.partition.kernel_partitions import (
-    KERNEL_OPS_DOMAIN,
-    PARTITION_DOMAIN,
-    PARTITION_OP,
-)
 from finn.transformation.kernels.convert import between_kernel_ops
 
 #: The partition PartitionFromLambda puts the KernelOps in; every other node stays on

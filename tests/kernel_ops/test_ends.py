@@ -25,8 +25,9 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.custom_op.kernels.shell as shell
+from finn.core.graph.annotations.platform import read_target, write_target
+from finn.core.graph.partition import partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
-from finn.custom_op.kernels.base import read_target, write_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
     configured_root,
@@ -34,7 +35,6 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
     shell_root,
 )
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint

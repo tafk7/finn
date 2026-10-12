@@ -23,10 +23,12 @@ from kernels.helpers import Lanes, labels
 from kernels.xsim import requires_xsim
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices
+from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import CHANNEL_KEYS, KernelOpError, channel_choices, kernel_op
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root
 from finn.kernels.configure import chosen, commit
 from finn.kernels.explore import Ranked, SizeFifos

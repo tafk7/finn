@@ -21,24 +21,18 @@ from kernels.artifacts.test_ipxact import AXILITE
 from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.custom_op.kernels as kernel_ops_package
-from finn.custom_op.kernels.base import (
-    CHANNEL,
-    PLATFORM_KEYS,
-    KernelOpError,
-    kernel_op,
-    read_target,
-    write_target,
-)
-from finn.custom_op.kernels.shell import configured_root, shell_root
-from finn.custom_op.partition.kernel_partitions import (
-    KERNEL_OPS_DOMAIN,
+from finn.core.graph.annotations.channel import CHANNEL
+from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
-    design_digest,
-    partition_body,
 )
+from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, write_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
+from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.explore import Seam
 from finn.platform import resolve_target
 from finn.transformation.kernels import (

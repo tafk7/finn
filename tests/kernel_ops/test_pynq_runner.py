@@ -27,8 +27,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.custom_op.kernels.base import kernel_op, write_target
-from finn.custom_op.partition.kernel_partitions import (
+from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_INTERFACES,
@@ -36,9 +35,10 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
     OUTPUTS,
-    design_digest,
-    partition_body,
 )
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import design_digest, partition_body
+from finn.custom_op.kernels.base import kernel_op
 from finn.platform import resolve_target
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.driver import (

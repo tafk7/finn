@@ -46,7 +46,7 @@ from qonnx.util.basic import (
 )
 
 from finn.core.executor import Context, Executor, Python, hardware_node
-from finn.custom_op.partition.kernel_partitions import body_file, is_partition
+from finn.core.graph.partition import body_file, is_partition
 
 #: The executors execute_onnx runs a model with when its caller names none.
 DEFAULT_EXECUTORS: tuple[Executor, ...] = (Python(),)

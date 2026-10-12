@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 
 from finn.builder.build_dataflow_resources import shell_resources_report
-from finn.custom_op.kernels.base import write_target
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import resolve_target, shell_row
 from finn.platform.shells import PYNQ_CHARACTERISED

@@ -21,7 +21,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import KernelOp, kernel_op, write_target
+from finn.core.graph.annotations.platform import write_target
+from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.custom_op.kernels.shell import ShellRoot, persist, save_channels, shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.target import Target

@@ -12,7 +12,8 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 
-from finn.custom_op.kernels.base import integer_tensor, kernel_op
+from finn.core.graph.facts import integer_tensor
+from finn.custom_op.kernels.base import kernel_op
 from finn.kernels.values.semantics import IntegerTensorValue
 from kernel_ops.models import WEIGHTS, matmul_model
 

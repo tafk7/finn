@@ -66,7 +66,7 @@ repos:
   - id: ruff-check
     name: ruff check (gate paths)
     args: [--extend-select, I, --extend-select, T20, --fix]
-    files: &gate_ruff '^(src/finn/(core/space|dataflow|kernels|platform|custom_op/kernels|custom_op/partition|transformation/kernels|analysis|harness|shells)/|tests/(core/space|dataflow|kernels|kernel_ops|xsim_sweep|oracle)/|tests/(layering|value_classes)\.py$|scripts/(benchmark-space|_gate_precommit|emitted_text)\.py$|src/finn/builder/(build_dataflow_(checks|config|plan|resources|steps|testbench|verification))\.py$|src/finn/core/(executor|onnx_exec|rtlsim_bench|rtlsim_exec|rtlsim_pacing)\.py$|src/finn/util/draws\.py$)'
+    files: &gate_ruff '^(src/finn/(core/space|core/graph|dataflow|kernels|platform|custom_op/kernels|custom_op/partition|transformation/kernels|analysis|harness|shells)/|tests/(core/space|dataflow|kernels|kernel_ops|xsim_sweep|oracle)/|tests/(layering|value_classes)\.py$|scripts/(benchmark-space|_gate_precommit|emitted_text)\.py$|src/finn/builder/(build_dataflow_(checks|config|plan|resources|steps|testbench|verification))\.py$|src/finn/core/(executor|onnx_exec|rtlsim_bench|rtlsim_exec|rtlsim_pacing)\.py$|src/finn/util/draws\.py$)'
   - id: ruff-format
     files: *gate_ruff
   - id: ruff-check

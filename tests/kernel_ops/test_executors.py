@@ -35,6 +35,12 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import qonnx_make_model
 
 from finn.core.executor import Context, Python
+from finn.core.graph.partition import (
+    KERNEL_OPS_DOMAIN,
+    PARTITION_DOMAIN,
+    PARTITION_OP,
+    kernel_partition_body,
+)
 from finn.core.onnx_exec import (
     HardwareRequired,
     InsidePartition,
@@ -45,12 +51,6 @@ from finn.core.onnx_exec import (
 )
 from finn.core.rtlsim_exec import Unstreamable, XSim, _read, boundary, links
 from finn.custom_op.kernels.shell import PARTITION
-from finn.custom_op.partition.kernel_partitions import (
-    KERNEL_OPS_DOMAIN,
-    PARTITION_DOMAIN,
-    PARTITION_OP,
-    kernel_partition_body,
-)
 from finn.dataflow.traversal import pack, vector_major
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.util.draws import boundary_inputs

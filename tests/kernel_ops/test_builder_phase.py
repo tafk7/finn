@@ -57,12 +57,8 @@ from finn.builder.build_dataflow_steps import (
     step_target_throughput,
     step_verify_partition,
 )
-from finn.core.onnx_exec import execute_onnx
-from finn.core.space import Finding, FindingKind, finding_record
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
-from finn.custom_op.kernels.shell import configured_root
-from finn.custom_op.partition.kernel_partitions import (
-    KERNEL_OPS_DOMAIN,
+from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
+from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_INTERFACES,
@@ -70,9 +66,14 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
     OUTPUTS,
-    design_digest,
-    partition_body,
 )
+from finn.core.graph.annotations.platform import read_target, write_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
+from finn.core.onnx_exec import execute_onnx
+from finn.core.space import Finding, FindingKind, finding_record
+from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRefused, TargetRequest, resolve_target
@@ -89,8 +90,6 @@ from finn.shells.pynq.runner import (
 from finn.toolchain.launcher import RECORDS, Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
-    HELD,
-    OBJECTIVE_FPS,
     explore_kernel_choices,
     kernel_choices_config,
     shell_bottleneck,

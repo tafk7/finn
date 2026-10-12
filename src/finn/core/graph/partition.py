@@ -1,54 +1,35 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Kernel partitions: what the flow reads about a partition of KernelOps, and what is
-built of it.
+"""The kernel path's partition: its node, its body, and the digest of its design.
 
-A kernel partition is a partition model whose nodes are all KernelOps (the
-``finn.custom_op.kernels`` domain, ``KERNEL_OPS_DOMAIN``), or the
-StreamingDataflowPartition node (of this package's domain, ``PARTITION_DOMAIN``) whose
-body is one. The kernel path cuts its model once (``finn.transformation.kernels.cut``):
-the parent graph holds one such node, and its body is opened through it
-(``partition_body``).
+A kernel partition is a model whose nodes are all KernelOps (``KERNEL_OPS_DOMAIN``), or
+the ``StreamingDataflowPartition`` node (``PARTITION_DOMAIN``) whose ``model`` attribute
+names such a body. The kernel path cuts its model once, so its parent graph holds one
+such node, and ``partition_body`` opens the body through it.
 
-What a build made of a partition that a later step consumes is one typed namespace of
-graph metadata (``qonnx.core.metadata``), ``finn.outputs`` (``OUTPUTS``), and no flat
-key: on the partition's body, its packaged IP (directory, VLNV, interface names;
-``PackagePartition``) and the digest of the design it was made from (``made_from``);
-on the build's model, the parent graph, the bitfile the shell's integration made and
-its hardware handoff, with the digest of the IP's design and the shell options the
-bitfile was built with. The run's own record (its reports, the tools' projects and
-transcripts) is the build's manifest's, not the model's
-(``finn.builder.build_dataflow_manifest``; decision SR3, item 4). A partition's
-boundary is not stored: what reads it (the integration export and the driver it
-describes, the interface description, the testbench) derives it from the configured
-root (``finn.custom_op.kernels.shell.configured_root``).
+``design_digest`` is the digest of a model's design: the model serialized
+deterministically, with ``finn.outputs`` cleared and the orders that carry no meaning
+made canonical. It covers the choices, the facts, the weights and the target, and
+nothing a build made, so an artifact states the digest of the design it was made from.
 
-An artifact is keyed by the design it was made from, not cleared when the design
-changes: ``design_digest`` is the digest of a model, serialized
-deterministically with ``finn.outputs`` cleared, so it covers the choices, the facts,
-the weights and the target, and nothing a build made. A reader compares the digest an
-artifact states with the body's now: the pynq shell's build packages the partition
-again on a mismatch, the driver and the deployment refuse a bitfile built from another
-design, and the deployment a driver made from another (decision SR6, item 8).
-
-This module depends on qonnx (and onnx, which qonnx depends on) only, below the
-KernelOps and their transformations, so the builder and the flow import it without
-loading the kernel stack.
+It imports qonnx only, so the builder and the flow read a partition without the kernel
+stack.
 """
 
 from __future__ import annotations
 
 import copy
 import hashlib
-import re
 from collections.abc import Callable, MutableSequence
 from typing import Any
 
 from onnx import ModelProto, NodeProto
-from qonnx.core.metadata import JSON, Namespace, clear
+from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+
+from finn.core.graph.annotations.outputs import OUTPUTS
 
 KERNEL_OPS_DOMAIN = "finn.custom_op.kernels"
 """The KernelOps' ONNX domain: the name of the package that registers them."""
@@ -59,57 +40,6 @@ registers it."""
 
 PARTITION_OP = "StreamingDataflowPartition"
 """The op type of the parent graph's node whose body is a partition."""
-
-OUTPUTS = Namespace("finn.outputs", version=1)
-"""What a build made of a partition of KernelOps (typed graph metadata): the packaged
-IP on the partition's body, the shell's integration on the build's parent graph."""
-
-
-def _named(item: object) -> bool:
-    return isinstance(item, str) and bool(item)
-
-
-def _interface_names(value: object) -> bool:
-    return isinstance(value, dict) and all(isinstance(names, list) for names in value.values())
-
-
-def _digest(value: object) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
-
-
-def _options(value: object) -> bool:
-    return isinstance(value, dict)
-
-
-OUTPUT_IP = OUTPUTS.key("ip", str, check=_named, expect="a directory")
-"""The packaged IP's directory (its ``component.xml``)."""
-OUTPUT_VLNV = OUTPUTS.key("vlnv", str, check=_named, expect="a VLNV")
-"""The packaged IP's VLNV."""
-OUTPUT_INTERFACES = OUTPUTS.key(
-    "interfaces",
-    JSON,
-    check=_interface_names,
-    expect="interface names by kind (clk, rst, s_axis, m_axis, axilite, ...)",
-)
-"""The packaged IP's interface names by kind, as the stitched-IP contract lists them."""
-OUTPUT_MADE_FROM = OUTPUTS.key(
-    "made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
-)
-"""The digest of the design the packaged IP was made from (``design_digest`` of the
-body it was packaged from)."""
-OUTPUT_BITFILE = OUTPUTS.key("bitfile", str, check=_named, expect="a file")
-"""The bitfile the shell's integration made."""
-OUTPUT_HWH = OUTPUTS.key("hwh", str, check=_named, expect="a file")
-"""The bitfile's hardware handoff."""
-OUTPUT_BITFILE_MADE_FROM = OUTPUTS.key(
-    "bitfile_made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
-)
-"""The digest of the design of the partition's IP the bitfile was built from (the body's
-``made_from`` when the shell's build ran)."""
-OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
-    "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
-)
-"""The shell's build options the bitfile was built with (``hw_debug``)."""
 
 
 def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
@@ -197,15 +127,6 @@ def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
 
 __all__ = [
     "KERNEL_OPS_DOMAIN",
-    "OUTPUTS",
-    "OUTPUT_BITFILE",
-    "OUTPUT_BITFILE_MADE_FROM",
-    "OUTPUT_BITFILE_OPTIONS",
-    "OUTPUT_HWH",
-    "OUTPUT_INTERFACES",
-    "OUTPUT_IP",
-    "OUTPUT_MADE_FROM",
-    "OUTPUT_VLNV",
     "PARTITION_DOMAIN",
     "PARTITION_OP",
     "body_file",

@@ -17,8 +17,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
+from finn.core.graph.errors import KernelOpError
 from finn.core.space import FindingKind, finding_record
-from finn.custom_op.kernels.base import KernelOpError
 from finn.transformation.kernels import (
     Outcome,
     between_kernel_ops,

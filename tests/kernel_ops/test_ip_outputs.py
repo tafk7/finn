@@ -34,12 +34,10 @@ from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutp
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE, VERIFICATION
 from finn.builder.build_dataflow_steps import step_package_partition, step_run_testbench
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
+from finn.core.graph.annotations.outputs import OUTPUT_IP
+from finn.core.graph.partition import partition_body
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
-from finn.custom_op.partition.kernel_partitions import (
-    OUTPUT_IP,
-    partition_body,
-)
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.kernels.utilization import Resources

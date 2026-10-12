@@ -67,10 +67,11 @@ from finn.builder.build_dataflow_testbench import (
     write_testbench,
 )
 from finn.builder.build_dataflow_verification import VERIFICATION_DIR, verify_partition_python
+from finn.core.graph.annotations.choices import OBJECTIVE_FPS
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import partition_body
 from finn.core.rtlsim_bench import SimulationFailed
-from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     DebugPlaceholder,
     Explorer,
@@ -86,7 +87,6 @@ from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
 from finn.toolchain.launcher import ToolFailed
 from finn.transformation.kernels import (
-    OBJECTIVE_FPS,
     Explored,
     ToKernelOps,
     exploration_summary,
@@ -301,7 +301,7 @@ def step_target_throughput(
     throughput the folding cannot reach is relaxed to the fastest it reaches, and the
     kernels folded to that. Writes report/step_target_throughput.json, with the
     bottleneck reached and whether it meets the target. The partition's body records
-    ``target_fps`` (finn.transformation.kernels.OBJECTIVE_FPS), the objective
+    ``target_fps`` (finn.core.graph.annotations.choices.OBJECTIVE_FPS), the objective
     step_build_bitfile reports the delivered clock against, until a later step that may
     change the folding (FOLDING_STEPS) removes it."""
     strategy = TargetThroughput(target_fps, relax=relax_target_fps)

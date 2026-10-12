@@ -23,14 +23,10 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
+from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target
+from finn.core.graph.errors import FactUnstated, KernelOpError
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.kernels.base import (
-    PLATFORM_KEYS,
-    FactUnstated,
-    KernelOpError,
-    kernel_op,
-    read_target,
-)
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import save_channels
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config

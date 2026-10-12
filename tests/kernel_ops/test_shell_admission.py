@@ -26,9 +26,11 @@ from kernels.helpers import with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
 import finn.custom_op.kernels.shell as shell
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.errors import KernelOpError
 from finn.core.space import composite, design_space, finding_text
 from finn.core.space.errors import ValueUnavailableError
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import Shell, admission_refusal, configured_root, shell_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel

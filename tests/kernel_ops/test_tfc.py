@@ -24,16 +24,14 @@ from kernels.xsim import requires_vivado, requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.core.onnx_exec as onnx_exec
+from finn.core.graph.annotations.channel import CHANNEL, channel_choices
+from finn.core.graph.annotations.outputs import OUTPUT_INTERFACES, OUTPUT_VLNV
 from finn.core.onnx_exec import RanBy, execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
-from finn.custom_op.kernels.base import CHANNEL, channel_choices, kernel_op
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, member, shell_root
-from finn.custom_op.partition.kernel_partitions import (
-    OUTPUT_INTERFACES,
-    OUTPUT_VLNV,
-)
 from finn.kernels.configure import commit, undecided
 from finn.kernels.explore import Ranked
 from finn.toolchain.launcher import host_toolchain

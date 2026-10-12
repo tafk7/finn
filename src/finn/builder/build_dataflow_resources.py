@@ -51,15 +51,15 @@ from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import partition_body
 from finn.core.space import finding_text
-from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
     configured_root,
     member,
     shell_resources,
 )
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
 from finn.shells.pynq.runner import REPORTS, STATIC_INSTANCES, bitfile_directory

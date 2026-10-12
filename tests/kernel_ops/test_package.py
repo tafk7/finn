@@ -24,15 +24,15 @@ from typing import cast
 import pytest
 from kernels.xsim import requires_vivado
 
-from finn.custom_op.kernels.base import KernelOpError
-from finn.custom_op.kernels.shell import configured_root, save_channels
-from finn.custom_op.partition.kernel_partitions import (
+from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
-    design_digest,
 )
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import design_digest
+from finn.custom_op.kernels.shell import configured_root, save_channels
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 from finn.toolchain.vivado import hierarchical_utilization

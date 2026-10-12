@@ -63,12 +63,12 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import numpy as np
 import numpy.typing as npt
 
+from finn.core.graph.partition import kernel_partition_body
 from finn.core.onnx_exec import running, window
 from finn.core.rtlsim_bench import Receive, SimulationFailed, Tap, Words, stream_out
 from finn.core.rtlsim_pacing import STALLED, Pacing
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_root, member
-from finn.custom_op.partition.kernel_partitions import kernel_partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
 from finn.toolchain.launcher import Toolchain, host_toolchain

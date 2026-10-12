@@ -20,8 +20,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
 import finn.custom_op.kernels as domain
+from finn.core.graph.errors import KernelOpError
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import KernelOp, KernelOpError, Match, kernel_op
+from finn.custom_op.kernels.base import KernelOp, Match, kernel_op
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.transformation.kernels import Outcome, kernel_ops_by_anchor
 from kernel_ops.models import convert

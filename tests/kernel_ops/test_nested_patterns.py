@@ -23,9 +23,10 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 import finn.custom_op.kernels as domain
+from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import KernelOpError, Match, refused
+from finn.custom_op.kernels.base import Match, refused
 from finn.custom_op.kernels.matmul import MatMul
 from finn.transformation.kernels import Outcome
 from kernel_ops.models import convert

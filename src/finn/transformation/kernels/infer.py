@@ -42,7 +42,8 @@ from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import infer_node_datatype
 
-from finn.custom_op.kernels.base import KernelOp, KernelOpError
+from finn.core.graph.errors import KernelOpError
+from finn.custom_op.kernels.base import KernelOp
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
