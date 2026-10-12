@@ -41,14 +41,14 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
-    src/finn/builder/build_dataflow_config.py src/finn/builder/build_dataflow_phases.py \
+    src/finn/builder/build_dataflow_config.py src/finn/builder/build_dataflow_plan.py \
     src/finn/builder/build_dataflow_steps.py \
     scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep tests/oracle
 # finn.toolchain.launcher: the toolchain packaging takes (PackagePartition's toolchain=);
 # finn.toolchain.xsim: XSim's driver, which the testbench and packaging's elaboration run.
 # finn.shells.pynq's runner and driver; its IODMA and IP generation are annotated, not
 # strictly checked: frozen extractions of the HWCustomOp flow's.
-# finn.builder's kernel path: its configuration, its checks, phases
+# finn.builder's kernel path: its configuration, its plan, its checks
 # and steps, the ip shell's testbench and the resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
     -p finn.transformation.kernels -p finn.transformation.prepare -p finn.analysis -p finn.harness \
@@ -57,7 +57,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.cus
     -m finn.core.rtlsim_pacing -m finn.core.containers -m finn.core.onnx_exec \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.toolchain.launcher \
     -m finn.toolchain.xsim \
-    -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_phases \
+    -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_plan \
     -m finn.builder.build_dataflow_steps -m finn.builder.build_dataflow_testbench \
     -m finn.builder.build_dataflow_resources -m finn.builder.build_dataflow_checks \
     -m finn.builder.build_dataflow_manifest -m finn.util.run_log

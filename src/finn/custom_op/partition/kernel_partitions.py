@@ -109,7 +109,7 @@ OUTPUT_BITFILE_MADE_FROM = OUTPUTS.key(
 OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
     "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
 )
-"""The shell's build options the bitfile was built with (``enable_hw_debug``)."""
+"""The shell's build options the bitfile was built with (``hw_debug``)."""
 
 
 def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:

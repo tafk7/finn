@@ -81,7 +81,7 @@ def build_of(tmp_path: Path, steps, **fields) -> tuple[int, dict, DataflowBuildC
         enable_build_pdb_debug=False,
         **fields,
     )
-    cfg._toolchain = fake_toolchain(tmp_path / "tools")
+    cfg.prepared_toolchain = fake_toolchain(tmp_path / "tools")
     status = build.build_dataflow_cfg(model, cfg)
     return status, manifest_of(output), cfg
 
@@ -99,7 +99,7 @@ def step_reports(model, cfg):
 
 def step_tools(model, cfg):
     """Runs the fake tool twice, from two threads, as the HLS pool does."""
-    tools = cfg._resolve_toolchain().transcripts_in(Path(cfg.output_dir) / "logs" / "step_tools")
+    tools = cfg.prepared_toolchain.transcripts_in(Path(cfg.output_dir) / "logs" / "step_tools")
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: tools.run("xvlog", [], timeout=60), range(2)))
     return model
@@ -230,17 +230,17 @@ def test_each_verification_asked_has_a_verdict(tmp_path):
     )
     assert status == -1
     assert manifest["verifications"] == {
-        "kernel_partition_python": "fail",
+        "partition_python": "fail",
         "stitched_ip_testbench": "not-run",
     }
-    assert manifest["steps"][0]["verifications"] == {"kernel_partition_python": "fail"}
+    assert manifest["steps"][0]["verifications"] == {"partition_python": "fail"}
     assert manifest["steps"][0]["phase"] == "phase_optimize_hardware"
     _, manifest, _ = build_of(
         tmp_path,
         [named("step_verify_partition", raising(ToolUnavailable("xelab", "missing")))],
         verify_steps=[VerificationStepType.PARTITION_ELABORATION],
     )
-    assert manifest["verifications"] == {"kernel_partition_elaboration": "error"}
+    assert manifest["verifications"] == {"partition_elaboration": "error"}
 
 
 def test_a_refused_configuration_is_the_outcome_with_its_failed_checks(tmp_path):
@@ -259,7 +259,7 @@ def test_a_refused_configuration_is_the_outcome_with_its_failed_checks(tmp_path)
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
-    with pytest.raises(ValueError, match="Unknown step or phase: step_none"):
+    with pytest.raises(ValueError, match="steps\\[0\\]: 'step_none' is no step or phase"):
         build_of(tmp_path, ["step_none"])
     manifest = manifest_of(str(tmp_path / "output"))
     assert manifest["outcome"]["status"] == "refused"

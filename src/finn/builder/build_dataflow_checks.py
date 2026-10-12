@@ -3,12 +3,12 @@
 
 """Configuration check system for FINN builds - catches incompatibilities early.
 
-Before its first step, a build checks its configuration (``run_all_config_checks``):
-the build's own checks (``kernel_path_checks``), and the Vivado release its board
-requires against the release its toolchain runs.
+Before its first step, a build checks its configuration against its plan
+(finn.builder.build_dataflow_plan; ``run_all_config_checks``): the build's own checks
+(``kernel_path_checks``), and the Vivado release its board requires against the
+release its toolchain runs.
 """
 
-import importlib
 import json
 import logging
 import os
@@ -25,7 +25,8 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     VerificationStepType,
 )
-from finn.platform import BOARDS, Board, TargetRefused, shell_row
+from finn.builder.build_dataflow_plan import BuildPlan
+from finn.platform import BOARDS, VIVADO_BLOCK_DESIGN, Board, TargetRefused, shell_row
 from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
 
@@ -74,27 +75,14 @@ def _check(
     return Check(name, severity, False, msg_fail, suggestion)
 
 
-def _resolved_step_names(cfg: DataflowBuildConfig) -> set[str] | None:
-    """The names of the steps the build runs (steps, start_step, stop_step), or None if
-    they cannot be resolved; the build then fails on its own when it starts."""
-    try:
-        # imported lazily via importlib (rather than a top-level import) since
-        # build_dataflow imports the checks, and a top-level import back
-        # would be circular
-        build_dataflow_mod = importlib.import_module("finn.builder.build_dataflow")
-        return {fn.__name__ for fn in build_dataflow_mod.resolve_build_steps(cfg, partial=True)}
-    except (ValueError, AttributeError):
-        return None
-
-
-def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
-    """Check a build's configuration before its first step: the target, the outputs
-    and the shell they need, ``enable_hw_debug``, and the verification inputs and steps.
-    Returns one Check per problem; an empty list means the configuration is
-    consistent."""
+def kernel_path_checks(cfg: DataflowBuildConfig, plan: BuildPlan) -> list[Check]:
+    """Check a build's configuration and its ``plan`` before the first step: the target,
+    the outputs and the shell they need, the ``hw_debug`` setting, the settings the run
+    leaves unread, and the verification inputs and steps. Returns one Check per
+    problem; an empty list means the configuration is consistent."""
     checks = []
     try:
-        target = cfg._resolve_target()
+        target = cfg.resolved_target
     except TargetRefused as refused:
         return [
             Check(
@@ -134,16 +122,26 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
                     f"Add {', '.join(missing)} to generate_outputs, or remove {output.value}",
                 )
             )
-    try:
-        cfg._resolve_shell_build_options()
-    except ValueError as refused:
+    hw_debug = plan.settings.get("hw_debug")
+    if hw_debug is not None and hw_debug.value and row.integration != VIVADO_BLOCK_DESIGN:
         checks.append(
             Check(
                 "kernel_hw_debug",
                 Severity.ERROR,
                 False,
-                str(refused),
-                "State enable_hw_debug only for a shell with a build (pynq), as a bool",
+                f"hw_debug: the {target.shell!r} shell has no build to take it",
+                "Set hw_debug only for a shell with a build (pynq)",
+            )
+        )
+    for name in plan.unread:
+        readers = ", ".join(plan.settings[name].readers)
+        checks.append(
+            Check(
+                "setting_unread",
+                Severity.WARNING,
+                False,
+                f"{name}: only {readers} read it, and start_step/stop_step leave them out",
+                "Remove the setting, or run the steps that read it",
             )
         )
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(
@@ -172,9 +170,7 @@ def kernel_path_checks(cfg: DataflowBuildConfig) -> list[Check]:
                 f"{testbench.value} from verify_steps",
             )
         )
-    resolved = _resolved_step_names(cfg)
-    if resolved is None:
-        return checks
+    resolved = {step.name for step in plan.steps}
     for each in cfg.verify_steps:
         vstep = VerificationStepType(each)
         unmet = [step for step in VERIFIED_BY[vstep] if step not in resolved]
@@ -199,7 +195,7 @@ def _vivado_release(cfg: DataflowBuildConfig) -> Tuple[Optional[Tuple[int, int]]
     or None and the reason if none is detected: no Vivado on its route, or the
     toolchain could not be prepared."""
     try:
-        return vivado.release(cfg._resolve_toolchain()), ""
+        return vivado.release(cfg.prepared_toolchain), ""
     except (ToolUnavailable, RuntimeError, OSError) as missing:
         return None, str(missing)
 
@@ -223,18 +219,18 @@ def _vivado_checks(board: Optional[Board], v: Optional[Tuple[int, int]], why: st
     ]
 
 
-def run_all_config_checks(cfg: DataflowBuildConfig) -> Report:
-    """Run all configuration checks of a build and return the report: the Vivado
-    release its board needs, and kernel_path_checks. The report records the release the
-    build's toolchain runs."""
+def run_all_config_checks(cfg: DataflowBuildConfig, plan: BuildPlan) -> Report:
+    """Run all configuration checks of a build and its ``plan``, and return the report:
+    the Vivado release its board needs, and kernel_path_checks. The report records the
+    release the build's toolchain runs."""
     v, why = _vivado_release(cfg)
     board = None
     try:
-        name = cfg._resolve_target().board
+        name = cfg.resolved_target.board
         board = BOARDS[name] if name is not None else None
     except TargetRefused:
         pass  # kernel_path_checks reports it
-    checks = _vivado_checks(board, v, why) + kernel_path_checks(cfg)
+    checks = _vivado_checks(board, v, why) + kernel_path_checks(cfg, plan)
     return Report(timestamp=datetime.now().isoformat(), vivado_version=v, checks=checks)
 
 

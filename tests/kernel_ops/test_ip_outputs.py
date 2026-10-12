@@ -36,7 +36,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_steps import ExploreOptions, step_package_partition
+from finn.builder.build_dataflow_steps import step_package_partition
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
@@ -213,7 +213,7 @@ def test_the_testbench_is_an_output_run_only_by_its_verification_step(
             verify_steps=verify_steps,
             verify_input_npy=str(tmp_path / "absent.npy"),
         )
-        cfg._toolchain = cast(Toolchain, stub)
+        cfg.prepared_toolchain = cast(Toolchain, stub)
         step_package_partition(parent, cfg)
         testbench = output / "stitched_ip" / TESTBENCH_DIR
         assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
@@ -268,7 +268,7 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
         generate_outputs=[DataflowOutputType.STITCHED_IP],
         verify_input_npy=str(tmp_path / "absent.npy"),
     )
-    cfg._toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
+    cfg.prepared_toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
     step_package_partition(kernel_model().transform(CutKernelPartition(tmp_path / "p")), cfg)
     logs = output / "logs" / "step_package_partition"
     assert sorted(path.name for path in logs.iterdir()) == [
@@ -279,7 +279,7 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
     assert (output / "stitched_ip" / "package.sh").is_file()
     assert not (output / "stitched_ip" / "package.sh.stdout.log").exists()
     # The build's own toolchain is unchanged: each step states its directory.
-    assert cfg._resolve_toolchain().transcripts is None
+    assert cfg.prepared_toolchain.transcripts is None
 
 
 def test_a_testbench_without_its_simulator_is_the_tools_absence(tmp_path: Path) -> None:
@@ -338,13 +338,11 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
         generate_outputs=[DataflowOutputType.STITCHED_IP],
-        step_options={
-            "step_explore": ExploreOptions(
-                kernel_exploration=[
-                    {"strategy": "target_throughput", "fps": 1e6},
-                    {"strategy": "size_fifos"},
-                ]
-            )
+        settings={
+            "strategies": [
+                {"strategy": "target_throughput", "fps": 1e6},
+                {"strategy": "size_fifos"},
+            ]
         },
         verify_steps=[VerificationStepType.STITCHED_IP_TESTBENCH],
         verify_input_npy=str(tmp_path / "input.npy"),

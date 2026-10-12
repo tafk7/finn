@@ -43,15 +43,16 @@ from finn.analysis.equivalence import (
 )
 from finn.analysis.initializers import annotated_initializers
 from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
-from finn.builder.build_dataflow_steps import PREPARATION_REPORT
+from finn.builder.build_dataflow_plan import resolve_plan
+from finn.builder.build_dataflow_steps import PREPARATION_REPORT, build_dataflow_phases
 from finn.core.containers import container, exact_up_to, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
+from finn.platform import TargetRequest
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.prepare import (
-    RECIPE_TRANSFORMS,
     SUB_PHASES,
     GraphPreparation,
     census,
@@ -177,9 +178,43 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     }
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
-    assert [step["name"] for step in manifest["steps"]] == build_dataflow_phase_lookup[
-        "phase_prepare_model"
-    ]
+    phase = [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
+    assert [step["name"] for step in manifest["steps"]] == phase
+    # The plan the build ran: each step with its settings, each setting with its value
+    # (or default) and its readers.
+    plan = manifest["plan"]
+    assert [step["name"] for step in plan["steps"]] == phase
+    preprocessing = str(tfc_directory / "preproc.onnx")
+    assert plan["steps"][2] == {
+        "name": "step_add_pre_post_processing",
+        "phase": "phase_prepare_model",
+        "settings": {
+            "preprocessing": preprocessing,
+            "input_datatype": "UINT8",
+            "topk": 1,
+            "max_multithreshold_bit_width": 8,
+        },
+    }
+    assert plan["steps"][3]["settings"] == {}
+    assert plan["settings"] == {
+        "override_inpsize": {"value": None, "given": False, "readers": ["step_tidy_up"]},
+        "max_multithreshold_bit_width": {
+            "value": 8,
+            "given": False,
+            "readers": ["step_qonnx_to_finn", "step_add_pre_post_processing"],
+        },
+        "preprocessing": {
+            "value": preprocessing,
+            "given": True,
+            "readers": ["step_add_pre_post_processing"],
+        },
+        "input_datatype": {
+            "value": "UINT8",
+            "given": True,
+            "readers": ["step_add_pre_post_processing"],
+        },
+        "topk": {"value": 1, "given": True, "readers": ["step_add_pre_post_processing"]},
+    }
 
 
 def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
@@ -627,11 +662,19 @@ def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test() -
     assert not [outcome for outcome in conversion.outcomes if outcome.op]
 
 
-def test_a_recipe_accepts_the_transform_thresholdings_hint_names() -> None:
+def test_an_edit_can_insert_the_transform_thresholdings_hint_names(tmp_path: Path) -> None:
     """Thresholding refuses a scaled or fractionally biased MultiThreshold with
-    ``LOWERING`` as its hint; a recipe that follows the hint names a transform it takes."""
-    assert GraphPreparation(streamlining=[LOWERING]).streamlining == [LOWERING]
-    assert RECIPE_TRANSFORMS[LOWERING] is ExtractMultiThresholdScaleBias
+    ``LOWERING`` as its hint; an edit that follows the hint inserts that transform after
+    the streamlining by its import path, and the build runs it by that name."""
+    path = f"{ExtractMultiThresholdScaleBias.__module__}.{LOWERING}"
+    cfg = DataflowBuildConfig(
+        output_dir=str(tmp_path),
+        target=TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e"),
+        steps=["phase_prepare_model"],
+        step_edits=[{"after": "step_streamline", "insert": path}],
+    )
+    names = [step.name for step in resolve_plan(cfg).steps]
+    assert names[names.index("step_streamline") + 1] == LOWERING
 
 
 # -- the equivalence analysis and the deviations' predicates -------------------------------

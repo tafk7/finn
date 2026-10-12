@@ -36,6 +36,7 @@ import sys
 import time
 from dataclasses import asdict, replace
 from datetime import datetime
+from pathlib import PurePath
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
@@ -48,7 +49,6 @@ from finn.builder.build_dataflow_config import (
     VERIFIED_BY,
     DataflowBuildConfig,
     VerificationStepType,
-    default_build_dataflow_steps,
 )
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
@@ -56,14 +56,9 @@ from finn.builder.build_dataflow_manifest import (
     ManifestHandler,
     finn_revision,
 )
-from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
-from finn.builder.build_dataflow_steps import (
-    AddPrePostProcessingOptions,
-    ExploreOptions,
-    build_dataflow_step_lookup,
-)
+from finn.builder.build_dataflow_plan import BuildPlan, declared_settings, resolve_plan
 from finn.core.space import by_code
-from finn.toolchain.launcher import ToolFailed, ToolUnavailable
+from finn.toolchain.launcher import ToolFailed, ToolUnavailable, host_selection
 from finn.util.run_log import FILE_ONLY, log_run, running_step
 
 #: The configuration file of a build directory (build_dataflow_directory), next to
@@ -129,101 +124,24 @@ def _findings_by_code(error: BaseException) -> dict[str, int]:
     return counts
 
 
-#: Each step's phase (finn.builder.build_dataflow_phases), for the manifest.
-_PHASE_OF = {step: phase for phase, steps in build_dataflow_phase_lookup.items() for step in steps}
-
-
-def _expanded_steps(cfg: DataflowBuildConfig):
-    """The build's steps in run order (``cfg.steps``, else default_build_dataflow_steps),
-    with each phase expanded into its steps and the ``inject_steps_before`` and
-    ``inject_steps_after`` functions placed around each step or phase. Also returns
-    each phase's first and last index in that list. Refuses an unknown name, listing
-    the steps and phases."""
-    steps = cfg.steps
-    if steps is None:
-        steps = default_build_dataflow_steps
-
-    steps_as_fxns = []
-    phase_spans = {}
-
-    def place(step_name, step_fn):
-        steps_as_fxns.extend(cfg.inject_steps_before.get(step_name, []))
-        steps_as_fxns.append(step_fn)
-        steps_as_fxns.extend(cfg.inject_steps_after.get(step_name, []))
-
-    for transform_step in steps:
-        if type(transform_step) is str and transform_step in build_dataflow_phase_lookup:
-            first = len(steps_as_fxns)
-            steps_as_fxns.extend(cfg.inject_steps_before.get(transform_step, []))
-            for step_name in build_dataflow_phase_lookup[transform_step]:
-                place(step_name, build_dataflow_step_lookup[step_name])
-            steps_as_fxns.extend(cfg.inject_steps_after.get(transform_step, []))
-            phase_spans.setdefault(transform_step, (first, len(steps_as_fxns) - 1))
-        elif type(transform_step) is str:
-            if transform_step not in build_dataflow_step_lookup:
-                raise ValueError(
-                    f"Unknown step or phase: {transform_step}; the steps: "
-                    f"{', '.join(build_dataflow_step_lookup)}; the phases: "
-                    f"{', '.join(build_dataflow_phase_lookup)}"
-                )
-            place(transform_step, build_dataflow_step_lookup[transform_step])
-        elif callable(transform_step):
-            place(getattr(transform_step, "__name__", None), transform_step)
-        else:
-            raise ValueError(f"Invalid step type: {type(transform_step)}")
-    return steps_as_fxns, phase_spans
-
-
-def _step_index(name: str, steps_as_fxns, phase_spans, last: bool) -> int:
-    """The index of the step ``name`` in the build's expanded steps; for a phase, of its
-    first step, or its last if ``last``. Refuses a name the build does not run, listing
-    its steps and phases."""
-    if name in phase_spans:
-        return phase_spans[name][1 if last else 0]
-    step_names = [step_fn.__name__ for step_fn in steps_as_fxns]
-    if name in step_names:
-        return step_names.index(name)
-    raise ValueError(
-        f"{name!r} is not one of this build's steps or phases; its steps: "
-        f"{', '.join(step_names)}; its phases: {', '.join(phase_spans) or 'none'}"
-    )
-
-
-def resolve_build_steps(cfg: DataflowBuildConfig, partial: bool = True):
-    """The build's steps as functions in run order, phases expanded and injected steps
-    placed. If ``partial``, only those from ``cfg.start_step`` to ``cfg.stop_step``;
-    either may name a phase, meaning its first step to start from or its last to stop
-    after."""
-    steps_as_fxns, phase_spans = _expanded_steps(cfg)
-    if partial:
-        if cfg.start_step is None:
-            start_ind = 0
-        else:
-            start_ind = _step_index(cfg.start_step, steps_as_fxns, phase_spans, last=False)
-        if cfg.stop_step is None:
-            stop_ind = len(steps_as_fxns) - 1
-        else:
-            stop_ind = _step_index(cfg.stop_step, steps_as_fxns, phase_spans, last=True)
-        steps_as_fxns = steps_as_fxns[start_ind : (stop_ind + 1)]
-    return steps_as_fxns
-
-
 def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
     """The intermediate model file of the step ``step_delta`` places after ``step_name``
-    (for a phase, its first step) in the build's steps."""
-    steps_as_fxns, phase_spans = _expanded_steps(cfg)
-    step_no = _step_index(step_name, steps_as_fxns, phase_spans, last=False) + step_delta
-    assert step_no >= 0, "Invalid step+delta combination"
-    assert step_no < len(steps_as_fxns), "Invalid step+delta combination"
-    filename = cfg.output_dir + "/intermediate_models/"
-    filename += "%s.onnx" % (steps_as_fxns[step_no].__name__)
-    return filename
+    (for a phase, its first step) in the build's plan (finn.builder.build_dataflow_plan)."""
+    plan = resolve_plan(cfg)
+    return _intermediate_model(cfg, plan, plan.index(step_name) + step_delta)
 
 
-def _run_build_steps(model, cfg, build_dataflow_steps, manifest=None):
-    """Run the resolved build steps in order, each log record stamped with its step, and
-    record each step's start and end, and the outcome, in the build's ``manifest``
-    (finn.builder.build_dataflow_manifest), if given.
+def _intermediate_model(cfg: DataflowBuildConfig, plan: BuildPlan, index: int) -> str:
+    """The intermediate model file of the plan's step at ``index``."""
+    if not 0 <= index < len(plan.edited):
+        raise ValueError(f"no step at {index} of this build's {len(plan.edited)} steps")
+    return cfg.output_dir + "/intermediate_models/%s.onnx" % plan.edited[index].name
+
+
+def _run_build_steps(model, cfg, plan: BuildPlan, manifest=None):
+    """Run the plan's steps in order, each with its settings and each log record stamped
+    with its step, and record each step's start and end, and the outcome, in the
+    build's ``manifest`` (finn.builder.build_dataflow_manifest), if given.
 
     Writes time_per_step.json, the seconds each step took. Returns 0 on success, or -1
     at the first failing step after logging its failure (_log_failure), recording it in
@@ -232,18 +150,16 @@ def _run_build_steps(model, cfg, build_dataflow_steps, manifest=None):
     """
     step_num = 1
     time_per_step = dict()
-    for transform_step in build_dataflow_steps:
-        step_name = transform_step.__name__
+    for planned in plan.steps:
+        step_name = planned.name
         step_start = time.time()
         with running_step(step_name):
             try:
-                _LOG.info(
-                    "Running step: %s [%d/%d]", step_name, step_num, len(build_dataflow_steps)
-                )
+                _LOG.info("Running step: %s [%d/%d]", step_name, step_num, len(plan.steps))
                 if manifest is not None:
-                    manifest.step_started(step_name, _PHASE_OF.get(step_name))
+                    manifest.step_started(step_name, planned.phase)
                 step_start = time.time()
-                model = transform_step(model, cfg)
+                model = planned.run(model, cfg)
                 step_end = time.time()
                 time_per_step[step_name] = step_end - step_start
                 chkpt_name = "%s.onnx" % (step_name)
@@ -287,11 +203,11 @@ def _identity(cfg: DataflowBuildConfig) -> dict:
     and the target, each None where it cannot be known. The model and the Vivado release
     are added later, as the build reads them."""
     try:
-        selection = asdict(cfg._resolve_selection())
+        selection = asdict(host_selection(stated=cfg.toolchain))
     except ValueError:
         selection = None
     try:
-        resolved = cfg._resolve_target()
+        resolved = cfg.resolved_target
         target = {
             "part": resolved.part,
             "shell": resolved.shell,
@@ -349,18 +265,28 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     set up first, so the configuration checks are logged and listed in the
     manifest too, and a refused configuration is logged and recorded before it raises.
 
+    The plan (finn.builder.build_dataflow_plan) is resolved first, and recorded in the
+    manifest: its steps, each with its settings, and each setting with its readers.
+
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
     """
     log_file = os.path.join(cfg.output_dir, LOG_FILE)
     with log_run(log_file, runner=_LOG.name, verbose=cfg.verbose), _indexed(cfg) as manifest:
         try:
+            plan = resolve_plan(cfg)
+            manifest.planned(plan.record())
             # if start_step is specified, override the input model
             if cfg.start_step is None:
                 _LOG.info("Building dataflow accelerator from " + model_filename)
                 model = ModelWrapper(model_filename)
             else:
-                intermediate_model_filename = resolve_step_filename(cfg.start_step, cfg, -1)
+                if plan.first == 0:
+                    raise ValueError(
+                        f"start_step {cfg.start_step}: no step runs before it, so no model "
+                        "was saved to start from"
+                    )
+                intermediate_model_filename = _intermediate_model(cfg, plan, plan.first - 1)
                 _LOG.info(
                     "Building dataflow accelerator from intermediate checkpoint"
                     + intermediate_model_filename
@@ -380,7 +306,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
             _LOG.info("Build manifest is at " + os.path.join(cfg.output_dir, MANIFEST_FILE))
 
             # Run configuration checks
-            config_report = run_all_config_checks(cfg)
+            config_report = run_all_config_checks(cfg, plan)
             log_report(config_report)
             report_path = save_report(config_report, cfg.output_dir)
             _LOG.info(f"Configuration check report saved to: {report_path}")
@@ -392,43 +318,44 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
                 raise AssertionError(
                     "Configuration check failed with errors. Fix the issues above to proceed."
                 )
-
-            build_dataflow_steps = resolve_build_steps(cfg)
         except Exception as error:
             _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
             _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
             manifest.refused(error)
             raise
-        return _run_build_steps(model, cfg, build_dataflow_steps, manifest)
+        return _run_build_steps(model, cfg, plan, manifest)
+
+
+def _is_path(kind) -> bool:
+    """Whether a setting's annotation is a path, or a path or None."""
+    if isinstance(kind, type):
+        return issubclass(kind, PurePath)
+    return any(_is_path(each) for each in getattr(kind, "__args__", ()) if each is not type(None))
 
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
     """``cfg`` with each relative path joined to ``directory``: ``output_dir``,
-    ``verify_input_npy``, step_add_pre_post_processing's ``preprocessing`` model, a strategy's
-    ``path`` in step_explore's ``kernel_exploration`` (the ``pinned`` choices file), and
-    the toolchain's settings scripts and command directory. Absolute paths and an empty
-    command directory are kept as they are."""
+    ``verify_input_npy``, the toolchain's settings scripts and command directory, each
+    setting a step of the build declares as a path (finn.builder.build_dataflow_plan),
+    and the ``path`` of each spec in the ``strategies`` setting (the ``pinned`` choices
+    file). Absolute paths and an empty command directory are kept as they are."""
 
     def resolve(path: str) -> str:
         return os.path.join(directory, path)
 
-    step_options = dict(cfg.step_options)
-    io = cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions)
-    if io.preprocessing is not None:
-        step_options["step_add_pre_post_processing"] = replace(
-            io, preprocessing=resolve(io.preprocessing)
-        )
-    explore = cfg.options("step_explore", ExploreOptions)
-    if any(isinstance(spec.get("path"), str) for spec in explore.kernel_exploration):
-        step_options["step_explore"] = replace(
-            explore,
-            kernel_exploration=[
-                {**spec, "path": resolve(spec["path"])}
-                if isinstance(spec.get("path"), str)
-                else spec
-                for spec in explore.kernel_exploration
-            ],
-        )
+    declared = declared_settings(cfg)
+    settings = dict(cfg.settings)
+    for name, value in settings.items():
+        if isinstance(value, str) and _is_path(declared.get(name)):
+            settings[name] = resolve(value)
+    strategies = settings.get("strategies")
+    if isinstance(strategies, list):
+        settings["strategies"] = [
+            {**spec, "path": resolve(spec["path"])}
+            if isinstance(spec, dict) and isinstance(spec.get("path"), str)
+            else spec
+            for spec in strategies
+        ]
     toolchain = cfg.toolchain
     if toolchain is not None:
         toolchain = replace(
@@ -443,14 +370,15 @@ def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuild
         output_dir=resolve(cfg.output_dir),
         verify_input_npy=resolve(cfg.verify_input_npy),
         toolchain=toolchain,
-        step_options=step_options,
+        settings=settings,
     )
 
 
 def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
     """Read a build directory's CONFIG_FILE, with its relative paths resolved against
     the directory (``_resolved_against``) so that they name the same files wherever the
-    build runs. Refuses a directory without one."""
+    build runs. Refuses a directory without one, and a list of steps that does not
+    resolve (its settings' paths are found by the steps that declare them)."""
     path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")

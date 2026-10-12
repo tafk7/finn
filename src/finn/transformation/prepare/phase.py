@@ -16,12 +16,11 @@ it:
   input's datatype stated, the label select (TopK) appended, then ``tidied``. It
   follows P2: the preprocessing model is lowered on its own and merged into the
   lowered network, so P2 never sees it;
-- ``streamlined`` (P3): the streamlining recipe, scales and biases absorbed into
-  thresholds, convolutions lowered to Im2Col and MatMul, bipolar MatMuls to
-  XnorPopcountMatMul;
-- ``topology_settled`` (P4): the topology recipe, transposes absorbed and
-  collapsed, MaxPool made NHWC; then tidied, layouts inferred and unused tensors
-  removed;
+- ``streamlined`` (P3): scales and biases absorbed into thresholds, convolutions
+  lowered to Im2Col and MatMul, bipolar MatMuls to XnorPopcountMatMul
+  (``STREAMLINING``);
+- ``topology_settled`` (P4): transposes absorbed and collapsed, MaxPool made NHWC
+  (``TOPOLOGY``); then tidied, layouts inferred and unused tensors removed;
 - ``containers_exact`` (P6): every integer tensor held exactly by its container,
   the integer regions that need it widened to float64
   (``finn.transformation.prepare.containers``). It reads the annotations P4 leaves,
@@ -38,11 +37,9 @@ where it is built.
 
 from __future__ import annotations
 
-import inspect
 from collections import Counter
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from types import MappingProxyType, ModuleType
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from onnx import helper
@@ -66,11 +63,7 @@ from qonnx.transformation.merge_onnx_models import MergeONNXModels
 from qonnx.util.cleanup import cleanup_model
 
 import finn.transformation.streamline.absorb as absorb
-import finn.transformation.streamline.collapse_repeated as collapse_repeated
-import finn.transformation.streamline.extract_multithreshold_scale_bias as extract_scale_bias
 import finn.transformation.streamline.reorder as reorder
-import finn.transformation.streamline.round_thresholds as round_thresholds
-import finn.transformation.streamline.sign_to_thres as sign_to_thres
 from finn.core.containers import container
 from finn.core.containers import name as container_name
 from finn.transformation.prepare.containers import exact_containers
@@ -80,66 +73,34 @@ from finn.transformation.qonnx.quant_act_to_multithreshold import (
 )
 from finn.transformation.streamline import Streamline
 
-
-def _defined_transforms(*modules: ModuleType) -> dict[str, type[Transformation]]:
-    return {
-        name: value
-        for module in modules
-        for name, value in vars(module).items()
-        if inspect.isclass(value)
-        and issubclass(value, Transformation)
-        and value.__module__ == module.__name__
-    }
-
-
-#: The transforms a recipe may name, by class name: streamlining's (absorb, reorder,
-#: collapse_repeated, sign_to_thres, round_thresholds, extract_multithreshold_scale_bias,
-#: which Thresholding's refusals name as their hint, and ``Streamline``, its fixed
-#: sequence), and qonnx's lowerings the default recipes run. Each is constructed with
-#: its defaults.
-RECIPE_TRANSFORMS: Mapping[str, type[Transformation]] = MappingProxyType(
-    {
-        **_defined_transforms(
-            absorb,
-            reorder,
-            collapse_repeated,
-            sign_to_thres,
-            round_thresholds,
-            extract_scale_bias,
-        ),
-        "Streamline": Streamline,
-        "LowerConvsToMatMul": LowerConvsToMatMul,
-        "ConvertBipolarMatMulToXnorPopcount": ConvertBipolarMatMulToXnorPopcount,
-    }
+#: P3's transforms, in order: TFC's fixture's streamlining (finn-dev's
+#: ``step_streamline`` with ``MoveScalarLinearPastInvariants``), with that step's
+#: convolution lowering ahead of the bipolar MatMuls' rewrite, which reads the lowered
+#: MatMuls. Each is constructed with its defaults.
+STREAMLINING: tuple[type[Transformation], ...] = (
+    absorb.AbsorbScalarBiasIntoMultiThreshold,
+    reorder.MoveScalarLinearPastInvariants,
+    Streamline,
+    LowerConvsToMatMul,
+    ConvertBipolarMatMulToXnorPopcount,
+    Streamline,
+    absorb.AbsorbScalarMulAddIntoTopK,
 )
 
-#: P3's default recipe: TFC's fixture's streamlining (finn-dev's ``step_streamline``
-#: with ``MoveScalarLinearPastInvariants``), with that step's convolution lowering ahead
-#: of the bipolar MatMuls' rewrite, which reads the lowered MatMuls.
-DEFAULT_STREAMLINING = (
-    "AbsorbScalarBiasIntoMultiThreshold",
-    "MoveScalarLinearPastInvariants",
-    "Streamline",
-    "LowerConvsToMatMul",
-    "ConvertBipolarMatMulToXnorPopcount",
-    "Streamline",
-    "AbsorbScalarMulAddIntoTopK",
-)
-
-#: P4's default recipe: finn-dev's ``step_streamline``'s topology after lowering convolutions.
-DEFAULT_TOPOLOGY = (
-    "MakeMaxPoolNHWC",
-    "AbsorbTransposeIntoMultiThreshold",
-    "MakeMaxPoolNHWC",
-    "AbsorbConsecutiveTransposes",
+#: P4's transforms, in order: finn-dev's ``step_streamline``'s topology after lowering
+#: convolutions.
+TOPOLOGY: tuple[type[Transformation], ...] = (
+    reorder.MakeMaxPoolNHWC,
+    absorb.AbsorbTransposeIntoMultiThreshold,
+    reorder.MakeMaxPoolNHWC,
+    absorb.AbsorbConsecutiveTransposes,
 )
 
 
 @dataclass(frozen=True)
 class GraphPreparation:
     """The graph-preparation phase's options, which its sub-phases read. A build states
-    them by its preparation steps' options (finn.builder.build_dataflow_steps: each
-    preparation step's, in a DataflowBuildConfig's ``step_options``). For TFC:
+    them by its preparation steps' settings (finn.builder.build_dataflow_steps). For TFC:
     ``GraphPreparation(preprocessing="preproc.onnx", input_datatype="UINT8", topk=1)``.
 
     - ``override_inpsize``: P0, the batch size (an int) or the input's shape (a list)
@@ -152,26 +113,15 @@ class GraphPreparation:
     - ``input_datatype``: P1, the graph input's datatype (a qonnx name), the domain the
       network is prepared for; None leaves the input unannotated, read as FLOAT32.
     - ``topk``: P1, a label select of the ``topk`` largest outputs appended (TopK,
-      its indices the graph's output).
-    - ``streamlining``: P3's recipe, names of ``RECIPE_TRANSFORMS`` run in order.
-    - ``topology``: P4's recipe, likewise."""
+      its indices the graph's output)."""
 
     override_inpsize: int | list[int] | None = None
     max_multithreshold_bit_width: int = 8
     preprocessing: str | None = None
     input_datatype: str | None = None
     topk: int | None = None
-    streamlining: list[str] = field(default_factory=lambda: list(DEFAULT_STREAMLINING))
-    topology: list[str] = field(default_factory=lambda: list(DEFAULT_TOPOLOGY))
 
     def __post_init__(self) -> None:
-        for name in ("streamlining", "topology"):
-            unknown = [each for each in getattr(self, name) if each not in RECIPE_TRANSFORMS]
-            if unknown:
-                raise ValueError(
-                    f"{name}: no transform named {', '.join(unknown)} "
-                    "(finn.transformation.prepare.RECIPE_TRANSFORMS)"
-                )
         if self.input_datatype is not None:
             try:
                 DataType[self.input_datatype]
@@ -257,22 +207,22 @@ def io_explicit(model: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
     return tidied(model)
 
 
-def _recipe(model: ModelWrapper, names: list[str]) -> ModelWrapper:
-    for name in names:
-        model = model.transform(RECIPE_TRANSFORMS[name]())
+def _applied(model: ModelWrapper, transforms: tuple[type[Transformation], ...]) -> ModelWrapper:
+    for transform in transforms:
+        model = model.transform(transform())
     return model
 
 
 def streamlined(model: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
-    """P3: the ``streamlining`` recipe, in order."""
-    return _recipe(model, options.streamlining)
+    """P3: the ``STREAMLINING`` transforms, in order."""
+    return _applied(model, STREAMLINING)
 
 
 def topology_settled(model: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
-    """P4: the ``topology`` recipe, in order; then ``tidied`` (the recipe's transforms
-    name what they add at random), every tensor's layout inferred and the tensors no
-    node reads removed."""
-    model = tidied(_recipe(model, options.topology))
+    """P4: the ``TOPOLOGY`` transforms, in order; then ``tidied`` (they name what they
+    add at random), every tensor's layout inferred and the tensors no node reads
+    removed."""
+    model = tidied(_applied(model, TOPOLOGY))
     return model.transform(InferDataLayouts()).transform(RemoveUnusedTensors())
 
 

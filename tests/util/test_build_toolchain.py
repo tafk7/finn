@@ -19,11 +19,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import (
-    AddPrePostProcessingOptions,
-    ConvertToChannelsLastOptions,
-    ExploreOptions,
-)
+from finn.builder.build_dataflow_plan import resolve_plan
 from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
 from finn.toolchain.vivado import vivado_jobs
@@ -62,7 +58,7 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
     selection = Selection(settings=("/opt/xilinx/settings64.sh",), hls_frontend="vitis-run")
     cfg = builder_config(toolchain=selection)
     assert prepared == []
-    assert cfg._resolve_toolchain() is cfg._resolve_toolchain() is prepared[0][1]
+    assert cfg.prepared_toolchain is cfg.prepared_toolchain is prepared[0][1]
     assert [named for named, _ in prepared] == [
         Selection(
             settings=("/opt/xilinx/settings64.sh",),
@@ -75,10 +71,10 @@ def test_the_toolchain_is_the_configured_selection_prepared_on_first_use(monkeyp
     # command directory, with the release's frontend.
     unset = builder_config()
     assert unset.toolchain is None
-    assert unset._resolve_selection() == Selection(
+    assert host_selection(stated=unset.toolchain) == Selection(
         command_dir="/site/tools", hls_frontend="vitis_hls", vivado_jobs=6
     )
-    assert unset._resolve_toolchain() is prepared[1][1]
+    assert unset.prepared_toolchain is prepared[1][1]
 
 
 def test_a_stated_selection_drops_none_of_the_machines_fields(monkeypatch):
@@ -90,7 +86,7 @@ def test_a_stated_selection_drops_none_of_the_machines_fields(monkeypatch):
     for name, value in machine.items():
         monkeypatch.setenv(name, value)
     jobs = builder_config(toolchain=Selection(vivado_jobs=2))
-    assert jobs._resolve_selection() == Selection(
+    assert host_selection(stated=jobs.toolchain) == Selection(
         command_dir="/site/tools", hls_frontend="vitis-run", vivado_jobs=2
     )
     local = Selection(command_dir="", hls_frontend="vitis_hls")
@@ -115,13 +111,13 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
     assert restored.toolchain == selection and restored == cfg
     # The prepared toolchain is not serialized with it.
     monkeypatch.setattr(Selection, "prepare", lambda selection: object())
-    cfg._resolve_toolchain()
+    cfg.prepared_toolchain
     assert DataflowBuildConfig.from_json(cfg.to_json()) == restored
     # Unset, it stays unset: the machine's selection is never written into the
     # configuration, which another machine may build from.
     monkeypatch.setenv("FINN_TOOL_DIR_OVERRIDE", "/site/tools")
     unset = builder_config()
-    unset._resolve_toolchain()
+    unset.prepared_toolchain
     assert json.loads(unset.to_json())["toolchain"] is None
     assert DataflowBuildConfig.from_json(unset.to_json()) == unset
 
@@ -134,18 +130,15 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     directory.mkdir()
     cfg = builder_config(
         verify_input_npy="inputs/input.npy",
-        step_options={
-            "step_add_pre_post_processing": AddPrePostProcessingOptions(
-                preprocessing="preproc.onnx", topk=1
-            ),
-            "step_explore": ExploreOptions(
-                kernel_exploration=[
-                    {"strategy": "pinned", "path": "kernel_choices.json"},
-                    {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
-                    {"strategy": "size_fifos", "margin": 2},
-                ],
-            ),
-            "step_convert_to_channels_last": ConvertToChannelsLastOptions(topology=[]),
+        settings={
+            "preprocessing": "preproc.onnx",
+            "topk": 1,
+            "strategies": [
+                {"strategy": "pinned", "path": "kernel_choices.json"},
+                {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
+                {"strategy": "size_fifos", "margin": 2},
+            ],
+            "input_datatype": "UINT8",
         },
         toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
     )
@@ -153,20 +146,19 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == str(directory / "out")
     assert read.verify_input_npy == str(directory / "inputs/input.npy")
-    # The paths in each step's options (step_options), the rest of them as stated.
-    assert read.options(
-        "step_add_pre_post_processing", AddPrePostProcessingOptions
-    ) == AddPrePostProcessingOptions(preprocessing=str(directory / "preproc.onnx"), topk=1)
-    assert read.options("step_explore", ExploreOptions) == ExploreOptions(
-        kernel_exploration=[
+    # The settings a step declares as a path, and the pinned strategies' files; the rest
+    # of them as stated, a str a step does not declare as a path included.
+    assert read.settings == {
+        "preprocessing": str(directory / "preproc.onnx"),
+        "topk": 1,
+        "strategies": [
             {"strategy": "pinned", "path": str(directory / "kernel_choices.json")},
             {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
             {"strategy": "size_fifos", "margin": 2},
         ],
-    )
-    assert (
-        read.options("step_convert_to_channels_last", ConvertToChannelsLastOptions).topology == []
-    )
+        "input_datatype": "UINT8",
+    }
+    assert resolve_plan(read).settings["preprocessing"].value == directory / "preproc.onnx"
     assert read.toolchain == Selection(
         settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
         command_dir=str(directory / "tools"),
@@ -176,11 +168,8 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     (directory / build_dataflow.CONFIG_FILE).write_text(stated.to_json())
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == "/results" and read.toolchain == Selection(command_dir="")
-    assert (
-        read.options("step_add_pre_post_processing", AddPrePostProcessingOptions).preprocessing
-        is None
-    )
-    assert read.step_options == {}
+    assert read.settings == {}
+    assert resolve_plan(read).settings["preprocessing"].value is None
 
 
 def test_a_build_directory_builds_in_process_its_toolchain_prepared_once(

@@ -11,6 +11,9 @@ the artifacts a later step uses (``finn.outputs``); the manifest indexes the run
 - ``identity``: what ran it: FINN's revision where it is known (``finn_revision``), the
   toolchain's selection, the Vivado release the configuration checks probed, the
   target, the model read and the output directory;
+- ``plan``: the steps the build runs (finn.builder.build_dataflow_plan), each with its
+  phase and the value of each setting it declares, and each setting with its value,
+  whether the configuration gave it (else its default), and the steps that read it;
 - ``configuration_checks``: the configuration check report
   (``config_check_report.json``), its counts, and each check that failed;
 - ``steps``: each step run, in order, with its phase (None for a step no phase lists),
@@ -168,6 +171,7 @@ class Manifest:
         self._concluded_by = dict(asked or {})
         self.state: dict[str, Any] = {
             "identity": dict(identity),
+            "plan": None,
             "configuration_checks": None,
             "steps": [],
             "verifications": {name: NOT_RUN for name in self._concluded_by},
@@ -199,6 +203,12 @@ class Manifest:
         """Add ``fields`` to the build's identity."""
         with self._lock:
             self.state["identity"].update(fields)
+            self.write()
+
+    def planned(self, plan: Mapping[str, Any]) -> None:
+        """Record the build's plan, as ``BuildPlan.record`` states it."""
+        with self._lock:
+            self.state["plan"] = dict(plan)
             self.write()
 
     def configuration_checks(self, report: Any, path: str) -> None:

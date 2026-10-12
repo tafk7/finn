@@ -6,7 +6,7 @@
 ``build_dataflow_cfg`` runs a DataflowBuildConfig's default steps from the exported
 network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
 phases: no Vivado. Each step's
-output is recorded as it runs (``inject_steps_after``), and the partition is compared
+output is recorded as it runs (``step_edits``), and the partition is compared
 with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phases
 (``phase_emit_hardware``, ``phase_generate_outputs``) is not a test.
 """
@@ -34,8 +34,8 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.builder.build_dataflow import build_dataflow_cfg, resolve_build_steps
-from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
+from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow_checks import Check, Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import (
     SHELL_OUTPUTS,
     DataflowBuildConfig,
@@ -43,12 +43,11 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
+from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
-    ExploreOptions,
+    build_dataflow_phases,
     step_build_bitfile,
     step_convert_to_hw,
-    step_create_dataflow_partition,
     step_deployment_package,
     step_explore,
     step_make_driver,
@@ -101,7 +100,7 @@ from kernel_ops.models import (
     matmul_model,
 )
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
-from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_options, partition
+from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
@@ -122,16 +121,10 @@ STEPS = (
 
 
 def explore(source: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """``source`` through the kernel path's steps to its exploration: the parent graph,
-    cut once, its body's choices explored and saved."""
-    model = source
-    for step in (
-        step_convert_to_hw,
-        step_create_dataflow_partition,
-        step_explore,
-    ):
-        model = step(model, cfg)
-    return model
+    """``source`` through the kernel path's steps to its exploration, with ``cfg``'s
+    strategies: the parent graph, cut once, its body's choices explored and saved."""
+    steps = ["step_convert_to_hw", "step_create_dataflow_partition", "step_explore"]
+    return run_steps(source, replace(cfg, steps=steps))
 
 
 @pytest.fixture(scope="module")
@@ -142,11 +135,6 @@ def source(tfc_streamlined: Path) -> ModelWrapper:
 
 #: TFC's target in the builder: Ultra96 in the Zynq shell at 5 ns (``ULTRA96``).
 ULTRA96_PYNQ = TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq")
-
-
-def exploration(**options: Any) -> dict[str, ExploreOptions]:
-    """``step_options`` stating step_explore's ``options`` (ExploreOptions)."""
-    return {"step_explore": ExploreOptions(**options)}
 
 
 def config(directory: Path, **settings: Any) -> DataflowBuildConfig:
@@ -190,9 +178,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
-        step_options={"step_add_pre_post_processing": io_options(tmp_path / "export")},
+        settings=io_settings(tmp_path / "export"),
         stop_step="phase_optimize_hardware",
-        inject_steps_after={name: [recorder(name)] for name in STEPS},
+        step_edits=[{"after": name, "insert": recorder(name)} for name in STEPS],
         verify_steps=[VerificationStepType.PARTITION_PYTHON],
         verify_input_npy=str(tmp_path / "input.npy"),
     )
@@ -208,15 +196,15 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # verification asked passed.
     manifest = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
-    assert manifest["verifications"] == {"kernel_partition_python": "pass"}
+    assert manifest["verifications"] == {"partition_python": "pass"}
     ran = [step for step in manifest["steps"] if step["phase"] is not None]
     assert [step["name"] for step in ran] == [
-        *build_dataflow_phase_lookup["phase_prepare_model"],
+        *[step.__name__ for step in build_dataflow_phases["phase_prepare_model"]],
         *STEPS,
     ]
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
-    assert indexed["step_verify_partition"]["verifications"] == {"kernel_partition_python": "pass"}
+    assert indexed["step_verify_partition"]["verifications"] == {"partition_python": "pass"}
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
     converted = seen["step_convert_to_hw"]
@@ -302,9 +290,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # of the three inputs, the partition's own output (the last MatMul's INT8 logits, not
     # the parent's label), the parent graph executed with it, equals the streamlined
     # model's.
-    verified = sorted((output / "verification_output").glob("verify_kernel_partition_python_*"))
+    verified = sorted((output / "verification_output").glob("verify_partition_python_*"))
     assert [path.name for path in verified] == [
-        f"verify_kernel_partition_python_{index}_SUCCESS.npz" for index in range(3)
+        f"verify_partition_python_{index}_SUCCESS.npz" for index in range(3)
     ]
     for index, path in enumerate(verified):
         (name,) = [item.name for item in built.graph.output]
@@ -323,9 +311,7 @@ def test_the_debug_placeholder_sets_nothing_on_tfc(
     """The debug placeholder is a strategy (``placeholder``), written in the list: on TFC
     no required choice is open, so it sets nothing, logs no DEBUG value, and the
     verification passes."""
-    cfg = config(
-        tmp_path, step_options=exploration(kernel_exploration=[{"strategy": "placeholder"}])
-    )
+    cfg = config(tmp_path, settings={"strategies": [{"strategy": "placeholder"}]})
     with caplog.at_level(logging.INFO, logger=STEPS_LOG):
         model = explore(source, cfg)
     report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
@@ -364,8 +350,8 @@ def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: P
     converted = step_convert_to_hw(chain_source().transform(InferShapes()), config(tmp_path))
     assert read_target(converted) == ULTRA96
     on_ip = config(tmp_path, target=TargetRequest(board="Ultra96", period_ns=5.0))
-    assert on_ip._resolve_target() == resolve_target(part=ULTRA96.part, period_ns=5.0)
-    assert (on_ip._resolve_target().shell, on_ip._resolve_target().board) == ("ip", None)
+    assert on_ip.resolved_target == resolve_target(part=ULTRA96.part, period_ns=5.0)
+    assert (on_ip.resolved_target.shell, on_ip.resolved_target.board) == ("ip", None)
     asserted = TargetRequest(board="Ultra96", part="xczu3eg-sbva484-1-i", period_ns=5.0)
     with pytest.raises(TargetRefused, match="board-part-mismatch"):
         step_convert_to_hw(chain_source(), config(tmp_path, target=asserted))
@@ -374,10 +360,15 @@ def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: P
         step_convert_to_hw(chain_source(), config(tmp_path, target=xrt))
 
 
+def checks_of(cfg: DataflowBuildConfig) -> list[Check]:
+    """The configuration checks of ``cfg`` against its plan."""
+    return run_all_config_checks(cfg, resolve_plan(cfg)).checks
+
+
 def failed_checks(cfg: Any) -> dict[str, list[str]]:
     """The configuration errors of a build, their messages by name."""
     failed: dict[str, list[str]] = {}
-    for check in run_all_config_checks(cfg).checks:
+    for check in checks_of(cfg):
         if not check.passed and check.severity == Severity.ERROR:
             failed.setdefault(check.name, []).append(check.message)
     return failed
@@ -493,21 +484,17 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     cfg = config(
         tmp_path, steps=["phase_emit_hardware", "phase_generate_outputs"], verify_steps=verify
     )
-    (warning,) = [
-        check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
-    ]
+    (warning,) = [check for check in checks_of(cfg) if check.name == "verify_step_prereq"]
     assert not warning.passed and warning.severity == Severity.WARNING
-    assert "kernel_partition_elaboration" in warning.message
+    assert "partition_elaboration" in warning.message
     cfg = config(tmp_path, verify_steps=verify)
-    assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
+    assert "verify_step_prereq" not in {check.name for check in checks_of(cfg)}
     python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
     testbench = [VerificationStepType.STITCHED_IP_TESTBENCH]
     cfg = config(tmp_path, steps=KERNEL_PATH, verify_steps=testbench)
-    (warning,) = [
-        check for check in run_all_config_checks(cfg).checks if check.name == "verify_step_prereq"
-    ]
+    (warning,) = [check for check in checks_of(cfg) if check.name == "verify_step_prereq"]
     assert "stitched_ip_testbench, which needs step_package_partition" in warning.message
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
         "testbench_output": [
@@ -545,11 +532,11 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
 def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None:
     """A build's steps are the kernel path's: another name is refused, naming its steps
     and phases, and the default steps are its six phases' steps, in order."""
-    with pytest.raises(ValueError, match="Unknown step or phase: step_hw_codegen") as refused:
-        resolve_build_steps(config(tmp_path, steps=["step_hw_codegen"]))
+    with pytest.raises(ValueError, match="'step_hw_codegen' is no step or phase") as refused:
+        resolve_plan(config(tmp_path, steps=["step_hw_codegen"]))
     assert "step_explore" in str(refused.value)
     assert "phase_optimize_hardware" in str(refused.value)
-    assert [step.__name__ for step in resolve_build_steps(config(tmp_path))] == [
+    assert [step.name for step in resolve_plan(config(tmp_path)).steps] == [
         "step_tidy_up",
         "step_qonnx_to_finn",
         "step_add_pre_post_processing",
@@ -569,17 +556,12 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
 
 
 def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(
-        tmp_path, step_options=exploration(kernel_exploration=[{"strategy": "fifo_depths"}])
-    )
+    cfg = config(tmp_path)
     with pytest.raises(ValueError, match="names no kernel strategy"):
-        step_explore(matmul_model(), cfg)
-    cfg = config(
-        tmp_path,
-        step_options=exploration(kernel_exploration=[{"strategy": "target_throughput", "fsp": 1}]),
-    )
+        step_explore(matmul_model(), cfg, strategies=[{"strategy": "fifo_depths"}])
+    misspelt = [{"strategy": "target_throughput", "fsp": 1}]
     with pytest.raises(ValueError, match="unexpected keyword argument 'fsp'"):
-        step_explore(matmul_model(), cfg)
+        step_explore(matmul_model(), cfg, strategies=misspelt)
 
 
 def set_folding() -> dict[str, dict[str, int]]:
@@ -659,7 +641,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
     specs = [{"strategy": "target_throughput", "fps": 1_000_000}]
-    cfg = config(tmp_path, step_options=exploration(kernel_exploration=specs))
+    cfg = config(tmp_path, settings={"strategies": specs})
     _, body, _ = partition_body(explore(source, cfg))
     folding = {
         node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
@@ -715,7 +697,7 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
         ("sized", [target, {"strategy": "size_fifos"}]),
         ("plain", [target]),
     ):
-        cfg = config(tmp_path / name, step_options=exploration(kernel_exploration=specs))
+        cfg = config(tmp_path / name, settings={"strategies": specs})
         explore(source, cfg)
         report = json.loads(
             (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
@@ -863,9 +845,7 @@ def z0_cut(tfc_cache: Path, tfc_streamlined: Path) -> Path:
 
     def cut(directory: Path) -> ModelWrapper:
         source = ModelWrapper(str(tfc_streamlined))
-        return explore(
-            source, config(directory, step_options=exploration(kernel_exploration=Z0_CHAIN))
-        )
+        return explore(source, config(directory, settings={"strategies": Z0_CHAIN}))
 
     return built(tfc_cache / "z0" / "parent.onnx", cut)
 
@@ -1121,7 +1101,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     cfg = config(
         tmp_path,
-        step_options=exploration(kernel_exploration=Z0_CHAIN),
+        settings={"strategies": Z0_CHAIN},
         generate_outputs=[
             DataflowOutputType.BITFILE,
             DataflowOutputType.PYNQ_DRIVER,
@@ -1129,7 +1109,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         ],
     )
     vivado = FakeVivado(timing=TIMING_REPORT)
-    cfg._toolchain = cast(Toolchain, vivado)
+    cfg.prepared_toolchain = cast(Toolchain, vivado)
     # An earlier build's files in the same output directory, which nothing ships.
     for stale in ("driver/stale.py", "deploy/driver/stale.py", "deploy/stale.bit"):
         (Path(cfg.output_dir) / stale).parent.mkdir(parents=True, exist_ok=True)
@@ -1157,7 +1137,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
         # The bitfile was built from the body's IP, made from its design as it is now.
         "bitfile_made_from": design_digest(body),
-        "bitfile_options": {"enable_hw_debug": False},
+        "bitfile_options": {"hw_debug": False},
         "hwh": str(output / "bitfile" / "finn-accel.hwh"),
     }
     assert (output / "bitfile" / "finn-accel.hwh").read_text() == "top.hwh"
