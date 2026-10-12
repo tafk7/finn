@@ -5,8 +5,8 @@
 
 A step is a function ``(model, cfg, *, settings...) -> model``. Its keyword-only
 parameters are its settings: the build fills each from the configuration's setting of
-that name, else it keeps its default (finn.builder.build_dataflow_plan). Each phase is a
-list of steps; a build without ``steps`` runs every phase in order.
+that name, else it keeps its default (finn.builder.build_dataflow_plan). A phase is a
+name for a list of steps; a build without ``steps`` runs every phase's steps in order.
 
 The steps prepare a Brevitas export into the streamlined graph the kernel path converts;
 convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
@@ -49,7 +49,7 @@ import finn.transformation.streamline.reorder as reorder
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
-    Step,
+    StepFunction,
     VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import reported, verdict, write_report
@@ -86,6 +86,7 @@ from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
 from finn.transformation.kernels import (
+    OBJECTIVE_FPS,
     Explored,
     ToKernelOps,
     exploration_summary,
@@ -303,8 +304,10 @@ def step_target_throughput(
     frames a second at the target's clock, the pins held. With ``relax_target_fps``, a
     throughput the folding cannot reach is relaxed to the fastest it reaches, and the
     kernels folded to that. Writes report/step_target_throughput.json, with the
-    bottleneck reached and whether it meets the target; its ``strategy.fps`` is the
-    objective step_build_bitfile reports the delivered clock against."""
+    bottleneck reached and whether it meets the target. The partition's body records
+    ``target_fps`` (finn.transformation.kernels.OBJECTIVE_FPS), the objective
+    step_build_bitfile reports the delivered clock against, until a later step that may
+    change the folding (FOLDING_STEPS) removes it."""
     strategy = TargetThroughput(target_fps, relax=relax_target_fps)
     _explore(model, cfg, "step_target_throughput", strategy)
     return model
@@ -461,16 +464,6 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     return model
 
 
-def _objective_fps(cfg: DataflowBuildConfig) -> float | None:
-    """The frames a second step_target_throughput folded to, read from its report in the
-    output directory; None where it wrote none."""
-    report = Path(cfg.output_dir) / "report" / "step_target_throughput.json"
-    if not report.is_file():
-        return None
-    fps: float = json.loads(report.read_text())["strategy"]["fps"]
-    return fps
-
-
 def step_build_bitfile(
     model: ModelWrapper,
     cfg: DataflowBuildConfig,
@@ -491,17 +484,18 @@ def step_build_bitfile(
     without a build (``ip``) refuses it before the build starts.
 
     The objective report/delivered_clock.json states beside what the delivered clock
-    gives is the throughput step_target_throughput folded the partition to, as its
-    report in this output directory states it; none without that report."""
+    gives is the throughput step_target_throughput folded the partition to, as the
+    partition's body records it (OBJECTIVE_FPS); none where it records none."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.BITFILE)
+    _, body, _ = partition_body(model)
     building = BuildPynqBitfile(
         Path(cfg.output_dir),
         toolchain=cfg.step_toolchain("step_build_bitfile"),
         hw_debug=hw_debug,
-        objective_fps=_objective_fps(cfg),
+        objective_fps=body.get(OBJECTIVE_FPS),
     )
     model = model.transform(building)
     for report in REPORTS.values():
@@ -574,9 +568,10 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     return model
 
 
-#: The build's phases, in the order a build runs them, each its steps in order. A
-#: configuration's lists name a phase wherever they name a step.
-build_dataflow_phases: dict[str, list[Step]] = {
+#: The build's phases, in the order a build runs them, each its steps in order. A phase is
+#: a name: in a configuration's ``steps`` it stands for its steps, as ``start_step`` for
+#: its first and as ``stop_step`` for its last.
+build_dataflow_phases: dict[str, list[StepFunction]] = {
     # Bring the export into FINN's form and clean it for the compiler without changing
     # its computation, its inputs and outputs as the configuration states them.
     "phase_prepare_model": [
@@ -609,7 +604,7 @@ build_dataflow_phases: dict[str, list[Step]] = {
 
 #: The steps that choose the partition's parameters, one strategy each, which a
 #: configuration adds to its list by name (by default, only step_size_fifos runs).
-KERNEL_STRATEGY_STEPS: list[Step] = [
+KERNEL_STRATEGY_STEPS: list[StepFunction] = [
     step_pin_choices,
     step_target_throughput,
     step_max_throughput,
@@ -622,22 +617,19 @@ KERNEL_STRATEGY_STEPS: list[Step] = [
 #: pin may too, and going back to the baselines does), and those that size the FIFOs at
 #: the folding they find: a build's plan refuses a folding step after its last sizing
 #: step (finn.builder.build_dataflow_plan).
-FOLDING_STEPS: tuple[Step, ...] = (
+FOLDING_STEPS: tuple[StepFunction, ...] = (
     step_pin_choices,
     step_target_throughput,
     step_max_throughput,
     step_baseline_choices,
 )
-FIFO_SIZING_STEPS: tuple[Step, ...] = (step_size_fifos,)
+FIFO_SIZING_STEPS: tuple[StepFunction, ...] = (step_size_fifos,)
 
 #: The build's steps by name: the phases' and the strategy steps.
-build_dataflow_step_lookup: dict[str, Step] = {
+build_dataflow_step_lookup: dict[str, StepFunction] = {
     step.__name__: step
     for step in [
         *(step for steps in build_dataflow_phases.values() for step in steps),
         *KERNEL_STRATEGY_STEPS,
     ]
 }
-
-#: The entries a build without ``steps`` runs: every phase, in order.
-default_build_dataflow_steps: list[str] = list(build_dataflow_phases)

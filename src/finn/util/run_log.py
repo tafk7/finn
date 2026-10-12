@@ -85,11 +85,11 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
     ``logging.captureWarnings``) go to the file, each line with its level, step
     (running_step) and logger, and to the console (_Console): with ``verbose`` all of
     it, otherwise the INFO lines of the logger named ``runner``, warnings and errors.
-    ``finn`` logs from INFO at least, so that a handler the caller adds (the build's
-    manifest) sees INFO records; a level the caller set above INFO is the one the file
-    and the console show. No stream is redirected, so a third party's print reaches the
-    console unchanged. The handlers, levels and warnings hook are restored afterwards,
-    leaving a notebook's own logging as it was."""
+    ``finn`` logs from INFO unless the caller set it higher; a level the caller set above
+    INFO is the one the file and the console show, for every logger below ``finn``. No stream
+    is redirected, so a third party's print reaches the console unchanged. The handlers,
+    levels and warnings hook are restored afterwards, leaving a notebook's own logging as
+    it was."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     stamp = _StepStamp()
     file_handler = logging.FileHandler(path, mode="a")
@@ -117,7 +117,7 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
             handler.addFilter(
                 lambda record: record.levelno >= shown or record.name == "py.warnings"
             )
-    loggers[0].setLevel(min(shown, logging.INFO))
+    loggers[0].setLevel(shown)
     # Leave the warnings hook alone if the caller already captures warnings.
     capture = warnings.showwarning is not getattr(logging, "_showwarning", None)
     if capture:

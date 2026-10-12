@@ -20,7 +20,8 @@ the partition, the parent graph's one ``StreamingDataflowPartition``
 at conversion, a channel's at the cut); ``ExploreKernelChoices`` explores the choices
 of a partition's body (the KernelOps the cut put together) through the DSE seam
 (``finn.kernels.explore``) by one strategy, which replaces the values it decides, saves
-every value and records the pins the body holds (``HELD``), so that the build's strategy
+every value and records the pins the body holds (``HELD``) and the throughput it was
+explored to (``OBJECTIVE_FPS``), so that the build's strategy
 steps, each one exploration of the parent graph's partition (``explore_partition``, its
 lines for the build's log ``exploration_summary``), hold a pin for the build;
 ``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
@@ -35,6 +36,7 @@ partition, from its ends.
 
 from finn.transformation.kernels.choose import (
     HELD,
+    OBJECTIVE_FPS,
     Explored,
     ExploreKernelChoices,
     exploration_summary,
@@ -58,6 +60,7 @@ from finn.transformation.kernels.package import ElaboratePartition, PackageParti
 
 __all__ = [
     "HELD",
+    "OBJECTIVE_FPS",
     "ElaboratePartition",
     "ExploreKernelChoices",
     "Explored",

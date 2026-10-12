@@ -64,6 +64,11 @@ StrPath = str | os.PathLike[str]
 
 _LOG = logging.getLogger(__name__)
 
+#: The logger of the records a build's manifest indexes (finn.builder.build_dataflow_manifest):
+#: the tool runs here, the reports and verdicts there. A build sets its level, so a caller
+#: that quiets another of FINN's loggers keeps them in the manifest.
+RECORDS = logging.getLogger("finn.records")
+
 # Vendor tools start slowly (a JVM behind vitis-run), and much more slowly when a
 # build launches many at once. Probe answers are cached per process, keyed by the
 # selection and the environment's PATH, so parallel HLS synthesis probes once.
@@ -75,7 +80,8 @@ _VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
 #: ``cwd``, ``transcript`` (its standard output's file) and ``status`` ``running``;
 #: when it ends, ``status`` (``completed``, ``failed``, or ``stopped`` with the
 #: ``error``), ``seconds`` and ``exit``. A build's manifest indexes them
-#: (finn.builder.build_dataflow_manifest); the log shows the same records.
+#: (finn.builder.build_dataflow_manifest) through ``RECORDS``; the log shows the same
+#: records.
 TOOL_RUN = "finn_tool_run"
 _RUNS = itertools.count(1)
 
@@ -145,9 +151,9 @@ def run_process(
     ``check``, a non-zero exit raises ``CalledProcessError``. A remote wrapper is
     responsible for cancelling its remote descendants.
 
-    A run that keeps a transcript is a tool run a build indexes: its log records, when
-    it starts and when it finishes or is stopped, carry ``TOOL_RUN``'s fields, with the
-    run named ``tool`` (by default, its command's first word).
+    A run that keeps a transcript is a tool run a build indexes: its log records
+    (``RECORDS``), when it starts and when it finishes or is stopped, carry ``TOOL_RUN``'s
+    fields, with the run named ``tool`` (by default, its command's first word).
     """
     command = [os.fspath(arg) for arg in argv]
     if not command:
@@ -156,6 +162,7 @@ def run_process(
     files = None if transcript is None else transcript_files(transcript)
     started = time.monotonic()
     run = next(_RUNS)
+    log = _LOG if files is None else RECORDS
 
     def indexed(**state: object) -> dict[str, dict[str, object]] | None:
         # The structured fields of this run's records, for a build's manifest; None
@@ -164,7 +171,7 @@ def run_process(
             return None
         return {TOOL_RUN: {"run": run, **state}}
 
-    _LOG.info(
+    log.info(
         "command=%s cwd=%s transcript=%s",
         shlex.join(command),
         cwd or os.getcwd(),
@@ -241,7 +248,7 @@ def run_process(
             setattr(exc, "output", out)
             setattr(exc, "stderr", err)
         seconds = time.monotonic() - started
-        _LOG.warning(
+        log.warning(
             "command stopped duration=%.3fs result=%s",
             seconds,
             type(exc).__name__,
@@ -252,7 +259,7 @@ def run_process(
         out, err = printed()
     result = ToolRun(command, proc.returncode, out, err, None if files is None else files[0])
     seconds = time.monotonic() - started
-    _LOG.info(
+    log.info(
         "command finished duration=%.3fs result=%s",
         seconds,
         proc.returncode,

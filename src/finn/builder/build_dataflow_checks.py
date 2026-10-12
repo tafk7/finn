@@ -18,7 +18,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
     config_finding,
 )
-from finn.builder.build_dataflow_plan import BuildPlan
+from finn.builder.build_dataflow_plan import Plan
 from finn.core.space import Finding, FindingKind
 from finn.kernels.target import Target
 from finn.platform import BOARDS, VIVADO_BLOCK_DESIGN, shell_row
@@ -56,12 +56,11 @@ def _board_vivado(cfg: DataflowBuildConfig, target: Target) -> list[Finding]:
     return [config_finding("board-vivado", message, "configuration.toolchain")]
 
 
-def configuration_findings(
-    cfg: DataflowBuildConfig, plan: BuildPlan, target: Target
-) -> list[Finding]:
+def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target) -> list[Finding]:
     """The findings of the checks the module docstring names, for a configuration, its
     ``plan`` and its resolved ``target``: rejections and limitations."""
     findings = _board_vivado(cfg, target)
+    run = plan.steps[plan.run]
     row = shell_row(target.shell, target.board)
     shell_outputs = [output for output in cfg.generate_outputs if output in SHELL_OUTPUTS]
     if shell_outputs and row.integration is None:
@@ -86,7 +85,8 @@ def configuration_findings(
     if hw_debug is not None and hw_debug.value and row.integration != VIVADO_BLOCK_DESIGN:
         message = f"the {target.shell!r} shell has no build to take it"
         findings.append(config_finding("hw-debug-shell", message, "configuration.hw_debug"))
-    for name in plan.unread:
+    read = {name for step in run for name in step.settings}
+    for name in sorted(name for name in cfg.settings if name not in read):
         readers = ", ".join(plan.settings[name].readers)
         message = f"only {readers} read it, and start_step/stop_step leave them out"
         findings.append(_warning("setting-unread", message, f"configuration.{name}"))
@@ -104,7 +104,7 @@ def configuration_findings(
             "writes, and generate_outputs does not ask for it"
         )
         findings.append(config_finding("testbench-output", message, "configuration.verify_steps"))
-    resolved = {step.name for step in plan.steps}
+    resolved = {step.name for step in run}
     for each in cfg.verify_steps:
         vstep = VerificationStepType(each)
         *saving, concluding = VERIFIED_BY[vstep]

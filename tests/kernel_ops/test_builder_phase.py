@@ -6,7 +6,7 @@
 ``build_dataflow_cfg`` runs a DataflowBuildConfig's default steps from the exported
 network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
 phases: no Vivado. Each step's
-output is recorded as it runs (``step_edits``), and the partition is compared
+output is recorded as it runs (a recorder after it in the list), and the partition is compared
 with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phases
 (``phase_emit_hardware``, ``phase_generate_outputs``) is not a test.
 """
@@ -33,6 +33,7 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
@@ -45,6 +46,7 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
+    FOLDING_STEPS,
     KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
@@ -53,6 +55,7 @@ from finn.builder.build_dataflow_steps import (
     step_deployment_package,
     step_make_driver,
     step_size_fifos,
+    step_target_throughput,
     step_verify_partition,
 )
 from finn.core.onnx_exec import execute_onnx
@@ -84,10 +87,11 @@ from finn.shells.pynq.runner import (
     iodma_model,
     project_script,
 )
-from finn.toolchain.launcher import Toolchain
+from finn.toolchain.launcher import RECORDS, Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
     HELD,
+    OBJECTIVE_FPS,
     explore_kernel_choices,
     kernel_choices_config,
     shell_bottleneck,
@@ -110,7 +114,7 @@ from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition
 #: The steps' logger, whose lines a step called outside a build logs.
 STEPS_LOG = "finn.builder.build_dataflow_steps"
 #: The logger of the reports a step writes (finn.builder.build_dataflow_manifest.reported).
-REPORTS_LOG = "finn.builder.build_dataflow_manifest"
+REPORTS_LOG = RECORDS.name
 
 #: The builder's phases from the prepared graph to the verified partition.
 KERNEL_PATH = ["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"]
@@ -201,8 +205,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     cfg = config(
         tmp_path,
         settings=io_settings(tmp_path / "export"),
-        stop_step="phase_optimize_hardware",
-        step_edits=[{"after": name, "insert": recorder(name)} for name in STEPS],
+        steps=["phase_prepare_model", *(each for name in STEPS for each in (name, recorder(name)))],
         verify_steps=[VerificationStepType.PARTITION_PYTHON],
         verify_input_npy=str(tmp_path / "input.npy"),
     )
@@ -214,19 +217,17 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
     # The run, as its manifest indexes it: every step of the four phases, in order, each
-    # completed (the recorders injected after each belong to no phase), and the
-    # verification asked passed.
+    # completed (the recorders after each aside), and the verification asked passed.
     manifest = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
     assert manifest["verifications"] == {"partition_python": "pass"}
-    ran = [step for step in manifest["steps"] if step["phase"] is not None]
+    ran = [step for step in manifest["steps"] if not step["name"].startswith("seen_")]
     assert [step["name"] for step in ran] == [
         *[step.__name__ for step in build_dataflow_phases["phase_prepare_model"]],
         *STEPS,
     ]
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
-    assert indexed["step_verify_partition"]["verifications"] == {"partition_python": "pass"}
     # Each strategy step's report is its own, listed under it.
     assert [report["path"] for report in indexed["step_size_fifos"]["reports"]] == [
         "report/step_size_fifos.json"
@@ -449,13 +450,10 @@ def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Pa
     assert strategy_report(cfg, "step_size_fifos")["strategy"]["margin"] == 2
     target = strategy_report(cfg, "step_target_throughput")["strategy"]
     assert target["fps"] == CHAIN_FPS and target["changed"]
-    planned = {step["name"]: step["settings"] for step in manifest["plan"]["steps"]}
-    assert planned["step_target_throughput"] == {
-        "target_fps": CHAIN_FPS,
-        "relax_target_fps": True,
-    }
-    assert planned["step_pin_choices"] == {"kernel_choices_file": str(pins)}
-    assert planned["step_max_throughput"] == {"max_throughput_within": {"lut": 0.5}}
+    planned = {name: each["value"] for name, each in manifest["plan"]["settings"].items()}
+    assert planned["target_fps"] == CHAIN_FPS and planned["relax_target_fps"] is True
+    assert planned["kernel_choices_file"] == str(pins)
+    assert planned["max_throughput_within"] == {"lut": 0.5}
     body = ModelWrapper(str(output / "partition" / "partition.onnx"))
     assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(body)
 
@@ -610,6 +608,85 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
         f"{design_digest(body)}; make the driver again (pynq_driver)"
     )
     assert not (output / "deploy").exists()
+
+
+class ObjectiveSeen(Transformation):
+    """Stands in for the bitfile's build (BuildPynqBitfile): keeps the objective it is
+    given, and builds nothing."""
+
+    seen: list[float | None] = []
+
+    def __init__(
+        self, directory: Path, *, toolchain: Toolchain, hw_debug: bool, objective_fps: float | None
+    ) -> None:
+        super().__init__()
+        ObjectiveSeen.seen.append(objective_fps)
+        self.findings: tuple[Finding, ...] = ()
+        self.bitfile = directory / "bitfile" / "finn-accel.bit"
+
+    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        return model, False
+
+
+def test_the_bitfiles_objective_is_the_target_its_partition_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """step_build_bitfile reports the delivered clock against the throughput the
+    partition's body records (OBJECTIVE_FPS), as the target throughput explored it:
+    none where none did, though an earlier build left its report in the output
+    directory; a build resumed from the saved model reads the same."""
+    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(ObjectiveSeen, "seen", [])
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    cfg = config(tmp_path)
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
+    stale = Path(cfg.output_dir) / "report" / "step_target_throughput.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text(json.dumps({"strategy": {"strategy": "target_throughput", "fps": 5.0}}))
+    step_build_bitfile(parent, cfg)
+    parent = step_target_throughput(parent, cfg, target_fps=1000.0)
+    _, body, _ = partition_body(parent)
+    assert body.get(OBJECTIVE_FPS) == 1000.0
+    step_build_bitfile(parent, cfg)
+    saved = tmp_path / "parent.onnx"
+    parent.save(str(saved))
+    step_build_bitfile(ModelWrapper(str(saved)), cfg)
+    assert ObjectiveSeen.seen == [None, 1000.0, 1000.0]
+
+
+def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every step that may change the folding (FOLDING_STEPS) other than the target
+    throughput removes the body's objective: the bitfile states no target its final
+    folding was not explored for."""
+    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
+    monkeypatch.setattr(ObjectiveSeen, "seen", [])
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps(CHAIN_PINS))
+    settings: dict[str, dict[str, Any]] = {
+        "step_pin_choices": {"kernel_choices_file": pins},
+        "step_max_throughput": {"max_throughput_within": {"lut": 0.5}},
+        "step_baseline_choices": {},
+    }
+    cfg = config(tmp_path)
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
+    others = [step for step in FOLDING_STEPS if step is not step_target_throughput]
+    assert [step.__name__ for step in others] == list(settings)
+    for folding in others:
+        parent = step_target_throughput(parent, cfg, target_fps=1000.0)
+        parent = folding(parent, cfg, **settings[folding.__name__])
+        _, body, _ = partition_body(parent)
+        assert body.get(OBJECTIVE_FPS) is None, folding.__name__
+        step_build_bitfile(parent, cfg)
+    assert ObjectiveSeen.seen == [None] * len(others)
 
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
@@ -1289,10 +1366,10 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     parent = explore(source, cfg, Z0_CHAIN)
     # The outputs' phase, its steps given their settings by the plan (and the build's
     # toolchain, the fake, by cfg): the bitfile's build reads its objective from the
-    # target throughput's report.
+    # partition's body, where the target throughput recorded it.
     outputs = replace(cfg, steps=["phase_generate_outputs"], settings={})
     for step in resolve_plan(outputs).steps:
-        parent = step.run(parent, cfg)
+        parent = step.function(parent, cfg, **step.settings)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
     ((_, _, script),) = vivado.runs
     assert "create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0\n" in script

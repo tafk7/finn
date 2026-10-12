@@ -471,7 +471,8 @@ process, starting no child, as `build_dataflow_directory` and `build_dataflow_cf
 and changes no working directory: the configuration's relative paths (`output_dir`,
 `verify_input_npy`, the preparation's `preprocessing`, the pinned choices'
 `kernel_choices_file`, the toolchain's settings scripts and command directory) name files in the project
-directory, resolved when `read_build_config` reads it, and a relative `FINN_BUILD_DIR`
+directory (`read_build_config` reads it with the directory as its `base_dir`: a field's
+path is joined to it when read, a path setting's when the build decodes it), and a relative `FINN_BUILD_DIR`
 is relative to the directory the command runs from. Every tool runs in the
 environment of the configuration's toolchain (the machine's when it names none),
 prepared once for the build; the process's own environment is left as it is. The
@@ -485,7 +486,7 @@ shell). Concurrent in-process builds still share stdout and logger state; use
 separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
 What a build leaves in its output directory: `build_dataflow.log` (for a reader:
-every record with its level, step and logger), upstream's `time_per_step.json`, the
+every record with its level, step and logger), the
 steps' reports under `report/`, each tool's
 transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as the
 tool runs), the intermediate models, and the outputs asked. `report/build.json` is
@@ -493,15 +494,17 @@ the build's manifest, the index of the run a program reads after the exit code, 
 never the log: the build's identity (FINN's revision where it is known, the
 toolchain's selection, the target, the model, and the Vivado release where the build
 probed it: for a board that requires a release, or in a tool step), what checking the
-configuration found (its rejections and the limitations warned of), each step with its
-phase, status (`running` while it runs, then
+configuration found (its rejections and the limitations warned of), the plan (the steps
+it runs, and each setting with its value or default and its readers), each step with
+its status (`running` while it runs, then
 `completed` or `failed`), seconds, the reports it wrote with their findings by code,
-its tool runs with their transcripts, status, exit and messages by severity, and its
-verifications; each verification asked with its verdict (`pass`, `fail`, `error`,
-`not-run`); and the `outcome`: `completed`, `failed` (the step, the error's kind:
+and its tool runs with their transcripts, status, exit and messages by severity; each
+verification that concluded with its verdict (`pass` or `fail`); and the `outcome`: `completed`, `failed` (the step, the error's kind:
 `refusal`, `tool-unavailable`, `tool-failed`, `verdict` or `bug`, the error, a
 refusal's findings by code) or `refused` (the configuration, before the first step).
-It is rewritten as the build goes, so a build that stopped says where. The model
+It is rewritten as the build goes, so a build that stopped says where. Its reports,
+verdicts and tool runs reach it as records of one logger, `finn.records`, whose level
+the build sets: a caller that quiets another of FINN's loggers keeps them. The model
 records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
 `vlnv`, `interfaces`, `made_from`) on the partition's body, the bitfile (`bitfile`,
 `hwh`, `bitfile_made_from`, `bitfile_options`) on the parent graph; the bitfile's
@@ -558,7 +561,15 @@ the configuration states no `toolchain`):
   "preprocessing": "preproc.onnx",
   "input_datatype": "UINT8",
   "topk": 1,
-  "step_edits": [{"before": "step_size_fifos", "insert": "step_target_throughput"}],
+  "steps": [
+    "phase_prepare_model",
+    "phase_convert_to_hardware",
+    "phase_create_accelerator",
+    "step_target_throughput",
+    "phase_optimize_hardware",
+    "phase_emit_hardware",
+    "phase_generate_outputs"
+  ],
   "target_fps": 1000000
 }
 ```
@@ -579,27 +590,24 @@ synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
 packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); with
 `ooc_synth`, also the partition per member, what synthesis flattened
 `unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
-need a shell that integrates the partition, so they are refused on `ip`. The default steps are the build's phases, each a list of
-steps: `phase_prepare_model` (the export cleaned, its pre- and post-processing added,
+need a shell that integrates the partition, so they are refused on `ip`. The default steps are the build's phases' steps, in order; a phase
+is a name for its steps: `phase_prepare_model` (the export cleaned, its pre- and post-processing added,
 its Quant nodes lowered, then tidied, streamlined and made channels-last),
 `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
 partition), `phase_optimize_hardware` (their choices, one strategy step at a time, and
 the partition's verification), `phase_emit_hardware` (the partition's IP) and
 `phase_generate_outputs` (what the shell makes), in
-`finn.builder.build_dataflow_steps.build_dataflow_phases`. `steps` replaces that list;
-its entries, and those of an edit, are phase or step names, import paths
+`finn.builder.build_dataflow_steps.build_dataflow_phases`. `steps` is the list the build
+runs in place of the default one: phase names (each its steps), step names, import paths
 (`package.module.name`) of a step function or of a qonnx `Transformation` class, run with
 its defaults, or in Python the function, `functools.partial` or `Transformation` itself.
-`step_edits` changes the list in order, without restating it:
-`{"after": "step_streamline", "insert": ["finn.transformation.streamline.extract_multithreshold_scale_bias.ExtractMultiThresholdScaleBias"]}`,
-`{"before": ..., "insert": ...}`, `{"replace": ..., "with": ...}` and
-`{"remove": "step_verify_partition"}`. A phase as target is the phase as a whole; any
-other name is a step, wherever it runs, and entries placed beside it join its phase.
-Each target must name exactly one place. `start_step` and `stop_step` name a phase or a
-step.
+A list names a phase for the steps it does not change, as above; in Python,
+`finn.builder.build_dataflow_plan.default_steps()` is the default list by step name, to
+change and give as `steps`. `start_step` and `stop_step` name a step once in the list,
+or a phase: its first step to start from, its last to stop after.
 
 The configuration's fields say how the build runs (`output_dir`, `target`, `toolchain`,
-`generate_outputs`, `verify_steps`, `verify_input_npy`, `steps`, `step_edits`,
+`generate_outputs`, `verify_steps`, `verify_input_npy`, `steps`,
 `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
 `verbose`). Every other top-level key is a setting (in Python, `settings={...}`): the
 value of the keyword-only parameter of that name of the steps that declare it
@@ -611,15 +619,15 @@ the same name share its value. The preparation steps declare `override_inpsize`
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
 the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
 logic analyzers on the ends' streams, refused on `ip`); its clock report's objective
-is the `target_fps` that `step_target_throughput`'s report in the output directory
-states, where there is one. The build's manifest records each
-step it runs with its settings, and each setting with its value or default and its
-readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
+is the `target_fps` the partition's body records where `step_target_throughput` folded
+it (`finn.choices/objective_fps`), and none where a later step that may change the folding
+(a pin, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
+each setting with its value or default and its readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
 their place (`configuration.target: ...`).
 
 The strategy steps choose the KernelOps' choices through the DSE seam, one strategy
-each; a build lists them like any step, in `steps` or by `step_edits`. Each opens the
+each; a build lists them like any step, in `steps`. Each opens the
 partition's body, takes every choice the body leaves open at its baseline (the first
 viable case its kernel lists: the least parallelism; each memory in the explicit style
 the size of what it holds orders first, `auto` last; every transport `direct`), runs
@@ -649,8 +657,8 @@ first, so the strategies after it fold around the pins. `step_size_fifos` sizes 
 channel from both ends' beat patterns at the bottleneck (`direct` where none is
 needed), `fifo_margin` words added to a FIFO it places. The default phase is
 `[step_size_fifos, step_verify_partition]`: the baseline folding, its FIFOs sized; a
-target throughput is `{"before": "step_size_fifos", "insert": "step_target_throughput"}`
-with `target_fps`. FIFO depths are sized at the folding before them, so the plan
+target throughput is `step_target_throughput` listed before it, with `target_fps` (the
+example above). FIFO depths are sized at the folding before them, so the plan
 refuses, before the first step, a step that may change the folding (pinning, a target
 or maximum throughput, going back to the baselines) after the last `step_size_fifos`,
 and one with no sizing after it in a build that does not cut the partition before it.

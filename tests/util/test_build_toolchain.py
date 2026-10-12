@@ -13,6 +13,7 @@ import pytest
 import json
 import os
 from onnx import TensorProto, helper
+from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
@@ -123,52 +124,51 @@ def test_the_toolchain_selection_round_trips_through_the_json_config(monkeypatch
 
 
 def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
-    """read_build_config resolves each relative path a build directory's configuration
-    states against the directory, so it names the same file from any working directory;
+    """read_build_config reads a build directory's configuration with the directory as its
+    base: each relative path it states names the same file from any working directory,
+    its fields' when read, a setting a step declares as a path when the plan decodes it;
     an absolute path, and an empty command directory, stay as stated."""
     directory = tmp_path / "build"
     directory.mkdir()
+    steps = ["phase_prepare_model", "step_convert_to_hw", "step_create_dataflow_partition"]
+    steps += ["step_pin_choices", "step_size_fifos"]
+    settings = {
+        "preprocessing": "preproc.onnx",
+        "topk": 1,
+        "kernel_choices_file": "kernel_choices.json",
+        "fifo_margin": 2,
+        "input_datatype": "UINT8",
+    }
     cfg = builder_config(
         verify_input_npy="inputs/input.npy",
-        step_edits=[{"before": "step_size_fifos", "insert": "step_pin_choices"}],
-        settings={
-            "preprocessing": "preproc.onnx",
-            "topk": 1,
-            "kernel_choices_file": "kernel_choices.json",
-            "fifo_margin": 2,
-            "input_datatype": "UINT8",
-        },
+        steps=steps,
+        settings=settings,
         toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
     )
     (directory / build_dataflow.CONFIG_FILE).write_text(cfg.to_json())
     read = build_dataflow.read_build_config(str(directory))
+    assert read.base_dir == str(directory)
     assert read.output_dir == str(directory / "out")
     assert read.verify_input_npy == str(directory / "inputs/input.npy")
-    # The settings a step declares as a path (the preprocessing model, the pinned
-    # choices); the rest of them as stated, a str a step does not declare as a path
-    # included.
-    assert read.settings == {
-        "preprocessing": str(directory / "preproc.onnx"),
-        "topk": 1,
-        "kernel_choices_file": str(directory / "kernel_choices.json"),
-        "fifo_margin": 2,
-        "input_datatype": "UINT8",
-    }
-    settings = resolve_plan(read).settings
-    assert settings["preprocessing"].value == directory / "preproc.onnx"
-    assert settings["kernel_choices_file"].value == directory / "kernel_choices.json"
-    # An absolute path stays as stated.
-    absolute = builder_config(
-        step_edits=[{"before": "step_size_fifos", "insert": "step_pin_choices"}],
-        settings={"kernel_choices_file": "/elsewhere/kernel_choices.json"},
-    )
-    (directory / build_dataflow.CONFIG_FILE).write_text(absolute.to_json())
-    read_again = build_dataflow.read_build_config(str(directory))
-    assert read_again.settings == {"kernel_choices_file": "/elsewhere/kernel_choices.json"}
     assert read.toolchain == Selection(
         settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
         command_dir=str(directory / "tools"),
     )
+    # The settings as stated, until the plan decodes them: the paths joined, the rest of
+    # them as stated, a str a step does not declare as a path included.
+    assert read.settings == settings
+    decoded = {name: setting.value for name, setting in resolve_plan(read).settings.items()}
+    assert decoded["preprocessing"] == directory / "preproc.onnx"
+    assert decoded["kernel_choices_file"] == directory / "kernel_choices.json"
+    assert (decoded["topk"], decoded["input_datatype"]) == (1, "UINT8")
+    # An absolute path stays as stated.
+    absolute = builder_config(
+        steps=steps, settings={"kernel_choices_file": "/elsewhere/kernel_choices.json"}
+    )
+    (directory / build_dataflow.CONFIG_FILE).write_text(absolute.to_json())
+    read_again = build_dataflow.read_build_config(str(directory))
+    chosen = resolve_plan(read_again).settings["kernel_choices_file"].value
+    assert chosen == Path("/elsewhere/kernel_choices.json")
     # Absolute as stated, unset, or the empty command directory: unchanged.
     stated = builder_config(output_dir="/results", toolchain=Selection(command_dir=""))
     (directory / build_dataflow.CONFIG_FILE).write_text(stated.to_json())
@@ -218,7 +218,7 @@ def test_a_build_directory_builds_in_process_its_toolchain_prepared_once(
     (toolchain,) = prepared
     assert toolchain.environment["SELECTED_BY_SETTINGS"] == "1"
     assert os.path.samefile(os.getcwd(), caller) and dict(os.environ) == environment
-    assert (directory / "out/time_per_step.json").is_file()
+    assert (directory / "out/report/build.json").is_file()
     scratch = (caller / "scratch").resolve()
     assert resources.scratch() == scratch
     assert f"Intermediate outputs will be generated in {scratch}" in capsys.readouterr().out

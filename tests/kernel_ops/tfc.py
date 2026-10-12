@@ -102,8 +102,9 @@ def run_steps(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """``model`` through the steps ``cfg`` names (its plan,
     finn.builder.build_dataflow_plan.resolve_plan), each with its settings, in memory:
     no model read or saved between them."""
-    for step in resolve_plan(cfg).steps:
-        model = step.run(model, cfg)
+    plan = resolve_plan(cfg)
+    for step in plan.steps[plan.run]:
+        model = step.function(model, cfg, **step.settings)
     return model
 
 
