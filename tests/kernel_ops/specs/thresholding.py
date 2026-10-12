@@ -3,9 +3,10 @@
 
 """Thresholding's ONNX entry: qonnx ``MultiThreshold`` graphs.
 
-The op's input normalization rounds the thresholds up and clips them to the input's
-range; ``x >= t`` and ``x >= ceil(t)`` agree for an integer ``x``, so the positive
-graphs' fractional and out-of-range thresholds agree with ONNX everywhere. The op's
+The op's facts round the thresholds up and clip them to the input's range for the
+kernel's table, the graph's left as they are; ``x >= t`` and ``x >= ceil(t)`` agree for
+an integer ``x``, so the positive graphs' fractional and out-of-range thresholds agree
+with ONNX everywhere. The op's
 typing rule does not read ``out_dtype``, which changes annotations only
 (``out-dtype-wide``: INT32 stated, the kernel's narrower type sound).
 """

@@ -8,12 +8,10 @@ whole-graph passes cannot run on a graph whose KernelOps' inputs are not known
 yet: they ask every node at once. ``InferKernelTensors`` visits the nodes in
 graph order instead:
 
-- a KernelOp first normalizes its value inputs against its inputs' exact types
-  (``normalize_inputs``: a Thresholding's thresholds as integers), then answers
-  its outputs from its kernel's fact-level views, in its node root bound on its
-  inputs (the facts, the input channels' tensors and an owned initializer's
-  value: MatMul's result range is its weights' columns'; the whole root reads the
-  outputs this pass states), and the pass writes them. An output's annotation is
+- a KernelOp answers its outputs from its kernel's fact-level views, in its node
+  root bound on its inputs (the facts, the input channels' tensors and an owned
+  initializer's value: MatMul's result range is its weights' columns'; the whole
+  root reads the outputs this pass states), and the pass writes them. An output's annotation is
   its producer's statement: every run states it again from the node's facts and
   replaces what was there, narrower or wider, so a change of the facts (weights
   replaced or lifted to a graph input) reaches the nodes that follow on the next
@@ -85,7 +83,7 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
 def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tuple[Finding, ...]:
     """The per-node step (module docstring): ``node``'s outputs stated from its inputs.
 
-    A KernelOp's inputs are normalized first. With ``admit``, it is asked the kernels'
+    With ``admit``, a KernelOp is asked the kernels'
     admission on its inputs (``KernelOp.admission``): when they refuse it, its outputs
     are not stated and the refusals are returned. ``ToKernelOps`` tries a candidate
     so, as it converts. Without ``admit`` (``InferKernelTensors``, re-running the step
@@ -101,7 +99,6 @@ def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tup
         _standard(model, standin)
         op.infer_node_datatype(model)
         return ()
-    op.normalize_inputs()
     if admit:
         refused = op.admission()
         if refused:

@@ -145,9 +145,9 @@ def test_a_contradiction_still_stops_the_conversion() -> None:
 
 
 def test_a_refused_trial_leaves_the_node_as_inference_leaves_it() -> None:
-    """Unsorted thresholds: the trial normalizes them (rounded up, annotated INT4) before
-    the kernels refuse their order. The node stays, its thresholds as they were, and the
-    model is what stating the target and inferring every node would make of it."""
+    """Unsorted thresholds: the kernels refuse their order. The node stays, its thresholds
+    as they were, and the model is what stating the target and inferring every node would
+    make of it."""
     model = multithreshold(table=UNSORTED)
     expected = model.transform(_Stated()).transform(InferKernelTensors())
     converted, conversion = convert(model)

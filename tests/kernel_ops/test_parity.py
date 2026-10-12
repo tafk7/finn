@@ -24,13 +24,13 @@ initial contents (``uram-init``). XSim simulates the DSP58 primitive (unisims); 
 UltraRAM is the RTL's ``RAM_STYLE`` attribute, which simulates as the behavioural
 memory: the mapping itself is synthesis's to show.
 
-- **Thresholding**: a row a channel, its thresholds normalized narrower than the input
+- **Thresholding**: a row a channel, its thresholds typed narrower than the input
   (so the RTL saturates the input's extremes to the thresholds' type), the least of
   them -16, a negative bias; and one row shared by every channel, at one point.
-  Against ``execute_node`` itself. Its first run found the RTL's saturation counting
-  a threshold at the type's minimum (INT5's -16) for inputs below it: the op now
-  normalizes to a type with a value below its least threshold (INT6), and the kernel
-  refuses the case (``threshold-saturation``).
+  Against ``execute_node`` itself. The RTL's saturation would count a threshold at the
+  type's minimum (INT5's -16) for inputs below it: the op's facts type the table with
+  a value below its least threshold (INT6), and the kernel refuses the case
+  (``threshold-saturation``).
 - **MatMul**: INT8 activations and weights at their extremes, against ``execute_node``
   itself: exact integer arithmetic, as the hardware's accumulator is, on the oracle's
   integer inputs (``test_matmul_execute_node_is_exact_beyond_float32``). The ONNX side,
@@ -93,7 +93,7 @@ def matmul(target: Target = TARGET, weights: Any = WEIGHTS, rows: int = ROWS) ->
     return model.transform(InferKernelTensors())
 
 
-# A row a channel, three thresholds each, -16 and 15 among them: normalized to INT6.
+# A row a channel, three thresholds each, -16 and 15 among them: the kernel's table INT6.
 THRESHOLDS = np.array([[-16, -3, 2], [-9, 0, 15], [-4, -4, 7], [-1, 6, 14]])
 SHARED = np.array([[-7, 0, 9]])
 BIAS = -2

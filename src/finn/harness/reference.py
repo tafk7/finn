@@ -3,11 +3,10 @@
 
 """The ONNX entry: a KernelOp's pattern and reference against the ONNX it covers.
 
-A KernelOp's ``execute_node`` (with ``normalize_inputs`` before it) is the
-computational reference for the nodes its pattern covers, and must equal their ONNX
-semantics, exactly, on every node the op converts.
-Nothing in a build re-checks it; this module does, offline, from a spec of the op
-(``OpSpec``, in ``tests/``):
+A KernelOp's ``execute_node`` is the computational reference for the nodes its
+pattern covers, and must equal their ONNX semantics, exactly, on every node the op
+converts. Nothing in a build re-checks it; this module does, offline, from a spec of
+the op (``OpSpec``, in ``tests/``):
 
 - **positive graphs**, each the nodes one match covers and nothing else. On each
   (``check_positive``):

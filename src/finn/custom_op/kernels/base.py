@@ -35,11 +35,10 @@ conversion reports; any other refusal of the facts is a contradiction
 (``KernelOpError``).
 
 An op's ``execute_node`` is the computational reference for what its pattern covers
-(PRINCIPLES 8), with ``normalize_inputs`` before it, defined for every input domain
-the ONNX it covers is, and equal to the ONNX semantics of the covered nodes on every
-node the op converts: a rewrite ``normalize_inputs`` makes keeps those values. Integers
-are exact on both sides: FINN executes ONNX with exact integers
-(``finn.core.onnx_exec``), as the hardware computes them. The harness checks the
+(PRINCIPLES 8), defined for every input domain the ONNX it covers is, and equal to the
+ONNX semantics of the covered nodes on every node the op converts. Integers are exact on
+both sides: FINN executes ONNX with exact integers (``finn.core.onnx_exec``), as the
+hardware computes them. The harness checks the
 reference against ONNX, every value equal (``finn.harness.reference``); no build
 re-checks it.
 
@@ -766,11 +765,6 @@ class KernelOp(CustomOp):
         return placed(type(self), facts.formals(), on)
 
     # -- inference ------------------------------------------------------------------------
-
-    def normalize_inputs(self) -> None:
-        """Rewrite this node's value inputs into the form its facts read, from inputs
-        already inferred; ``InferKernelTensors`` calls it before the outputs. None by
-        default."""
 
     def output_tensors(self) -> Shapes:
         """Each output's ONNX shape and datatype, from the kernel's fact-level views
