@@ -37,7 +37,7 @@ float64 implementation of some (Conv). Each standard op that reads or writes a f
 tensor there is tried first, as qonnx runs it, a session of the one node
 (``float64_refused``); if ONNX Runtime refuses one, the float64 run is skipped, not run
 narrower, and one limitation names the ops and why (``export-rounds-unchecked``):
-where the export rounds is not known. The rest of the check runs as before.
+where the export rounds is not known. The rest of the analysis runs.
 """
 
 from __future__ import annotations
