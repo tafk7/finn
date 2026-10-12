@@ -12,11 +12,12 @@ import io
 import logging
 import onnx
 import onnx.helper as oh
+import os
 import sys
 import warnings
 
 import finn.builder.build_dataflow as build
-from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind
 from finn.platform import TargetRequest
@@ -205,16 +206,15 @@ def test_the_log_has_every_record_with_its_step_the_console_the_runner_and_warni
     assert "WARNING step_says finn.transformation.kernels: a module's warning" in log
     assert "WARNING step_says py.warnings: " in log and "UserWarning: a step's warning" in log
     assert "INFO - finn.builder.build_dataflow: Completed successfully" in log
-    assert "INFO - finn.builder.build_dataflow_checks: " in log  # the check report
     assert warnings.showwarning is shown
     assert (finn.level, finn.handlers, finn.propagate) == (level, handlers, propagate)
 
 
 @pytest.mark.util
-def test_a_refused_configuration_is_logged_each_check_at_its_severity_then_raises(capsys):
-    """The configuration checks run in the build's log: a failed check is logged at its
-    severity, and a configuration refused is logged before it raises (upstream's
-    AssertionError); upstream's report files are kept."""
+def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys):
+    """Before the first step, each limitation the configuration checks find is a warning
+    and each rejection an error, once each on the console and in the log, and the build
+    raises one ConfigurationRefused; it writes no report of its own."""
     output = make_build_dir("test_build_failure_")
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
@@ -225,14 +225,21 @@ def test_a_refused_configuration_is_logged_each_check_at_its_severity_then_raise
         verify_steps=["stitched_ip_testbench"],
         generate_outputs=[],
     )
-    with pytest.raises(AssertionError, match="Configuration check failed with errors"):
+    refusal = "testbench-output: configuration.verify_steps: stitched_ip_testbench runs the"
+    with pytest.raises(ConfigurationRefused, match=refusal):
         build.build_dataflow_cfg(model, cfg)
     err = capsys.readouterr().err
     with open(f"{output}/{build.LOG_FILE}") as f:
         log = f.read()
-    assert "ERROR: testbench_output: verify_steps includes stitched_ip_testbench" in err
-    assert "ERROR - finn.builder.build_dataflow_checks: testbench_output: " in log
-    assert "Build failed before its first step: AssertionError: Configuration check" in err
-    assert "FINN Build Configuration Check Report" in log
-    with open(f"{output}/config_check_report.txt") as f:
-        assert "[X] testbench_output: " in f.read()
+    warning = "verification-not-run: configuration.verify_steps: stitched_ip_testbench, which"
+    assert err.splitlines()[:3] == [
+        f"WARNING: {warning} step_package_partition runs, and the resolved build steps "
+        "(steps/start_step/stop_step) leave it out: that verification does not run, and has "
+        "no verdict",
+        "ERROR: Configuration refused: 1 findings",
+        f"ERROR:   {refusal} testbench stitched_ip writes, and generate_outputs does not ask "
+        "for it",
+    ]
+    assert log.count(refusal) == 1 and log.count(warning) == 1
+    assert "Traceback" not in log
+    assert sorted(os.listdir(output)) == ["build_dataflow.log", "model.onnx", "report"]

@@ -27,18 +27,14 @@ from finn.builder.build_dataflow import (
     read_build_config,
     resolve_step_filename,
 )
-from finn.builder.build_dataflow_checks import (
-    Report,
-    Severity,
-    format_report,
-    run_all_config_checks,
-    save_report,
-)
+from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
     VerificationStepType,
 )
+from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
     KERNEL_STRATEGY_STEPS,
@@ -47,9 +43,11 @@ from finn.builder.build_dataflow_steps import (
     default_build_dataflow_steps,
     step_add_pre_post_processing,
 )
+from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
+from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config
 from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_settings
@@ -57,9 +55,20 @@ from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_settings
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
 
-def checked(cfg: DataflowBuildConfig) -> Report:
-    """The configuration checks of ``cfg`` against its plan."""
-    return run_all_config_checks(cfg, resolve_plan(cfg))
+def checked(cfg: DataflowBuildConfig) -> list[Finding]:
+    """The configuration checks' findings of ``cfg``, its plan and its target."""
+    return configuration_findings(cfg, resolve_plan(cfg), cfg.resolved_target)
+
+
+def refusal(cfg: DataflowBuildConfig) -> ConfigurationRefused:
+    """The refusal of ``cfg``'s plan."""
+    with pytest.raises(ConfigurationRefused) as refused:
+        resolve_plan(cfg)
+    return refused.value
+
+
+def place(finding: Finding) -> object:
+    return dict(finding.details).get("place")
 
 
 def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
@@ -81,7 +90,6 @@ def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
         "fifo_margin": 0,
         "fifo_ram_style": None,
         "hw_debug": False,
-        "target_fps": None,
     }
     assert not any(setting.given for setting in settings.values())
     assert "step_size_fifos" in [step.name for step in plan.steps]
@@ -179,12 +187,16 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(ke
     """Read as a setting, refused when the plan resolves, before the first step."""
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, key: None}))
     assert cfg.settings == {key: None}
-    with pytest.raises(ValueError) as refused:
-        resolve_plan(cfg)
-    assert str(refused.value) == (
-        f"settings no step of this build declares: {key}; the settings its steps read: "
-        "fifo_margin, fifo_ram_style, hw_debug, input_datatype, max_multithreshold_bit_width, "
-        "override_inpsize, preprocessing, target_fps, topk"
+    (finding,) = refusal(cfg).findings
+    assert (finding.kind, finding.code, place(finding)) == (
+        FindingKind.REJECTION,
+        "setting-unknown",
+        f"configuration.{key}",
+    )
+    assert finding.message == (
+        "no step of this build declares it; the settings its steps read: fifo_margin, "
+        "fifo_ram_style, hw_debug, input_datatype, max_multithreshold_bit_width, "
+        "override_inpsize, preprocessing, topk"
     )
 
 
@@ -269,7 +281,7 @@ def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written()
         ({"topk": "one"}, "configuration.topk: an int, not 'one'"),
         ({"max_multithreshold_bit_width": "8"}, "configuration.max_multithreshold_bit_width: "),
         ({"fifo_margin": "2"}, "configuration.fifo_margin: an int, not '2'"),
-        ({"target_fps": "fast"}, "configuration.target_fps: a float, not 'fast'"),
+        ({"fifo_ram_style": 3}, "configuration.fifo_ram_style: a str, not 3"),
         ({"hw_debug": "yes"}, "configuration.hw_debug: a bool, not 'yes'"),
         ({"override_inpsize": [1, "28"]}, "configuration.override_inpsize: "),
     ],
@@ -279,8 +291,9 @@ def test_a_setting_of_the_wrong_type_is_refused_naming_it(
 ) -> None:
     """By the annotation of the step that declares it, when the plan resolves."""
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, **settings}))
-    with pytest.raises(ValueError, match=re.escape(refused)):
+    with pytest.raises(ConfigurationRefused, match=re.escape(refused)) as refusal:
         resolve_plan(cfg)
+    assert [finding.code for finding in refusal.value.findings] == ["setting-invalid"]
 
 
 @pytest.mark.parametrize(
@@ -309,13 +322,13 @@ def test_hw_debug_on_a_shell_without_a_build_is_refused_before_the_build() -> No
             json.dumps({**STATED, "target": target, "hw_debug": True})
         )
         assert resolve_plan(cfg).settings["hw_debug"].readers == ("step_build_bitfile",)
-        found = [check for check in checked(cfg).checks if check.name == "kernel_hw_debug"]
+        found = [finding for finding in checked(cfg) if finding.code == "hw-debug-shell"]
         if passed:
             assert found == []
             continue
-        (check,) = found
-        assert (check.severity, check.passed) == (Severity.ERROR, False)
-        assert check.message == "hw_debug: the 'ip' shell has no build to take it"
+        (finding,) = found
+        assert (finding.kind, place(finding)) == (FindingKind.REJECTION, "configuration.hw_debug")
+        assert finding.message == "the 'ip' shell has no build to take it"
 
 
 def board_build(tmp_path: Path, board: str, shell: str = "pynq") -> DataflowBuildConfig:
@@ -338,35 +351,34 @@ def release(found: tuple[int, int]) -> object:
     return probe
 
 
-def board_checks(report: Report) -> list[tuple[bool, str]]:
-    return [
-        (check.passed, check.message) for check in report.checks if check.name == "board_vivado"
-    ]
+def never(self: Toolchain, tool: str, timeout: float = 0) -> tuple[int, ...]:
+    raise AssertionError(f"{tool} was asked its release")
 
 
-def test_no_vivado_on_the_route_is_reported_not_raised(tmp_path: Path) -> None:
-    """Without Vivado on the build's route, the report states none detected; a board
-    whose row requires a release fails its check, naming why, and one without passes
-    every Vivado check."""
-    report = checked(board_build(tmp_path, "AUP-ZU3_8GB"))
-    assert report.vivado_version is None and report.has_errors()
-    ((passed, message),) = board_checks(report)
-    assert not passed
+def board_vivado(findings: list[Finding]) -> list[str]:
+    return [finding.message for finding in findings if finding.code == "board-vivado"]
+
+
+def test_vivado_is_asked_its_release_only_for_a_board_that_requires_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A board whose row requires a release (AUP-ZU3_8GB's, 2024.1) asks the build's
+    toolchain; with no Vivado on its route, the check refuses it, naming why. A board
+    without one, and the ip shell, which names no board, ask nothing."""
+    (message,) = board_vivado(checked(board_build(tmp_path, "AUP-ZU3_8GB")))
     assert message.startswith("AUP-ZU3_8GB requires Vivado 2024.1 or later, no Vivado detected")
     assert "vivado: not on this toolchain's route" in message
-    report = checked(board_build(tmp_path, "Ultra96"))
-    assert report.vivado_version is None and board_checks(report) == []
-    assert "Vivado: Not detected" in format_report(report)
+    monkeypatch.setattr(Toolchain, "probe", never)
+    assert board_vivado(checked(board_build(tmp_path, "Ultra96"))) == []
+    assert board_vivado(checked(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
 
 
 def test_a_toolchain_that_does_not_prepare_is_no_vivado_detected(tmp_path: Path) -> None:
     cfg = board_build(tmp_path, "AUP-ZU3_8GB")
     del cfg.prepared_toolchain
     cfg.toolchain = Selection(settings=(str(tmp_path / "missing-settings64.sh"),))
-    report = checked(cfg)
-    assert report.vivado_version is None
-    ((passed, message),) = board_checks(report)
-    assert not passed and "no Vivado detected" in message
+    (message,) = board_vivado(checked(cfg))
+    assert "no Vivado detected" in message
 
 
 @pytest.mark.parametrize(
@@ -377,28 +389,44 @@ def test_the_release_a_boards_row_requires_against_the_toolchains(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, found: tuple[int, int], passed: bool
 ) -> None:
     """The release comes from the build's toolchain's probe, the requirement from the
-    board's row (AUP-ZU3_8GB's, 2024.1), on the shell that names the board; on ``ip``
-    the target names no board and nothing is required."""
+    board's row, on the shell that names the board."""
     monkeypatch.setattr(Toolchain, "probe", release(found))
-    report = checked(board_build(tmp_path, "AUP-ZU3_8GB"))
-    assert report.vivado_version == found
-    ((check_passed, message),) = board_checks(report)
-    assert check_passed is passed
-    if not passed:
-        assert message == "AUP-ZU3_8GB requires Vivado 2024.1 or later, found 2023.2"
-    assert board_checks(checked(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
+    stated = board_vivado(checked(board_build(tmp_path, "AUP-ZU3_8GB")))
+    assert stated == (
+        [] if passed else ["AUP-ZU3_8GB requires Vivado 2024.1 or later, found 2023.2"]
+    )
 
 
-def test_the_report_states_the_toolchains_release(
+def step_nothing(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    return model
+
+
+def test_the_manifest_states_the_release_only_where_the_build_asked_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(Toolchain, "probe", release((2025, 2)))
-    report = checked(board_build(tmp_path, "Ultra96"))
-    assert report.vivado_version == (2025, 2)
-    assert not report.has_errors()
-    assert "Vivado: 2025.2" in Path(save_report(report, str(tmp_path))).read_text()
-    stated = json.loads((tmp_path / "config_check_report.json").read_text())
-    assert stated["vivado_version"] == [2025, 2]
+    """The release the toolchain's probe found in this process, for a board that
+    requires one; a build that never asks Vivado states none."""
+    source = tmp_path / "model.onnx"
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), source)
+    built = {}
+    for board in ("AUP-ZU3_8GB", "Ultra96"):
+        cfg = board_build(tmp_path / board, board)
+        cfg.output_dir = str(tmp_path / board / "output")
+        cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
+        key = cfg.prepared_toolchain.probe_key("version", "vivado")
+        monkeypatch.setitem(launcher._VERSIONS, key, (2025, 2))
+        if board == "Ultra96":
+            monkeypatch.setattr(Toolchain, "probe", never)
+        assert build_dataflow_cfg(str(source), cfg) == 0
+        built[board] = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
+    assert built["AUP-ZU3_8GB"]["identity"]["vivado"] == "2025.2"
+    assert "vivado" not in built["Ultra96"]["identity"]
+    assert sorted(path.name for path in (tmp_path / "Ultra96" / "output").iterdir()) == [
+        "build_dataflow.log",
+        "intermediate_models",
+        "report",
+        "time_per_step.json",
+    ]
 
 
 def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
@@ -437,7 +465,6 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
         "fifo_margin": ("step_size_fifos",),
         "fifo_ram_style": ("step_size_fifos",),
         "hw_debug": ("step_build_bitfile",),
-        "target_fps": ("step_build_bitfile",),
     }
 
 
@@ -477,22 +504,21 @@ def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases()
         "'step_size_fifos' is not one of this build's steps or phases; its steps: "
         "step_package_partition; its phases: phase_emit_hardware"
     )
-    with pytest.raises(ValueError) as refused:
-        resolve_plan(cfg)
-    assert str(refused.value) == message
-    with pytest.raises(ValueError) as refused:
+    (finding,) = refusal(cfg).findings
+    assert (finding.code, place(finding), finding.message) == ("step-absent", "start_step", message)
+    with pytest.raises(ConfigurationRefused) as refused:
         resolve_step_filename("step_size_fifos", cfg, -1)
-    assert str(refused.value) == message
+    assert str(refused.value) == f"step-absent: start_step: {message}"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
-    with pytest.raises(ValueError, match="'phase_kernel' is not one of this build's") as refused:
-        resolve_plan(cfg)
-    assert "step_deployment_package" in str(refused.value)
-    assert "phase_generate_outputs" in str(refused.value)
+    (finding,) = refusal(cfg).findings
+    assert (finding.code, place(finding)) == ("step-absent", "stop_step")
+    assert finding.message.startswith("'phase_kernel' is not one of this build's")
+    assert "step_deployment_package" in finding.message
+    assert "phase_generate_outputs" in finding.message
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "steps": ["phase_kernel"]}))
-    with pytest.raises(
-        ValueError, match=r"steps\[0\]: 'phase_kernel' is no step or phase; the steps: "
-    ):
-        resolve_plan(cfg)
+    (finding,) = refusal(cfg).findings
+    assert (finding.code, place(finding)) == ("step-unknown", "steps[0]")
+    assert finding.message.startswith("'phase_kernel' is no step or phase; the steps: ")
 
 
 def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
@@ -547,6 +573,61 @@ def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
     assert build_dataflow_cfg(str(source), cfg) == 0
     assert ran == ["step_three"]
     assert list(json.loads((output / "time_per_step.json").read_text())) == ["step_three"]
+
+
+def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path) -> None:
+    """The target's refusal, the plan's and the checks' are one ConfigurationRefused,
+    raised before the model is read; the manifest records the refusal and its findings,
+    and the log names each once."""
+    stated = {
+        **STATED,
+        "output_dir": str(tmp_path / "output"),
+        "target": {"period_ns": 5.0, "board": "U250"},
+        "steps": ["phase_create_accelerator", "step_target_throughput"],
+        "fifo_margins": 2,
+    }
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    with pytest.raises(ConfigurationRefused) as refused:
+        build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
+    codes = [(finding.code, place(finding)) for finding in refused.value.findings]
+    assert codes == [
+        ("unknown-board", None),
+        ("setting-unknown", "configuration.fifo_margins"),
+        ("setting-required", "configuration.target_fps"),
+    ]
+    required = refused.value.findings[2].message
+    assert required == "step_target_throughput require it, and it is not given"
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    assert manifest["outcome"] == {
+        "status": "refused",
+        "error": {"type": "ConfigurationRefused", "message": str(refused.value)},
+    }
+    recorded = manifest["configuration_findings"]
+    assert [(each["code"], each["kind"]) for each in recorded] == [
+        (code, "rejection") for code, _ in codes
+    ]
+    assert manifest["identity"]["target"] is None and manifest["identity"]["model"] is None
+    assert manifest["plan"] is None and manifest["steps"] == []
+    log = (tmp_path / "output" / "build_dataflow.log").read_text()
+    assert "Configuration refused: 3 findings" in log
+    assert log.count("setting-required: configuration.target_fps: ") == 1
+    # The target resolves, the plan too: the checks' rejections, and their warnings once.
+    stated = {**stated, "target": {"period_ns": 5.0, "board": "Ultra96"}, "target_fps": 1e6}
+    del stated["fifo_margins"]
+    stated["generate_outputs"] = ["bitfile"]
+    stated["stop_step"] = "step_create_dataflow_partition"
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    with pytest.raises(ConfigurationRefused) as refused:
+        build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
+    assert [finding.code for finding in refused.value.findings] == ["shell-outputs"]
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    assert [each["code"] for each in manifest["configuration_findings"]] == [
+        "shell-outputs",
+        "setting-unread",
+    ]
+    assert manifest["plan"] is not None
+    log = (tmp_path / "output" / "build_dataflow.log").read_text()
+    assert log.count("setting-unread: configuration.target_fps: ") == 1
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:

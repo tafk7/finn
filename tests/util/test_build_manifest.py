@@ -5,8 +5,8 @@
 the index of a run, which a machine reads after the exit code, never the log. It is
 written from the build's start and rewritten as the build goes: each step with its
 phase, status, seconds, reports and their findings, tool runs and their transcripts,
-and verifications; the configuration checks; the outcome, by the failure's kind. The
-steps and the tool are fakes; no Vivado."""
+and verifications; what checking the configuration found; the outcome, by the
+failure's kind. The steps and the tool are fakes; no Vivado."""
 
 import pytest
 
@@ -22,6 +22,7 @@ from pathlib import Path
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
     VerificationStepType,
@@ -36,6 +37,7 @@ from finn.builder.build_dataflow_manifest import (
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind, finding_record
 from finn.platform import TargetRequest
+from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 
 pytestmark = pytest.mark.util
@@ -135,9 +137,8 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
         "vivado_jobs",
     }
     assert identity["finn"] == finn_revision()
-    assert identity["vivado"] is None  # the fake toolchain has no Vivado
-    checks = manifest["configuration_checks"]
-    assert checks["report"] == "config_check_report.json" and checks["failed"] == []
+    assert "vivado" not in identity  # nothing asked the fake toolchain's Vivado
+    assert manifest["configuration_findings"] == []
     steps = {step["name"]: step for step in manifest["steps"]}
     assert list(steps) == ["step_reports", "step_tools", "step_looks"]
     assert all(step["status"] == "completed" for step in steps.values())
@@ -168,6 +169,17 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
         "build.json",
         "checked.json",
     ]
+
+
+def test_the_release_is_the_probes_where_the_build_ran_a_tool(tmp_path, monkeypatch):
+    """Where a step ran a tool, the Vivado release a probe of the build's toolchain found
+    in this process; a build that ran none states none, though a probe found it."""
+    key = fake_toolchain(tmp_path / "tools").probe_key("version", "vivado")
+    monkeypatch.setitem(launcher._VERSIONS, key, (2025, 2))
+    _, manifest, _ = build_of(tmp_path, [step_tools])
+    assert manifest["identity"]["vivado"] == "2025.2"
+    _, manifest, _ = build_of(tmp_path, [step_reports])
+    assert "vivado" not in manifest["identity"]
 
 
 def raising(error):
@@ -243,27 +255,29 @@ def test_each_verification_asked_has_a_verdict(tmp_path):
     assert manifest["verifications"] == {"partition_elaboration": "error"}
 
 
-def test_a_refused_configuration_is_the_outcome_with_its_failed_checks(tmp_path):
-    with pytest.raises(AssertionError, match="Configuration check failed"):
+def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
+    with pytest.raises(ConfigurationRefused, match="testbench-output: ") as refused:
         build_of(tmp_path, [step_reports], verify_steps=["stitched_ip_testbench"])
     manifest = manifest_of(str(tmp_path / "output"))
-    assert manifest["outcome"]["status"] == "refused"
-    assert manifest["outcome"]["error"]["type"] == "AssertionError"
-    assert manifest["steps"] == []
-    failed = manifest["configuration_checks"]["failed"]
-    assert {check["name"] for check in failed} >= {"testbench_output"}
-    assert {check["severity"] for check in failed if check["name"] == "testbench_output"} == {
-        "ERROR"
+    assert manifest["outcome"] == {
+        "status": "refused",
+        "error": {"type": "ConfigurationRefused", "message": str(refused.value)},
     }
+    assert manifest["steps"] == []
+    found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
+    assert found == [("testbench-output", "rejection"), ("verification-not-run", "limitation")]
     assert manifest["verifications"] == {"stitched_ip_testbench": "not-run"}
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
-    with pytest.raises(ValueError, match="steps\\[0\\]: 'step_none' is no step or phase"):
+    with pytest.raises(
+        ConfigurationRefused, match="step-unknown: steps\\[0\\]: 'step_none' is no step or phase"
+    ):
         build_of(tmp_path, ["step_none"])
     manifest = manifest_of(str(tmp_path / "output"))
     assert manifest["outcome"]["status"] == "refused"
-    assert manifest["outcome"]["error"]["type"] == "ValueError"
+    assert manifest["outcome"]["error"]["type"] == "ConfigurationRefused"
+    assert [each["code"] for each in manifest["configuration_findings"]] == ["step-unknown"]
 
 
 def test_a_caller_quieter_than_info_still_gets_its_manifest(tmp_path, capsys):

@@ -296,22 +296,15 @@ def step_target_throughput(
     model: ModelWrapper,
     cfg: DataflowBuildConfig,
     *,
-    target_fps: float | None = None,
+    target_fps: float,
     relax_target_fps: bool = True,
 ) -> ModelWrapper:
     """Fold the partition's kernels to the least parallelism that meets ``target_fps``
-    frames a second at the target's clock, the pins held. ``target_fps`` is required
-    when this step runs (the configuration checks refuse a plan without it); it is
-    optional only because step_build_bitfile reads it too, as the objective it reports
-    the delivered clock against. With ``relax_target_fps``, a throughput the folding
-    cannot reach is relaxed to the fastest it reaches, and the kernels folded to that.
-    Writes report/step_target_throughput.json, with the bottleneck reached and whether
-    it meets the target."""
-    if target_fps is None:
-        raise ValueError(
-            "step_target_throughput: no target_fps, the frames a second it folds the "
-            "partition to, is given"
-        )
+    frames a second at the target's clock, the pins held. With ``relax_target_fps``, a
+    throughput the folding cannot reach is relaxed to the fastest it reaches, and the
+    kernels folded to that. Writes report/step_target_throughput.json, with the
+    bottleneck reached and whether it meets the target; its ``strategy.fps`` is the
+    objective step_build_bitfile reports the delivered clock against."""
     strategy = TargetThroughput(target_fps, relax=relax_target_fps)
     _explore(model, cfg, "step_target_throughput", strategy)
     return model
@@ -468,12 +461,21 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     return model
 
 
+def _objective_fps(cfg: DataflowBuildConfig) -> float | None:
+    """The frames a second step_target_throughput folded to, read from its report in the
+    output directory; None where it wrote none."""
+    report = Path(cfg.output_dir) / "report" / "step_target_throughput.json"
+    if not report.is_file():
+        return None
+    fps: float = json.loads(report.read_text())["strategy"]["fps"]
+    return fps
+
+
 def step_build_bitfile(
     model: ModelWrapper,
     cfg: DataflowBuildConfig,
     *,
     hw_debug: bool = False,
-    target_fps: float | None = None,
 ) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
     directory, if BITFILE is asked. Only the pynq shell has a bitfile build
@@ -488,9 +490,9 @@ def step_build_bitfile(
     ``hw_debug``: insert integrated logic analyzers on the ends' streams. A shell
     without a build (``ip``) refuses it before the build starts.
 
-    ``target_fps``: the throughput step_target_throughput folded the partition to, the
-    objective report/delivered_clock.json states beside what the delivered clock
-    gives."""
+    The objective report/delivered_clock.json states beside what the delivered clock
+    gives is the throughput step_target_throughput folded the partition to, as its
+    report in this output directory states it; none without that report."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
         return model
@@ -499,7 +501,7 @@ def step_build_bitfile(
         Path(cfg.output_dir),
         toolchain=cfg.step_toolchain("step_build_bitfile"),
         hw_debug=hw_debug,
-        objective_fps=target_fps,
+        objective_fps=_objective_fps(cfg),
     )
     model = model.transform(building)
     for report in REPORTS.values():

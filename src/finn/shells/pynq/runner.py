@@ -484,7 +484,7 @@ class BuildPynqBitfile(Transformation):
     the template's impl_1 hierarchical utilization (report/placed_utilization.xml), each
     IP's out-of-context synthesis utilization (report/out_of_context/), and the
     delivered clock beside the one asked, with the shell root's bottleneck, ends
-    included, and the throughput asked (``objective_fps``, the build's ``target_fps``)
+    included, and the throughput asked (``objective_fps``, step_target_throughput's)
     (report/delivered_clock.json), with its limitations (``delivered_clock_findings``,
     the report's ``findings``). The shell, board, part and clock are the target the
     partition's body states (``pynq_row``); the ends' scratch models are kept in

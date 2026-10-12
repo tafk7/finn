@@ -9,13 +9,16 @@ The model and the manifest index different things: the model indexes the design 
 the artifacts a later step uses (``finn.outputs``); the manifest indexes the run:
 
 - ``identity``: what ran it: FINN's revision where it is known (``finn_revision``), the
-  toolchain's selection, the Vivado release the configuration checks probed, the
-  target, the model read and the output directory;
+  toolchain's selection, the target, the model read, the output directory, and, where
+  the build ran a tool or checked the release its board requires, the Vivado release
+  the toolchain's probe found;
 - ``plan``: the steps the build runs (finn.builder.build_dataflow_plan), each with its
   phase and the value of each setting it declares, and each setting with its value,
   whether the configuration gave it (else its default), and the steps that read it;
-- ``configuration_checks``: the configuration check report
-  (``config_check_report.json``), its counts, and each check that failed;
+- ``configuration_findings``: what checking the configuration found before the first
+  step (finn.builder.build_dataflow_checks), each a finding record
+  (``finn.core.space.finding_record``): the rejections that refused it, and the
+  limitations the build warned of;
 - ``steps``: each step run, in order, with its phase (None for a step no phase lists),
   its ``status`` (``running``, ``completed``, ``failed``), its ``seconds``, the
   ``reports`` it wrote (each with its findings by code), its tool runs (``tools``: each
@@ -28,7 +31,8 @@ the artifacts a later step uses (``finn.outputs``); the manifest indexes the run
 - ``outcome``: None while the build runs; then ``completed``; ``failed``, with the
   step, the error's ``kind`` (``refusal``, ``tool-unavailable``, ``tool-failed``,
   ``verdict``, ``bug``), its type and message, and a refusal's findings by code; or
-  ``refused`` before the first step (the configuration), with the error.
+  ``refused`` before the first step, with the error (a refused configuration's findings
+  are its ``configuration_findings``).
 
 The file is rewritten atomically (a temporary file renamed over it) whenever it
 changes, so a build stopped at any point leaves the last state it reached; a killed
@@ -52,6 +56,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from finn.core.space import Finding, finding_record
 from finn.toolchain import vivado
 from finn.toolchain.launcher import TOOL_RUN, transcript_files
 
@@ -201,7 +206,7 @@ class Manifest:
         self.state: dict[str, Any] = {
             "identity": dict(identity),
             "plan": None,
-            "configuration_checks": None,
+            "configuration_findings": None,
             "steps": [],
             "verifications": {name: NOT_RUN for name in self._concluded_by},
             "outcome": None,
@@ -240,19 +245,10 @@ class Manifest:
             self.state["plan"] = dict(plan)
             self.write()
 
-    def configuration_checks(self, report: Any, path: str) -> None:
-        """Record the configuration checks' ``report`` (``build_dataflow_checks.Report``),
-        saved as JSON beside ``path``: its counts and each check that failed."""
-        failed = [check for check in report.checks if not check.passed]
+    def configured(self, findings: list[Finding]) -> None:
+        """Record what checking the configuration found."""
         with self._lock:
-            self.state["configuration_checks"] = {
-                "report": self.relative(Path(path).with_suffix(".json")),
-                "counts": dict(sorted(Counter(check.severity.value for check in failed).items())),
-                "failed": [
-                    {"name": c.name, "severity": c.severity.value, "message": c.message}
-                    for c in failed
-                ],
-            }
+            self.state["configuration_findings"] = [finding_record(each) for each in findings]
             self.write()
 
     def step_started(self, name: str, phase: str | None) -> None:

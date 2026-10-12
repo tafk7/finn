@@ -14,6 +14,10 @@ naming its place (``configuration.target: ...``), a key a nested type does not d
 a null where a field is not optional, a value of the wrong type and an unknown enum
 value. The settings are decoded when the build's plan resolves, by the annotations of
 the steps that declare them (``decoded``).
+
+A build refuses a configuration before its first step with one error,
+``ConfigurationRefused``, carrying every rejection found: the target's, the plan's and the
+configuration checks'.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ import json
 import os
 import types
 import typing
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from enum import Enum
 from functools import cached_property, partial
@@ -33,9 +37,38 @@ from typing import Any, Union
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 
+from finn.core.space import Finding, FindingKind
 from finn.kernels.target import Target
 from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
+
+#: The owner of the findings about a build's configuration.
+OWNER = "finn.builder"
+
+
+def config_finding(
+    code: str, message: str, place: str | None = None, kind: FindingKind = FindingKind.REJECTION
+) -> Finding:
+    """A finding about the configuration, a rejection unless ``kind`` says otherwise; its
+    ``place`` in the configuration, where it has one, is its detail of that name."""
+    return Finding(kind, code, OWNER, message, () if place is None else (("place", place),))
+
+
+def finding_line(finding: Finding) -> str:
+    """A finding as one line: ``code: place: message``, without a place where it has none."""
+    place = dict(finding.details).get("place")
+    where = "" if place is None else f"{place}: "
+    return f"{finding.code}: {where}{finding.message}"
+
+
+class ConfigurationRefused(ValueError):
+    """A configuration the build refuses before its first step: every rejection found
+    (``findings``), the target's, the plan's and the configuration checks'."""
+
+    def __init__(self, findings: Iterable[Finding]) -> None:
+        self.findings = tuple(findings)
+        super().__init__("; ".join(map(finding_line, self.findings)))
+
 
 #: A step: a function ``(model, cfg, *, settings...) -> model``.
 Step = Callable[..., ModelWrapper]
@@ -218,7 +251,9 @@ class DataflowBuildConfig:
 
     @cached_property
     def resolved_target(self) -> Target:
-        """The build's target (finn.platform.resolve_target), resolved on first use."""
+        """The build's target (finn.platform.resolve_target), resolved on first use; a
+        build resolves it before anything else, and its ``TargetRefused`` refuses the
+        configuration."""
         return self.target.resolve()
 
     @cached_property
@@ -375,13 +410,17 @@ def encoded(value: Any, place: str) -> Any:
 
 __all__ = [
     "OUTPUT_NEEDS",
+    "OWNER",
     "SHELL_OUTPUTS",
     "VERIFIED_BY",
+    "ConfigurationRefused",
     "DataflowBuildConfig",
     "DataflowOutputType",
     "Step",
     "StepEntry",
     "VerificationStepType",
+    "config_finding",
     "decoded",
     "encoded",
+    "finding_line",
 ]

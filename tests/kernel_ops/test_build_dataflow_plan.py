@@ -25,11 +25,17 @@ from finn.builder.build_dataflow import (
     build_dataflow_cfg,
     read_build_config,
 )
-from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
-from finn.builder.build_dataflow_config import DataflowBuildConfig, StepEntry
+from finn.builder.build_dataflow_checks import configuration_findings
+from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
+    DataflowBuildConfig,
+    StepEntry,
+    finding_line,
+)
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import BuildPlan, resolve_plan
 from finn.builder.build_dataflow_steps import step_cleanup, step_tidy_up
+from finn.core.space import FindingKind
 from finn.platform import TargetRequest
 
 TARGET = TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e")
@@ -107,10 +113,13 @@ def names(plan: BuildPlan) -> list[str]:
 
 
 def refused(cfg: DataflowBuildConfig) -> str:
-    """The message the plan of ``cfg`` is refused with."""
-    with pytest.raises(ValueError) as refusal:
+    """The one finding the plan of ``cfg`` is refused with, as a line: its code, its
+    place where it has one, and its message."""
+    with pytest.raises(ConfigurationRefused) as refusal:
         resolve_plan(cfg)
-    return str(refusal.value)
+    (finding,) = refusal.value.findings
+    assert finding.kind is FindingKind.REJECTION
+    return finding_line(finding)
 
 
 def identity_model() -> ModelWrapper:
@@ -183,16 +192,20 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
     [
         (
             "step_size_fifo",
-            "steps[1]: 'step_size_fifo' is no step or phase; the steps: step_cleanup, ",
+            "step-unknown: steps[1]: 'step_size_fifo' is no step or phase; the steps: "
+            "step_cleanup, ",
         ),
-        ("finn.builder.nowhere.step_x", "steps[1]: 'finn.builder.nowhere.step_x': no module"),
+        (
+            "finn.builder.nowhere.step_x",
+            "step-import: steps[1]: 'finn.builder.nowhere.step_x': no module",
+        ),
         (
             "finn.builder.build_dataflow_steps.step_size_fifo",
-            "steps[1]: 'finn.builder.build_dataflow_steps.step_size_fifo': "
+            "step-import: steps[1]: 'finn.builder.build_dataflow_steps.step_size_fifo': "
             "finn.builder.build_dataflow_steps has no 'step_size_fifo'",
         ),
-        ("pathlib.Path", "steps[1]: Path is a class, not a Transformation"),
-        (3, "steps[1]: 3 is no step: a phase or step name, an import path, a function"),
+        ("pathlib.Path", "step-invalid: steps[1]: Path is a class, not a Transformation"),
+        (3, "step-invalid: steps[1]: 3 is no step: a phase or step name, an import path"),
     ],
 )
 def test_an_entry_that_names_no_step_is_refused_naming_its_place(entry: Any, message: str) -> None:
@@ -291,38 +304,45 @@ def test_an_edit_applies_to_steps_when_given() -> None:
     [
         (
             [{"after": "step_streamlin", "insert": "step_size_fifos"}],
-            "step_edits[0].after: 'step_streamlin' names 0 steps of the list, not one; its "
-            "steps: step_cleanup, step_add_pre_post_processing,",
+            "edit-target: step_edits[0].after: 'step_streamlin' names 0 steps of the list, "
+            "not one; its steps: step_cleanup, step_add_pre_post_processing,",
         ),
         (
             [
                 {"after": "step_tidy_up", "insert": "step_size_fifos"},
                 {"replace": "step_size_fifos", "with": "step_tidy_up"},
             ],
-            "step_edits[1].replace: 'step_size_fifos' names 2 steps of the list, not one",
+            "edit-target: step_edits[1].replace: 'step_size_fifos' names 2 steps of the list, "
+            "not one",
         ),
         (
             [{"remove": "phase_create_accelerator"}, {"remove": "phase_create_accelerator"}],
-            "step_edits[1].remove: 'phase_create_accelerator' is 0 times in the list, not once",
+            "edit-target: step_edits[1].remove: 'phase_create_accelerator' is 0 times in the "
+            "list, not once",
         ),
         (
             [{"after": "step_tidy_up"}],
-            "step_edits[0]: 'after' takes the keys ['after', 'insert'], not ['after']",
+            "edit-invalid: step_edits[0]: 'after' takes the keys ['after', 'insert'], not "
+            "['after']",
         ),
         (
             [{"remove": "step_tidy_up", "with": "step_size_fifos"}],
-            "step_edits[0]: 'remove' takes the keys ['remove'], not ['remove', 'with']",
+            "edit-invalid: step_edits[0]: 'remove' takes the keys ['remove'], not "
+            "['remove', 'with']",
         ),
         (
             [{"before": "step_tidy_up", "after": "step_size_fifos", "insert": []}],
-            "step_edits[0]: exactly one of before, after, replace, remove, not",
+            "edit-invalid: step_edits[0]: exactly one of before, after, replace, remove, not",
         ),
-        ([{"remove": 3}], "step_edits[0].remove: a phase or step name, or an import path, not 3"),
+        (
+            [{"remove": 3}],
+            "edit-invalid: step_edits[0].remove: a phase or step name, or an import path, not 3",
+        ),
         (
             [{"after": "step_tidy_up", "insert": ["step_size_fifos", "step_size_fifo"]}],
-            "step_edits[0].insert[1]: 'step_size_fifo' is no step or phase",
+            "step-unknown: step_edits[0].insert[1]: 'step_size_fifo' is no step or phase",
         ),
-        (["step_tidy_up"], "step_edits[0]: an object such as"),
+        (["step_tidy_up"], "edit-invalid: step_edits[0]: an object such as"),
     ],
 )
 def test_an_edit_whose_target_is_not_once_in_the_list_is_refused_naming_its_place(
@@ -339,11 +359,15 @@ def test_no_edit_is_the_default_list() -> None:
 
 def test_start_and_stop_name_a_step_once() -> None:
     twice = config(steps=["step_tidy_up", "step_tidy_up"], start_step="step_tidy_up")
-    assert refused(twice) == "'step_tidy_up' is 2 steps of this build, not one"
+    assert refused(twice) == (
+        "step-ambiguous: start_step: 'step_tidy_up' is 2 steps of this build, not one"
+    )
     phases = config(
         steps=["phase_emit_hardware", "phase_emit_hardware"], stop_step="phase_emit_hardware"
     )
-    assert refused(phases) == "'phase_emit_hardware' is 2 times in this build, not once"
+    assert refused(phases) == (
+        "step-ambiguous: stop_step: 'phase_emit_hardware' is 2 times in this build, not once"
+    )
 
 
 # -- settings --------------------------------------------------------------------------------
@@ -401,14 +425,15 @@ def test_each_setting_is_decoded_by_its_steps_annotation_and_passed_to_it() -> N
 def test_a_setting_of_the_wrong_type_is_refused_naming_its_place(
     stated: dict[str, Any], message: str
 ) -> None:
-    assert refused(config(steps=[step_typed], settings=stated)) == message
+    assert refused(config(steps=[step_typed], settings=stated)) == f"setting-invalid: {message}"
 
 
 def test_a_setting_no_step_declares_is_refused_naming_the_settings_the_steps_read() -> None:
     cfg = config(steps=[step_typed, step_cleanup], settings={"scael": 2.0})
     assert refused(cfg) == (
-        "settings no step of this build declares: scael; the settings its steps read: count, "
-        "flag, label, limit, mode, override_inpsize, scale, sizes, table, weights"
+        "setting-unknown: configuration.scael: no step of this build declares it; the "
+        "settings its steps read: count, flag, label, limit, mode, override_inpsize, scale, "
+        "sizes, table, weights"
     )
 
 
@@ -420,17 +445,18 @@ def test_steps_that_declare_one_setting_share_its_value() -> None:
 
 def test_steps_that_declare_one_setting_differently_are_refused() -> None:
     assert refused(config(steps=[step_scaled, step_counted])) == (
-        "setting scale: its readers declare different types (step_scaled: <class 'float'>; "
-        "step_counted: <class 'int'>)"
+        "setting-conflict: configuration.scale: its readers declare different types "
+        "(step_scaled: <class 'float'>; step_counted: <class 'int'>)"
     )
     assert refused(config(steps=[step_scaled, step_halved])) == (
-        "setting scale: its readers declare different defaults (step_scaled: 1.0; step_halved: 0.5)"
+        "setting-conflict: configuration.scale: its readers declare different defaults "
+        "(step_scaled: 1.0; step_halved: 0.5)"
     )
 
 
 def test_a_setting_without_a_default_must_be_given() -> None:
     assert refused(config(steps=[step_needs])) == (
-        "setting target_fps: step_needs require it, and it is not given"
+        "setting-required: configuration.target_fps: step_needs require it, and it is not given"
     )
     plan = resolve_plan(config(steps=[step_needs], settings={"target_fps": 1000}))
     plan.steps[0].run(identity_model(), config())
@@ -439,7 +465,7 @@ def test_a_setting_without_a_default_must_be_given() -> None:
 
 def test_a_setting_whose_readers_the_run_leaves_out_is_a_warning() -> None:
     """Declared by the edited list, so not refused; read by no step from start_step to
-    stop_step, so the checks warn."""
+    stop_step, so the checks find a limitation, which the build warns of."""
     cfg = config(
         steps=[step_scaled, step_typed],
         stop_step="step_scaled",
@@ -447,12 +473,11 @@ def test_a_setting_whose_readers_the_run_leaves_out_is_a_warning() -> None:
     )
     plan = resolve_plan(cfg)
     assert names(plan) == ["step_scaled"] and plan.unread == ("label",)
-    (warning,) = [
-        check for check in run_all_config_checks(cfg, plan).checks if check.name == "setting_unread"
-    ]
-    assert (warning.severity, warning.passed) == (Severity.WARNING, False)
-    assert warning.message == (
-        "label: only step_typed read it, and start_step/stop_step leave them out"
+    (warning,) = configuration_findings(cfg, plan, cfg.resolved_target)
+    assert warning.kind is FindingKind.LIMITATION
+    assert finding_line(warning) == (
+        "setting-unread: configuration.label: only step_typed read it, and "
+        "start_step/stop_step leave them out"
     )
 
 
@@ -516,11 +541,17 @@ def test_a_refused_plan_is_the_builds_outcome_before_its_first_step(tmp_path: Pa
         output_dir=str(tmp_path / "output"), settings={"scael": 1}, enable_build_pdb_debug=False
     )
     with pytest.raises(
-        ValueError, match=re.escape("settings no step of this build declares: scael")
+        ConfigurationRefused, match=re.escape("setting-unknown: configuration.scael: ")
     ):
         build_dataflow_cfg(str(model), cfg)
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     assert manifest["outcome"]["status"] == "refused"
+    assert manifest["outcome"]["error"]["type"] == "ConfigurationRefused"
+    (finding,) = manifest["configuration_findings"]
+    assert (finding["code"], finding["details"]) == (
+        "setting-unknown",
+        {"place": "configuration.scael"},
+    )
     assert manifest["plan"] is None and manifest["steps"] == []
 
 
@@ -537,9 +568,9 @@ def test_a_step_that_folds_after_the_last_fifo_sizing_is_refused_when_the_plan_r
         settings={"target_fps": 1000.0},
     )
     assert refused(after) == (
-        "step_target_throughput (step 10 of the run) follows step_size_fifos (step 9), the "
-        "last that sizes FIFOs: their depths are sized at the folding before it and would go "
-        "stale; size FIFOs after the last step that changes the folding"
+        "fifos-stale: step_target_throughput (step 10 of the run) follows step_size_fifos "
+        "(step 9), the last that sizes FIFOs: their depths are sized at the folding before it "
+        "and would go stale; size FIFOs after the last step that changes the folding"
     )
     folds = {
         "step_pin_choices": {"kernel_choices_file": "pins.json"},
@@ -549,7 +580,9 @@ def test_a_step_that_folds_after_the_last_fifo_sizing_is_refused_when_the_plan_r
     for folding, settings in folds.items():
         steps = ["phase_create_accelerator", "step_size_fifos", folding]
         cfg = config(steps=steps, settings=settings)
-        assert refused(cfg).startswith(f"{folding} (step 3 of the run) follows step_size_fifos")
+        assert refused(cfg).startswith(
+            f"fifos-stale: {folding} (step 3 of the run) follows step_size_fifos"
+        )
     # Sized again after it, the run is current; a step that does not fold (the debug
     # placeholder) may follow the sizing.
     again = [
@@ -576,8 +609,8 @@ def test_a_step_that_folds_with_no_sizing_after_it_needs_the_cut_before_it() -> 
     assert names(plan) == ["step_create_dataflow_partition", "step_target_throughput"]
     resumed = config(steps=cut, start_step="step_target_throughput", settings={"target_fps": 1.0})
     assert refused(resumed) == (
-        "step_target_throughput (step 1 of the run) may change the folding, and no step after "
-        "it sizes FIFOs: the partition comes from an earlier run (no "
+        "fifos-unsized: step_target_throughput (step 1 of the run) may change the folding, "
+        "and no step after it sizes FIFOs: the partition comes from an earlier run (no "
         "step_create_dataflow_partition before it), whose FIFOs may be sized at another "
         "folding; add step_size_fifos after it"
     )
@@ -587,24 +620,32 @@ def test_a_step_that_folds_with_no_sizing_after_it_needs_the_cut_before_it() -> 
     assert names(resolve_plan(sized)) == ["step_target_throughput", "step_size_fifos"]
 
 
-def test_a_target_throughput_without_its_target_is_refused_before_the_first_step() -> None:
-    """target_fps is optional to the plan (the bitfile's build reads it too, as its
-    objective), and required by the configuration checks where the target throughput
-    runs."""
+def test_a_target_throughput_without_its_target_is_refused_when_the_plan_resolves() -> None:
+    """step_target_throughput requires target_fps, its one reader."""
     cut = ["phase_create_accelerator", "step_target_throughput"]
-    cfg = config(steps=cut)
-    (check,) = [
-        check
-        for check in run_all_config_checks(cfg, resolve_plan(cfg)).checks
-        if check.name == "target_fps"
-    ]
-    assert (check.severity, check.passed) == (Severity.ERROR, False)
-    assert check.message == (
-        "step_target_throughput runs, and no target_fps is given: the frames a second it "
-        "folds the partition to"
+    assert refused(config(steps=cut)) == (
+        "setting-required: configuration.target_fps: step_target_throughput require it, and "
+        "it is not given"
     )
-    given = config(steps=cut, settings={"target_fps": 1000})
-    plan = resolve_plan(given)
-    checks = run_all_config_checks(given, plan).checks
-    assert not [check for check in checks if check.name == "target_fps"]
+    plan = resolve_plan(config(steps=cut, settings={"target_fps": 1000}))
     assert plan.settings["target_fps"].value == 1000.0
+    assert plan.settings["target_fps"].readers == ("step_target_throughput",)
+
+
+def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> None:
+    """A plan whose list resolves is refused with all its settings' and its run's
+    rejections at once."""
+    cfg = config(
+        steps=[step_scaled, step_counted, step_needs, step_typed],
+        start_step="step_scaled",
+        settings={"scael": 1, "count": "two"},
+    )
+    with pytest.raises(ConfigurationRefused) as refusal:
+        resolve_plan(cfg)
+    assert [finding_line(finding).split(": ")[:2] for finding in refusal.value.findings] == [
+        ["setting-unknown", "configuration.scael"],
+        ["setting-conflict", "configuration.scale"],
+        ["setting-required", "configuration.target_fps"],
+        ["setting-invalid", "configuration.count"],
+        ["start-without-model", "start_step"],
+    ]

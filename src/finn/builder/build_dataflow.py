@@ -40,15 +40,13 @@ from pathlib import PurePath
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
-from finn.builder.build_dataflow_checks import (
-    log_report,
-    run_all_config_checks,
-    save_report,
-)
+from finn.builder.build_dataflow_checks import configuration_findings, required_vivado
 from finn.builder.build_dataflow_config import (
     VERIFIED_BY,
+    ConfigurationRefused,
     DataflowBuildConfig,
     VerificationStepType,
+    finding_line,
 )
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
@@ -57,7 +55,9 @@ from finn.builder.build_dataflow_manifest import (
     finn_revision,
 )
 from finn.builder.build_dataflow_plan import BuildPlan, declared_settings, resolve_plan
-from finn.core.space import by_code
+from finn.core.space import Finding, FindingKind, by_code
+from finn.kernels.target import Target
+from finn.platform import TargetRefused
 from finn.toolchain.launcher import ToolFailed, ToolUnavailable, host_selection
 from finn.util.run_log import FILE_ONLY, log_run, running_step
 
@@ -197,34 +197,45 @@ def _run_build_steps(model, cfg, plan: BuildPlan, manifest=None):
     return 0
 
 
-def _identity(cfg: DataflowBuildConfig) -> dict:
-    """The build's identity for its manifest, from the configuration before its checks:
-    FINN's revision, the toolchain's selection (the configuration's over the machine's)
-    and the target, each None where it cannot be known. The model and the Vivado release
-    are added later, as the build reads them."""
+def _identity(cfg: DataflowBuildConfig, target: Target | None) -> dict:
+    """The build's identity for its manifest: FINN's revision, the toolchain's selection
+    (the configuration's over the machine's) and the resolved ``target``, each None where
+    it is not known. The model is added as the build reads it, and the Vivado release
+    where a probe found it (_indexed)."""
     try:
         selection = asdict(host_selection(stated=cfg.toolchain))
     except ValueError:
         selection = None
-    try:
-        resolved = cfg.resolved_target
-        target = {
-            "part": resolved.part,
-            "shell": resolved.shell,
-            "board": resolved.board,
-            "period_ns": resolved.platform.period_ns,
+    stated = None
+    if target is not None:
+        stated = {
+            "part": target.part,
+            "shell": target.shell,
+            "board": target.board,
+            "period_ns": target.platform.period_ns,
         }
-    except (ValueError, LookupError, TypeError):
-        target = None  # the configuration checks name it
     return {
         "finn": finn_revision(),
         "model": None,
         "output_dir": os.path.abspath(cfg.output_dir),
         "started": datetime.now().isoformat(timespec="seconds"),
         "toolchain": selection,
-        "vivado": None,
-        "target": target,
+        "target": stated,
     }
+
+
+def _vivado_release(
+    cfg: DataflowBuildConfig, target: Target | None, manifest: Manifest
+) -> str | None:
+    """The Vivado release of the build's toolchain where the build ran a tool or checked
+    the release its board requires, as the toolchain's probe found it; None where it
+    did neither, or nothing probed it. Never asks Vivado."""
+    ran = any(step["tools"] for step in manifest.state["steps"])
+    if not ran and (target is None or required_vivado(target) is None):
+        return None
+    toolchain = vars(cfg).get("prepared_toolchain")
+    found = None if toolchain is None else toolchain.probed("vivado")
+    return None if found is None else "%d.%d" % tuple(found[:2])
 
 
 def _asked_verifications(cfg: DataflowBuildConfig) -> dict:
@@ -242,18 +253,61 @@ def _asked_verifications(cfg: DataflowBuildConfig) -> dict:
 
 
 @contextlib.contextmanager
-def _indexed(cfg: DataflowBuildConfig):
+def _indexed(cfg: DataflowBuildConfig, target: Target | None):
     """The build's manifest (``MANIFEST_FILE`` in the output directory) for the ``with``
-    block, written at once and filled from FINN's log records (ManifestHandler)."""
-    manifest = Manifest(cfg.output_dir, _identity(cfg), _asked_verifications(cfg))
+    block, written at once and filled from FINN's log records (ManifestHandler); at its
+    end, the Vivado release in its identity where the build asked it (_vivado_release)."""
+    manifest = Manifest(cfg.output_dir, _identity(cfg, target), _asked_verifications(cfg))
     handler = ManifestHandler(manifest)
     logger = logging.getLogger("finn")
     logger.addHandler(handler)
     try:
         yield manifest
     finally:
+        release = _vivado_release(cfg, target, manifest)
+        if release is not None:
+            manifest.identify(vivado=release)
         logger.removeHandler(handler)
         handler.close()
+
+
+def _configured(
+    cfg: DataflowBuildConfig, target: Target | None, found: list[Finding], manifest: Manifest
+) -> BuildPlan:
+    """The build's plan, recorded in the manifest, once the configuration is checked:
+    ``found`` (the target's refusal) with the plan's rejections, else with the
+    configuration checks' findings. The findings are recorded, each limitation logged as
+    a warning, and every rejection raised as one ConfigurationRefused."""
+    plan = None
+    try:
+        plan = resolve_plan(cfg)
+    except ConfigurationRefused as refused:
+        found = [*found, *refused.findings]
+    else:
+        manifest.planned(plan.record())
+        if target is not None:
+            found = [*found, *configuration_findings(cfg, plan, target)]
+    manifest.configured(found)
+    for finding in found:
+        if finding.kind is not FindingKind.REJECTION:
+            _LOG.warning("%s", finding_line(finding))
+    rejections = [finding for finding in found if finding.kind is FindingKind.REJECTION]
+    if rejections:
+        raise ConfigurationRefused(rejections)
+    assert plan is not None
+    return plan
+
+
+def _log_refusal(error: BaseException) -> None:
+    """Log a build stopped before its first step: a refused configuration as each of its
+    findings; any other error by its type, its traceback in the log file only."""
+    if isinstance(error, ConfigurationRefused):
+        _LOG.error("Configuration refused: %d findings", len(error.findings))
+        for finding in error.findings:
+            _LOG.error("  %s", finding_line(finding))
+        return
+    _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
+    _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
 
 
 def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
@@ -262,68 +316,41 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
 
     The build log (``LOG_FILE`` in the output directory, and the console; log_run) and
     the manifest (``MANIFEST_FILE``, finn.builder.build_dataflow_manifest; _indexed) are
-    set up first, so the configuration checks are logged and listed in the
-    manifest too, and a refused configuration is logged and recorded before it raises.
+    set up first, so a refused configuration is logged and recorded before it raises.
 
-    The plan (finn.builder.build_dataflow_plan) is resolved first, and recorded in the
-    manifest: its steps, each with its settings, and each setting with its readers.
+    Before the first step, the target is resolved, then the plan
+    (finn.builder.build_dataflow_plan), recorded in the manifest, then the configuration
+    checks run (finn.builder.build_dataflow_checks); every rejection of the three is
+    raised together as one ConfigurationRefused (_configured).
 
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
     """
     log_file = os.path.join(cfg.output_dir, LOG_FILE)
-    with log_run(log_file, runner=_LOG.name, verbose=cfg.verbose), _indexed(cfg) as manifest:
+    with log_run(log_file, runner=_LOG.name, verbose=cfg.verbose):
         try:
-            plan = resolve_plan(cfg)
-            manifest.planned(plan.record())
-            # if start_step is specified, override the input model
-            if cfg.start_step is None:
-                _LOG.info("Building dataflow accelerator from " + model_filename)
-                model = ModelWrapper(model_filename)
-            else:
-                if plan.first == 0:
-                    raise ValueError(
-                        f"start_step {cfg.start_step}: no step runs before it, so no model "
-                        "was saved to start from"
-                    )
-                intermediate_model_filename = _intermediate_model(cfg, plan, plan.first - 1)
-                _LOG.info(
-                    "Building dataflow accelerator from intermediate checkpoint"
-                    + intermediate_model_filename
-                )
-                model = ModelWrapper(intermediate_model_filename)
-            assert type(model) is ModelWrapper
-            manifest.identify(
-                model=os.path.abspath(
-                    model_filename if cfg.start_step is None else intermediate_model_filename
-                )
-            )
-            finn_build_dir = resources.scratch()
-
-            _LOG.info("Intermediate outputs will be generated in " + str(finn_build_dir))
-            _LOG.info("Final outputs will be generated in " + cfg.output_dir)
-            _LOG.info("Build log is at " + log_file)
-            _LOG.info("Build manifest is at " + os.path.join(cfg.output_dir, MANIFEST_FILE))
-
-            # Run configuration checks
-            config_report = run_all_config_checks(cfg, plan)
-            log_report(config_report)
-            report_path = save_report(config_report, cfg.output_dir)
-            _LOG.info(f"Configuration check report saved to: {report_path}")
-            release = config_report.vivado_version
-            manifest.identify(vivado=None if release is None else "%d.%d" % tuple(release))
-            manifest.configuration_checks(config_report, report_path)
-
-            if config_report.has_errors():
-                raise AssertionError(
-                    "Configuration check failed with errors. Fix the issues above to proceed."
-                )
-        except Exception as error:
-            _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
-            _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
-            manifest.refused(error)
-            raise
-        return _run_build_steps(model, cfg, plan, manifest)
+            target, found = cfg.resolved_target, []
+        except TargetRefused as refused:
+            target, found = None, list(refused.findings)
+        with _indexed(cfg, target) as manifest:
+            try:
+                _LOG.info("Intermediate outputs will be generated in %s", resources.scratch())
+                _LOG.info("Final outputs will be generated in %s", cfg.output_dir)
+                _LOG.info("Build log is at %s", log_file)
+                _LOG.info("Build manifest is at %s", os.path.join(cfg.output_dir, MANIFEST_FILE))
+                plan = _configured(cfg, target, found, manifest)
+                if cfg.start_step is None:
+                    source = model_filename
+                else:
+                    source = _intermediate_model(cfg, plan, plan.first - 1)
+                _LOG.info("Building dataflow accelerator from %s", source)
+                model = ModelWrapper(source)
+                manifest.identify(model=os.path.abspath(source))
+            except Exception as error:
+                _log_refusal(error)
+                manifest.refused(error)
+                raise
+            return _run_build_steps(model, cfg, plan, manifest)
 
 
 def _is_path(kind) -> bool:
