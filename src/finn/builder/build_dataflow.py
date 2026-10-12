@@ -88,21 +88,18 @@ def _failure_kind(error: BaseException) -> str:
 def _log_failure(step: str, error: BaseException) -> str:
     """Log a failed step's error according to its kind (_failure_kind), and return the
     kind; the traceback always goes to the log file. A tool unavailable names the tool
-    and what selects it; a tool failure its transcript and error lines; a refusal the
-    number of findings and one line per code; a verdict ``Verification for <step> :
-    FAIL``. Anything else is a bug, and its traceback is shown on the console too."""
+    and what selects it, a tool failure its transcript and error lines, a verdict what
+    the check found; a refusal the number of findings and one line per code. Anything
+    else is a bug, and its traceback is shown on the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
-    if kind in ("tool-unavailable", "tool-failed"):
+    if kind in ("tool-unavailable", "tool-failed", "verdict"):
         _LOG.error("%s: %s: %s", step, name, error)
     elif kind == "refusal":
         findings = tuple(error.findings)
         _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), name, error)
         for line in by_code(findings):
             _LOG.error("  %s", line)
-    elif kind == "verdict":
-        _LOG.error("Verification for %s : FAIL", step)
-        _LOG.error("%s: %s", name, error)
     else:
         _LOG.error("%s failed: %s: %s", step, name, error, exc_info=error)
         return kind

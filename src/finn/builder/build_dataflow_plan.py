@@ -16,11 +16,12 @@ named by its class name in the log, the manifest and the intermediate models.
 
 **Settings.** A step's keyword-only parameters are its settings. Each setting the
 configuration gives must be declared by a step of the list (before ``start_step`` and
-``stop_step`` trim it), and is decoded by that step's annotation, a ``Path`` joined to
-the configuration's ``base_dir``. Steps that declare the same name share its value, so
-they must declare the same annotation and default. A setting a step requires (no
-default) must be given. A setting given whose every reader ``start_step`` or
-``stop_step`` leaves out is reported by the configuration checks as a warning.
+``stop_step`` trim it), and is decoded by that step's annotation; a ``Path``, given or
+by default, is joined to the configuration's ``base_dir``. Steps that declare the same
+name share its value, so they must declare the same annotation and default. A setting
+a step requires (no default) must be given. A setting given whose every reader
+``start_step`` or ``stop_step`` leaves out is reported by the configuration checks as a
+warning.
 
 **Start and stop.** ``start_step`` and ``stop_step`` name a step once in the list, or a
 phase: its first step, or its last. ``start_step`` names a step after the list's first:
@@ -32,6 +33,12 @@ its ends' folding changes, so the run's order must keep the depths current
 change the folding after the run's last step that sizes FIFOs is refused; so is one
 with no sizing step after it in a run that does not cut the partition before it, whose
 partition an earlier run made and may have sized at another folding.
+
+**The verifying steps' inputs.** A verifying step in the run reads what an earlier step
+of the list made: step_verify_partition_python the model saved before
+step_convert_to_hw, which the list has once, after another step, before the check, with
+``save_intermediate_models`` on; step_run_testbench the testbench a
+step_package_partition before it writes, with ``stitched_ip`` asked.
 
 **Refusals.** ``resolve_plan`` refuses a configuration with ``ConfigurationRefused``
 (finn.builder.build_dataflow_config), each finding's place in the configuration its
@@ -48,6 +55,7 @@ import inspect
 import typing
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
@@ -56,6 +64,7 @@ from qonnx.transformation.base import Transformation
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
+    DataflowOutputType,
     config_finding,
     decoded,
     encoded,
@@ -66,6 +75,8 @@ from finn.builder.build_dataflow_steps import (
     build_dataflow_phases,
     build_dataflow_step_lookup,
     step_create_dataflow_partition,
+    step_run_testbench,
+    step_verify_partition_python,
 )
 from finn.core.space import Finding
 
@@ -283,6 +294,8 @@ def _settings(
             message = f"{', '.join(names)} require it, and it is not given"
             refused.append(config_finding("setting-required", message, place))
         else:
+            if isinstance(default, PurePath) and cfg.base_dir is not None:
+                default = type(default)(cfg.base_dir, default)
             settings[name] = Setting(default, False, names)
     return settings, refused
 
@@ -317,6 +330,7 @@ def resolve_plan(cfg: DataflowBuildConfig) -> Plan:
             refused.append(config_finding("start-without-model", message, "start_step"))
         plan = Plan(steps, slice(first, last + 1), settings)
         refused.extend(_stale_fifos(plan.steps[plan.run]))
+        refused.extend(_unmade_inputs(cfg, plan))
     if refused:
         raise ConfigurationRefused(refused)
     return plan
@@ -351,6 +365,40 @@ def _stale_fifos(run: tuple[Step, ...]) -> list[Finding]:
                 "step_size_fifos after it"
             )
             refused.append(config_finding("fifos-unsized", message))
+    return refused
+
+
+def _unmade_inputs(cfg: DataflowBuildConfig, plan: Plan) -> list[Finding]:
+    """The rejections of a verifying step in the run whose input no earlier step of the
+    list makes (the module docstring)."""
+    refused = []
+    names = [step.name for step in plan.steps]
+    for index in range(plan.run.start, plan.run.stop):
+        origin = _origin(plan.steps[index].function)
+        place = f"{names[index]} (step {index - plan.run.start + 1} of the run)"
+        if origin is step_verify_partition_python:
+            converting = [at for at, name in enumerate(names) if name == "step_convert_to_hw"]
+            if len(converting) != 1 or not 0 < converting[0] < index:
+                message = (
+                    f"{place} reads the model saved before step_convert_to_hw: the list "
+                    "needs that step once, after another step and before the check"
+                )
+                refused.append(config_finding("check-order", message))
+            if not cfg.save_intermediate_models:
+                message = f"{place} reads the model saved before step_convert_to_hw"
+                where = "configuration.save_intermediate_models"
+                refused.append(config_finding("intermediate-models-off", message, where))
+        elif origin is step_run_testbench:
+            if "step_package_partition" not in names[:index]:
+                message = (
+                    f"{place} runs the testbench step_package_partition writes, and no "
+                    "step_package_partition comes before it"
+                )
+                refused.append(config_finding("check-order", message))
+            if DataflowOutputType.STITCHED_IP not in cfg.generate_outputs:
+                message = f"{place} runs the testbench stitched_ip writes, which is not asked"
+                where = "configuration.generate_outputs"
+                refused.append(config_finding("testbench-output", message, where))
     return refused
 
 

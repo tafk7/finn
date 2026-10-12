@@ -23,7 +23,7 @@ import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
-    VerificationStepType,
+    DataflowOutputType,
 )
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
@@ -218,19 +218,21 @@ def step_checks(model, cfg):
 def test_a_verdict_is_recorded_from_its_record_only(tmp_path):
     """``pass`` or ``fail`` as the check's verdict states it; a step that fails concludes
     no verification: its failure is the outcome's, with its kind."""
-    status, manifest, _ = build_of(
-        tmp_path,
-        [step_checks, raising(SimulationFailed("differs"))],
-        verify_steps=[VerificationStepType.PARTITION_ELABORATION],
-    )
+    status, manifest, _ = build_of(tmp_path, [step_checks, raising(SimulationFailed("differs"))])
     assert status == -1
     assert manifest["verifications"] == {"a_check": "fail"}
     assert (manifest["outcome"]["step"], manifest["outcome"]["kind"]) == ("step_fails", "verdict")
 
 
 def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
-    with pytest.raises(ConfigurationRefused, match="testbench-output: ") as refused:
-        build_of(tmp_path, [step_reports], verify_steps=["stitched_ip_testbench"])
+    with pytest.raises(ConfigurationRefused, match="shell-outputs: ") as refused:
+        build_of(
+            tmp_path,
+            [step_reports, "step_size_fifos"],
+            stop_step="step_reports",
+            generate_outputs=[DataflowOutputType.BITFILE],
+            settings={"fifo_margin": 2},
+        )
     manifest = manifest_of(str(tmp_path / "output"))
     assert manifest["outcome"] == {
         "status": "refused",
@@ -238,7 +240,7 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     }
     assert manifest["steps"] == []
     found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
-    assert found == [("testbench-output", "rejection"), ("verification-not-run", "limitation")]
+    assert found == [("shell-outputs", "rejection"), ("setting-unread", "limitation")]
     assert manifest["verifications"] == {}
 
 

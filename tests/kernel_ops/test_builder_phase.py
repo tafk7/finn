@@ -41,7 +41,6 @@ from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
-    VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
@@ -204,10 +203,12 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
-        settings=io_settings(tmp_path / "export"),
-        steps=["phase_prepare_model", *(each for name in STEPS for each in (name, recorder(name)))],
-        verify_steps=[VerificationStepType.PARTITION_PYTHON],
-        verify_input_npy=str(tmp_path / "input.npy"),
+        settings={**io_settings(tmp_path / "export"), "verify_input_npy": tmp_path / "input.npy"},
+        steps=[
+            "phase_prepare_model",
+            *(each for name in STEPS for each in (name, recorder(name))),
+            "step_verify_partition_python",
+        ],
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
     assert list(seen) == list(STEPS)
@@ -217,14 +218,15 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
     # The run, as its manifest indexes it: every step of the four phases, in order, each
-    # completed (the recorders after each aside), and the verification asked passed.
+    # completed (the recorders after each aside), then the Python check, passed.
     manifest = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
-    assert manifest["verifications"] == {"partition_python": "pass"}
+    assert manifest["verifications"] == {"step_verify_partition_python": "pass"}
     ran = [step for step in manifest["steps"] if not step["name"].startswith("seen_")]
     assert [step["name"] for step in ran] == [
         *[step.__name__ for step in build_dataflow_phases["phase_prepare_model"]],
         *STEPS,
+        "step_verify_partition_python",
     ]
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
@@ -313,10 +315,10 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert {row["transport"] for row in sizing["channels"].values()} == {"direct"}
     assert len(sizing["channels"]) == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
-    # The verification the configuration asked for, through the partition node: on each
-    # of the three inputs, the partition's own output (the last MatMul's INT8 logits, not
-    # the parent's label), the parent graph executed with it, equals the streamlined
-    # model's.
+    # The Python check, through the partition node: on each of the three inputs, the
+    # partition's own output (the last MatMul's INT8 logits, not the parent's label), the
+    # parent graph executed with it, equals the streamlined model's, the one the build
+    # saved before conversion.
     verified = sorted((output / "verification_output").glob("verify_partition_python_*"))
     assert [path.name for path in verified] == [
         f"verify_partition_python_{index}_SUCCESS.npz" for index in range(3)
@@ -708,57 +710,6 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
     # The ip shell takes the part.
     on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
     assert failed_checks(config(tmp_path, target=on_part, generate_outputs=[])) == {}
-
-
-def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> None:
-    """A verification whose concluding step the plan leaves out does not run, and the
-    check says so; one whose reference-saving step it leaves out (a build resumed after
-    conversion) still runs, on a reference an earlier run left, and the check says that
-    it fails where there is none. Both are limitations, which the build warns of."""
-    verify = [VerificationStepType.PARTITION_ELABORATION]
-    cfg = config(
-        tmp_path, steps=["phase_emit_hardware", "phase_generate_outputs"], verify_steps=verify
-    )
-    (warning,) = checks_of(cfg)
-    assert (warning.kind, warning.code) == (FindingKind.LIMITATION, "verification-not-run")
-    assert warning.message == (
-        "partition_elaboration, which step_verify_partition runs, and the resolved build "
-        "steps (steps/start_step/stop_step) leave it out: that verification does not run, "
-        "and has no verdict"
-    )
-    assert checks_of(config(tmp_path, verify_steps=verify)) == []
-    python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
-    assert failed_checks(python) == {"verify-input-missing": ["not found: input.npy"]}
-    resumed = config(
-        tmp_path,
-        steps=["phase_create_accelerator", "phase_optimize_hardware"],
-        verify_steps=[VerificationStepType.PARTITION_PYTHON],
-    )
-    (warning,) = [
-        finding for finding in checks_of(resumed) if finding.code == "verification-unreferenced"
-    ]
-    assert warning.kind is FindingKind.LIMITATION
-    assert warning.message == (
-        "partition_python, whose reference step_convert_to_hw saves, and the resolved build "
-        "steps (steps/start_step/stop_step) leave it out: step_verify_partition reads the "
-        "reference an earlier run left in the output directory, and fails "
-        "(FileNotFoundError) where there is none"
-    )
-    # The testbench's run is the outputs' phase's, and needs the testbench asked.
-    testbench = [VerificationStepType.STITCHED_IP_TESTBENCH]
-    cfg = config(tmp_path, steps=KERNEL_PATH, verify_steps=testbench)
-    (warning,) = [finding for finding in checks_of(cfg) if finding.code == "verification-not-run"]
-    assert "stitched_ip_testbench, which step_package_partition runs" in warning.message
-    assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
-        "testbench-output": [
-            "stitched_ip_testbench runs the testbench stitched_ip writes, and "
-            "generate_outputs does not ask for it"
-        ]
-    }
-    asked = config(
-        tmp_path, verify_steps=testbench, generate_outputs=[DataflowOutputType.STITCHED_IP]
-    )
-    assert failed_checks(asked) == {}
 
 
 def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(

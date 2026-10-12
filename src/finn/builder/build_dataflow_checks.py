@@ -3,19 +3,15 @@
 
 """What a build's plan cannot see of its configuration, checked before the first step
 (``configuration_findings``): the outputs and the shell they need, ``hw_debug``, the
-settings the run leaves unread, the verification inputs and steps, and the Vivado
-release a board requires. A rejection refuses the build (``ConfigurationRefused``); a
-limitation is logged as a warning, and the build runs."""
-
-import os
+settings the run leaves unread, and the Vivado release a board requires. A rejection
+refuses the build (``ConfigurationRefused``); a limitation is logged as a warning, and
+the build runs."""
 
 from finn.builder.build_dataflow_config import (
     OUTPUT_NEEDS,
     SHELL_OUTPUTS,
-    VERIFIED_BY,
     DataflowBuildConfig,
     DataflowOutputType,
-    VerificationStepType,
     config_finding,
 )
 from finn.builder.build_dataflow_plan import Plan
@@ -90,40 +86,4 @@ def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target)
         readers = ", ".join(plan.settings[name].readers)
         message = f"only {readers} read it, and start_step/stop_step leave them out"
         findings.append(_warning("setting-unread", message, f"configuration.{name}"))
-    if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps and not os.path.isfile(
-        cfg.verify_input_npy
-    ):
-        message = f"not found: {cfg.verify_input_npy}"
-        findings.append(
-            config_finding("verify-input-missing", message, "configuration.verify_input_npy")
-        )
-    testbench = VerificationStepType.STITCHED_IP_TESTBENCH
-    if testbench in cfg.verify_steps and DataflowOutputType.STITCHED_IP not in asked:
-        message = (
-            f"{testbench.value} runs the testbench {DataflowOutputType.STITCHED_IP.value} "
-            "writes, and generate_outputs does not ask for it"
-        )
-        findings.append(config_finding("testbench-output", message, "configuration.verify_steps"))
-    resolved = {step.name for step in run}
-    for each in cfg.verify_steps:
-        vstep = VerificationStepType(each)
-        *saving, concluding = VERIFIED_BY[vstep]
-        unsaved = [step for step in saving if step not in resolved]
-        if concluding not in resolved:
-            message = (
-                f"{vstep.value}, which {concluding} runs, and the resolved build steps "
-                "(steps/start_step/stop_step) leave it out: that verification does not run, "
-                "and has no verdict"
-            )
-            findings.append(_warning("verification-not-run", message, "configuration.verify_steps"))
-        elif unsaved:
-            message = (
-                f"{vstep.value}, whose reference {', '.join(unsaved)} saves, and the resolved "
-                f"build steps (steps/start_step/stop_step) leave it out: {concluding} reads "
-                "the reference an earlier run left in the output directory, and fails "
-                "(FileNotFoundError) where there is none"
-            )
-            findings.append(
-                _warning("verification-unreferenced", message, "configuration.verify_steps")
-            )
     return findings

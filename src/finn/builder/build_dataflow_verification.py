@@ -1,23 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build's Python verification of the partition, ``partition_python``: the parent
-graph, its partition node running the KernelOps, against the model the kernel path
-started from.
-
-The reference is the model before conversion, which the build's conversion step saves
-when the verification is asked (``save_reference``, ``REFERENCE_FILE`` under the output
-directory). ``verify_partition_python`` reads it back after the cut, executes both
-models with FINN's execution (``finn.core.onnx_exec``) on each input of the inputs file,
-and compares the partition's outputs with the reference's, value for value. The
-reference is read from the output directory, so a build that starts after the
-conversion step reads the one an earlier run left there, if any.
+"""The partition's Python check, step_verify_partition_python: the parent graph, its
+partition node running the KernelOps, against the model before conversion, which the
+build saved (``intermediate_models/``). ``verify_partition_python`` executes both with
+FINN's execution (``finn.core.onnx_exec``) on each input of the inputs file and compares
+the partition's outputs with the reference's, value for value.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import numpy as np
@@ -28,38 +21,25 @@ from finn.custom_op.partition.kernel_partitions import partition_body
 
 _LOG = logging.getLogger(__name__)
 
-#: Where the conversion step saves the model before conversion, the reference,
-#: under the output directory.
-REFERENCE_FILE = Path("intermediate_models") / "kernel_path_source.onnx"
-
-#: Where the verification saves the partition's outputs, under the output directory.
+#: Where the check saves the partition's outputs, under the output directory.
 VERIFICATION_DIR = Path("verification_output")
 
 
-def save_reference(model: ModelWrapper, output_dir: Path) -> None:
-    """Save ``model``, the graph the kernel path converts, as the reference
-    (``REFERENCE_FILE`` under ``output_dir``)."""
-    reference = output_dir / REFERENCE_FILE
-    reference.parent.mkdir(parents=True, exist_ok=True)
-    model.save(str(reference))
-
-
 def verify_partition_python(
-    parent: ModelWrapper, output_dir: Path, inputs_file: str | os.PathLike[str]
+    parent: ModelWrapper,
+    reference_file: Path,
+    inputs_file: Path,
+    output_dir: Path,
 ) -> bool:
     """Execute the parent graph ``parent``, its partition node running the KernelOps, on
     each input in ``inputs_file`` (an .npy file, one input a row), and compare the
-    partition's outputs value for value with those of the reference saved in
-    ``output_dir`` (``save_reference``). Saves each input's partition outputs as
-    verification_output/verify_partition_python_<index>_<SUCCESS|FAIL>.npz there, logs
-    each output that differs as a warning, and returns whether all matched. A missing
-    reference is refused with FileNotFoundError."""
-    reference_file = output_dir / REFERENCE_FILE
-    if not reference_file.is_file():
-        raise FileNotFoundError(
-            f"{reference_file}: the kernel path's source, which step_convert_to_hw keeps when "
-            "PARTITION_PYTHON is asked, is not there (did the build start after it?)"
-        )
+    partition's outputs value for value with those of the model in ``reference_file``.
+    Saves each input's partition outputs as
+    verification_output/verify_partition_python_<index>_<SUCCESS|FAIL>.npz under
+    ``output_dir``, logs each output that differs as a warning, and returns whether all
+    matched."""
+    if not inputs_file.is_file():
+        raise FileNotFoundError(f"verify_input_npy: {inputs_file} is no file")
     saved = output_dir / VERIFICATION_DIR
     saved.mkdir(parents=True, exist_ok=True)
     node, _, _ = partition_body(parent)
@@ -67,7 +47,7 @@ def verify_partition_python(
     reference_input = reference.graph.input[0].name
     shape = reference.get_tensor_shape(reference_input)
     if shape is None:
-        raise ValueError(f"partition_python: the source's input {reference_input} states no shape")
+        raise ValueError(f"{reference_file}: its input {reference_input} states no shape")
     outputs = list(node.output)
     inputs = np.load(inputs_file)
     all_match = True
@@ -78,7 +58,7 @@ def verify_partition_python(
         mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
         for name in mismatched:
             _LOG.warning(
-                f"partition_python: input {index}: {name} differs from the source's in "
+                f"Python check: input {index}: {name} differs from the reference's in "
                 f"{int(np.sum(built[name] != expected[name]))} of {built[name].size} values"
             )
         result = "FAIL" if mismatched else "SUCCESS"
@@ -88,10 +68,10 @@ def verify_partition_python(
             **{name: built[name] for name in outputs},
         )
     _LOG.info(
-        f"partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
-        f"inputs of {inputs_file}, against the model the kernel path started from"
+        f"Python check: the partition's outputs {outputs} on {inputs.shape[0]} "
+        f"inputs of {inputs_file}, against {reference_file.name}"
     )
     return all_match
 
 
-__all__ = ["VERIFICATION_DIR", "REFERENCE_FILE", "save_reference", "verify_partition_python"]
+__all__ = ["VERIFICATION_DIR", "verify_partition_python"]

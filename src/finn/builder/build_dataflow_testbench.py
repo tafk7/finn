@@ -21,10 +21,10 @@ holds everything the testbench needs and nothing from the build machine:
 
 ``write_testbench`` simulates nothing: the testbench is an output, and a build does not
 re-verify the partition's computation. ``run_testbench`` runs ``run.sh`` as a user
-would, in a toolchain's environment. It is the verification step
-``stitched_ip_testbench``, which runs only when asked and fails on a mismatch.
-``run.sh`` holds the same commands ``finn.core.rtlsim_bench.simulate`` runs
-(``finn.toolchain.xsim.script``), with the directory's own paths.
+would, in a toolchain's environment: the build's step_run_testbench, which a build runs
+only where its list asks for it, and which fails on a mismatch. ``run.sh`` holds the
+same commands ``finn.core.rtlsim_bench.simulate`` runs (``finn.toolchain.xsim.script``),
+with the directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
