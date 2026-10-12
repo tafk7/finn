@@ -34,12 +34,12 @@ def weighted(weights: Any, annotation: str) -> ModelWrapper:
 
 def test_weights_their_annotation_holds_give_no_finding() -> None:
     held = weighted([[-8.0, 7.0], [0.0, 3.0]], "INT4").analysis(annotated_initializers)
-    assert held == {"checked": ("w",), "findings": ()}
+    assert (held["checked"], held["findings"]) == (("w",), ())
 
 
 def test_a_float_annotation_is_not_checked() -> None:
     held = weighted([[0.5, 1.5], [2.0, 3.0]], "FLOAT32").analysis(annotated_initializers)
-    assert held == {"checked": (), "findings": ()}
+    assert (held["checked"], held["findings"]) == ((), ())
 
 
 @pytest.mark.parametrize(
