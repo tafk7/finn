@@ -57,7 +57,7 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     activate = op(model).point().activate
     parameters = dict(activate.module.parameters)
     assert (parameters["C"], parameters["PE"]) == (1, 4)
-    # One row, INT5 as normalized, padded to four words.
+    # One row in INT5, the type the facts derive, padded to four words.
     assert activate.thresholds_file.data == b"17\n01\n08\n00\n"
     # One row a lane: stage 1 holds two words, whatever the channels.
     assert parameters["DEPTH_TRIGGER_BRAM"] == 2
@@ -72,16 +72,40 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
 
 def test_the_thresholds_type_holds_a_value_below_the_least_an_input_can_miss() -> None:
     """thresholding_axi saturates an INT8 input to the thresholds' type: with the least
-    threshold at INT5's minimum, an input below it would count it. Normalized, the type
-    holds one value below it (INT6), and the kernel admits the node; a least threshold
-    at the input's own minimum, which every input meets, needs none."""
+    threshold at INT5's minimum, an input below it would count it. The type the facts
+    derive holds one value below it (INT6), and the kernel admits the node; a least
+    threshold at the input's own minimum, which every input meets, needs none."""
     table = np.array([[-16, -3, 2], [-9, 0, 15], [-4, -4, 7], [-1, 6, 14]])
     model = thresholding_model(thresholds=table)
-    assert model.get_tensor_datatype("t").name == "INT6"
+    assert op(model).facts().formals()["threshold_dtype"] == DataType["INT6"]
     assert not op(model).verify_node()
     floor = table.copy()
     floor[0, 0] = -128
-    assert thresholding_model(thresholds=floor).get_tensor_datatype("t").name == "INT8"
+    formals = op(thresholding_model(thresholds=floor)).facts().formals()
+    assert formals["threshold_dtype"] == DataType["INT8"]
+
+
+def test_the_table_is_derived_from_the_stored_thresholds_and_the_input_type() -> None:
+    """Rounded up and clipped to [min, max + 1] of the input's type, and typed by what it
+    holds; the graph's table stays as it was, unannotated."""
+    table = np.array([[-300.0, -2.5, 0.25], [-9.0, 1.0, 130.0], [-1.5, 3.0, 4.0], [0, 1, 2]])
+    model = thresholding_model(thresholds=table, bias=-1, annotate=("x",))
+    formals = op(model).facts().formals()
+    assert formals["thresholds"] == (((-128, -2, 1), (-9, 1, 128), (-1, 3, 4), (0, 1, 2)),)
+    assert formals["threshold_dtype"] == DataType["INT9"]
+    assert np.array_equal(model.get_initializer("t"), table.astype(np.float32))
+    assert not model.has_tensor_datatype("t")
+    source = multithreshold(model)
+    for start in range(-128, 128, 12):  # every INT8 input
+        values = np.clip(np.arange(start, start + 12), -128, 127).reshape(3, 4)
+        feed = {"x": values.astype(np.float32)}
+        assert np.array_equal(execute_onnx(model, feed)["y"], execute_onnx(source, feed)["y"])
+
+
+def test_a_nan_threshold_is_refused_by_name() -> None:
+    table = np.where(THRESHOLDS == 1, np.nan, THRESHOLDS)
+    with pytest.raises(KernelOpError, match="activate: t holds NaN"):
+        op(thresholding_model(thresholds=table, infer=False)).facts()
 
 
 def test_a_float_thresholding_is_refused_while_its_choices_are_open() -> None:

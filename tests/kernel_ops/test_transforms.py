@@ -280,25 +280,27 @@ def test_a_shape_the_inference_cannot_know_is_not_overwritten() -> None:
 
 
 @pytest.mark.parametrize(
-    "thresholds, dtype, table, annotation",
+    "thresholds, dtype, table, threshold_dtype",
     [
         # Rounded up; the row for every channel stays one row.
         ([[63.75, 191.25]], "UINT8", [64, 192], "UINT8"),
-        # Clipped to max + 1 of the input: annotated by what it holds, not by the input.
+        # Clipped to max + 1 of the input: typed by what it holds, not by the input.
         ([[0.5, 300.0]], "UINT8", [1, 256], "UINT9"),
-        # A signed input: clipped to its minimum, a signed annotation.
+        # A signed input: clipped to its minimum, a signed type.
         ([[-20.5, 3.2, 9.0]], "INT4", [-8, 4, 8], "INT5"),
     ],
 )
-def test_the_thresholds_become_integers_against_the_input_type(
-    thresholds: list[list[float]], dtype: str, table: list[int], annotation: str
+def test_the_graph_keeps_the_thresholds_and_the_kernel_holds_them_as_integers(
+    thresholds: list[list[float]], dtype: str, table: list[int], threshold_dtype: str
 ) -> None:
     source = tfc_input(thresholds, dtype=dtype)
     model = through_the_kernel_path(source)
-    values = model.get_initializer("thresholds")
-    assert values.shape == (1, len(table))
-    assert (values == np.array(table, dtype=np.float32)).all()
-    assert model.get_tensor_datatype("thresholds").name == annotation
+    # The graph's thresholds as they were: the same values, unannotated.
+    assert np.array_equal(model.get_initializer("thresholds"), source.get_initializer("thresholds"))
+    assert not model.has_tensor_datatype("thresholds")
+    formals = kernel_op(model, model.graph.node[1]).facts().formals()
+    assert formals["thresholds"] == ((tuple(table),),)
+    assert formals["threshold_dtype"] == DataType[threshold_dtype]
     # Exact: every value of the input type, in both graphs.
     low, high = int(DataType[dtype].min()), int(DataType[dtype].max())
     for start in range(low, high + 1, 16):
@@ -307,12 +309,21 @@ def test_the_thresholds_become_integers_against_the_input_type(
         assert np.array_equal(execute_onnx(model, feed)["y"], execute_onnx(source, feed)["y"])
 
 
-def test_a_shared_table_is_normalized_once_for_each_reader() -> None:
-    model = through_the_kernel_path(tfc_input([[-20.5, 3.2, 200.0]], shared=True))
+def test_a_shared_table_is_held_against_each_readers_input_type() -> None:
+    """One table read on two input types (qonnx's cleanup gives each reader its copy,
+    stating FLOAT32 for the copy): the graph keeps the values as they were, and each
+    node's kernel holds them as integers against its own input's type."""
+    source = tfc_input([[-20.5, 3.2, 200.0]], shared=True)
+    model = through_the_kernel_path(source)
     nodes = {node.name: node for node in model.graph.node}
-    quantize, again = nodes["quantize"], nodes["again"]
-    assert quantize.input[1] != again.input[1]
-    assert model.get_initializer(quantize.input[1])[0].tolist() == [0, 4, 200]
-    assert model.get_tensor_datatype(quantize.input[1]).name == "UINT8"
-    assert model.get_initializer(again.input[1])[0].tolist() == [-8, 4, 8]
-    assert model.get_tensor_datatype(again.input[1]).name == "INT5"
+    expected = {"quantize": ((0, 4, 200), "UINT8"), "again": ((-8, 4, 8), "INT5")}
+    for name, (table, threshold_dtype) in expected.items():
+        assert nodes[name].op_type == "Thresholding"
+        thresholds = nodes[name].input[1]
+        stored = model.get_initializer(thresholds)
+        assert stored.dtype == np.float32
+        assert np.array_equal(stored, source.get_initializer("thresholds"))
+        assert model.get_tensor_datatype(thresholds) == DataType["FLOAT32"]
+        formals = kernel_op(model, nodes[name]).facts().formals()
+        assert formals["thresholds"] == ((table,),)
+        assert formals["threshold_dtype"] == DataType[threshold_dtype]

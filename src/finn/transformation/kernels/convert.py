@@ -9,8 +9,8 @@ resolves it) once, in the one place ``read_target(model)`` reads it, the model's
 model does not import it yet (inserting a node never raises a model's import), and
 visits the nodes in graph order, inferring as it converts (``infer_node``, the step
 ``InferKernelTensors`` runs on each node). A node a KernelOp's pattern matches is
-tried as that KernelOp: its inputs normalized, and the kernels asked whether they
-admit it on its inputs as the nodes before it state them (``KernelOp.admission``: the
+tried as that KernelOp: the kernels are asked whether they admit it on its inputs
+as the nodes before it state them (``KernelOp.admission``: the
 kernel's admission and each Decision with no viable case). An admitted node is
 rewritten, keeping its name, inputs and outputs, and its outputs are stated as its
 kernel derives them for the nodes that follow; its own choices are created then, each
@@ -308,9 +308,8 @@ def _trial(
     the anchor's place, named as the anchor, on the set's boundary tensors, its
     interior tensors removed, and why it is refused: nothing when the kernels admit it,
     its outputs then stated; else the kernels' findings, a refused Decision by its
-    cases' (an unstated fact is
-    ``fact-unstated``). A copy, so that a refused trial leaves ``model`` as it was:
-    normalizing a KernelOp's inputs rewrites them. A contradiction raises."""
+    cases' (an unstated fact is ``fact-unstated``). A copy, so that a refused trial
+    leaves ``model`` as it was. A contradiction raises."""
     trial = copy.deepcopy(model)
     index = subgraph.indices[0]
     new = helper.make_node(
