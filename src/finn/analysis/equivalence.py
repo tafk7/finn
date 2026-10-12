@@ -6,8 +6,9 @@ on what it computes, sampled: an analysis pass.
 
 ``model.analysis(equivalence_with(reference, explains))`` checks ``model``, the prepared
 graph, against ``reference``, the export with its inputs and outputs as the build states
-them (the caller builds it; the tests with ``finn.transformation.prepare.reference``),
-and returns an ``Equivalence``. Preparation may change the network's function only
+them: the graph right after the build's step_add_pre_post_processing, its Quant nodes and
+float arithmetic as exported (the caller builds it; the tests by running the build's own
+steps), and returns an ``Equivalence``. Preparation may change the network's function only
 where it says so: its inputs and outputs (a preprocessing model merged ahead, a label
 select appended) and its declared deviations (``DEVIATIONS``). So both graphs are run
 by FINN's execution (``finn.core.onnx_exec``), the reference's Quant nodes and all, on
@@ -20,8 +21,8 @@ is the caller's.
 
 FINN's execution computes integers exactly in both graphs, as the hardware does: a
 standard node whose annotated integers pass what float32 holds exactly computes in
-float64. So the reference must be annotated (tidied) before it runs: its integer
-annotations are what make its integer arithmetic exact.
+float64. So the reference must be annotated (qonnx's ``InferDataTypes``) before it runs:
+its integer annotations are what make its integer arithmetic exact.
 
 Both graphs run with qonnx's sanitization off (``SANITIZE_QUANT_TENSORS=0``), so
 that rounding an integer-annotated tensor cannot hide a value that is not an integer;

@@ -20,8 +20,8 @@ finn.toolchain  <-  finn.util (with finn.xsi, finn.resources)  <-  finn.transfor
                                                                 the XSim testbench, the
                                                                 executors, finn.harness,
                                                                 finn.shells, the flow
-finn.core.space, finn.util  <-  preparation (finn.transformation.qonnx, .streamline,
-                                .prepare)  <-  the flow
+finn.core.space, finn.util  <-  preparation (finn.transformation.qonnx, .streamline)
+                                <-  the flow
 finn.dataflow  <-  the draws (finn.util.draws)  <-  finn.analysis, finn.harness, the flow
 finn.core.space, the draws, the executors  <-  finn.analysis  <-  the flow
 finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.generate (the
@@ -168,15 +168,14 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
-    # Graph preparation: the front end that takes an export to the graph the kernel
-    # path converts (Quant lowering, streamlining) and the phase over it. It reads no
-    # target: neither the platform registry nor the KernelOps.
+    # Graph preparation's transforms: the front end that takes an export to the graph the
+    # kernel path converts (Quant lowering, streamlining); the builder's preparation steps
+    # run them. It reads no target: neither the platform registry nor the KernelOps.
     Layer(
         "preparation",
         (
             "finn.transformation.qonnx",
             "finn.transformation.streamline",
-            "finn.transformation.prepare",
         ),
         ("util",),
         ("numpy", "onnx", "qonnx"),

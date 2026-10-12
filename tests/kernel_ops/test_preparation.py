@@ -1,16 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Graph preparation (``finn.transformation.prepare``, ``phase_prepare_model``): the
-export to the streamlined graph the kernel path converts.
+"""Graph preparation (the builder's ``phase_prepare_model``): the export to the
+streamlined graph the kernel path converts.
 
 TFC_W2A2 through the builder's phase from its export: the graph its fixture reads,
-equivalent to the export (``finn.analysis.equivalence``), its initializers held by their
-annotations (``finn.analysis.initializers``), and unchanged when prepared again; CNV_W2A2
-equivalent and held alike (slow: preparing CNV takes about a minute). On
-hand-made graphs: a wide layer, past what float32 holds exactly, converted and exact,
-and the equivalence analysis with preparation's declared deviations, whose predicates
-are this file's (``EXPLAINS``).
+equivalent to the export with its inputs and outputs stated (``kernel_ops.tfc.reference``,
+``finn.analysis.equivalence``), its initializers held by their annotations
+(``finn.analysis.initializers``), and unchanged when prepared again; CNV_W2A2 equivalent
+and held alike (slow: preparing CNV takes about a minute). On hand-made graphs: a wide
+layer, past what float32 holds exactly, converted and exact; a bipolar MatMul rewritten
+by the streamlining; and the equivalence analysis with preparation's declared
+deviations, whose predicates are this file's (``EXPLAINS``).
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -39,24 +39,17 @@ from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
-from finn.builder.build_dataflow_steps import PREPARATION_REPORT, build_dataflow_phases
+from finn.builder.build_dataflow_steps import build_dataflow_phases, step_streamline
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
 from finn.platform import TargetRequest
 from finn.transformation.kernels.convert import ToKernelOps
-from finn.transformation.prepare import (
-    SUB_PHASES,
-    GraphPreparation,
-    prepared,
-    reference,
-)
-from finn.transformation.prepare.phase import streamlined
 from finn.transformation.streamline.extract_multithreshold_scale_bias import (
     ExtractMultiThresholdScaleBias,
 )
 from kernel_ops.models import TARGET
-from kernel_ops.tfc import EXPORT, preparation, preparation_config
+from kernel_ops.tfc import EXPORT, io_settings, preparation_config, reference, run_steps
 
 GENERAL = "qonnx.custom_op.general"
 """qonnx's custom ops' domain."""
@@ -151,14 +144,15 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     made = ModelWrapper(str(output / "intermediate_models" / "step_convert_to_channels_last.onnx"))
     # The graph the kernel path's fixtures read, byte for byte.
     assert made.model.SerializeToString() == Path(tfc_streamlined).read_bytes()
-    report = json.loads((output / PREPARATION_REPORT).read_text())
-    assert list(report) == ["sub_phases"]
-    assert [entry["sub_phase"] for entry in report["sub_phases"]] == [n for n, _ in SUB_PHASES]
-    by_name = {entry["sub_phase"]: entry for entry in report["sub_phases"]}
-    assert by_name["P2 quantization"]["removed"] == {"Quant": 8}
-    assert by_name["P2 quantization"]["added"] == {"Add": 4, "MultiThreshold": 4}
-    assert by_name["P1 io"]["added"] == {"Div": 1, "TopK": 1}
-    assert by_name["P4 topology"]["removed"] == by_name["P4 topology"]["added"] == {}
+    # Each step's graph is its intermediate model: the export's eight Quant nodes lowered
+    # with the preprocessing's Div merged ahead and the label select appended.
+    stated = ModelWrapper(str(output / "intermediate_models" / "step_add_pre_post_processing.onnx"))
+    lowered = ModelWrapper(str(output / "intermediate_models" / "step_qonnx_to_finn.onnx"))
+    assert [n.op_type for n in stated.graph.node].count("Quant") == 8
+    assert [n.op_type for n in stated.graph.node][0] == "Div"
+    assert stated.graph.node[-1].op_type == "TopK"
+    assert "Quant" not in [n.op_type for n in lowered.graph.node]
+    assert [n.op_type for n in lowered.graph.node].count("MultiThreshold") == 4
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
     phase = [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
@@ -168,24 +162,14 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     plan = manifest["plan"]
     assert [step["name"] for step in plan["steps"]] == phase
     preprocessing = str(tfc_directory / "preproc.onnx")
-    assert plan["steps"][2] == {
+    assert plan["steps"][1] == {
         "name": "step_add_pre_post_processing",
         "phase": "phase_prepare_model",
-        "settings": {
-            "preprocessing": preprocessing,
-            "input_datatype": "UINT8",
-            "topk": 1,
-            "max_multithreshold_bit_width": 8,
-        },
+        "settings": {"preprocessing": preprocessing, "input_datatype": "UINT8", "topk": 1},
     }
     assert plan["steps"][3]["settings"] == {}
     assert plan["settings"] == {
-        "override_inpsize": {"value": None, "given": False, "readers": ["step_tidy_up"]},
-        "max_multithreshold_bit_width": {
-            "value": 8,
-            "given": False,
-            "readers": ["step_qonnx_to_finn", "step_add_pre_post_processing"],
-        },
+        "override_inpsize": {"value": None, "given": False, "readers": ["step_cleanup"]},
         "preprocessing": {
             "value": preprocessing,
             "given": True,
@@ -197,6 +181,11 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
             "readers": ["step_add_pre_post_processing"],
         },
         "topk": {"value": 1, "given": True, "readers": ["step_add_pre_post_processing"]},
+        "max_multithreshold_bit_width": {
+            "value": 8,
+            "given": False,
+            "readers": ["step_qonnx_to_finn"],
+        },
     }
 
 
@@ -205,7 +194,7 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
 ) -> None:
     export = ModelWrapper(str(tfc_directory / EXPORT))
     made = ModelWrapper(str(tfc_streamlined))
-    reference_graph = reference(export, preparation(tfc_directory))
+    reference_graph = reference(export, tfc_directory)
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
     assert checked == {"draws": 12, "findings": ()}
     # The streamlined TFC: the input flatten, four MultiThreshold and MatMul layers, the
@@ -270,7 +259,7 @@ def test_cnv_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     its integer-annotated initializers (its nine MatMuls' weights, INT2) held."""
     export = ModelWrapper(str(cnv_export))
     made = ModelWrapper(str(cnv_streamlined))
-    reference_graph = reference(export, preparation(cnv_export.parent))
+    reference_graph = reference(export, cnv_export.parent)
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
     assert checked == {"draws": 12, "findings": ()}
     held = made.analysis(annotated_initializers)
@@ -283,10 +272,13 @@ def test_cnv_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
 def test_tfc_prepared_again_is_unchanged_and_states_no_target(
     tfc_directory: Path, tfc_streamlined: Path
 ) -> None:
-    """Every sub-phase but the preprocessing's merge, which would compose it twice, run
-    on the prepared graph again gives the same bytes; nothing stated a target."""
+    """The graph-preparation phase run on the prepared graph again, as TFC's build states
+    it but for the preprocessing, whose merge would compose it twice, gives the same
+    bytes; nothing stated a target."""
     made = ModelWrapper(str(tfc_streamlined))
-    again = prepared(made, replace(preparation(tfc_directory), preprocessing=None))
+    settings = {k: v for k, v in io_settings(tfc_directory).items() if k != "preprocessing"}
+    cfg = preparation_config(tfc_directory, steps=["phase_prepare_model"], settings=settings)
+    again = run_steps(copy.deepcopy(made), cfg)
     assert again.model.SerializeToString() == made.model.SerializeToString()
     assert not [prop.key for prop in made.model.metadata_props if prop.key.startswith("finn.")]
 
@@ -437,10 +429,12 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
     assert checked == {"draws": 3, "findings": ()}
 
 
-def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test() -> None:
-    """KT19 Q4 (NOTE §5.2 item 4): where a datatype decides which op a node is, P3
-    rewrites it. A bipolar MatMul becomes XnorPopcountMatMul by the default recipe, at
-    no KernelOp's anchor; no pattern reads BIPOLAR (``test_reference``'s
+def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(
+    tmp_path: Path,
+) -> None:
+    """Where a datatype decides which op a node is, the streamlining rewrites it: a
+    bipolar MatMul becomes XnorPopcountMatMul (step_streamline), which no KernelOp
+    anchors at; no pattern reads BIPOLAR (``test_reference``'s
     ``test_a_pattern_reads_no_datatype``)."""
     model = graph(
         [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
@@ -449,7 +443,11 @@ def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test() -
         {"w": np.where(np.eye(8, 4) > 0, 1.0, -1.0)},
         {"w": "BIPOLAR"},
     )
-    made = streamlined(model, GraphPreparation())
+    cfg = DataflowBuildConfig(
+        output_dir=str(tmp_path),
+        target=TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e"),
+    )
+    made = step_streamline(model, cfg)
     assert "XnorPopcountMatMul" in [node.op_type for node in made.graph.node]
     assert "MatMul" not in [node.op_type for node in made.graph.node]
     conversion = ToKernelOps(TARGET)

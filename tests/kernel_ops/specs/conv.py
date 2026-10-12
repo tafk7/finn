@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Conv's ONNX entry: a lowered convolution, qonnx ``Im2Col`` and the ONNX
-``MatMul`` reading its patches, as graph preparation's P3 lowers an ONNX ``Conv``.
+``MatMul`` reading its patches, as graph preparation's streamlining (step_streamline)
+lowers an ONNX ``Conv``.
 
 Positive: a window over the whole image (CNV's last 3 x 3 layer), 2 x 2 windows at
 stride 2 (no overlap), 3 x 3 at stride 1 (overlapping, CNV's other layers), a strided

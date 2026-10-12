@@ -537,9 +537,10 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
     assert "step_explore" in str(refused.value)
     assert "phase_optimize_hardware" in str(refused.value)
     assert [step.name for step in resolve_plan(config(tmp_path)).steps] == [
-        "step_tidy_up",
-        "step_qonnx_to_finn",
+        "step_cleanup",
         "step_add_pre_post_processing",
+        "step_qonnx_to_finn",
+        "step_tidy_up",
         "step_streamline",
         "step_convert_to_channels_last",
         "step_convert_to_hw",
