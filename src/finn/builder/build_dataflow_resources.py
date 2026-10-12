@@ -62,10 +62,15 @@ from finn.custom_op.kernels.shell import (
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
 from finn.platform import shell_row
-from finn.shells.pynq.runner import STATIC_INSTANCES
+from finn.shells.pynq.runner import REPORTS, STATIC_INSTANCES, bitfile_directory
 from finn.toolchain import vivado
+from finn.toolchain.launcher import ToolFailed
 from finn.transformation.kernels.integration import integration
-from finn.transformation.kernels.package import ooc_member_resources, resources_of
+from finn.transformation.kernels.package import (
+    ooc_member_resources,
+    partition_utilization_report,
+    resources_of,
+)
 
 #: The report's file, under the output directory.
 RESOURCES_FILE = "report/resources.json"
@@ -133,6 +138,24 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
             if key.startswith("static_region.")
         },
     }
+
+
+def built_reports(parent: ModelWrapper, packaged: Path | None) -> dict[str, Path]:
+    """The reports the build made that ``shell_resources_report`` reads, by name: those
+    collected beside the bitfile the parent graph ``parent`` states (``placed``,
+    ``out_of_context``; none without a bitfile), and the utilization report of the
+    partition packaged with OOC_SYNTH into ``packaged`` (``ooc_synth``; none when not
+    given, or not synthesized there)."""
+    reports: dict[str, Path] = {}
+    built = bitfile_directory(parent)
+    if built is not None:
+        reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
+    if packaged is not None:
+        try:
+            reports["ooc_synth"] = partition_utilization_report(packaged)
+        except ToolFailed:
+            pass  # not synthesized into this output directory: the column is absent
+    return reports
 
 
 def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) -> dict[str, Any]:
@@ -247,4 +270,4 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     return report
 
 
-__all__ = ["RESOURCES_FILE", "shell_resources_report"]
+__all__ = ["RESOURCES_FILE", "built_reports", "shell_resources_report"]

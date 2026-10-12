@@ -21,7 +21,8 @@ at conversion, a channel's at the cut); ``ExploreKernelChoices`` explores the ch
 of a partition's body (the KernelOps the cut put together) through the DSE seam
 (``finn.kernels.explore``) by one strategy, which replaces the values it decides, saves
 every value and records the pins the body holds (``HELD``), so that the build's strategy
-steps, each one exploration, hold a pin for the build;
+steps, each one exploration of the parent graph's partition (``explore_partition``, its
+lines for the build's log ``exploration_summary``), hold a pin for the build;
 ``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
 included, from its saved choices; ``kernel_choices_config`` exports a
 body's choices, every one it states, by graph name (the nodes' and the tensors'
@@ -36,7 +37,9 @@ from finn.transformation.kernels.choose import (
     HELD,
     Explored,
     ExploreKernelChoices,
+    exploration_summary,
     explore_kernel_choices,
+    explore_partition,
     held_choices,
     shell_bottleneck,
 )
@@ -64,6 +67,8 @@ __all__ = [
     "ToKernelOps",
     "between_kernel_ops",
     "explore_kernel_choices",
+    "explore_partition",
+    "exploration_summary",
     "held_choices",
     "infer_node",
     "kernel_choices_config",

@@ -188,18 +188,34 @@ def kernel_path_checks(cfg: DataflowBuildConfig, plan: BuildPlan) -> list[Check]
     resolved = {step.name for step in plan.steps}
     for each in cfg.verify_steps:
         vstep = VerificationStepType(each)
-        unmet = [step for step in VERIFIED_BY[vstep] if step not in resolved]
-        if unmet:
+        *saving, concluding = VERIFIED_BY[vstep]
+        unsaved = [step for step in saving if step not in resolved]
+        if concluding not in resolved:
             checks.append(
                 Check(
                     "verify_step_prereq",
                     Severity.WARNING,
                     False,
-                    f"verify_steps includes {vstep.value}, which needs {', '.join(unmet)} "
-                    "in the resolved build steps (steps/start_step/stop_step). That "
-                    "verification would silently never run",
-                    "Include those steps in steps, adjust start_step/stop_step so they run, "
+                    f"verify_steps includes {vstep.value}, which {concluding} runs, and the "
+                    "resolved build steps (steps/start_step/stop_step) leave it out: that "
+                    "verification does not run, and has no verdict",
+                    f"Include {concluding} in steps, adjust start_step/stop_step so it runs, "
                     "or remove it from verify_steps",
+                )
+            )
+        elif unsaved:
+            checks.append(
+                Check(
+                    "verify_step_prereq",
+                    Severity.WARNING,
+                    False,
+                    f"verify_steps includes {vstep.value}, whose reference "
+                    f"{', '.join(unsaved)} saves, and the resolved build steps "
+                    f"(steps/start_step/stop_step) leave it out: {concluding} reads the "
+                    "reference an earlier run left in the output directory, and fails "
+                    "(FileNotFoundError) where there is none",
+                    f"Include {', '.join(unsaved)} in steps, adjust start_step/stop_step so it "
+                    "runs, or remove it from verify_steps",
                 )
             )
     return checks
