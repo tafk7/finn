@@ -21,7 +21,7 @@ The runner (``build_pynq``):
 - writes the block design (``block_design``) from the export's instances and
   connections into ``templates.custom_zynq_shell_template``, unchanged; the
   template's own debug block names nets of the HWCustomOp flow's partitions and stays
-  off, and the shell's ``enable_hw_debug`` option marks the export's streams instead
+  off, and the shell's ``hw_debug`` option marks the export's streams instead
   (``debug_lines``);
 - runs Vivado on it and collects what it made (``PynqBuilt``): the bitfile, its
   hardware handoff, the routed timing report, the template's ``impl_1`` hierarchical
@@ -105,11 +105,11 @@ STATIC_INSTANCES = {
 
 @dataclass(frozen=True)
 class PynqOptions:
-    """The ``pynq`` shell's build options (``DataflowBuildConfig.enable_hw_debug`` on a
-    ``pynq`` target). ``enable_hw_debug``: integrated logic analyzers on the ends'
-    streams and on the memory interconnect's port to the processor."""
+    """The ``pynq`` shell's build options (step_build_bitfile's ``hw_debug`` setting on a
+    ``pynq`` target). ``hw_debug``: integrated logic analyzers on the ends' streams and
+    on the memory interconnect's port to the processor."""
 
-    enable_hw_debug: bool = False
+    hw_debug: bool = False
 
 
 @dataclass(frozen=True)
@@ -229,16 +229,14 @@ def debug_lines(export: Integration) -> list[str]:
     ]
 
 
-def block_design(
-    export: Integration, ips: Mapping[str, InstanceIP], enable_hw_debug: bool = False
-) -> str:
+def block_design(export: Integration, ips: Mapping[str, InstanceIP], hw_debug: bool = False) -> str:
     """The block design's instances and connections, as the template's custom section
     takes them: for each instance in the block design's order (``_instances``), its IP
     repositories and cell, then each connection of one of its pins, its own pin first:
     its memory port to the memory interconnect, each AXI-Lite bus from the control
     interconnect with its address (the template's ``assign_axi_addr_proc``), its clock
     and reset, and each stream it takes. ``ips`` holds each instance's IP; with
-    ``enable_hw_debug``, ``debug_lines`` follow."""
+    ``hw_debug``, ``debug_lines`` follow."""
     lines = []
     for instance in _instances(export):
         ip = ips[instance]
@@ -271,7 +269,7 @@ def block_design(
         for connection in mine:
             if connection.kind == "axis" and _owner(connection.sink) == instance:
                 lines.append(_interface(connection.sink, connection.source))
-    if enable_hw_debug:
+    if hw_debug:
         lines += debug_lines(export)
     return "\n".join(lines) + "\n"
 
@@ -379,7 +377,7 @@ def build_pynq(
     project: str = make_build_dir(prefix="vivado_zynq_proj_")  # type: ignore[no-untyped-call]
     script = project + "/ip_config.tcl"
     with open(script, "w") as f:
-        f.write(project_script(export, block_design(export, ips, options.enable_hw_debug), jobs))
+        f.write(project_script(export, block_design(export, ips, options.hw_debug), jobs))
     toolchain.run(
         "vivado",
         ["-mode", "batch", "-source", script],
@@ -515,7 +513,7 @@ class BuildPynqBitfile(Transformation):
     (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's
     (``host_toolchain``), prepared once, when the transformation is made;
     Vivado launches as many runs at once as its selection says (``vivado_jobs``).
-    ``enable_hw_debug`` inserts integrated logic analyzers (``PynqOptions``). ``bitfile``
+    ``hw_debug`` inserts integrated logic analyzers (``PynqOptions``). ``bitfile``
     and ``clock`` hold the bitfile's path and the delivered clock's report, ``findings``
     its limitations."""
 
@@ -524,12 +522,12 @@ class BuildPynqBitfile(Transformation):
         directory: Path,
         *,
         toolchain: Toolchain | None = None,
-        enable_hw_debug: bool = False,
+        hw_debug: bool = False,
     ) -> None:
         super().__init__()
         self.directory = Path(directory)
         self.toolchain = host_toolchain() if toolchain is None else toolchain
-        self.options = PynqOptions(enable_hw_debug=enable_hw_debug)
+        self.options = PynqOptions(hw_debug=hw_debug)
         self.bitfile = self.directory / BITFILE
         self.clock: dict[str, Any] = {}
         self.findings: tuple[Finding, ...] = ()

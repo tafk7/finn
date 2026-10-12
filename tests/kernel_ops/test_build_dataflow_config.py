@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's build configuration (``DataflowBuildConfig``): read from and written to
-JSON, refusing what it does not declare, and built through the one ``build_dataflow``
-entry."""
+JSON, refusing what it does not declare, its settings resolved by the steps that declare
+them, and built through the one ``build_dataflow`` entry."""
 
 from __future__ import annotations
 
-import dataclasses
+import functools
 import json
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -16,15 +17,14 @@ from typing import Any
 
 import onnx
 import pytest
-from dataclasses_json.undefined import UndefinedParameterError
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.general import GiveUniqueNodeNames
 
 from finn.builder.build_dataflow import (
     build_dataflow_cfg,
     build_dataflow_directory,
     read_build_config,
-    resolve_build_steps,
     resolve_step_filename,
 )
 from finn.builder.build_dataflow_checks import (
@@ -38,77 +38,68 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
     VerificationStepType,
-    default_build_dataflow_steps,
 )
-from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
+from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
-    AddPrePostProcessingOptions,
-    ConvertToChannelsLastOptions,
-    ExploreOptions,
-    QonnxToFinnOptions,
-    StreamlineOptions,
-    TidyUpOptions,
+    DEFAULT_STRATEGIES,
+    build_dataflow_phases,
     build_dataflow_step_lookup,
-    build_dataflow_step_options,
+    default_build_dataflow_steps,
+    step_add_pre_post_processing,
 )
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.platform import TargetRequest, resolve_target
-from finn.shells.pynq.runner import PynqOptions
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config
-from finn.transformation.prepare import GraphPreparation
-from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_options
+from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_settings
 
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
+
+
+def checked(cfg: DataflowBuildConfig) -> Report:
+    """The configuration checks of ``cfg`` against its plan."""
+    return run_all_config_checks(cfg, resolve_plan(cfg))
 
 
 def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
     assert cfg.generate_outputs == [] and cfg.verify_steps == []
-    assert cfg.step_options == {}
-    # The default exploration sizes the FIFOs at the baseline folding; a list written
-    # replaces it.
-    explore = cfg.options("step_explore", ExploreOptions)
-    assert explore.kernel_exploration == [{"strategy": "size_fifos"}]
-    stated: dict[str, Any] = {"step_explore": {"kernel_exploration": []}}
-    written = DataflowBuildConfig.from_json(json.dumps({**STATED, "step_options": stated}))
-    assert written.options("step_explore", ExploreOptions).kernel_exploration == []
-    # Each configuration has its own list.
-    other = DataflowBuildConfig.from_json(json.dumps(STATED))
-    assert (
-        explore.kernel_exploration
-        is not other.options("step_explore", ExploreOptions).kernel_exploration
-    )
-    assert cfg.steps is None and cfg.toolchain is None
-    # Prepared from the export as exported: its own inputs and outputs, the default
-    # recipes.
-    assert (
-        cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions)
-        == AddPrePostProcessingOptions()
-    )
-    assert cfg.options("step_streamline", StreamlineOptions).streamlining == (
-        GraphPreparation().streamlining
-    )
+    assert cfg.settings == {}
+    assert cfg.steps is None and cfg.step_edits == [] and cfg.toolchain is None
+    # Every setting at its default: the export's own inputs and outputs, and the
+    # exploration that sizes the FIFOs at the baseline folding.
+    settings = resolve_plan(cfg).settings
+    assert {name: setting.value for name, setting in settings.items()} == {
+        "override_inpsize": None,
+        "max_multithreshold_bit_width": 8,
+        "preprocessing": None,
+        "input_datatype": None,
+        "topk": None,
+        "strategies": DEFAULT_STRATEGIES,
+        "hw_debug": False,
+    }
+    assert DEFAULT_STRATEGIES == ({"strategy": "size_fifos"},)
+    assert not any(setting.given for setting in settings.values())
+    # A list written replaces the default.
+    written = DataflowBuildConfig.from_json(json.dumps({**STATED, "strategies": []}))
+    assert resolve_plan(written).settings["strategies"].value == []
     assert default_build_dataflow_steps[0] == "phase_prepare_model"
 
 
-#: Every option of every step that takes options, none at its default.
-STEP_OPTIONS = {
-    "step_tidy_up": TidyUpOptions(override_inpsize=[1, 1, 28, 28]),
-    "step_qonnx_to_finn": QonnxToFinnOptions(max_multithreshold_bit_width=4),
-    "step_add_pre_post_processing": AddPrePostProcessingOptions(
-        preprocessing="preproc.onnx", input_datatype="UINT8", topk=1
-    ),
-    "step_streamline": StreamlineOptions(streamlining=["Streamline"]),
-    "step_convert_to_channels_last": ConvertToChannelsLastOptions(topology=[]),
-    "step_explore": ExploreOptions(
-        kernel_exploration=[
-            {"strategy": "target_throughput", "fps": 1_000_000},
-            {"strategy": "size_fifos"},
-        ],
-    ),
+#: Every setting of the build's steps, none at its default.
+SETTINGS: dict[str, Any] = {
+    "override_inpsize": [1, 1, 28, 28],
+    "max_multithreshold_bit_width": 4,
+    "preprocessing": "preproc.onnx",
+    "input_datatype": "UINT8",
+    "topk": 1,
+    "strategies": [
+        {"strategy": "target_throughput", "fps": 1_000_000},
+        {"strategy": "size_fifos"},
+    ],
+    "hw_debug": True,
 }
 
 
@@ -122,14 +113,17 @@ def test_a_configuration_holds_through_json() -> None:
         toolchain=Selection(
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
-        enable_hw_debug=True,
         steps=["phase_optimize_hardware", "step_package_partition"],
+        step_edits=[
+            {"after": "step_explore", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
+            {"remove": "step_package_partition"},
+        ],
         start_step="step_explore",
         stop_step="phase_optimize_hardware",
         save_intermediate_models=False,
         enable_build_pdb_debug=False,
         verbose=True,
-        step_options=STEP_OPTIONS,
+        settings=SETTINGS,
     )
     written = cfg.to_json()
     assert DataflowBuildConfig.from_json(written) == cfg
@@ -148,148 +142,175 @@ def test_a_configuration_holds_through_json() -> None:
         "deployment_package",
     ]
     assert stated["verify_steps"] == [
-        "kernel_partition_python",
-        "kernel_partition_elaboration",
+        "partition_python",
+        "partition_elaboration",
         "stitched_ip_testbench",
     ]
-    # Each step's options under its name, every field stated.
-    assert stated["step_options"] == {
-        "step_tidy_up": {"override_inpsize": [1, 1, 28, 28]},
-        "step_qonnx_to_finn": {"max_multithreshold_bit_width": 4},
-        "step_add_pre_post_processing": {
-            "preprocessing": "preproc.onnx",
-            "input_datatype": "UINT8",
-            "topk": 1,
-        },
-        "step_streamline": {"streamlining": ["Streamline"]},
-        "step_convert_to_channels_last": {"topology": []},
-        "step_explore": {
-            "kernel_exploration": [
-                {"strategy": "target_throughput", "fps": 1_000_000},
-                {"strategy": "size_fifos"},
-            ],
-        },
-    }
+    # The settings beside the fields, as stated; the edits as written.
+    assert {name: stated[name] for name in SETTINGS} == SETTINGS
+    assert "settings" not in stated
+    assert stated["step_edits"] == [
+        {"after": "step_explore", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
+        {"remove": "step_package_partition"},
+    ]
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
     assert stated["toolchain"]["vivado_jobs"] == 4
-    # Debug cores are an option of the pynq shell's build (SZ7), upstream's flat field.
-    assert stated["enable_hw_debug"] is True
-    assert cfg._resolve_shell_build_options() == PynqOptions(enable_hw_debug=True)
-    # Each step reads its own, of the type it declares.
-    for step, options in STEP_OPTIONS.items():
-        assert cfg.options(step, type(options)) == options
-    with pytest.raises(TypeError, match="step_explore declares ExploreOptions"):
-        cfg.options("step_explore", AddPrePostProcessingOptions)
 
 
 @pytest.mark.parametrize(
     "key",
     [
-        # The board is the target's; the toolchain's selection states Vivado's jobs
-        # (SZ7).
+        # The board is the target's; the toolchain's selection states Vivado's jobs.
         "board",
         "vivado_jobs",
+        # The names before settings: per-step options, injections, the flat hardware
+        # debug flag and the exploration's old name.
+        "step_options",
+        "inject_steps_after",
+        "enable_hw_debug",
+        "kernel_exploration",
     ],
 )
-def test_an_undeclared_key_is_refused_naming_it(key: str) -> None:
-    with pytest.raises(UndefinedParameterError, match=key):
-        DataflowBuildConfig.from_json(json.dumps({**STATED, key: None}))
-
-
-def test_an_undeclared_target_or_toolchain_key_is_refused_naming_it() -> None:
-    target = {"period_ns": 5.0, "board": "Ultra96", "shell_flow_type": "vivado_zynq"}
-    with pytest.raises(UndefinedParameterError, match="target: .*shell_flow_type"):
-        DataflowBuildConfig.from_json(json.dumps({**STATED, "target": target}))
-    toolchain = {"hls_frontned": "vitis-run"}
-    with pytest.raises(UndefinedParameterError, match="toolchain: .*hls_frontned"):
-        DataflowBuildConfig.from_json(json.dumps({**STATED, "toolchain": toolchain}))
+def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(key: str) -> None:
+    """Read as a setting, refused when the plan resolves, before the first step."""
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, key: None}))
+    assert cfg.settings == {key: None}
+    with pytest.raises(ValueError) as refused:
+        resolve_plan(cfg)
+    assert str(refused.value) == (
+        f"settings no step of this build declares: {key}; the settings its steps read: "
+        "hw_debug, input_datatype, max_multithreshold_bit_width, override_inpsize, "
+        "preprocessing, strategies, topk"
+    )
 
 
 @pytest.mark.parametrize(
-    "options, refused",
+    "stated, refused",
     [
-        # A step that takes no options, and a name that is no step.
-        ({"step_widen_containers": {}}, "step_widen_containers takes no options"),
-        ({"step_explorer": {}}, "step_explorer is no step"),
-        ({"phase_optimize_hardware": {}}, "phase_optimize_hardware is no step"),
-        # An option the step's type does not declare.
         (
-            {"step_qonnx_to_finn": {"max_multithreshold_bitwidth": 8}},
-            "step_options.step_qonnx_to_finn: .*max_multithreshold_bitwidth",
-        ),
-        ({"step_explore": {"strategies": []}}, "step_options.step_explore: .*strategies"),
-        # No completion policy and no fresh exploration: every choice is stored where it
-        # is created, and the baseline strategy starts over.
-        (
-            {"step_explore": {"kernel_completion": "baseline"}},
-            "step_options.step_explore: .*kernel_completion",
+            {"target": {"period_ns": 5.0, "board": "Ultra96", "shell_flow_type": "vivado_zynq"}},
+            "configuration.target: keys TargetRequest does not declare: ['shell_flow_type']",
         ),
         (
-            {"step_explore": {"kernel_exploration_fresh": True}},
-            "step_options.step_explore: .*kernel_exploration_fresh",
+            {"toolchain": {"hls_frontned": "vitis-run"}},
+            "configuration.toolchain: keys Selection does not declare: ['hls_frontned']",
         ),
+        ({"target": {"board": "Ultra96"}}, "configuration.target: no period_ns"),
+        ({"target": {"period_ns": "5"}}, "configuration.target.period_ns: a float, not '5'"),
+        ({"toolchain": {"hls_frontend": "hls"}}, "configuration.toolchain: Unknown HLS frontend"),
+        ({"verify_steps": None}, "configuration.verify_steps: null, and it is not optional"),
+        ({"generate_outputs": None}, "configuration.generate_outputs: null, and it is not"),
+        (
+            {"verify_steps": ["kernel_partition_python"]},
+            "configuration.verify_steps[0]: 'kernel_partition_python'; one of "
+            "['partition_python', 'partition_elaboration', 'stitched_ip_testbench']",
+        ),
+        ({"verbose": "yes"}, "configuration.verbose: a bool, not 'yes'"),
+        ({"verify_input_npy": 3}, "configuration.verify_input_npy: a str, not 3"),
+        ({"steps": "phase_prepare_model"}, "configuration.steps: "),
+        ({"step_edits": {"remove": "step_explore"}}, "configuration.step_edits: a list, not"),
+        ({"settings": {"topk": 1}}, "configuration.settings: JSON states each setting as a"),
     ],
 )
-def test_an_undeclared_step_or_option_is_refused_naming_it(
-    options: dict[str, object], refused: str
+def test_json_the_configuration_does_not_declare_is_refused_naming_its_place(
+    stated: dict[str, Any], refused: str
 ) -> None:
-    """In JSON and in Python alike."""
-    with pytest.raises(UndefinedParameterError, match=refused):
-        DataflowBuildConfig.from_json(json.dumps({**STATED, "step_options": options}))
-    with pytest.raises(UndefinedParameterError, match=refused):
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        DataflowBuildConfig.from_json(json.dumps({**STATED, **stated}))
+
+
+def test_json_without_a_required_field_is_refused_naming_it() -> None:
+    with pytest.raises(ValueError, match="configuration: no output_dir, which"):
+        DataflowBuildConfig.from_json(json.dumps({"target": {"period_ns": 5.0}}))
+    with pytest.raises(ValueError, match="configuration: a JSON object, not"):
+        DataflowBuildConfig.from_json("[]")
+
+
+def test_a_setting_named_as_a_field_is_refused() -> None:
+    with pytest.raises(ValueError, match=r"configuration.settings: \['verbose'\] are fields"):
         DataflowBuildConfig(
-            output_dir="out", target=TargetRequest(period_ns=5.0), step_options=options
+            output_dir="out", target=TargetRequest(period_ns=5.0), settings={"verbose": True}
         )
 
 
-@pytest.mark.parametrize(
-    "options, refused",
-    [
-        (
-            {"step_streamline": {"streamlining": ["Streamline", "Streamlining"]}},
-            "step_streamline: streamlining: no transform named Streamlining",
-        ),
-        (
-            {"step_convert_to_channels_last": {"topology": ["MakeMaxPoolNCHW"]}},
-            "step_convert_to_channels_last: topology: no transform named MakeMaxPoolNCHW",
-        ),
-        (
-            {"step_add_pre_post_processing": {"input_datatype": "UINT33x"}},
-            "step_add_pre_post_processing: input_datatype: 'UINT33x' is no qonnx datatype",
-        ),
-        ({"step_add_pre_post_processing": {"topk": 0}}, "step_add_pre_post_processing: topk: 0"),
-        ({"step_explore": ["size_fifos"]}, "step_explore: an object of ExploreOptions's fields"),
-    ],
-)
-def test_a_preparation_the_phase_cannot_run_is_refused_naming_it(
-    options: dict[str, object], refused: str
-) -> None:
-    with pytest.raises(ValueError, match=refused):
-        DataflowBuildConfig.from_json(json.dumps({**STATED, "step_options": options}))
+def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written() -> None:
+    def step_mine(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+        return model
 
-
-@pytest.mark.parametrize(
-    "shell, debug, refused",
-    [
-        ("ip", True, "enable_hw_debug: the 'ip' shell has no build to take it"),
-        ("pynq", "yes", "enable_hw_debug is a bool, not 'yes'"),
-    ],
-)
-def test_hw_debug_the_shells_build_does_not_take_is_refused(
-    shell: str, debug: object, refused: str
-) -> None:
-    """Before the build: the configuration's check names what its shell refuses."""
-    target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
-    cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "target": target, "enable_hw_debug": debug})
+    target = TargetRequest(period_ns=5.0)
+    in_steps = DataflowBuildConfig(
+        output_dir="out", target=target, steps=["phase_prepare_model", step_mine]
     )
-    with pytest.raises(ValueError, match=refused):
-        cfg._resolve_shell_build_options()
-    (check,) = [
-        check for check in run_all_config_checks(cfg).checks if check.name == "kernel_hw_debug"
+    with pytest.raises(ValueError) as refused:
+        in_steps.to_json()
+    assert str(refused.value) == (
+        "configuration.steps[1]: step_mine is a Python object; JSON names a step by its name "
+        "or import path"
+    )
+    edits: list[dict[str, object]] = [
+        {"after": "step_streamline", "insert": [functools.partial(step_mine)]}
     ]
-    assert (check.severity, check.passed) == (Severity.ERROR, False)
-    assert refused in check.message
+    in_edits = DataflowBuildConfig(output_dir="out", target=target, step_edits=edits)
+    with pytest.raises(ValueError, match=r"configuration.step_edits\[0\].insert\[0\]: partial is"):
+        in_edits.to_json()
+    replaced = GiveUniqueNodeNames()  # type: ignore[no-untyped-call]
+    edits = [{"replace": "step_streamline", "with": replaced}]
+    with pytest.raises(ValueError, match=r"step_edits\[0\].with: GiveUniqueNodeNames is"):
+        DataflowBuildConfig(output_dir="out", target=target, step_edits=edits).to_json()
+
+
+@pytest.mark.parametrize(
+    "settings, refused",
+    [
+        ({"topk": "one"}, "configuration.topk: an int, not 'one'"),
+        ({"max_multithreshold_bit_width": "8"}, "configuration.max_multithreshold_bit_width: "),
+        ({"strategies": ["size_fifos"]}, "configuration.strategies[0]: an object, not"),
+        ({"hw_debug": "yes"}, "configuration.hw_debug: a bool, not 'yes'"),
+        ({"override_inpsize": [1, "28"]}, "configuration.override_inpsize: "),
+    ],
+)
+def test_a_setting_of_the_wrong_type_is_refused_naming_it(
+    settings: dict[str, Any], refused: str
+) -> None:
+    """By the annotation of the step that declares it, when the plan resolves."""
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, **settings}))
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        resolve_plan(cfg)
+
+
+@pytest.mark.parametrize(
+    "settings, refused",
+    [
+        ({"input_datatype": "UINT33x"}, "input_datatype: 'UINT33x' is no qonnx datatype"),
+        ({"topk": 0}, "topk: 0; at least 1"),
+    ],
+)
+def test_a_value_preparation_cannot_take_is_refused_when_its_step_runs(
+    settings: dict[str, Any], refused: str
+) -> None:
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, **settings}))
+    resolve_plan(cfg)
+    model = ModelWrapper(helper.make_model(helper.make_graph([], "empty", [], [])))
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        step_add_pre_post_processing(model, cfg, **settings)
+
+
+def test_hw_debug_on_a_shell_without_a_build_is_refused_before_the_build() -> None:
+    """The configuration's check names what its shell refuses; the bitfile step
+    declares the setting."""
+    for shell, passed in (("ip", False), ("pynq", True)):
+        target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
+        cfg = DataflowBuildConfig.from_json(
+            json.dumps({**STATED, "target": target, "hw_debug": True})
+        )
+        assert resolve_plan(cfg).settings["hw_debug"].readers == ("step_build_bitfile",)
+        found = [check for check in checked(cfg).checks if check.name == "kernel_hw_debug"]
+        if passed:
+            assert found == []
+            continue
+        (check,) = found
+        assert (check.severity, check.passed) == (Severity.ERROR, False)
+        assert check.message == "hw_debug: the 'ip' shell has no build to take it"
 
 
 def board_build(tmp_path: Path, board: str, shell: str = "pynq") -> DataflowBuildConfig:
@@ -298,7 +319,7 @@ def board_build(tmp_path: Path, board: str, shell: str = "pynq") -> DataflowBuil
     cfg = DataflowBuildConfig.from_json(
         json.dumps({**STATED, "target": {"period_ns": 5.0, "board": board, "shell": shell}})
     )
-    cfg._toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
     return cfg
 
 
@@ -322,22 +343,22 @@ def test_no_vivado_on_the_route_is_reported_not_raised(tmp_path: Path) -> None:
     """Without Vivado on the build's route, the report states none detected; a board
     whose row requires a release fails its check, naming why, and one without passes
     every Vivado check."""
-    report = run_all_config_checks(board_build(tmp_path, "AUP-ZU3_8GB"))
+    report = checked(board_build(tmp_path, "AUP-ZU3_8GB"))
     assert report.vivado_version is None and report.has_errors()
     ((passed, message),) = board_checks(report)
     assert not passed
     assert message.startswith("AUP-ZU3_8GB requires Vivado 2024.1 or later, no Vivado detected")
     assert "vivado: not on this toolchain's route" in message
-    report = run_all_config_checks(board_build(tmp_path, "Ultra96"))
+    report = checked(board_build(tmp_path, "Ultra96"))
     assert report.vivado_version is None and board_checks(report) == []
     assert "Vivado: Not detected" in format_report(report)
 
 
 def test_a_toolchain_that_does_not_prepare_is_no_vivado_detected(tmp_path: Path) -> None:
     cfg = board_build(tmp_path, "AUP-ZU3_8GB")
-    del cfg._toolchain
+    del cfg.prepared_toolchain
     cfg.toolchain = Selection(settings=(str(tmp_path / "missing-settings64.sh"),))
-    report = run_all_config_checks(cfg)
+    report = checked(cfg)
     assert report.vivado_version is None
     ((passed, message),) = board_checks(report)
     assert not passed and "no Vivado detected" in message
@@ -354,20 +375,20 @@ def test_the_release_a_boards_row_requires_against_the_toolchains(
     board's row (AUP-ZU3_8GB's, 2024.1), on the shell that names the board; on ``ip``
     the target names no board and nothing is required."""
     monkeypatch.setattr(Toolchain, "probe", release(found))
-    report = run_all_config_checks(board_build(tmp_path, "AUP-ZU3_8GB"))
+    report = checked(board_build(tmp_path, "AUP-ZU3_8GB"))
     assert report.vivado_version == found
     ((check_passed, message),) = board_checks(report)
     assert check_passed is passed
     if not passed:
         assert message == "AUP-ZU3_8GB requires Vivado 2024.1 or later, found 2023.2"
-    assert board_checks(run_all_config_checks(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
+    assert board_checks(checked(board_build(tmp_path, "AUP-ZU3_8GB", "ip"))) == []
 
 
 def test_the_report_states_the_toolchains_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(Toolchain, "probe", release((2025, 2)))
-    report = run_all_config_checks(board_build(tmp_path, "Ultra96"))
+    report = checked(board_build(tmp_path, "Ultra96"))
     assert report.vivado_version == (2025, 2)
     assert not report.has_errors()
     assert "Vivado: 2025.2" in Path(save_report(report, str(tmp_path))).read_text()
@@ -386,25 +407,35 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
     ]
 
 
-def test_the_default_steps_are_the_phases_each_a_list_of_every_step_once() -> None:
-    assert default_build_dataflow_steps == list(build_dataflow_phase_lookup)
-    in_phases = [step for steps in build_dataflow_phase_lookup.values() for step in steps]
-    assert in_phases == list(build_dataflow_step_lookup)
+def test_the_default_list_and_the_lookup_are_the_phase_tables() -> None:
+    """Both derived from the one table: every phase in order, and every step once, by
+    its name."""
+    assert default_build_dataflow_steps == list(build_dataflow_phases)
+    in_phases = [step for steps in build_dataflow_phases.values() for step in steps]
+    assert list(build_dataflow_step_lookup.values()) == in_phases
+    assert all(name == step.__name__ for name, step in build_dataflow_step_lookup.items())
+    assert len(set(in_phases)) == len(in_phases)
 
 
-def test_each_step_with_options_declares_a_type_with_defaults() -> None:
-    """Every step that takes options is a step, and its type is a dataclass every field
-    of which has a default: a step not named in ``step_options`` takes them."""
-    assert set(build_dataflow_step_options) <= set(build_dataflow_step_lookup)
-    assert set(build_dataflow_step_options) == set(STEP_OPTIONS)
-    for kind in build_dataflow_step_options.values():
-        assert dataclasses.is_dataclass(kind)
-        kind()
+def test_the_steps_declare_their_settings_each_with_a_default() -> None:
+    """The settings of the default build and the steps that read them: a configuration
+    that gives none resolves."""
+    cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
+    readers = {name: setting.readers for name, setting in resolve_plan(cfg).settings.items()}
+    assert readers == {
+        "override_inpsize": ("step_tidy_up",),
+        "max_multithreshold_bit_width": ("step_qonnx_to_finn", "step_add_pre_post_processing"),
+        "preprocessing": ("step_add_pre_post_processing",),
+        "input_datatype": ("step_add_pre_post_processing",),
+        "topk": ("step_add_pre_post_processing",),
+        "strategies": ("step_explore",),
+        "hw_debug": ("step_build_bitfile",),
+    }
 
 
 def names(cfg: DataflowBuildConfig) -> list[str]:
     """The names of the steps ``cfg``'s build runs, in order."""
-    return [step.__name__ for step in resolve_build_steps(cfg)]
+    return [step.name for step in resolve_plan(cfg).steps]
 
 
 def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
@@ -427,50 +458,7 @@ def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
         "out/intermediate_models/step_create_dataflow_partition.onnx"
     )
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_prepare_model"}))
-    assert names(cfg) == build_dataflow_phase_lookup["phase_prepare_model"]
-
-
-def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase() -> None:
-    def step_mine(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-        return model
-
-    def injected(name: str) -> Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper]:
-        def step(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-            return model
-
-        step.__name__ = name
-        return step
-
-    cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "steps": ["step_widen_containers", "phase_optimize_hardware"]})
-    )
-    assert cfg.steps is not None
-    cfg.steps.append(step_mine)
-    cfg.inject_steps_before = {
-        "step_verify_partition": [injected("before_verify")],
-        "phase_optimize_hardware": [injected("before_phase")],
-    }
-    cfg.inject_steps_after = {
-        "step_widen_containers": [injected("after_widening")],
-        "phase_optimize_hardware": [injected("after_phase")],
-        "step_mine": [injected("after_mine")],
-    }
-    assert names(cfg) == [
-        "step_widen_containers",
-        "after_widening",
-        "before_phase",
-        "step_explore",
-        "before_verify",
-        "step_verify_partition",
-        "after_phase",
-        "step_mine",
-        "after_mine",
-    ]
-    # A phase's span holds what is injected around it; an injected step is a step.
-    cfg.start_step, cfg.stop_step = "phase_optimize_hardware", "phase_optimize_hardware"
-    assert names(cfg)[0] == "before_phase" and names(cfg)[-1] == "after_phase"
-    cfg.start_step, cfg.stop_step = "before_verify", "step_verify_partition"
-    assert names(cfg) == ["before_verify", "step_verify_partition"]
+    assert names(cfg) == [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
 
 
 def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases() -> None:
@@ -482,19 +470,21 @@ def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases()
         "step_package_partition; its phases: phase_emit_hardware"
     )
     with pytest.raises(ValueError) as refused:
-        resolve_build_steps(cfg)
+        resolve_plan(cfg)
     assert str(refused.value) == message
     with pytest.raises(ValueError) as refused:
         resolve_step_filename("step_explore", cfg, -1)
     assert str(refused.value) == message
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
     with pytest.raises(ValueError, match="'phase_kernel' is not one of this build's") as refused:
-        resolve_build_steps(cfg)
+        resolve_plan(cfg)
     assert "step_deployment_package" in str(refused.value)
     assert "phase_generate_outputs" in str(refused.value)
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "steps": ["phase_kernel"]}))
-    with pytest.raises(ValueError, match="Unknown step or phase: phase_kernel; the steps: "):
-        resolve_build_steps(cfg)
+    with pytest.raises(
+        ValueError, match=r"steps\[0\]: 'phase_kernel' is no step or phase; the steps: "
+    ):
+        resolve_plan(cfg)
 
 
 def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
@@ -512,10 +502,10 @@ def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
         step.__name__ = name
         return step
 
-    for name in ("step_one", "step_two", "step_three"):
-        monkeypatch.setitem(build_dataflow_step_lookup, name, recorded(name))
     monkeypatch.setitem(
-        build_dataflow_phase_lookup, "phase_test", ["step_one", "step_two", "step_three"]
+        build_dataflow_phases,
+        "phase_test",
+        [recorded(name) for name in ("step_one", "step_two", "step_three")],
     )
     source = tmp_path / "model.onnx"
     onnx.save(
@@ -535,7 +525,7 @@ def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
         target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
         steps=["phase_test"],
         stop_step="step_two",
-        inject_steps_after={"step_one": [recorded("step_injected")]},
+        step_edits=[{"after": "step_one", "insert": recorded("step_injected")}],
         enable_build_pdb_debug=False,
     )
     assert build_dataflow_cfg(str(source), cfg) == 0
@@ -572,11 +562,9 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),
-        step_options={
-            "step_add_pre_post_processing": io_options(directory),
-            "step_explore": ExploreOptions(
-                kernel_exploration=[{"strategy": "target_throughput", "fps": 1_000_000}]
-            ),
+        settings={
+            **io_settings(directory),
+            "strategies": [{"strategy": "target_throughput", "fps": 1_000_000}],
         },
         enable_build_pdb_debug=False,
     )

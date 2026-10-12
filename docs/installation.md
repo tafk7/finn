@@ -543,21 +543,21 @@ host file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build
 `finn.builder.build_dataflow_config.DataflowBuildConfig`, written as
 `dataflow_build_config.json` beside `model.onnx`, which `build_dataflow` builds. A
 kernel-path build of TFC for Ultra96 in the
-Zynq shell (the environment as configured, so `settings` stays empty):
+Zynq shell, its preprocessing beside the export (the tool environment as configured, so
+the configuration states no `toolchain`):
 
 ```json
 {
   "output_dir": "output",
   "target": {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq"},
   "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
-  "step_options": {
-    "step_explore": {
-      "kernel_exploration": [
-        {"strategy": "target_throughput", "fps": 1000000},
-        {"strategy": "size_fifos"}
-      ]
-    }
-  }
+  "preprocessing": "preproc.onnx",
+  "input_datatype": "UINT8",
+  "topk": 1,
+  "strategies": [
+    {"strategy": "target_throughput", "fps": 1000000},
+    {"strategy": "size_fifos"}
+  ]
 }
 ```
 
@@ -582,15 +582,37 @@ steps: `phase_prepare_model` (the export prepared),
 `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
 partition), `phase_optimize_hardware` (their choices and the partition's
 verification), `phase_emit_hardware` (the partition's IP) and
-`phase_generate_outputs` (what the shell makes). `steps`, `start_step` and
-`stop_step` name phases or steps. A key the configuration does not declare is
-refused by name. The top-level fields are how the build runs; each step's own options
-are under `step_options`, by step name, each step declaring its options type beside it
-(`finn.builder.build_dataflow_steps.build_dataflow_step_options`: the preparation
-steps' and `step_explore`'s); a step not named takes its defaults, and a step that takes
-no options, or an option its type does not declare, is refused by name.
+`phase_generate_outputs` (what the shell makes), in
+`finn.builder.build_dataflow_steps.build_dataflow_phases`. `steps` replaces that list;
+its entries, and those of an edit, are phase or step names, import paths
+(`package.module.name`) of a step function or of a qonnx `Transformation` class, run with
+its defaults, or in Python the function, `functools.partial` or `Transformation` itself.
+`step_edits` changes the list in order, without restating it:
+`{"after": "step_streamline", "insert": ["finn.transformation.streamline.extract_multithreshold_scale_bias.ExtractMultiThresholdScaleBias"]}`,
+`{"before": ..., "insert": ...}`, `{"replace": ..., "with": ...}` and
+`{"remove": "step_verify_partition"}`. A phase as target is the phase as a whole; any
+other name is a step, wherever it runs, and entries placed beside it join its phase.
+Each target must name exactly one place. `start_step` and `stop_step` name a phase or a
+step.
 
-`step_explore`'s `kernel_exploration` lists the strategies that choose the KernelOps' choices
+The configuration's fields say how the build runs (`output_dir`, `target`, `toolchain`,
+`generate_outputs`, `verify_steps`, `verify_input_npy`, `steps`, `step_edits`,
+`start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
+`verbose`). Every other top-level key is a setting (in Python, `settings={...}`): the
+value of the keyword-only parameter of that name of the steps that declare it
+(`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its
+annotation; a path setting is relative to the build directory. A setting no step of
+the build declares is refused, naming the settings its steps read; steps that declare
+the same name share its value. The preparation steps declare `override_inpsize`,
+`max_multithreshold_bit_width` (default 8), `preprocessing`, `input_datatype` and
+`topk`; `step_explore` `strategies`; `step_build_bitfile` `hw_debug` (integrated logic
+analyzers on the ends' streams, refused on `ip`). The build's manifest records each
+step it runs with its settings, and each setting with its value or default and its
+readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
+where a field is not optional, a wrong type and an unknown value are refused, naming
+their place (`configuration.target: ...`).
+
+`step_explore`'s `strategies` lists the strategies that choose the KernelOps' choices
 through the DSE seam, run as written, each with its own parameters. Every choice the
 partition's body leaves open first takes its baseline, the first viable case its
 kernel lists (the least parallelism; each memory in the explicit style the size of

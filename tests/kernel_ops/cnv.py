@@ -4,7 +4,7 @@
 """CNV_W2A2 for the kernel path's tests: the BNN-PYNQ CNV at two bits (its weights from the
 torch hub cache), exported by Brevitas with its preprocessing beside it, as
 ``kernel_ops.tfc`` exports TFC. Its build states its inputs and outputs as TFC's does
-(``kernel_ops.tfc.io_options``), so ``kernel_ops.tfc.prepared`` prepares it.
+(``kernel_ops.tfc.io_settings``), so ``kernel_ops.tfc.prepared`` prepares it.
 
 Exporting and preparing CNV takes about a minute; ``conftest.py`` builds it once a run
 (``cnv_export``, ``cnv_streamlined``), for the tests marked slow that read it.

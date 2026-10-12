@@ -153,11 +153,11 @@ def test_the_block_design_instantiates_each_end_and_the_partition_from_the_expor
 
 def test_the_debug_option_probes_every_end_stream_and_the_memory_port(tmp_path: Path) -> None:
     """The template's debug block names the HWCustomOp flow's nets; with the shell's
-    enable_hw_debug the block design marks the export's own: each stream's net (named by
+    hw_debug the block design marks the export's own: each stream's net (named by
     its master pin) and the memory interconnect's port to the processor."""
     export = integration(zynq_model(tmp_path))
     plain = block_design(export, IPS).splitlines()
-    debug = block_design(export, IPS, enable_hw_debug=True).splitlines()
+    debug = block_design(export, IPS, hw_debug=True).splitlines()
     assert debug[: len(plain)] == plain
     nets = ["idma0_m_axis_0", "idma1_m_axis_0", "partition_m_axis_0", "smartconnect_0_M00_AXI"]
     assert debug[len(plain) : len(plain) + 4] == [
@@ -424,7 +424,7 @@ def test_the_debug_option_reaches_the_block_design(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     vivado = FakeVivado()
-    recorded_build(monkeypatch, tmp_path, vivado, options=PynqOptions(enable_hw_debug=True))
+    recorded_build(monkeypatch, tmp_path, vivado, options=PynqOptions(hw_debug=True))
     ((_, _, script),) = vivado.runs
     assert "set_property HDL_ATTRIBUTE.DEBUG true [get_bd_intf_nets {idma1_m_axis_0}]" in script
     # The template's own block, on its constant nets, stays off.
@@ -478,7 +478,7 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     asked = [{"strategy": "target_throughput", "fps": 1000}, {"strategy": "size_fifos"}]
     exploration.write_text(json.dumps({"strategies": asked}))
     vivado = FakeVivado(timing=TIMING_REPORT)
-    building = BuildPynqBitfile(output, toolchain=cast(Toolchain, vivado), enable_hw_debug=True)
+    building = BuildPynqBitfile(output, toolchain=cast(Toolchain, vivado), hw_debug=True)
     built = parent.transform(building)
     ((_, _, script),) = vivado.runs
     assert "set FREQ_MHZ 200\n" in script and f"set FPGA_PART {ZYNQ.part}\n" in script
@@ -496,7 +496,7 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert built.namespace(OUTPUTS) == {
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
         "bitfile_made_from": design_digest(body),
-        "bitfile_options": {"enable_hw_debug": True},
+        "bitfile_options": {"hw_debug": True},
         "hwh": str(output / "bitfile" / "finn-accel.hwh"),
     }
     assert bitfile_directory(built) == output

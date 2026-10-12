@@ -205,7 +205,7 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         OUTPUT_MADE_FROM: DIGEST,
         OUTPUT_BITFILE: "/out/bitfile/finn-accel.bit",
         OUTPUT_BITFILE_MADE_FROM: DIGEST,
-        OUTPUT_BITFILE_OPTIONS: {"enable_hw_debug": False},
+        OUTPUT_BITFILE_OPTIONS: {"hw_debug": False},
         OUTPUT_HWH: "/out/bitfile/finn-accel.hwh",
     }
     for key, value in made.items():
@@ -222,7 +222,7 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         (OUTPUT_HWH, ""),
         (OUTPUT_MADE_FROM, "sha1:" + "0" * 40),
         (OUTPUT_BITFILE_MADE_FROM, DIGEST.upper()),
-        (OUTPUT_BITFILE_OPTIONS, ["enable_hw_debug"]),
+        (OUTPUT_BITFILE_OPTIONS, ["hw_debug"]),
     ):
         with pytest.raises(MetadataError, match=f"{key.entry}: cannot store"):
             model.set(key, bad)

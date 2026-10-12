@@ -1,13 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build's steps. Each is a function ``(model, DataflowBuildConfig) -> model``,
-registered by name in ``build_dataflow_step_lookup`` so that a configuration's ``steps``
-can name it; the phases (finn.builder.build_dataflow_phases) group them in order.
+"""The build's steps, and at the end its phases (``build_dataflow_phases``).
 
-A step with options of its own declares them as a dataclass beside it and registers that
-type by the step's name in ``build_dataflow_step_options``. A configuration sets them in
-``step_options``, and the step reads its own with ``DataflowBuildConfig.options``.
+A step is a function ``(model, cfg, *, settings...) -> model``. Its keyword-only
+parameters are its settings: the build fills each from the configuration's setting of
+that name, else it keeps its default (finn.builder.build_dataflow_plan). Each phase is a
+list of steps; a build without ``steps`` runs every phase in order.
 
 The steps prepare a Brevitas export into the streamlined graph the kernel path converts;
 convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
@@ -16,12 +15,11 @@ partition's packaged IP on any shell, and the bitfile, driver and deployment pac
 a shell that integrates it."""
 
 import copy
-import dataclasses
 import json
 import logging
 import os
 import shutil
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +30,7 @@ from qonnx.custom_op.registry import getCustomOp
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
+    Step,
     VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import REPORT, VERIFICATION
@@ -82,8 +81,6 @@ from finn.transformation.kernels.package import (
 )
 from finn.transformation.prepare import SUB_PHASES, GraphPreparation, census
 from finn.transformation.prepare.phase import (
-    DEFAULT_STREAMLINING,
-    DEFAULT_TOPOLOGY,
     SubPhase,
     containers_exact,
     imported,
@@ -105,7 +102,7 @@ def _tools(cfg: DataflowBuildConfig, step: str) -> Toolchain:
     """The build's toolchain for ``step``, writing every tool's transcript into
     ``output_dir/logs/<step>``. The step passes it to each transformation that runs a
     tool."""
-    return cfg._resolve_toolchain().transcripts_in(Path(cfg.output_dir) / "logs" / step)
+    return cfg.prepared_toolchain.transcripts_in(Path(cfg.output_dir) / "logs" / step)
 
 
 def _verdict(name: str, passed: bool) -> None:
@@ -142,18 +139,6 @@ def _write_preparation_report(cfg: DataflowBuildConfig, report: dict[str, Any]) 
     _reported(path)
 
 
-def _preparation(*stated: Any) -> GraphPreparation:
-    """The graph-preparation options (finn.transformation.prepare.GraphPreparation) set
-    from the preparation steps' options ``stated``; the rest keep their defaults."""
-    return GraphPreparation(
-        **{
-            item.name: getattr(each, item.name)
-            for each in stated
-            for item in dataclasses.fields(each)
-        }
-    )
-
-
 def _sub_phase(
     run: SubPhase,
     model: ModelWrapper,
@@ -180,103 +165,74 @@ def _sub_phase(
     return model
 
 
-@dataclass(frozen=True)
-class TidyUpOptions:
-    """Options of step_tidy_up. ``override_inpsize``: the batch size (an int) or
-    the whole input shape (a list) for qonnx's cleanup to set; None keeps the export's."""
+def step_tidy_up(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    override_inpsize: int | list[int] | None = None,
+) -> ModelWrapper:
+    """Run qonnx's cleanup on the export. Starts report/graph_preparation.json afresh.
 
-    override_inpsize: int | list[int] | None = None
-
-
-def step_tidy_up(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Run qonnx's cleanup on the export, overriding its input size if the options ask.
-    Starts report/graph_preparation.json afresh."""
-    options = cfg.options("step_tidy_up", TidyUpOptions)
-    return _sub_phase(imported, model, cfg, _preparation(options), fresh=True)
-
-
-@dataclass(frozen=True)
-class QonnxToFinnOptions:
-    """Options of step_qonnx_to_finn. ``max_multithreshold_bit_width``: the
-    widest Quant activation lowered to a MultiThreshold; a wider one stays a Quant.
-    step_add_pre_post_processing lowers the preprocessing model with the same limit."""
-
-    max_multithreshold_bit_width: int = 8
+    ``override_inpsize``: the batch size (an int) or the whole input shape (a list) the
+    cleanup sets; None keeps the export's."""
+    preparation = GraphPreparation(override_inpsize=override_inpsize)
+    return _sub_phase(imported, model, cfg, preparation, fresh=True)
 
 
-def step_qonnx_to_finn(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Lower Quant nodes: activations to MultiThresholds, weights to integers."""
-    options = cfg.options("step_qonnx_to_finn", QonnxToFinnOptions)
-    return _sub_phase(quantization_lowered, model, cfg, _preparation(options))
+def step_qonnx_to_finn(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, max_multithreshold_bit_width: int = 8
+) -> ModelWrapper:
+    """Lower Quant nodes: activations to MultiThresholds, weights to integers.
+
+    ``max_multithreshold_bit_width``: the widest Quant activation lowered to a
+    MultiThreshold; a wider one stays a Quant."""
+    preparation = GraphPreparation(max_multithreshold_bit_width=max_multithreshold_bit_width)
+    return _sub_phase(quantization_lowered, model, cfg, preparation)
 
 
-@dataclass(frozen=True)
-class AddPrePostProcessingOptions:
-    """Options of step_add_pre_post_processing: the network's inputs and outputs. By default, the
-    export's own.
+def step_add_pre_post_processing(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    preprocessing: Path | None = None,
+    input_datatype: str | None = None,
+    topk: int | None = None,
+    max_multithreshold_bit_width: int = 8,
+) -> ModelWrapper:
+    """State the network's inputs and outputs; by default, the export's own.
 
     - ``preprocessing``: an ONNX model (a QONNX export, such as one of
-      ``finn.util.pytorch.ToTensor``) merged ahead of the network; its input becomes
-      the graph's input.
+      ``finn.util.pytorch.ToTensor``) merged ahead of the network; its input becomes the
+      graph's input. It is lowered on its own first, with step_qonnx_to_finn's
+      ``max_multithreshold_bit_width``.
     - ``input_datatype``: the qonnx name of the graph input's datatype, the range of
       values the network is prepared for. None leaves the input unannotated, which is
       read as FLOAT32.
     - ``topk``: append a TopK that selects the ``topk`` largest outputs; its indices
       become the graph's output."""
-
-    preprocessing: str | None = None
-    input_datatype: str | None = None
-    topk: int | None = None
-
-    def __post_init__(self) -> None:
-        _preparation(self)
-
-
-def step_add_pre_post_processing(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Merge the preprocessing model (lowered with step_qonnx_to_finn's bit-width
-    limit), set the input datatype and append the TopK, as the options say."""
-    options = cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions)
-    quantization = cfg.options("step_qonnx_to_finn", QonnxToFinnOptions)
-    return _sub_phase(io_explicit, model, cfg, _preparation(options, quantization))
-
-
-@dataclass(frozen=True)
-class StreamlineOptions:
-    """Options of step_streamline. ``streamlining``: the recipe, names from
-    finn.transformation.prepare.RECIPE_TRANSFORMS, run in order."""
-
-    streamlining: list[str] = field(default_factory=lambda: list(DEFAULT_STREAMLINING))
-
-    def __post_init__(self) -> None:
-        _preparation(self)
+    preparation = GraphPreparation(
+        max_multithreshold_bit_width=max_multithreshold_bit_width,
+        preprocessing=None if preprocessing is None else str(preprocessing),
+        input_datatype=input_datatype,
+        topk=topk,
+    )
+    return _sub_phase(io_explicit, model, cfg, preparation)
 
 
 def step_streamline(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Run the streamlining recipe."""
-    options = cfg.options("step_streamline", StreamlineOptions)
-    return _sub_phase(streamlined, model, cfg, _preparation(options))
-
-
-@dataclass(frozen=True)
-class ConvertToChannelsLastOptions:
-    """Options of step_convert_to_channels_last. ``topology``: the recipe, names from
-    finn.transformation.prepare.RECIPE_TRANSFORMS, run in order."""
-
-    topology: list[str] = field(default_factory=lambda: list(DEFAULT_TOPOLOGY))
-
-    def __post_init__(self) -> None:
-        _preparation(self)
+    """Streamline the graph: scales and biases absorbed into thresholds, convolutions
+    lowered to Im2Col and MatMul, bipolar MatMuls rewritten to XnorPopcountMatMul."""
+    return _sub_phase(streamlined, model, cfg, GraphPreparation())
 
 
 def step_convert_to_channels_last(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Run the topology recipe and infer the data layouts."""
-    options = cfg.options("step_convert_to_channels_last", ConvertToChannelsLastOptions)
-    return _sub_phase(topology_settled, model, cfg, _preparation(options))
+    """Absorb and collapse transposes, make MaxPool NHWC, and infer the data layouts."""
+    return _sub_phase(topology_settled, model, cfg, GraphPreparation())
 
 
 def step_widen_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Widen to float64 the integer regions float32 cannot hold exactly, with Casts at
-    their edges; the graph's inputs and outputs keep their types. No options."""
+    their edges; the graph's inputs and outputs keep their types."""
     return _sub_phase(containers_exact, model, cfg, GraphPreparation())
 
 
@@ -295,7 +251,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         os.makedirs(os.path.dirname(_kernel_path_source(cfg)), exist_ok=True)
         model.save(_kernel_path_source(cfg))
-    conversion = ToKernelOps(cfg._resolve_target())
+    conversion = ToKernelOps(cfg.resolved_target)
     model = model.transform(conversion)
     report = kernel_ops_report(model, conversion.outcomes)
     os.makedirs(cfg.output_dir + "/report", exist_ok=True)
@@ -308,12 +264,26 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     return model
 
 
-@dataclass(frozen=True)
-class ExploreOptions:
-    """Options of step_explore.
+#: step_explore's strategies by default: the baseline folding, its FIFOs sized.
+DEFAULT_STRATEGIES: tuple[Mapping[str, Any], ...] = ({"strategy": "size_fifos"},)
 
-    ``kernel_exploration``: the strategies that set the KernelOps' choices, run in
-    order, each a spec with its own parameters
+
+def step_explore(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    strategies: Sequence[Mapping[str, Any]] = DEFAULT_STRATEGIES,
+) -> ModelWrapper:
+    """Run the strategies over the partition's KernelOps, in order, and save every value
+    in the partition's body: a kernel's on its node, a channel's on its tensor. Each
+    strategy carries its own objective; what no strategy decides keeps its baseline.
+    Writes report/kernel_exploration.json (what each strategy changed, who set each
+    value, the choices left open, and the limitations found) and kernel_choices.json
+    (every choice by node or tensor name, which the ``pinned`` strategy reads back). A
+    limitation, such as the shell's resources exceeding the part's, is logged as a
+    warning, never an error.
+
+    ``strategies``: each a spec with its own parameters
     (finn.transformation.kernels.KERNEL_STRATEGIES):
 
     - ``{"strategy": "pinned", "path": ...}``: the choices in a kernel_choices.json;
@@ -334,29 +304,12 @@ class ExploreOptions:
     that changes the folding; a list that folds after its last size_fifos is refused.
     To start over from the baselines, put ``{"strategy": "baseline"}`` first.
 
-    The default, ``[{"strategy": "size_fifos"}]``, keeps the baseline folding and sizes
-    its FIFOs. A list you give replaces the default and runs as written: without
-    size_fifos, every channel keeps its baseline, a direct connection. The partition is
-    packaged and built from exactly the saved values, and a required choice no strategy
-    set is refused there, by name."""
-
-    kernel_exploration: list[dict[str, Any]] = field(
-        default_factory=lambda: [{"strategy": "size_fifos"}]
-    )
-
-
-def step_explore(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Run the strategies the options list (``kernel_exploration``) over the partition's
-    KernelOps, in order, and save every value in the partition's body: a kernel's on its
-    node, a channel's on its tensor. Each strategy carries its own objective; what no
-    strategy decides keeps its baseline. Writes report/kernel_exploration.json (what each
-    strategy changed, who set each value, the choices left open, and the limitations
-    found) and kernel_choices.json (every choice by node or tensor name, which the
-    ``pinned`` strategy reads back). A limitation, such as the shell's resources
-    exceeding the part's, is logged as a warning, never an error."""
-    options = cfg.options("step_explore", ExploreOptions)
-    strategies = [strategy(spec) for spec in options.kernel_exploration]
-    exploring = ExplorePartition(strategies)
+    The default keeps the baseline folding and sizes its FIFOs. A list you give
+    replaces the default and runs as written: without size_fifos, every channel keeps
+    its baseline, a direct connection. The partition is packaged and built from exactly
+    the saved values, and a required choice no strategy set is refused there, by
+    name."""
+    exploring = ExplorePartition([strategy(spec) for spec in strategies])
     model = model.transform(exploring)
     explored, body = exploring.explored, exploring.body
     assert explored is not None and body is not None
@@ -414,7 +367,7 @@ def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> b
     each input in ``verify_input_npy``, and compare the partition's outputs value for
     value with those of the model saved before conversion (step_convert_to_hw). Saves
     each input's partition outputs as
-    verification_output/verify_kernel_partition_python_<index>_<SUCCESS|FAIL>.npz, and
+    verification_output/verify_partition_python_<index>_<SUCCESS|FAIL>.npz, and
     returns whether all matched."""
     source_file = _kernel_path_source(cfg)
     if not os.path.isfile(source_file):
@@ -429,9 +382,7 @@ def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> b
     source_input = source.graph.input[0].name
     shape = source.get_tensor_shape(source_input)
     if shape is None:
-        raise ValueError(
-            f"kernel_partition_python: the source's input {source_input} states no shape"
-        )
+        raise ValueError(f"partition_python: the source's input {source_input} states no shape")
     ishape = tuple(shape)
     outputs = list(node.output)
     inputs = np.load(cfg.verify_input_npy)
@@ -443,17 +394,17 @@ def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> b
         mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
         for name in mismatched:
             _LOG.warning(
-                f"kernel_partition_python: input {index}: {name} differs from the source's in "
+                f"partition_python: input {index}: {name} differs from the source's in "
                 f"{int(np.sum(built[name] != expected[name]))} of {built[name].size} values"
             )
         result = "FAIL" if mismatched else "SUCCESS"
         all_match = all_match and not mismatched
         np.savez(
-            f"{verify_out_dir}/verify_kernel_partition_python_{index}_{result}.npz",
+            f"{verify_out_dir}/verify_partition_python_{index}_{result}.npz",
             **{name: built[name] for name in outputs},
         )
     _LOG.info(
-        f"kernel_partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
+        f"partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
         f"inputs of {cfg.verify_input_npy}, against the model the kernel path started from"
     )
     return all_match
@@ -468,19 +419,19 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     compiles and elaborates its RTL in XSim."""
     node, body, _ = partition_body(model)
     configured_root(body, node.name)
-    refuse_drift(read_target(body), cfg._resolve_target(), "build")
+    refuse_drift(read_target(body), cfg.resolved_target, "build")
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
         matched = _verify_partition_python(model, cfg)
-        _verdict("kernel_partition_python", matched)
+        _verdict("partition_python", matched)
     if VerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
-        directory = cfg.output_dir + "/verification_output/kernel_partition_elaboration"
+        directory = cfg.output_dir + "/verification_output/partition_elaboration"
         body.transform(
             ElaboratePartition(
                 directory=Path(directory),
                 toolchain=_tools(cfg, "step_verify_partition"),
             )
         )
-        _verdict("kernel_partition_elaboration", True)
+        _verdict("partition_elaboration", True)
     return model
 
 
@@ -489,7 +440,7 @@ def _refuse_drift(
 ) -> None:
     """Refuse to make ``output`` if the partition's target is not the configuration's."""
     _, body, _ = partition_body(model)
-    refuse_drift(read_target(body), cfg._resolve_target(), f"{output.value} build")
+    refuse_drift(read_target(body), cfg.resolved_target, f"{output.value} build")
 
 
 def _stitched_ip_directory(cfg: DataflowBuildConfig) -> Path:
@@ -547,16 +498,21 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     return model
 
 
-def step_build_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_build_bitfile(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, hw_debug: bool = False
+) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
     directory, if BITFILE is asked. Only the pynq shell has a bitfile build
-    (BuildPynqBitfile); ``enable_hw_debug`` is its option. Each tool's transcript goes
-    into logs/step_build_bitfile. Refuses a partition built for another target than
-    the configuration's. The model records the bitfile and its hardware handoff
-    (finn.outputs) and what the bitfile was built from. The build's reports, collected
-    beside the bitfile under report/ (finn.shells.pynq.runner.REPORTS), and the Vivado
-    project are listed under this step in the build's manifest. Any shortfall of the
-    delivered clock is logged as a warning."""
+    (BuildPynqBitfile). Each tool's transcript goes into logs/step_build_bitfile.
+    Refuses a partition built for another target than the configuration's. The model
+    records the bitfile and its hardware handoff (finn.outputs), what the bitfile was
+    built from and the options it was built with. The build's reports, collected beside
+    the bitfile under report/ (finn.shells.pynq.runner.REPORTS), and the Vivado project
+    are listed under this step in the build's manifest. Any shortfall of the delivered
+    clock is logged as a warning.
+
+    ``hw_debug``: insert integrated logic analyzers on the ends' streams. A shell
+    without a build (``ip``) refuses it before the build starts."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
         return model
@@ -564,7 +520,7 @@ def step_build_bitfile(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     building = BuildPynqBitfile(
         Path(cfg.output_dir),
         toolchain=_tools(cfg, "step_build_bitfile"),
-        enable_hw_debug=cfg.enable_hw_debug,
+        hw_debug=hw_debug,
     )
     model = model.transform(building)
     for report in REPORTS.values():
@@ -704,35 +660,41 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     return model
 
 
-#: The build's steps by name, for a configuration's ``steps``.
-build_dataflow_step_lookup = {
-    step.__name__: step
-    for step in (
+#: The build's phases, in the order a build runs them, each its steps in order. A
+#: configuration's lists name a phase wherever they name a step.
+build_dataflow_phases: dict[str, list[Step]] = {
+    # Bring the export into FINN's form and clean it for the compiler without changing
+    # its computation (finn.transformation.prepare).
+    "phase_prepare_model": [
         step_tidy_up,
         step_qonnx_to_finn,
         step_add_pre_post_processing,
         step_streamline,
         step_convert_to_channels_last,
         step_widen_containers,
-        step_convert_to_hw,
-        step_create_dataflow_partition,
-        step_explore,
-        step_verify_partition,
-        step_package_partition,
+    ],
+    # Record the target in the model and convert the graph's nodes to KernelOps.
+    "phase_convert_to_hardware": [step_convert_to_hw],
+    # Cut the KernelOps into one partition; the other nodes stay on the host.
+    "phase_create_accelerator": [step_create_dataflow_partition],
+    # Choose the partition's parameters with the strategies, then check it.
+    "phase_optimize_hardware": [step_explore, step_verify_partition],
+    # Generate the partition's HDL and package it as an IP.
+    "phase_emit_hardware": [step_package_partition],
+    # Make the outputs the configuration asks for: bitfile, driver, resources report,
+    # deployment package.
+    "phase_generate_outputs": [
         step_build_bitfile,
         step_make_driver,
         step_resources_report,
         step_deployment_package,
-    )
+    ],
 }
 
-#: The options type of each step that has options, by step name, for a configuration's
-#: ``step_options``.
-build_dataflow_step_options: dict[str, type] = {
-    "step_tidy_up": TidyUpOptions,
-    "step_qonnx_to_finn": QonnxToFinnOptions,
-    "step_add_pre_post_processing": AddPrePostProcessingOptions,
-    "step_streamline": StreamlineOptions,
-    "step_convert_to_channels_last": ConvertToChannelsLastOptions,
-    "step_explore": ExploreOptions,
+#: The build's steps by name.
+build_dataflow_step_lookup: dict[str, Step] = {
+    step.__name__: step for steps in build_dataflow_phases.values() for step in steps
 }
+
+#: The entries a build without ``steps`` runs: every phase, in order.
+default_build_dataflow_steps: list[str] = list(build_dataflow_phases)

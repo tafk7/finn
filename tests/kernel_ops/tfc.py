@@ -6,7 +6,7 @@
 The BNN-PYNQ TFC at two bits (``brevitas_examples``, its weights from the torch
 hub cache), exported by Brevitas with its preprocessing beside it
 (``finn.util.pytorch.ToTensor``, ``exported``), through the builder's
-graph-preparation phase as TFC's build states it (``io_options``, ``preparation``:
+graph-preparation phase as TFC's build states it (``io_settings``, ``preparation``:
 the preprocessing merged, the input UINT8, the label select appended) to the
 streamlined graph (``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
 and ``partition_kernel_ops``: the input flatten (a Reshape) before the
@@ -34,9 +34,8 @@ from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
-from finn.builder.build_dataflow import resolve_build_steps
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import AddPrePostProcessingOptions
+from finn.builder.build_dataflow_plan import resolve_plan
 from finn.kernels.explore import Ranked
 from finn.platform import TargetRequest, resolve_target
 from finn.transformation.kernels import (
@@ -76,48 +75,40 @@ def exported(directory: Path) -> ModelWrapper:
     return ModelWrapper(str(network))
 
 
-def io_options(directory: Path) -> AddPrePostProcessingOptions:
-    """TFC's inputs and outputs as its build states them (step_add_pre_post_processing's options),
-    its preprocessing model in ``directory``: the images' scaling merged ahead, the
-    input UINT8 (a pixel), the top label selected."""
-    return AddPrePostProcessingOptions(
-        preprocessing=str(directory / PREPROCESSING), input_datatype="UINT8", topk=1
-    )
+def io_settings(directory: Path) -> dict[str, Any]:
+    """TFC's inputs and outputs as its build states them (step_add_pre_post_processing's
+    settings), its preprocessing model in ``directory``: the images' scaling merged
+    ahead, the input UINT8 (a pixel), the top label selected."""
+    return {"preprocessing": str(directory / PREPROCESSING), "input_datatype": "UINT8", "topk": 1}
 
 
 def preparation(directory: Path) -> GraphPreparation:
-    """TFC's graph preparation (``io_options``), the default recipes, as the phase's
-    sub-phases read it."""
-    options = io_options(directory)
-    return GraphPreparation(
-        preprocessing=options.preprocessing,
-        input_datatype=options.input_datatype,
-        topk=options.topk,
-    )
+    """TFC's graph preparation (``io_settings``), as the phase's sub-phases read it."""
+    return GraphPreparation(**io_settings(directory))
 
 
-def preparation_config(directory: Path, **settings: Any) -> DataflowBuildConfig:
-    """A build of TFC from its export in ``directory`` (``io_options``), its outputs
+def preparation_config(directory: Path, **fields: Any) -> DataflowBuildConfig:
+    """A build of TFC from its export in ``directory`` (``io_settings``), its outputs
     under ``directory / "output"``, for Ultra96 in the Zynq shell at 5 ns, no debugger
     and no intermediate models."""
     return DataflowBuildConfig(
         **{
             "output_dir": str(directory / "output"),
             "target": TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
-            "step_options": {"step_add_pre_post_processing": io_options(directory)},
+            "settings": io_settings(directory),
             "enable_build_pdb_debug": False,
             "save_intermediate_models": False,
-            **settings,
+            **fields,
         }
     )
 
 
 def run_steps(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """``model`` through the steps ``cfg`` names (its phases expanded,
-    finn.builder.build_dataflow.resolve_build_steps), in memory: no model read or saved
-    between them."""
-    for step in resolve_build_steps(cfg):
-        model = step(model, cfg)
+    """``model`` through the steps ``cfg`` names (its plan,
+    finn.builder.build_dataflow_plan.resolve_plan), each with its settings, in memory:
+    no model read or saved between them."""
+    for step in resolve_plan(cfg).steps:
+        model = step.run(model, cfg)
     return model
 
 

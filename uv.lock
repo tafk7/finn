@@ -112,20 +112,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dataclasses-json"
-version = "0.5.7"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "marshmallow", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "marshmallow-enum", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "typing-inspect", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/85/94/1b30216f84c48b9e0646833f6f2dd75f1169cc04dc45c48fe39e644c89d5/dataclasses-json-0.5.7.tar.gz", hash = "sha256:c2c11bc8214fbf709ffc369d11446ff6945254a7f09128154a7620613d8fda90", size = 30958, upload-time = "2022-03-21T14:49:46.685Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/7e/2042610dfc8121e8119ad8b94db496d8697e4b0ef7a6e378018a2bd84435/dataclasses_json-0.5.7-py3-none-any.whl", hash = "sha256:bc285b5f892094c3a53d558858a88553dd6a61a11ab1a8128a0e554385dcc5dd", size = 25647, upload-time = "2022-03-21T14:49:40.344Z" },
-]
-
-[[package]]
 name = "dependencies"
 version = "2.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -175,7 +161,6 @@ name = "finn"
 source = { editable = "." }
 dependencies = [
     { name = "clize", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "dataclasses-json", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "greenlet", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "numpy", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "onnx", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -223,7 +208,6 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "clize", specifier = ">=5.0.1,<6" },
-    { name = "dataclasses-json", specifier = ">=0.5.7,<0.7" },
     { name = "greenlet", specifier = ">=3.2.4,<4" },
     { name = "numpy", specifier = ">=1.26.4,<2" },
     { name = "onnx", specifier = ">=1.22.0,<1.23" },
@@ -370,30 +354,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/81/56e567126a2c2bc2684d6391332e357589a96a76cb9f8e5052d85cb0ead8/MarkupSafe-2.1.5-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:3a57fdd7ce31c7ff06cdfbf31dafa96cc533c21e443d57f5b1ecc6cdc668ec7f", size = 33317, upload-time = "2024-02-02T16:30:29.214Z" },
     { url = "https://files.pythonhosted.org/packages/0a/0d/2454f072fae3b5a137c119abf15465d1771319dfe9e4acbb31722a0fff91/MarkupSafe-2.1.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f5dfb42c4604dddc8e4305050aa6deb084540643ed5804d7455b5df8fe16f5e5", size = 28462, upload-time = "2024-02-02T16:30:36.166Z" },
     { url = "https://files.pythonhosted.org/packages/88/07/2dc76aa51b481eb96a4c3198894f38b480490e834479611a4053fbf08623/MarkupSafe-2.1.5-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:58c98fee265677f63a4385256a6d7683ab1832f3ddd1e66fe948d5880c21a169", size = 33038, upload-time = "2024-02-02T16:30:42.243Z" },
-]
-
-[[package]]
-name = "marshmallow"
-version = "3.26.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/55/79/de6c16cc902f4fc372236926b0ce2ab7845268dcc30fb2fbb7f71b418631/marshmallow-3.26.2.tar.gz", hash = "sha256:bbe2adb5a03e6e3571b573f42527c6fe926e17467833660bebd11593ab8dfd57", size = 222095, upload-time = "2025-12-22T06:53:53.309Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/2f/5108cb3ee4ba6501748c4908b908e55f42a5b66245b4cfe0c99326e1ef6e/marshmallow-3.26.2-py3-none-any.whl", hash = "sha256:013fa8a3c4c276c24d26d84ce934dc964e2aa794345a0f8c7e5a7191482c8a73", size = 50964, upload-time = "2025-12-22T06:53:51.801Z" },
-]
-
-[[package]]
-name = "marshmallow-enum"
-version = "1.5.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "marshmallow", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/8c/ceecdce57dfd37913143087fffd15f38562a94f0d22823e3c66eac0dca31/marshmallow-enum-1.5.1.tar.gz", hash = "sha256:38e697e11f45a8e64b4a1e664000897c659b60aa57bfa18d44e226a9920b6e58", size = 4013, upload-time = "2019-08-21T01:07:46.254Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/59/ef3a3dc499be447098d4a89399beb869f813fee1b5a57d5d79dee2c1bf51/marshmallow_enum-1.5.1-py2.py3-none-any.whl", hash = "sha256:57161ab3dbfde4f57adeb12090f39592e992b9c86d206d02f6bd03ebec60f072", size = 4186, upload-time = "2019-08-21T01:07:44.814Z" },
 ]
 
 [[package]]
@@ -854,19 +814,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f6/cc/6253133b5bb138fc3306cebfbda2c520f545d36b5be2c7255cc528bb45d6/typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5", size = 113555, upload-time = "2026-07-02T08:40:05.92Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8", size = 45571, upload-time = "2026-07-02T08:40:04.659Z" },
-]
-
-[[package]]
-name = "typing-inspect"
-version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "mypy-extensions", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "typing-extensions", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/dc/74/1789779d91f1961fa9438e9a8710cdae6bd138c80d7303996933d117264a/typing_inspect-0.9.0.tar.gz", hash = "sha256:b23fc42ff6f6ef6954e4852c1fb512cdd18dbea03134f91f856a95ccc9461f78", size = 13825, upload-time = "2023-05-24T20:25:47.612Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/f3/107a22063bf27bdccf2024833d3445f4eea42b2e598abfbd46f6a63b6cb0/typing_inspect-0.9.0-py3-none-any.whl", hash = "sha256:9ee6fc59062311ef8547596ab6b955e1b8aa46242d854bfc78f4f6b0eff35f9f", size = 8827, upload-time = "2023-05-24T20:25:45.287Z" },
 ]
 
 [[package]]

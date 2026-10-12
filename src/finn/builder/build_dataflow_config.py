@@ -1,49 +1,50 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Build configuration for a build of KernelOps (finn.custom_op.kernels) from a Brevitas
-export, run by ``build_dataflow``.
+"""The configuration of a build of KernelOps (finn.custom_op.kernels) from a Brevitas
+export, which ``build_dataflow`` runs.
 
-Its fields are what every step may read: the target (``finn.platform.TargetRequest``),
-the toolchain (``finn.toolchain.launcher.Selection``), the outputs, the checks and which
-steps run. Each step's own options are in ``step_options``. It has an option only for
-what the build actually makes.
+Its fields say how the build runs: the target, the toolchain, the outputs, the checks
+and the steps. Everything else it states is a setting: a value a step of the build
+declares as one of its keyword-only parameters (finn.builder.build_dataflow_plan). In
+JSON a setting is a top-level key beside the fields; in Python an entry of ``settings``.
+
+This module reads and writes the JSON (``from_json``, ``to_json``). Reading refuses,
+naming its place (``configuration.target: ...``), a key a nested type does not declare,
+a null where a field is not optional, a value of the wrong type and an unknown enum
+value. The settings are decoded when the build's plan resolves, by the annotations of
+the steps that declare them (``decoded``).
 """
 
-from collections.abc import Mapping
-from dataclasses import dataclass, field, fields
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from __future__ import annotations
 
-from dataclasses_json import DataClassJsonMixin, Undefined, config
-from dataclasses_json.undefined import UndefinedParameterError
+import collections.abc
+import json
+import os
+import types
+import typing
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass
+from enum import Enum
+from functools import cached_property, partial
+from pathlib import PurePath
+from typing import Any, Union
+
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.base import Transformation
 
 from finn.kernels.target import Target
-from finn.platform import VIVADO_BLOCK_DESIGN, TargetRequest, shell_row
-from finn.shells.pynq.runner import PynqOptions
+from finn.platform import TargetRequest
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
 
-#: A step's options type (finn.builder.build_dataflow_steps.build_dataflow_step_options).
-StepOptions = TypeVar("StepOptions")
+#: A step: a function ``(model, cfg, *, settings...) -> model``.
+Step = Callable[..., ModelWrapper]
 
-
-def declared(cls: type, name: str) -> Callable[[Any], Any]:
-    """A decoder for the nested dataclass ``cls`` at the configuration key ``name``. It
-    refuses, by name, any key ``cls`` does not declare, which dataclasses_json would
-    otherwise drop silently in a nested dataclass."""
-
-    def decode(stated: Any) -> Any:
-        if stated is None or isinstance(stated, cls):
-            return stated
-        unknown = sorted(set(stated) - {item.name for item in fields(cls)})
-        if unknown:
-            raise UndefinedParameterError(
-                f"{name}: keys {cls.__name__} does not declare: {unknown}"
-            )
-        return cls(**stated)
-
-    return decode
+#: An entry of a list of steps (``steps``, an edit's ``insert`` or ``with``): the name of
+#: a phase or of one of the build's steps, an import path (``package.module.name``) of a
+#: step function or a qonnx Transformation class, or in Python the object itself: a
+#: function (a ``functools.partial`` too), a Transformation instance or class.
+StepEntry = Union[str, Step, Transformation, type[Transformation]]
 
 
 class DataflowOutputType(str, Enum):
@@ -93,9 +94,9 @@ class VerificationStepType(str, Enum):
 
     #: execute the parent graph with the partition's KernelOps in Python on each input
     #: of verify_input_npy, and compare with the model before conversion
-    PARTITION_PYTHON = "kernel_partition_python"
+    PARTITION_PYTHON = "partition_python"
     #: compile and elaborate the partition's RTL in XSim (xvlog, xelab); needs Vivado
-    PARTITION_ELABORATION = "kernel_partition_elaboration"
+    PARTITION_ELABORATION = "partition_elaboration"
     #: run the packaged IP's XSim testbench (its run.sh) once in the build's toolchain,
     #: comparing the module's outputs with the partition's in Python; needs STITCHED_IP
     #: and Vivado
@@ -111,30 +112,12 @@ VERIFIED_BY = {
 }
 
 
-#: The phases a build runs by default, in order (finn.builder.build_dataflow_phases).
-default_build_dataflow_steps = [
-    "phase_prepare_model",
-    "phase_convert_to_hardware",
-    "phase_create_accelerator",
-    "phase_optimize_hardware",
-    "phase_emit_hardware",
-    "phase_generate_outputs",
-]
-
-
 @dataclass
-class DataflowBuildConfig(DataClassJsonMixin):
+class DataflowBuildConfig:
     """The configuration of a build. Pass it to build_dataflow_cfg, or write it as
     ``dataflow_build_config.json`` beside ``model.onnx`` for build_dataflow_directory and
     the ``build_dataflow`` command; there, relative paths name files in that directory
-    (read_build_config). Serialized to and from JSON. Reading or constructing one
-    refuses, by name (``UndefinedParameterError``), a key it does not declare, a
-    ``step_options`` entry for a step that takes no options, and an option the step
-    does not declare."""
-
-    # The type is ignored: dataclasses_json declares this attribute as None, the value
-    # its decorator sets.
-    dataclass_json_config = config(undefined=Undefined.RAISE)["dataclasses_json"]  # type: ignore[assignment]
+    (read_build_config)."""
 
     #: Directory where the build's outputs and reports are written
     output_dir: str
@@ -144,44 +127,40 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: packaged IP for its user to integrate; ``pynq`` the Zynq block design for a
     #: board (finn.platform.shells). In JSON:
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
-    target: TargetRequest = field(metadata=config(decoder=declared(TargetRequest, "target")))
+    target: TargetRequest
+
+    #: The AMD tool installation the build's tools run in: the machine's
+    #: (finn.toolchain.launcher.host_selection), with any field given here taking
+    #: precedence.
+    toolchain: Selection | None = None
 
     #: What the build makes besides the partition and its reports (DataflowOutputType).
     #: None by default.
-    generate_outputs: List[DataflowOutputType] = field(default_factory=list)
+    generate_outputs: list[DataflowOutputType] = field(default_factory=list)
 
     #: Optional checks to run (VerificationStepType). None by default.
-    verify_steps: List[VerificationStepType] = field(default_factory=list)
+    verify_steps: list[VerificationStepType] = field(default_factory=list)
 
     #: The .npy file of inputs for PARTITION_PYTHON, one frame per index of its first
     #: axis. STITCHED_IP's testbench streams its first frame if the file exists, else a
     #: generated frame.
     verify_input_npy: str = "input.npy"
 
-    #: The AMD tool installation the build's tools run in: the machine's
-    #: (finn.toolchain.launcher.host_selection), with any field given here taking
-    #: precedence.
-    toolchain: Optional[Selection] = field(
-        default=None, metadata=config(decoder=declared(Selection, "toolchain"))
-    )
+    #: If given, the build runs these entries (StepEntry) in order instead of every
+    #: phase (finn.builder.build_dataflow_steps.default_build_dataflow_steps).
+    steps: Sequence[StepEntry] | None = None
 
-    #: Whether the shell's build inserts integrated logic analyzers on the ends' streams
-    #: (``pynq`` only, finn.shells.pynq.runner.PynqOptions; ``ip`` has no build and
-    #: refuses it). The bitfile's record notes it (finn.outputs ``bitfile_options``).
-    enable_hw_debug: bool = False
-
-    #: If given, run only these steps, each the name of a step or phase
-    #: (finn.builder.build_dataflow_phases, finn.builder.build_dataflow_steps) or a
-    #: function taking (model, DataflowBuildConfig). By default,
-    #: default_build_dataflow_steps.
-    steps: Optional[List[Any]] = None
+    #: Edits of the list of steps, applied in order (finn.builder.build_dataflow_plan):
+    #: {"before": target, "insert": entries}, {"after": target, "insert": entries},
+    #: {"replace": target, "with": entries} and {"remove": target}.
+    step_edits: Sequence[Mapping[str, Any]] = field(default_factory=list)
 
     #: If given, start from this step, or a phase's first step, loading the
     #: intermediate model saved before it (save_intermediate_models must be enabled).
-    start_step: Optional[str] = None
+    start_step: str | None = None
 
     #: If given, stop after this step, or a phase's last step.
-    stop_step: Optional[str] = None
+    stop_step: str | None = None
 
     #: Whether each step's model is saved under intermediate_models.
     save_intermediate_models: bool = True
@@ -194,103 +173,209 @@ class DataflowBuildConfig(DataClassJsonMixin):
     #: runner's lines (each step it runs, the outcome), warnings and errors.
     verbose: bool = False
 
-    #: Functions to run after named steps or phases.
-    inject_steps_after: Dict[
-        str, List[Callable[[ModelWrapper, "DataflowBuildConfig"], ModelWrapper]]
-    ] = field(default_factory=dict)
-
-    #: Functions to run before named steps or phases.
-    inject_steps_before: Dict[
-        str, List[Callable[[ModelWrapper, "DataflowBuildConfig"], ModelWrapper]]
-    ] = field(default_factory=dict)
-
-    #: Each step's own options, by step name: an instance of the options type the step
-    #: declares (finn.builder.build_dataflow_steps.build_dataflow_step_options), or in
-    #: JSON an object of its fields. A step not named here uses its type's defaults.
-    #: Naming a step that takes no options, or an option its type does not declare, is
-    #: refused. In JSON, for TFC: {"step_add_pre_post_processing": {"preprocessing":
-    #: "preproc.onnx", "input_datatype": "UINT8", "topk": 1}, "step_explore":
-    #: {"kernel_exploration": [{"strategy": "target_throughput", "fps": 1000000},
-    #: {"strategy": "size_fifos"}]}}.
-    step_options: Dict[str, Any] = field(default_factory=dict)
+    #: The settings, by name: each the value of the keyword-only parameter of that name
+    #: of the steps that declare it. In JSON, top-level keys.
+    settings: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.step_options = {
-            step: _step_options(step, stated) for step, stated in self.step_options.items()
-        }
+        clashing = sorted(set(self.settings) & _FIELDS)
+        if clashing:
+            raise ValueError(f"configuration.settings: {clashing} are fields, not settings")
 
-    def options(self, step: str, kind: type[StepOptions]) -> StepOptions:
-        """The options of the step ``step``, of its declared type ``kind``: from
-        ``step_options``, else that type's defaults."""
-        stated = _step_options(step, self.step_options.get(step))
-        if not isinstance(stated, kind):
-            raise TypeError(
-                f"{step} declares {type(stated).__name__} as its options, not {kind.__name__}"
-            )
+    @classmethod
+    def from_dict(cls, stated: object) -> DataflowBuildConfig:
+        """The configuration a JSON object states: each field decoded by its type, every
+        other key a setting."""
+        if not isinstance(stated, Mapping):
+            raise ValueError(f"configuration: a JSON object, not {stated!r}")
+        if "settings" in stated:
+            raise ValueError("configuration.settings: JSON states each setting as a top-level key")
+        hints = typing.get_type_hints(cls)
+        known = {name: value for name, value in stated.items() if name in _FIELDS}
+        decoded_fields = _decoded_fields(cls, hints, known, "configuration")
+        settings = {name: value for name, value in stated.items() if name not in _FIELDS}
+        return cls(**decoded_fields, settings=settings)
+
+    @classmethod
+    def from_json(cls, text: str) -> DataflowBuildConfig:
+        return cls.from_dict(json.loads(text))
+
+    def to_dict(self) -> dict[str, Any]:
+        """The configuration as JSON states it: the fields, then the settings beside
+        them. Refuses a function, a partial or a Transformation in a list of steps:
+        JSON names a step by its name or import path."""
+        stated = {
+            item.name: encoded(getattr(self, item.name), f"configuration.{item.name}")
+            for item in fields(self)
+            if item.name != "settings"
+        }
+        for name, value in self.settings.items():
+            stated[name] = encoded(value, f"configuration.{name}")
         return stated
 
-    def _resolve_selection(self) -> Selection:
-        """The selection this build's tools run by: ``toolchain`` laid over the
-        machine's (``host_selection``)."""
-        return host_selection(stated=self.toolchain)
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), indent=2)
 
-    def _resolve_toolchain(self) -> Toolchain:
-        """The prepared toolchain every tool step of this build runs in. The first step
-        that asks prepares it, and later steps get the same object. It is kept on the
-        instance, not as a field, because it is prepared, not configured, and is not
-        serialized."""
-        toolchain: Optional[Toolchain] = getattr(self, "_toolchain", None)
-        if toolchain is None:
-            toolchain = self._resolve_selection().prepare()
-            self._toolchain = toolchain
-        return toolchain
-
-    def _resolve_target(self) -> Target:
-        """The build's resolved target (finn.platform.resolve_target)."""
+    @cached_property
+    def resolved_target(self) -> Target:
+        """The build's target (finn.platform.resolve_target), resolved on first use."""
         return self.target.resolve()
 
-    def _resolve_shell_build_options(self) -> Optional[PynqOptions]:
-        """The options of the shell's build (``enable_hw_debug``), or None for a shell
-        without a build. Raises ValueError if ``enable_hw_debug`` is not a bool, or is
-        set for a shell without a build."""
-        if type(self.enable_hw_debug) is not bool:
-            raise ValueError(f"enable_hw_debug is a bool, not {self.enable_hw_debug!r}")
-        target = self._resolve_target()
-        if shell_row(target.shell, target.board).integration == VIVADO_BLOCK_DESIGN:
-            return PynqOptions(enable_hw_debug=self.enable_hw_debug)
-        if self.enable_hw_debug:
-            raise ValueError(f"enable_hw_debug: the {target.shell!r} shell has no build to take it")
-        return None
+    @cached_property
+    def prepared_toolchain(self) -> Toolchain:
+        """The toolchain every tool step of this build runs in: ``toolchain`` laid over
+        the machine's selection (``host_selection``), prepared on first use. It is not
+        serialized: it is prepared, not configured."""
+        return host_selection(stated=self.toolchain).prepare()
 
 
-def _step_options(step: str, stated: Any) -> Any:
-    """``stated`` as an instance of the options type the step ``step`` declares
-    (finn.builder.build_dataflow_steps.build_dataflow_step_options): an instance is
-    kept, an object of its fields is decoded, and None gives the defaults. Raises
-    ``UndefinedParameterError`` for a step without options or an undeclared key, and
-    ``ValueError`` for a value the type refuses."""
-    # Imported here: the steps module imports this one.
-    from finn.builder.build_dataflow_steps import (  # noqa: PLC0415
-        build_dataflow_step_lookup,
-        build_dataflow_step_options,
-    )
+#: The configuration's fields, which a JSON object states beside the settings.
+_FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"settings"}
 
-    kind = build_dataflow_step_options.get(step)
-    if kind is None:
-        what = "takes no options" if step in build_dataflow_step_lookup else "is no step"
-        raise UndefinedParameterError(
-            f"step_options: {step} {what}; the steps that take options: "
-            f"{', '.join(build_dataflow_step_options)}"
-        )
-    if stated is None:
-        return kind()
-    if isinstance(stated, kind):
+
+def _decoded_fields(
+    kind: type, hints: Mapping[str, Any], stated: Mapping[str, Any], place: str
+) -> dict[str, Any]:
+    """The fields of the dataclass ``kind`` that ``stated`` gives, each decoded by its
+    type; refuses a required field ``stated`` does not give."""
+    missing = [
+        item.name
+        for item in fields(kind)
+        if item.default is MISSING and item.default_factory is MISSING and item.name not in stated
+    ]
+    if missing:
+        raise ValueError(f"{place}: no {', '.join(missing)}, which {kind.__name__} requires")
+    return {name: decoded(hints[name], value, f"{place}.{name}") for name, value in stated.items()}
+
+
+def _text(kind: Any) -> str:
+    """``kind`` as a refusal names it."""
+    if isinstance(kind, type) and not typing.get_args(kind):
+        return kind.__name__
+    return str(kind).replace("typing.", "").replace("collections.abc.", "")
+
+
+def decoded(kind: Any, stated: Any, place: str) -> Any:
+    """``stated`` (as JSON states it, or as Python gives it) as a value of the type
+    ``kind``: a bool, an int, a float (an int accepted), a str, a ``Path`` (from a
+    str), an enum (from its value), a list, tuple or sequence, a dict or mapping with
+    str keys, a dataclass (from an object of its fields), a union (``X | None``), a
+    callable, ``Any``, or an instance of any other class. Refuses, naming ``place``, a
+    null where ``kind`` is not optional, a value of another type, an unknown enum
+    value and a key a dataclass does not declare."""
+    origin, args = typing.get_origin(kind), typing.get_args(kind)
+    if kind is Any:
         return stated
-    if not isinstance(stated, Mapping):
+    if origin in (Union, types.UnionType):
+        if stated is None and type(None) in args:
+            return None
+        if stated is None:
+            raise ValueError(f"{place}: null, and it is not optional")
+        members = [each for each in args if each is not type(None)]
+        if len(members) == 1:
+            return decoded(members[0], stated, place)
+        for each in members:
+            try:
+                return decoded(each, stated, place)
+            except ValueError:
+                continue
+        raise ValueError(f"{place}: {_text(kind)}, not {stated!r}")
+    if stated is None:
+        raise ValueError(f"{place}: null, and it is not optional")
+    if origin is collections.abc.Callable or kind is collections.abc.Callable:
+        if not callable(stated):
+            raise ValueError(f"{place}: a function, not {stated!r}")
+        return stated
+    if origin is type:
+        if not (isinstance(stated, type) and issubclass(stated, args[0])):
+            raise ValueError(f"{place}: a {_text(args[0])} class, not {stated!r}")
+        return stated
+    if isinstance(kind, type) and is_dataclass(kind):
+        if isinstance(stated, kind):
+            return stated
+        if not isinstance(stated, Mapping):
+            raise ValueError(f"{place}: an object of {kind.__name__}'s fields, not {stated!r}")
+        unknown = sorted(set(stated) - {item.name for item in fields(kind)})
+        if unknown:
+            raise ValueError(f"{place}: keys {kind.__name__} does not declare: {unknown}")
+        values = _decoded_fields(kind, typing.get_type_hints(kind), stated, place)
+        try:
+            return kind(**values)
+        except ValueError as refused:
+            raise ValueError(f"{place}: {refused}") from None
+    if isinstance(kind, type) and issubclass(kind, Enum):
+        if isinstance(stated, kind):
+            return stated
+        try:
+            return kind(stated)
+        except ValueError:
+            allowed = [each.value for each in kind]
+            raise ValueError(f"{place}: {stated!r}; one of {allowed}") from None
+    if origin in (list, tuple, collections.abc.Sequence):
+        if not isinstance(stated, (list, tuple)):
+            raise ValueError(f"{place}: a list, not {stated!r}")
+        each = args[0] if args else Any
+        items = [decoded(each, value, f"{place}[{index}]") for index, value in enumerate(stated)]
+        return tuple(items) if origin is tuple else items
+    if origin in (dict, collections.abc.Mapping):
+        if not isinstance(stated, Mapping):
+            raise ValueError(f"{place}: an object, not {stated!r}")
+        value_kind = args[1] if args else Any
+        for key in stated:
+            if not isinstance(key, str):
+                raise ValueError(f"{place}: keys are strings, not {key!r}")
+        return {key: decoded(value_kind, value, f"{place}.{key}") for key, value in stated.items()}
+    if isinstance(kind, type) and issubclass(kind, PurePath):
+        if not isinstance(stated, (str, os.PathLike)):
+            raise ValueError(f"{place}: a path, not {stated!r}")
+        return kind(stated)
+    if kind is float and type(stated) is int:
+        return float(stated)
+    if kind is int and isinstance(stated, bool):
+        raise ValueError(f"{place}: an int, not {stated!r}")
+    if isinstance(kind, type) and not isinstance(stated, kind):
+        name = _text(kind)
+        article = "an" if name[0] in "aeiouAEIOU" else "a"
+        raise ValueError(f"{place}: {article} {name}, not {stated!r}")
+    return stated
+
+
+def encoded(value: Any, place: str) -> Any:
+    """``value`` as JSON states it: a dataclass as an object of its fields, an enum as
+    its value, a path as a str, a tuple as a list. Refuses, naming ``place``, a
+    function, a partial, a Transformation and any other object JSON cannot state."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            item.name: encoded(getattr(value, item.name), f"{place}.{item.name}")
+            for item in fields(value)
+        }
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, PurePath):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [encoded(each, f"{place}[{index}]") for index, each in enumerate(value)]
+    if isinstance(value, Mapping):
+        return {key: encoded(each, f"{place}.{key}") for key, each in value.items()}
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if callable(value) or isinstance(value, (partial, Transformation)):
+        name = getattr(value, "__name__", type(value).__name__)
         raise ValueError(
-            f"step_options.{step}: an object of {kind.__name__}'s fields, not {stated!r}"
+            f"{place}: {name} is a Python object; JSON names a step by its name or import path"
         )
-    try:
-        return declared(kind, f"step_options.{step}")(stated)
-    except ValueError as refused:
-        raise ValueError(f"step_options.{step}: {refused}") from refused
+    raise ValueError(f"{place}: {value!r} has no JSON form")
+
+
+__all__ = [
+    "OUTPUT_NEEDS",
+    "SHELL_OUTPUTS",
+    "VERIFIED_BY",
+    "DataflowBuildConfig",
+    "DataflowOutputType",
+    "Step",
+    "StepEntry",
+    "VerificationStepType",
+    "decoded",
+    "encoded",
+]
