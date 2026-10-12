@@ -111,10 +111,14 @@ def test_an_int20_matmul_stays_on_the_host_with_each_cores_code() -> None:
     ]
 
 
-def test_an_int32_matmul_in_float32_is_refused_by_its_domain_step_before_the_kernels() -> None:
-    """Its partial sums can pass 2**24, where ONNX's float32 MatMul rounds and the
-    reference is exact: the op's domain step refuses it."""
-    assert refused(matmul("INT32", "INT32")) == [("MatMul", "matmul-container-exceeded")]
+def test_an_int32_matmul_stays_on_the_host_with_each_cores_code() -> None:
+    """INT32 activations on a DSP48E2: the kernels refuse the node, each case of the
+    ``compute`` Decision by its code. Its sums pass 2**24, which no longer matters:
+    FINN executes the ONNX it covers with exact integers."""
+    assert sorted(refused(matmul("INT32", "INT32"))) == [
+        ("matmul.compute.int8_dsp58.core_supported", "dotp-target"),
+        ("matmul.compute.packed.core_supported", "dotp-activation-width"),
+    ]
 
 
 def test_a_float_multithreshold_stays_on_the_host_with_the_kernels_codes() -> None:

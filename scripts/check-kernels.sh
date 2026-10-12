@@ -34,7 +34,7 @@ OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
 # minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado slow
 gate_ruff src/finn/kernels tests/kernels src/finn/platform \
-    src/finn/core/containers.py src/finn/core/executor.py src/finn/core/onnx_exec.py \
+    src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/transformation/prepare src/finn/analysis src/finn/util/draws.py \
@@ -54,7 +54,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.cus
     -p finn.transformation.kernels -p finn.transformation.prepare -p finn.analysis -p finn.harness \
     -m finn.util.draws \
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
-    -m finn.core.rtlsim_pacing -m finn.core.containers -m finn.core.onnx_exec \
+    -m finn.core.rtlsim_pacing -m finn.core.onnx_exec \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.toolchain.launcher \
     -m finn.toolchain.xsim \
     -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_plan \

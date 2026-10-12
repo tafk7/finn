@@ -82,7 +82,6 @@ from finn.transformation.kernels.package import (
 from finn.transformation.prepare import SUB_PHASES, GraphPreparation, census
 from finn.transformation.prepare.phase import (
     SubPhase,
-    containers_exact,
     imported,
     io_explicit,
     quantization_lowered,
@@ -228,12 +227,6 @@ def step_streamline(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapp
 def step_convert_to_channels_last(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Absorb and collapse transposes, make MaxPool NHWC, and infer the data layouts."""
     return _sub_phase(topology_settled, model, cfg, GraphPreparation())
-
-
-def step_widen_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Widen to float64 the integer regions float32 cannot hold exactly, with Casts at
-    their edges; the graph's inputs and outputs keep their types."""
-    return _sub_phase(containers_exact, model, cfg, GraphPreparation())
 
 
 def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
@@ -671,7 +664,6 @@ build_dataflow_phases: dict[str, list[Step]] = {
         step_add_pre_post_processing,
         step_streamline,
         step_convert_to_channels_last,
-        step_widen_containers,
     ],
     # Record the target in the model and convert the graph's nodes to KernelOps.
     "phase_convert_to_hardware": [step_convert_to_hw],

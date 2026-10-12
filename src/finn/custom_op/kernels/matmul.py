@@ -14,30 +14,19 @@ matrix ONNX stores. The output is A's leading axes and n.
 
 Its reference, ``execute_node``, is ONNX's MatMul wherever ONNX's is defined. For
 integer operands (by their annotations) it is exact integer arithmetic, as the
-hardware's accumulator is: the integer product of its operands, carried in A's
-container. ONNX's MatMul executed in the operands' container is that product too,
-as long as every partial sum stays within the integers that container holds exactly
-(``finn.core.containers``); beyond them it rounds (a float container) or wraps (an
-integer one), so the domain step refuses such a node. For float operands it
-computes in their container, as ONNX does (ONNX leaves the order of a float sum
-open, so two executions agree bit for bit where every partial sum is exact).
-Whether a kernel builds a float MatMul is the kernels' to say: today they refuse it
-(``matmul-arithmetic``), and a float kernel would be a new kernel, not a new
+hardware's accumulator is: the integer product of its operands, held in A's element
+type where that type holds every value of it exactly, else in float64 (a float A)
+or int64 (``product``), so the reference never rounds. FINN executes ONNX's MatMul with exact
+integers too (``finn.core.onnx_exec``), so the two agree on every integer node. For
+float operands it computes in their element type, as ONNX does (ONNX leaves the order
+of a float sum open, so two executions agree bit for bit where every partial sum is
+exact). Whether a kernel builds a float MatMul is the kernels' to say: today they
+refuse it (``matmul-arithmetic``), and a float kernel would be a new kernel, not a new
 pattern.
 
 Its pattern: an ONNX ``MatMul`` whose B is a matrix. A batched B (any other rank)
 is not this op (``matmul-batched``); B's shape unstated is ``fact-unstated``. It
 reads no datatype.
-
-Its domain step (``exact``): an integer MatMul whose facts let a partial sum pass
-the integers the operands' container holds exactly
-(``finn.core.containers.matmul_partial_sums``: A's type's largest magnitude times the
-largest sum of a column of B's magnitudes, B's values when it is an initializer, else
-its type's; the bound graph preparation's widening reads too) is refused
-(``matmul-container-exceeded``), and an operand that bound reads unannotated, or A's
-container unstated, is ``fact-unstated``. Graph preparation widens an integer region's
-container to float64 where its bounds need it, so a prepared graph gives this refusal
-only past 2**53, or where preparation was skipped; the node then stays on the host.
 """
 
 from __future__ import annotations
@@ -47,10 +36,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import numpy as np
 import numpy.typing as npt
 
-from finn.core.containers import container, exact_up_to, matmul_partial_sums, name
-from finn.core.space import Finding, Rejected
+from finn.core.space import Rejected
 from finn.custom_op.kernels.base import (
-    FactUnstated,
     KernelOp,
     KernelOpError,
     Match,
@@ -85,6 +72,18 @@ def _integers(label: str, tensor: str, values: Any) -> npt.NDArray[Any]:
     return found.astype(np.int64)
 
 
+def _exact_up_to(element: np.dtype[Any]) -> int:
+    """The largest magnitude up to which ``element`` holds every integer exactly: a
+    float type's 2**(mantissa bits + 1), an integer type's largest value; 0 for
+    another."""
+    if element.kind == "f":
+        mantissa: int = 2 ** (int(np.finfo(element).nmant) + 1)
+        return mantissa
+    if element.kind in "iu":
+        return int(np.iinfo(element).max)
+    return 0
+
+
 class MatMul(KernelOp):
     """ONNX MatMul, Y = A @ B, bound to ``MatMulKernel``."""
 
@@ -115,44 +114,6 @@ class MatMul(KernelOp):
             message = f"the weights {b} are {len(dims)}-D {dims}, not a (k, n) matrix"
             return Rejected((refused(cls.op_type, "matmul-batched", message, shape=dims),))
         return Match((node,), {})
-
-    def exact(self) -> tuple[Finding, ...]:
-        """An integer MatMul's partial sums within the integers the operands' container
-        holds exactly (module docstring); a float MatMul is ONNX's in its container."""
-        model, label = self.model(), self.label
-        a, b = self.onnx_node.input
-        stored = model.get_initializer(b)
-        types = [datatype(model, tensor, label) for tensor in (a, b)]
-        if not all(dtype.is_integer() for dtype in types):
-            return ()  # float semantics, as ONNX's
-        a_largest, b_largest = (max(abs(int(t.min())), abs(int(t.max()))) for t in types)
-        k = shape(model, b, label)[0]
-        bound = matmul_partial_sums(a_largest, k, b_largest, stored)
-        held = container(model, a)
-        limit = exact_up_to(held)
-        if held is None or limit is None:
-            raise FactUnstated(
-                f"{label}: {a} states no container whose exact integers are known: the "
-                "reference's exactness against ONNX reads it",
-                a,
-            )
-        if bound <= limit:
-            return ()
-        message = (
-            f"{a} ({types[0].name}) times a column of {b} can sum to {bound}, beyond {limit}, "
-            f"the integers its container {name(held)} holds: ONNX's MatMul there would not be "
-            "exact where the reference and the hardware are"
-        )
-        return (
-            refused(
-                self.op_type,
-                "matmul-container-exceeded",
-                message,
-                bound=bound,
-                container=name(held),
-                limit=limit,
-            ),
-        )
 
     def weights(self) -> tuple[int, int]:
         """The weights' (k, n); weights that are not a matrix are refused."""
@@ -223,15 +184,16 @@ class MatMul(KernelOp):
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
-        """Y = A @ B (module docstring): exactly, in integers carried in A's container, for
-        integer operands; in the operands' container for floats."""
+        """Y = A @ B (module docstring): exactly for integer operands; in the operands'
+        element type for floats."""
         a, b = self.onnx_node.input
         context[self.onnx_node.output[0]] = self.product(context[a], context[b])
 
     def product(self, x: Any, w: Any) -> npt.NDArray[Any]:
-        """``x @ w``, the values of this node's A and B (module docstring): exactly, in
-        integers carried in ``x``'s container, for integer operands (by their
-        annotations); in the operands' container for floats."""
+        """``x @ w``, the values of this node's A and B (module docstring). For integer
+        operands (by their annotations), the exact integer product, held in ``x``'s
+        element type where it holds every value exactly, else in float64 (a float ``x``)
+        or int64 where that does; for floats, in the operands' element type."""
         model, label = self.model(), self.label
         a, b = self.onnx_node.input
         held = np.asarray(x).dtype
@@ -244,8 +206,14 @@ class MatMul(KernelOp):
         largest = int(np.abs(x).max(initial=0)) * int(np.abs(w).sum(axis=0).max(initial=0))
         if largest >= 1 << 63:  # int64 might not hold a sum: Python's integers
             x, w = x.astype(object), w.astype(object)
-        found: npt.NDArray[Any] = np.matmul(x, w).astype(held)
-        return found
+        exact: npt.NDArray[Any] = np.matmul(x, w)
+        reached = int(np.abs(exact).max(initial=0))
+        wider = np.dtype(np.float64) if held.kind == "f" else np.dtype(np.int64)
+        for element in (held, wider, np.dtype(np.int64)):
+            if reached <= _exact_up_to(element):
+                found: npt.NDArray[Any] = exact.astype(element)
+                return found
+        return exact  # past int64: Python's integers
 
 
 __all__ = ["MatMul"]

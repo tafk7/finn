@@ -3,14 +3,11 @@
 
 """MatMul's ONNX entry: ONNX ``MatMul`` graphs.
 
-ONNX's MatMul in the operands' container rounds (or wraps) a partial sum beyond the
-integers that container holds exactly (``finn.core.containers``), where the
-reference is the exact integer product. The domain step refuses a node whose facts
-allow such a sum (``matmul-container-exceeded``: ``beyond-2**24``, ``int32``,
-``int8-k2304``, ``beyond-2**53-in-double``), so every positive graph's reference
-equals ONNX exactly; ``tests/kernel_ops/test_reference.py`` shows the difference on a
-node made by hand. A wide layer held in float64, as graph preparation's P6 holds it,
-is exact (``int8-k2304-in-double``).
+The reference is the exact integer product, and FINN executes ONNX's MatMul with exact
+integers too (``finn.core.onnx_exec``): a node whose annotated sums pass 2**24, which
+float32 holds exactly, computes in float64. So a wide layer converts and its reference
+equals ONNX exactly (``beyond-2**24``, ``int8-k2304``, ``streamed-int16``). The kernels
+refuse what no core takes (``int32``, ``beyond-2**53``).
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from onnx import TensorProto, helper
+from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels import MatMul
@@ -40,17 +37,15 @@ def matmul(
     rows: int = 4,
     stored: bool = True,
     w_shape: list[int] | None = None,
-    container: int = TensorProto.FLOAT,
 ) -> ModelWrapper:
-    """x (1, rows, k) -> MatMul ``mm`` with w -> y; w an initializer, or a graph input;
-    every tensor held in ``container``."""
+    """x (1, rows, k) -> MatMul ``mm`` with w -> y; w an initializer, or a graph input."""
     weights = np.asarray(weights)
     k = weights.shape[0]
     node = helper.make_node("MatMul", ["x", "w"], ["y"], name="mm")
     inputs = {"x": ([1, rows, k], x)}
     if stored:
-        return source([node], inputs, {"w": (weights, w)}, container)
-    return source([node], {**inputs, "w": (w_shape or list(weights.shape), w)}, {}, container)
+        return source([node], inputs, {"w": (weights, w)})
+    return source([node], {**inputs, "w": (w_shape or list(weights.shape), w)}, {})
 
 
 SPEC = OpSpec(
@@ -64,30 +59,18 @@ SPEC = OpSpec(
         "streamed-weights": lambda: matmul("INT4", "INT4", np.zeros((8, 3)), stored=False),
         # 128 * 1024 * 128 = 2**24: every partial sum within float32's integers.
         "at-2**24": lambda: matmul("INT8", "INT8", np.full((1024, 2), -128), rows=2),
-        "int8-k2304-in-double": lambda: matmul(
-            "INT8", "INT8", SPREAD, rows=2, container=TensorProto.DOUBLE
-        ),
+        # 128 * 1025 * 128: past float32's integers, within float64's.
+        "beyond-2**24": lambda: matmul("INT8", "INT8", np.full((1025, 2), -128), rows=2),
+        "int8-k2304": lambda: matmul("INT8", "INT8", SPREAD, rows=2),
+        "streamed-int16": lambda: matmul("INT16", "INT16", np.zeros((64, 2)), stored=False),
     },
     negative={
         "batched": (lambda: matmul(stored=False, w_shape=[2, 8, 4]), "matmul-batched"),
-        "beyond-2**24": (
-            lambda: matmul("INT8", "INT8", np.full((1025, 2), -128), rows=2),
-            "matmul-container-exceeded",
-        ),
-        "int32": (lambda: matmul("INT32", "INT32", np.eye(4)), "matmul-container-exceeded"),
-        "streamed-int16": (
-            lambda: matmul("INT16", "INT16", np.zeros((64, 2)), stored=False),
-            "matmul-container-exceeded",
-        ),
-        "int8-k2304": (
-            lambda: matmul("INT8", "INT8", SPREAD, rows=2),
-            "matmul-container-exceeded",
-        ),
-        "beyond-2**53-in-double": (
-            lambda: matmul(
-                "INT32", "INT32", np.zeros((4, 2)), stored=False, container=TensorProto.DOUBLE
-            ),
-            "matmul-container-exceeded",
+        "int32": (lambda: matmul("INT32", "INT32", np.eye(4)), "dotp-activation-width"),
+        # Sums past float64's 2**53: no core takes INT32 activations.
+        "beyond-2**53": (
+            lambda: matmul("INT32", "INT32", np.zeros((4, 2)), stored=False),
+            "dotp-activation-width",
         ),
         "unannotated": (lambda: matmul(x=None), "fact-unstated"),
         "float": (lambda: matmul("FLOAT32", "FLOAT32", np.eye(4)), "matmul-arithmetic"),

@@ -29,7 +29,6 @@ from kernels.helpers import Lanes
 from oracle import capture
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
@@ -54,6 +53,7 @@ from finn.builder.build_dataflow_steps import (
     step_resources_report,
     step_verify_partition,
 )
+from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Finding, FindingKind, finding_record
 from finn.custom_op.kernels.base import KernelOpError, kernel_op, read_target, write_target
 from finn.custom_op.kernels.shell import configured_root
@@ -188,7 +188,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert list(seen) == list(STEPS)
     # The export prepared first, to the streamlined graph the fixture's phase makes.
     prepared = ModelWrapper(
-        str(Path(cfg.output_dir) / "intermediate_models" / "step_widen_containers.onnx")
+        str(Path(cfg.output_dir) / "intermediate_models" / "step_convert_to_channels_last.onnx")
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
     # The run, as its manifest indexes it: every step of the four phases, in order, each
@@ -542,7 +542,6 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
         "step_add_pre_post_processing",
         "step_streamline",
         "step_convert_to_channels_last",
-        "step_widen_containers",
         "step_convert_to_hw",
         "step_create_dataflow_partition",
         "step_explore",

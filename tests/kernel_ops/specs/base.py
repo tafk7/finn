@@ -15,8 +15,6 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.core.containers import numpy_type
-
 GENERAL = "qonnx.custom_op.general"
 
 Stated = tuple[list[int] | None, str | None]
@@ -27,16 +25,15 @@ def source(
     nodes: list[NodeProto],
     inputs: Mapping[str, Stated],
     stored: Mapping[str, tuple[Any, str | None]],
-    container: int = TensorProto.FLOAT,
 ) -> ModelWrapper:
     """A source graph of ``nodes``: its ``inputs`` (shape, datatype) and ``stored``
     initializers (values, datatype); the last node's output the graph's. Every tensor
-    is held in ``container`` (``finn.core.containers``), the export's float32 unless
-    stated, as graph preparation's P6 leaves a widened region."""
+    is float32, as an export holds it."""
     infos = [
-        helper.make_tensor_value_info(name, container, dims) for name, (dims, _) in inputs.items()
+        helper.make_tensor_value_info(name, TensorProto.FLOAT, dims)
+        for name, (dims, _) in inputs.items()
     ]
-    y = helper.make_tensor_value_info(nodes[-1].output[0], container, None)
+    y = helper.make_tensor_value_info(nodes[-1].output[0], TensorProto.FLOAT, None)
     model = ModelWrapper(
         qonnx_make_model(
             helper.make_graph(nodes, "spec", infos, [y]),
@@ -44,7 +41,7 @@ def source(
         )
     )
     for name, (values, _) in stored.items():
-        model.set_initializer(name, np.asarray(values, dtype=numpy_type(container)))
+        model.set_initializer(name, np.asarray(values, dtype=np.float32))
     for name, (_, dtype) in {**inputs, **stored}.items():
         if dtype is not None:
             model.set_tensor_datatype(name, DataType[dtype])

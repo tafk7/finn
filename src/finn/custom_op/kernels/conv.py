@@ -34,9 +34,7 @@ reorder carries). Its semantic attributes are ``kernel``, ``stride`` and
 ``stride``, ``dilations``).
 
 Its reference, ``execute_node``: qonnx's ``Im2Col`` of the image, then MatMul's
-(exact integer arithmetic for integer operands, carried in the image's container),
-the ONNX the pattern covers. Its domain step is MatMul's on the image and the
-weights: an ``Im2Col`` copies values, so the patches' partial sums are the image's.
+(exact integer arithmetic for integer operands), the ONNX the pattern covers.
 """
 
 from __future__ import annotations

@@ -20,15 +20,12 @@ it:
   lowered to Im2Col and MatMul, bipolar MatMuls to XnorPopcountMatMul
   (``STREAMLINING``);
 - ``topology_settled`` (P4): transposes absorbed and collapsed, MaxPool made NHWC
-  (``TOPOLOGY``); then tidied, layouts inferred and unused tensors removed;
-- ``containers_exact`` (P6): every integer tensor held exactly by its container,
-  the integer regions that need it widened to float64
-  (``finn.transformation.prepare.containers``). It reads the annotations P4 leaves,
-  and has no options.
+  (``TOPOLOGY``); then tidied, layouts inferred and unused tensors removed.
 
-On TFC P6 changes nothing: its bounds stay within 3456. On CNV (W2A2, W1A1)
-P0-P4 give the nodes, initializers and annotations of finn-dev's ``step_streamline``,
-which runs the topology between its two ``Streamline`` passes: P3 lowers the
+Preparation keeps the export's element types (float32): FINN executes a graph's
+integers exactly whatever type holds them (``finn.core.onnx_exec``). On CNV (W2A2,
+W1A1) P0-P4 give the nodes, initializers and annotations of finn-dev's
+``step_streamline``, which runs the topology between its two ``Streamline`` passes: P3 lowers the
 convolutions ahead of the bipolar rewrite, which reads their MatMuls, and P4 follows.
 
 The phase reads no target: what preparation makes of a graph does not depend on
@@ -64,9 +61,6 @@ from qonnx.util.cleanup import cleanup_model
 
 import finn.transformation.streamline.absorb as absorb
 import finn.transformation.streamline.reorder as reorder
-from finn.core.containers import container
-from finn.core.containers import name as container_name
-from finn.transformation.prepare.containers import exact_containers
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
     default_filter_function_generator,
@@ -226,23 +220,15 @@ def topology_settled(model: ModelWrapper, options: GraphPreparation) -> ModelWra
     return model.transform(InferDataLayouts()).transform(RemoveUnusedTensors())
 
 
-def containers_exact(model: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
-    """P6: the integer regions whose bounds pass their container's exact integers
-    widened to float64, Casts at their edges (``containers.exact_containers``). The
-    rule is fixed: no option reaches it."""
-    return exact_containers(model)
-
-
 SubPhase = Callable[[ModelWrapper, GraphPreparation], ModelWrapper]
 
-#: The sub-phases by their names in the design (P0-P4, P6), in the order they run.
+#: The sub-phases by their names in the design (P0-P4), in the order they run.
 SUB_PHASES: tuple[tuple[str, SubPhase], ...] = (
     ("P0 import", imported),
     ("P2 quantization", quantization_lowered),
     ("P1 io", io_explicit),
     ("P3 streamlining", streamlined),
     ("P4 topology", topology_settled),
-    ("P6 containers", containers_exact),
 )
 
 
@@ -256,8 +242,8 @@ def prepared(model: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
 
 def census(before: ModelWrapper, after: ModelWrapper) -> dict[str, Any]:
     """What a sub-phase changed, as the phase's report records it: the nodes removed and
-    added, counted by op type; the annotations and the containers changed on tensors
-    both graphs name (tensor: [before, after]; absent is null)."""
+    added, counted by op type; the annotations changed on tensors both graphs name
+    (tensor: [before, after]; absent is null)."""
     counted = Counter(node.op_type for node in before.graph.node)
     counts = Counter(node.op_type for node in after.graph.node)
 
@@ -269,15 +255,7 @@ def census(before: ModelWrapper, after: ModelWrapper) -> dict[str, Any]:
             if name
         }
 
-    def containers(model: ModelWrapper) -> dict[str, str | None]:
-        names = {name for node in model.graph.node for name in (*node.input, *node.output)}
-        found = {name: container(model, name) for name in names if name}
-        return {
-            name: None if each is None else container_name(each) for name, each in found.items()
-        }
-
     stated, restated = annotations(before), annotations(after)
-    held, reheld = containers(before), containers(after)
     return {
         "removed": dict(sorted((counted - counts).items())),
         "added": dict(sorted((counts - counted).items())),
@@ -285,11 +263,6 @@ def census(before: ModelWrapper, after: ModelWrapper) -> dict[str, Any]:
             name: [stated[name], restated[name]]
             for name in sorted(stated.keys() & restated.keys())
             if stated[name] != restated[name]
-        },
-        "containers_changed": {
-            name: [held[name], reheld[name]]
-            for name in sorted(held.keys() & reheld.keys())
-            if held[name] != reheld[name]
         },
     }
 

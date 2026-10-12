@@ -44,7 +44,6 @@ import numpy as np
 from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.containers import container, held, numpy_type
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_root
@@ -92,8 +91,8 @@ def boundary_words(
 
 def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]]:
     """One frame of the partition's inputs, each drawn uniformly (seeded) from its
-    datatype's integers and stored in the input's container type (finn.core.containers:
-    float32 as exported, or float64 where graph preparation widened the region)."""
+    datatype's integers, as int64: FINN executes the body on integers as they are
+    (``finn.core.onnx_exec``)."""
     rng = np.random.default_rng(seed)
     frame: dict[str, NDArray[Any]] = {}
     for name in graph_inputs(body):
@@ -102,11 +101,7 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
             raise ValueError(f"{name}: a {datatype.name} input; the testbench streams integers")
         shape = body.get_tensor_shape(name)
         low, high = int(datatype.min()), int(datatype.max())
-        element_type = container(body, name)
-        if element_type is None:
-            raise ValueError(f"{name}: the partition's input states no container")
-        drawn = rng.integers(low, high + 1, size=shape, dtype=np.int64)
-        frame[name] = held(drawn, element_type).astype(numpy_type(element_type))
+        frame[name] = rng.integers(low, high + 1, size=shape, dtype=np.int64)
     return frame
 
 
