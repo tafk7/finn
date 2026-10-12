@@ -20,12 +20,30 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Any
 
 import numpy as np
+from onnx import helper
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from qonnx.transformation.bipolar_to_xnor import ConvertBipolarMatMulToXnorPopcount
+from qonnx.transformation.fold_constants import FoldConstants
+from qonnx.transformation.general import (
+    GiveReadableTensorNames,
+    GiveUniqueNodeNames,
+    RemoveStaticGraphInputs,
+    RemoveUnusedTensors,
+)
+from qonnx.transformation.infer_data_layouts import InferDataLayouts
+from qonnx.transformation.infer_datatypes import InferDataTypes
+from qonnx.transformation.infer_shapes import InferShapes
+from qonnx.transformation.insert_topk import InsertTopK
+from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
+from qonnx.transformation.merge_onnx_models import MergeONNXModels
+from qonnx.util.cleanup import cleanup_model
 
+import finn.transformation.streamline.absorb as absorb
+import finn.transformation.streamline.reorder as reorder
 from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
@@ -86,23 +104,15 @@ from finn.transformation.kernels.package import (
     PackagePartition,
     partition_utilization_report,
 )
-from finn.transformation.prepare import SUB_PHASES, GraphPreparation, census
-from finn.transformation.prepare.phase import (
-    SubPhase,
-    containers_exact,
-    imported,
-    io_explicit,
-    quantization_lowered,
-    streamlined,
-    topology_settled,
+from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
+from finn.transformation.qonnx.quant_act_to_multithreshold import (
+    default_filter_function_generator,
 )
+from finn.transformation.streamline import Streamline
 
 #: The steps' logger. The build log has every line; the console shows only warnings, such
 #: as a failed verification the build continued past, or a limitation.
 _LOG = logging.getLogger(__name__)
-
-#: The graph-preparation phase's report, under the output directory.
-PREPARATION_REPORT = "report/graph_preparation.json"
 
 
 def _tools(cfg: DataflowBuildConfig, step: str) -> Toolchain:
@@ -129,72 +139,26 @@ def _reported(path: str | os.PathLike[str]) -> None:
     _LOG.info(f"wrote {path}", extra={REPORT: os.fspath(path)})
 
 
-def _preparation_report(cfg: DataflowBuildConfig, fresh: bool = False) -> dict[str, Any]:
-    """The graph-preparation report written so far, or an empty one if ``fresh`` or none
-    exists."""
-    path = Path(cfg.output_dir) / PREPARATION_REPORT
-    if fresh or not path.is_file():
-        return {"sub_phases": []}
-    report: dict[str, Any] = json.loads(path.read_text())
-    return report
+def _cleaned(model: ModelWrapper, override_inpsize: int | list[int] | None = None) -> ModelWrapper:
+    """``model`` through qonnx's cleanup (``cleanup_model``), its Quant nodes kept."""
+    inpsize = tuple(override_inpsize) if isinstance(override_inpsize, list) else override_inpsize
+    cleaned: ModelWrapper = cleanup_model(model, override_inpsize=inpsize)  # type: ignore[no-untyped-call]
+    return cleaned
 
 
-def _write_preparation_report(cfg: DataflowBuildConfig, report: dict[str, Any]) -> None:
-    path = Path(cfg.output_dir) / PREPARATION_REPORT
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(report, indent=2))
-    _reported(path)
-
-
-def _sub_phase(
-    run: SubPhase,
-    model: ModelWrapper,
-    cfg: DataflowBuildConfig,
-    options: GraphPreparation,
-    fresh: bool = False,
-) -> ModelWrapper:
-    """Run one preparation sub-phase, ``run``, on ``model`` with ``options``, record the
-    nodes it added and removed in the report under its name, and log a one-line summary.
-    ``fresh`` starts the report afresh."""
-    name = next(name for name, sub_phase in SUB_PHASES if sub_phase is run)
-    before = copy.deepcopy(model)
-    model = run(model, options)
-    changed = census(before, model)
-    report = _preparation_report(cfg, fresh)
-    report["sub_phases"].append({"sub_phase": name, **changed})
-    _write_preparation_report(cfg, report)
-    counts = ", ".join(
-        f"{sign}{count} {op}"
-        for sign, side in (("-", "removed"), ("+", "added"))
-        for op, count in changed[side].items()
-    )
-    _LOG.info(f"Graph preparation: {name}: {counts or 'no node changed'}")
-    return model
-
-
-def step_tidy_up(
+def step_cleanup(
     model: ModelWrapper,
     cfg: DataflowBuildConfig,
     *,
     override_inpsize: int | list[int] | None = None,
 ) -> ModelWrapper:
-    """Run qonnx's cleanup on the export. Starts report/graph_preparation.json afresh.
+    """Clean the export with qonnx's cleanup: shapes inferred, constants folded with the
+    Quant nodes kept, parameters made unique, unused tensors and static inputs removed,
+    nodes and tensors named.
 
     ``override_inpsize``: the batch size (an int) or the whole input shape (a list) the
     cleanup sets; None keeps the export's."""
-    preparation = GraphPreparation(override_inpsize=override_inpsize)
-    return _sub_phase(imported, model, cfg, preparation, fresh=True)
-
-
-def step_qonnx_to_finn(
-    model: ModelWrapper, cfg: DataflowBuildConfig, *, max_multithreshold_bit_width: int = 8
-) -> ModelWrapper:
-    """Lower Quant nodes: activations to MultiThresholds, weights to integers.
-
-    ``max_multithreshold_bit_width``: the widest Quant activation lowered to a
-    MultiThreshold; a wider one stays a Quant."""
-    preparation = GraphPreparation(max_multithreshold_bit_width=max_multithreshold_bit_width)
-    return _sub_phase(quantization_lowered, model, cfg, preparation)
+    return _cleaned(model, override_inpsize)
 
 
 def step_add_pre_post_processing(
@@ -204,43 +168,99 @@ def step_add_pre_post_processing(
     preprocessing: Path | None = None,
     input_datatype: str | None = None,
     topk: int | None = None,
-    max_multithreshold_bit_width: int = 8,
 ) -> ModelWrapper:
-    """State the network's inputs and outputs; by default, the export's own.
+    """State the network's inputs and outputs, on the graph as exported (its Quant nodes
+    not yet lowered); by default, the export's own.
 
     - ``preprocessing``: an ONNX model (a QONNX export, such as one of
-      ``finn.util.pytorch.ToTensor``) merged ahead of the network; its input becomes the
-      graph's input. It is lowered on its own first, with step_qonnx_to_finn's
-      ``max_multithreshold_bit_width``.
+      ``finn.util.pytorch.ToTensor``), cleaned and merged ahead of the network; its input
+      becomes the graph's input. A graph that already holds its preprocessing is given
+      none: merging composes it again.
     - ``input_datatype``: the qonnx name of the graph input's datatype, the range of
       values the network is prepared for. None leaves the input unannotated, which is
       read as FLOAT32.
     - ``topk``: append a TopK that selects the ``topk`` largest outputs; its indices
-      become the graph's output."""
-    preparation = GraphPreparation(
-        max_multithreshold_bit_width=max_multithreshold_bit_width,
-        preprocessing=None if preprocessing is None else str(preprocessing),
-        input_datatype=input_datatype,
-        topk=topk,
+      become the graph's output. A graph that already ends in a TopK is left alone."""
+    if input_datatype is not None:
+        try:
+            DataType[input_datatype]
+        except KeyError:
+            raise ValueError(f"input_datatype: {input_datatype!r} is no qonnx datatype") from None
+    if topk is not None and topk < 1:
+        raise ValueError(f"topk: {topk}; at least 1")
+    if preprocessing is not None:
+        model = model.transform(
+            MergeONNXModels(_cleaned(ModelWrapper(str(preprocessing))))  # type: ignore[no-untyped-call]
+        )
+        # MergeONNXModels imports the standard domain only: the custom ops' domains are
+        # stated again, so that reading their nodes warns of no fallback version.
+        imported_domains = {opset.domain for opset in model.model.opset_import}
+        for domain in sorted({node.domain for node in model.graph.node} - imported_domains):
+            model.model.opset_import.append(helper.make_opsetid(domain, 1))
+    if input_datatype is not None:
+        model.set_tensor_datatype(model.get_first_global_in(), DataType[input_datatype])
+    if topk is not None:
+        model = model.transform(InsertTopK(k=topk))  # type: ignore[no-untyped-call]
+        # InsertTopK drops the former output's shape with its graph output entry.
+        model = model.transform(InferShapes())
+    return model
+
+
+def step_qonnx_to_finn(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, max_multithreshold_bit_width: int = 8
+) -> ModelWrapper:
+    """Lower the whole graph's Quant nodes, the preprocessing's too: activations to
+    MultiThresholds, weights folded to integers (ConvertQONNXtoFINN).
+
+    ``max_multithreshold_bit_width``: the widest Quant activation lowered to a
+    MultiThreshold; a wider one stays a Quant."""
+    return model.transform(
+        ConvertQONNXtoFINN(  # type: ignore[no-untyped-call]
+            filter_function=default_filter_function_generator(  # type: ignore[no-untyped-call]
+                max_multithreshold_bit_width=max_multithreshold_bit_width
+            )
+        )
     )
-    return _sub_phase(io_explicit, model, cfg, preparation)
+
+
+def step_tidy_up(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Tidy the graph: shapes inferred, constants folded, nodes and tensors named by
+    their place in the graph, every node's outputs annotated by qonnx's rule, and static
+    inputs removed."""
+    model = model.transform(InferShapes())
+    model = model.transform(FoldConstants())  # type: ignore[no-untyped-call]
+    model = model.transform(GiveUniqueNodeNames())  # type: ignore[no-untyped-call]
+    model = model.transform(GiveReadableTensorNames())
+    model = model.transform(InferDataTypes())  # type: ignore[no-untyped-call]
+    return model.transform(RemoveStaticGraphInputs())
 
 
 def step_streamline(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Streamline the graph: scales and biases absorbed into thresholds, convolutions
-    lowered to Im2Col and MatMul, bipolar MatMuls rewritten to XnorPopcountMatMul."""
-    return _sub_phase(streamlined, model, cfg, GraphPreparation())
+    lowered to Im2Col and MatMul if the graph has any, bipolar MatMuls rewritten to
+    XnorPopcountMatMul (which reads the lowered convolutions' MatMuls too), and the
+    scalar scale and bias ahead of a label select absorbed into its TopK."""
+    model = model.transform(absorb.AbsorbScalarBiasIntoMultiThreshold())  # type: ignore[no-untyped-call]
+    model = model.transform(reorder.MoveScalarLinearPastInvariants())
+    model = model.transform(Streamline())
+    if model.get_nodes_by_op_type("Conv"):
+        model = model.transform(LowerConvsToMatMul())
+    model = model.transform(ConvertBipolarMatMulToXnorPopcount())
+    model = model.transform(Streamline())
+    return model.transform(absorb.AbsorbScalarMulAddIntoTopK())
 
 
 def step_convert_to_channels_last(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Absorb and collapse transposes, make MaxPool NHWC, and infer the data layouts."""
-    return _sub_phase(topology_settled, model, cfg, GraphPreparation())
-
-
-def step_widen_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Widen to float64 the integer regions float32 cannot hold exactly, with Casts at
-    their edges; the graph's inputs and outputs keep their types."""
-    return _sub_phase(containers_exact, model, cfg, GraphPreparation())
+    """Make MaxPool NHWC and absorb and collapse the transposes around it, then tidy the
+    graph as step_tidy_up does (the transforms since the last tidy-up name what they add
+    at random), infer every tensor's data layout and remove the tensors no node reads."""
+    model = model.transform(reorder.MakeMaxPoolNHWC())
+    model = model.transform(absorb.AbsorbTransposeIntoMultiThreshold())
+    model = model.transform(reorder.MakeMaxPoolNHWC())
+    model = model.transform(absorb.AbsorbConsecutiveTransposes())
+    model = step_tidy_up(model, cfg)
+    model = model.transform(InferDataLayouts())
+    return model.transform(RemoveUnusedTensors())
 
 
 def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
@@ -744,14 +764,14 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
 #: configuration's lists name a phase wherever they name a step.
 build_dataflow_phases: dict[str, list[Step]] = {
     # Bring the export into FINN's form and clean it for the compiler without changing
-    # its computation (finn.transformation.prepare).
+    # its computation, its inputs and outputs as the configuration states them.
     "phase_prepare_model": [
-        step_tidy_up,
-        step_qonnx_to_finn,
+        step_cleanup,
         step_add_pre_post_processing,
+        step_qonnx_to_finn,
+        step_tidy_up,
         step_streamline,
         step_convert_to_channels_last,
-        step_widen_containers,
     ],
     # Record the target in the model and convert the graph's nodes to KernelOps.
     "phase_convert_to_hardware": [step_convert_to_hw],

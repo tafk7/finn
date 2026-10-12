@@ -429,11 +429,11 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     readers = {name: setting.readers for name, setting in resolve_plan(cfg).settings.items()}
     assert readers == {
-        "override_inpsize": ("step_tidy_up",),
-        "max_multithreshold_bit_width": ("step_qonnx_to_finn", "step_add_pre_post_processing"),
+        "override_inpsize": ("step_cleanup",),
         "preprocessing": ("step_add_pre_post_processing",),
         "input_datatype": ("step_add_pre_post_processing",),
         "topk": ("step_add_pre_post_processing",),
+        "max_multithreshold_bit_width": ("step_qonnx_to_finn",),
         "fifo_margin": ("step_size_fifos",),
         "fifo_ram_style": ("step_size_fifos",),
         "hw_debug": ("step_build_bitfile",),

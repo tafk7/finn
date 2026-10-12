@@ -576,7 +576,8 @@ packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); wit
 `ooc_synth`, also the partition per member, what synthesis flattened
 `unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
 need a shell that integrates the partition, so they are refused on `ip`. The default steps are the build's phases, each a list of
-steps: `phase_prepare_model` (the export prepared),
+steps: `phase_prepare_model` (the export cleaned, its pre- and post-processing added,
+its Quant nodes lowered, then tidied, streamlined and made channels-last),
 `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
 partition), `phase_optimize_hardware` (their choices, one strategy step at a time, and
 the partition's verification), `phase_emit_hardware` (the partition's IP) and
@@ -601,9 +602,10 @@ value of the keyword-only parameter of that name of the steps that declare it
 (`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its
 annotation; a path setting is relative to the build directory. A setting no step of
 the build declares is refused, naming the settings its steps read; steps that declare
-the same name share its value. The preparation steps declare `override_inpsize`,
-`max_multithreshold_bit_width` (default 8), `preprocessing`, `input_datatype` and
-`topk`; the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
+the same name share its value. The preparation steps declare `override_inpsize`
+(`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
+and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
+the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
 logic analyzers on the ends' streams, refused on `ip`) and `target_fps` (the objective
 its clock report states). The build's manifest records each
 step it runs with its settings, and each setting with its value or default and its

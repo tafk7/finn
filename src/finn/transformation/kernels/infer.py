@@ -9,9 +9,7 @@ yet: they ask every node at once. ``InferKernelTensors`` visits the nodes in
 graph order instead:
 
 - a KernelOp first normalizes its value inputs against its inputs' exact types
-  (``normalize_inputs``: a Thresholding's thresholds as integers), then takes its
-  domain step (``exact``: its reference exact against ONNX on the node's facts and
-  containers; a node it is not exact for is a contradiction here), then answers
+  (``normalize_inputs``: a Thresholding's thresholds as integers), then answers
   its outputs from its kernel's fact-level views, in its node root bound on its
   inputs (the facts, the input channels' tensors and an owned initializer's
   value: MatMul's result range is its weights' columns'; the whole root reads the
@@ -87,13 +85,11 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
 def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tuple[Finding, ...]:
     """The per-node step (module docstring): ``node``'s outputs stated from its inputs.
 
-    A KernelOp's inputs are normalized and its domain step taken (``KernelOp.exact``).
-    With ``admit``, a node its reference is not exact for is refused by the domain
-    step's findings, and one it is exact for is asked the kernels' admission on its
-    inputs (``KernelOp.admission``): when either refuses it, its outputs are not
-    stated and the refusals are returned. ``ToKernelOps`` tries a candidate so, as it
-    converts. Without ``admit`` (``InferKernelTensors``, re-running the step on a
-    converted graph) the domain step's findings are a contradiction, raised.
+    A KernelOp's inputs are normalized first. With ``admit``, it is asked the kernels'
+    admission on its inputs (``KernelOp.admission``): when they refuse it, its outputs
+    are not stated and the refusals are returned. ``ToKernelOps`` tries a candidate
+    so, as it converts. Without ``admit`` (``InferKernelTensors``, re-running the step
+    on a converted graph) its outputs are stated.
     """
     if not is_custom_op(node.domain):
         _standard(model, node)
@@ -106,15 +102,6 @@ def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tup
         op.infer_node_datatype(model)
         return ()
     op.normalize_inputs()
-    outside = op.exact()
-    if outside and not admit:
-        raise KernelOpError(
-            f"{op.label}: its reference is not exact for its facts: "
-            + "; ".join(f"{finding.code}: {finding.message}" for finding in outside),
-            findings=outside,
-        )
-    if outside:
-        return outside
     if admit:
         refused = op.admission()
         if refused:

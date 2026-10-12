@@ -15,21 +15,16 @@ whole for its choices, replays the choices its node holds and those its owned
 parameter channels' tensors state, and answers the compiler's queries from the
 result.
 
-Each node is asked three questions, each with one owner (KT18):
+Each node is asked two questions, each with one owner:
 
 - **identity**, the op's pattern: the node it starts from (``anchor``: a domain and
   an op type) and ``match``, which reads the graph around that node by its structure
   only (the op types and connectivity, which inputs are facts, the semantic
-  attributes, what fixes the axes; never a datatype, a value, a container or the
-  platform) and answers with the nodes the op covers and its semantic attributes
-  (``Match``), or the Space's ``Rejected`` with the pattern's findings: a refusal by
-  its code, or a structural fact it needs that the graph does not state
-  (``fact-unstated``). ``match`` never changes the model; ``ToKernelOps`` applies a
-  match;
-- **domain**, the op's reference: ``exact``, on the node once its inputs are
-  normalized, refuses a node whose facts (its datatypes, values and containers) let
-  the ONNX it covers compute other values than the reference, each refusal by its
-  code;
+  attributes, what fixes the axes; never a datatype, a value or the platform) and
+  answers with the nodes the op covers and its semantic attributes (``Match``), or
+  the Space's ``Rejected`` with the pattern's findings: a refusal by its code, or a
+  structural fact it needs that the graph does not state (``fact-unstated``).
+  ``match`` never changes the model; ``ToKernelOps`` applies a match;
 - **realizability**, the kernels': ``admission`` asks them on the node's inputs
   (``refusals``: the kernel's admission and each Decision with no viable case, by
   why each of its cases is refused), which ``verify_node`` also reports on the
@@ -42,8 +37,9 @@ conversion reports; any other refusal of the facts is a contradiction
 An op's ``execute_node`` is the computational reference for what its pattern covers
 (PRINCIPLES 8), with ``normalize_inputs`` before it, defined for every input domain
 the ONNX it covers is, and equal to the ONNX semantics of the covered nodes on every
-node the op converts: a rewrite ``normalize_inputs`` makes keeps those values, and a
-node where they would differ is refused by ``exact``. The harness checks the
+node the op converts: a rewrite ``normalize_inputs`` makes keeps those values. Integers
+are exact on both sides: FINN executes ONNX with exact integers
+(``finn.core.onnx_exec``), as the hardware computes them. The harness checks the
 reference against ONNX, every value equal (``finn.harness.reference``); no build
 re-checks it.
 
@@ -237,7 +233,7 @@ def refused(owner: str, code: str, message: str, **details: object) -> Finding:
 
 def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
     """The annotation of ``tensor``; an unannotated tensor is refused (qonnx reads it
-    as its container type, FLOAT32, which is not a statement)."""
+    as FLOAT32, which is not a statement)."""
     if not model.has_tensor_datatype(tensor):
         produced = model.find_producer(tensor) is not None
         raise FactUnstated(
@@ -532,7 +528,7 @@ class KernelOp(CustomOp):
       initializer): the channel's ``contents``, which its source stores.
 
     And its pattern (the module docstring): ``anchor``, the ``(domain, op_type)`` of the
-    ONNX node it starts from, and ``match``; and its domain step, ``exact``.
+    ONNX node it starts from, and ``match``.
     """
 
     wants_model = True
@@ -578,14 +574,6 @@ class KernelOp(CustomOp):
         findings; by the graph's structure only, never a datatype or a value, ``model``
         unchanged (module docstring)."""
         raise NotImplementedError
-
-    def exact(self) -> tuple[Finding, ...]:
-        """The domain step: the refusals of this node where, on its facts once its inputs
-        are normalized, the ONNX it covers executed in its containers could compute other
-        values than its reference, each by its code (``refused``). Empty where they
-        agree; by default, an op whose reference agrees on every node it converts. A
-        fact it reads that the graph does not state raises ``FactUnstated``."""
-        return ()
 
     # -- schema ---------------------------------------------------------------------------
 

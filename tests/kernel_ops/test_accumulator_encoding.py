@@ -36,10 +36,10 @@ from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
+from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root

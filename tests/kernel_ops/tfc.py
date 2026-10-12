@@ -6,9 +6,9 @@
 The BNN-PYNQ TFC at two bits (``brevitas_examples``, its weights from the torch
 hub cache), exported by Brevitas with its preprocessing beside it
 (``finn.util.pytorch.ToTensor``, ``exported``), through the builder's
-graph-preparation phase as TFC's build states it (``io_settings``, ``preparation``:
-the preprocessing merged, the input UINT8, the label select appended) to the
-streamlined graph (``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
+graph-preparation phase as TFC's build states it (``io_settings``: the preprocessing
+merged, the input UINT8, the label select appended) to the streamlined graph
+(``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
 and ``partition_kernel_ops``: the input flatten (a Reshape) before the
 partition and the label select (TopK) after it, both on the host.
 
@@ -33,6 +33,7 @@ from typing import Any
 from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from qonnx.transformation.infer_datatypes import InferDataTypes
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_plan import resolve_plan
@@ -44,7 +45,6 @@ from finn.transformation.kernels import (
     ToKernelOps,
 )
 from finn.transformation.kernels.cut import partition_kernel_ops
-from finn.transformation.prepare import GraphPreparation
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
@@ -82,11 +82,6 @@ def io_settings(directory: Path) -> dict[str, Any]:
     return {"preprocessing": str(directory / PREPROCESSING), "input_datatype": "UINT8", "topk": 1}
 
 
-def preparation(directory: Path) -> GraphPreparation:
-    """TFC's graph preparation (``io_settings``), as the phase's sub-phases read it."""
-    return GraphPreparation(**io_settings(directory))
-
-
 def preparation_config(directory: Path, **fields: Any) -> DataflowBuildConfig:
     """A build of TFC from its export in ``directory`` (``io_settings``), its outputs
     under ``directory / "output"``, for Ultra96 in the Zynq shell at 5 ns, no debugger
@@ -116,8 +111,20 @@ def prepared(export: ModelWrapper, directory: Path) -> ModelWrapper:
     """``export``, exported into ``directory`` with its preprocessing beside it (TFC by
     ``exported``, or CNV by ``kernel_ops.cnv.exported``), through the builder's
     graph-preparation phase (``phase_prepare_model``) as TFC's build states it: the
-    streamlined graph. The phase's report goes under ``directory / "output"``."""
+    streamlined graph."""
     return run_steps(export, preparation_config(directory, steps=["phase_prepare_model"]))
+
+
+def reference(export: ModelWrapper, directory: Path) -> ModelWrapper:
+    """What ``export``'s prepared graph must compute (``prepared``'s arguments): the
+    export through the builder's graph-preparation phase as TFC's build states it, up to
+    and including step_add_pre_post_processing, then annotated (``InferDataTypes``), its
+    Quant nodes and float arithmetic as exported. The equivalence analysis
+    (finn.analysis.equivalence) checks the prepared graph against it."""
+    cfg = preparation_config(
+        directory, steps=["phase_prepare_model"], stop_step="step_add_pre_post_processing"
+    )
+    return run_steps(export, cfg).transform(InferDataTypes())  # type: ignore[no-untyped-call]
 
 
 def streamlined(directory: Path) -> ModelWrapper:

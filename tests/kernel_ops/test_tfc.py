@@ -22,10 +22,9 @@ import numpy as np
 import pytest
 from kernels.xsim import requires_vivado, requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.core.onnx_exec import execute_onnx
 
 import finn.core.onnx_exec as onnx_exec
-from finn.core.onnx_exec import RanBy
+from finn.core.onnx_exec import RanBy, execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED

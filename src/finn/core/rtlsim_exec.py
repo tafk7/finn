@@ -17,7 +17,9 @@ of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
    none expected;
 4. **the tensors**: each output's words read back as the port presents them
    (``finn.dataflow.traversal.unpack``), sign-extended by its element, into the
-   context in the container the context holds the tensor in.
+   context in the container the context holds the tensor in, or, where that container
+   does not hold every value exactly (float32 past 2**24), in float64 (a float
+   container) or int64, as a KernelOp's reference widens its own (MatMul's ``product``).
 
 It only executes: it compares nothing. Its outputs are exactly the words that arrived,
 as a tensor: ``pack`` of an output gives back its words, and words that are no tensor
@@ -87,8 +89,8 @@ class Unstreamable(ValueError):
 
 class Unreadable(SimulationFailed):
     """An output's words are no tensor of its port's traversal (an element presented
-    twice with two values), or not one its container in the context holds exactly;
-    ``received`` holds each output's words as they arrived."""
+    twice with two values), or not one its container in the context, or the wider one
+    it takes, holds exactly; ``received`` holds each output's words as they arrived."""
 
     def __init__(self, message: str, received: Mapping[str, tuple[int, ...]]) -> None:
         super().__init__(message)
@@ -240,19 +242,25 @@ def _read(
     received: Mapping[str, tuple[int, ...]],
 ) -> npt.NDArray[Any]:
     """The tensor ``words`` present in ``form``, in the shape and container of ``held``,
-    the context's: refused (``Unreadable``) when they are no tensor of ``form`` or the
-    container does not hold their values exactly."""
+    the context's, or where that container does not hold their values exactly, in
+    float64 (a float container) or int64: refused (``Unreadable``) when they are no
+    tensor of ``form`` or neither holds them exactly."""
     try:
-        values = unpack(form, words, bits, signed=signed)
+        unpacked = unpack(form, words, bits, signed=signed)
     except ValueError as error:
         raise Unreadable(f"{where}: {error}", received) from None
-    found = values.reshape(np.shape(held)).astype(np.asarray(held).dtype)
-    if not np.array_equal(found, values.reshape(found.shape)):
-        raise Unreadable(
-            f"{where}: its container ({found.dtype}) does not hold the values presented exactly",
-            received,
-        )
-    return found
+    values = unpacked.reshape(np.shape(held))
+    container = np.asarray(held).dtype
+    wider = np.dtype(np.float64) if container.kind == "f" else np.dtype(np.int64)
+    for element in (container, wider):
+        found = values.astype(element)
+        if np.array_equal(found, values):
+            return found
+    raise Unreadable(
+        f"{where}: neither its container ({container}) nor {wider} holds the values"
+        " presented exactly",
+        received,
+    )
 
 
 def boundary(body: ModelWrapper, node: NodeProto) -> tuple[Any, tuple[Stream, ...]]:
