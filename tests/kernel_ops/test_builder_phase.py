@@ -34,9 +34,10 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.build_dataflow_checks import Check, Severity, run_all_config_checks
+from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
     SHELL_OUTPUTS,
+    ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
     VerificationStepType,
@@ -502,18 +503,29 @@ def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: P
         step_convert_to_hw(chain_source(), config(tmp_path, target=xrt))
 
 
-def checks_of(cfg: DataflowBuildConfig) -> list[Check]:
-    """The configuration checks of ``cfg`` against its plan."""
-    return run_all_config_checks(cfg, resolve_plan(cfg)).checks
+def checks_of(cfg: DataflowBuildConfig) -> list[Finding]:
+    """The configuration checks' findings of ``cfg``, its plan and its target."""
+    return configuration_findings(cfg, resolve_plan(cfg), cfg.resolved_target)
 
 
 def failed_checks(cfg: Any) -> dict[str, list[str]]:
-    """The configuration errors of a build, their messages by name."""
+    """The configuration checks' rejections of a build, their messages by code."""
     failed: dict[str, list[str]] = {}
-    for check in checks_of(cfg):
-        if not check.passed and check.severity == Severity.ERROR:
-            failed.setdefault(check.name, []).append(check.message)
+    for finding in checks_of(cfg):
+        if finding.kind is FindingKind.REJECTION:
+            failed.setdefault(finding.code, []).append(finding.message)
     return failed
+
+
+def refusal(cfg: DataflowBuildConfig) -> dict[str, list[str]]:
+    """The rejections a build of ``cfg`` is refused with before its first step, their
+    messages by code."""
+    with pytest.raises(ConfigurationRefused) as refused:
+        build_dataflow_cfg(str(Path(cfg.output_dir) / "absent.onnx"), cfg)
+    found: dict[str, list[str]] = {}
+    for finding in refused.value.findings:
+        found.setdefault(finding.code, []).append(finding.message)
+    return found
 
 
 def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: Path) -> None:
@@ -526,7 +538,7 @@ def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: P
     every = list(DataflowOutputType)
     cfg = config(tmp_path, target=on_ip, generate_outputs=every)
     assert failed_checks(cfg) == {
-        "kernel_path_shell": [
+        "shell-outputs": [
             "bitfile, pynq_driver, deployment_package: the 'ip' shell does not integrate "
             "the partition; its outputs are the packaged IP's (stitched_ip, ooc_synth)"
         ]
@@ -548,14 +560,14 @@ def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> 
     what it lacks."""
     needs = "it is made from them, in the same build"
     driver = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
-    assert failed_checks(driver) == {"kernel_output_needs": [f"pynq_driver needs bitfile: {needs}"]}
+    assert failed_checks(driver) == {"output-needs": [f"pynq_driver needs bitfile: {needs}"]}
     deployment = [DataflowOutputType.BITFILE, DataflowOutputType.DEPLOYMENT_PACKAGE]
     assert failed_checks(config(tmp_path, generate_outputs=deployment)) == {
-        "kernel_output_needs": [f"deployment_package needs pynq_driver: {needs}"]
+        "output-needs": [f"deployment_package needs pynq_driver: {needs}"]
     }
     alone = config(tmp_path, generate_outputs=[DataflowOutputType.DEPLOYMENT_PACKAGE])
     assert failed_checks(alone) == {
-        "kernel_output_needs": [f"deployment_package needs bitfile, pynq_driver: {needs}"]
+        "output-needs": [f"deployment_package needs bitfile, pynq_driver: {needs}"]
     }
     shell = [DataflowOutputType.BITFILE, DataflowOutputType.PYNQ_DRIVER]
     assert failed_checks(config(tmp_path, generate_outputs=shell)) == {}
@@ -602,17 +614,17 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
     unknown = TargetRequest(board="U250", period_ns=5.0)
-    assert failed_checks(config(tmp_path, target=unknown, generate_outputs=[])) == {
-        "kernel_target": [
-            "unknown-board: 'U250' is not a board (one of ['AUP-ZU3_8GB', 'KV260_SOM', "
+    assert refusal(config(tmp_path, target=unknown, generate_outputs=[])) == {
+        "unknown-board": [
+            "'U250' is not a board (one of ['AUP-ZU3_8GB', 'KV260_SOM', "
             "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'ZCU102', 'ZCU104', 'ZCU111'])"
         ]
     }
     # A board the Zynq template cannot build: refused before any step runs.
     zcu111 = TargetRequest(board="ZCU111", period_ns=5.0, shell="pynq")
-    assert failed_checks(config(tmp_path, target=zcu111, generate_outputs=[])) == {
-        "kernel_target": [
-            "no-shell-row: the 'pynq' shell has no row for board 'ZCU111': the Zynq "
+    assert refusal(config(tmp_path, target=zcu111, generate_outputs=[])) == {
+        "no-shell-row": [
+            "the 'pynq' shell has no row for board 'ZCU111': the Zynq "
             "template has no branch for it (no board preset)"
         ]
     }
@@ -625,43 +637,45 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     """A verification whose concluding step the plan leaves out does not run, and the
     check says so; one whose reference-saving step it leaves out (a build resumed after
     conversion) still runs, on a reference an earlier run left, and the check says that
-    it fails where there is none."""
+    it fails where there is none. Both are limitations, which the build warns of."""
     verify = [VerificationStepType.PARTITION_ELABORATION]
     cfg = config(
         tmp_path, steps=["phase_emit_hardware", "phase_generate_outputs"], verify_steps=verify
     )
-    (warning,) = [check for check in checks_of(cfg) if check.name == "verify_step_prereq"]
-    assert not warning.passed and warning.severity == Severity.WARNING
+    (warning,) = checks_of(cfg)
+    assert (warning.kind, warning.code) == (FindingKind.LIMITATION, "verification-not-run")
     assert warning.message == (
-        "verify_steps includes partition_elaboration, which step_verify_partition runs, and "
-        "the resolved build steps (steps/start_step/stop_step) leave it out: that "
-        "verification does not run, and has no verdict"
+        "partition_elaboration, which step_verify_partition runs, and the resolved build "
+        "steps (steps/start_step/stop_step) leave it out: that verification does not run, "
+        "and has no verdict"
     )
-    cfg = config(tmp_path, verify_steps=verify)
-    assert "verify_step_prereq" not in {check.name for check in checks_of(cfg)}
+    assert checks_of(config(tmp_path, verify_steps=verify)) == []
     python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
-    assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
+    assert failed_checks(python) == {"verify-input-missing": ["not found: input.npy"]}
     resumed = config(
         tmp_path,
         steps=["phase_create_accelerator", "phase_optimize_hardware"],
         verify_steps=[VerificationStepType.PARTITION_PYTHON],
     )
-    (warning,) = [check for check in checks_of(resumed) if check.name == "verify_step_prereq"]
+    (warning,) = [
+        finding for finding in checks_of(resumed) if finding.code == "verification-unreferenced"
+    ]
+    assert warning.kind is FindingKind.LIMITATION
     assert warning.message == (
-        "verify_steps includes partition_python, whose reference step_convert_to_hw saves, "
-        "and the resolved build steps (steps/start_step/stop_step) leave it out: "
-        "step_verify_partition reads the reference an earlier run left in the output "
-        "directory, and fails (FileNotFoundError) where there is none"
+        "partition_python, whose reference step_convert_to_hw saves, and the resolved build "
+        "steps (steps/start_step/stop_step) leave it out: step_verify_partition reads the "
+        "reference an earlier run left in the output directory, and fails "
+        "(FileNotFoundError) where there is none"
     )
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
     testbench = [VerificationStepType.STITCHED_IP_TESTBENCH]
     cfg = config(tmp_path, steps=KERNEL_PATH, verify_steps=testbench)
-    (warning,) = [check for check in checks_of(cfg) if check.name == "verify_step_prereq"]
+    (warning,) = [finding for finding in checks_of(cfg) if finding.code == "verification-not-run"]
     assert "stitched_ip_testbench, which step_package_partition runs" in warning.message
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
-        "testbench_output": [
-            "verify_steps includes stitched_ip_testbench, which runs the testbench "
-            "stitched_ip writes, and generate_outputs does not ask for it"
+        "testbench-output": [
+            "stitched_ip_testbench runs the testbench stitched_ip writes, and "
+            "generate_outputs does not ask for it"
         ]
     }
     asked = config(
@@ -1274,9 +1288,10 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
         (Path(cfg.output_dir) / stale).write_text("an earlier build's")
     parent = explore(source, cfg, Z0_CHAIN)
     # The outputs' phase, its steps given their settings by the plan (and the build's
-    # toolchain, the fake, by cfg): the bitfile's build reads target_fps, the objective,
-    # as the target throughput read it.
-    for step in resolve_plan(replace(cfg, steps=["phase_generate_outputs"])).steps:
+    # toolchain, the fake, by cfg): the bitfile's build reads its objective from the
+    # target throughput's report.
+    outputs = replace(cfg, steps=["phase_generate_outputs"], settings={})
+    for step in resolve_plan(outputs).steps:
         parent = step.run(parent, cfg)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
     ((_, _, script),) = vivado.runs

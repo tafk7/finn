@@ -178,18 +178,27 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     assert resolve_plan(read).settings["preprocessing"].value is None
 
 
+def step_tools(model, cfg):
+    """Takes the build's toolchain for two steps, as two tool steps do."""
+    cfg.step_toolchain("step_one")
+    cfg.step_toolchain("step_two")
+    return model
+
+
 def test_a_build_directory_builds_in_process_its_toolchain_prepared_once(
     monkeypatch, tmp_path, capsys
 ):
     """build_dataflow_directory builds in the calling process, its working directory and
     environment unchanged: the toolchain its configuration names (a settings script the
     configuration states relative to the build directory) is prepared once, for the
-    whole build, and kept off os.environ; a relative FINN_BUILD_DIR is the caller's."""
+    whole build, when a step first takes it, and kept off os.environ; a relative
+    FINN_BUILD_DIR is the caller's."""
     directory = tmp_path / "build"
     directory.mkdir()
     (directory / "settings64.sh").write_text("export SELECTED_BY_SETTINGS=1\n")
     (directory / "model.onnx").write_bytes(identity_model().model.SerializeToString())
-    cfg = builder_config(toolchain=Selection(settings=("settings64.sh",)), steps=[])
+    selection = Selection(settings=("settings64.sh",))
+    cfg = builder_config(toolchain=selection, steps=[f"{__name__}.step_tools"])
     (directory / build_dataflow.CONFIG_FILE).write_text(cfg.to_json())
     caller = tmp_path / "caller"
     caller.mkdir()

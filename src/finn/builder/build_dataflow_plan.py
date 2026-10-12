@@ -35,7 +35,8 @@ A setting given whose every reader ``start_step`` or ``stop_step`` leaves out is
 reported by the configuration checks as a warning (``unread``).
 
 **Start and stop.** ``start_step`` and ``stop_step`` name a phase (its first step, or
-its last) or a step, once in the list.
+its last) or a step, once in the list; ``start_step`` a step after the list's first:
+the build starts from the model the step before it saved.
 
 **The kernel strategy steps' order.** The engine keeps a stored FIFO depth valid when
 its ends' folding changes, so the run's order must keep the depths current
@@ -43,6 +44,12 @@ its ends' folding changes, so the run's order must keep the depths current
 change the folding after the run's last step that sizes FIFOs is refused; so is one
 with no sizing step after it in a run that does not cut the partition before it, whose
 partition an earlier run made and may have sized at another folding.
+
+**Refusals.** ``resolve_plan`` refuses a configuration with ``ConfigurationRefused``
+(finn.builder.build_dataflow_config), each finding's place in the configuration its
+``place`` detail: at the first entry or edit that does not resolve, since the rest of
+the list depends on it; otherwise with every rejection of the settings, of
+``start_step`` and ``stop_step`` and of the run's order together.
 """
 
 from __future__ import annotations
@@ -60,7 +67,12 @@ from typing import Any
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 
-from finn.builder.build_dataflow_config import DataflowBuildConfig, decoded
+from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
+    DataflowBuildConfig,
+    config_finding,
+    decoded,
+)
 from finn.builder.build_dataflow_steps import (
     FIFO_SIZING_STEPS,
     FOLDING_STEPS,
@@ -69,6 +81,7 @@ from finn.builder.build_dataflow_steps import (
     default_build_dataflow_steps,
     step_create_dataflow_partition,
 )
+from finn.core.space import Finding
 
 #: The operations of an edit, each with the key that holds its entries (None: none).
 EDITS: Mapping[str, str | None] = {
@@ -128,24 +141,28 @@ class BuildPlan:
         """The steps the build runs, in order."""
         return self.edited[self.first : self.last + 1]
 
-    def index(self, name: str, *, last: bool = False) -> int:
+    def index(self, name: str, *, last: bool = False, place: str | None = None) -> int:
         """The index in ``edited`` of the step ``name`` names: a phase's first step, or
-        its last if ``last``; a step. Refuses a name that is not once in the list."""
+        its last if ``last``; a step. Refuses, at ``place``, a name that is not once in
+        the list."""
         if name in self.phases:
             spans = self.phases[name]
             if len(spans) != 1:
-                raise ValueError(f"{name!r} is {len(spans)} times in this build, not once")
+                message = f"{name!r} is {len(spans)} times in this build, not once"
+                raise _refusal("step-ambiguous", place, message)
             return spans[0][1 if last else 0]
         found = [index for index, step in enumerate(self.edited) if step.name == name]
         if len(found) == 1:
             return found[0]
         if found:
-            raise ValueError(f"{name!r} is {len(found)} steps of this build, not one")
-        raise ValueError(
+            message = f"{name!r} is {len(found)} steps of this build, not one"
+            raise _refusal("step-ambiguous", place, message)
+        message = (
             f"{name!r} is not one of this build's steps or phases; its steps: "
             f"{', '.join(step.name for step in self.edited)}; its phases: "
             f"{', '.join(self.phases) or 'none'}"
         )
+        raise _refusal("step-absent", place, message)
 
     def record(self) -> dict[str, Any]:
         """The plan as the build's manifest records it: each step it runs with its phase
@@ -207,15 +224,22 @@ class _Group:
     steps: list[_Step]
 
 
+def _refusal(code: str, place: str | None, message: str) -> ConfigurationRefused:
+    """A refusal of one rejection, at ``place`` in the configuration."""
+    return ConfigurationRefused([config_finding(code, message, place)])
+
+
 def _imported(path: str, place: str) -> object:
     """The object the import path ``path`` names."""
     module, _, name = path.rpartition(".")
     try:
         found = importlib.import_module(module)
     except ImportError as missing:
-        raise ValueError(f"{place}: {path!r}: no module {module!r} ({missing})") from None
+        raise _refusal(
+            "step-import", place, f"{path!r}: no module {module!r} ({missing})"
+        ) from None
     if not hasattr(found, name):
-        raise ValueError(f"{place}: {path!r}: {module} has no {name!r}")
+        raise _refusal("step-import", place, f"{path!r}: {module} has no {name!r}")
     return getattr(found, name)
 
 
@@ -232,31 +256,34 @@ def _step(entry: object, place: str) -> _Step:
     partial too) and the settings it declares."""
     if isinstance(entry, type):
         if not issubclass(entry, Transformation):
-            raise ValueError(f"{place}: {entry.__name__} is a class, not a Transformation")
+            raise _refusal(
+                "step-invalid", place, f"{entry.__name__} is a class, not a Transformation"
+            )
         try:
             instance = entry()
         except TypeError as refused:
-            raise ValueError(
-                f"{place}: {entry.__name__} cannot be constructed with its defaults: {refused}"
-            ) from None
+            message = f"{entry.__name__} cannot be constructed with its defaults: {refused}"
+            raise _refusal("step-invalid", place, message) from None
         return _Step(entry.__name__, entry, _applying(instance), {})
     if isinstance(entry, Transformation):
         kind = type(entry)
         return _Step(kind.__name__, kind, _applying(entry), {})
     if not callable(entry):
-        raise ValueError(
-            f"{place}: {entry!r} is no step: a phase or step name, an import path, a "
-            "function or a Transformation"
+        message = (
+            f"{entry!r} is no step: a phase or step name, an import path, a function or a "
+            "Transformation"
         )
+        raise _refusal("step-invalid", place, message)
     function = entry.func if isinstance(entry, functools.partial) else entry
     bound = entry.keywords if isinstance(entry, functools.partial) else {}
     name = getattr(function, "__name__", None)
     if not isinstance(name, str):
-        raise ValueError(f"{place}: {entry!r} has no name")
+        raise _refusal("step-invalid", place, f"{entry!r} has no name")
     try:
         hints = typing.get_type_hints(function)
     except (NameError, TypeError) as unresolved:
-        raise ValueError(f"{place}: {name}'s annotations do not resolve: {unresolved}") from None
+        message = f"{name}'s annotations do not resolve: {unresolved}"
+        raise _refusal("step-invalid", place, message) from None
     declared = {
         parameter.name: (hints.get(parameter.name, Any), parameter.default)
         for parameter in inspect.signature(entry).parameters.values()
@@ -276,11 +303,11 @@ def _resolved(entry: object, place: str) -> _Group | _Step:
         return _step(build_dataflow_step_lookup[entry], place)
     if "." in entry:
         return _step(_imported(entry, place), place)
-    raise ValueError(
-        f"{place}: {entry!r} is no step or phase; the steps: "
-        f"{', '.join(build_dataflow_step_lookup)}; the phases: "
-        f"{', '.join(build_dataflow_phases)}"
+    message = (
+        f"{entry!r} is no step or phase; the steps: {', '.join(build_dataflow_step_lookup)}; "
+        f"the phases: {', '.join(build_dataflow_phases)}"
     )
+    raise _refusal("step-unknown", place, message)
 
 
 def _entries(stated: object, place: str) -> list[_Group | _Step]:
@@ -303,33 +330,33 @@ def _as_steps(resolved: Iterable[_Group | _Step]) -> list[_Step]:
 def _edit(groups: list[_Group], edit: object, place: str) -> None:
     """Apply one edit of ``step_edits`` to ``groups``, in place."""
     if not isinstance(edit, Mapping):
-        raise ValueError(f"{place}: an object such as {{'after': 'step_x', 'insert': [...]}}")
+        message = "an object such as {'after': 'step_x', 'insert': [...]}"
+        raise _refusal("edit-invalid", place, message)
     operations = [operation for operation in EDITS if operation in edit]
     if len(operations) != 1:
-        raise ValueError(
-            f"{place}: exactly one of {', '.join(EDITS)}, not {sorted(map(str, edit))}"
-        )
+        message = f"exactly one of {', '.join(EDITS)}, not {sorted(map(str, edit))}"
+        raise _refusal("edit-invalid", place, message)
     (operation,) = operations
     holder = EDITS[operation]
     expected = {operation} if holder is None else {operation, holder}
     if set(edit) != expected:
-        raise ValueError(
-            f"{place}: {operation!r} takes the keys {sorted(expected)}, "
-            f"not {sorted(map(str, edit))}"
-        )
+        message = f"{operation!r} takes the keys {sorted(expected)}, not {sorted(map(str, edit))}"
+        raise _refusal("edit-invalid", place, message)
     target = edit[operation]
     where = f"{place}.{operation}"
     if not isinstance(target, str):
-        raise ValueError(f"{where}: a phase or step name, or an import path, not {target!r}")
+        message = f"a phase or step name, or an import path, not {target!r}"
+        raise _refusal("edit-invalid", where, message)
     entries = [] if holder is None else _entries(edit[holder], f"{place}.{holder}")
     if target in build_dataflow_phases:
         found = [index for index, group in enumerate(groups) if group.phase == target]
         if len(found) != 1:
             phases = [group.phase for group in groups if group.phase is not None]
-            raise ValueError(
-                f"{where}: {target!r} is {len(found)} times in the list, not once; "
-                f"its phases: {', '.join(phases) or 'none'}"
+            message = (
+                f"{target!r} is {len(found)} times in the list, not once; its phases: "
+                f"{', '.join(phases) or 'none'}"
             )
+            raise _refusal("edit-target", where, message)
         groups[_span(operation, found[0])] = [_as_group(each) for each in entries]
         return
     origin = _imported(target, where) if "." in target else None
@@ -341,10 +368,11 @@ def _edit(groups: list[_Group], edit: object, place: str) -> None:
     ]
     if len(matches) != 1:
         names = [step.name for group in groups for step in group.steps]
-        raise ValueError(
-            f"{where}: {target!r} names {len(matches)} steps of the list, not one; "
-            f"its steps: {', '.join(names) or 'none'}"
+        message = (
+            f"{target!r} names {len(matches)} steps of the list, not one; its steps: "
+            f"{', '.join(names) or 'none'}"
         )
+        raise _refusal("edit-target", where, message)
     ((group, position),) = matches
     group.steps[_span(operation, position)] = _as_steps(entries)
 
@@ -386,47 +414,57 @@ def declared_settings(cfg: DataflowBuildConfig) -> dict[str, Any]:
 
 def _settings(
     cfg: DataflowBuildConfig, declared: Mapping[str, list[tuple[str, Any, Any]]]
-) -> dict[str, Setting]:
+) -> tuple[dict[str, Setting], list[Finding]]:
     """Each declared setting's value, the configuration's decoded, else the default its
-    readers declare. Refuses an undeclared setting, readers that disagree on a
-    setting's annotation or default, and a required setting not given."""
-    undeclared = sorted(set(cfg.settings) - set(declared))
-    if undeclared:
-        raise ValueError(
-            f"settings no step of this build declares: {', '.join(undeclared)}; the "
-            f"settings its steps read: {', '.join(sorted(declared)) or 'none'}"
-        )
+    readers declare; and the rejections: each setting no step declares, readers that
+    disagree on a setting's annotation or default, a value that does not decode, and a
+    required setting not given."""
+    refused = []
+    read = ", ".join(sorted(declared)) or "none"
+    for name in sorted(set(cfg.settings) - set(declared)):
+        message = f"no step of this build declares it; the settings its steps read: {read}"
+        refused.append(config_finding("setting-unknown", message, f"configuration.{name}"))
     settings = {}
     for name, readers in declared.items():
+        place = f"configuration.{name}"
         kinds = {step: kind for step, kind, _ in readers}
+        defaults = [default for _, _, default in readers]
         if len({repr(kind) for kind in kinds.values()}) > 1:
             stated = "; ".join(f"{step}: {kind!r}" for step, kind in kinds.items())
-            raise ValueError(f"setting {name}: its readers declare different types ({stated})")
-        defaults = [default for _, _, default in readers]
+            message = f"its readers declare different types ({stated})"
+            refused.append(config_finding("setting-conflict", message, place))
+            continue
         if any(default != defaults[0] for default in defaults[1:]):
             stated = "; ".join(f"{step}: {default!r}" for step, _, default in readers)
-            raise ValueError(f"setting {name}: its readers declare different defaults ({stated})")
+            message = f"its readers declare different defaults ({stated})"
+            refused.append(config_finding("setting-conflict", message, place))
+            continue
         names = tuple(dict.fromkeys(step for step, _, _ in readers))
         kind, default = readers[0][1], defaults[0]
         if name in cfg.settings:
-            value = decoded(kind, cfg.settings[name], f"configuration.{name}")
-            settings[name] = Setting(value, True, names)
+            try:
+                settings[name] = Setting(decoded(kind, cfg.settings[name], place), True, names)
+            except ValueError as invalid:
+                # decoded names the place it refuses, this setting's or one inside it.
+                where, _, message = str(invalid).partition(": ")
+                refused.append(config_finding("setting-invalid", message, where))
         elif default is inspect.Parameter.empty:
-            raise ValueError(f"setting {name}: {', '.join(names)} require it, and it is not given")
+            message = f"{', '.join(names)} require it, and it is not given"
+            refused.append(config_finding("setting-required", message, place))
         else:
             settings[name] = Setting(default, False, names)
-    return settings
+    return settings, refused
 
 
 def resolve_plan(cfg: DataflowBuildConfig) -> BuildPlan:
     """The configuration's plan: its list resolved and edited, its settings decoded and
     given to the steps that declare them, the run from ``start_step`` to ``stop_step``.
-    Refuses, naming its place, what the module docstring says it refuses."""
+    Refuses what the module docstring says it refuses."""
     groups = _edited(cfg)
     listing = {
         step.__name__: phase for phase, steps in build_dataflow_phases.items() for step in steps
     }
-    settings = _settings(cfg, _declarations(groups))
+    settings, refused = _settings(cfg, _declarations(groups))
     phases: dict[str, list[tuple[int, int]]] = {}
     edited: list[PlannedStep] = []
     for group in groups:
@@ -434,7 +472,7 @@ def resolve_plan(cfg: DataflowBuildConfig) -> BuildPlan:
             span = (len(edited), len(edited) + len(group.steps) - 1)
             phases.setdefault(group.phase, []).append(span)
         for step in group.steps:
-            values = {name: settings[name].value for name in step.declared}
+            values = {name: settings[name].value for name in step.declared if name in settings}
             edited.append(
                 PlannedStep(step.name, listing.get(step.name), step.function, values, step.origin)
             )
@@ -446,19 +484,35 @@ def resolve_plan(cfg: DataflowBuildConfig) -> BuildPlan:
         settings,
         (),
     )
-    first = 0 if cfg.start_step is None else plan.index(cfg.start_step)
-    last = len(edited) - 1 if cfg.stop_step is None else plan.index(cfg.stop_step, last=True)
-    running = {name for step in edited[first : last + 1] for name in step.settings}
-    unread = tuple(sorted(name for name in cfg.settings if name not in running))
-    plan = replace(plan, first=first, last=last, unread=unread)
-    _refuse_stale_fifos(plan.steps)
+    bounds = []
+    for place, name, end, default in (
+        ("start_step", cfg.start_step, False, 0),
+        ("stop_step", cfg.stop_step, True, len(edited) - 1),
+    ):
+        try:
+            bounds.append(default if name is None else plan.index(name, last=end, place=place))
+        except ConfigurationRefused as absent:
+            refused.extend(absent.findings)
+    if len(bounds) == 2:
+        first, last = bounds
+        if cfg.start_step is not None and first == 0:
+            message = "no step runs before it, so no model was saved to start from"
+            refused.append(config_finding("start-without-model", message, "start_step"))
+        running = {name for step in edited[first : last + 1] for name in step.settings}
+        unread = tuple(sorted(name for name in cfg.settings if name not in running))
+        plan = replace(plan, first=first, last=last, unread=unread)
+        refused.extend(_stale_fifos(plan.steps))
+    if refused:
+        raise ConfigurationRefused(refused)
     return plan
 
 
-def _refuse_stale_fifos(run: tuple[PlannedStep, ...]) -> None:
-    """Refuse a run whose order would build FIFO depths sized at another folding than the
-    one built (the module docstring): a step that may change the folding after the last
-    step that sizes FIFOs, or with no sizing step after it and no cut before it."""
+def _stale_fifos(run: tuple[PlannedStep, ...]) -> list[Finding]:
+    """The rejections of a run whose order would build FIFO depths sized at another folding
+    than the one built (the module docstring): each step that may change the folding
+    after the last step that sizes FIFOs, or with no sizing step after it and no cut
+    before it."""
+    refused = []
     sizing = [index for index, step in enumerate(run) if step.origin in FIFO_SIZING_STEPS]
     last = max(sizing, default=None)
     for index, step in enumerate(run):
@@ -466,19 +520,22 @@ def _refuse_stale_fifos(run: tuple[PlannedStep, ...]) -> None:
             continue
         place = f"{step.name} (step {index + 1} of the run)"
         if last is not None and index > last:
-            raise ValueError(
+            message = (
                 f"{place} follows {run[last].name} (step {last + 1}), the last that sizes "
                 "FIFOs: their depths are sized at the folding before it and would go stale; "
                 "size FIFOs after the last step that changes the folding"
             )
+            refused.append(config_finding("fifos-stale", message))
         cut = any(each.origin is step_create_dataflow_partition for each in run[:index])
         if last is None and not cut:
-            raise ValueError(
+            message = (
                 f"{place} may change the folding, and no step after it sizes FIFOs: the "
                 "partition comes from an earlier run (no step_create_dataflow_partition "
                 "before it), whose FIFOs may be sized at another folding; add "
                 "step_size_fifos after it"
             )
+            refused.append(config_finding("fifos-unsized", message))
+    return refused
 
 
 __all__ = [

@@ -345,6 +345,7 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
     import onnx.helper as oh  # noqa: PLC0415
 
     from finn.builder.build_dataflow import build_dataflow_directory  # noqa: PLC0415
+    from finn.builder.build_dataflow_config import ConfigurationRefused  # noqa: PLC0415
 
     project = tmp_path / "project with spaces"
     project.mkdir()
@@ -373,14 +374,15 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
     assert os.getcwd() == cwd and dict(os.environ) == env
     # A step that fails on an empty model: no partition to explore.
     assert build_dataflow_directory(str(state("step_size_fifos"))) == -1
-    with pytest.raises(ValueError, match="'not_a_step' is no step or phase"):
+    with pytest.raises(ConfigurationRefused, match="'not_a_step' is no step or phase"):
         build_dataflow_directory(str(state("not_a_step")))
     assert os.getcwd() == cwd
     assert command().returncode == 0
     assert command("step_size_fifos").returncode == 255
     refused = command("not_a_step")
     assert refused.returncode == 1
-    assert b"ValueError: steps[0]: 'not_a_step' is no step or phase" in refused.stderr
+    stated = b"ConfigurationRefused: step-unknown: steps[0]: 'not_a_step' is no step or phase"
+    assert stated in refused.stderr
     assert os.getcwd() == cwd and dict(os.environ) == env
 
 

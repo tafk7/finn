@@ -477,20 +477,24 @@ environment of the configuration's toolchain (the machine's when it names none),
 prepared once for the build; the process's own environment is left as it is. The
 command exits 0 when the build completes, 255 when a step fails
 (`build_dataflow_directory` returns -1), and 1 with the traceback when the
-configuration is refused (it raises). A caller that loads XSI in process supplies its
+configuration is refused: before the first step, one `ConfigurationRefused` carries
+every rejection found, the target's, the plan's and the configuration checks', each a
+finding with its code and its place in the configuration. A caller that loads XSI in process supplies its
 loader environment before interpreter startup (`docker/finn-toolchain.sh` does for a
 shell). Concurrent in-process builds still share stdout and logger state; use
 separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
 
 What a build leaves in its output directory: `build_dataflow.log` (for a reader:
-every record with its level, step and logger), upstream's `time_per_step.json` and
-`config_check_report.txt`/`.json`, the steps' reports under `report/`, each tool's
+every record with its level, step and logger), upstream's `time_per_step.json`, the
+steps' reports under `report/`, each tool's
 transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as the
 tool runs), the intermediate models, and the outputs asked. `report/build.json` is
 the build's manifest, the index of the run a program reads after the exit code, and
 never the log: the build's identity (FINN's revision where it is known, the
-toolchain's selection, the Vivado release, the target, the model), the configuration
-checks that failed, each step with its phase, status (`running` while it runs, then
+toolchain's selection, the target, the model, and the Vivado release where the build
+probed it: for a board that requires a release, or in a tool step), what checking the
+configuration found (its rejections and the limitations warned of), each step with its
+phase, status (`running` while it runs, then
 `completed` or `failed`), seconds, the reports it wrote with their findings by code,
 its tool runs with their transcripts, status, exit and messages by severity, and its
 verifications; each verification asked with its verdict (`pass`, `fail`, `error`,
@@ -606,8 +610,9 @@ the same name share its value. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
 the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
-logic analyzers on the ends' streams, refused on `ip`) and `target_fps` (the objective
-its clock report states). The build's manifest records each
+logic analyzers on the ends' streams, refused on `ip`); its clock report's objective
+is the `target_fps` that `step_target_throughput`'s report in the output directory
+states, where there is one. The build's manifest records each
 step it runs with its settings, and each setting with its value or default and its
 readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
@@ -625,7 +630,7 @@ every value in the body.
 | Step | Settings | What it does |
 |---|---|---|
 | `step_pin_choices` | `kernel_choices_file` (a path, required) | sets the values a `kernel_choices.json` states and pins them for the build |
-| `step_target_throughput` | `target_fps` (required when it runs), `relax_target_fps` (default true) | folds the least parallelism that meets `target_fps` at the target's clock |
+| `step_target_throughput` | `target_fps` (required), `relax_target_fps` (default true) | folds the least parallelism that meets `target_fps` at the target's clock |
 | `step_max_throughput` | `max_throughput_within` (required: `{"lut": 0.5}`) | the fewest cycles a frame whose resources stay within the fractions of the part's |
 | `step_size_fifos` | `fifo_margin` (default 0), `fifo_ram_style` (default none: FinnLib's `auto`) | sizes each channel's FIFO at the folding before it |
 | `step_baseline_choices` | none | sets every value not pinned back to its baseline |
