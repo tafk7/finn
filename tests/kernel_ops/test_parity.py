@@ -59,18 +59,14 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_pacing import FREE
 from finn.custom_op.kernels.base import write_target
 from finn.custom_op.kernels.shell import configured_root, persist, shell_root
-from finn.harness.ops import (
-    Disagreement,
-    boundary_inputs,
-    check_parity,
-    graph_inputs,
-)
+from finn.harness.ops import Disagreement, check_parity
 from finn.harness.points import Covering, covering
 from finn.harness.reference import platform_rows
 from finn.kernels.configure import commit
 from finn.kernels.target import DspBlock, Target
 from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.cut import BaselineChoices
+from finn.util.draws import boundary_inputs, graph_inputs
 from kernel_ops.models import TARGET, matmul_model, thresholding_model
 
 # -- the models ------------------------------------------------------------------------

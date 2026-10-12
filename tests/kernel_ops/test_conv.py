@@ -16,8 +16,8 @@ reaches the hardware as its image channel's reorder, and CNV's convolutions conv
   (SIMD channels a beat) is one edge whose plan is the window's reorder, after a width
   conversion where PE and SIMD differ; in XSim the two compute what their
   ``execute_node`` do.
-- CNV_W2A2 (the BNN-PYNQ CNV at two bits, its weights from the torch hub cache, as
-  ``kernel_ops.tfc`` takes TFC) through graph preparation and ``ToKernelOps``: each of
+- CNV_W2A2 (``kernel_ops.cnv``, prepared once a run: ``conftest.py``'s
+  ``cnv_streamlined``) through ``ToKernelOps``: each of
   its six ``Im2Col`` and ``MatMul`` pairs converts to one Conv, and the host
   nodes between KernelOps are the two max pools, the flatten's Transpose and its
   Reshape.
@@ -37,26 +37,21 @@ from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 
-from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_steps import AddPrePostProcessingOptions
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.dataflow.traversal import vector_major
-from finn.harness.ops import boundary_inputs, check_parity
-from finn.platform import TargetRequest
+from finn.harness.ops import check_parity
 from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
 from finn.transformation.kernels.cut import BaselineChoices
+from finn.util.draws import boundary_inputs
 from kernel_ops.models import convert
 from kernel_ops.specs import conv
 from kernel_ops.specs.base import GENERAL, source
 from kernel_ops.test_networks import config
-from kernel_ops.tfc import PREPROCESSING, ULTRA96, run_steps
-
-CNV_SHAPE = (1, 3, 32, 32)
-CNV_EXPORT = "cnv_w2a2.onnx"
+from kernel_ops.tfc import ULTRA96, run_steps
 
 
 def test_the_kernel_op_conv_and_onnxs_conv_never_resolve_to_each_other() -> None:
@@ -196,44 +191,12 @@ def test_a_window_inside_the_partition_computes_in_xsim_what_its_kernel_ops_comp
     )
 
 
-def cnv_exported(directory: Path) -> ModelWrapper:
-    """CNV_W2A2 as Brevitas exports it (QONNX, opset 13) into ``directory``, and beside it
-    its preprocessing (``kernel_ops.tfc.PREPROCESSING``), as ``kernel_ops.tfc.exported``
-    exports TFC."""
-    import torch  # noqa: PLC0415
-    from brevitas.export import export_qonnx  # type: ignore[import-untyped]  # noqa: PLC0415
-
-    from finn.util.pytorch import ToTensor  # noqa: PLC0415
-    from finn.util.test import get_test_model_trained  # noqa: PLC0415
-
-    network = directory / CNV_EXPORT
-    directory.mkdir(parents=True, exist_ok=True)
-    trained = get_test_model_trained("CNV", 2, 2)  # type: ignore[no-untyped-call]
-    export_qonnx(trained, torch.randn(CNV_SHAPE), network, opset_version=13)
-    preprocessing = ToTensor()  # type: ignore[no-untyped-call]
-    export_qonnx(preprocessing, torch.randn(CNV_SHAPE), directory / PREPROCESSING, opset_version=13)
-    return ModelWrapper(str(network))
-
-
 @pytest.mark.slow
-def test_cnvs_six_convolutions_each_convert_to_one_conv(tmp_path: Path) -> None:
+def test_cnvs_six_convolutions_each_convert_to_one_conv(cnv_streamlined: Path) -> None:
     """CNV_W2A2 prepared as its build states it (the preprocessing merged, the input
-    UINT8, the top label selected; the equivalence check off, as the conversion is what
-    is checked), then ``ToKernelOps`` for Ultra96 at 5 ns in the Zynq shell."""
-    settings = DataflowBuildConfig(
-        output_dir=str(tmp_path / "output"),
-        target=TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq"),
-        step_options={
-            "step_add_pre_post_processing": AddPrePostProcessingOptions(
-                preprocessing=str(tmp_path / PREPROCESSING), input_datatype="UINT8", topk=1
-            )
-        },
-        verify_steps=[],
-        enable_build_pdb_debug=False,
-        save_intermediate_models=False,
-        steps=["phase_prepare_model"],
-    )
-    prepared = run_steps(cnv_exported(tmp_path), settings)
+    UINT8, the top label selected), then ``ToKernelOps`` for Ultra96 at 5 ns in the Zynq
+    shell."""
+    prepared = ModelWrapper(str(cnv_streamlined))
     conversion = ToKernelOps(ULTRA96)
     model = prepared.transform(conversion)
     windowed = [outcome for outcome in conversion.outcomes if outcome.op == "Conv"]

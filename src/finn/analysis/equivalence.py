@@ -1,20 +1,21 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Graph preparation's equivalence with the export, and the soundness of the prepared
-graph's annotations on what it computes, sampled.
+"""A prepared graph's equivalence with its export, and the soundness of its annotations
+on what it computes, sampled: an analysis pass.
 
-Preparation may change the network's function only where it says so: its inputs and
-outputs (a preprocessing model merged ahead, a label select appended) and its declared
-deviations (``DEVIATIONS``). So the reference is the export with the import and the
-inputs and outputs alone applied (``finn.transformation.prepare.reference``), executed
-by qonnx, Quant nodes and all; the prepared graph must compute the same outputs,
-element for element, on draws from its input's annotation (``drawn_inputs``: extremes,
-random, corners). An output element that differs passes only where the predicate of a
-declared deviation explains it (``Explanation``, keyed by its code); the predicates are
-the caller's, and without them every difference is found (``equivalence-unexplained``,
-a rejection: the check's equivalence is false there). What a finding stops is the
-caller's: the kernel gate fails on any. No build step runs this check.
+``model.analysis(equivalence_with(reference, explains))`` checks ``model``, the prepared
+graph, against ``reference``, the export with its inputs and outputs as the build states
+them (the caller builds it; the tests with ``finn.transformation.prepare.reference``),
+and returns an ``Equivalence``. Preparation may change the network's function only
+where it says so: its inputs and outputs (a preprocessing model merged ahead, a label
+select appended) and its declared deviations (``DEVIATIONS``). So both graphs are run
+by qonnx, the reference's Quant nodes and all, on draws from the prepared graph's input
+annotation (``finn.util.draws.drawn_inputs``: extremes, random, corners), and must
+compute the same outputs, element for element. An element that differs passes only
+where the predicate of a declared deviation explains it (``Explanation``, keyed by its
+code); the predicates are the caller's, and without them every difference is found
+(``equivalence-unexplained``, a rejection). What a finding stops is the caller's.
 
 Both graphs run with qonnx's sanitization off (``SANITIZE_QUANT_TENSORS=0``), so
 that rounding an integer-annotated tensor cannot hide a value that is not an integer;
@@ -24,20 +25,19 @@ own annotation is wrong, and the kernels sized from it would be.
 
 **The export's own rounding** (``export_rounds``). The prepared graph holds its integer
 regions exactly (``finn.transformation.prepare.containers``); the export computes them
-in float32, as the network was trained.
-The reference runs once more with every float32 tensor held in float64
-(``finn.transformation.prepare.containers.widened``, a Cast where an op computes in
-float32 alone); a tensor whose values are integers there and differ in float32, its
-producer's inputs agreeing, is where the export rounds and the prepared graph does
-not. Each is named (``export-rounds``, a limitation): it explains a difference, and
-fails nothing.
+in float32, as the network was trained. The reference runs once more with every
+float32 tensor held in float64 (``finn.transformation.prepare.containers.widened``, a
+Cast where an op computes in float32 alone); a tensor whose values are integers there
+and differ in float32, its producer's inputs agreeing, is where the export rounds and
+the prepared graph does not. Each is named (``export-rounds``, a limitation): it
+explains a difference, and fails nothing.
 
 That run needs every op of the widened export in float64, and ONNX Runtime has no
 float64 implementation of some (Conv). Each standard op that reads or writes a float64
 tensor there is tried first, as qonnx runs it, a session of the one node
 (``float64_refused``); if ONNX Runtime refuses one, the float64 run is skipped, not run
 narrower, and one limitation names the ops and why (``export-rounds-unchecked``):
-where the export rounds is not known. The rest of the check runs as before.
+where the export rounds is not known. The rest of the analysis runs.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -61,9 +61,8 @@ from qonnx.custom_op.registry import is_custom_op
 
 from finn.core.containers import container
 from finn.core.space import Finding, FindingKind
-from finn.harness.orders import Integers
-from finn.harness.reference import as_held, drawn_inputs
 from finn.transformation.prepare.containers import NARROW_FLOATS, WIDE, widened
+from finn.util.draws import Integers, as_held, drawn_inputs
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -96,7 +95,7 @@ DEVIATIONS: Mapping[str, str] = MappingProxyType(
 )
 
 SEEDS = 4
-"""The seeds a check draws from unless told otherwise: three draws each."""
+"""The seeds the analysis draws from unless told otherwise: three draws each."""
 
 
 @dataclass(frozen=True)
@@ -180,8 +179,8 @@ def unexplained(draw: Draw, explains: Mapping[str, Explanation]) -> list[Finding
                     "equivalence-unexplained",
                     f"{computed_item.name}: {int(differs.sum())} values differ from the "
                     f"export's and no predicate explains them; first at {first}: the export "
-                    f"{expected[first]}, the prepared graph {computed[first]} (the phase "
-                    f"declares {declared}; their predicates are given: "
+                    f"{expected[first]}, the prepared graph {computed[first]} (preparation "
+                    f"declares {declared}; the predicates given: "
                     f"{', '.join(explains) or 'none'})",
                     output=computed_item.name,
                     differing=int(differs.sum()),
@@ -331,55 +330,57 @@ def export_rounds(reference: ModelWrapper, wide: ModelWrapper, draw: Draw) -> li
     return found
 
 
-@dataclass(frozen=True)
-class Equivalence:
-    """The check's result: how many draws ran, the findings (none: equivalent up to the
-    explained deviations, and sound, on every draw), and where the export itself rounds
-    (``rounds``: ``export-rounds`` limitations, each tensor once; or, where the float64
-    run cannot run, the one ``export-rounds-unchecked`` limitation naming why)."""
+class Equivalence(TypedDict):
+    """The analysis's result: how many draws ran (``draws``); the ``findings`` (none:
+    equivalent up to the explained deviations, and sound, on every draw), each once, at
+    its first draw; and where the export itself rounds (``rounds``: ``export-rounds``
+    limitations, each tensor once; or, where the float64 run cannot run, the one
+    ``export-rounds-unchecked`` limitation naming why)."""
 
     draws: int
     findings: tuple[Finding, ...]
-    rounds: tuple[Finding, ...] = ()
+    rounds: tuple[Finding, ...]
 
 
-def check_equivalence(
+def equivalence_with(
     reference: ModelWrapper,
-    prepared: ModelWrapper,
     explains: Mapping[str, Explanation] = EMPTY,
     seeds: int = SEEDS,
-) -> Equivalence:
-    """The prepared graph against the ``reference`` (the export, its inputs and outputs
-    applied) on each of ``seeds`` seeds' three draws from the prepared graph's input
-    annotation: the outputs (``unexplained``) and the annotations' soundness
-    (``unsound``), each finding once, at its first draw; where the export rounds
-    (``export_rounds``), unless ONNX Runtime cannot run the export in float64
-    (``float64_refused``: the run is skipped, and named). ``explains`` may name declared
-    deviations only (``DEVIATIONS``)."""
+) -> Callable[[ModelWrapper], Equivalence]:
+    """The analysis of a prepared graph against ``reference`` (the export, its inputs and
+    outputs applied) on each of ``seeds`` seeds' three draws from the prepared graph's
+    input annotation, the differences ``explains`` explains passing. ``explains`` may
+    name declared deviations only (``DEVIATIONS``)."""
     undeclared = sorted(set(explains) - set(DEVIATIONS))
     if undeclared:
-        raise ValueError(f"no deviation of the phase is named {', '.join(undeclared)}")
-    found: dict[tuple[str, Any], Finding] = {}
-    rounds: dict[str, Finding] = {}
-    wide = in_float64(reference)
-    refused = float64_refused(wide)
-    draws = 0
-    for seed in range(seeds):
-        for inputs in drawn_inputs(prepared, seed):
-            draw = observe(reference, prepared, inputs)
-            draws += 1
-            for finding in (*unexplained(draw, explains), *unsound(draw)):
-                key = (
-                    finding.code,
-                    dict(finding.details).get("output", dict(finding.details).get("tensor")),
-                )
-                found.setdefault(key, finding)
-            if refused:
-                continue
-            for finding in export_rounds(reference, wide, draw):
-                rounds.setdefault(str(dict(finding.details)["tensor"]), finding)
-    skipped = (_unchecked(refused),) if refused else ()
-    return Equivalence(draws, tuple(found.values()), (*rounds.values(), *skipped))
+        raise ValueError(f"preparation declares no deviation named {', '.join(undeclared)}")
+
+    def equivalence(prepared: ModelWrapper) -> Equivalence:
+        found: dict[tuple[str, Any], Finding] = {}
+        rounds: dict[str, Finding] = {}
+        wide = in_float64(reference)
+        refused = float64_refused(wide)
+        draws = 0
+        for seed in range(seeds):
+            for inputs in drawn_inputs(prepared, seed):
+                draw = observe(reference, prepared, inputs)
+                draws += 1
+                for finding in (*unexplained(draw, explains), *unsound(draw)):
+                    details = dict(finding.details)
+                    where = details.get("output", details.get("tensor"))
+                    found.setdefault((finding.code, where), finding)
+                if refused:
+                    continue
+                for finding in export_rounds(reference, wide, draw):
+                    rounds.setdefault(str(dict(finding.details)["tensor"]), finding)
+        skipped = (_unchecked(refused),) if refused else ()
+        return {
+            "draws": draws,
+            "findings": tuple(found.values()),
+            "rounds": (*rounds.values(), *skipped),
+        }
+
+    return equivalence
 
 
 __all__ = [
@@ -389,9 +390,10 @@ __all__ = [
     "Draw",
     "Equivalence",
     "Explanation",
-    "check_equivalence",
+    "equivalence_with",
     "export_rounds",
     "float64_refused",
+    "in_float64",
     "unexplained",
     "unsound",
 ]

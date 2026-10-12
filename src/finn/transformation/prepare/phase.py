@@ -345,7 +345,7 @@ def census(before: ModelWrapper, after: ModelWrapper) -> dict[str, Any]:
 
 
 def reference(export: ModelWrapper, options: GraphPreparation) -> ModelWrapper:
-    """What the prepared graph must compute: the ``export`` with P0 and P1 alone
-    applied, its Quant nodes and float arithmetic as exported, its inputs and outputs
-    as the build states them. The phase's equivalence check executes it."""
+    """What the prepared graph must compute: the ``export`` imported, its inputs and
+    outputs as the build states them, nothing else applied (its Quant nodes and float
+    arithmetic as exported). ``finn.analysis.equivalence`` checks against it."""
     return io_explicit(imported(export, options), options)

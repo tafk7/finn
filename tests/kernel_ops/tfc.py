@@ -122,8 +122,9 @@ def run_steps(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
 
 
 def prepared(export: ModelWrapper, directory: Path) -> ModelWrapper:
-    """``export``, TFC exported into ``directory`` (``exported``), through the builder's
-    graph-preparation phase (``phase_prepare_model``) as its build states it: the
+    """``export``, exported into ``directory`` with its preprocessing beside it (TFC by
+    ``exported``, or CNV by ``kernel_ops.cnv.exported``), through the builder's
+    graph-preparation phase (``phase_prepare_model``) as TFC's build states it: the
     streamlined graph. The phase's report goes under ``directory / "output"``."""
     return run_steps(export, preparation_config(directory, steps=["phase_prepare_model"]))
 

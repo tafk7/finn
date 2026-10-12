@@ -37,7 +37,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
     src/finn/core/containers.py src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
-    src/finn/transformation/prepare \
+    src/finn/transformation/prepare src/finn/analysis src/finn/util/draws.py \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
@@ -51,7 +51,8 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
 # finn.builder's kernel path: its configuration, its checks, phases
 # and steps, the ip shell's testbench and the resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
-    -p finn.transformation.kernels -p finn.transformation.prepare -p finn.harness \
+    -p finn.transformation.kernels -p finn.transformation.prepare -p finn.analysis -p finn.harness \
+    -m finn.util.draws \
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
     -m finn.core.rtlsim_pacing -m finn.core.containers -m finn.core.onnx_exec \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.toolchain.launcher \

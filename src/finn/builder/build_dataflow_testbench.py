@@ -50,12 +50,12 @@ from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.traversal import pack
-from finn.harness.ops import graph_inputs
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.toolchain import xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, ToolUnavailable, run_process
 from finn.transformation.kernels.package import boundary_facts, free_side
+from finn.util.draws import graph_inputs
 
 #: The directory of the testbench, beside the packaged IP.
 TESTBENCH_DIR = "testbench"

@@ -36,17 +36,13 @@ build cuts it, against ``execute_onnx(model, inputs)``.
 
 A test may state ``reference`` in place of the oracle, an integer reference of
 its own. ``finn.harness.reference`` checks a KernelOp's reference against ONNX;
-here the reference is what the hardware must compute.
-
-``boundary_inputs`` draws the inputs from each graph input's datatype: random
-integers of its range, seeded, and its extremes, the first row (the last axis's
-vector) all its least value and the second all its greatest; one row holds both.
+here the reference is what the hardware must compute. A test draws the inputs from
+the graph's annotations (``finn.util.draws.boundary_inputs``).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import prod
 from pathlib import Path
 from typing import Any
 
@@ -57,44 +53,20 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import WordsDiffer
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import STALLED, Pacing
-from finn.custom_op.kernels.base import datatype, kernel_op
-from finn.custom_op.kernels.base import shape as tensor_shape
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import pack
-from finn.harness.orders import Integers, Reference, Stream, decode
+from finn.harness.orders import Reference, Stream, decode
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import free_side
+from finn.util.draws import Integers
 
 
 class Disagreement(AssertionError):
     """The oracle's outputs are not values the hardware can present: not integers, or
     outside the boundary's element. An ``AssertionError``: parity fails."""
-
-
-def graph_inputs(model: ModelWrapper) -> list[str]:
-    """The graph's inputs that are no initializer, in order: the boundary's inputs."""
-    initializers = {tensor.name for tensor in model.graph.initializer}
-    return [item.name for item in model.graph.input if item.name not in initializers]
-
-
-def boundary_inputs(model: ModelWrapper, seed: int) -> dict[str, Integers]:
-    """Each graph input's values: random integers of its datatype, seeded, with its
-    extremes in its first two rows (module docstring)."""
-    rng = np.random.default_rng(seed)
-    found = {}
-    for name in graph_inputs(model):
-        low, high = ordinary_integer_bounds(datatype(model, name, name))
-        shape = tensor_shape(model, name, name)
-        values = rng.integers(low, high + 1, size=shape, dtype=np.int64)
-        rows = values.reshape(prod(shape[:-1]), shape[-1])
-        if rows.shape[0] >= 2:
-            rows[0], rows[1] = low, high
-        else:
-            rows[0, 0], rows[0, -1] = low, high
-        found[name] = values
-    return found
 
 
 def executed(model: ModelWrapper, inputs: Mapping[str, Integers]) -> dict[str, Any]:
@@ -189,10 +161,7 @@ def check_parity(
 
 __all__ = [
     "Disagreement",
-    "Integers",
     "Reference",
-    "boundary_inputs",
     "check_parity",
     "executed",
-    "graph_inputs",
 ]

@@ -35,9 +35,10 @@ from qonnx.transformation.infer_shapes import InferShapes
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.partition.kernel_partitions import partition_body
-from finn.harness.ops import boundary_inputs, check_parity, graph_inputs
+from finn.harness.ops import check_parity
 from finn.harness.reference import OpSpec
 from finn.platform import TargetRequest
+from finn.util.draws import boundary_inputs, graph_inputs
 from kernel_ops.models import TARGET
 from kernel_ops.specs import conv, matmul, thresholding
 from kernel_ops.tfc import run_steps

@@ -5,9 +5,12 @@
 export to the streamlined graph the kernel path converts.
 
 TFC_W2A2 through the builder's phase from its export: the graph its fixture reads,
-equivalent to the export, and unchanged when prepared again. On hand-made graphs: the
-widening of integer regions to float64, and the equivalence check with preparation's
-declared deviations, whose predicates are this file's (``EXPLAINS``).
+equivalent to the export (``finn.analysis.equivalence``), its initializers held by their
+annotations (``finn.analysis.initializers``), and unchanged when prepared again; CNV_W2A2
+equivalent and held alike (slow: preparing CNV takes about a minute). On
+hand-made graphs: the widening of integer regions to float64, and the equivalence
+analysis with preparation's declared deviations, whose predicates are this file's
+(``EXPLAINS``).
 """
 
 from __future__ import annotations
@@ -30,6 +33,15 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
+from finn.analysis.equivalence import (
+    DEVIATIONS,
+    Draw,
+    Explanation,
+    equivalence_with,
+    float64_refused,
+    in_float64,
+)
+from finn.analysis.initializers import annotated_initializers
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
@@ -37,14 +49,6 @@ from finn.builder.build_dataflow_steps import PREPARATION_REPORT
 from finn.core.containers import container, exact_up_to, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
-from finn.harness.preparation import (
-    DEVIATIONS,
-    Draw,
-    Explanation,
-    check_equivalence,
-    float64_refused,
-    in_float64,
-)
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.prepare import (
     RECIPE_TRANSFORMS,
@@ -183,8 +187,9 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
 ) -> None:
     export = ModelWrapper(str(tfc_directory / EXPORT))
     made = ModelWrapper(str(tfc_streamlined))
-    checked = check_equivalence(reference(export, preparation(tfc_directory)), made, EXPLAINS)
-    assert (checked.draws, checked.findings, checked.rounds) == (12, (), ())
+    reference_graph = reference(export, preparation(tfc_directory))
+    checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
+    assert checked == {"draws": 12, "findings": (), "rounds": ()}
     # The streamlined TFC: the input flatten, four MultiThreshold and MatMul layers, the
     # label select; INT2 activations, and each MatMul's exact range as qonnx's interval
     # rule states it (G3a, qonnx b7bc357): INT10 for the 784-wide first layer, INT8 after.
@@ -217,6 +222,38 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
         TensorProto.INT64,  # the input flatten's shape, TopK's k and its indices
     }
     assert widened_regions(made) == set()
+
+
+def test_tfc_prepared_initializers_hold_their_annotations(tfc_streamlined: Path) -> None:
+    """TFC's integer-annotated initializers are its four MatMuls' weights (INT2), and each
+    annotation holds its values; the thresholds are unannotated."""
+    made = ModelWrapper(str(tfc_streamlined))
+    held = made.analysis(annotated_initializers)
+    weights = [node.input[1] for node in made.graph.node if node.op_type == "MatMul"]
+    assert sorted(held["checked"]) == sorted(weights)
+    assert {made.get_tensor_datatype(name) for name in weights} == {DataType["INT2"]}
+    assert held["findings"] == ()
+
+
+@pytest.mark.slow
+def test_cnv_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
+    cnv_export: Path, cnv_streamlined: Path
+) -> None:
+    """CNV_W2A2 as TFC: equivalent to its export on every draw, its annotations sound, and
+    its integer-annotated initializers (its nine MatMuls' weights, INT2) held. ONNX
+    Runtime has no float64 Conv, so where the export rounds is not checked, and named."""
+    export = ModelWrapper(str(cnv_export))
+    made = ModelWrapper(str(cnv_streamlined))
+    reference_graph = reference(export, preparation(cnv_export.parent))
+    checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
+    assert (checked["draws"], checked["findings"]) == (12, ())
+    ((code, details),) = [(f.code, dict(f.details)) for f in checked["rounds"]]
+    assert (code, details["ops"]) == ("export-rounds-unchecked", ("Conv",))
+    held = made.analysis(annotated_initializers)
+    weights = [node.input[1] for node in made.graph.node if node.op_type == "MatMul"]
+    assert len(weights) == 9 and sorted(held["checked"]) == sorted(weights)
+    assert {made.get_tensor_datatype(name) for name in weights} == {DataType["INT2"]}
+    assert held["findings"] == ()
 
 
 def test_tfc_prepared_again_is_unchanged_and_states_no_target(
@@ -542,10 +579,10 @@ def test_where_the_export_rounds_its_integers_the_equivalence_names_the_tensor()
         {"w": "INT8"},
     ).transform(InferDataTypes())  # type: ignore[no-untyped-call]
     made = exact_containers(made)
-    checked = check_equivalence(export, made, seeds=1)
-    assert checked.findings == ()
+    checked = made.analysis(equivalence_with(export, seeds=1))
+    assert checked["findings"] == ()
     ((tensor, kind),) = [
-        (dict(f.details)["tensor"], f.kind) for f in checked.rounds if f.code == "export-rounds"
+        (dict(f.details)["tensor"], f.kind) for f in checked["rounds"] if f.code == "export-rounds"
     ]
     assert (tensor, kind) == ("y", FindingKind.LIMITATION)
 
@@ -563,9 +600,9 @@ def test_an_export_onnx_runtime_cannot_run_in_float64_skips_that_run_named() -> 
         {"w": "INT8"},
     )
     assert float64_refused(in_float64(export)) == {"Conv": ("Conv_0",)}
-    checked = check_equivalence(export, copy.deepcopy(export), seeds=1)
-    assert (checked.draws, checked.findings) == (3, ())
-    ((code, kind, details),) = [(f.code, f.kind, dict(f.details)) for f in checked.rounds]
+    checked = copy.deepcopy(export).analysis(equivalence_with(export, seeds=1))
+    assert (checked["draws"], checked["findings"]) == (3, ())
+    ((code, kind, details),) = [(f.code, f.kind, dict(f.details)) for f in checked["rounds"]]
     assert (code, kind) == ("export-rounds-unchecked", FindingKind.LIMITATION)
     assert details == {"ops": ("Conv",), "nodes": ("Conv_0",)}
 
@@ -597,7 +634,7 @@ def test_a_recipe_accepts_the_transform_thresholdings_hint_names() -> None:
     assert RECIPE_TRANSFORMS[LOWERING] is ExtractMultiThresholdScaleBias
 
 
-# -- equivalence and the deviations' predicates --------------------------------------------
+# -- the equivalence analysis and the deviations' predicates -------------------------------
 
 
 def test_a_difference_no_deviation_explains_fails_the_equivalence() -> None:
@@ -610,9 +647,9 @@ def test_a_difference_no_deviation_explains_fails_the_equivalence() -> None:
             {"y": "INT8"},
         )
 
-    assert check_equivalence(adding(1.0), adding(1.0), EXPLAINS).findings == ()
-    (found,) = check_equivalence(adding(1.0), adding(2.0), EXPLAINS).findings
-    assert found.code == "equivalence-unexplained" and "the phase declares" in found.message
+    assert adding(1.0).analysis(equivalence_with(adding(1.0), EXPLAINS))["findings"] == ()
+    (found,) = adding(2.0).analysis(equivalence_with(adding(1.0), EXPLAINS))["findings"]
+    assert found.code == "equivalence-unexplained" and "preparation declares" in found.message
 
 
 def test_an_integer_annotation_the_prepared_graph_breaks_on_a_draw_is_unsound() -> None:
@@ -625,7 +662,7 @@ def test_an_integer_annotation_the_prepared_graph_breaks_on_a_draw_is_unsound() 
             {"y": stated},
         )
 
-    (found,) = check_equivalence(adding("FLOAT32"), adding("INT8")).findings
+    (found,) = adding("INT8").analysis(equivalence_with(adding("FLOAT32")))["findings"]
     assert (found.code, dict(found.details)["tensor"]) == ("annotation-unsound", "y")
 
 
@@ -642,10 +679,11 @@ def test_topk_affine_explains_the_values_of_a_label_select_whose_scale_was_dropp
 
     export = selecting([helper.make_node("Mul", ["x", "two"], ["s"], name="Mul_0")])
     made = selecting([helper.make_node("Identity", ["x"], ["s"], name="Identity_0")])
-    assert codes(check_equivalence(export, made).findings) == [
+    assert codes(made.analysis(equivalence_with(export))["findings"]) == [
         ("equivalence-unexplained", FindingKind.REJECTION)
     ]
-    assert check_equivalence(export, made, {"topk-affine": topk_affine}).findings == ()
+    explained = equivalence_with(export, {"topk-affine": topk_affine})
+    assert made.analysis(explained)["findings"] == ()
 
 
 def test_sign_at_zero_explains_a_sign_turned_threshold_at_zero() -> None:
@@ -656,10 +694,11 @@ def test_sign_at_zero_explains_a_sign_turned_threshold_at_zero() -> None:
         ["y"],
         {"t": [[0.0]]},
     )
-    assert codes(check_equivalence(export, made).findings) == [
+    assert codes(made.analysis(equivalence_with(export))["findings"]) == [
         ("equivalence-unexplained", FindingKind.REJECTION)
     ]
-    assert check_equivalence(export, made, {"sign-at-zero": sign_at_zero}).findings == ()
+    explained = equivalence_with(export, {"sign-at-zero": sign_at_zero})
+    assert made.analysis(explained)["findings"] == ()
 
 
 def test_threshold_float32_explains_a_threshold_one_rounding_from_the_exports() -> None:
@@ -668,14 +707,14 @@ def test_threshold_float32_explains_a_threshold_one_rounding_from_the_exports() 
 
     export = thresholding(float(np.nextafter(np.float32(3), np.float32(4))))
     made = thresholding(3.0)
-    assert codes(check_equivalence(export, made).findings) == [
+    assert codes(made.analysis(equivalence_with(export))["findings"]) == [
         ("equivalence-unexplained", FindingKind.REJECTION)
     ]
-    explained = {"threshold-float32": threshold_float32}
-    assert check_equivalence(export, made, explained).findings == ()
+    explained = equivalence_with(export, {"threshold-float32": threshold_float32})
+    assert made.analysis(explained)["findings"] == ()
 
 
 def test_a_predicate_for_no_declared_deviation_is_refused() -> None:
     model = graph([_node("Relu", ["x"])], UNARY, ["y"])
-    with pytest.raises(ValueError, match="no deviation of the phase is named rounding"):
-        check_equivalence(model, model, {"rounding": topk_affine})
+    with pytest.raises(ValueError, match="preparation declares no deviation named rounding"):
+        equivalence_with(model, {"rounding": topk_affine})

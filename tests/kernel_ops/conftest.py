@@ -1,8 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""TFC_W2A2 (``kernel_ops.tfc``) for the tests that only read it, built once a run and
-saved: a test loads its own copy (``ModelWrapper(str(path))``), a module its own (``tfc``)."""
+"""TFC_W2A2 (``kernel_ops.tfc``) and CNV_W2A2 (``kernel_ops.cnv``) for the tests that only
+read them, built once a run and saved: a test loads its own copy
+(``ModelWrapper(str(path))``), a module its own (``tfc``)."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
+from kernel_ops import cnv
 from kernel_ops.tfc import EXPORT, built, exported, kernel_ops, prepared
 
 
@@ -35,6 +37,23 @@ def tfc_streamlined(tfc_cache: Path, tfc_export: Path) -> Path:
     return built(
         tfc_cache / "streamlined.onnx",
         lambda _: prepared(ModelWrapper(str(tfc_export)), tfc_export.parent),
+    )
+
+
+@pytest.fixture(scope="session")
+def cnv_export(tfc_cache: Path) -> Path:
+    """CNV_W2A2 as Brevitas exports it, its preprocessing model beside it
+    (``kernel_ops.cnv.exported``), kept beside TFC's builds."""
+    return built(tfc_cache.parent / "cnv" / "export" / cnv.EXPORT, cnv.exported)
+
+
+@pytest.fixture(scope="session")
+def cnv_streamlined(cnv_export: Path) -> Path:
+    """CNV_W2A2 through the builder's graph-preparation phase, its inputs and outputs as
+    TFC's (``kernel_ops.tfc.prepared``)."""
+    return built(
+        cnv_export.parent.parent / "streamlined.onnx",
+        lambda _: prepared(ModelWrapper(str(cnv_export)), cnv_export.parent),
     )
 
 

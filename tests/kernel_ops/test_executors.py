@@ -51,8 +51,8 @@ from finn.custom_op.partition.kernel_partitions import (
     PARTITION_OP,
     kernel_partition_body,
 )
-from finn.harness.ops import boundary_inputs
 from finn.transformation.kernels.cut import CutKernelPartition, partition_kernel_ops
+from finn.util.draws import boundary_inputs
 from kernel_ops.models import configure_partition, kernel_model, thresholding_model
 
 X = np.array([[-2.0, -1.0, 1.0, 2.0]], dtype=np.float32)
