@@ -17,9 +17,10 @@ conversion step reads the one an earlier run left there, if any.
 from __future__ import annotations
 
 import logging
-import numpy as np
 import os
 from pathlib import Path
+
+import numpy as np
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.onnx_exec import execute_onnx
