@@ -35,6 +35,11 @@ memory: the mapping itself is synthesis's to show.
   itself: exact integer arithmetic, as the hardware's accumulator is, on the oracle's
   integer inputs (``test_matmul_execute_node_is_exact_beyond_float32``). The ONNX side,
   which FINN executes with exact integers too, is ``tests/kernel_ops/test_reference.py``'s.
+- **A wide MatMul**: the spec's INT8 layer over k 2304 with spread weights
+  (``int8-k2304``), at one lean point: PE 3 (every output channel at once) and SIMD 16,
+  so each sum builds over 144 accumulation steps in an INT26 accumulator, 576 compute
+  cycles in all. Beside the extremes' rows, channel 0's greatest and least sums, each odd
+  and past 2**24, where float32 would round them.
 
 The specs of the kernels these ops bind are ``kernels.specs.matmul`` and
 ``kernels.specs.thresholding``.
@@ -64,8 +69,9 @@ from finn.kernels.configure import commit
 from finn.kernels.target import DspBlock, Target
 from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.cut import BaselineChoices
-from finn.util.draws import boundary_inputs, graph_inputs
+from finn.util.draws import Integers, boundary_inputs, graph_inputs
 from kernel_ops.models import TARGET, matmul_model, thresholding_model
+from kernel_ops.specs.matmul import SPREAD
 
 # -- the models ------------------------------------------------------------------------
 
@@ -76,10 +82,11 @@ WEIGHTS = np.array(
 )
 
 
-def matmul(target: Target = TARGET) -> ModelWrapper:
+def matmul(target: Target = TARGET, weights: Any = WEIGHTS, rows: int = ROWS) -> ModelWrapper:
     """x (1, 4, 8) INT8 -> MatMul ``first`` with w (8, 4) INT8, an initializer -> y, built
-    for ``target``."""
-    model = matmul_model(weights=WEIGHTS, x_shape=[1, ROWS, K], annotate=(), infer=False)
+    for ``target``; or x (1, rows, k) with ``weights`` (k, n)."""
+    k = np.shape(weights)[0]
+    model = matmul_model(weights=weights, x_shape=[1, rows, k], annotate=(), infer=False)
     write_target(model, target)
     for name in ("x", "w"):
         model.set_tensor_datatype(name, DataType["INT8"])
@@ -158,6 +165,39 @@ def seed(label: str) -> int:
     return zlib.crc32(label.encode())
 
 
+# -- a wide MatMul ---------------------------------------------------------------------
+
+#: A lean point of the wide layer: all three output channels at once, 16 products a
+#: cycle, so 144 accumulation steps a sum and 576 compute cycles in all, where SIMD 1
+#: takes 9 216 and the covering's full SIMD (2 304 lanes) would make a slow elaboration.
+WIDE_POINT: Mapping[str, object] = {
+    "first.compute.packed.pe": 3,
+    "first.compute.packed.simd": 16,
+    "first.compute.packed.reducer": "tree",
+    "first.compute.packed.compute_pumping": False,
+}
+
+
+def wide() -> ModelWrapper:
+    """x (1, 4, 2304) INT8 -> MatMul ``first`` with the spec's spread weights (2304, 3)
+    INT8 -> y (INT26), at ``WIDE_POINT``."""
+    return persisted(matmul(weights=SPREAD, rows=4), WIDE_POINT)
+
+
+def wide_inputs(model: ModelWrapper) -> dict[str, Integers]:
+    """The seeded draw with the extremes in rows 0 and 1; rows 2 and 3 channel 0's
+    greatest and least sums, each made odd, if it is not, by stepping the first
+    activation one toward zero (its weight is odd)."""
+    inputs = boundary_inputs(model, seed("wide"))
+    rows = inputs["x"][0]
+    up = SPREAD[:, 0] > 0
+    for row, (positive, negative) in ((2, (127, -128)), (3, (-128, 127))):
+        rows[row] = np.where(up, positive, negative)
+        if int(rows[row] @ SPREAD[:, 0]) % 2 == 0:
+            rows[row, 0] -= np.sign(rows[row, 0])
+    return inputs
+
+
 # -- offline ---------------------------------------------------------------------------
 
 
@@ -209,6 +249,23 @@ def test_matmul_execute_node_is_exact_beyond_float32() -> None:
     assert abs(exact).max() > 2**24
     assert not np.array_equal(np.matmul(x.astype(np.float32), weights.astype(np.float32)), exact)
     assert np.array_equal(execute_onnx(model, {"x": x})["y"], exact)
+
+
+def test_the_wide_matmul_execute_node_is_exact_on_its_parity_inputs() -> None:
+    """The wide layer's reference on its parity inputs is the integer product: channel 0's
+    sums in rows 2 and 3 odd and past 2**24 either way, where float32 rounds them, and the
+    output annotated INT26, the accumulator the hardware carries."""
+    model = wide()
+    inputs = wide_inputs(model)
+    x = inputs["x"]
+    assert (x[0, 0] == -128).all() and (x[0, 1] == 127).all()
+    assert x.min() >= -128 and x.max() <= 127
+    exact = x @ SPREAD
+    sums = exact[0, 2:, 0]
+    assert sums[0] > 2**24 and sums[1] < -(2**24) and (sums % 2 == 1).all(), sums
+    assert (sums.astype(np.float32).astype(np.int64) != sums).all()
+    assert model.get_tensor_datatype("y") == DataType["INT26"]
+    assert np.array_equal(execute_onnx(model, inputs)["y"], exact)
 
 
 def test_an_oracle_value_the_boundary_cannot_present_is_a_disagreement(tmp_path: Path) -> None:
@@ -276,6 +333,13 @@ def test_the_hardware_computes_what_its_kernel_op_computes_on_versal(
     build, _ = MODELS[name]
     model = persisted(build(target=VERSAL), ON_VERSAL[name])
     check_parity(model, tmp_path, inputs=boundary_inputs(model, seed(name)), label=name)
+
+
+@requires_xsim
+def test_a_wide_matmul_computes_what_its_kernel_op_computes(tmp_path: Path) -> None:
+    """The INT8 layer over k 2304, its sums past 2**24, at ``WIDE_POINT``."""
+    model = wide()
+    check_parity(model, tmp_path, inputs=wide_inputs(model), label="wide")
 
 
 @requires_xsim
