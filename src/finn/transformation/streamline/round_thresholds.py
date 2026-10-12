@@ -30,122 +30,61 @@
 import numpy as np
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import InferDataTypes
 
 
 class RoundAndClipThresholds(Transformation):
-    """For MultiThreshold, Thresholding, MVAU, and VVAU nodes operating on integer inp/accumulators,
-    round up (ceil) threshold values to the nearest integer and clip to valid range.
-    Stores the thresholds in a float64 container (this is separate from the quantization
-    annotation): ONNX gives thresholds no type, and float64 holds every integer threshold
-    up to 2**53 exactly, where float32 rounds past 2**24. Runs InferDataTypes() afterward
-    to propagate any changes to the quantization data types."""
+    """Rounds and clips the thresholds of each MultiThreshold whose input is an
+    integer or fixed-point type, keeping every count it computes.
+
+    The thresholds are rounded up to the input type's next representable value,
+    clipped to ``[min, max + step]`` of that type, and annotated with the smallest
+    type that holds them. They are stored in float64: ONNX gives thresholds no type,
+    and float64 holds every integer threshold up to 2**53 exactly, where float32
+    rounds past 2**24. InferDataTypes runs afterwards to carry the new annotations
+    through the graph."""
 
     def apply(self, model: ModelWrapper):  # noqa
-        graph = model.graph
         graph_modified = False
-        for index, node in enumerate(graph.node):
-            op_type = node.op_type
-            if op_type == "MultiThreshold" or op_type.startswith("Thresholding"):
-                thresholds = model.get_initializer(node.input[1])
-                if thresholds is None:
-                    continue
-                dtype = model.get_tensor_datatype(node.input[0])
-                # This transformation only applies to thresholding operations
-                # operating on integer inputs
-                if not (dtype.is_integer() or dtype.is_fixed_point()):
-                    continue
-                if dtype.is_integer():
-                    # Round thresholds up to nearest integer and clip thresholds
-                    # outside the input range, in float64, which holds them exactly
-                    new_thresholds = np.clip(
-                        np.ceil(thresholds.astype(np.float64)), dtype.min(), dtype.max() + 1
-                    )
-                    # Insert the rounded and clipped thresholds back into the model
-                    model.set_initializer(node.input[1], new_thresholds)
-                    # The rounded and clipped thresholds now fit into a data type
-                    # that is one bit bigger than the input datatype
-                    # Determine new max_value
-                    max_val = dtype.max() + 1
-                    if not dtype.signed():
-                        tdt = DataType.get_smallest_possible(max_val)
-                    else:
-                        tdt = DataType.get_smallest_possible(-(max_val) - 1)
-                elif dtype.is_fixed_point():
-                    # Round thresholds up to nearest representable value
-                    # of the input datatype
-                    new_thresholds = np.clip(
-                        np.ceil(thresholds.astype(np.float64) / dtype.scale_factor())
-                        * dtype.scale_factor(),
-                        dtype.min(),
-                        dtype.max() + dtype.scale_factor(),
-                    )
-                    model.set_initializer(node.input[1], new_thresholds)
-                    # find smallest underlying integer representation for the thresholds
-                    max_val = dtype.max() / dtype.scale_factor() + 1
-                    tdt_int = DataType.get_smallest_possible(-max_val - 1)
-                    tdt = DataType[
-                        f"FIXED<{tdt_int.bitwidth()},{tdt_int.bitwidth() - dtype.frac_bits()}>"
-                    ]
-
-                model.set_tensor_datatype(node.input[1], tdt)
-                # If hw op we need to set the weight data type attribute as well
-                if op_type.startswith("Thresholding"):
-                    inst = getCustomOp(node)
-                    inst.set_nodeattr("weightDataType", tdt.name)
-                # ones
-                if np.any(new_thresholds != thresholds):
-                    # Track the graph has been modified to inform the transform
-                    # container to exhaustively repeat this transformation until
-                    # no changes are possible
-                    graph_modified = True
-                    # Immediately exit here to propagate the data type changes
-                    # before considering the next node
-                    break
-
-            # Handle MVAU and VVAU nodes with thresholds (noActivation=0)
-            elif op_type.startswith("MVAU") or op_type.startswith("VVAU"):
-                inst = getCustomOp(node)
-                # Only process if node has thresholds (noActivation=0)
-                if inst.get_nodeattr("noActivation") == 0 and len(node.input) > 2:
-                    thresholds = model.get_initializer(node.input[2])
-                    if thresholds is None:
-                        continue
-
-                    # Get accumulator datatype (should be set by MinimizeAccumulatorWidth)
-                    acc_dt = DataType[inst.get_nodeattr("accDataType")]
-
-                    # This transformation only applies to integer accumulators
-                    if not acc_dt.is_integer():
-                        continue
-
-                    # Round thresholds up to nearest integer and clip to accumulator range
-                    new_thresholds = np.clip(
-                        np.ceil(thresholds.astype(np.float64)), acc_dt.min(), acc_dt.max() + 1
-                    )
-                    # Insert the rounded and clipped thresholds back into the model
-                    model.set_initializer(node.input[2], new_thresholds)
-                    # The rounded and clipped thresholds now fit into a data type
-                    # that is one bit bigger than the accumulator datatype
-                    # Determine new max_value
-                    max_val = acc_dt.max() + 1
-                    if not acc_dt.signed():
-                        tdt = DataType.get_smallest_possible(max_val)
-                    else:
-                        tdt = DataType.get_smallest_possible(-(max_val) - 1)
-
-                    model.set_tensor_datatype(node.input[2], tdt)
-
-                    if np.any(new_thresholds != thresholds):
-                        # Track the graph has been modified to inform the transform
-                        # container to exhaustively repeat this transformation until
-                        # no changes are possible
-                        graph_modified = True
-                        # Immediately exit here to propagate the data type changes
-                        # before considering the next node
-                        break
+        for node in model.graph.node:
+            if node.op_type != "MultiThreshold":
+                continue
+            thresholds = model.get_initializer(node.input[1])
+            if thresholds is None:
+                continue
+            dtype = model.get_tensor_datatype(node.input[0])
+            if dtype.is_integer():
+                new_thresholds = np.clip(
+                    np.ceil(thresholds.astype(np.float64)), dtype.min(), dtype.max() + 1
+                )
+                # The clipped thresholds need one bit more than the input type.
+                max_val = dtype.max() + 1
+                if not dtype.signed():
+                    tdt = DataType.get_smallest_possible(max_val)
+                else:
+                    tdt = DataType.get_smallest_possible(-(max_val) - 1)
+            elif dtype.is_fixed_point():
+                new_thresholds = np.clip(
+                    np.ceil(thresholds.astype(np.float64) / dtype.scale_factor())
+                    * dtype.scale_factor(),
+                    dtype.min(),
+                    dtype.max() + dtype.scale_factor(),
+                )
+                max_val = dtype.max() / dtype.scale_factor() + 1
+                tdt_int = DataType.get_smallest_possible(-max_val - 1)
+                tdt = DataType[
+                    f"FIXED<{tdt_int.bitwidth()},{tdt_int.bitwidth() - dtype.frac_bits()}>"
+                ]
+            else:
+                continue
+            model.set_initializer(node.input[1], new_thresholds)
+            model.set_tensor_datatype(node.input[1], tdt)
+            if np.any(new_thresholds != thresholds):
+                # Stop at the first change so the new types propagate before the next
+                # node is considered; the transform is repeated until nothing changes.
+                graph_modified = True
+                break
 
         model = model.transform(InferDataTypes())
         return model, graph_modified
