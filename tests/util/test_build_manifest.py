@@ -4,15 +4,14 @@
 """The build's manifest, ``report/build.json`` (finn.builder.build_dataflow_manifest):
 the index of a run, which a machine reads after the exit code, never the log. It is
 written from the build's start and rewritten as the build goes: each step with its
-phase, status, seconds, reports and their findings, tool runs and their transcripts,
-and verifications; what checking the configuration found; the outcome, by the
-failure's kind. The steps and the tool are fakes; no Vivado."""
+status, seconds, reports and their findings, and tool runs and their transcripts; the
+verdicts; what checking the configuration found; the outcome, by the failure's kind.
+The steps and the tool are fakes; no Vivado."""
 
 import pytest
 
 import json
 import logging
-import numpy as np
 import onnx
 import onnx.helper as oh
 import os
@@ -24,15 +23,14 @@ import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
-    DataflowOutputType,
     VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
-    REPORT,
-    VERIFICATION,
     findings_by_code,
     finn_revision,
+    reported,
+    verdict,
 )
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind, finding_record
@@ -41,8 +39,6 @@ from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 
 pytestmark = pytest.mark.util
-
-_STEPS = logging.getLogger("finn.builder.test_steps")
 
 #: A tool printing Vivado's messages: one warning, one critical warning.
 WARNS = """
@@ -89,13 +85,14 @@ def build_of(tmp_path: Path, steps, **fields) -> tuple[int, dict, DataflowBuildC
 
 
 def step_reports(model, cfg):
-    """Writes a report with two findings of one code, one of another, and says so."""
+    """Writes a report with two findings of one code, one of another, and says so; and
+    a check's verdict, passed."""
     path = Path(cfg.output_dir) / "report" / "checked.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     stated = [finding_record(blocker(code)) for code in ("odd", "odd", "even")]
     path.write_text(json.dumps({"section": {"findings": stated}}))
-    _STEPS.info("wrote it", extra={REPORT: str(path)})
-    _STEPS.info("verified", extra={VERIFICATION: {"name": "a_check", "passed": True}})
+    reported(path)
+    verdict("a_check", True)
     return model
 
 
@@ -142,14 +139,11 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
     steps = {step["name"]: step for step in manifest["steps"]}
     assert list(steps) == ["step_reports", "step_tools", "step_looks"]
     assert all(step["status"] == "completed" for step in steps.values())
-    assert all(step["phase"] is None for step in steps.values())  # no phase lists them
     assert all(step["seconds"] >= 0 for step in steps.values())
-    reported = steps["step_reports"]
-    assert reported["reports"] == [
+    assert steps["step_reports"]["reports"] == [
         {"path": "report/checked.json", "findings": {"even": 1, "odd": 2}}
     ]
-    assert reported["findings"] == {"even": 1, "odd": 2}
-    assert reported["verifications"] == {"a_check": "pass"}
+    assert manifest["verifications"] == {"a_check": "pass"}
     runs = steps["step_tools"]["tools"]
     assert sorted(run["transcript"] for run in runs) == [
         "logs/step_tools/xvlog.2.stdout.log",
@@ -159,12 +153,8 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
         assert (run["tool"], run["status"], run["exit"]) == ("xvlog", "completed", 0)
         assert run["messages"] == {"CRITICAL WARNING": 1, "WARNING": 1}
         assert run["seconds"] >= 0
-    # Upstream's file stays beside it; nothing half-written is left.
-    assert list(json.loads((Path(cfg.output_dir) / "time_per_step.json").read_text())) == [
-        "step_reports",
-        "step_tools",
-        "step_looks",
-    ]
+    # The manifest holds each step's time; nothing half-written is left.
+    assert not (Path(cfg.output_dir) / "time_per_step.json").exists()
     assert sorted(path.name for path in (Path(cfg.output_dir) / "report").iterdir()) == [
         "build.json",
         "checked.json",
@@ -214,45 +204,28 @@ def test_a_failed_step_is_the_outcome_by_its_kind(tmp_path, error, kind):
     failed = manifest["steps"][-1]
     assert (failed["name"], failed["status"]) == ("step_fails", "failed")
     assert failed["seconds"] >= 0
-    # A refusal's findings are the outcome's; the step's are its reports' (none here).
+    # A refusal's findings are the outcome's.
     assert outcome["findings"] == ({"odd": 2, "x": 1} if kind == "refusal" else {})
-    assert failed["findings"] == {}
     assert manifest["steps"][0]["status"] == "completed"
 
 
-def named(name, step):
-    step.__name__ = name
-    return step
+def step_checks(model, cfg):
+    """A check that fails, and the build continues past it."""
+    verdict("a_check", False)
+    return model
 
 
-def test_each_verification_asked_has_a_verdict(tmp_path):
-    """A verification asked is ``not-run`` until it concludes: ``pass`` or ``fail`` by its
-    verdict, ``fail`` when its step fails with a verdict, ``error`` when its step fails
-    otherwise, and ``not-run`` when its step never ran."""
-    np.save(tmp_path / "input.npy", np.zeros((1, 2)))
+def test_a_verdict_is_recorded_from_its_record_only(tmp_path):
+    """``pass`` or ``fail`` as the check's verdict states it; a step that fails concludes
+    no verification: its failure is the outcome's, with its kind."""
     status, manifest, _ = build_of(
         tmp_path,
-        [named("step_verify_partition", raising(SimulationFailed("differs")))],
-        verify_steps=[
-            VerificationStepType.PARTITION_PYTHON,
-            VerificationStepType.STITCHED_IP_TESTBENCH,
-        ],
-        verify_input_npy=str(tmp_path / "input.npy"),
-        generate_outputs=[DataflowOutputType.STITCHED_IP],
-    )
-    assert status == -1
-    assert manifest["verifications"] == {
-        "partition_python": "fail",
-        "stitched_ip_testbench": "not-run",
-    }
-    assert manifest["steps"][0]["verifications"] == {"partition_python": "fail"}
-    assert manifest["steps"][0]["phase"] == "phase_optimize_hardware"
-    _, manifest, _ = build_of(
-        tmp_path,
-        [named("step_verify_partition", raising(ToolUnavailable("xelab", "missing")))],
+        [step_checks, raising(SimulationFailed("differs"))],
         verify_steps=[VerificationStepType.PARTITION_ELABORATION],
     )
-    assert manifest["verifications"] == {"partition_elaboration": "error"}
+    assert status == -1
+    assert manifest["verifications"] == {"a_check": "fail"}
+    assert (manifest["outcome"]["step"], manifest["outcome"]["kind"]) == ("step_fails", "verdict")
 
 
 def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
@@ -266,7 +239,7 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     assert manifest["steps"] == []
     found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
     assert found == [("testbench-output", "rejection"), ("verification-not-run", "limitation")]
-    assert manifest["verifications"] == {"stitched_ip_testbench": "not-run"}
+    assert manifest["verifications"] == {}
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
@@ -281,8 +254,8 @@ def test_an_unknown_step_is_refused_before_the_first(tmp_path):
 
 
 def test_a_caller_quieter_than_info_still_gets_its_manifest(tmp_path, capsys):
-    """The manifest is collected from INFO records; a caller that set FINN's logger to
-    WARNING keeps its log and console at WARNING."""
+    """The manifest is collected from INFO records of its own logger; a caller that set
+    FINN's logger to WARNING keeps its log and console at WARNING."""
     finn = logging.getLogger("finn")
     level = finn.level
     finn.setLevel(logging.WARNING)
@@ -302,3 +275,29 @@ def test_findings_are_counted_at_any_depth_but_inside_a_finding():
     stated["causes"] = [cause]
     report = {"a": [{"findings": [stated]}], "b": {"findings": [stated, stated]}, "c": 1}
     assert findings_by_code(report) == {"top": 3}
+
+
+def test_a_module_logger_a_caller_quiets_drops_nothing_from_the_manifest(tmp_path):
+    """The reports, verdicts and tool runs reach the manifest through one logger whose
+    level the build sets: a caller that quiets the toolchain's and the builder's loggers
+    drops none of them, and gets its own level back after the build."""
+    quieted = [logging.getLogger(name) for name in ("finn.toolchain", "finn.builder")]
+    records = logging.getLogger(launcher.RECORDS.name)
+    levels = [logger.level for logger in quieted]
+    for logger in quieted:
+        logger.setLevel(logging.WARNING)
+    records.setLevel(logging.ERROR)
+    try:
+        status, manifest, _ = build_of(tmp_path, [step_reports, step_tools])
+    finally:
+        assert records.level == logging.ERROR
+        records.setLevel(logging.NOTSET)
+        for logger, level in zip(quieted, levels):
+            logger.setLevel(level)
+    assert status == 0
+    steps = {step["name"]: step for step in manifest["steps"]}
+    assert [report["path"] for report in steps["step_reports"]["reports"]] == [
+        "report/checked.json"
+    ]
+    assert manifest["verifications"] == {"a_check": "pass"}
+    assert [run["status"] for run in steps["step_tools"]["tools"]] == ["completed"] * 2

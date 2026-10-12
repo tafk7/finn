@@ -13,7 +13,8 @@ This module reads and writes the JSON (``from_json``, ``to_json``). Reading refu
 naming its place (``configuration.target: ...``), a key a nested type does not declare,
 a null where a field is not optional, a value of the wrong type and an unknown enum
 value. The settings are decoded when the build's plan resolves, by the annotations of
-the steps that declare them (``decoded``).
+the steps that declare them (``decoded``). The relative paths of a configuration read
+from a build directory name files in it (``base_dir``).
 
 A build refuses a configuration before its first step with one error,
 ``ConfigurationRefused``, carrying every rejection found: the target's, the plan's and the
@@ -23,14 +24,15 @@ configuration checks'.
 from __future__ import annotations
 
 import collections.abc
+import functools
 import json
 import os
 import types
 import typing
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import MISSING, dataclass, field, fields, is_dataclass
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
 from enum import Enum
-from functools import cached_property, partial
+from functools import cached_property
 from pathlib import Path, PurePath
 from typing import Any, Union
 
@@ -71,13 +73,13 @@ class ConfigurationRefused(ValueError):
 
 
 #: A step: a function ``(model, cfg, *, settings...) -> model``.
-Step = Callable[..., ModelWrapper]
+StepFunction = Callable[..., ModelWrapper]
 
-#: An entry of a list of steps (``steps``, an edit's ``insert`` or ``with``): the name of
-#: a phase or of one of the build's steps, an import path (``package.module.name``) of a
-#: step function or a qonnx Transformation class, or in Python the object itself: a
-#: function (a ``functools.partial`` too), a Transformation instance or class.
-StepEntry = Union[str, Step, Transformation, type[Transformation]]
+#: An entry of ``steps``: the name of a phase or of one of the build's steps, an import
+#: path (``package.module.name``) of a step function or a qonnx Transformation class, or
+#: in Python the object itself: a function (a ``functools.partial`` too), a
+#: Transformation instance or class.
+StepEntry = Union[str, StepFunction, Transformation, type[Transformation]]
 
 
 class DataflowOutputType(str, Enum):
@@ -150,7 +152,7 @@ class DataflowBuildConfig:
     """The configuration of a build. Pass it to build_dataflow_cfg, or write it as
     ``dataflow_build_config.json`` beside ``model.onnx`` for build_dataflow_directory and
     the ``build_dataflow`` command; there, relative paths name files in that directory
-    (read_build_config)."""
+    (``base_dir``)."""
 
     #: Directory where the build's outputs and reports are written
     output_dir: str
@@ -179,14 +181,9 @@ class DataflowBuildConfig:
     #: generated frame.
     verify_input_npy: str = "input.npy"
 
-    #: If given, the build runs these entries (StepEntry) in order instead of every
-    #: phase (finn.builder.build_dataflow_steps.default_build_dataflow_steps).
+    #: If given, the build runs these entries (StepEntry) in order instead of the
+    #: default list (finn.builder.build_dataflow_plan.default_steps).
     steps: Sequence[StepEntry] | None = None
-
-    #: Edits of the list of steps, applied in order (finn.builder.build_dataflow_plan):
-    #: {"before": target, "insert": entries}, {"after": target, "insert": entries},
-    #: {"replace": target, "with": entries} and {"remove": target}.
-    step_edits: Sequence[Mapping[str, Any]] = field(default_factory=list)
 
     #: If given, start from this step, or a phase's first step, loading the
     #: intermediate model saved before it (save_intermediate_models must be enabled).
@@ -210,15 +207,36 @@ class DataflowBuildConfig:
     #: of the steps that declare it. In JSON, top-level keys.
     settings: dict[str, Any] = field(default_factory=dict)
 
+    #: The directory the relative paths name files in (read_build_config: the build
+    #: directory), else the working directory: ``output_dir``, ``verify_input_npy`` and
+    #: the toolchain's settings scripts and command directory are joined to it here, and
+    #: each setting a step declares as a ``Path`` when the plan decodes it. Not in JSON.
+    base_dir: str | None = None
+
     def __post_init__(self) -> None:
         clashing = sorted(set(self.settings) & _FIELDS)
         if clashing:
             raise ValueError(f"configuration.settings: {clashing} are fields, not settings")
+        if self.base_dir is None:
+            return
+        # Absolute, so that joining again (dataclasses.replace) changes nothing.
+        self.base_dir = os.path.abspath(self.base_dir)
+        joined = functools.partial(os.path.join, self.base_dir)
+        self.output_dir = joined(self.output_dir)
+        self.verify_input_npy = joined(self.verify_input_npy)
+        if self.toolchain is not None:
+            # An empty command directory is the environment's PATH, not a directory.
+            command_dir = self.toolchain.command_dir
+            self.toolchain = replace(
+                self.toolchain,
+                settings=tuple(map(joined, self.toolchain.settings)),
+                command_dir=joined(command_dir) if command_dir else command_dir,
+            )
 
     @classmethod
-    def from_dict(cls, stated: object) -> DataflowBuildConfig:
-        """The configuration a JSON object states: each field decoded by its type, every
-        other key a setting."""
+    def from_dict(cls, stated: object, base_dir: str | None = None) -> DataflowBuildConfig:
+        """The configuration a JSON object states, its relative paths naming files in
+        ``base_dir``: each field decoded by its type, every other key a setting."""
         if not isinstance(stated, Mapping):
             raise ValueError(f"configuration: a JSON object, not {stated!r}")
         if "settings" in stated:
@@ -227,11 +245,11 @@ class DataflowBuildConfig:
         known = {name: value for name, value in stated.items() if name in _FIELDS}
         decoded_fields = _decoded_fields(cls, hints, known, "configuration")
         settings = {name: value for name, value in stated.items() if name not in _FIELDS}
-        return cls(**decoded_fields, settings=settings)
+        return cls(**decoded_fields, settings=settings, base_dir=base_dir)
 
     @classmethod
-    def from_json(cls, text: str) -> DataflowBuildConfig:
-        return cls.from_dict(json.loads(text))
+    def from_json(cls, text: str, base_dir: str | None = None) -> DataflowBuildConfig:
+        return cls.from_dict(json.loads(text), base_dir)
 
     def to_dict(self) -> dict[str, Any]:
         """The configuration as JSON states it: the fields, then the settings beside
@@ -240,7 +258,7 @@ class DataflowBuildConfig:
         stated = {
             item.name: encoded(getattr(self, item.name), f"configuration.{item.name}")
             for item in fields(self)
-            if item.name != "settings"
+            if item.name not in ("settings", "base_dir")
         }
         for name, value in self.settings.items():
             stated[name] = encoded(value, f"configuration.{name}")
@@ -271,7 +289,7 @@ class DataflowBuildConfig:
 
 
 #: The configuration's fields, which a JSON object states beside the settings.
-_FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"settings"}
+_FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"settings", "base_dir"}
 
 
 def _decoded_fields(
@@ -296,14 +314,14 @@ def _text(kind: Any) -> str:
     return str(kind).replace("typing.", "").replace("collections.abc.", "")
 
 
-def decoded(kind: Any, stated: Any, place: str) -> Any:
+def decoded(kind: Any, stated: Any, place: str, base_dir: str | None = None) -> Any:
     """``stated`` (as JSON states it, or as Python gives it) as a value of the type
-    ``kind``: a bool, an int, a float (an int accepted), a str, a ``Path`` (from a
-    str), an enum (from its value), a list, tuple or sequence, a dict or mapping with
-    str keys, a dataclass (from an object of its fields), a union (``X | None``), a
-    callable, ``Any``, or an instance of any other class. Refuses, naming ``place``, a
-    null where ``kind`` is not optional, a value of another type, an unknown enum
-    value and a key a dataclass does not declare."""
+    ``kind``: a bool, an int, a float (an int accepted), a str, a ``Path`` (from a str,
+    joined to ``base_dir`` where given), an enum (from its value), a list, tuple or
+    sequence, a dict or mapping with str keys, a dataclass (from an object of its
+    fields), a union (``X | None``), a callable, ``Any``, or an instance of any other
+    class. Refuses, naming ``place``, a null where ``kind`` is not optional, a value of
+    another type, an unknown enum value and a key a dataclass does not declare."""
     origin, args = typing.get_origin(kind), typing.get_args(kind)
     if kind is Any:
         return stated
@@ -314,10 +332,10 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
             raise ValueError(f"{place}: null, and it is not optional")
         members = [each for each in args if each is not type(None)]
         if len(members) == 1:
-            return decoded(members[0], stated, place)
+            return decoded(members[0], stated, place, base_dir)
         for each in members:
             try:
-                return decoded(each, stated, place)
+                return decoded(each, stated, place, base_dir)
             except ValueError:
                 continue
         raise ValueError(f"{place}: {_text(kind)}, not {stated!r}")
@@ -356,7 +374,10 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
         if not isinstance(stated, (list, tuple)):
             raise ValueError(f"{place}: a list, not {stated!r}")
         each = args[0] if args else Any
-        items = [decoded(each, value, f"{place}[{index}]") for index, value in enumerate(stated)]
+        items = [
+            decoded(each, value, f"{place}[{index}]", base_dir)
+            for index, value in enumerate(stated)
+        ]
         return tuple(items) if origin is tuple else items
     if origin in (dict, collections.abc.Mapping):
         if not isinstance(stated, Mapping):
@@ -365,11 +386,14 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
         for key in stated:
             if not isinstance(key, str):
                 raise ValueError(f"{place}: keys are strings, not {key!r}")
-        return {key: decoded(value_kind, value, f"{place}.{key}") for key, value in stated.items()}
+        return {
+            key: decoded(value_kind, value, f"{place}.{key}", base_dir)
+            for key, value in stated.items()
+        }
     if isinstance(kind, type) and issubclass(kind, PurePath):
         if not isinstance(stated, (str, os.PathLike)):
             raise ValueError(f"{place}: a path, not {stated!r}")
-        return kind(stated)
+        return kind(stated) if base_dir is None else kind(base_dir, stated)
     if kind is float and type(stated) is int:
         return float(stated)
     if kind is int and isinstance(stated, bool):
@@ -400,7 +424,7 @@ def encoded(value: Any, place: str) -> Any:
         return {key: encoded(each, f"{place}.{key}") for key, each in value.items()}
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
-    if callable(value) or isinstance(value, (partial, Transformation)):
+    if callable(value) or isinstance(value, (functools.partial, Transformation)):
         name = getattr(value, "__name__", type(value).__name__)
         raise ValueError(
             f"{place}: {name} is a Python object; JSON names a step by its name or import path"
@@ -416,8 +440,8 @@ __all__ = [
     "ConfigurationRefused",
     "DataflowBuildConfig",
     "DataflowOutputType",
-    "Step",
     "StepEntry",
+    "StepFunction",
     "VerificationStepType",
     "config_finding",
     "decoded",

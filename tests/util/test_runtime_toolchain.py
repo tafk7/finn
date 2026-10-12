@@ -370,7 +370,7 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
 
     cwd, env = os.getcwd(), dict(os.environ)
     assert build_dataflow_directory(str(state())) == 0
-    assert (project / "output/time_per_step.json").is_file()
+    assert (project / "output/report/build.json").is_file()
     assert os.getcwd() == cwd and dict(os.environ) == env
     # A step that fails on an empty model: no partition to explore.
     assert build_dataflow_directory(str(state("step_size_fifos"))) == -1

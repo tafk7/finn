@@ -28,24 +28,20 @@
 
 import clize
 import contextlib
-import json
 import logging
 import os
 import pdb  # NOQA
 import sys
 import time
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import datetime
-from pathlib import PurePath
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
 from finn.builder.build_dataflow_checks import configuration_findings, required_vivado
 from finn.builder.build_dataflow_config import (
-    VERIFIED_BY,
     ConfigurationRefused,
     DataflowBuildConfig,
-    VerificationStepType,
     finding_line,
 )
 from finn.builder.build_dataflow_manifest import (
@@ -54,11 +50,11 @@ from finn.builder.build_dataflow_manifest import (
     ManifestHandler,
     finn_revision,
 )
-from finn.builder.build_dataflow_plan import BuildPlan, declared_settings, resolve_plan
+from finn.builder.build_dataflow_plan import Plan, resolve_plan
 from finn.core.space import Finding, FindingKind, by_code
 from finn.kernels.target import Target
 from finn.platform import TargetRefused
-from finn.toolchain.launcher import ToolFailed, ToolUnavailable, host_selection
+from finn.toolchain.launcher import RECORDS, ToolFailed, ToolUnavailable, host_selection
 from finn.util.run_log import FILE_ONLY, log_run, running_step
 
 #: The configuration file of a build directory (build_dataflow_directory), next to
@@ -114,16 +110,6 @@ def _log_failure(step: str, error: BaseException) -> str:
     return kind
 
 
-def _findings_by_code(error: BaseException) -> dict[str, int]:
-    """A refusal's findings by code; none for another error."""
-    counts: dict[str, int] = {}
-    for finding in getattr(error, "findings", ()):
-        code = getattr(finding, "code", None)
-        if isinstance(code, str):
-            counts[code] = counts.get(code, 0) + 1
-    return counts
-
-
 def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
     """The intermediate model file of the step ``step_delta`` places after ``step_name``
     (for a phase, its first step) in the build's plan (finn.builder.build_dataflow_plan)."""
@@ -131,52 +117,40 @@ def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: 
     return _intermediate_model(cfg, plan, plan.index(step_name) + step_delta)
 
 
-def _intermediate_model(cfg: DataflowBuildConfig, plan: BuildPlan, index: int) -> str:
+def _intermediate_model(cfg: DataflowBuildConfig, plan: Plan, index: int) -> str:
     """The intermediate model file of the plan's step at ``index``."""
-    if not 0 <= index < len(plan.edited):
-        raise ValueError(f"no step at {index} of this build's {len(plan.edited)} steps")
-    return cfg.output_dir + "/intermediate_models/%s.onnx" % plan.edited[index].name
+    if not 0 <= index < len(plan.steps):
+        raise ValueError(f"no step at {index} of this build's {len(plan.steps)} steps")
+    return cfg.output_dir + "/intermediate_models/%s.onnx" % plan.steps[index].name
 
 
-def _run_build_steps(model, cfg, plan: BuildPlan, manifest=None):
+def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Manifest):
     """Run the plan's steps in order, each with its settings and each log record stamped
     with its step, and record each step's start and end, and the outcome, in the
-    build's ``manifest`` (finn.builder.build_dataflow_manifest), if given.
+    build's ``manifest`` (finn.builder.build_dataflow_manifest).
 
-    Writes time_per_step.json, the seconds each step took. Returns 0 on success, or -1
-    at the first failing step after logging its failure (_log_failure), recording it in
-    the manifest, and starting the postmortem debugger if ``enable_build_pdb_debug`` is
-    set and stdin is a terminal.
+    Returns 0 on success, or -1 at the first failing step after logging its failure
+    (_log_failure), recording it in the manifest, and starting the postmortem debugger
+    if ``enable_build_pdb_debug`` is set and stdin is a terminal.
     """
-    step_num = 1
-    time_per_step = dict()
-    for planned in plan.steps:
-        step_name = planned.name
-        step_start = time.time()
-        with running_step(step_name):
+    run = plan.steps[plan.run]
+    for number, step in enumerate(run, start=1):
+        started = time.time()
+        with running_step(step.name):
             try:
-                _LOG.info("Running step: %s [%d/%d]", step_name, step_num, len(plan.steps))
-                if manifest is not None:
-                    manifest.step_started(step_name, planned.phase)
-                step_start = time.time()
-                model = planned.run(model, cfg)
-                step_end = time.time()
-                time_per_step[step_name] = step_end - step_start
-                chkpt_name = "%s.onnx" % (step_name)
+                _LOG.info("Running step: %s [%d/%d]", step.name, number, len(run))
+                manifest.step_started(step.name)
+                model = step.function(model, cfg, **step.settings)
                 if cfg.save_intermediate_models:
                     intermediate_model_dir = cfg.output_dir + "/intermediate_models"
-                    if not os.path.exists(intermediate_model_dir):
-                        os.makedirs(intermediate_model_dir)
-                    model.save("%s/%s" % (intermediate_model_dir, chkpt_name))
-                if manifest is not None:
-                    manifest.step_ended("completed", time.time() - step_start)
-                step_num += 1
+                    os.makedirs(intermediate_model_dir, exist_ok=True)
+                    model.save("%s/%s.onnx" % (intermediate_model_dir, step.name))
+                manifest.step_ended("completed", time.time() - started)
             except:  # noqa
                 extype, value, tb = sys.exc_info()
-                kind = _log_failure(step_name, value)
-                if manifest is not None:
-                    manifest.failed(step_name, kind, value, _findings_by_code(value))
-                    manifest.step_ended("failed", time.time() - step_start)
+                kind = _log_failure(step.name, value)
+                manifest.failed(step.name, kind, value)
+                manifest.step_ended("failed", time.time() - started)
                 # The postmortem debugger only where someone can answer it: with stdin not
                 # a terminal (pytest, a batch job) pdb's read would fail and report itself
                 # instead of the error above.
@@ -188,11 +162,7 @@ def _run_build_steps(model, cfg, plan: BuildPlan, manifest=None):
                     pdb.post_mortem(tb)
                 _LOG.error("Build failed")
                 return -1
-
-    with open(cfg.output_dir + "/time_per_step.json", "w") as f:
-        json.dump(time_per_step, f, indent=2)
-    if manifest is not None:
-        manifest.completed()
+    manifest.completed()
     _LOG.info("Completed successfully")
     return 0
 
@@ -238,42 +208,31 @@ def _vivado_release(
     return None if found is None else "%d.%d" % tuple(found[:2])
 
 
-def _asked_verifications(cfg: DataflowBuildConfig) -> dict:
-    """Each verification ``cfg.verify_steps`` asks for, by name, with the step that
-    concludes it (the last in VERIFIED_BY). A name that is not a verification is skipped;
-    the configuration checks report it."""
-    asked = {}
-    for each in cfg.verify_steps:
-        try:
-            verification = VerificationStepType(each)
-        except ValueError:
-            continue
-        asked[verification.value] = VERIFIED_BY[verification][-1]
-    return asked
-
-
 @contextlib.contextmanager
 def _indexed(cfg: DataflowBuildConfig, target: Target | None):
     """The build's manifest (``MANIFEST_FILE`` in the output directory) for the ``with``
-    block, written at once and filled from FINN's log records (ManifestHandler); at its
-    end, the Vivado release in its identity where the build asked it (_vivado_release)."""
-    manifest = Manifest(cfg.output_dir, _identity(cfg, target), _asked_verifications(cfg))
+    block, written at once and filled from the records of RECORDS (ManifestHandler), whose
+    level is INFO meanwhile; at its end, the Vivado release in its identity where the
+    build asked it (_vivado_release)."""
+    manifest = Manifest(cfg.output_dir, _identity(cfg, target))
     handler = ManifestHandler(manifest)
-    logger = logging.getLogger("finn")
-    logger.addHandler(handler)
+    level = RECORDS.level
+    RECORDS.setLevel(logging.INFO)
+    RECORDS.addHandler(handler)
     try:
         yield manifest
     finally:
         release = _vivado_release(cfg, target, manifest)
         if release is not None:
             manifest.identify(vivado=release)
-        logger.removeHandler(handler)
+        RECORDS.removeHandler(handler)
+        RECORDS.setLevel(level)
         handler.close()
 
 
 def _configured(
     cfg: DataflowBuildConfig, target: Target | None, found: list[Finding], manifest: Manifest
-) -> BuildPlan:
+) -> Plan:
     """The build's plan, recorded in the manifest, once the configuration is checked:
     ``found`` (the target's refusal) with the plan's rejections, else with the
     configuration checks' findings. The findings are recorded, each limitation logged as
@@ -342,7 +301,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
                 if cfg.start_step is None:
                     source = model_filename
                 else:
-                    source = _intermediate_model(cfg, plan, plan.first - 1)
+                    source = _intermediate_model(cfg, plan, plan.run.start - 1)
                 _LOG.info("Building dataflow accelerator from %s", source)
                 model = ModelWrapper(source)
                 manifest.identify(model=os.path.abspath(source))
@@ -353,57 +312,15 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
             return _run_build_steps(model, cfg, plan, manifest)
 
 
-def _is_path(kind) -> bool:
-    """Whether a setting's annotation is a path, or a path or None."""
-    if isinstance(kind, type):
-        return issubclass(kind, PurePath)
-    return any(_is_path(each) for each in getattr(kind, "__args__", ()) if each is not type(None))
-
-
-def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
-    """``cfg`` with each relative path joined to ``directory``: ``output_dir``,
-    ``verify_input_npy``, the toolchain's settings scripts and command directory, and
-    each setting a step of the build declares as a path (finn.builder.build_dataflow_plan;
-    the preprocessing model, the pinned choices). Absolute paths and an empty command
-    directory are kept as they are."""
-
-    def resolve(path: str) -> str:
-        return os.path.join(directory, path)
-
-    declared = declared_settings(cfg)
-    settings = dict(cfg.settings)
-    for name, value in settings.items():
-        if isinstance(value, str) and _is_path(declared.get(name)):
-            settings[name] = resolve(value)
-    toolchain = cfg.toolchain
-    if toolchain is not None:
-        toolchain = replace(
-            toolchain,
-            settings=tuple(map(resolve, toolchain.settings)),
-            command_dir=resolve(toolchain.command_dir)
-            if toolchain.command_dir
-            else toolchain.command_dir,
-        )
-    return replace(
-        cfg,
-        output_dir=resolve(cfg.output_dir),
-        verify_input_npy=resolve(cfg.verify_input_npy),
-        toolchain=toolchain,
-        settings=settings,
-    )
-
-
 def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
-    """Read a build directory's CONFIG_FILE, with its relative paths resolved against
-    the directory (``_resolved_against``) so that they name the same files wherever the
-    build runs. Refuses a directory without one, and a list of steps that does not
-    resolve (its settings' paths are found by the steps that declare them)."""
+    """Read a build directory's CONFIG_FILE, its relative paths naming files in the
+    directory (``DataflowBuildConfig.base_dir``) wherever the build runs. Refuses a
+    directory without one."""
     path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
     with open(path) as f:
-        cfg = DataflowBuildConfig.from_json(f.read())
-    return _resolved_against(cfg, os.path.abspath(path_to_cfg_dir))
+        return DataflowBuildConfig.from_json(f.read(), os.path.abspath(path_to_cfg_dir))
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):

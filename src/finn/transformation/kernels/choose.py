@@ -28,7 +28,8 @@ settles, and then:
   (``configured_root``);
 - records the pins held, those the body recorded and those the strategy pinned, in the
   body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
-  the body holds them: a pin holds for the build, and re-baselining keeps it;
+  the body holds them: a pin holds for the build, and re-baselining keeps it; and a
+  target throughput's frames a second (``OBJECTIVE_FPS``);
 - keeps what it found (``explored``): the point, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
@@ -101,7 +102,15 @@ from finn.custom_op.kernels.shell import (
 from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
-from finn.kernels.explore import Bottleneck, Cost, Explorer, Pinned, Seam, SizeFifos
+from finn.kernels.explore import (
+    Bottleneck,
+    Cost,
+    Explorer,
+    Pinned,
+    Seam,
+    SizeFifos,
+    TargetThroughput,
+)
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
@@ -126,6 +135,10 @@ HELD = CHOICES.key(
 """The choices pinned in a partition's body, by owner and key there (``{graph name: {key:
 value}}``, the form ``kernel_choices.json`` takes): every exploration of the body holds
 them (``Seam.held``), so a pin holds for the build. Absent where nothing is pinned."""
+
+OBJECTIVE_FPS = CHOICES.key("objective_fps", float)
+"""The frames a second a target throughput explored the body to (``TargetThroughput``),
+which a shell's build reports its delivered clock against. Absent where none did."""
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
@@ -463,6 +476,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     persist(model, root, point)
     if seam.held:
         model.set(HELD, _by_owner(seam, seam.held))
+    if isinstance(strategy, TargetThroughput):
+        model.set(OBJECTIVE_FPS, strategy.fps)
     left = [
         _owned(seam, choice.key) + (" (required)" if choice.required else "")
         for choice in seam.choices(point)
@@ -558,6 +573,7 @@ class ExploreKernelChoices(Transformation):
 __all__ = [
     "CHOICES",
     "HELD",
+    "OBJECTIVE_FPS",
     "ExploreKernelChoices",
     "Explored",
     "explore_kernel_choices",

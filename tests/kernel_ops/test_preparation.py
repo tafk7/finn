@@ -157,17 +157,11 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     assert manifest["outcome"] == {"status": "completed"}
     phase = [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
     assert [step["name"] for step in manifest["steps"]] == phase
-    # The plan the build ran: each step with its settings, each setting with its value
-    # (or default) and its readers.
+    # The plan the build ran: its steps, each setting with its value (or default) and its
+    # readers.
     plan = manifest["plan"]
-    assert [step["name"] for step in plan["steps"]] == phase
+    assert plan["steps"] == phase
     preprocessing = str(tfc_directory / "preproc.onnx")
-    assert plan["steps"][1] == {
-        "name": "step_add_pre_post_processing",
-        "phase": "phase_prepare_model",
-        "settings": {"preprocessing": preprocessing, "input_datatype": "UINT8", "topk": 1},
-    }
-    assert plan["steps"][3]["settings"] == {}
     assert plan["settings"] == {
         "override_inpsize": {"value": None, "given": False, "readers": ["step_cleanup"]},
         "preprocessing": {
@@ -455,16 +449,17 @@ def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(
     assert not [outcome for outcome in conversion.outcomes if outcome.op]
 
 
-def test_an_edit_can_insert_the_transform_thresholdings_hint_names(tmp_path: Path) -> None:
+def test_a_list_can_insert_the_transform_thresholdings_hint_names(tmp_path: Path) -> None:
     """Thresholding refuses a scaled or fractionally biased MultiThreshold with
-    ``LOWERING`` as its hint; an edit that follows the hint inserts that transform after
-    the streamlining by its import path, and the build runs it by that name."""
+    ``LOWERING`` as its hint; a list that follows the hint names that transform after the
+    streamlining by its import path, and the build runs it by that name."""
     path = f"{ExtractMultiThresholdScaleBias.__module__}.{LOWERING}"
+    steps = [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
+    steps.insert(steps.index("step_streamline") + 1, path)
     cfg = DataflowBuildConfig(
         output_dir=str(tmp_path),
         target=TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e"),
-        steps=["phase_prepare_model"],
-        step_edits=[{"after": "step_streamline", "insert": path}],
+        steps=steps,
     )
     names = [step.name for step in resolve_plan(cfg).steps]
     assert names[names.index("step_streamline") + 1] == LOWERING

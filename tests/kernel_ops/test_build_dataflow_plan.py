@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The build's plan (finn.builder.build_dataflow_plan): the entries of a list of steps,
-the edits of ``step_edits``, and the settings the steps declare, decoded and given to
-them, recorded in the build's manifest. No model is built but an identity's."""
+a phase's name standing for its steps, and the settings the steps declare, decoded and
+given to them, recorded in the build's manifest. No model is built but an identity's."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import enum
 import functools
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ from finn.builder.build_dataflow_config import (
     finding_line,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_plan import BuildPlan, resolve_plan
+from finn.builder.build_dataflow_plan import Plan, Step, default_steps, resolve_plan
 from finn.builder.build_dataflow_steps import step_cleanup, step_tidy_up
 from finn.core.space import FindingKind
 from finn.platform import TargetRequest
@@ -108,8 +109,14 @@ def config(**fields: Any) -> DataflowBuildConfig:
     return DataflowBuildConfig(**{"output_dir": "out", "target": TARGET, **fields})
 
 
-def names(plan: BuildPlan) -> list[str]:
-    return [step.name for step in plan.steps]
+def names(plan: Plan) -> list[str]:
+    """The names of the steps the plan runs."""
+    return [step.name for step in plan.steps[plan.run]]
+
+
+def ran(step: Step, model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """``model`` through ``step``, with its settings, as the build runs it."""
+    return step.function(model, cfg, **step.settings)
 
 
 def refused(cfg: DataflowBuildConfig) -> str:
@@ -140,7 +147,8 @@ def identity_model() -> ModelWrapper:
 
 
 def test_an_entry_is_a_phase_a_step_an_import_path_or_in_python_the_object() -> None:
-    """Each entry's name is the step's function's, or the Transformation's class's."""
+    """Each entry's name is the step's function's, or the Transformation's class's; a
+    phase stands for its steps."""
     entries: list[StepEntry] = [
         "phase_create_accelerator",
         "step_size_fifos",
@@ -160,19 +168,9 @@ def test_an_entry_is_a_phase_a_step_an_import_path_or_in_python_the_object() -> 
         "GiveReadableTensorNames",
         "GiveUniqueNodeNames",
     ]
-    # The phase that lists a step of its name, wherever the list places it.
-    assert [step.phase for step in plan.steps] == [
-        "phase_create_accelerator",
-        "phase_optimize_hardware",
-        None,
-        None,
-        "phase_prepare_model",
-        None,
-        None,
-    ]
     # A Transformation runs on the model and has no settings.
     model = identity_model()
-    named = plan.steps[3].run(model, config())
+    named = ran(plan.steps[3], model, config())
     assert [node.name for node in named.graph.node] == ["Identity_0"]
     assert plan.steps[3].settings == {}
 
@@ -182,7 +180,7 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
     bound = functools.partial(step_typed, scale=3.0, mode=Mode.SMALL)
     plan = resolve_plan(config(steps=[bound], settings={"count": 2}))
     assert "scale" not in plan.settings and "mode" not in plan.settings
-    plan.steps[0].run(identity_model(), config())
+    ran(plan.steps[0], identity_model(), config())
     assert (RAN["step_typed"]["scale"], RAN["step_typed"]["mode"]) == (3.0, Mode.SMALL)
     assert RAN["step_typed"]["count"] == 2
 
@@ -212,7 +210,7 @@ def test_an_entry_that_names_no_step_is_refused_naming_its_place(entry: Any, mes
     assert refused(config(steps=["step_tidy_up", entry])).startswith(message)
 
 
-# -- edits -----------------------------------------------------------------------------------
+# -- the list --------------------------------------------------------------------------------
 
 #: The default list's steps, in order.
 DEFAULT = [
@@ -234,127 +232,49 @@ DEFAULT = [
 ]
 
 
-def test_each_edit_changes_the_default_list_in_order() -> None:
-    edits = [
-        {"after": "step_streamline", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
-        {"before": "step_cleanup", "insert": [f"{__name__}.step_scaled", "step_size_fifos"]},
-        {"remove": "step_verify_partition"},
-        # An import path names a step by what it imports.
-        {"replace": f"{__name__}.step_scaled", "with": GiveReadableTensorNames()},
-        {"remove": "phase_generate_outputs"},
-        {"replace": "phase_emit_hardware", "with": ["phase_generate_outputs"]},
-    ]
-    plan = resolve_plan(config(step_edits=edits))
-    assert names(plan) == [
-        "GiveReadableTensorNames",
-        "step_size_fifos",
-        "step_cleanup",
-        "step_add_pre_post_processing",
-        "step_qonnx_to_finn",
-        "step_tidy_up",
-        "step_streamline",
+def test_the_default_list_is_every_phases_steps_by_name() -> None:
+    assert default_steps() == DEFAULT
+    assert names(resolve_plan(config())) == DEFAULT
+    assert names(resolve_plan(config(steps=default_steps()))) == DEFAULT
+
+
+def test_a_list_made_from_the_default_one_is_the_list() -> None:
+    """A Python caller changes the default list and gives it as ``steps``: a step inserted,
+    replaced or removed where the caller puts it."""
+    steps: list[StepEntry] = list(default_steps())
+    steps.insert(
+        steps.index("step_streamline") + 1, "qonnx.transformation.general.GiveUniqueNodeNames"
+    )
+    steps[steps.index("step_size_fifos")] = GiveReadableTensorNames()
+    steps.remove("step_verify_partition")
+    assert names(resolve_plan(config(steps=steps))) == [
+        *DEFAULT[:5],
         "GiveUniqueNodeNames",
-        "step_convert_to_channels_last",
-        "step_convert_to_hw",
-        "step_create_dataflow_partition",
-        "step_size_fifos",
-        "step_build_bitfile",
-        "step_make_driver",
-        "step_resources_report",
-        "step_deployment_package",
+        *DEFAULT[5:8],
+        "GiveReadableTensorNames",
+        *DEFAULT[10:],
     ]
 
 
-def test_a_phase_target_is_the_phase_as_a_whole_a_step_target_joins_its_phase() -> None:
-    """Placed before or after a phase, entries run outside it; placed beside a step of a
-    phase, inside it: a build that starts at the phase, or stops after it, runs them."""
-    edits = [
-        {"before": "phase_optimize_hardware", "insert": f"{__name__}.step_scaled"},
-        {"after": "phase_optimize_hardware", "insert": GiveUniqueNodeNames},
-        {"before": "step_verify_partition", "insert": GiveReadableTensorNames},
-    ]
-    phase = config(
-        step_edits=edits,
+def test_a_phase_names_its_steps_in_the_list_and_at_start_and_stop() -> None:
+    """In ``steps``, a phase is its steps; as ``start_step`` its first step, as
+    ``stop_step`` its last, wherever the list places them."""
+    cfg = config(
+        steps=[step_scaled, "phase_optimize_hardware", GiveUniqueNodeNames],
         start_step="phase_optimize_hardware",
         stop_step="phase_optimize_hardware",
     )
-    inside = ["step_size_fifos", "GiveReadableTensorNames", "step_verify_partition"]
-    assert names(resolve_plan(phase)) == inside
-    whole = names(resolve_plan(config(step_edits=edits)))
-    position = whole.index("step_scaled")
-    assert whole[position : position + 5] == ["step_scaled", *inside, "GiveUniqueNodeNames"]
-    # A step inserted beside one of a phase runs in it, but no phase lists it.
-    assert [step.phase for step in resolve_plan(phase).steps] == [
-        "phase_optimize_hardware",
-        None,
-        "phase_optimize_hardware",
+    plan = resolve_plan(cfg)
+    assert [step.name for step in plan.steps] == [
+        "step_scaled",
+        "step_size_fifos",
+        "step_verify_partition",
+        "GiveUniqueNodeNames",
     ]
-
-
-def test_an_edit_applies_to_steps_when_given() -> None:
-    cfg = config(
-        steps=["step_tidy_up", step_scaled],
-        step_edits=[{"after": "step_scaled", "insert": "phase_emit_hardware"}],
-    )
-    assert names(resolve_plan(cfg)) == ["step_tidy_up", "step_scaled", "step_package_partition"]
-
-
-@pytest.mark.parametrize(
-    "edits, message",
-    [
-        (
-            [{"after": "step_streamlin", "insert": "step_size_fifos"}],
-            "edit-target: step_edits[0].after: 'step_streamlin' names 0 steps of the list, "
-            "not one; its steps: step_cleanup, step_add_pre_post_processing,",
-        ),
-        (
-            [
-                {"after": "step_tidy_up", "insert": "step_size_fifos"},
-                {"replace": "step_size_fifos", "with": "step_tidy_up"},
-            ],
-            "edit-target: step_edits[1].replace: 'step_size_fifos' names 2 steps of the list, "
-            "not one",
-        ),
-        (
-            [{"remove": "phase_create_accelerator"}, {"remove": "phase_create_accelerator"}],
-            "edit-target: step_edits[1].remove: 'phase_create_accelerator' is 0 times in the "
-            "list, not once",
-        ),
-        (
-            [{"after": "step_tidy_up"}],
-            "edit-invalid: step_edits[0]: 'after' takes the keys ['after', 'insert'], not "
-            "['after']",
-        ),
-        (
-            [{"remove": "step_tidy_up", "with": "step_size_fifos"}],
-            "edit-invalid: step_edits[0]: 'remove' takes the keys ['remove'], not "
-            "['remove', 'with']",
-        ),
-        (
-            [{"before": "step_tidy_up", "after": "step_size_fifos", "insert": []}],
-            "edit-invalid: step_edits[0]: exactly one of before, after, replace, remove, not",
-        ),
-        (
-            [{"remove": 3}],
-            "edit-invalid: step_edits[0].remove: a phase or step name, or an import path, not 3",
-        ),
-        (
-            [{"after": "step_tidy_up", "insert": ["step_size_fifos", "step_size_fifo"]}],
-            "step-unknown: step_edits[0].insert[1]: 'step_size_fifo' is no step or phase",
-        ),
-        (["step_tidy_up"], "edit-invalid: step_edits[0]: an object such as"),
-    ],
-)
-def test_an_edit_whose_target_is_not_once_in_the_list_is_refused_naming_its_place(
-    edits: list[Any], message: str
-) -> None:
-    assert refused(config(step_edits=edits)).startswith(message)
-
-
-def test_no_edit_is_the_default_list() -> None:
-    assert names(resolve_plan(config())) == DEFAULT
-    nothing = [{"before": "finn.builder.build_dataflow_steps.step_size_fifos", "insert": []}]
-    assert names(resolve_plan(config(step_edits=nothing))) == DEFAULT
+    assert names(plan) == ["step_size_fifos", "step_verify_partition"]
+    inside = config(steps=["step_size_fifos", step_scaled, "step_verify_partition", "step_tidy_up"])
+    stopped = replace(inside, start_step="step_scaled", stop_step="phase_optimize_hardware")
+    assert names(resolve_plan(stopped)) == ["step_scaled", "step_verify_partition"]
 
 
 def test_start_and_stop_name_a_step_once() -> None:
@@ -366,7 +286,8 @@ def test_start_and_stop_name_a_step_once() -> None:
         steps=["phase_emit_hardware", "phase_emit_hardware"], stop_step="phase_emit_hardware"
     )
     assert refused(phases) == (
-        "step-ambiguous: stop_step: 'phase_emit_hardware' is 2 times in this build, not once"
+        "step-ambiguous: stop_step: 'phase_emit_hardware' (its last step, "
+        "'step_package_partition') is 2 steps of this build, not one"
     )
 
 
@@ -396,7 +317,7 @@ def test_each_setting_is_decoded_by_its_steps_annotation_and_passed_to_it() -> N
         )
     )
     plan = resolve_plan(cfg)
-    plan.steps[0].run(identity_model(), cfg)
+    ran(plan.steps[0], identity_model(), cfg)
     assert RAN["step_typed"] == {
         **stated,
         "scale": 2.0,
@@ -459,12 +380,12 @@ def test_a_setting_without_a_default_must_be_given() -> None:
         "setting-required: configuration.target_fps: step_needs require it, and it is not given"
     )
     plan = resolve_plan(config(steps=[step_needs], settings={"target_fps": 1000}))
-    plan.steps[0].run(identity_model(), config())
+    ran(plan.steps[0], identity_model(), config())
     assert RAN["step_needs"] == {"target_fps": 1000.0}
 
 
 def test_a_setting_whose_readers_the_run_leaves_out_is_a_warning() -> None:
-    """Declared by the edited list, so not refused; read by no step from start_step to
+    """Declared by the list, so not refused; read by no step from start_step to
     stop_step, so the checks find a limitation, which the build warns of."""
     cfg = config(
         steps=[step_scaled, step_typed],
@@ -472,7 +393,7 @@ def test_a_setting_whose_readers_the_run_leaves_out_is_a_warning() -> None:
         settings={"scale": 2.0, "label": "unread"},
     )
     plan = resolve_plan(cfg)
-    assert names(plan) == ["step_scaled"] and plan.unread == ("label",)
+    assert names(plan) == ["step_scaled"]
     (warning,) = configuration_findings(cfg, plan, cfg.resolved_target)
     assert warning.kind is FindingKind.LIMITATION
     assert finding_line(warning) == (
@@ -482,8 +403,8 @@ def test_a_setting_whose_readers_the_run_leaves_out_is_a_warning() -> None:
 
 
 def test_a_build_directorys_path_settings_name_its_files(tmp_path: Path) -> None:
-    """read_build_config resolves a setting a step declares as a path against the build
-    directory; a str setting stays as stated."""
+    """A setting a step declares as a path names a file in the build directory, joined
+    to it when the plan decodes it; a str setting stays as stated."""
     stated = {
         "output_dir": "out",
         "target": {"period_ns": 10.0},
@@ -493,11 +414,15 @@ def test_a_build_directorys_path_settings_name_its_files(tmp_path: Path) -> None
     }
     (tmp_path / CONFIG_FILE).write_text(json.dumps(stated))
     cfg = read_build_config(str(tmp_path))
-    assert cfg.settings == {"table": str(tmp_path / "choices.json"), "label": "choices.json"}
-    assert resolve_plan(cfg).settings["table"].value == tmp_path / "choices.json"
+    assert cfg.settings == {"table": "choices.json", "label": "choices.json"}
+    settings = resolve_plan(cfg).settings
+    assert settings["table"].value == tmp_path / "choices.json"
+    assert settings["label"].value == "choices.json"
+    absolute = replace(cfg, settings={"table": "/elsewhere/choices.json"})
+    assert resolve_plan(absolute).settings["table"].value == Path("/elsewhere/choices.json")
 
 
-def test_the_manifest_records_the_plan_each_step_its_settings_each_setting_its_readers(
+def test_the_manifest_records_the_plan_its_steps_and_each_setting_with_its_readers(
     tmp_path: Path,
 ) -> None:
     model = tmp_path / "model.onnx"
@@ -511,12 +436,9 @@ def test_the_manifest_records_the_plan_each_step_its_settings_each_setting_its_r
     assert build_dataflow_cfg(str(model), cfg) == 0
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     plan = manifest["plan"]
-    assert plan["steps"][:2] == [
-        {"name": "step_scaled", "phase": None, "settings": {"scale": 2.0}},
-        {"name": "GiveUniqueNodeNames", "phase": None, "settings": {}},
-    ]
-    assert plan["steps"][2]["settings"]["table"] == "t.json"
-    assert plan["steps"][2]["settings"]["mode"] == "small"
+    assert plan["steps"] == ["step_scaled", "GiveUniqueNodeNames", "step_typed"]
+    assert plan["settings"]["table"]["value"] == "t.json"
+    assert plan["settings"]["mode"]["value"] == "small"
     assert plan["settings"]["scale"] == {
         "value": 2.0,
         "given": True,
@@ -528,8 +450,6 @@ def test_the_manifest_records_the_plan_each_step_its_settings_each_setting_its_r
         "GiveUniqueNodeNames",
         "step_typed",
     ]
-    timings = json.loads((tmp_path / "output" / "time_per_step.json").read_text())
-    assert list(timings) == ["step_scaled", "GiveUniqueNodeNames", "step_typed"]
     saved = sorted(path.name for path in (tmp_path / "output" / "intermediate_models").iterdir())
     assert saved == ["GiveUniqueNodeNames.onnx", "step_scaled.onnx", "step_typed.onnx"]
 
@@ -563,10 +483,9 @@ def test_a_step_that_folds_after_the_last_fifo_sizing_is_refused_when_the_plan_r
     depth valid when the folding changes: a step that may change the folding (a target or
     a maximum throughput, a pin, going back to the baselines) after the run's last FIFO
     sizing is refused, naming both, before any step runs."""
-    after = config(
-        step_edits=[{"after": "step_size_fifos", "insert": "step_target_throughput"}],
-        settings={"target_fps": 1000.0},
-    )
+    steps = default_steps()
+    steps.insert(steps.index("step_size_fifos") + 1, "step_target_throughput")
+    after = config(steps=steps, settings={"target_fps": 1000.0})
     assert refused(after) == (
         "fifos-stale: step_target_throughput (step 10 of the run) follows step_size_fifos "
         "(step 9), the last that sizes FIFOs: their depths are sized at the folding before it "
@@ -595,8 +514,9 @@ def test_a_step_that_folds_after_the_last_fifo_sizing_is_refused_when_the_plan_r
     plan = resolve_plan(config(steps=again, settings={"target_fps": 1000.0}))
     assert names(plan) == ["step_create_dataflow_partition", *again[1:]]
     # Before the sizing, as the default phase lists it, the plan resolves.
-    before = [{"before": "step_size_fifos", "insert": "step_target_throughput"}]
-    plan = resolve_plan(config(step_edits=before, settings={"target_fps": 1000.0}))
+    before = default_steps()
+    before.insert(before.index("step_size_fifos"), "step_target_throughput")
+    plan = resolve_plan(config(steps=before, settings={"target_fps": 1000.0}))
     assert names(plan)[8:10] == ["step_target_throughput", "step_size_fifos"]
 
 
