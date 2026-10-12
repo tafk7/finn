@@ -12,17 +12,20 @@ The steps prepare a Brevitas export into the streamlined graph the kernel path c
 convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
 choose the partition's parameters, one strategy step at a time; and make the outputs the
 configuration asks for: the partition's packaged IP on any shell, and the bitfile,
-driver and deployment package on a shell that integrates it.
+driver and deployment package on a shell that integrates it. The verifying steps
+(VERIFYING_STEPS) are in no phase: a build asks for a check by listing its step.
 
 A step is the transformations and calls it runs; what they do lives in the module that
 owns it: the exploration in finn.transformation.kernels, the shell's outputs in
-finn.shells, the optional verifications in finn.builder.build_dataflow_verification and
-finn.builder.build_dataflow_testbench, the resources report in
-finn.builder.build_dataflow_resources, and the logging of the reports and verdicts the
-build's manifest collects in finn.builder.build_dataflow_manifest."""
+finn.shells, the checks in finn.builder.build_dataflow_verification,
+finn.builder.build_dataflow_testbench and finn.transformation.kernels.package, the
+resources report in finn.builder.build_dataflow_resources, and the logging of the
+reports and verdicts the build's manifest collects in
+finn.builder.build_dataflow_manifest."""
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from onnx import helper
@@ -50,7 +53,6 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
     StepFunction,
-    VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import reported, verdict, write_report
 from finn.builder.build_dataflow_resources import (
@@ -64,11 +66,8 @@ from finn.builder.build_dataflow_testbench import (
     testbench_frame,
     write_testbench,
 )
-from finn.builder.build_dataflow_verification import (
-    VERIFICATION_DIR,
-    save_reference,
-    verify_partition_python,
-)
+from finn.builder.build_dataflow_verification import VERIFICATION_DIR, verify_partition_python
+from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import partition_body
@@ -85,6 +84,7 @@ from finn.platform import refuse_drift
 from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
+from finn.toolchain.launcher import ToolFailed
 from finn.transformation.kernels import (
     OBJECTIVE_FPS,
     Explored,
@@ -246,11 +246,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     """Record the build's target in the model, and convert each node a KernelOp
     supports (MatMul, MultiThreshold) into that KernelOp. Writes report/kernel_ops.json:
     what each node became, or why it stayed on the host. Refuses a host node between
-    KernelOps, since they must form one partition. With PARTITION_PYTHON, the model
-    before conversion is saved as that check's reference
-    (finn.builder.build_dataflow_verification.save_reference)."""
-    if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
-        save_reference(model, Path(cfg.output_dir))
+    KernelOps, since they must form one partition."""
     conversion = ToKernelOps(cfg.resolved_target)
     model = model.transform(conversion)
     report = kernel_ops_report(model, conversion.outcomes)
@@ -390,24 +386,64 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     kernel_choices.json, by node or tensor name (kernel_choices_config; the file
     step_pin_choices pins). Then check the partition before a shell builds it: its
     choices are complete and current, its ports match its graph's inputs and outputs in
-    order (configured_root), and its target is the configuration's (refuse_drift). Then
-    run the optional checks ``verify_steps`` asks for: PARTITION_PYTHON compares the
-    partition's outputs with the model before conversion
-    (finn.builder.build_dataflow_verification), and PARTITION_ELABORATION compiles and
-    elaborates its RTL in XSim, into verification_output/partition_elaboration."""
+    order (configured_root), and its target is the configuration's (refuse_drift)."""
     output = Path(cfg.output_dir)
     node, body, _ = partition_body(model)
     output.mkdir(parents=True, exist_ok=True)
     (output / KERNEL_CHOICES_FILE).write_text(json.dumps(kernel_choices_config(body), indent=2))
     configured_root(body, node.name)
     refuse_drift(read_target(body), cfg.resolved_target, "build")
-    if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
-        verdict("partition_python", verify_partition_python(model, output, cfg.verify_input_npy))
-    if VerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
-        directory = output / VERIFICATION_DIR / "partition_elaboration"
-        toolchain = cfg.step_toolchain("step_verify_partition")
-        body.transform(ElaboratePartition(directory=directory, toolchain=toolchain))
-        verdict("partition_elaboration", True)
+    return model
+
+
+def _saved_before(cfg: DataflowBuildConfig, name: str) -> Path:
+    """The model the build saved before the step ``name``, once in its list: the
+    intermediate model of the step before it."""
+    from finn.builder.build_dataflow_plan import resolve_plan  # noqa: PLC0415 (it imports this)
+
+    plan = resolve_plan(cfg)
+    before = plan.steps[plan.index(name) - 1].name
+    return Path(cfg.output_dir) / "intermediate_models" / f"{before}.onnx"
+
+
+def step_verify_partition_python(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, verify_input_npy: Path = Path("input.npy")
+) -> ModelWrapper:
+    """Check the partition in Python: execute the parent graph, its partition node
+    running the KernelOps, on each input of ``verify_input_npy`` (an .npy file, one
+    input a row), and compare the partition's outputs with the model's before
+    conversion, the one the build saved before step_convert_to_hw
+    (finn.builder.build_dataflow_verification). Records its verdict; on ``fail`` the
+    build continues. The plan refuses it unless step_convert_to_hw is in the list once,
+    after another step and before it, and the intermediate models are saved."""
+    reference = _saved_before(cfg, "step_convert_to_hw")
+    passed = verify_partition_python(model, reference, verify_input_npy, Path(cfg.output_dir))
+    verdict("step_verify_partition_python", passed)
+    return model
+
+
+def _concluded(name: str, check: Callable[[], object]) -> None:
+    """Run the RTL check ``check`` of the step ``name`` and record its verdict: ``fail``
+    where a tool or the simulation fails, and the step fails with that error. A tool
+    that is not available concludes nothing."""
+    try:
+        check()
+    except (ToolFailed, SimulationFailed):
+        verdict(name, False)
+        raise
+    verdict(name, True)
+
+
+def step_elaborate_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Compile and elaborate the partition's RTL in XSim (ElaboratePartition), into
+    verification_output/partition_elaboration, and record the verdict; a failure fails
+    the build."""
+    _, body, _ = partition_body(model)
+    elaborating = ElaboratePartition(
+        directory=Path(cfg.output_dir) / VERIFICATION_DIR / "partition_elaboration",
+        toolchain=cfg.step_toolchain("step_elaborate_partition"),
+    )
+    _concluded("step_elaborate_partition", lambda: body.transform(elaborating))
     return model
 
 
@@ -419,7 +455,9 @@ def _refuse_drift(
     refuse_drift(read_target(body), cfg.resolved_target, f"{output.value} build")
 
 
-def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def step_package_partition(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, verify_input_npy: Path = Path("input.npy")
+) -> ModelWrapper:
     """Package the partition as an IP named ``partition`` into ``stitched_ip/``, with its
     interface description (``interface.json``), if STITCHED_IP or OOC_SYNTH is asked.
     The partition's body records the IP, so a shell's integration later in the build
@@ -430,9 +468,7 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     report/resources.json reads it there. With STITCHED_IP, an XSim testbench is written
     into ``stitched_ip/testbench`` (finn.builder.build_dataflow_testbench). It streams
     the partition's inputs for the first frame of ``verify_input_npy`` if that file
-    exists, else a generated frame. The testbench is run only if STITCHED_IP_TESTBENCH is
-    in ``verify_steps``, and the step then fails (``SimulationFailed``) if the module's
-    outputs differ from the partition's in Python."""
+    exists, else a generated frame; step_run_testbench runs it."""
     stitched = DataflowOutputType.STITCHED_IP in cfg.generate_outputs
     ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
     if not (stitched or ooc):
@@ -454,13 +490,22 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     if ooc:
         reported(partition_utilization_report(directory))
     if stitched:
-        frame, stimulus = testbench_frame(model, body, cfg.verify_input_npy)
+        frame, stimulus = testbench_frame(model, body, verify_input_npy)
         testbench = directory / TESTBENCH_DIR
         write_testbench(body, testbench, frame, toolchain=toolchain, label=node.name)
         _LOG.info(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
-        if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
-            run_testbench(testbench, toolchain=toolchain)
-            verdict("stitched_ip_testbench", True)
+    return model
+
+
+def step_run_testbench(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Run the packaged partition's XSim testbench, the one step_package_partition
+    writes with STITCHED_IP, once in the build's toolchain (run_testbench), and record
+    the verdict; a mismatch fails the build (``SimulationFailed``). The plan refuses it
+    without step_package_partition before it in the list, or without STITCHED_IP
+    asked."""
+    testbench = Path(cfg.output_dir) / STITCHED_IP_DIR / TESTBENCH_DIR
+    toolchain = cfg.step_toolchain("step_run_testbench")
+    _concluded("step_run_testbench", lambda: run_testbench(testbench, toolchain=toolchain))
     return model
 
 
@@ -625,11 +670,21 @@ FOLDING_STEPS: tuple[StepFunction, ...] = (
 )
 FIFO_SIZING_STEPS: tuple[StepFunction, ...] = (step_size_fifos,)
 
-#: The build's steps by name: the phases' and the strategy steps.
+#: The steps that check the partition, in no phase: a configuration lists each it asks
+#: for, the Python check and the elaboration after the strategy steps, the testbench
+#: after step_package_partition.
+VERIFYING_STEPS: list[StepFunction] = [
+    step_verify_partition_python,
+    step_elaborate_partition,
+    step_run_testbench,
+]
+
+#: The build's steps by name: the phases', the strategy and the verifying steps.
 build_dataflow_step_lookup: dict[str, StepFunction] = {
     step.__name__: step
     for step in [
         *(step for steps in build_dataflow_phases.values() for step in steps),
         *KERNEL_STRATEGY_STEPS,
+        *VERIFYING_STEPS,
     ]
 }

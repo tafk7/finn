@@ -131,16 +131,16 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     directory = tmp_path / "build"
     directory.mkdir()
     steps = ["phase_prepare_model", "step_convert_to_hw", "step_create_dataflow_partition"]
-    steps += ["step_pin_choices", "step_size_fifos"]
+    steps += ["step_pin_choices", "step_size_fifos", "step_verify_partition_python"]
     settings = {
         "preprocessing": "preproc.onnx",
         "topk": 1,
         "kernel_choices_file": "kernel_choices.json",
         "fifo_margin": 2,
         "input_datatype": "UINT8",
+        "verify_input_npy": "inputs/input.npy",
     }
     cfg = builder_config(
-        verify_input_npy="inputs/input.npy",
         steps=steps,
         settings=settings,
         toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
@@ -149,7 +149,6 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     read = build_dataflow.read_build_config(str(directory))
     assert read.base_dir == str(directory)
     assert read.output_dir == str(directory / "out")
-    assert read.verify_input_npy == str(directory / "inputs/input.npy")
     assert read.toolchain == Selection(
         settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
         command_dir=str(directory / "tools"),
@@ -160,6 +159,7 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     decoded = {name: setting.value for name, setting in resolve_plan(read).settings.items()}
     assert decoded["preprocessing"] == directory / "preproc.onnx"
     assert decoded["kernel_choices_file"] == directory / "kernel_choices.json"
+    assert decoded["verify_input_npy"] == directory / "inputs/input.npy"
     assert (decoded["topk"], decoded["input_datatype"]) == (1, "UINT8")
     # An absolute path stays as stated.
     absolute = builder_config(
@@ -175,7 +175,10 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == "/results" and read.toolchain == Selection(command_dir="")
     assert read.settings == {}
-    assert resolve_plan(read).settings["preprocessing"].value is None
+    unset = resolve_plan(read).settings
+    assert unset["preprocessing"].value is None
+    # A path setting's default names a file in the directory too.
+    assert unset["verify_input_npy"].value == directory / "input.npy"
 
 
 def step_tools(model, cfg):

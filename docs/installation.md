@@ -469,10 +469,10 @@ builds ahead of time; `--check` only checks prerequisites.
 `build_dataflow project/` remains the ordinary public build command. It builds in
 process, starting no child, as `build_dataflow_directory` and `build_dataflow_cfg` do,
 and changes no working directory: the configuration's relative paths (`output_dir`,
-`verify_input_npy`, the preparation's `preprocessing`, the pinned choices'
-`kernel_choices_file`, the toolchain's settings scripts and command directory) name files in the project
+the preparation's `preprocessing`, the pinned choices' `kernel_choices_file`, the
+checks' `verify_input_npy`, the toolchain's settings scripts and command directory) name files in the project
 directory (`read_build_config` reads it with the directory as its `base_dir`: a field's
-path is joined to it when read, a path setting's when the build decodes it), and a relative `FINN_BUILD_DIR`
+path is joined to it when read, a path setting's, given or by default, when the build decodes it), and a relative `FINN_BUILD_DIR`
 is relative to the directory the command runs from. Every tool runs in the
 environment of the configuration's toolchain (the machine's when it names none),
 prepared once for the build; the process's own environment is left as it is. The
@@ -499,7 +499,7 @@ it runs, and each setting with its value or default and its readers), each step 
 its status (`running` while it runs, then
 `completed` or `failed`), seconds, the reports it wrote with their findings by code,
 and its tool runs with their transcripts, status, exit and messages by severity; each
-verification that concluded with its verdict (`pass` or `fail`); and the `outcome`: `completed`, `failed` (the step, the error's kind:
+verifying step that concluded with its verdict (`pass` or `fail`), by its name; and the `outcome`: `completed`, `failed` (the step, the error's kind:
 `refusal`, `tool-unavailable`, `tool-failed`, `verdict` or `bug`, the error, a
 refusal's findings by code) or `refused` (the configuration, before the first step).
 It is rewritten as the build goes, so a build that stopped says where. Its reports,
@@ -583,7 +583,7 @@ description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
 AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
 bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
 of `verify_input_npy` or a generated one, checked against the partition in
-Python); `ooc_synth` synthesizes the IP out of context. Every kernel-path build
+Python; `step_run_testbench` runs it); `ooc_synth` synthesizes the IP out of context. Every kernel-path build
 writes `report/resources.json`: each member of the shell (the partition, each end,
 each IP of the static region) and their total, as the model states them, as Vivado
 synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
@@ -607,8 +607,7 @@ change and give as `steps`. `start_step` and `stop_step` name a step once in the
 or a phase: its first step to start from, its last to stop after.
 
 The configuration's fields say how the build runs (`output_dir`, `target`, `toolchain`,
-`generate_outputs`, `verify_steps`, `verify_input_npy`, `steps`,
-`start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
+`generate_outputs`, `steps`, `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
 `verbose`). Every other top-level key is a setting (in Python, `settings={...}`): the
 value of the keyword-only parameter of that name of the steps that declare it
 (`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its
@@ -617,7 +616,8 @@ the build declares is refused, naming the settings its steps read; steps that de
 the same name share its value. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
-the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
+the strategy steps theirs (below); `step_package_partition` and
+`step_verify_partition_python` `verify_input_npy` (default `input.npy`); `step_build_bitfile` `hw_debug` (integrated
 logic analyzers on the ends' streams, refused on `ip`); its clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
@@ -676,6 +676,20 @@ resource than the part has is a warning naming that resource, never a refusal.
 a kernel's choices under its node, a channel's under the tensor it carries, in graph
 order: each node's input channels, the node, its output channels), the file
 `step_pin_choices` reads.
+
+The verifying steps check the partition, and no phase holds them: a build asks for a
+check by listing its step (in Python, `default_steps()` with the step inserted).
+`step_verify_partition_python`, after the strategy steps, executes the parent graph,
+its partition running the KernelOps, on each input of `verify_input_npy` (an `.npy`
+file, one input a row) and compares the partition's outputs with the model the build
+saved before `step_convert_to_hw` (`intermediate_models/`); a mismatch is recorded
+`fail`, and the build continues. `step_elaborate_partition` compiles and elaborates the
+partition's RTL in XSim; `step_run_testbench`, after `step_package_partition`, runs the
+packaged IP's testbench. Either fails the build when its check fails. Each records its
+verdict in the manifest's `verifications` under its own name. The plan refuses, before
+the first step, a Python check without `step_convert_to_hw` once before it (after
+another step) or with `save_intermediate_models` off, and a testbench run without a
+`step_package_partition` before it or without `stitched_ip` asked.
 
 Explicit selections, and a build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the

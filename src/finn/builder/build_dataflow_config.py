@@ -4,8 +4,8 @@
 """The configuration of a build of KernelOps (finn.custom_op.kernels) from a Brevitas
 export, which ``build_dataflow`` runs.
 
-Its fields say how the build runs: the target, the toolchain, the outputs, the checks
-and the steps. Everything else it states is a setting: a value a step of the build
+Its fields say how the build runs: the target, the toolchain, the outputs and the
+steps. Everything else it states is a setting: a value a step of the build
 declares as one of its keyword-only parameters (finn.builder.build_dataflow_plan). In
 JSON a setting is a top-level key beside the fields; in Python an entry of ``settings``.
 
@@ -90,7 +90,7 @@ class DataflowOutputType(str, Enum):
     not ``ip``."""
 
     #: the packaged IP, with its interface description and an XSim testbench (written,
-    #: not run: STITCHED_IP_TESTBENCH runs it)
+    #: not run: step_run_testbench runs it)
     STITCHED_IP = "stitched_ip"
     #: the IP synthesized out of context, with its resources per member of the shell
     OOC_SYNTH = "ooc_synth"
@@ -121,32 +121,6 @@ OUTPUT_NEEDS = {
 }
 
 
-class VerificationStepType(str, Enum):
-    """Optional checks a build can add. None run by default: each KernelOp's
-    ``execute_node`` is the reference, and the test harness checks the hardware against
-    it. A failed Python check is reported and the build continues. A failed RTL check
-    stops the build."""
-
-    #: execute the parent graph with the partition's KernelOps in Python on each input
-    #: of verify_input_npy, and compare with the model before conversion
-    PARTITION_PYTHON = "partition_python"
-    #: compile and elaborate the partition's RTL in XSim (xvlog, xelab); needs Vivado
-    PARTITION_ELABORATION = "partition_elaboration"
-    #: run the packaged IP's XSim testbench (its run.sh) once in the build's toolchain,
-    #: comparing the module's outputs with the partition's in Python; needs STITCHED_IP
-    #: and Vivado
-    STITCHED_IP_TESTBENCH = "stitched_ip_testbench"
-
-
-#: The steps each verification needs: those that save its reference, if it has one,
-#: then the one that checks and concludes it.
-VERIFIED_BY = {
-    VerificationStepType.PARTITION_PYTHON: ("step_convert_to_hw", "step_verify_partition"),
-    VerificationStepType.PARTITION_ELABORATION: ("step_verify_partition",),
-    VerificationStepType.STITCHED_IP_TESTBENCH: ("step_package_partition",),
-}
-
-
 @dataclass
 class DataflowBuildConfig:
     """The configuration of a build. Pass it to build_dataflow_cfg, or write it as
@@ -172,14 +146,6 @@ class DataflowBuildConfig:
     #: What the build makes besides the partition and its reports (DataflowOutputType).
     #: None by default.
     generate_outputs: list[DataflowOutputType] = field(default_factory=list)
-
-    #: Optional checks to run (VerificationStepType). None by default.
-    verify_steps: list[VerificationStepType] = field(default_factory=list)
-
-    #: The .npy file of inputs for PARTITION_PYTHON, one frame per index of its first
-    #: axis. STITCHED_IP's testbench streams its first frame if the file exists, else a
-    #: generated frame.
-    verify_input_npy: str = "input.npy"
 
     #: If given, the build runs these entries (StepEntry) in order instead of the
     #: default list (finn.builder.build_dataflow_plan.default_steps).
@@ -208,9 +174,9 @@ class DataflowBuildConfig:
     settings: dict[str, Any] = field(default_factory=dict)
 
     #: The directory the relative paths name files in (read_build_config: the build
-    #: directory), else the working directory: ``output_dir``, ``verify_input_npy`` and
-    #: the toolchain's settings scripts and command directory are joined to it here, and
-    #: each setting a step declares as a ``Path`` when the plan decodes it. Not in JSON.
+    #: directory), else the working directory: ``output_dir`` and the toolchain's
+    #: settings scripts and command directory are joined to it here, and each setting a
+    #: step declares as a ``Path`` when the plan decodes it. Not in JSON.
     base_dir: str | None = None
 
     def __post_init__(self) -> None:
@@ -223,7 +189,6 @@ class DataflowBuildConfig:
         self.base_dir = os.path.abspath(self.base_dir)
         joined = functools.partial(os.path.join, self.base_dir)
         self.output_dir = joined(self.output_dir)
-        self.verify_input_npy = joined(self.verify_input_npy)
         if self.toolchain is not None:
             # An empty command directory is the environment's PATH, not a directory.
             command_dir = self.toolchain.command_dir
@@ -436,13 +401,11 @@ __all__ = [
     "OUTPUT_NEEDS",
     "OWNER",
     "SHELL_OUTPUTS",
-    "VERIFIED_BY",
     "ConfigurationRefused",
     "DataflowBuildConfig",
     "DataflowOutputType",
     "StepEntry",
     "StepFunction",
-    "VerificationStepType",
     "config_finding",
     "decoded",
     "encoded",

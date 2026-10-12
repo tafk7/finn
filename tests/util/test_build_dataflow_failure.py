@@ -17,7 +17,11 @@ import sys
 import warnings
 
 import finn.builder.build_dataflow as build
-from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
+from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
+    DataflowBuildConfig,
+    DataflowOutputType,
+)
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind
 from finn.platform import TargetRequest
@@ -152,12 +156,9 @@ def test_a_tool_unavailable_is_logged_naming_what_selects_it(capsys):
 
 
 @pytest.mark.util
-def test_a_verdict_is_logged_as_a_failed_verification(capsys):
+def test_a_verdict_is_logged_with_what_the_check_found_no_traceback(capsys):
     err, log = logged_failure(capsys, SimulationFailed("FAIL: 3 words differ"))
-    assert err.splitlines()[:2] == [
-        "ERROR: Verification for step_fails : FAIL",
-        "ERROR: SimulationFailed: FAIL: 3 words differ",
-    ]
+    assert err.splitlines()[0] == "ERROR: step_fails: SimulationFailed: FAIL: 3 words differ"
     assert "Traceback" not in err and "Traceback" in log
 
 
@@ -221,24 +222,23 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys)
     cfg = DataflowBuildConfig(
         output_dir=output,
         target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
-        steps=[step_says],
-        verify_steps=["stitched_ip_testbench"],
-        generate_outputs=[],
+        steps=[step_says, "step_size_fifos"],
+        stop_step="step_says",
+        generate_outputs=[DataflowOutputType.BITFILE],
+        settings={"fifo_margin": 2},
     )
-    refusal = "testbench-output: configuration.verify_steps: stitched_ip_testbench runs the"
+    refusal = "shell-outputs: configuration.generate_outputs: bitfile: the 'ip' shell does"
     with pytest.raises(ConfigurationRefused, match=refusal):
         build.build_dataflow_cfg(model, cfg)
     err = capsys.readouterr().err
     with open(f"{output}/{build.LOG_FILE}") as f:
         log = f.read()
-    warning = "verification-not-run: configuration.verify_steps: stitched_ip_testbench, which"
+    warning = "setting-unread: configuration.fifo_margin: only step_size_fifos read it"
     assert err.splitlines()[:3] == [
-        f"WARNING: {warning} step_package_partition runs, and the resolved build steps "
-        "(steps/start_step/stop_step) leave it out: that verification does not run, and has "
-        "no verdict",
+        f"WARNING: {warning}, and start_step/stop_step leave them out",
         "ERROR: Configuration refused: 1 findings",
-        f"ERROR:   {refusal} testbench stitched_ip writes, and generate_outputs does not ask "
-        "for it",
+        f"ERROR:   {refusal} not integrate the partition; its outputs are the packaged IP's "
+        "(stitched_ip, ooc_synth)",
     ]
     assert log.count(refusal) == 1 and log.count(warning) == 1
     assert "Traceback" not in log

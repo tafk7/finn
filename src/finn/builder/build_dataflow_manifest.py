@@ -23,8 +23,9 @@ the artifacts a later step uses (``finn.outputs``); the manifest indexes the run
   ``failed``), its ``seconds``, the ``reports`` it wrote (each with its findings by
   code), and its tool runs (``tools``: each with its transcript, status, seconds, exit
   status and messages by severity);
-- ``verifications``: the verdict of each verification that concluded, by name: ``pass``
-  or ``fail``;
+- ``verifications``: the verdict each verifying step that concluded recorded
+  (``verdict``; FINN's are finn.builder.build_dataflow_steps.VERIFYING_STEPS), by its
+  name: ``pass`` or ``fail``;
 - ``outcome``: None while the build runs; then ``completed``; ``failed``, with the
   step, the error's ``kind`` (``refusal``, ``tool-unavailable``, ``tool-failed``,
   ``verdict``, ``bug``), its type and message, and a refusal's findings by code; or
@@ -85,9 +86,8 @@ def write_report(path: Path, stated: Any) -> None:
 
 
 def verdict(name: str, passed: bool) -> None:
-    """Log a verification's verdict, ``Verification for <name> : SUCCESS`` or ``FAIL``;
-    the manifest records it (``VERIFICATION``). A FAIL is a warning, because the build
-    continues."""
+    """Log the verdict of the verifying step ``name``, ``Verification for <name> :
+    SUCCESS`` or ``FAIL`` (a warning); the manifest records it (``VERIFICATION``)."""
     stated = {VERIFICATION: {"name": name, "passed": passed}}
     if passed:
         RECORDS.info(f"Verification for {name} : SUCCESS", extra=stated)

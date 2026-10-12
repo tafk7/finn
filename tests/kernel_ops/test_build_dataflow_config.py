@@ -32,12 +32,12 @@ from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
-    VerificationStepType,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import default_steps, resolve_plan
 from finn.builder.build_dataflow_steps import (
     KERNEL_STRATEGY_STEPS,
+    VERIFYING_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
     step_add_pre_post_processing,
@@ -73,7 +73,7 @@ def place(finding: Finding) -> object:
 def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
-    assert cfg.generate_outputs == [] and cfg.verify_steps == []
+    assert cfg.generate_outputs == []
     assert cfg.settings == {}
     assert cfg.steps is None and cfg.toolchain is None and cfg.base_dir is None
     # Every setting at its default: the export's own inputs and outputs, and FIFO sizing
@@ -88,6 +88,7 @@ def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
         "topk": None,
         "fifo_margin": 0,
         "fifo_ram_style": None,
+        "verify_input_npy": Path("input.npy"),
         "hw_debug": False,
     }
     assert not any(setting.given for setting in settings.values())
@@ -106,6 +107,7 @@ SETTINGS: dict[str, Any] = {
     "fifo_ram_style": "block",
     "hw_debug": True,
     "target_fps": 1_000_000,
+    "verify_input_npy": "frames.npy",
 }
 
 
@@ -114,8 +116,6 @@ def test_a_configuration_holds_through_json() -> None:
         output_dir="out",
         target=TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq"),
         generate_outputs=list(DataflowOutputType),
-        verify_steps=list(VerificationStepType),
-        verify_input_npy="frames.npy",
         toolchain=Selection(
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
@@ -146,11 +146,6 @@ def test_a_configuration_holds_through_json() -> None:
         "bitfile",
         "pynq_driver",
         "deployment_package",
-    ]
-    assert stated["verify_steps"] == [
-        "partition_python",
-        "partition_elaboration",
-        "stitched_ip_testbench",
     ]
     # The settings beside the fields, as stated; the list as written; no base directory.
     assert {name: stated[name] for name in SETTINGS} == SETTINGS
@@ -196,7 +191,7 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(ke
     assert finding.message == (
         "no step of this build declares it; the settings its steps read: fifo_margin, "
         "fifo_ram_style, hw_debug, input_datatype, max_multithreshold_bit_width, "
-        "override_inpsize, preprocessing, topk"
+        "override_inpsize, preprocessing, topk, verify_input_npy"
     )
 
 
@@ -214,15 +209,8 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(ke
         ({"target": {"board": "Ultra96"}}, "configuration.target: no period_ns"),
         ({"target": {"period_ns": "5"}}, "configuration.target.period_ns: a float, not '5'"),
         ({"toolchain": {"hls_frontend": "hls"}}, "configuration.toolchain: Unknown HLS frontend"),
-        ({"verify_steps": None}, "configuration.verify_steps: null, and it is not optional"),
         ({"generate_outputs": None}, "configuration.generate_outputs: null, and it is not"),
-        (
-            {"verify_steps": ["kernel_partition_python"]},
-            "configuration.verify_steps[0]: 'kernel_partition_python'; one of "
-            "['partition_python', 'partition_elaboration', 'stitched_ip_testbench']",
-        ),
         ({"verbose": "yes"}, "configuration.verbose: a bool, not 'yes'"),
-        ({"verify_input_npy": 3}, "configuration.verify_input_npy: a str, not 3"),
         ({"steps": "phase_prepare_model"}, "configuration.steps: "),
         ({"settings": {"topk": 1}}, "configuration.settings: JSON states each setting as a"),
     ],
@@ -438,10 +426,12 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
 
 def test_the_default_list_and_the_lookup_are_the_phase_tables() -> None:
     """Both derived from the one table: every phase's steps in order, and every step
-    once, by its name, the strategy steps no phase runs by default after the phases'."""
+    once, by its name, the strategy steps no phase runs by default after the phases', then
+    the verifying steps, which no phase runs."""
     in_phases = [step for steps in build_dataflow_phases.values() for step in steps]
     assert default_steps() == [step.__name__ for step in in_phases]
     others = [step for step in KERNEL_STRATEGY_STEPS if step not in in_phases]
+    others += VERIFYING_STEPS
     assert list(build_dataflow_step_lookup.values()) == [*in_phases, *others]
     assert all(name == step.__name__ for name, step in build_dataflow_step_lookup.items())
     assert len(set(in_phases)) == len(in_phases)
@@ -460,6 +450,7 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
         "max_multithreshold_bit_width": ("step_qonnx_to_finn",),
         "fifo_margin": ("step_size_fifos",),
         "fifo_ram_style": ("step_size_fifos",),
+        "verify_input_npy": ("step_package_partition",),
         "hw_debug": ("step_build_bitfile",),
     }
 

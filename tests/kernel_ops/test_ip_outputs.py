@@ -7,16 +7,16 @@ per member out of context, and its XSim testbench.
 
 The Chain (``kernel_ops.models``) is packaged against a toolchain double that stands
 for Vivado (``kernel_ops.packaging.PackagedByStub``), so its description and its
-resources from a report are read in the fast gate, and so is the step that writes the
-testbench and runs it only when the verification step is asked. TFC_W2A2 is built
-through the builder on the ``ip`` shell to its packaged IP and testbench, which the
-verification step runs and which then runs on its own (marker ``xsim``; it packages
-with Vivado too).
+resources from a report are read in the fast gate, and so are the step that writes the
+testbench and the one that runs it. TFC_W2A2 is built through the builder on the ``ip``
+shell to its packaged IP and testbench, which step_run_testbench runs and which then
+runs on its own (marker ``xsim``; it packages with Vivado too).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -30,13 +30,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.build_dataflow_config import (
-    DataflowBuildConfig,
-    DataflowOutputType,
-    VerificationStepType,
-)
-from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_steps import step_package_partition
+from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
+from finn.builder.build_dataflow_manifest import MANIFEST_FILE, VERIFICATION
+from finn.builder.build_dataflow_steps import step_package_partition, step_run_testbench
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
@@ -50,6 +46,7 @@ from finn.kernels.utilization import Resources
 from finn.platform import TargetRequest
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
+    RECORDS,
     Selection,
     Toolchain,
     ToolFailed,
@@ -190,36 +187,48 @@ def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
     assert found["unreported_instances"] == ["second.compute.packed"]
 
 
-def test_the_testbench_is_an_output_run_only_by_its_verification_step(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_the_testbench_is_an_output_its_own_step_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """STITCHED_IP writes the testbench beside the IP and simulates nothing (PRINCIPLES
-    §8: no build re-verifies the computation); STITCHED_IP_TESTBENCH, asked, runs it
-    once, in the build's toolchain."""
+    §8: no build re-verifies the computation); step_run_testbench runs it once, in the
+    build's toolchain, and records its verdict: ``fail`` where the simulation fails, and
+    the step fails with it."""
     ran: list[tuple[Path, object]] = []
-    monkeypatch.setattr(
-        build_dataflow_steps,
-        "run_testbench",
-        lambda directory, *, toolchain: ran.append((directory, toolchain)),
-    )
+    differs = SimulationFailed("FAIL: 3 words differ")
+
+    def run(directory: Path, *, toolchain: object) -> None:
+        ran.append((directory, toolchain))
+        if len(ran) > 1:
+            raise differs
+
+    monkeypatch.setattr(build_dataflow_steps, "run_testbench", run)
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
     stub = PackagedByStub()
-    for verify_steps in ([], [VerificationStepType.STITCHED_IP_TESTBENCH]):
-        output = tmp_path / f"output_{len(verify_steps)}"
-        cfg = DataflowBuildConfig(
-            output_dir=str(output),
-            target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
-            generate_outputs=[DataflowOutputType.STITCHED_IP],
-            verify_steps=verify_steps,
-            verify_input_npy=str(tmp_path / "absent.npy"),
-        )
-        cfg.prepared_toolchain = cast(Toolchain, stub)
-        step_package_partition(parent, cfg)
-        testbench = output / "stitched_ip" / TESTBENCH_DIR
-        assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
-        assert (testbench / RUN_SCRIPT).is_file()
-        assert not (testbench / "xsim.log").exists()
-        assert ran == ([(testbench, stub)] if verify_steps else [])
+    output = tmp_path / "output"
+    cfg = DataflowBuildConfig(
+        output_dir=str(output),
+        target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
+        generate_outputs=[DataflowOutputType.STITCHED_IP],
+    )
+    cfg.prepared_toolchain = cast(Toolchain, stub)
+    step_package_partition(parent, cfg, verify_input_npy=tmp_path / "absent.npy")
+    testbench = output / "stitched_ip" / TESTBENCH_DIR
+    assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
+    assert (testbench / RUN_SCRIPT).is_file()
+    assert not (testbench / "xsim.log").exists()
+    assert ran == []
+    with caplog.at_level(logging.INFO, logger=RECORDS.name):
+        step_run_testbench(parent, cfg)
+        assert ran == [(testbench, stub)]
+        with pytest.raises(SimulationFailed) as failed:
+            step_run_testbench(parent, cfg)
+    assert failed.value is differs
+    verdicts = [getattr(record, VERIFICATION) for record in caplog.records]
+    assert verdicts == [
+        {"name": "step_run_testbench", "passed": True},
+        {"name": "step_run_testbench", "passed": False},
+    ]
 
 
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:
@@ -266,10 +275,10 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
         output_dir=str(output),
         target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
         generate_outputs=[DataflowOutputType.STITCHED_IP],
-        verify_input_npy=str(tmp_path / "absent.npy"),
     )
     cfg.prepared_toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
-    step_package_partition(kernel_model().transform(CutKernelPartition(tmp_path / "p")), cfg)
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "p"))
+    step_package_partition(parent, cfg, verify_input_npy=tmp_path / "absent.npy")
     logs = output / "logs" / "step_package_partition"
     assert sorted(path.name for path in logs.iterdir()) == [
         "package.sh.stderr.log",
@@ -325,8 +334,8 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     tmp_path: Path, tfc_streamlined: Path
 ) -> None:
     """TFC_W2A2 through the builder on ``ip`` (Ultra96's part at 5 ns, the Z0 baseline's
-    exploration), STITCHED_IP asked and STITCHED_IP_TESTBENCH: the IP packages, its
-    description reads back against the module's pins, the verification step runs the
+    exploration), STITCHED_IP asked and step_run_testbench listed: the IP packages, its
+    description reads back against the module's pins, step_run_testbench runs the
     testbench written beside it, on the first image of verify_input_npy, and it prints
     PASS when run by its own script."""
     source_file = tmp_path / "streamlined.onnx"
@@ -338,7 +347,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
         generate_outputs=[DataflowOutputType.STITCHED_IP],
-        settings={"target_fps": 1e6},
+        settings={"target_fps": 1e6, "verify_input_npy": tmp_path / "input.npy"},
         steps=[
             "phase_prepare_model",
             "phase_convert_to_hardware",
@@ -346,20 +355,23 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
             "step_target_throughput",
             "phase_optimize_hardware",
             "phase_emit_hardware",
+            "step_run_testbench",
             "phase_generate_outputs",
         ],
-        verify_steps=[VerificationStepType.STITCHED_IP_TESTBENCH],
-        verify_input_npy=str(tmp_path / "input.npy"),
         enable_build_pdb_debug=False,
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
     manifest = json.loads((output / MANIFEST_FILE).read_text())
-    assert manifest["verifications"] == {"stitched_ip_testbench": "pass"}
-    # The testbench's run.sh, run through the build's toolchain, its transcript the step's.
-    (stitched,) = [each for each in manifest["steps"] if each["name"] == "step_package_partition"]
-    runs = {Path(run["transcript"]).name: run for run in stitched["tools"]}
-    assert runs["run.sh.stdout.log"]["status"] == "completed"
-    assert runs["package.sh.stdout.log"]["status"] == "completed"
+    assert manifest["verifications"] == {"step_run_testbench": "pass"}
+    # Packaged by its step; the testbench's run.sh run through the build's toolchain by
+    # its own, its transcript that step's.
+    tools = {
+        each["name"]: {Path(run["transcript"]).name: run["status"] for run in each["tools"]}
+        for each in manifest["steps"]
+        if each["name"] in ("step_package_partition", "step_run_testbench")
+    }
+    assert tools["step_package_partition"]["package.sh.stdout.log"] == "completed"
+    assert tools["step_run_testbench"] == {"run.sh.stdout.log": "completed"}
     ip = output / "stitched_ip"
     assert (ip / "ip" / "component.xml").is_file()
     # The partition the build packaged, opened through the parent graph the step saved.
