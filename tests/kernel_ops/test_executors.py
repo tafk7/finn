@@ -43,7 +43,7 @@ from finn.core.onnx_exec import (
     execute_onnx,
     running,
 )
-from finn.core.rtlsim_exec import Unstreamable, XSim, boundary, links
+from finn.core.rtlsim_exec import Unstreamable, XSim, _read, boundary, links
 from finn.custom_op.kernels.shell import PARTITION
 from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
@@ -51,6 +51,7 @@ from finn.custom_op.partition.kernel_partitions import (
     PARTITION_OP,
     kernel_partition_body,
 )
+from finn.dataflow.traversal import pack, vector_major
 from finn.transformation.kernels.cut import CutKernelPartition, partition_kernel_ops
 from finn.util.draws import boundary_inputs
 from kernel_ops.models import configure_partition, kernel_model, thresholding_model
@@ -272,6 +273,17 @@ def test_xsim_refuses_an_input_its_boundary_cannot_present(tmp_path: Path) -> No
         context["x"] = values
         with pytest.raises(Unstreamable, match=refusal):
             XSim(directory=tmp_path).run(partition, context, parent)
+
+
+def test_xsim_reads_an_output_its_container_cannot_hold_into_a_wider_one() -> None:
+    """No Vivado needed: an output's words read back keep the context's container where
+    it holds them exactly; an odd value past 2**24, which float32 rounds, comes back in
+    float64, exactly, as the KernelOp's reference holds it."""
+    form, held = vector_major((1, 2), 2), np.zeros((1, 2), dtype=np.float32)
+    for values, element in (([5, -7], np.float32), ([2**24 + 1, -(2**24) - 3], np.float64)):
+        words = pack(form, np.array(values), 26)
+        found = _read(form, 26, True, held, words, "y", {"y": words})
+        assert found.dtype == element and np.array_equal(found, [values]), found
 
 
 # -- start_node and end_node inside a partition ----------------------------------------
