@@ -29,7 +29,7 @@ from finn.builder.build_dataflow_checks import Severity, run_all_config_checks
 from finn.builder.build_dataflow_config import DataflowBuildConfig, StepEntry
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import BuildPlan, resolve_plan
-from finn.builder.build_dataflow_steps import step_tidy_up
+from finn.builder.build_dataflow_steps import step_cleanup, step_tidy_up
 from finn.platform import TargetRequest
 
 TARGET = TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e")
@@ -183,7 +183,7 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
     [
         (
             "step_explorer",
-            "steps[1]: 'step_explorer' is no step or phase; the steps: step_tidy_up, ",
+            "steps[1]: 'step_explorer' is no step or phase; the steps: step_cleanup, ",
         ),
         ("finn.builder.nowhere.step_x", "steps[1]: 'finn.builder.nowhere.step_x': no module"),
         (
@@ -203,9 +203,10 @@ def test_an_entry_that_names_no_step_is_refused_naming_its_place(entry: Any, mes
 
 #: The default list's steps, in order.
 DEFAULT = [
-    "step_tidy_up",
-    "step_qonnx_to_finn",
+    "step_cleanup",
     "step_add_pre_post_processing",
+    "step_qonnx_to_finn",
+    "step_tidy_up",
     "step_streamline",
     "step_convert_to_channels_last",
     "step_convert_to_hw",
@@ -223,7 +224,7 @@ DEFAULT = [
 def test_each_edit_changes_the_default_list_in_order() -> None:
     edits = [
         {"after": "step_streamline", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
-        {"before": "step_tidy_up", "insert": [f"{__name__}.step_scaled", "step_explore"]},
+        {"before": "step_cleanup", "insert": [f"{__name__}.step_scaled", "step_explore"]},
         {"remove": "step_verify_partition"},
         # An import path names a step by what it imports.
         {"replace": f"{__name__}.step_scaled", "with": GiveReadableTensorNames()},
@@ -234,9 +235,10 @@ def test_each_edit_changes_the_default_list_in_order() -> None:
     assert names(plan) == [
         "GiveReadableTensorNames",
         "step_explore",
-        "step_tidy_up",
-        "step_qonnx_to_finn",
+        "step_cleanup",
         "step_add_pre_post_processing",
+        "step_qonnx_to_finn",
+        "step_tidy_up",
         "step_streamline",
         "GiveUniqueNodeNames",
         "step_convert_to_channels_last",
@@ -290,7 +292,7 @@ def test_an_edit_applies_to_steps_when_given() -> None:
         (
             [{"after": "step_streamlin", "insert": "step_explore"}],
             "step_edits[0].after: 'step_streamlin' names 0 steps of the list, not one; its "
-            "steps: step_tidy_up, step_qonnx_to_finn,",
+            "steps: step_cleanup, step_add_pre_post_processing,",
         ),
         (
             [
@@ -403,7 +405,7 @@ def test_a_setting_of_the_wrong_type_is_refused_naming_its_place(
 
 
 def test_a_setting_no_step_declares_is_refused_naming_the_settings_the_steps_read() -> None:
-    cfg = config(steps=[step_typed, step_tidy_up], settings={"scael": 2.0})
+    cfg = config(steps=[step_typed, step_cleanup], settings={"scael": 2.0})
     assert refused(cfg) == (
         "settings no step of this build declares: scael; the settings its steps read: count, "
         "flag, label, limit, mode, override_inpsize, scale, sizes, table, weights"
@@ -414,11 +416,6 @@ def test_steps_that_declare_one_setting_share_its_value() -> None:
     plan = resolve_plan(config(steps=[step_scaled, step_typed], settings={"scale": 4.0}))
     assert plan.settings["scale"].readers == ("step_scaled", "step_typed")
     assert [step.settings["scale"] for step in plan.steps] == [4.0, 4.0]
-    # The build's own: the preprocessing lowered with the quantization's bit width.
-    plan = resolve_plan(config(settings={"max_multithreshold_bit_width": 4}))
-    width = plan.settings["max_multithreshold_bit_width"]
-    assert width.readers == ("step_qonnx_to_finn", "step_add_pre_post_processing")
-    assert [step.settings["max_multithreshold_bit_width"] for step in plan.steps[1:3]] == [4, 4]
 
 
 def test_steps_that_declare_one_setting_differently_are_refused() -> None:

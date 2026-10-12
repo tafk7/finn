@@ -21,8 +21,8 @@ gate_pytest tests/kernel_ops xsim vivado
 # The XSim sweep's tooling: the emitted text and each job's key (no Vivado).
 gate_pytest tests/xsim_sweep
 # Graph preparation's front end (the preparation layer: finn.transformation.qonnx
-# and .streamline, which the kernel path's graph-preparation phase runs; tests/
-# kernel_ops tests the phase itself) and the Brevitas export it reads, under
+# and .streamline, which the builder's graph-preparation steps run; tests/kernel_ops
+# tests the steps themselves) and the Brevitas export it reads, under
 # tests/conftest.py. One thread per worker: each of the workers would otherwise run
 # torch over every CPU. About 1 700 tests, 7 minutes alone.
 OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
@@ -37,7 +37,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
     src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
-    src/finn/transformation/prepare src/finn/analysis src/finn/util/draws.py \
+    src/finn/analysis src/finn/util/draws.py \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
@@ -51,7 +51,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
 # finn.builder's kernel path: its configuration, its plan, its checks
 # and steps, the ip shell's testbench and the resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
-    -p finn.transformation.kernels -p finn.transformation.prepare -p finn.analysis -p finn.harness \
+    -p finn.transformation.kernels -p finn.analysis -p finn.harness \
     -m finn.util.draws \
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
     -m finn.core.rtlsim_pacing -m finn.core.onnx_exec \
