@@ -108,6 +108,8 @@ from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition
 
 #: The steps' logger, whose lines a step called outside a build logs.
 STEPS_LOG = "finn.builder.build_dataflow_steps"
+#: The logger of the reports a step writes (finn.builder.build_dataflow_manifest.reported).
+REPORTS_LOG = "finn.builder.build_dataflow_manifest"
 
 #: The builder's phases from the prepared graph to the verified partition.
 KERNEL_PATH = ["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"]
@@ -620,22 +622,42 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
 
 
 def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> None:
+    """A verification whose concluding step the plan leaves out does not run, and the
+    check says so; one whose reference-saving step it leaves out (a build resumed after
+    conversion) still runs, on a reference an earlier run left, and the check says that
+    it fails where there is none."""
     verify = [VerificationStepType.PARTITION_ELABORATION]
     cfg = config(
         tmp_path, steps=["phase_emit_hardware", "phase_generate_outputs"], verify_steps=verify
     )
     (warning,) = [check for check in checks_of(cfg) if check.name == "verify_step_prereq"]
     assert not warning.passed and warning.severity == Severity.WARNING
-    assert "partition_elaboration" in warning.message
+    assert warning.message == (
+        "verify_steps includes partition_elaboration, which step_verify_partition runs, and "
+        "the resolved build steps (steps/start_step/stop_step) leave it out: that "
+        "verification does not run, and has no verdict"
+    )
     cfg = config(tmp_path, verify_steps=verify)
     assert "verify_step_prereq" not in {check.name for check in checks_of(cfg)}
     python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
+    resumed = config(
+        tmp_path,
+        steps=["phase_create_accelerator", "phase_optimize_hardware"],
+        verify_steps=[VerificationStepType.PARTITION_PYTHON],
+    )
+    (warning,) = [check for check in checks_of(resumed) if check.name == "verify_step_prereq"]
+    assert warning.message == (
+        "verify_steps includes partition_python, whose reference step_convert_to_hw saves, "
+        "and the resolved build steps (steps/start_step/stop_step) leave it out: "
+        "step_verify_partition reads the reference an earlier run left in the output "
+        "directory, and fails (FileNotFoundError) where there is none"
+    )
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
     testbench = [VerificationStepType.STITCHED_IP_TESTBENCH]
     cfg = config(tmp_path, steps=KERNEL_PATH, verify_steps=testbench)
     (warning,) = [check for check in checks_of(cfg) if check.name == "verify_step_prereq"]
-    assert "stitched_ip_testbench, which needs step_package_partition" in warning.message
+    assert "stitched_ip_testbench, which step_package_partition runs" in warning.message
     assert failed_checks(config(tmp_path, verify_steps=testbench, generate_outputs=[])) == {
         "testbench_output": [
             "verify_steps includes stitched_ip_testbench, which runs the testbench "
@@ -654,7 +676,11 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     """A host node on a path from a KernelOp to a KernelOp is refused where the build
     converts, named with its findings, after the report is written: not at
     partitioning, which would find the partition depending on itself."""
-    with caplog.at_level(logging.INFO, logger=STEPS_LOG), pytest.raises(KernelOpError) as refused:
+    with (
+        caplog.at_level(logging.INFO, logger=STEPS_LOG),
+        caplog.at_level(logging.INFO, logger=REPORTS_LOG),
+        pytest.raises(KernelOpError) as refused,
+    ):
         step_convert_to_hw(host_between_source(), config(tmp_path))
     assert str(refused.value) == (
         "1 host nodes sit between KernelOps, so a partition of the KernelOps would depend "
@@ -662,7 +688,10 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     )
     report = json.loads((tmp_path / "output" / "report" / "kernel_ops.json").read_text())
     assert report["between_kernel_ops"] == ["flip"]
-    assert [record.getMessage() for record in caplog.records if record.name == STEPS_LOG] == [
+    logged = [
+        record.getMessage() for record in caplog.records if record.name in (STEPS_LOG, REPORTS_LOG)
+    ]
+    assert logged == [
         f"wrote {tmp_path / 'output' / 'report' / 'kernel_ops.json'}",
         "ToKernelOps: 2 converted (MatMul 2); 1 on the host; report/kernel_ops.json",
         "ToKernelOps:   no-kernel-op (limitation) 1: Transpose 1",

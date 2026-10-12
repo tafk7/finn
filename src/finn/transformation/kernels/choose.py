@@ -5,11 +5,12 @@
 time, and saving them.
 
 ``explore_kernel_choices(model, strategy)`` explores a partition's body, the model of
-KernelOps the kernel path's cut made (``CutKernelPartition``; the build's strategy steps
-open it through the parent graph's node, ``partition_body``, and save it in its file),
-so which KernelOps go together is the cut's alone: a model holding any other node is
-refused. It builds the body's shell root (``shell_root``: their kernels, the channels
-between them and the channels on its boundary; the nodes' and the channels' saved
+KernelOps the kernel path's cut made (``CutKernelPartition``; ``explore_partition``, which
+the build's strategy steps run, opens it through the parent graph's node,
+``partition_body``, and saves it in its file), so which KernelOps go together is the
+cut's alone: a model holding any other node is refused. It builds the body's shell root
+(``shell_root``: their kernels, the channels between them and the channels on its
+boundary; the nodes' and the channels' saved
 choices replayed, a stale one dropped with why; members named as the graph,
 ``MatMul_0``) and its ``Seam`` (``finn.kernels.explore``), holds the pins the body
 records (``HELD``), gives every choice the body leaves open its baseline
@@ -42,6 +43,8 @@ settles, and then:
   outer search can compare; and every limitation it found (``findings``: the
   strategy's and the resources'), in the report where each was found. Who set a value
   is logged in the report, never stored in the model.
+
+``exploration_summary`` gives an exploration's lines for a build's log.
 
 The order of strategies is the build plan's: pins first, and FIFO sizing after the last
 strategy that changes the folding (``finn.builder.build_dataflow_plan``), since the
@@ -76,6 +79,7 @@ says what the cycles leave out (``memory_latency``: unmeasured, each call adds i
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -94,7 +98,7 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
     shell_root,
 )
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import Bottleneck, Cost, Explorer, Pinned, Seam, SizeFifos
@@ -495,6 +499,38 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     return Explored(point, cost, explored, (*found, *over_part))
 
 
+def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
+    """The partition of the kernel path's parent graph ``parent`` explored by ``strategy``:
+    its body opened through the partition node (``partition_body``), explored
+    (``explore_kernel_choices``) and saved in its file. The parent graph is unchanged;
+    a later exploration of the body holds the pins this one recorded."""
+    _, body, body_file = partition_body(parent)
+    explored = explore_kernel_choices(body, strategy)
+    body.save(body_file)
+    return explored
+
+
+def exploration_summary(explored: Explored, label: str) -> list[tuple[int, str]]:
+    """An exploration's lines for a build's log, each with its level: how many values
+    the strategy ``label`` changed; each limitation found, a warning; each value a
+    debugging strategy set; the choices left open; and the FIFOs."""
+    report = explored.report
+    changed = len(report["strategy"]["changed"])
+    lines = [(logging.INFO, f"Kernel choices: {label} changed {changed}")]
+    lines += [(logging.WARNING, f"Kernel choices: {each.message}") for each in explored.findings]
+    lines += [
+        (logging.INFO, f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
+        for node, held in report["choices"].items()
+        for attribute, entry in held.items()
+        if str(entry["by"]).startswith("DEBUG")
+    ]
+    if report["open"]:
+        left = ", ".join(report["open"])
+        lines.append((logging.INFO, f"Kernel choices: open, refused at packaging: {left}"))
+    lines.append((logging.INFO, f"FIFOs: {report['fifos']}"))
+    return lines
+
+
 def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
     """The slowest members of a partition model of KernelOps' shell root, ends included,
     and their cycles a frame, its saved choices replayed (None where a member's cycles
@@ -525,6 +561,8 @@ __all__ = [
     "ExploreKernelChoices",
     "Explored",
     "explore_kernel_choices",
+    "explore_partition",
+    "exploration_summary",
     "held_choices",
     "shell_bottleneck",
 ]

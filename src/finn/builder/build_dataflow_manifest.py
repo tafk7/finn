@@ -33,10 +33,10 @@ the artifacts a later step uses (``finn.outputs``); the manifest indexes the run
 The file is rewritten atomically (a temporary file renamed over it) whenever it
 changes, so a build stopped at any point leaves the last state it reached; a killed
 build's step stays ``running``. Steps report what they did in log records, which the
-build's ``ManifestHandler`` collects: a report written (``REPORT``), a verdict
-(``VERIFICATION``), a tool run (``finn.toolchain.launcher.TOOL_RUN``). Of a report,
-only its findings' counts are copied. Paths inside the output directory are written
-relative to it.
+build's ``ManifestHandler`` collects: a report written (``REPORT``: ``reported``,
+``write_report``), a verdict (``VERIFICATION``: ``verdict``), a tool run
+(``finn.toolchain.launcher.TOOL_RUN``). Of a report, only its findings' counts are
+copied. Paths inside the output directory are written relative to it.
 """
 
 from __future__ import annotations
@@ -65,6 +65,35 @@ REPORT = "finn_report"
 VERIFICATION = "finn_verification"
 
 PASS, FAIL, ERROR, NOT_RUN = "pass", "fail", "error", "not-run"
+
+#: The log of what the steps report to the manifest: the reports they write and the
+#: verdicts of their verifications.
+_LOG = logging.getLogger(__name__)
+
+
+def reported(path: str | os.PathLike[str]) -> None:
+    """Log ``wrote <path>`` for a report the running step wrote: the manifest lists it
+    under that step, with its findings (``REPORT``)."""
+    _LOG.info(f"wrote {path}", extra={REPORT: os.fspath(path)})
+
+
+def write_report(path: Path, stated: Any) -> None:
+    """Write ``stated`` as JSON into the report ``path``, its directory made, and log it
+    (``reported``)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(stated, indent=2))
+    reported(path)
+
+
+def verdict(name: str, passed: bool) -> None:
+    """Log a verification's verdict, ``Verification for <name> : SUCCESS`` or ``FAIL``;
+    the manifest records it (``VERIFICATION``). A FAIL is a warning, because the build
+    continues."""
+    stated = {VERIFICATION: {"name": name, "passed": passed}}
+    if passed:
+        _LOG.info(f"Verification for {name} : SUCCESS", extra=stated)
+    else:
+        _LOG.warning(f"Verification for {name} : FAIL", extra=stated)
 
 
 @functools.cache
@@ -364,4 +393,7 @@ __all__ = [
     "ManifestHandler",
     "finn_revision",
     "findings_by_code",
+    "reported",
+    "verdict",
+    "write_report",
 ]

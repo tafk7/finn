@@ -12,20 +12,22 @@ The steps prepare a Brevitas export into the streamlined graph the kernel path c
 convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
 choose the partition's parameters, one strategy step at a time; and make the outputs the
 configuration asks for: the partition's packaged IP on any shell, and the bitfile,
-driver and deployment package on a shell that integrates it."""
+driver and deployment package on a shell that integrates it.
 
-import copy
+A step is the transformations and calls it runs; what they do lives in the module that
+owns it: the exploration in finn.transformation.kernels, the shell's outputs in
+finn.shells, the optional verifications in finn.builder.build_dataflow_verification and
+finn.builder.build_dataflow_testbench, the resources report in
+finn.builder.build_dataflow_resources, and the logging of the reports and verdicts the
+build's manifest collects in finn.builder.build_dataflow_manifest."""
+
 import json
 import logging
-import os
-import shutil
 from pathlib import Path
 
-import numpy as np
 from onnx import helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.bipolar_to_xnor import ConvertBipolarMatMulToXnorPopcount
 from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.general import (
@@ -50,25 +52,26 @@ from finn.builder.build_dataflow_config import (
     Step,
     VerificationStepType,
 )
-from finn.builder.build_dataflow_manifest import REPORT, VERIFICATION
-from finn.builder.build_dataflow_resources import RESOURCES_FILE, shell_resources_report
+from finn.builder.build_dataflow_manifest import reported, verdict, write_report
+from finn.builder.build_dataflow_resources import (
+    RESOURCES_FILE,
+    built_reports,
+    shell_resources_report,
+)
 from finn.builder.build_dataflow_testbench import (
     TESTBENCH_DIR,
-    generated_frame,
-    partition_frame,
     run_testbench,
+    testbench_frame,
     write_testbench,
 )
-from finn.core.onnx_exec import execute_onnx
+from finn.builder.build_dataflow_verification import (
+    VERIFICATION_DIR,
+    save_reference,
+    verify_partition_python,
+)
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
-from finn.custom_op.partition.kernel_partitions import (
-    OUTPUT_BITFILE,
-    OUTPUT_HWH,
-    OUTPUT_IP,
-    design_digest,
-    partition_body,
-)
+from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.explore import (
     DebugPlaceholder,
     Explorer,
@@ -79,20 +82,14 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.platform import refuse_drift
+from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
-from finn.shells.pynq.runner import (
-    BITFILE,
-    REPORTS,
-    BuildPynqBitfile,
-    bitfile_directory,
-    pynq_row,
-    refuse_stale_bitfile,
-)
-from finn.toolchain.launcher import Toolchain, ToolFailed
+from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
 from finn.transformation.kernels import (
     Explored,
     ToKernelOps,
-    explore_kernel_choices,
+    exploration_summary,
+    explore_partition,
     kernel_choices_config,
     kernel_ops_report,
     kernel_ops_summary,
@@ -110,33 +107,14 @@ from finn.transformation.qonnx.quant_act_to_multithreshold import (
 )
 from finn.transformation.streamline import Streamline
 
-#: The steps' logger. The build log has every line; the console shows only warnings, such
-#: as a failed verification the build continued past, or a limitation.
+#: The steps' logger. The build log has every line; the console shows warnings, such as
+#: a failed verification the build continued past or a limitation, and with ``verbose``
+#: every line.
 _LOG = logging.getLogger(__name__)
 
-
-def _tools(cfg: DataflowBuildConfig, step: str) -> Toolchain:
-    """The build's toolchain for ``step``, writing every tool's transcript into
-    ``output_dir/logs/<step>``. The step passes it to each transformation that runs a
-    tool."""
-    return cfg.prepared_toolchain.transcripts_in(Path(cfg.output_dir) / "logs" / step)
-
-
-def _verdict(name: str, passed: bool) -> None:
-    """Log a verification's result, ``Verification for <name> : SUCCESS`` or ``FAIL``. A
-    FAIL is a warning, because the build continues. The build's manifest records the
-    result (finn.builder.build_dataflow_manifest.VERIFICATION)."""
-    verdict = {VERIFICATION: {"name": name, "passed": passed}}
-    if passed:
-        _LOG.info(f"Verification for {name} : SUCCESS", extra=verdict)
-    else:
-        _LOG.warning(f"Verification for {name} : FAIL", extra=verdict)
-
-
-def _reported(path: str | os.PathLike[str]) -> None:
-    """Log ``wrote <path>`` for a report the step wrote; the build's manifest lists it
-    under the step, with its findings (finn.builder.build_dataflow_manifest.REPORT)."""
-    _LOG.info(f"wrote {path}", extra={REPORT: os.fspath(path)})
+#: Where step_package_partition packages the partition, under the output directory: its
+#: IP, interface description and testbench, and with OOC_SYNTH its utilization report.
+STITCHED_IP_DIR = "stitched_ip"
 
 
 def _cleaned(model: ModelWrapper, override_inpsize: int | list[int] | None = None) -> ModelWrapper:
@@ -263,28 +241,19 @@ def step_convert_to_channels_last(model: ModelWrapper, cfg: DataflowBuildConfig)
     return model.transform(RemoveUnusedTensors())
 
 
-def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
-    """Where step_convert_to_hw saves the model it converts, the reference for the
-    PARTITION_PYTHON check."""
-    return cfg.output_dir + "/intermediate_models/kernel_path_source.onnx"
-
-
 def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Record the build's target in the model, and convert each node a KernelOp
     supports (MatMul, MultiThreshold) into that KernelOp. Writes report/kernel_ops.json:
     what each node became, or why it stayed on the host. Refuses a host node between
     KernelOps, since they must form one partition. With PARTITION_PYTHON, the model
-    before conversion is saved as that check's reference."""
+    before conversion is saved as that check's reference
+    (finn.builder.build_dataflow_verification.save_reference)."""
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
-        os.makedirs(os.path.dirname(_kernel_path_source(cfg)), exist_ok=True)
-        model.save(_kernel_path_source(cfg))
+        save_reference(model, Path(cfg.output_dir))
     conversion = ToKernelOps(cfg.resolved_target)
     model = model.transform(conversion)
     report = kernel_ops_report(model, conversion.outcomes)
-    os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-    with open(cfg.output_dir + "/report/kernel_ops.json", "w") as f:
-        json.dump(report, f, indent=2)
-    _reported(cfg.output_dir + "/report/kernel_ops.json")
+    write_report(Path(cfg.output_dir) / "report" / "kernel_ops.json", report)
     for line in kernel_ops_summary(conversion.outcomes):
         _LOG.info(line)
     refuse_host_between(model, conversion.outcomes)
@@ -296,39 +265,17 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
 KERNEL_CHOICES_FILE = "kernel_choices.json"
 
 
-def _strategy_report(step: str) -> str:
-    """Where the strategy step ``step`` writes its report, under the output directory."""
-    return f"report/{step}.json"
-
-
-def _explore_partition(
+def _explore(
     model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
 ) -> Explored:
-    """Run one strategy over the partition's KernelOps: the body opened through the parent
-    graph's partition node, its pins held, ``strategy`` run, every value and the pins saved
-    in the body's file (finn.transformation.kernels.explore_kernel_choices). Writes the
-    step's report (``_strategy_report``): what the strategy changed, who set each value,
-    the pins, the choices left open, the FIFOs, the cost and resources, and the
-    limitations found, each also logged as a warning, never an error. The parent graph is
-    unchanged."""
-    _, body, body_file = partition_body(model)
-    explored = explore_kernel_choices(body, strategy)
-    body.save(body_file)
-    path = Path(cfg.output_dir) / _strategy_report(step)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(explored.report, indent=2))
-    _reported(path)
-    report = explored.report
-    _LOG.info(f"Kernel choices: {step} changed {len(report['strategy']['changed'])}")
-    for finding in explored.findings:
-        _LOG.warning(f"Kernel choices: {finding.message}")
-    for node, held in report["choices"].items():
-        for attribute, entry in held.items():
-            if str(entry["by"]).startswith("DEBUG"):
-                _LOG.info(f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
-    if report["open"]:
-        _LOG.info(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
-    _LOG.info(f"FIFOs: {report['fifos']}")
+    """Explore the partition by ``strategy``, its pins held and every value saved in its
+    body (finn.transformation.kernels.explore_partition); write the step's report,
+    report/<step>.json, and log its summary, each limitation found a warning, never an
+    error."""
+    explored = explore_partition(model, strategy)
+    write_report(Path(cfg.output_dir) / "report" / f"{step}.json", explored.report)
+    for level, line in exploration_summary(explored, step):
+        _LOG.log(level, line)
     return explored
 
 
@@ -341,7 +288,7 @@ def step_pin_choices(
     of the build holds them. A choice the partition does not have, a value it does not
     take, or one an earlier pin holds otherwise is refused, by name. Pin first, so that
     the strategies after it fold around the pins. Writes report/step_pin_choices.json."""
-    _explore_partition(model, cfg, "step_pin_choices", Pinned(kernel_choices_file))
+    _explore(model, cfg, "step_pin_choices", Pinned(kernel_choices_file))
     return model
 
 
@@ -366,7 +313,7 @@ def step_target_throughput(
             "partition to, is given"
         )
     strategy = TargetThroughput(target_fps, relax=relax_target_fps)
-    _explore_partition(model, cfg, "step_target_throughput", strategy)
+    _explore(model, cfg, "step_target_throughput", strategy)
     return model
 
 
@@ -378,9 +325,7 @@ def step_max_throughput(
     (``{"lut": 0.5}``), the pins held. A budget even the least parallelism exceeds is a
     limitation, logged, and that point is kept. Writes
     report/step_max_throughput.json, with every budget tried."""
-    explored = _explore_partition(
-        model, cfg, "step_max_throughput", MaxThroughput(max_throughput_within)
-    )
+    explored = _explore(model, cfg, "step_max_throughput", MaxThroughput(max_throughput_within))
     each = explored.report["strategy"]
     _LOG.info(
         f"Kernel choices: max_throughput reached {each['bottleneck']['cycles']} cycles a "
@@ -405,7 +350,7 @@ def step_size_fifos(
     that changes the folding; the build's plan refuses a folding step after it. Writes
     report/step_size_fifos.json."""
     strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
-    _explore_partition(model, cfg, "step_size_fifos", strategy)
+    _explore(model, cfg, "step_size_fifos", strategy)
     return model
 
 
@@ -413,7 +358,7 @@ def step_baseline_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     """Set every choice of the partition that is not pinned back to its baseline: a
     build resumed from a partition explored before starts over with it. Writes
     report/step_baseline_choices.json."""
-    _explore_partition(model, cfg, "step_baseline_choices", Rebaseline())
+    _explore(model, cfg, "step_baseline_choices", Rebaseline())
     return model
 
 
@@ -423,77 +368,25 @@ def step_placeholder_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> M
     yet; each is logged ``DEBUG: set by placeholder``. A FIFO's depth has no first value:
     it is refused, by name (run step_size_fifos). Writes
     report/step_placeholder_choices.json."""
-    _explore_partition(model, cfg, "step_placeholder_choices", DebugPlaceholder())
+    _explore(model, cfg, "step_placeholder_choices", DebugPlaceholder())
     return model
-
-
-def _partition_directory(cfg: DataflowBuildConfig) -> Path:
-    """Where the build keeps the partition's body (``partition.onnx``) and the scratch
-    models the shell's integration generates the ends' IPs from (``ends/``)."""
-    return Path(cfg.output_dir) / "partition"
 
 
 def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Cut the KernelOps into one StreamingDataflowPartition, leaving the nodes before
     and after it on the host. From here on the build's model is the parent graph. The
     partition is named ``partition``: its node, its body (partition/partition.onnx), its
-    IP and its block-design instance. Its body carries the target and every choice at
-    its baseline. Each channel's choices are created here, and each KernelOp's are
-    checked again in context: one that is stale because the model was edited since
-    conversion is reset to its baseline, with a warning saying why."""
-    cut = CutKernelPartition(_partition_directory(cfg))
+    IP and its block-design instance; partition/ also holds the scratch models the
+    shell's integration generates the ends' IPs from (partition/ends/). Its body carries
+    the target and every choice at its baseline. Each channel's choices are created
+    here, and each KernelOp's are checked again in context: one that is stale because
+    the model was edited since conversion is reset to its baseline, with a warning
+    saying why."""
+    cut = CutKernelPartition(Path(cfg.output_dir) / "partition")
     model = model.transform(cut)
     for key, why in cut.dropped.items():
         _LOG.warning(f"Kernel choices: {key} dropped as stale at the cut and re-baselined: {why}")
     return model
-
-
-def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> bool:
-    """Execute the parent graph ``model``, its partition node running the KernelOps, on
-    each input in ``verify_input_npy``, and compare the partition's outputs value for
-    value with those of the model saved before conversion (step_convert_to_hw). Saves
-    each input's partition outputs as
-    verification_output/verify_partition_python_<index>_<SUCCESS|FAIL>.npz, and
-    returns whether all matched."""
-    source_file = _kernel_path_source(cfg)
-    if not os.path.isfile(source_file):
-        raise FileNotFoundError(
-            f"{source_file}: the kernel path's source, which step_convert_to_hw keeps when "
-            "PARTITION_PYTHON is asked, is not there (did the build start after it?)"
-        )
-    verify_out_dir = cfg.output_dir + "/verification_output"
-    os.makedirs(verify_out_dir, exist_ok=True)
-    node, _, _ = partition_body(model)
-    source = ModelWrapper(source_file)
-    source_input = source.graph.input[0].name
-    shape = source.get_tensor_shape(source_input)
-    if shape is None:
-        raise ValueError(f"partition_python: the source's input {source_input} states no shape")
-    ishape = tuple(shape)
-    outputs = list(node.output)
-    inputs = np.load(cfg.verify_input_npy)
-    all_match = True
-    for index in range(inputs.shape[0]):
-        frame = inputs[index : index + 1].reshape((1,) + ishape[1:])
-        built = execute_onnx(model, {model.graph.input[0].name: frame}, True)
-        expected = execute_onnx(source, {source_input: frame}, True)
-        mismatched = [name for name in outputs if not np.array_equal(built[name], expected[name])]
-        for name in mismatched:
-            _LOG.warning(
-                f"partition_python: input {index}: {name} differs from the source's in "
-                f"{int(np.sum(built[name] != expected[name]))} of {built[name].size} values"
-            )
-        result = "FAIL" if mismatched else "SUCCESS"
-        all_match = all_match and not mismatched
-        np.savez(
-            f"{verify_out_dir}/verify_partition_python_{index}_{result}.npz",
-            **{name: built[name] for name in outputs},
-        )
-    _LOG.info(
-        f"partition_python: the partition's outputs {outputs} on {inputs.shape[0]} "
-        f"inputs of {cfg.verify_input_npy}, against the model the kernel path started from"
-    )
-    return all_match
 
 
 def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
@@ -503,26 +396,22 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     choices are complete and current, its ports match its graph's inputs and outputs in
     order (configured_root), and its target is the configuration's (refuse_drift). Then
     run the optional checks ``verify_steps`` asks for: PARTITION_PYTHON compares the
-    partition's outputs with the model before conversion (_verify_partition_python), and
-    PARTITION_ELABORATION compiles and elaborates its RTL in XSim."""
+    partition's outputs with the model before conversion
+    (finn.builder.build_dataflow_verification), and PARTITION_ELABORATION compiles and
+    elaborates its RTL in XSim, into verification_output/partition_elaboration."""
+    output = Path(cfg.output_dir)
     node, body, _ = partition_body(model)
-    os.makedirs(cfg.output_dir, exist_ok=True)
-    with open(os.path.join(cfg.output_dir, KERNEL_CHOICES_FILE), "w") as f:
-        json.dump(kernel_choices_config(body), f, indent=2)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / KERNEL_CHOICES_FILE).write_text(json.dumps(kernel_choices_config(body), indent=2))
     configured_root(body, node.name)
     refuse_drift(read_target(body), cfg.resolved_target, "build")
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
-        matched = _verify_partition_python(model, cfg)
-        _verdict("partition_python", matched)
+        verdict("partition_python", verify_partition_python(model, output, cfg.verify_input_npy))
     if VerificationStepType.PARTITION_ELABORATION in cfg.verify_steps:
-        directory = cfg.output_dir + "/verification_output/partition_elaboration"
-        body.transform(
-            ElaboratePartition(
-                directory=Path(directory),
-                toolchain=_tools(cfg, "step_verify_partition"),
-            )
-        )
-        _verdict("partition_elaboration", True)
+        directory = output / VERIFICATION_DIR / "partition_elaboration"
+        toolchain = cfg.step_toolchain("step_verify_partition")
+        body.transform(ElaboratePartition(directory=directory, toolchain=toolchain))
+        verdict("partition_elaboration", True)
     return model
 
 
@@ -532,12 +421,6 @@ def _refuse_drift(
     """Refuse to make ``output`` if the partition's target is not the configuration's."""
     _, body, _ = partition_body(model)
     refuse_drift(read_target(body), cfg.resolved_target, f"{output.value} build")
-
-
-def _stitched_ip_directory(cfg: DataflowBuildConfig) -> Path:
-    """Where step_package_partition packages the partition: its IP, interface
-    description and testbench, and with OOC_SYNTH its utilization report."""
-    return Path(cfg.output_dir) / "stitched_ip"
 
 
 def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
@@ -559,8 +442,8 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     if not (stitched or ooc):
         _LOG.info("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
         return model
-    directory = _stitched_ip_directory(cfg)
-    toolchain = _tools(cfg, "step_package_partition")
+    directory = Path(cfg.output_dir) / STITCHED_IP_DIR
+    toolchain = cfg.step_toolchain("step_package_partition")
     node, body, body_file = partition_body(model)
     body = body.transform(
         PackagePartition(
@@ -573,19 +456,15 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
     body.save(body_file)
     _LOG.info(f"Packaged IP {node.name} and its interface description in {directory}")
     if ooc:
-        _reported(partition_utilization_report(directory))
+        reported(partition_utilization_report(directory))
     if stitched:
-        if os.path.isfile(cfg.verify_input_npy):
-            frame = partition_frame(model, np.load(cfg.verify_input_npy)[0])
-            stimulus = f"the first input of {cfg.verify_input_npy}"
-        else:
-            frame, stimulus = generated_frame(body), "a generated frame"
+        frame, stimulus = testbench_frame(model, body, cfg.verify_input_npy)
         testbench = directory / TESTBENCH_DIR
         write_testbench(body, testbench, frame, toolchain=toolchain, label=node.name)
         _LOG.info(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
         if VerificationStepType.STITCHED_IP_TESTBENCH in cfg.verify_steps:
             run_testbench(testbench, toolchain=toolchain)
-            _verdict("stitched_ip_testbench", True)
+            verdict("stitched_ip_testbench", True)
     return model
 
 
@@ -618,13 +497,13 @@ def step_build_bitfile(
     _refuse_drift(model, cfg, DataflowOutputType.BITFILE)
     building = BuildPynqBitfile(
         Path(cfg.output_dir),
-        toolchain=_tools(cfg, "step_build_bitfile"),
+        toolchain=cfg.step_toolchain("step_build_bitfile"),
         hw_debug=hw_debug,
         objective_fps=target_fps,
     )
     model = model.transform(building)
     for report in REPORTS.values():
-        _reported(Path(cfg.output_dir) / report)
+        reported(Path(cfg.output_dir) / report)
     for finding in building.findings:
         _LOG.warning(finding.message)
     _LOG.info(f"Bitfile written into {building.bitfile.parent}")
@@ -645,12 +524,12 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
     _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
     making = MakePynqDriver(Path(cfg.output_dir))
     model = model.transform(making)
-    _reported(Path(cfg.output_dir) / DRIVER_REPORT)
+    reported(Path(cfg.output_dir) / DRIVER_REPORT)
     description = making.description
     returned = ", ".join(
         f"{each['name']} ({each['element']}, {each['shape']})" for each in description["returns"]
     )
-    driver_dir = os.path.join(cfg.output_dir, DRIVER_DIR)
+    driver_dir = Path(cfg.output_dir) / DRIVER_DIR
     _LOG.info(
         f"PYNQ Python driver written into {driver_dir}, at {description['fclk_mhz']} MHz; "
         f"it returns {returned}"
@@ -658,77 +537,19 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
     return model
 
 
-#: The finn.outputs keys a deployed model drops: they hold paths on the build machine.
-_MACHINE_PATHS = (OUTPUT_IP, OUTPUT_BITFILE, OUTPUT_HWH)
-
-
-def _host_model(model: ModelWrapper, directory: Path) -> Path:
-    """Write the parent graph ``model`` into ``directory`` as the deployment ships it:
-    parent.onnx (the host's nodes and the partition node) and partition.onnx beside it.
-    The node refers to its body by a relative path, and neither model keeps a path on
-    the build machine (_MACHINE_PATHS). Returns the path of parent.onnx."""
-    directory.mkdir(parents=True, exist_ok=True)
-    node, body, _ = partition_body(model)
-    shipped = ModelWrapper(copy.deepcopy(model.model))
-    shipped_body = ModelWrapper(copy.deepcopy(body.model))
-    for each in (shipped, shipped_body):
-        for key in _MACHINE_PATHS:
-            each.delete(key)
-    (shipped_node,) = [each for each in shipped.graph.node if each.name == node.name]
-    getCustomOp(shipped_node).set_nodeattr("model", "partition.onnx")
-    shipped_body.save(str(directory / "partition.onnx"))
-    shipped.save(str(directory / "parent.onnx"))
-    return directory / "parent.onnx"
-
-
 def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the bitfile, the driver, the host-side model (deploy/model/) and the
     driver's description (deploy/driver.json) into deploy/, if DEPLOYMENT_PACKAGE is
-    asked; deploy/ is written afresh. Ships the bitfile and driver this output
-    directory's own steps made. Refuses a model that records no bitfile, or another
-    directory's; an output directory without a driver; and a bitfile or driver made from
-    another design than the current partition."""
+    asked; deploy/ is written afresh (finn.shells.pynq.deploy). Ships the bitfile and
+    driver this output directory's own steps made. Refuses a model that records no
+    bitfile, or another directory's; an output directory without a driver; a bitfile or
+    driver made from another design than the current partition; and a partition built
+    for another target than the configuration's."""
     if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
         _LOG.info("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
         return model
     _refuse_drift(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
-    pynq_row(model, "deployment_package")
-    output = Path(cfg.output_dir)
-    stated = model.get(OUTPUT_BITFILE)
-    if stated is None:
-        raise ValueError(
-            "deployment_package: the model states no bitfile (finn.outputs): the "
-            "deployment ships the bitfile and the driver its build made; ask bitfile "
-            "and pynq_driver with it"
-        )
-    if Path(stated) != output / BITFILE:
-        raise ValueError(
-            f"deployment_package: the model's bitfile is {stated}, not this output "
-            f"directory's ({output / BITFILE})"
-        )
-    if not (output / DRIVER_REPORT).is_file():
-        raise ValueError(
-            f"deployment_package: no driver in this output directory ({output / DRIVER_REPORT}):"
-            " the deployment ships the bitfile and the driver its build made; ask "
-            "pynq_driver with it"
-        )
-    refuse_stale_bitfile(model, "deployment_package")
-    _, body, _ = partition_body(model)
-    made_from = json.loads((output / DRIVER_REPORT).read_text()).get("made_from")
-    now = design_digest(body)
-    if made_from != now:
-        raise ValueError(
-            f"deployment_package: the driver in this output directory ({output / DRIVER_DIR}) "
-            f"was made from the design {made_from}, and the partition's design is now {now}; "
-            "make the driver again (pynq_driver)"
-        )
-    deploy = output / "deploy"
-    shutil.rmtree(deploy, ignore_errors=True)
-    shutil.copytree(output / BITFILE.parent, deploy / BITFILE.parent)
-    shutil.copytree(output / DRIVER_DIR, deploy / DRIVER_DIR, copy_function=shutil.copyfile)
-    _host_model(model, deploy / "model")
-    shutil.copy(output / DRIVER_REPORT, deploy / "driver.json")
-    return model
+    return model.transform(MakePynqDeployment(Path(cfg.output_dir)))
 
 
 def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
@@ -739,20 +560,11 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     (finn.shells.pynq.runner.REPORTS: ``placed``, ``out_of_context``) and, with
     OOC_SYNTH, the packaged partition's in stitched_ip/ (``ooc_synth``). A column the
     build did not make is marked absent."""
+    ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
+    packaged = Path(cfg.output_dir) / STITCHED_IP_DIR if ooc else None
+    stated = shell_resources_report(model, built_reports(model, packaged))
     report = Path(cfg.output_dir) / RESOURCES_FILE
-    report.parent.mkdir(parents=True, exist_ok=True)
-    reports: dict[str, Path] = {}
-    built = bitfile_directory(model)
-    if built is not None:
-        reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
-    if DataflowOutputType.OOC_SYNTH in cfg.generate_outputs:
-        try:
-            reports["ooc_synth"] = partition_utilization_report(_stitched_ip_directory(cfg))
-        except ToolFailed:
-            pass  # not synthesized into this output directory: the column is absent
-    stated = shell_resources_report(model, reports)
-    report.write_text(json.dumps(stated, indent=2))
-    _reported(report)
+    write_report(report, stated)
     absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())
     _LOG.info(
         f"Resources per member written to {report}" + (f"; absent: {absent}" if absent else "")

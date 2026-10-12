@@ -27,7 +27,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from enum import Enum
 from functools import cached_property, partial
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Any, Union
 
 from qonnx.core.modelwrapper import ModelWrapper
@@ -103,8 +103,8 @@ class VerificationStepType(str, Enum):
     STITCHED_IP_TESTBENCH = "stitched_ip_testbench"
 
 
-#: The steps each verification needs to run: the one that saves its reference, and
-#: the one that checks.
+#: The steps each verification needs: those that save its reference, if it has one,
+#: then the one that checks and concludes it.
 VERIFIED_BY = {
     VerificationStepType.PARTITION_PYTHON: ("step_convert_to_hw", "step_verify_partition"),
     VerificationStepType.PARTITION_ELABORATION: ("step_verify_partition",),
@@ -227,6 +227,12 @@ class DataflowBuildConfig:
         the machine's selection (``host_selection``), prepared on first use. It is not
         serialized: it is prepared, not configured."""
         return host_selection(stated=self.toolchain).prepare()
+
+    def step_toolchain(self, step: str) -> Toolchain:
+        """The build's toolchain for the step ``step``, writing every tool's transcript
+        into ``output_dir/logs/<step>``, where the manifest finds them. The step passes
+        it to each transformation that runs a tool."""
+        return self.prepared_toolchain.transcripts_in(Path(self.output_dir) / "logs" / step)
 
 
 #: The configuration's fields, which a JSON object states beside the settings.

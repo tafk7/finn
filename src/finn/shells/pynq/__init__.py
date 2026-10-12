@@ -11,6 +11,8 @@ IODMAs, and the PYNQ driver its host runtime runs.
   extraction of the HWCustomOp flow's ``IODMA_hls`` and its IP generation.
 - ``driver``: the PYNQ driver and its description, and their transformation
   (``MakePynqDriver``).
+- ``deploy``: the deployment package, the bitfile, the driver and the host's model
+  copied for the board (``MakePynqDeployment``).
 - ``templates`` and ``data/``: the project, HLS and driver templates, the driver's base
   files, the IODMA IP's driver descriptor and simulation-control module.
 """

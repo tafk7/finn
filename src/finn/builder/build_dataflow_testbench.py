@@ -29,12 +29,14 @@ would, in a toolchain's environment. It is the verification step
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
 each beat's elements, packed with lane zero lowest. The frame holds the partition's
-inputs: ``partition_frame`` executes the parent graph on a source input (the first in
-``verify_input_npy``), or ``generated_frame`` draws each input from its datatype.
+inputs (``testbench_frame``): ``partition_frame`` executes the parent graph on a source
+input (the first in ``verify_input_npy``), or, without that file, ``generated_frame``
+draws each input from its datatype.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -118,6 +120,19 @@ def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[st
         parent, {parent.graph.input[0].name: frame}, return_full_exec_context=True
     )
     return {name: context[name] for name in graph_inputs(body)}
+
+
+def testbench_frame(
+    parent: ModelWrapper, body: ModelWrapper, inputs_file: str | os.PathLike[str]
+) -> tuple[dict[str, NDArray[Any]], str]:
+    """The frame the testbench of the parent graph ``parent``'s partition, ``body``,
+    streams, and what it is: the partition's inputs for the first input of
+    ``inputs_file`` if that file exists (``partition_frame``), else a frame drawn from
+    the body's input datatypes (``generated_frame``)."""
+    if os.path.isfile(inputs_file):
+        frame = partition_frame(parent, np.load(inputs_file)[0])
+        return frame, f"the first input of {os.fspath(inputs_file)}"
+    return generated_frame(body), "a generated frame"
 
 
 def _run_script(top: str, sources: Sequence[str]) -> str:
@@ -238,5 +253,6 @@ __all__ = [
     "generated_frame",
     "partition_frame",
     "run_testbench",
+    "testbench_frame",
     "write_testbench",
 ]

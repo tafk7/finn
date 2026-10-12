@@ -507,9 +507,10 @@ class Toolchain:
     tool this toolchain runs starts. Made by ``Selection.prepare``.
 
     ``transcripts`` is the directory a build step writes its runs' transcripts in
-    (``output_dir/logs/<step>``), or None outside a build. The step sets it
-    (``transcripts_in``) and passes the toolchain down to every transformation that runs
-    a tool."""
+    (``output_dir/logs/<step>``), or None outside a build. The step takes its toolchain
+    from the build's configuration, which sets it (``transcripts_in``; the builder's
+    ``DataflowBuildConfig.step_toolchain``), and passes it down to every transformation
+    that runs a tool."""
 
     selection: Selection
     environment: Mapping[str, str] = field(repr=False)
