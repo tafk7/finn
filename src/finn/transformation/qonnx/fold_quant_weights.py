@@ -37,6 +37,16 @@ from qonnx.transformation.remove import remove_node_and_rewire
 from qonnx.util.basic import get_preferred_qonnx_opset
 
 
+def _drop_tensor_layout(model, tensor_name):
+    """Remove the data layout annotation of ``tensor_name``, if it has one."""
+    for annotation in model.graph.quantization_annotation:
+        if annotation.tensor_name == tensor_name:
+            entries = annotation.quant_parameter_tensor_names
+            kept = [entry for entry in entries if entry.key != "tensor_layout"]
+            del entries[:]
+            entries.extend(kept)
+
+
 class FoldQuantWeights(Transformation):
     """Merges Quant nodes, which are used as weights into the initializer
     of the weight tensor.
@@ -257,6 +267,9 @@ class FoldQuantWeights(Transformation):
                             )
                             graph.node.insert(node_ind, div_node)
 
+                    # The folded weight is a constant, not the Quant's dynamic output:
+                    # a data layout inferred for that output does not describe it.
+                    _drop_tensor_layout(model, node_out)
                     # remove old node
                     graph.node.remove(n)
                     graph_modified = True

@@ -37,6 +37,7 @@ import torch
 from brevitas.export import export_qonnx
 from onnx import TensorProto, helper
 from pkgutil import get_data
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
@@ -45,6 +46,7 @@ from tempfile import TemporaryDirectory
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
+from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
 from finn.util.test import get_test_model_trained
 
 
@@ -167,6 +169,41 @@ def _make_single_quant_model(x, scale, zeropt, bitwidth, signed, narrow, roundin
     model.opset_import.append(helper.make_opsetid("qonnx.custom_op.general", 1))
     m = ModelWrapper(model)
     return m.transform(InferShapes()).transform(InferDataTypes())
+
+
+@pytest.mark.transform
+def test_folding_a_weight_quant_drops_the_layout_inferred_for_its_output():
+    """A weight Quant's output can carry a data layout inferred for it as a dynamic
+    tensor (qonnx's MergeONNXModels runs InferDataLayouts on a graph not yet lowered);
+    folded into an initializer, the weight keeps its datatype but not that layout."""
+    x = helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 4])
+    y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 3])
+    inits = [
+        nph.from_array(np.arange(12, dtype=np.float32).reshape(4, 3) - 6, "w_float"),
+        nph.from_array(np.asarray(1.0, dtype=np.float32), "scale"),
+        nph.from_array(np.asarray(0.0, dtype=np.float32), "zeropt"),
+        nph.from_array(np.asarray(4.0, dtype=np.float32), "bitwidth"),
+    ]
+    quant = helper.make_node(
+        "Quant",
+        ["w_float", "scale", "zeropt", "bitwidth"],
+        ["w"],
+        domain="qonnx.custom_op.general",
+        signed=1,
+        narrow=0,
+        rounding_mode="ROUND",
+    )
+    matmul = helper.make_node("MatMul", ["x", "w"], ["y"])
+    graph = helper.make_graph([quant, matmul], "weight_quant", [x], [y], initializer=inits)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.opset_import.append(helper.make_opsetid("qonnx.custom_op.general", 1))
+    model = ModelWrapper(model).transform(InferShapes()).transform(InferDataTypes())
+    model.set_tensor_layout("w", ["N", "C"])
+    model = model.transform(FoldQuantWeights())
+    assert [node.op_type for node in model.graph.node] == ["MatMul"]
+    assert model.get_initializer("w") is not None
+    assert model.get_tensor_layout("w") is None
+    assert model.get_tensor_datatype("w") == DataType["INT4"]
 
 
 @pytest.mark.transform
