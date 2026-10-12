@@ -25,7 +25,7 @@ Nothing in a build re-checks it; this module does, offline, from a spec of the o
      values are checked on the spec's target, or the first row that admits the
      graph where that target does not:
   3. on seeded random inputs and on inputs at the extremes, both drawn from each
-     graph input's annotation (``drawn_inputs``), the KernelOps' ``execute_node``
+     graph input's annotation (``finn.util.draws.drawn_inputs``), the KernelOps' ``execute_node``
      computes what qonnx's execution of the graph computes (``observe``,
      ``check_values``), every output element equal; any difference is
      ``Unequal``;
@@ -38,7 +38,7 @@ Nothing in a build re-checks it; this module does, offline, from a spec of the o
   reference), or the kernels'.
 
 The inputs are the integers of each annotation that the input's container holds
-(``finn.core.containers``): a value the container cannot hold is not one ONNX's
+(``finn.util.draws``): a value the container cannot hold is not one ONNX's
 execution of the graph speaks of. ONNX's execution gets them in that container (the
 export's float32, or float64 where graph preparation widened the region); the
 reference gets them as int64.
@@ -63,16 +63,14 @@ from qonnx.core.onnx_exec import execute_onnx
 from qonnx.transformation.infer_shapes import InferShapes
 
 import finn.custom_op.kernels as kernel_ops
-from finn.core.containers import container, held, numpy_type
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import KernelOp, datatype, kernel_op
-from finn.dataflow.datatypes import ordinary_integer_bounds
-from finn.harness.ops import boundary_inputs, executed
-from finn.harness.orders import Integers
+from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.harness.ops import executed
 from finn.kernels.target import Target
 from finn.platform import BOARDS, IP, ROWS, part, resolve_target
 from finn.platform.architectures import RULES
 from finn.transformation.kernels.convert import ToKernelOps
+from finn.util.draws import Integers, as_held, drawn_inputs
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -246,41 +244,6 @@ def check_negative(op: type[KernelOp], model: ModelWrapper, code: str, target: T
             )
 
 
-def drawn_inputs(model: ModelWrapper, seed: int) -> list[dict[str, Integers]]:
-    """Three draws for ``seed``, each held by its input's container
-    (``finn.core.containers.held``): random integers of each graph input's annotation,
-    with its extremes in the first two rows (``finn.harness.ops.boundary_inputs``) and
-    without; and each element at one of its extremes, at random."""
-    rng = np.random.default_rng(seed)
-    extremes, uniform, corners = boundary_inputs(model, seed), {}, {}
-    for name, values in extremes.items():
-        low, high = ordinary_integer_bounds(datatype(model, name, name))
-        uniform[name] = rng.integers(low, high + 1, size=values.shape, dtype=np.int64)
-        corners[name] = np.where(rng.integers(0, 2, size=values.shape) == 1, high, low)
-    draws = (extremes, uniform, corners)
-    return [
-        {name: held(values, _container(model, name)) for name, values in draw.items()}
-        for draw in draws
-    ]
-
-
-def _container(model: ModelWrapper, tensor: str) -> int:
-    """``tensor``'s container; a graph input that states none is refused."""
-    found = container(model, tensor)
-    if found is None:
-        raise ValueError(f"{tensor} states no container (an element type)")
-    return found
-
-
-def as_held(model: ModelWrapper, inputs: Mapping[str, Integers]) -> dict[str, Any]:
-    """``inputs`` (integers, by graph input) in each input's container, as ONNX's
-    execution of ``model`` takes them."""
-    return {
-        name: np.asarray(values, dtype=numpy_type(_container(model, name)))
-        for name, values in inputs.items()
-    }
-
-
 def observe(
     source: ModelWrapper, conversion: ModelWrapper, inputs: Mapping[str, Integers]
 ) -> Observed:
@@ -378,7 +341,6 @@ __all__ = [
     "Unequal",
     "Unsound",
     "anchored",
-    "as_held",
     "check_match_pure",
     "check_negative",
     "check_positive",
@@ -387,7 +349,6 @@ __all__ = [
     "converted",
     "coverage",
     "digest",
-    "drawn_inputs",
     "observe",
     "platform_rows",
 ]

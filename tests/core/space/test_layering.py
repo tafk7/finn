@@ -61,6 +61,8 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.xsi.setup", "util"),
         ("finn.toolchain.host", "toolchain"),
         ("finn.harness.ops", "harness"),
+        ("finn.util.draws", "draws"),
+        ("finn.analysis.equivalence", "analysis"),
         ("finn.core.rtlsim_bench", "xsim"),
         ("finn.core.rtlsim_pacing", "xsim"),
         ("finn.core.rtlsim_exec", "executors"),
@@ -135,6 +137,15 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("harness", "onnx.helper"),
         ("harness", "kernel_ops.specs.matmul.SPEC"),
         ("custom_op.kernels", "finn.harness.ops.check_parity"),
+        # The analyses: generic passes, beside the harness and below the builder.
+        ("analysis", "finn.harness.reference"),
+        ("analysis", "finn.builder.build_dataflow_steps"),
+        ("analysis", "finn.custom_op.kernels.base"),
+        ("analysis", "pytest"),
+        ("harness", "finn.analysis.equivalence"),
+        # The draws read a graph's annotations, not the KernelOps' facts.
+        ("draws", "finn.custom_op.kernels.base.datatype"),
+        ("draws", "finn.harness.ops"),
     ],
 )
 def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> None:
@@ -166,8 +177,13 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         # The ONNX entry: the reference against qonnx's execution of the source graph.
         ("harness", "qonnx.core.onnx_exec.execute_onnx"),
         ("harness", "finn.transformation.kernels.convert.ToKernelOps"),
-        # Which ops ONNX Runtime cannot run in float64 (the equivalence check).
-        ("harness", "onnxruntime.InferenceSession"),
+        # Which ops ONNX Runtime cannot run in float64 (the equivalence analysis).
+        ("analysis", "onnxruntime.InferenceSession"),
+        ("analysis", "finn.transformation.prepare.containers.widened"),
+        ("analysis", "finn.util.draws.drawn_inputs"),
+        ("analysis", "finn.core.space.Finding"),
+        ("harness", "finn.util.draws.boundary_inputs"),
+        ("flow", "finn.analysis.initializers.annotated_initializers"),
         ("flow", "finn.core.rtlsim_bench.simulate"),
         ("tests.kernels", "finn.core.rtlsim_bench.stream_through"),
         ("tests.kernels", "finn.core.rtlsim_pacing.STALLED"),

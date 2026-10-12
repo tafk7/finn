@@ -40,11 +40,10 @@ from itertools import permutations, product
 from math import prod
 
 import numpy as np
-import numpy.typing as npt
 
 from finn.dataflow.traversal import Loop, Position, Traversal, axis_strides, offsets, pack
+from finn.util.draws import Integers
 
-Integers = npt.NDArray[np.int64]
 Reference = Callable[[Mapping[str, Integers]], Mapping[str, object]]
 """Input tensors by stream name to output tensors by stream name."""
 

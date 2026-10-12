@@ -16,7 +16,8 @@ import numpy as np
 import pytest
 
 from finn.dataflow.traversal import Traversal, offsets, pack, vector_major
-from finn.harness.orders import Integers, Stream, decode, describe, orders
+from finn.harness.orders import Stream, decode, describe, orders
+from finn.util.draws import Integers
 
 B, C, S = 2, 3, 4
 SHAPE = (B, C, S)

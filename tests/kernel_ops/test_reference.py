@@ -42,13 +42,13 @@ from finn.harness.reference import (
     check_sound,
     check_values,
     converted,
-    drawn_inputs,
     observe,
     platform_rows,
 )
 from finn.kernels.target import DspBlock
 from finn.platform import IP, PYNQ, shell_row
 from finn.platform.architectures import RULES
+from finn.util.draws import drawn_inputs
 from kernel_ops.models import TARGET
 from kernel_ops.specs import SPECS, matmul, thresholding
 

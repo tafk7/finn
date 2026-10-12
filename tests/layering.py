@@ -21,7 +21,10 @@ finn.toolchain  <-  finn.util (with finn.xsi, finn.resources)  <-  finn.transfor
                                                                 executors, finn.harness,
                                                                 finn.shells, the flow
 finn.core.space, finn.util  <-  preparation (finn.transformation.qonnx, .streamline,
-                                .prepare)  <-  finn.harness, the flow
+                                .prepare)  <-  the flow
+finn.dataflow, finn.core.containers  <-  the draws (finn.util.draws)  <-  finn.harness,
+                                                                     the flow
+finn.core.space, the draws, preparation  <-  finn.analysis  <-  the flow
 finn.core.containers  <-  finn.custom_op.kernels, preparation, finn.harness, the flow
 finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.generate (the
                                                             catalog generator; nothing
@@ -164,6 +167,15 @@ LAYERS: tuple[Layer, ...] = (
         ANY,
         "tests/kernel_ops",
     ),
+    # A graph's inputs drawn from their annotations and held in their containers: what
+    # the harness and the analyses run a graph on, and the testbench reads its inputs by.
+    Layer(
+        "draws",
+        ("finn.util.draws",),
+        ("dataflow", "containers"),
+        ("numpy", "qonnx"),
+        "tests/kernel_ops",
+    ),
     # Graph preparation: the front end that takes an export to the graph the kernel
     # path converts (Quant lowering, streamlining) and the phase over it. It reads no
     # target: neither the platform registry nor the KernelOps.
@@ -176,6 +188,17 @@ LAYERS: tuple[Layer, ...] = (
         ),
         ("util", "containers"),
         ("numpy", "onnx", "qonnx"),
+        "tests/kernel_ops",
+    ),
+    # Analysis passes: generic functions of a graph returning their findings, which no
+    # build step runs. Neither the harness nor the builder: what a finding stops is the
+    # caller's. The equivalence analysis runs the export in float64 as preparation's
+    # widening holds it, and asks ONNX Runtime which ops it cannot run there.
+    Layer(
+        "analysis",
+        ("finn.analysis",),
+        ("space", "containers", "preparation", "draws"),
+        ("numpy", "onnxruntime", "qonnx"),
         "tests/kernel_ops",
     ),
     # The part catalog's generator: a tool above the registry, which runs Vivado
@@ -245,11 +268,10 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # The kernel harness: what checks a kernel's hardware (the hardware against its
-    # KernelOps' oracle, execute_node, on a model of them: two runs of the executors), a
-    # KernelOp's reference against qonnx's execution of the ONNX it covers, and the
-    # prepared graph against the export. It reads no test tree and no pytest;
-    # the tests that use it stay in tests/. Nothing below the flow imports it. ONNX
-    # Runtime: which ops it cannot run in float64 (the equivalence check's float64 run).
+    # KernelOps' oracle, execute_node, on a model of them: two runs of the executors) and
+    # a KernelOp's reference against qonnx's execution of the ONNX it covers, on the
+    # draws. It reads no test tree and no pytest; the tests that use it stay in tests/.
+    # Nothing below the flow imports it.
     Layer(
         "harness",
         ("finn.harness",),
@@ -261,12 +283,12 @@ LAYERS: tuple[Layer, ...] = (
             "toolchain",
             "util",
             "transformation.kernels",
-            "preparation",
             "containers",
+            "draws",
             "xsim",
             "executors",
         ),
-        ("numpy", "onnxruntime", "qonnx"),
+        ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
@@ -302,6 +324,8 @@ LAYERS: tuple[Layer, ...] = (
             "platform.generate",
             "transformation.kernels",
             "preparation",
+            "draws",
+            "analysis",
             "harness",
             "xsim",
             "executors",
@@ -336,9 +360,10 @@ LAYERS: tuple[Layer, ...] = (
         ("pytest", "qonnx.core.datatype"),
         "tests/dataflow",
     ),
-    # The kernel tests need no graph either: the kernel stack, the harness, the XSim
-    # testbench, the toolchain, util for the XSI runtime and the resource store, the
-    # space tests' helpers and the oracle's captures.
+    # The kernel tests need no graph either: the kernel stack, the harness and the
+    # integers it decodes (the draws' type), the XSim testbench, the toolchain, util for
+    # the XSI runtime and the resource store, the space tests' helpers and the oracle's
+    # captures.
     Layer(
         "tests.kernels",
         ("kernels",),
@@ -346,6 +371,7 @@ LAYERS: tuple[Layer, ...] = (
             *_KERNEL_STACK,
             "toolchain",
             "util",
+            "draws",
             "harness",
             "xsim",
             "tests.layering",
