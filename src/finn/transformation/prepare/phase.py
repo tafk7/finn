@@ -33,8 +33,7 @@ which runs the topology between its two ``Streamline`` passes: P3 lowers the
 convolutions ahead of the bipolar rewrite, which reads their MatMuls, and P4 follows.
 
 The phase reads no target: what preparation makes of a graph does not depend on
-where it is built. ``finn.transformation.prepare.checkpoint`` checks what it
-leaves (P7).
+where it is built.
 """
 
 from __future__ import annotations

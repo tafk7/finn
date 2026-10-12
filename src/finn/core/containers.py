@@ -10,16 +10,16 @@ up to a magnitude exactly (``EXACT_UP_TO``): float32 up to 2**24, float64 up to
 2**53, an integer container its range. Past it, a float container rounds and an
 integer one wraps.
 
-The one statement of that fact: the graph-preparation phase widens the integer
-regions that need it (P6) and its checkpoint checks every integer tensor against
-it; a KernelOp's domain step (``KernelOp.exact``) reads it to say where its
-reference is exact against ONNX executed in its operands' container; the harness
-draws a tensor's inputs as its container holds them.
+The one statement of that fact: graph preparation widens the integer regions that
+need it (``finn.transformation.prepare.containers``); a KernelOp's domain step
+(``KernelOp.exact``) reads it to say where its reference is exact against ONNX
+executed in its operands' container; the harness draws a tensor's inputs as its
+container holds them.
 
 What a container must hold is the largest magnitude a value reaches on the way to it.
 For a MatMul that is its partial sums (``matmul_partial_sums``), the one bound both
-the checkpoint (``container-inexact``) and MatMul's domain step
-(``matmul-container-exceeded``) read, so that the two refusals agree.
+the widening and MatMul's domain step (``matmul-container-exceeded``) read, so that a
+MatMul the widening holds exactly is one its domain step accepts.
 """
 
 from __future__ import annotations

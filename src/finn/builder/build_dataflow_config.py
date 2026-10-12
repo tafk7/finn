@@ -88,13 +88,8 @@ OUTPUT_NEEDS = {
 class VerificationStepType(str, Enum):
     """Optional checks a build can add. None run by default: each KernelOp's
     ``execute_node`` is the reference, and the test harness checks the hardware against
-    it. A failed Python check is reported and the build continues, unless a value breaks
-    its annotation, which stops it. A failed RTL check stops the build."""
-
-    #: compare the prepared graph with the export on random inputs drawn from the
-    #: input's annotated range, and check that the integer annotations hold
-    #: (finn.harness.preparation)
-    GRAPH_PREPARATION_PYTHON = "graph_preparation_python"
+    it. A failed Python check is reported and the build continues. A failed RTL check
+    stops the build."""
 
     #: execute the parent graph with the partition's KernelOps in Python on each input
     #: of verify_input_npy, and compare with the model before conversion
@@ -110,10 +105,6 @@ class VerificationStepType(str, Enum):
 #: The steps each verification needs to run: the one that saves its reference, and
 #: the one that checks.
 VERIFIED_BY = {
-    VerificationStepType.GRAPH_PREPARATION_PYTHON: (
-        "step_tidy_up",
-        "step_check_prepared",
-    ),
     VerificationStepType.PARTITION_PYTHON: ("step_convert_to_hw", "step_verify_partition"),
     VerificationStepType.PARTITION_ELABORATION: ("step_verify_partition",),
     VerificationStepType.STITCHED_IP_TESTBENCH: ("step_package_partition",),

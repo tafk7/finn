@@ -9,11 +9,11 @@ A step with options of its own declares them as a dataclass beside it and regist
 type by the step's name in ``build_dataflow_step_options``. A configuration sets them in
 ``step_options``, and the step reads its own with ``DataflowBuildConfig.options``.
 
-The steps prepare a Brevitas export into the streamlined graph the kernel path converts,
-and check it; convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into
-one partition; choose the partition's parameters; and make the outputs the configuration
-asks for: the partition's packaged IP on any shell, and the bitfile, driver and
-deployment package on a shell that integrates it."""
+The steps prepare a Brevitas export into the streamlined graph the kernel path converts;
+convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
+choose the partition's parameters; and make the outputs the configuration asks for: the
+partition's packaged IP on any shell, and the bitfile, driver and deployment package on
+a shell that integrates it."""
 
 import copy
 import dataclasses
@@ -44,7 +44,6 @@ from finn.builder.build_dataflow_testbench import (
     write_testbench,
 )
 from finn.core.onnx_exec import execute_onnx
-from finn.core.space import by_code, finding_record
 from finn.custom_op.kernels.base import read_target
 from finn.custom_op.kernels.shell import configured_root
 from finn.custom_op.partition.kernel_partitions import (
@@ -54,7 +53,6 @@ from finn.custom_op.partition.kernel_partitions import (
     design_digest,
     partition_body,
 )
-from finn.harness.preparation import check_equivalence
 from finn.platform import refuse_drift
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import (
@@ -71,7 +69,6 @@ from finn.transformation.kernels import (
     ExplorePartition,
     ToKernelOps,
     kernel_choices_config,
-    kernel_ops_by_anchor,
     kernel_ops_report,
     kernel_ops_summary,
     refuse_host_between,
@@ -83,15 +80,7 @@ from finn.transformation.kernels.package import (
     PackagePartition,
     partition_utilization_report,
 )
-from finn.transformation.prepare import (
-    DEVIATIONS,
-    SUB_PHASES,
-    GraphPreparation,
-    PreparationRefused,
-    census,
-    checkpoint,
-    reference,
-)
+from finn.transformation.prepare import SUB_PHASES, GraphPreparation, census
 from finn.transformation.prepare.phase import (
     DEFAULT_STREAMLINING,
     DEFAULT_TOPOLOGY,
@@ -136,18 +125,12 @@ def _reported(path: str | os.PathLike[str]) -> None:
     _LOG.info(f"wrote {path}", extra={REPORT: os.fspath(path)})
 
 
-def _preparation_source(cfg: DataflowBuildConfig) -> str:
-    """Where step_tidy_up saves the export, the reference for the
-    GRAPH_PREPARATION_PYTHON check."""
-    return cfg.output_dir + "/intermediate_models/graph_preparation_source.onnx"
-
-
 def _preparation_report(cfg: DataflowBuildConfig, fresh: bool = False) -> dict[str, Any]:
     """The graph-preparation report written so far, or an empty one if ``fresh`` or none
     exists."""
     path = Path(cfg.output_dir) / PREPARATION_REPORT
     if fresh or not path.is_file():
-        return {"sub_phases": [], "checkpoint": None, "equivalence": None}
+        return {"sub_phases": []}
     report: dict[str, Any] = json.loads(path.read_text())
     return report
 
@@ -207,12 +190,8 @@ class TidyUpOptions:
 
 def step_tidy_up(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Run qonnx's cleanup on the export, overriding its input size if the options ask.
-    Starts report/graph_preparation.json afresh, and saves the export as the reference
-    when GRAPH_PREPARATION_PYTHON is configured."""
+    Starts report/graph_preparation.json afresh."""
     options = cfg.options("step_tidy_up", TidyUpOptions)
-    if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
-        os.makedirs(os.path.dirname(_preparation_source(cfg)), exist_ok=True)
-        model.save(_preparation_source(cfg))
     return _sub_phase(imported, model, cfg, _preparation(options), fresh=True)
 
 
@@ -299,86 +278,6 @@ def step_widen_containers(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     """Widen to float64 the integer regions float32 cannot hold exactly, with Casts at
     their edges; the graph's inputs and outputs keep their types. No options."""
     return _sub_phase(containers_exact, model, cfg, GraphPreparation())
-
-
-def step_check_prepared(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Check the prepared graph before the kernel path converts it: its structure, that
-    its integer annotations are sound and its containers exact, and what would stay on
-    the host (float nodes, Transposes, host nodes between KernelOps). Writes the result
-    into the preparation report, logs one line per finding code, and refuses the graph
-    on any blocker.
-
-    With GRAPH_PREPARATION_PYTHON, also compare the graph with the export on seeded
-    random inputs. Differences are reported, not refused, because a build cannot tell an
-    intended deviation from a bug: the log prints FAIL and the declared deviations that
-    might explain them, and the build continues. A value outside its tensor's annotated
-    range does refuse the graph, because the kernels' bit widths trust that annotation.
-    Where the export itself rounds (integers that float32 cannot hold exactly), the
-    report lists each tensor."""
-    checked = checkpoint(model, set(kernel_ops_by_anchor()))
-    blockers = list(checked.blockers)
-    report = _preparation_report(cfg)
-    report["checkpoint"] = {
-        "bounded": checked.bounded,
-        "unbounded": dict(checked.unbounded),
-        "findings": [finding_record(finding) for finding in checked.findings],
-    }
-    if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
-        source_file = _preparation_source(cfg)
-        if not os.path.isfile(source_file):
-            raise FileNotFoundError(
-                f"{source_file}: the export, which step_tidy_up keeps when "
-                "GRAPH_PREPARATION_PYTHON is asked, is not there (did the build start after it?)"
-            )
-        input_name = model.graph.input[0].name
-        if not (
-            model.has_tensor_datatype(input_name)
-            and model.get_tensor_datatype(input_name).is_integer()
-        ):
-            raise ValueError(
-                f"graph_preparation_python draws from the prepared input's annotation, and "
-                f"{input_name} states no integer one: state "
-                "step_add_pre_post_processing's input_datatype"
-            )
-        # The reference is the export after the import and I/O steps only, with their
-        # options (and the preprocessing model lowered with the quantization step's limit).
-        options = _preparation(
-            cfg.options("step_tidy_up", TidyUpOptions),
-            cfg.options("step_qonnx_to_finn", QonnxToFinnOptions),
-            cfg.options("step_add_pre_post_processing", AddPrePostProcessingOptions),
-        )
-        equivalence = check_equivalence(reference(ModelWrapper(source_file), options), model)
-        report["equivalence"] = {
-            "draws": equivalence.draws,
-            "findings": [finding_record(finding) for finding in equivalence.findings],
-            "export_rounds": [finding_record(finding) for finding in equivalence.rounds],
-        }
-        unsound = [f for f in equivalence.findings if f.code == "annotation-unsound"]
-        blockers += unsound
-    _write_preparation_report(cfg, report)
-    _LOG.info(
-        f"Graph preparation: checkpoint: {len(checked.findings)} findings, {checked.bounded} "
-        f"integer outputs bounded; {PREPARATION_REPORT}"
-    )
-    for line in by_code(checked.findings):
-        _LOG.info(f"Graph preparation:   {line}")
-    if VerificationStepType.GRAPH_PREPARATION_PYTHON in cfg.verify_steps:
-        _verdict("graph_preparation_python", not equivalence.findings)
-        if equivalence.findings:
-            declared = ", ".join(DEVIATIONS)
-            refused = "annotation-unsound refuses the graph, the rest " if unsound else ""
-            _LOG.warning(
-                f"Graph preparation: equivalence: {len(equivalence.findings)} findings on "
-                f"{equivalence.draws} draws, {refused}reported, not refused; a build runs no "
-                f"deviation's predicate, and the phase declares {declared}"
-            )
-            for line in by_code(equivalence.findings):
-                _LOG.warning(f"Graph preparation:   {line}")
-        for line in by_code(equivalence.rounds):
-            _LOG.info(f"Graph preparation:   {line}")
-    if blockers:
-        raise PreparationRefused(blockers)
-    return model
 
 
 def _kernel_path_source(cfg: DataflowBuildConfig) -> str:
@@ -815,7 +714,6 @@ build_dataflow_step_lookup = {
         step_streamline,
         step_convert_to_channels_last,
         step_widen_containers,
-        step_check_prepared,
         step_convert_to_hw,
         step_create_dataflow_partition,
         step_explore,

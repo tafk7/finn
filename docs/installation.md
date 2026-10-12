@@ -578,7 +578,7 @@ packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); wit
 `ooc_synth`, also the partition per member, what synthesis flattened
 `unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
 need a shell that integrates the partition, so they are refused on `ip`. The default steps are the build's phases, each a list of
-steps: `phase_prepare_model` (the export prepared and checked),
+steps: `phase_prepare_model` (the export prepared),
 `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
 partition), `phase_optimize_hardware` (their choices and the partition's
 verification), `phase_emit_hardware` (the partition's IP) and
