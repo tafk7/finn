@@ -11,7 +11,7 @@ around, saved, timed, started from and stopped at on its own."""
 #: order.
 build_dataflow_phase_lookup: dict[str, list[str]] = {
     # Bring the export into FINN's form and clean it for the compiler without changing
-    # its computation (finn.transformation.prepare), then check the prepared graph.
+    # its computation (finn.transformation.prepare).
     "phase_prepare_model": [
         "step_tidy_up",
         "step_qonnx_to_finn",
@@ -19,7 +19,6 @@ build_dataflow_phase_lookup: dict[str, list[str]] = {
         "step_streamline",
         "step_convert_to_channels_last",
         "step_widen_containers",
-        "step_check_prepared",
     ],
     # Record the target in the model and convert the graph's nodes to KernelOps.
     "phase_convert_to_hardware": ["step_convert_to_hw"],

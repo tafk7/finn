@@ -193,29 +193,22 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         step_options={"step_add_pre_post_processing": io_options(tmp_path / "export")},
         stop_step="phase_optimize_hardware",
         inject_steps_after={name: [recorder(name)] for name in STEPS},
-        verify_steps=[
-            VerificationStepType.GRAPH_PREPARATION_PYTHON,
-            VerificationStepType.PARTITION_PYTHON,
-        ],
+        verify_steps=[VerificationStepType.PARTITION_PYTHON],
         verify_input_npy=str(tmp_path / "input.npy"),
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
     assert list(seen) == list(STEPS)
-    # The export prepared first, to the streamlined graph the fixture's phase makes, and
-    # checked against the export.
+    # The export prepared first, to the streamlined graph the fixture's phase makes.
     prepared = ModelWrapper(
-        str(Path(cfg.output_dir) / "intermediate_models" / "step_check_prepared.onnx")
+        str(Path(cfg.output_dir) / "intermediate_models" / "step_widen_containers.onnx")
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
     # The run, as its manifest indexes it: every step of the four phases, in order, each
-    # completed (the recorders injected after each belong to no phase), and both
-    # verifications asked passed.
+    # completed (the recorders injected after each belong to no phase), and the
+    # verification asked passed.
     manifest = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
-    assert manifest["verifications"] == {
-        "graph_preparation_python": "pass",
-        "kernel_partition_python": "pass",
-    }
+    assert manifest["verifications"] == {"kernel_partition_python": "pass"}
     ran = [step for step in manifest["steps"] if step["phase"] is not None]
     assert [step["name"] for step in ran] == [
         *build_dataflow_phase_lookup["phase_prepare_model"],
@@ -223,7 +216,6 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     ]
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
-    assert indexed["step_check_prepared"]["verifications"] == {"graph_preparation_python": "pass"}
     assert indexed["step_verify_partition"]["verifications"] == {"kernel_partition_python": "pass"}
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
@@ -508,23 +500,6 @@ def test_a_verification_whose_step_does_not_run_is_warned_of(tmp_path: Path) -> 
     assert "kernel_partition_elaboration" in warning.message
     cfg = config(tmp_path, verify_steps=verify)
     assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
-    # The preparation's equivalence needs the export kept, and the checkpoint: a build
-    # from a prepared model, or from the checkpoint alone, never checks it.
-    preparation = [VerificationStepType.GRAPH_PREPARATION_PYTHON]
-    for steps in (
-        {"steps": KERNEL_PATH},
-        {"steps": ["step_check_prepared", *KERNEL_PATH]},
-    ):
-        (warning,) = [
-            check
-            for check in run_all_config_checks(
-                config(tmp_path, verify_steps=preparation, **steps)
-            ).checks
-            if check.name == "verify_step_prereq"
-        ]
-        assert "graph_preparation_python, which needs" in warning.message
-    cfg = config(tmp_path, verify_steps=preparation, stop_step="phase_prepare_model")
-    assert "verify_step_prereq" not in {check.name for check in run_all_config_checks(cfg).checks}
     python = config(tmp_path, verify_steps=[VerificationStepType.PARTITION_PYTHON])
     assert failed_checks(python) == {"verify_files": ["verify_input_npy not found: input.npy"]}
     # The testbench's run is the outputs' phase's, and needs the testbench asked.
@@ -581,7 +556,6 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
         "step_streamline",
         "step_convert_to_channels_last",
         "step_widen_containers",
-        "step_check_prepared",
         "step_convert_to_hw",
         "step_create_dataflow_partition",
         "step_explore",

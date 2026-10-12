@@ -148,7 +148,6 @@ def test_a_configuration_holds_through_json() -> None:
         "deployment_package",
     ]
     assert stated["verify_steps"] == [
-        "graph_preparation_python",
         "kernel_partition_python",
         "kernel_partition_elaboration",
         "stitched_ip_testbench",
@@ -443,7 +442,7 @@ def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase(
         return step
 
     cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "steps": ["step_check_prepared", "phase_optimize_hardware"]})
+        json.dumps({**STATED, "steps": ["step_widen_containers", "phase_optimize_hardware"]})
     )
     assert cfg.steps is not None
     cfg.steps.append(step_mine)
@@ -452,13 +451,13 @@ def test_steps_mix_phases_steps_and_functions_injected_around_a_step_or_a_phase(
         "phase_optimize_hardware": [injected("before_phase")],
     }
     cfg.inject_steps_after = {
-        "step_check_prepared": [injected("after_checkpoint")],
+        "step_widen_containers": [injected("after_widening")],
         "phase_optimize_hardware": [injected("after_phase")],
         "step_mine": [injected("after_mine")],
     }
     assert names(cfg) == [
-        "step_check_prepared",
-        "after_checkpoint",
+        "step_widen_containers",
+        "after_widening",
         "before_phase",
         "step_explore",
         "before_verify",

@@ -33,12 +33,11 @@ Its domain step (``exact``): an integer MatMul whose facts let a partial sum pas
 the integers the operands' container holds exactly
 (``finn.core.containers.matmul_partial_sums``: A's type's largest magnitude times the
 largest sum of a column of B's magnitudes, B's values when it is an initializer, else
-its type's; the bound graph preparation's checkpoint reads too) is refused
+its type's; the bound graph preparation's widening reads too) is refused
 (``matmul-container-exceeded``), and an operand that bound reads unannotated, or A's
 container unstated, is ``fact-unstated``. Graph preparation widens an integer region's
-container where its bounds need it (P6), and its checkpoint refuses a bound past 2**53
-(P7, ``container-inexact``), so a prepared graph does not give it: the refusal is the
-safety net for a graph that skipped preparation.
+container to float64 where its bounds need it, so a prepared graph gives this refusal
+only past 2**53, or where preparation was skipped; the node then stays on the host.
 """
 
 from __future__ import annotations

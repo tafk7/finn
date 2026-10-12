@@ -21,7 +21,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import finn.builder.build_dataflow as build
-from finn.builder.build_dataflow_config import DataflowBuildConfig, VerificationStepType
+from finn.builder.build_dataflow_config import (
+    DataflowBuildConfig,
+    DataflowOutputType,
+    VerificationStepType,
+)
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
     REPORT,
@@ -216,20 +220,21 @@ def test_each_verification_asked_has_a_verdict(tmp_path):
     np.save(tmp_path / "input.npy", np.zeros((1, 2)))
     status, manifest, _ = build_of(
         tmp_path,
-        [named("step_check_prepared", raising(SimulationFailed("differs")))],
+        [named("step_verify_partition", raising(SimulationFailed("differs")))],
         verify_steps=[
-            VerificationStepType.GRAPH_PREPARATION_PYTHON,
             VerificationStepType.PARTITION_PYTHON,
+            VerificationStepType.STITCHED_IP_TESTBENCH,
         ],
         verify_input_npy=str(tmp_path / "input.npy"),
+        generate_outputs=[DataflowOutputType.STITCHED_IP],
     )
     assert status == -1
     assert manifest["verifications"] == {
-        "graph_preparation_python": "fail",
-        "kernel_partition_python": "not-run",
+        "kernel_partition_python": "fail",
+        "stitched_ip_testbench": "not-run",
     }
-    assert manifest["steps"][0]["verifications"] == {"graph_preparation_python": "fail"}
-    assert manifest["steps"][0]["phase"] == "phase_prepare_model"
+    assert manifest["steps"][0]["verifications"] == {"kernel_partition_python": "fail"}
+    assert manifest["steps"][0]["phase"] == "phase_optimize_hardware"
     _, manifest, _ = build_of(
         tmp_path,
         [named("step_verify_partition", raising(ToolUnavailable("xelab", "missing")))],

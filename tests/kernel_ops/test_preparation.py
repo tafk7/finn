@@ -2,22 +2,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Graph preparation (``finn.transformation.prepare``, ``phase_prepare_model``): the
-export to the streamlined graph the kernel path converts, and its checkpoint (P7).
+export to the streamlined graph the kernel path converts.
 
 TFC_W2A2 through the builder's phase from its export: the graph its fixture reads,
-checked, equivalent to the export (always here, as KT19 has it), and unchanged when
-prepared again. The checkpoint's checks on hand-made graphs, each made to fail: its
-bound rules against the ops' exhaustive ranges, the structure, soundness and
-exactness, and the equivalence with the phase's declared deviations, whose predicates
-are this file's (``EXPLAINS``).
+equivalent to the export, and unchanged when prepared again. On hand-made graphs: the
+widening of integer regions to float64, and the equivalence check with preparation's
+declared deviations, whose predicates are this file's (``EXPLAINS``).
 """
 
 from __future__ import annotations
 
 import copy
-import itertools
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -34,13 +31,14 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.build_dataflow_config import VerificationStepType
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_steps import PREPARATION_REPORT, step_check_prepared
-from finn.core.containers import container, matmul_partial_sums
+from finn.builder.build_dataflow_phases import build_dataflow_phase_lookup
+from finn.builder.build_dataflow_steps import PREPARATION_REPORT
+from finn.core.containers import container, exact_up_to, matmul_partial_sums
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
 from finn.harness.preparation import (
+    DEVIATIONS,
     Draw,
     Explanation,
     check_equivalence,
@@ -49,19 +47,14 @@ from finn.harness.preparation import (
 )
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.prepare import (
-    BOUND_RULES,
-    DEVIATIONS,
     RECIPE_TRANSFORMS,
     SUB_PHASES,
     GraphPreparation,
-    PreparationRefused,
     census,
-    checkpoint,
     prepared,
     reference,
 )
-from finn.transformation.prepare.checkpoint import interval
-from finn.transformation.prepare.containers import exact_containers, widened_regions
+from finn.transformation.prepare.containers import exact_containers, magnitudes, widened_regions
 from finn.transformation.prepare.phase import streamlined
 from finn.transformation.streamline.extract_multithreshold_scale_bias import (
     ExtractMultiThresholdScaleBias,
@@ -72,11 +65,9 @@ from kernel_ops.tfc import EXPORT, preparation, preparation_config
 GENERAL = "qonnx.custom_op.general"
 """qonnx's custom ops' domain."""
 MULTITHRESHOLD = (GENERAL, "MultiThreshold")
-ANCHORS = {("", "MatMul"), MULTITHRESHOLD}
-"""The KernelOps' anchors, as the builder gives them (``kernel_ops_by_anchor``)."""
 
 
-# -- the phase's deviations' predicates ---------------------------------------------------
+# -- the deviations' predicates ------------------------------------------------------
 
 
 def _producer(model: ModelWrapper, tensor: str) -> Any:
@@ -153,28 +144,26 @@ def tfc_directory(tfc_export: Path, tmp_path: Path) -> Path:
     return directory
 
 
-def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
+def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     tfc_directory: Path, tfc_streamlined: Path
 ) -> None:
     cfg = preparation_config(
-        tfc_directory,
-        steps=["phase_prepare_model"],
-        verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
-        save_intermediate_models=True,
+        tfc_directory, steps=["phase_prepare_model"], save_intermediate_models=True
     )
     assert build_dataflow_cfg(str(tfc_directory / EXPORT), cfg) == 0
     output = Path(cfg.output_dir)
-    made = ModelWrapper(str(output / "intermediate_models" / "step_check_prepared.onnx"))
+    made = ModelWrapper(str(output / "intermediate_models" / "step_widen_containers.onnx"))
     # The graph the kernel path's fixtures read, byte for byte.
     assert made.model.SerializeToString() == Path(tfc_streamlined).read_bytes()
     report = json.loads((output / PREPARATION_REPORT).read_text())
+    assert list(report) == ["sub_phases"]
     assert [entry["sub_phase"] for entry in report["sub_phases"]] == [n for n, _ in SUB_PHASES]
     by_name = {entry["sub_phase"]: entry for entry in report["sub_phases"]}
     assert by_name["P2 quantization"]["removed"] == {"Quant": 8}
     assert by_name["P2 quantization"]["added"] == {"Add": 4, "MultiThreshold": 4}
     assert by_name["P1 io"]["added"] == {"Div": 1, "TopK": 1}
     assert by_name["P4 topology"]["removed"] == by_name["P4 topology"]["added"] == {}
-    # P6 is a no-op on TFC: every bound within 3456, float32 holds them.
+    # The widening changes nothing on TFC: float32 holds every magnitude it reaches.
     assert by_name["P6 containers"] == {
         "sub_phase": "P6 containers",
         "removed": {},
@@ -182,20 +171,11 @@ def test_tfc_prepares_through_the_builder_checked_and_equivalent_to_its_export(
         "annotations_changed": {},
         "containers_changed": {},
     }
-    # Every integer output bounded and sound, every container exact; what remains is
-    # the label select's float values.
-    assert report["checkpoint"]["bounded"] == 10 and report["checkpoint"]["unbounded"] == {}
-    assert [(f["code"], f["kind"]) for f in report["checkpoint"]["findings"]] == [
-        ("float-remains", "limitation")
-    ]
-    assert report["checkpoint"]["findings"][0]["details"]["nodes"] == ["TopK_0"]
-    assert report["equivalence"] == {"draws": 12, "findings": [], "export_rounds": []}
-    # The run's index: the check passed, the checkpoint's one finding by its code.
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
-    assert manifest["verifications"] == {"graph_preparation_python": "pass"}
-    (checked,) = [each for each in manifest["steps"] if each["name"] == "step_check_prepared"]
-    assert checked["reports"] == [{"path": PREPARATION_REPORT, "findings": {"float-remains": 1}}]
+    assert [step["name"] for step in manifest["steps"]] == build_dataflow_phase_lookup[
+        "phase_prepare_model"
+    ]
 
 
 def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
@@ -222,7 +202,7 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     for node in made.graph.node:
         if node.op_type == "MultiThreshold":
             assert made.get_tensor_datatype(node.output[0]) == DataType["INT2"]
-    # The export's float32 containers throughout (P6 widened nothing), but ONNX's INT64
+    # The export's float32 containers throughout (nothing widened), but ONNX's INT64
     # shapes and indices and the thresholds, which streamlining computes and stores in
     # float64 (ONNX gives them no type).
     thresholds = {node.input[1] for node in made.graph.node if node.op_type == "MultiThreshold"}
@@ -297,38 +277,6 @@ def codes(findings: Sequence[Finding]) -> list[tuple[str, FindingKind]]:
     return [(finding.code, finding.kind) for finding in findings]
 
 
-def _bound(model: ModelWrapper, output: int = 0) -> tuple[int, int]:
-    node = model.graph.node[0]
-    rule = BOUND_RULES[(node.domain, node.op_type)]
-    found = rule(model, node, [interval(model, name) if name else None for name in node.input])
-    bound = found[output]
-    assert bound is not None
-    return bound.low, bound.high
-
-
-def _exhaustive(graph_of: Rule) -> tuple[int, int]:
-    """The least and greatest value the rule's graph's output takes over every
-    combination of its inputs' annotated values, each combination a row of one batch."""
-    model = graph_of(1)
-    names = [item.name for item in model.graph.input if model.get_initializer(item.name) is None]
-    shapes = [list(model.get_tensor_shape(name) or ()) for name in names]
-    domains = []
-    for name, shape in zip(names, shapes):
-        datatype = model.get_tensor_datatype(name)
-        integers = range(int(datatype.min()), int(datatype.max()) + 1)
-        domains.append(list(itertools.product(integers, repeat=int(np.prod(shape)))))
-    rows = list(itertools.product(*domains))
-    batched = graph_of(len(rows))
-    context = {
-        name: np.asarray([row[index] for row in rows], dtype=np.float32).reshape(
-            [len(rows), *shape[1:]]
-        )
-        for index, (name, shape) in enumerate(zip(names, shapes))
-    }
-    values = np.asarray(execute_onnx(batched, context)[batched.graph.output[0].name])
-    return int(values.min()), int(values.max())
-
-
 def _node(op: str, inputs: list[str], domain: str = "", **attributes: Any) -> Any:
     return helper.make_node(op, inputs, ["y"], name=f"{op}_0", domain=domain, **attributes)
 
@@ -336,169 +284,7 @@ def _node(op: str, inputs: list[str], domain: str = "", **attributes: Any) -> An
 UNARY = {"x": ([1, 2], "INT3")}
 """One INT3 input of two elements."""
 
-Rule = Callable[[int], ModelWrapper]
-"""A bound rule's graph for a batch of rows."""
-
-
-def _binary(op: str, **attributes: Any) -> Rule:
-    return lambda rows: graph(
-        [_node(op, ["x", "z"], **attributes)],
-        {"x": ([rows, 2], "INT3"), "z": ([rows, 2], "INT2")},
-        ["y"],
-    )
-
-
-def _unary(op: str, inputs: Sequence[str] = ("x",), domain: str = "", **options: Any) -> Rule:
-    initializers = options.pop("initializers", {})
-    return lambda rows: graph(
-        [_node(op, list(inputs), domain, **options)],
-        {"x": ([rows, 2], "INT3")},
-        ["y"],
-        initializers,
-    )
-
-
-#: Each bound rule on a graph small enough to execute exhaustively, by its batch.
-RULES: Mapping[str, Rule] = {
-    **{op: _binary(op) for op in ("Add", "Sub", "Mul", "Max", "Min")},
-    "Concat": _binary("Concat", axis=1),
-    **{op: _unary(op) for op in ("Relu", "Neg", "Abs")},
-    "Clip": _unary("Clip", ("x", "lo", "hi"), initializers={"lo": -1.0, "hi": 2.0}),
-    "Reshape": _unary("Reshape", ("x", "s"), initializers={"s": np.array([-1, 1])}),
-    "MultiThreshold": _unary(
-        "MultiThreshold",
-        ("x", "t"),
-        GENERAL,
-        out_bias=-2.0,
-        initializers={"t": [[-1.5, 0.5, 2.5]]},
-    ),
-    "MatMul weights": lambda rows: graph(
-        [_node("MatMul", ["x", "w"])],
-        {"x": ([rows, 3], "INT2")},
-        ["y"],
-        {"w": [[1, -3], [2, 0], [-1, 2]]},
-    ),
-    "XnorPopcountMatMul": lambda rows: graph(
-        [_node("XnorPopcountMatMul", ["x", "w"], GENERAL)],
-        {"x": ([rows, 3], "BINARY")},
-        ["y"],
-        {"w": [[1, 0], [0, 1], [1, 1]]},
-    ),
-    "MatMul": lambda rows: graph(
-        [_node("MatMul", ["x", "z"])],
-        {"x": ([rows, 1, 2], "INT2"), "z": ([rows, 2, 1], "INT2")},
-        ["y"],
-    ),
-}
-
-
-@pytest.mark.parametrize("name", RULES)
-def test_a_bound_rule_is_the_ops_exact_range_on_its_inputs(name: str) -> None:
-    assert _bound(RULES[name](1)) == _exhaustive(RULES[name])
-
-
-def test_topk_bounds_its_indices_by_its_axis_and_its_values_by_its_input() -> None:
-    model = graph(
-        [helper.make_node("TopK", ["x", "k"], ["v", "i"], name="TopK_0")],
-        {"x": ([1, 5], "INT3")},
-        ["i"],
-        {"k": np.array([1])},
-    )
-    assert (_bound(model, 0), _bound(model, 1)) == ((-4, 3), (0, 4))
-
-
-def test_a_sound_exact_graph_has_no_finding_and_counts_what_it_bounds() -> None:
-    model = graph(
-        [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-        {"x": ([1, 3], "INT2")},
-        ["y"],
-        {"w": [[1, -3], [2, 0], [-1, 2]]},
-        {"w": "INT3", "y": "INT5"},
-    )
-    checked = checkpoint(model, ANCHORS)
-    assert (checked.findings, checked.bounded, dict(checked.unbounded)) == ((), 1, {})
-
-
-def test_an_annotation_narrower_than_its_ops_range_is_unsound() -> None:
-    """qonnx's INT32 on a MatMul is sound, if wide; INT4 for a range of [-7, 8] is not."""
-    stated = {"w": "INT3", "y": "INT4"}
-    model = graph(
-        [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-        {"x": ([1, 3], "INT2")},
-        ["y"],
-        {"w": [[1, -3], [2, 0], [-1, 2]]},
-        stated,
-    )
-    (found,) = checkpoint(model, ANCHORS).blockers
-    assert (found.code, dict(found.details)["low"], dict(found.details)["high"]) == (
-        "annotation-unsound",
-        -7,
-        8,
-    )
-    # An initializer its annotation does not hold, likewise.
-    model.set_tensor_datatype("y", DataType["INT32"])
-    model.set_tensor_datatype("w", DataType["INT2"])
-    assert codes(checkpoint(model, ANCHORS).blockers) == [
-        ("annotation-unsound", FindingKind.BLOCKER)
-    ]
-
-
-def test_partial_sums_past_float32s_integers_are_inexact_unless_the_container_holds_them() -> None:
-    """An INT8 layer over k 2304 with spread weights: its partial sums reach past 2**24,
-    which float32 rounds; float64 holds them."""
-    weights = np.where(np.arange(2304 * 2).reshape(2304, 2) % 2 == 0, 127, -127)
-    for element_type, expected in (
-        (TensorProto.FLOAT, [("container-inexact", FindingKind.BLOCKER)]),
-        (TensorProto.DOUBLE, []),
-    ):
-        model = graph(
-            [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-            {"x": ([1, 2304], "INT8")},
-            ["y"],
-            {"w": weights},
-            {"w": "INT8", "y": "INT32"},
-            element_type,
-        )
-        assert codes(checkpoint(model, ANCHORS).findings) == expected
-
-
-@pytest.mark.parametrize("owned", [True, False], ids=["initializer", "channel"])
-def test_the_checkpoint_and_matmuls_domain_step_refuse_at_one_bound(owned: bool) -> None:
-    """One bound for both refusals (``finn.core.containers.matmul_partial_sums``): INT8
-    activations against a column of magnitudes summing to 2**17 reach 2**24, the last
-    integer float32 holds, and neither refuses; one more step past it and both do, the
-    checkpoint (``container-inexact``) and MatMul's domain step
-    (``matmul-container-exceeded``). Weights an initializer (all -128, then one 1 more),
-    or on a channel (INT8, k 1024, then 1025)."""
-    for k, refused in ((1024, False), (1025, True)):
-        if owned:
-            weights = np.full((k, 1), -128.0)
-            if refused:
-                weights[-1] = 1.0
-            assert matmul_partial_sums(128, k, 128, weights) == 2**24 + refused * 128
-            initializers: dict[str, Any] = {"w": weights}
-            inputs = {"x": ([1, k], "INT8")}
-        else:
-            assert matmul_partial_sums(128, k, 128) == 128 * 128 * k
-            initializers = {}
-            inputs = {"x": ([1, k], "INT8"), "w": ([k, 1], "INT8")}
-        model = graph(
-            [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-            inputs,
-            ["y"],
-            initializers,
-            {"w": "INT8", "y": "INT32"},
-        )
-        checked = [f.code for f in checkpoint(model, ANCHORS).findings]
-        assert ("container-inexact" in checked) is refused, checked
-        conversion = ToKernelOps(TARGET)
-        copy.deepcopy(model).transform(conversion)
-        (outcome,) = conversion.outcomes
-        found = [f.code for f in outcome.findings]
-        assert ("matmul-container-exceeded" in found) is refused, found
-
-
-# -- P6, containers --------------------------------------------------------------------
+# -- containers ----------------------------------------------------------------------------
 
 #: An INT8 layer over k 2304 with spread weights: partial sums up to 127 * 128 * 2304,
 #: past 2**24.
@@ -547,11 +333,57 @@ def _edges(model: ModelWrapper) -> list[tuple[str, int, list[int] | None]]:
     ]
 
 
-def test_p6_widens_only_the_region_that_needs_it_and_casts_only_at_its_edges() -> None:
-    """KT19 Q3: the wide layer's region (its input, weights, sums and the thresholds'
-    output it is tied to) in float64; the narrow layer and the float arithmetic in
-    float32; a Cast where the wide region's sum enters the float Mul (annotated FLOAT32
-    from there) and at the graph's input and output, which keep their containers."""
+def _past_their_containers(model: ModelWrapper) -> set[str]:
+    """The integer tensors whose magnitudes (``magnitudes``) pass the integers their
+    containers hold exactly."""
+    return {
+        tensor
+        for tensor, reached in magnitudes(model).items()
+        if (limit := exact_up_to(container(model, tensor))) is not None and reached > limit
+    }
+
+
+@pytest.mark.parametrize("owned", [True, False], ids=["initializer", "channel"])
+def test_the_widening_and_matmuls_domain_step_part_at_one_bound(owned: bool) -> None:
+    """One bound for both (``finn.core.containers.matmul_partial_sums``): INT8
+    activations against a column of magnitudes summing to 2**17 reach 2**24, the last
+    integer float32 holds, so nothing is widened and MatMul's domain step accepts it;
+    one more step past it and the widening takes the MatMul's region to float64, which
+    the domain step refuses in float32 (``matmul-container-exceeded``). Weights an
+    initializer (all -128, then one 1 more), or on a channel (INT8, k 1024, then
+    1025)."""
+    for k, past in ((1024, False), (1025, True)):
+        if owned:
+            weights = np.full((k, 1), -128.0)
+            if past:
+                weights[-1] = 1.0
+            assert matmul_partial_sums(128, k, 128, weights) == 2**24 + past * 128
+            initializers: dict[str, Any] = {"w": weights}
+            inputs = {"x": ([1, k], "INT8")}
+        else:
+            assert matmul_partial_sums(128, k, 128) == 128 * 128 * k
+            initializers = {}
+            inputs = {"x": ([1, k], "INT8"), "w": ([k, 1], "INT8")}
+        model = graph(
+            [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
+            inputs,
+            ["y"],
+            initializers,
+            {"w": "INT8", "y": "INT32"},
+        )
+        assert ("y" in widened_regions(model)) is past
+        conversion = ToKernelOps(TARGET)
+        copy.deepcopy(model).transform(conversion)
+        (outcome,) = conversion.outcomes
+        found = [f.code for f in outcome.findings]
+        assert ("matmul-container-exceeded" in found) is past, found
+
+
+def test_the_widening_takes_only_the_region_that_needs_it_and_casts_only_at_its_edges() -> None:
+    """The wide layer's region (its input, weights, sums and the thresholds' output it is
+    tied to) in float64; the narrow layer and the float arithmetic in float32; a Cast
+    where the wide region's sum enters the float Mul (annotated FLOAT32 from there) and
+    at the graph's input and output, which keep their containers."""
     source = _wide_and_narrow()
     assert source.get_tensor_datatype("sa") == DataType["INT26"]
     made = exact_containers(copy.deepcopy(source))
@@ -576,7 +408,7 @@ def test_p6_widens_only_the_region_that_needs_it_and_casts_only_at_its_edges() -
         (["x"], ["x_double"], TensorProto.DOUBLE),
         (["ya_double"], ["ya"], TensorProto.FLOAT),
     ]
-    # The report's census names what P6 widened, and the Casts it added.
+    # The report's census names what was widened, and the Casts added.
     changed = census(source, made)
     assert changed["containers_changed"] == {
         "sa": ["FLOAT", "DOUBLE"],
@@ -598,18 +430,18 @@ def test_p6_widens_only_the_region_that_needs_it_and_casts_only_at_its_edges() -
     assert np.array_equal(
         execute_onnx(made, inputs)["scaled"], execute_onnx(source, inputs)["scaled"]
     )
-    # The checkpoint finds every container exact; P6 on its own output changes nothing.
-    assert not [f for f in checkpoint(made, ANCHORS).findings if "container" in f.code]
-    assert codes(checkpoint(source, ANCHORS).blockers) == [
-        ("container-inexact", FindingKind.BLOCKER)
-    ]
+    # The wide sums past float32's integers before, every container exact after; the
+    # widening on its own output changes nothing.
+    assert _past_their_containers(source) == {"sa"}
+    assert _past_their_containers(made) == set()
     again = exact_containers(copy.deepcopy(made))
     assert again.model.SerializeToString() == made.model.SerializeToString()
 
 
-def test_an_int8_matmul_over_k_2304_with_spread_weights_converts_once_p6_widens_it() -> None:
-    """The outcome P6 changes (NOTE §6): in float32 the domain step refuses the wide layer
-    (ONNX would round its sums, ``matmul-container-exceeded``); in float64 it converts."""
+def test_an_int8_matmul_over_k_2304_with_spread_weights_converts_once_widened() -> None:
+    """The outcome the widening changes: in float32 the domain step refuses the wide
+    layer (ONNX would round its sums, ``matmul-container-exceeded``); in float64 it
+    converts."""
     source = _wide_and_narrow()
     for model, wide in ((source, False), (exact_containers(copy.deepcopy(source)), True)):
         conversion = ToKernelOps(TARGET)
@@ -655,10 +487,11 @@ def test_a_quantizers_integer_output_enters_a_widened_region_through_a_cast() ->
     assert execute_onnx(made, {"f": f})["y"][0, 0] == 127 * np.abs(SPREAD[:, 0]).sum()
 
 
-def test_past_2_53_a_region_is_widened_and_the_checkpoint_refuses_it_by_name() -> None:
+def test_past_2_53_a_region_is_widened_and_its_matmul_stays_on_the_host() -> None:
     """INT24 activations times INT24 weights over k 4096 reach 2**58: float64 holds them
-    no more than float32 does (KT19 Q3, ``container-inexact``, each tensor named: the
-    widened sum and the graph's output, which keeps float32)."""
+    no more than float32 does. The region is widened as far as float64 goes, the widened
+    sum and the graph's output (which keeps float32) stay past their containers, and
+    MatMul's domain step leaves the node on the host (``matmul-container-exceeded``)."""
     model = graph(
         [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
         {"x": ([1, 4096], "INT24"), "w": ([4096, 2], "INT24")},
@@ -667,21 +500,19 @@ def test_past_2_53_a_region_is_widened_and_the_checkpoint_refuses_it_by_name() -
     )
     made = exact_containers(model)
     assert container(made, "y_double") == TensorProto.DOUBLE
-    found = {
-        dict(f.details)["tensor"]: (f.code, dict(f.details)["limit"])
-        for f in checkpoint(made, ANCHORS).blockers
-    }
-    assert found == {
-        "y_double": ("container-inexact", 2**53),
-        "y": ("container-inexact", 2**24),
-    }
+    assert _past_their_containers(made) == {"y_double", "y"}
+    conversion = ToKernelOps(TARGET)
+    copy.deepcopy(made).transform(conversion)
+    (outcome,) = [each for each in conversion.outcomes if each.nodes[0] == "MatMul_0"]
+    assert outcome.op is None
+    assert "matmul-container-exceeded" in [f.code for f in outcome.findings]
 
 
 def test_where_the_export_rounds_its_integers_the_equivalence_names_the_tensor() -> None:
     """The G1-G2 record's open item, which containers make possible: an exported wide
     layer (a Quant, then a MatMul over k 2304) computes in float32, and an odd sum past
     2**24 rounds; the export run in float64 does not. The tensor is named
-    (``export-rounds``, a limitation); the prepared graph, P6 applied, is exact up to
+    (``export-rounds``, a limitation); the prepared graph, widened, is exact up to
     the graph's output, which keeps float32."""
     weights = np.full((2304, 1), 127.0)
     weights[-1] = 126  # 127 * the column's sum is odd, past 2**24
@@ -766,174 +597,6 @@ def test_a_recipe_accepts_the_transform_thresholdings_hint_names() -> None:
     assert RECIPE_TRANSFORMS[LOWERING] is ExtractMultiThresholdScaleBias
 
 
-def test_a_kernel_ops_tensor_without_an_annotation_or_a_shape_is_refused() -> None:
-    model = graph(
-        [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-        {"x": ([1, 3], None)},
-        ["y"],
-        {"w": np.ones((3, 2))},
-        {"y": "INT8"},
-    )
-    (found,) = checkpoint(model, ANCHORS).blockers
-    assert (found.code, dict(found.details)["tensor"]) == ("annotation-absent", "x")
-    # Not where no KernelOp anchors: a host node's float input is no statement it reads.
-    assert checkpoint(model, set()).blockers == ()
-    model.set_tensor_datatype("x", DataType["INT2"])
-    del model.graph.output[0].type.tensor_type.shape.dim[:]
-    model.graph.output[0].type.tensor_type.ClearField("shape")
-    assert codes(checkpoint(model, ANCHORS).blockers) == [("shape-unknown", FindingKind.BLOCKER)]
-
-
-def test_what_the_phase_leaves_is_reported_never_refused() -> None:
-    """A float node, a Transpose, and a host node between two anchored ones."""
-    model = graph(
-        [
-            helper.make_node("MatMul", ["x", "w"], ["a"], name="MatMul_0"),
-            helper.make_node("Relu", ["a"], ["b"], name="Relu_0"),
-            helper.make_node("Transpose", ["b"], ["c"], name="Transpose_0", perm=[0, 1]),
-            helper.make_node("MatMul", ["c", "v"], ["y"], name="MatMul_1"),
-        ],
-        {"x": ([1, 2], "INT2")},
-        ["y"],
-        {"w": np.eye(2), "v": np.eye(2)},
-        {"a": "INT32", "b": "FLOAT32", "c": "FLOAT32", "y": "FLOAT32"},
-    )
-    checked = checkpoint(model, ANCHORS)
-    assert checked.blockers == ()
-    assert {f.code: dict(f.details)["nodes"] for f in checked.findings} == {
-        "float-remains": ("Relu_0", "Transpose_0", "MatMul_1"),
-        "transpose-remains": ("Transpose_0",),
-        "host-between-predicted": ("Relu_0", "Transpose_0"),
-    }
-
-
-def test_the_builders_checkpoint_refuses_a_blocker_naming_it_in_its_report(
-    tmp_path: Path,
-) -> None:
-    model = graph(
-        [helper.make_node("MatMul", ["x", "w"], ["y"], name="MatMul_0")],
-        {"x": ([1, 3], "INT2")},
-        ["y"],
-        {"w": [[1, -3], [2, 0], [-1, 2]]},
-        {"w": "INT3", "y": "INT4"},
-    )
-    cfg = preparation_config(tmp_path)
-    with pytest.raises(PreparationRefused, match="annotation-unsound: MatMul_0") as refused:
-        step_check_prepared(model, cfg)
-    assert codes(refused.value.findings) == [("annotation-unsound", FindingKind.BLOCKER)]
-    report = json.loads((Path(cfg.output_dir) / PREPARATION_REPORT).read_text())
-    assert [f["code"] for f in report["checkpoint"]["findings"]] == ["annotation-unsound"]
-
-
-def _built_from(tmp_path: Path, export: ModelWrapper, prepared_as: ModelWrapper) -> Any:
-    """A build of ``export`` that imports it, keeping it as the equivalence's reference,
-    takes ``prepared_as`` for the prepared graph, checks it with GRAPH_PREPARATION_PYTHON
-    and records whether a step after the checkpoint ran: its status, its manifest, its
-    report, whether that step ran, and its log (the rendering, for its wording)."""
-    after: list[ModelWrapper] = []
-
-    def alter(model: ModelWrapper, cfg: Any) -> ModelWrapper:
-        return prepared_as
-
-    def record(model: ModelWrapper, cfg: Any) -> ModelWrapper:
-        after.append(model)
-        return model
-
-    export.save(str(tmp_path / "export.onnx"))
-    cfg = preparation_config(
-        tmp_path,
-        step_options={},
-        steps=["step_tidy_up", alter, "step_check_prepared", record],
-        verify_steps=[VerificationStepType.GRAPH_PREPARATION_PYTHON],
-    )
-    status = build_dataflow_cfg(str(tmp_path / "export.onnx"), cfg)
-    output = Path(cfg.output_dir)
-    return (
-        status,
-        json.loads((output / MANIFEST_FILE).read_text()),
-        json.loads((output / PREPARATION_REPORT).read_text()),
-        bool(after),
-        (output / "build_dataflow.log").read_text(),
-    )
-
-
-def _adding(constant: float, stated: str = "INT8") -> ModelWrapper:
-    return graph(
-        [helper.make_node("Add", ["x", "c"], ["y"], name="Add_0")],
-        UNARY,
-        ["y"],
-        {"c": [constant]},
-        {"y": stated},
-    )
-
-
-def test_a_builds_equivalence_difference_is_reported_as_a_failure_and_the_build_continues(
-    tmp_path: Path,
-) -> None:
-    status, manifest, report, continued, log = _built_from(tmp_path, _adding(1.0), _adding(2.0))
-    assert status == 0 and continued
-    assert manifest["outcome"] == {"status": "completed"}
-    assert manifest["verifications"] == {"graph_preparation_python": "fail"}
-    checked = manifest["steps"][-2]
-    assert checked["name"] == "step_check_prepared"
-    assert checked["findings"] == {"equivalence-unexplained": 1}
-    # The log renders it for a reader: no deviation's predicate ran, the declared named.
-    declared = ", ".join(DEVIATIONS)
-    assert "reported, not refused; a build runs no deviation's predicate" in log
-    assert f"the phase declares {declared}\n" in log
-    assert report["checkpoint"]["findings"] == []
-    (found,) = report["equivalence"]["findings"]
-    # A difference in a build that continues is no blocker: the check's equivalence is
-    # false there (a rejection), and the build reports it (FAIL) and goes on.
-    assert (found["code"], found["kind"]) == ("equivalence-unexplained", "rejection")
-
-
-def test_a_builds_checkpoint_blocker_still_refuses_beside_an_equivalence_difference(
-    tmp_path: Path,
-) -> None:
-    # y = x + 7 over INT3 reaches 10, which INT2 does not hold: unsound by bound, and on
-    # the draws the export's x + 1 differs.
-    status, manifest, report, continued, _ = _built_from(
-        tmp_path, _adding(1.0), _adding(7.0, "INT2")
-    )
-    assert status != 0 and not continued
-    assert manifest["verifications"] == {"graph_preparation_python": "fail"}
-    outcome = manifest["outcome"]
-    assert (outcome["status"], outcome["step"], outcome["kind"]) == (
-        "failed",
-        "step_check_prepared",
-        "refusal",
-    )
-    # Refused twice over: by the checkpoint's bound, and by a draw outside INT2.
-    assert outcome["findings"] == {"annotation-unsound": 2}
-    assert [f["code"] for f in report["checkpoint"]["findings"]] == ["annotation-unsound"]
-    assert "Add_0 (Add) computes y over [3, 10]" in report["checkpoint"]["findings"][0]["message"]
-    assert "equivalence-unexplained" in {f["code"] for f in report["equivalence"]["findings"]}
-
-
-def test_a_builds_sampled_unsound_annotation_refuses_the_graph_naming_it(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # y = x + 0.5 computes what the export does, but INT8 holds none of it: the
-    # checkpoint has no bound for a fractional Add, and the draws find it.
-    status, manifest, report, continued, log = _built_from(
-        tmp_path, _adding(0.5, "FLOAT32"), _adding(0.5)
-    )
-    assert status != 0 and not continued
-    assert "1 blockers: P7 equivalence: annotation-unsound: y is annotated INT8" in (
-        capsys.readouterr().err
-    )
-    assert manifest["verifications"] == {"graph_preparation_python": "fail"}
-    assert manifest["outcome"]["kind"] == "refusal"
-    assert manifest["outcome"]["findings"] == {"annotation-unsound": 1}
-    assert report["checkpoint"]["findings"] == []
-    (found,) = report["equivalence"]["findings"]
-    assert found["code"] == "annotation-unsound"
-    assert found["message"].startswith("y is annotated INT8")
-    # The log renders it for a reader: the unsound annotation refuses, the rest reported.
-    assert "annotation-unsound refuses the graph, the rest reported, not refused" in log
-
-
 # -- equivalence and the deviations' predicates --------------------------------------------
 
 
@@ -1013,6 +676,6 @@ def test_threshold_float32_explains_a_threshold_one_rounding_from_the_exports() 
 
 
 def test_a_predicate_for_no_declared_deviation_is_refused() -> None:
-    model = RULES["Relu"](1)
+    model = graph([_node("Relu", ["x"])], UNARY, ["y"])
     with pytest.raises(ValueError, match="no deviation of the phase is named rounding"):
         check_equivalence(model, model, {"rounding": topk_affine})

@@ -113,7 +113,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # Containers: the ONNX element types execution holds a tensor's values in, and the
     # integers each holds exactly. The KernelOps' domain step, graph preparation's
-    # container pass and checkpoint, and the harness's draws read the one table.
+    # container widening, and the harness's draws read the one table.
     Layer(
         "containers", ("finn.core.containers",), (), ("numpy", "onnx", "qonnx"), "tests/kernel_ops"
     ),
@@ -165,9 +165,8 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # Graph preparation: the front end that takes an export to the graph the kernel
-    # path converts (Quant lowering, streamlining) and the phase over it, with its
-    # checkpoint's findings. It reads no target: neither the platform registry nor
-    # the KernelOps, whose anchors the checkpoint is given.
+    # path converts (Quant lowering, streamlining) and the phase over it. It reads no
+    # target: neither the platform registry nor the KernelOps.
     Layer(
         "preparation",
         (
@@ -175,7 +174,7 @@ LAYERS: tuple[Layer, ...] = (
             "finn.transformation.streamline",
             "finn.transformation.prepare",
         ),
-        ("space", "util", "containers"),
+        ("util", "containers"),
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
