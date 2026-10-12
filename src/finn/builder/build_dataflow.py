@@ -34,7 +34,6 @@ import os
 import pdb  # NOQA
 import sys
 import time
-import warnings
 from dataclasses import asdict, replace
 from datetime import datetime
 from qonnx.core.modelwrapper import ModelWrapper
@@ -65,6 +64,7 @@ from finn.builder.build_dataflow_steps import (
 )
 from finn.core.space import by_code
 from finn.toolchain.launcher import ToolFailed, ToolUnavailable
+from finn.util.run_log import FILE_ONLY, log_run, running_step
 
 #: The configuration file of a build directory (build_dataflow_directory), next to
 #: model.onnx.
@@ -73,116 +73,10 @@ CONFIG_FILE = "dataflow_build_config.json"
 #: The build log, in the output directory.
 LOG_FILE = "build_dataflow.log"
 
-#: The runner's logger. The console shows its INFO lines (the build's paths, each step
-#: it runs, the outcome); from other loggers, only warnings and above.
+#: The runner's logger, log_run's ``runner``: the console shows its INFO lines (the
+#: build's paths, each step it runs, the outcome) and, from other loggers, only warnings
+#: and above.
 _LOG = logging.getLogger(__name__)
-
-#: Pass as ``extra`` to send a record to the build log only, unless ``verbose`` (used
-#: for a refusal's traceback).
-FILE_ONLY = {"finn_console": False}
-
-#: The step running now, stamped on every log record. A module global, not a context
-#: variable, because a step's thread pool (HLS synthesis) does not inherit context.
-_step = "-"
-
-
-class _StepStamp(logging.Filter):
-    """Stamps each record with the running step (``step``), and strips the trailing
-    newline warnings.formatwarning adds to a captured warning."""
-
-    def filter(self, record):
-        record.step = _step
-        if record.name == "py.warnings" and isinstance(record.msg, str):
-            record.msg = record.msg.rstrip("\n")
-        return True
-
-
-class _Console(logging.Filter):
-    """Selects what the build's console shows: with ``verbose``, everything the log file
-    has; otherwise the runner's lines and every logger's warnings and errors. INFO and
-    below go to stdout, WARNING and above to stderr (``errors``)."""
-
-    def __init__(self, verbose: bool, errors: bool):
-        super().__init__()
-        self.verbose = verbose
-        self.errors = errors
-
-    def filter(self, record):
-        if (record.levelno >= logging.WARNING) != self.errors:
-            return False
-        if self.verbose:
-            return True
-        if not getattr(record, "finn_console", True):
-            return False
-        return record.levelno >= logging.WARNING or record.name == _LOG.name
-
-
-class _ConsoleFormat(logging.Formatter):
-    """The message alone for INFO and below; ``LEVEL: message`` above."""
-
-    def format(self, record):
-        text = super().format(record)
-        return text if record.levelno < logging.WARNING else f"{record.levelname}: {text}"
-
-
-@contextlib.contextmanager
-def _build_log(cfg):
-    """Set up the build's log for the ``with`` block. FINN's loggers (``finn``) and
-    Python's warnings (``py.warnings``, captured through ``logging.captureWarnings``) go
-    to ``LOG_FILE`` in ``cfg.output_dir``, each line with its level, step and logger,
-    and to the console (_Console). ``finn`` logs from INFO, the level the build's
-    manifest is collected from (_indexed); a level the caller set is the one the log
-    file and the console show (INFO if none is set). No stream is redirected, so a
-    third-party print reaches the console unchanged. The handlers, levels and warnings
-    hook are restored afterwards, leaving a notebook's own logging as it was."""
-    global _step
-    os.makedirs(cfg.output_dir, exist_ok=True)
-    stamp = _StepStamp()
-    file_handler = logging.FileHandler(os.path.join(cfg.output_dir, LOG_FILE), mode="a")
-    file_handler.setFormatter(
-        logging.Formatter("[%(asctime)s] %(levelname)s %(step)s %(name)s: %(message)s")
-    )
-    handlers = [file_handler]
-    for stream, errors in ((sys.stdout, False), (sys.stderr, True)):
-        console = logging.StreamHandler(stream)
-        console.addFilter(_Console(cfg.verbose, errors))
-        console.setFormatter(_ConsoleFormat("%(message)s"))
-        handlers.append(console)
-    loggers = [logging.getLogger("finn"), logging.getLogger("py.warnings")]
-    saved = [(logger, logger.level, logger.propagate) for logger in loggers]
-    for handler in handlers:
-        handler.addFilter(stamp)
-        for logger in loggers:
-            logger.addHandler(handler)
-    for logger in loggers:
-        # Not also to the root's handlers (a notebook's), which would print each line twice.
-        logger.propagate = False
-    # FINN logs from INFO, since the manifest is collected from INFO records
-    # (ManifestHandler); a level the caller set above INFO filters the log and console.
-    shown = loggers[0].level or logging.INFO
-    if shown > logging.INFO:
-        for handler in handlers:
-            handler.addFilter(
-                lambda record: record.levelno >= shown or record.name == "py.warnings"
-            )
-    loggers[0].setLevel(min(shown, logging.INFO))
-    # Leave the warnings hook alone if the caller already captures warnings.
-    capture = warnings.showwarning is not getattr(logging, "_showwarning", None)
-    if capture:
-        logging.captureWarnings(True)
-    try:
-        yield
-    finally:
-        _step = "-"
-        if capture:
-            logging.captureWarnings(False)
-        for logger, level, propagate in saved:
-            logger.setLevel(level)
-            logger.propagate = propagate
-            for handler in handlers:
-                logger.removeHandler(handler)
-        for handler in handlers:
-            handler.close()
 
 
 def _failure_kind(error: BaseException) -> str:
@@ -336,50 +230,48 @@ def _run_build_steps(model, cfg, build_dataflow_steps, manifest=None):
     the manifest, and starting the postmortem debugger if ``enable_build_pdb_debug`` is
     set and stdin is a terminal.
     """
-    global _step
     step_num = 1
     time_per_step = dict()
     for transform_step in build_dataflow_steps:
         step_name = transform_step.__name__
         step_start = time.time()
-        try:
-            _step = step_name
-            _LOG.info("Running step: %s [%d/%d]", step_name, step_num, len(build_dataflow_steps))
-            if manifest is not None:
-                manifest.step_started(step_name, _PHASE_OF.get(step_name))
-            # run the step
-            step_start = time.time()
-            model = transform_step(model, cfg)
-            step_end = time.time()
-            time_per_step[step_name] = step_end - step_start
-            chkpt_name = "%s.onnx" % (step_name)
-            if cfg.save_intermediate_models:
-                intermediate_model_dir = cfg.output_dir + "/intermediate_models"
-                if not os.path.exists(intermediate_model_dir):
-                    os.makedirs(intermediate_model_dir)
-                model.save("%s/%s" % (intermediate_model_dir, chkpt_name))
-            if manifest is not None:
-                manifest.step_ended("completed", time.time() - step_start)
-            step_num += 1
-        except:  # noqa
-            extype, value, tb = sys.exc_info()
-            kind = _log_failure(step_name, value)
-            if manifest is not None:
-                manifest.failed(step_name, kind, value, _findings_by_code(value))
-                manifest.step_ended("failed", time.time() - step_start)
-            # start postmortem debug if configured, and only where someone can answer it:
-            # with stdin not a terminal (pytest, a batch job) pdb's read would fail and
-            # report itself instead of the error above
-            if not cfg.enable_build_pdb_debug:
-                _LOG.info("enable_build_pdb_debug not set in build config, exiting...")
-            elif sys.stdin is None or not sys.stdin.isatty():
-                _LOG.info("enable_build_pdb_debug set, but stdin is not a terminal, exiting...")
-            else:
-                pdb.post_mortem(tb)
-            _LOG.error("Build failed")
-            return -1
-        finally:
-            _step = "-"
+        with running_step(step_name):
+            try:
+                _LOG.info(
+                    "Running step: %s [%d/%d]", step_name, step_num, len(build_dataflow_steps)
+                )
+                if manifest is not None:
+                    manifest.step_started(step_name, _PHASE_OF.get(step_name))
+                step_start = time.time()
+                model = transform_step(model, cfg)
+                step_end = time.time()
+                time_per_step[step_name] = step_end - step_start
+                chkpt_name = "%s.onnx" % (step_name)
+                if cfg.save_intermediate_models:
+                    intermediate_model_dir = cfg.output_dir + "/intermediate_models"
+                    if not os.path.exists(intermediate_model_dir):
+                        os.makedirs(intermediate_model_dir)
+                    model.save("%s/%s" % (intermediate_model_dir, chkpt_name))
+                if manifest is not None:
+                    manifest.step_ended("completed", time.time() - step_start)
+                step_num += 1
+            except:  # noqa
+                extype, value, tb = sys.exc_info()
+                kind = _log_failure(step_name, value)
+                if manifest is not None:
+                    manifest.failed(step_name, kind, value, _findings_by_code(value))
+                    manifest.step_ended("failed", time.time() - step_start)
+                # The postmortem debugger only where someone can answer it: with stdin not
+                # a terminal (pytest, a batch job) pdb's read would fail and report itself
+                # instead of the error above.
+                if not cfg.enable_build_pdb_debug:
+                    _LOG.info("enable_build_pdb_debug not set in build config, exiting...")
+                elif sys.stdin is None or not sys.stdin.isatty():
+                    _LOG.info("enable_build_pdb_debug set, but stdin is not a terminal, exiting...")
+                else:
+                    pdb.post_mortem(tb)
+                _LOG.error("Build failed")
+                return -1
 
     with open(cfg.output_dir + "/time_per_step.json", "w") as f:
         json.dump(time_per_step, f, indent=2)
@@ -452,15 +344,16 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     """Best-effort build a dataflow accelerator using the given configuration, through
     the steps of finn.builder.build_dataflow_steps.
 
-    The build log (``LOG_FILE`` in the output directory, and the console) and the
-    manifest (``MANIFEST_FILE``, finn.builder.build_dataflow_manifest) are set up first
-    (_build_log, _indexed), so the configuration checks are logged and listed in the
+    The build log (``LOG_FILE`` in the output directory, and the console; log_run) and
+    the manifest (``MANIFEST_FILE``, finn.builder.build_dataflow_manifest; _indexed) are
+    set up first, so the configuration checks are logged and listed in the
     manifest too, and a refused configuration is logged and recorded before it raises.
 
     :param model_filename: ONNX model filename to build
     :param cfg: Build configuration
     """
-    with _build_log(cfg), _indexed(cfg) as manifest:
+    log_file = os.path.join(cfg.output_dir, LOG_FILE)
+    with log_run(log_file, runner=_LOG.name, verbose=cfg.verbose), _indexed(cfg) as manifest:
         try:
             # if start_step is specified, override the input model
             if cfg.start_step is None:
@@ -483,7 +376,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
 
             _LOG.info("Intermediate outputs will be generated in " + str(finn_build_dir))
             _LOG.info("Final outputs will be generated in " + cfg.output_dir)
-            _LOG.info("Build log is at " + os.path.join(cfg.output_dir, LOG_FILE))
+            _LOG.info("Build log is at " + log_file)
             _LOG.info("Build manifest is at " + os.path.join(cfg.output_dir, MANIFEST_FILE))
 
             # Run configuration checks
