@@ -41,7 +41,7 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
-    DEFAULT_STRATEGIES,
+    KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
     default_build_dataflow_steps,
@@ -68,23 +68,23 @@ def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
     assert cfg.generate_outputs == [] and cfg.verify_steps == []
     assert cfg.settings == {}
     assert cfg.steps is None and cfg.step_edits == [] and cfg.toolchain is None
-    # Every setting at its default: the export's own inputs and outputs, and the
-    # exploration that sizes the FIFOs at the baseline folding.
-    settings = resolve_plan(cfg).settings
+    # Every setting at its default: the export's own inputs and outputs, and FIFO sizing
+    # at the baseline folding, the default strategy step, without a margin.
+    plan = resolve_plan(cfg)
+    settings = plan.settings
     assert {name: setting.value for name, setting in settings.items()} == {
         "override_inpsize": None,
         "max_multithreshold_bit_width": 8,
         "preprocessing": None,
         "input_datatype": None,
         "topk": None,
-        "strategies": DEFAULT_STRATEGIES,
+        "fifo_margin": 0,
+        "fifo_ram_style": None,
         "hw_debug": False,
+        "target_fps": None,
     }
-    assert DEFAULT_STRATEGIES == ({"strategy": "size_fifos"},)
     assert not any(setting.given for setting in settings.values())
-    # A list written replaces the default.
-    written = DataflowBuildConfig.from_json(json.dumps({**STATED, "strategies": []}))
-    assert resolve_plan(written).settings["strategies"].value == []
+    assert "step_size_fifos" in [step.name for step in plan.steps]
     assert default_build_dataflow_steps[0] == "phase_prepare_model"
 
 
@@ -95,11 +95,10 @@ SETTINGS: dict[str, Any] = {
     "preprocessing": "preproc.onnx",
     "input_datatype": "UINT8",
     "topk": 1,
-    "strategies": [
-        {"strategy": "target_throughput", "fps": 1_000_000},
-        {"strategy": "size_fifos"},
-    ],
+    "fifo_margin": 2,
+    "fifo_ram_style": "block",
     "hw_debug": True,
+    "target_fps": 1_000_000,
 }
 
 
@@ -115,10 +114,13 @@ def test_a_configuration_holds_through_json() -> None:
         ),
         steps=["phase_optimize_hardware", "step_package_partition"],
         step_edits=[
-            {"after": "step_explore", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
+            {
+                "after": "step_size_fifos",
+                "insert": "qonnx.transformation.general.GiveUniqueNodeNames",
+            },
             {"remove": "step_package_partition"},
         ],
-        start_step="step_explore",
+        start_step="step_size_fifos",
         stop_step="phase_optimize_hardware",
         save_intermediate_models=False,
         enable_build_pdb_debug=False,
@@ -150,7 +152,7 @@ def test_a_configuration_holds_through_json() -> None:
     assert {name: stated[name] for name in SETTINGS} == SETTINGS
     assert "settings" not in stated
     assert stated["step_edits"] == [
-        {"after": "step_explore", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
+        {"after": "step_size_fifos", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
         {"remove": "step_package_partition"},
     ]
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
@@ -164,11 +166,13 @@ def test_a_configuration_holds_through_json() -> None:
         "board",
         "vivado_jobs",
         # The names before settings: per-step options, injections, the flat hardware
-        # debug flag and the exploration's old name.
+        # debug flag, the exploration's old names, and its spec of the target throughput.
         "step_options",
         "inject_steps_after",
         "enable_hw_debug",
         "kernel_exploration",
+        "strategies",
+        "fps",
     ],
 )
 def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(key: str) -> None:
@@ -179,8 +183,8 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(ke
         resolve_plan(cfg)
     assert str(refused.value) == (
         f"settings no step of this build declares: {key}; the settings its steps read: "
-        "hw_debug, input_datatype, max_multithreshold_bit_width, override_inpsize, "
-        "preprocessing, strategies, topk"
+        "fifo_margin, fifo_ram_style, hw_debug, input_datatype, max_multithreshold_bit_width, "
+        "override_inpsize, preprocessing, target_fps, topk"
     )
 
 
@@ -208,7 +212,7 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(ke
         ({"verbose": "yes"}, "configuration.verbose: a bool, not 'yes'"),
         ({"verify_input_npy": 3}, "configuration.verify_input_npy: a str, not 3"),
         ({"steps": "phase_prepare_model"}, "configuration.steps: "),
-        ({"step_edits": {"remove": "step_explore"}}, "configuration.step_edits: a list, not"),
+        ({"step_edits": {"remove": "step_size_fifos"}}, "configuration.step_edits: a list, not"),
         ({"settings": {"topk": 1}}, "configuration.settings: JSON states each setting as a"),
     ],
 )
@@ -264,7 +268,8 @@ def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written()
     [
         ({"topk": "one"}, "configuration.topk: an int, not 'one'"),
         ({"max_multithreshold_bit_width": "8"}, "configuration.max_multithreshold_bit_width: "),
-        ({"strategies": ["size_fifos"]}, "configuration.strategies[0]: an object, not"),
+        ({"fifo_margin": "2"}, "configuration.fifo_margin: an int, not '2'"),
+        ({"target_fps": "fast"}, "configuration.target_fps: a float, not 'fast'"),
         ({"hw_debug": "yes"}, "configuration.hw_debug: a bool, not 'yes'"),
         ({"override_inpsize": [1, "28"]}, "configuration.override_inpsize: "),
     ],
@@ -409,10 +414,11 @@ def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
 
 def test_the_default_list_and_the_lookup_are_the_phase_tables() -> None:
     """Both derived from the one table: every phase in order, and every step once, by
-    its name."""
+    its name, the strategy steps no phase runs by default after the phases'."""
     assert default_build_dataflow_steps == list(build_dataflow_phases)
     in_phases = [step for steps in build_dataflow_phases.values() for step in steps]
-    assert list(build_dataflow_step_lookup.values()) == in_phases
+    others = [step for step in KERNEL_STRATEGY_STEPS if step not in in_phases]
+    assert list(build_dataflow_step_lookup.values()) == [*in_phases, *others]
     assert all(name == step.__name__ for name, step in build_dataflow_step_lookup.items())
     assert len(set(in_phases)) == len(in_phases)
 
@@ -428,8 +434,10 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
         "preprocessing": ("step_add_pre_post_processing",),
         "input_datatype": ("step_add_pre_post_processing",),
         "topk": ("step_add_pre_post_processing",),
-        "strategies": ("step_explore",),
+        "fifo_margin": ("step_size_fifos",),
+        "fifo_ram_style": ("step_size_fifos",),
         "hw_debug": ("step_build_bitfile",),
+        "target_fps": ("step_build_bitfile",),
     }
 
 
@@ -441,10 +449,10 @@ def names(cfg: DataflowBuildConfig) -> list[str]:
 def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     """A step inside a phase, or a phase: its first step to start from, its last to
     stop after; the build starts from the model the step before saved."""
-    inside = {**STATED, "start_step": "step_explore", "stop_step": "step_package_partition"}
+    inside = {**STATED, "start_step": "step_size_fifos", "stop_step": "step_package_partition"}
     cfg = DataflowBuildConfig.from_json(json.dumps(inside))
-    assert names(cfg) == ["step_explore", "step_verify_partition", "step_package_partition"]
-    assert resolve_step_filename("step_explore", cfg, -1) == (
+    assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
+    assert resolve_step_filename("step_size_fifos", cfg, -1) == (
         "out/intermediate_models/step_create_dataflow_partition.onnx"
     )
     phases = {
@@ -453,7 +461,7 @@ def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
         "stop_step": "phase_emit_hardware",
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(phases))
-    assert names(cfg) == ["step_explore", "step_verify_partition", "step_package_partition"]
+    assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
     assert resolve_step_filename("phase_optimize_hardware", cfg, -1) == (
         "out/intermediate_models/step_create_dataflow_partition.onnx"
     )
@@ -463,17 +471,17 @@ def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
 
 def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases() -> None:
     cfg = DataflowBuildConfig.from_json(
-        json.dumps({**STATED, "steps": ["phase_emit_hardware"], "start_step": "step_explore"})
+        json.dumps({**STATED, "steps": ["phase_emit_hardware"], "start_step": "step_size_fifos"})
     )
     message = (
-        "'step_explore' is not one of this build's steps or phases; its steps: "
+        "'step_size_fifos' is not one of this build's steps or phases; its steps: "
         "step_package_partition; its phases: phase_emit_hardware"
     )
     with pytest.raises(ValueError) as refused:
         resolve_plan(cfg)
     assert str(refused.value) == message
     with pytest.raises(ValueError) as refused:
-        resolve_step_filename("step_explore", cfg, -1)
+        resolve_step_filename("step_size_fifos", cfg, -1)
     assert str(refused.value) == message
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
     with pytest.raises(ValueError, match="'phase_kernel' is not one of this build's") as refused:
@@ -553,8 +561,8 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     """build_dataflow_directory (the ``build_dataflow`` command's entry) builds a
     directory's DataflowBuildConfig through the kernel path in its build process: TFC
     from its export, prepared as the configuration's JSON states, on the default ip
-    shell, named by its board, explored as its Zynq build is, to its verified
-    partition, whose target is the part's on ip."""
+    shell, named by its board, folded to its target throughput in place of the default
+    FIFO sizing, to its verified partition, whose target is the part's on ip."""
     directory = tmp_path / "build"
     directory.mkdir()
     shutil.copyfile(tfc_export, directory / "model.onnx")
@@ -562,10 +570,8 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(period_ns=5.0, board="Ultra96"),
-        settings={
-            **io_settings(directory),
-            "strategies": [{"strategy": "target_throughput", "fps": 1_000_000}],
-        },
+        settings={**io_settings(directory), "target_fps": 1_000_000},
+        step_edits=[{"replace": "step_size_fifos", "with": "step_target_throughput"}],
         enable_build_pdb_debug=False,
     )
     (directory / "dataflow_build_config.json").write_text(cfg.to_json())
@@ -575,5 +581,5 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     _, body, _ = partition_body(built)
     assert read_target(body) == resolve_target(part=ULTRA96.part, period_ns=5.0)
     assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(body)
-    report = json.loads((output / "report" / "kernel_exploration.json").read_text())
+    report = json.loads((output / "report" / "step_target_throughput.json").read_text())
     assert report["bottleneck"]["cycles"] == 196

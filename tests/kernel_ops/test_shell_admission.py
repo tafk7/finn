@@ -116,7 +116,7 @@ def test_a_shell_root_of_kernel_ops_counts_its_ends() -> None:
     on a row taking one bus, its ends alone exceed it."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    explore_kernel_choices(model, [])
+    explore_kernel_choices(model)
     configured_root(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
@@ -124,7 +124,7 @@ def test_a_shell_root_of_kernel_ops_counts_its_ends() -> None:
         root = shell_root(model, model.graph.node, name="chain")
         assert root.row == narrow
         with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:
-            explore_kernel_choices(model, [])
+            explore_kernel_choices(model)
         with pytest.raises(
             KernelOpError, match="takes 1 AXI-Lite buses; the partition presents 0"
         ) as packaged:

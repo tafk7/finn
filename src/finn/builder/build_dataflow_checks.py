@@ -26,6 +26,7 @@ from finn.builder.build_dataflow_config import (
     VerificationStepType,
 )
 from finn.builder.build_dataflow_plan import BuildPlan
+from finn.builder.build_dataflow_steps import step_target_throughput
 from finn.platform import BOARDS, VIVADO_BLOCK_DESIGN, Board, TargetRefused, shell_row
 from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
@@ -77,9 +78,10 @@ def _check(
 
 def kernel_path_checks(cfg: DataflowBuildConfig, plan: BuildPlan) -> list[Check]:
     """Check a build's configuration and its ``plan`` before the first step: the target,
-    the outputs and the shell they need, the ``hw_debug`` setting, the settings the run
-    leaves unread, and the verification inputs and steps. Returns one Check per
-    problem; an empty list means the configuration is consistent."""
+    the outputs and the shell they need, the ``hw_debug`` setting, the ``target_fps``
+    setting step_target_throughput requires, the settings the run leaves unread, and the
+    verification inputs and steps. Returns one Check per problem; an empty list means
+    the configuration is consistent."""
     checks = []
     try:
         target = cfg.resolved_target
@@ -131,6 +133,19 @@ def kernel_path_checks(cfg: DataflowBuildConfig, plan: BuildPlan) -> list[Check]
                 False,
                 f"hw_debug: the {target.shell!r} shell has no build to take it",
                 "Set hw_debug only for a shell with a build (pynq)",
+            )
+        )
+    folding = any(step.origin is step_target_throughput for step in plan.steps)
+    target_fps = plan.settings.get("target_fps")
+    if folding and (target_fps is None or target_fps.value is None):
+        checks.append(
+            Check(
+                "target_fps",
+                Severity.ERROR,
+                False,
+                "step_target_throughput runs, and no target_fps is given: the frames a "
+                "second it folds the partition to",
+                "Set target_fps, or remove step_target_throughput",
             )
         )
     for name in plan.unread:

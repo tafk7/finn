@@ -19,9 +19,9 @@ the partition, the parent graph's one ``StreamingDataflowPartition``
 (``cut.BaselineChoices``, also for a body made by hand: a KernelOp's own are created
 at conversion, a channel's at the cut); ``ExploreKernelChoices`` explores the choices
 of a partition's body (the KernelOps the cut put together) through the DSE seam
-(``finn.kernels.explore``) by a list of strategies (``strategy``: one from its spec),
-each replacing the values it decides, and saves every value (``ExplorePartition``, the
-build's, through the parent graph's partition node, the body saved in its file);
+(``finn.kernels.explore``) by one strategy, which replaces the values it decides, saves
+every value and records the pins the body holds (``HELD``), so that the build's strategy
+steps, each one exploration, hold a pin for the build;
 ``shell_bottleneck`` reads the slowest members of a partition's shell root, ends
 included, from its saved choices; ``kernel_choices_config`` exports a
 body's choices, every one it states, by graph name (the nodes' and the tensors'
@@ -33,14 +33,12 @@ partition, from its ends.
 """
 
 from finn.transformation.kernels.choose import (
-    EXPLORATION_REPORT,
-    KERNEL_STRATEGIES,
+    HELD,
     Explored,
     ExploreKernelChoices,
-    ExplorePartition,
     explore_kernel_choices,
+    held_choices,
     shell_bottleneck,
-    strategy,
 )
 from finn.transformation.kernels.config import kernel_choices_config
 from finn.transformation.kernels.convert import (
@@ -56,11 +54,9 @@ from finn.transformation.kernels.infer import InferKernelTensors, infer_node
 from finn.transformation.kernels.package import ElaboratePartition, PackagePartition
 
 __all__ = [
-    "EXPLORATION_REPORT",
-    "KERNEL_STRATEGIES",
+    "HELD",
     "ElaboratePartition",
     "ExploreKernelChoices",
-    "ExplorePartition",
     "Explored",
     "InferKernelTensors",
     "Outcome",
@@ -68,6 +64,7 @@ __all__ = [
     "ToKernelOps",
     "between_kernel_ops",
     "explore_kernel_choices",
+    "held_choices",
     "infer_node",
     "kernel_choices_config",
     "kernel_ops_by_anchor",
@@ -75,5 +72,4 @@ __all__ = [
     "kernel_ops_summary",
     "refuse_host_between",
     "shell_bottleneck",
-    "strategy",
 ]

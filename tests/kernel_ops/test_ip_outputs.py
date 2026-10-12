@@ -338,12 +338,8 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
         generate_outputs=[DataflowOutputType.STITCHED_IP],
-        settings={
-            "strategies": [
-                {"strategy": "target_throughput", "fps": 1e6},
-                {"strategy": "size_fifos"},
-            ]
-        },
+        settings={"target_fps": 1e6},
+        step_edits=[{"before": "step_size_fifos", "insert": "step_target_throughput"}],
         verify_steps=[VerificationStepType.STITCHED_IP_TESTBENCH],
         verify_input_npy=str(tmp_path / "input.npy"),
         enable_build_pdb_debug=False,

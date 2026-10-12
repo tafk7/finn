@@ -10,16 +10,15 @@ list of steps; a build without ``steps`` runs every phase in order.
 
 The steps prepare a Brevitas export into the streamlined graph the kernel path converts;
 convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
-choose the partition's parameters; and make the outputs the configuration asks for: the
-partition's packaged IP on any shell, and the bitfile, driver and deployment package on
-a shell that integrates it."""
+choose the partition's parameters, one strategy step at a time; and make the outputs the
+configuration asks for: the partition's packaged IP on any shell, and the bitfile,
+driver and deployment package on a shell that integrates it."""
 
 import copy
 import json
 import logging
 import os
 import shutil
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +51,15 @@ from finn.custom_op.partition.kernel_partitions import (
     design_digest,
     partition_body,
 )
+from finn.kernels.explore import (
+    DebugPlaceholder,
+    Explorer,
+    MaxThroughput,
+    Pinned,
+    Rebaseline,
+    SizeFifos,
+    TargetThroughput,
+)
 from finn.platform import refuse_drift
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import (
@@ -64,14 +72,13 @@ from finn.shells.pynq.runner import (
 )
 from finn.toolchain.launcher import Toolchain, ToolFailed
 from finn.transformation.kernels import (
-    EXPLORATION_REPORT,
-    ExplorePartition,
+    Explored,
     ToKernelOps,
+    explore_kernel_choices,
     kernel_choices_config,
     kernel_ops_report,
     kernel_ops_summary,
     refuse_host_between,
-    strategy,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import (
@@ -264,71 +271,35 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     return model
 
 
-#: step_explore's strategies by default: the baseline folding, its FIFOs sized.
-DEFAULT_STRATEGIES: tuple[Mapping[str, Any], ...] = ({"strategy": "size_fifos"},)
+#: Where step_verify_partition writes the partition's choices, by graph name
+#: (kernel_choices_config), under the output directory: the file step_pin_choices pins.
+KERNEL_CHOICES_FILE = "kernel_choices.json"
 
 
-def step_explore(
-    model: ModelWrapper,
-    cfg: DataflowBuildConfig,
-    *,
-    strategies: Sequence[Mapping[str, Any]] = DEFAULT_STRATEGIES,
-) -> ModelWrapper:
-    """Run the strategies over the partition's KernelOps, in order, and save every value
-    in the partition's body: a kernel's on its node, a channel's on its tensor. Each
-    strategy carries its own objective; what no strategy decides keeps its baseline.
-    Writes report/kernel_exploration.json (what each strategy changed, who set each
-    value, the choices left open, and the limitations found) and kernel_choices.json
-    (every choice by node or tensor name, which the ``pinned`` strategy reads back). A
-    limitation, such as the shell's resources exceeding the part's, is logged as a
-    warning, never an error.
+def _strategy_report(step: str) -> str:
+    """Where the strategy step ``step`` writes its report, under the output directory."""
+    return f"report/{step}.json"
 
-    ``strategies``: each a spec with its own parameters
-    (finn.transformation.kernels.KERNEL_STRATEGIES):
 
-    - ``{"strategy": "pinned", "path": ...}``: the choices in a kernel_choices.json;
-    - ``{"strategy": "target_throughput", "fps": ..., "relax": true}``: the least
-      parallelism that meets ``fps`` at the target's clock;
-    - ``{"strategy": "max_throughput", "within": {"lut": 0.5}}``: the fastest folding
-      whose shell's resources stay within the given fractions of the part
-      (``within`` is required);
-    - ``{"strategy": "size_fifos", "margin": 0}``: each channel's FIFO sized from the
-      beat patterns at both its ends;
-    - ``{"strategy": "baseline"}``: every choice not pinned set back to its baseline;
-    - ``{"strategy": "placeholder"}``: for debugging, every open required choice set
-      to its first allowed value.
-
-    Every choice starts at its baseline, set when it is created (a KernelOp's at
-    conversion, a channel's at the cut). Each strategy replaces the values it decides,
-    and every value is saved. Pins go first, and FIFO sizing after the last strategy
-    that changes the folding; a list that folds after its last size_fifos is refused.
-    To start over from the baselines, put ``{"strategy": "baseline"}`` first.
-
-    The default keeps the baseline folding and sizes its FIFOs. A list you give
-    replaces the default and runs as written: without size_fifos, every channel keeps
-    its baseline, a direct connection. The partition is packaged and built from exactly
-    the saved values, and a required choice no strategy set is refused there, by
-    name."""
-    exploring = ExplorePartition([strategy(spec) for spec in strategies])
-    model = model.transform(exploring)
-    explored, body = exploring.explored, exploring.body
-    assert explored is not None and body is not None
-    os.makedirs(cfg.output_dir + "/report", exist_ok=True)
-    with open(os.path.join(cfg.output_dir, EXPLORATION_REPORT), "w") as f:
-        json.dump(explored.report, f, indent=2)
-    _reported(os.path.join(cfg.output_dir, EXPLORATION_REPORT))
-    with open(cfg.output_dir + "/kernel_choices.json", "w") as f:
-        json.dump(kernel_choices_config(body), f, indent=2)
+def _explore_partition(
+    model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
+) -> Explored:
+    """Run one strategy over the partition's KernelOps: the body opened through the parent
+    graph's partition node, its pins held, ``strategy`` run, every value and the pins saved
+    in the body's file (finn.transformation.kernels.explore_kernel_choices). Writes the
+    step's report (``_strategy_report``): what the strategy changed, who set each value,
+    the pins, the choices left open, the FIFOs, the cost and resources, and the
+    limitations found, each also logged as a warning, never an error. The parent graph is
+    unchanged."""
+    _, body, body_file = partition_body(model)
+    explored = explore_kernel_choices(body, strategy)
+    body.save(body_file)
+    path = Path(cfg.output_dir) / _strategy_report(step)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(explored.report, indent=2))
+    _reported(path)
     report = explored.report
-    for each in report["strategies"]:
-        _LOG.info(f"Kernel choices: {each['strategy']} changed {len(each['changed'])}")
-        if each["strategy"] == "max_throughput":
-            reached = each["bottleneck"]["cycles"]
-            _LOG.info(
-                f"Kernel choices: max_throughput reached {reached} cycles a frame within "
-                f"{each['budget']} ({'fits' if each['fits'] else 'does not fit'}; binding: "
-                f"{each['binding']}; {len(each['tried'])} budgets tried)"
-            )
+    _LOG.info(f"Kernel choices: {step} changed {len(report['strategy']['changed'])}")
     for finding in explored.findings:
         _LOG.warning(f"Kernel choices: {finding.message}")
     for node, held in report["choices"].items():
@@ -338,6 +309,101 @@ def step_explore(
     if report["open"]:
         _LOG.info(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
     _LOG.info(f"FIFOs: {report['fifos']}")
+    return explored
+
+
+def step_pin_choices(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, kernel_choices_file: Path
+) -> ModelWrapper:
+    """Pin the partition's choices that ``kernel_choices_file`` states, by node or tensor
+    name, in the form step_verify_partition writes (kernel_choices.json). The pins are
+    set in one batch and recorded in the partition's body, so every later strategy step
+    of the build holds them. A choice the partition does not have, a value it does not
+    take, or one an earlier pin holds otherwise is refused, by name. Pin first, so that
+    the strategies after it fold around the pins. Writes report/step_pin_choices.json."""
+    _explore_partition(model, cfg, "step_pin_choices", Pinned(kernel_choices_file))
+    return model
+
+
+def step_target_throughput(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    target_fps: float | None = None,
+    relax_target_fps: bool = True,
+) -> ModelWrapper:
+    """Fold the partition's kernels to the least parallelism that meets ``target_fps``
+    frames a second at the target's clock, the pins held. ``target_fps`` is required
+    when this step runs (the configuration checks refuse a plan without it); it is
+    optional only because step_build_bitfile reads it too, as the objective it reports
+    the delivered clock against. With ``relax_target_fps``, a throughput the folding
+    cannot reach is relaxed to the fastest it reaches, and the kernels folded to that.
+    Writes report/step_target_throughput.json, with the bottleneck reached and whether
+    it meets the target."""
+    if target_fps is None:
+        raise ValueError(
+            "step_target_throughput: no target_fps, the frames a second it folds the "
+            "partition to, is given"
+        )
+    strategy = TargetThroughput(target_fps, relax=relax_target_fps)
+    _explore_partition(model, cfg, "step_target_throughput", strategy)
+    return model
+
+
+def step_max_throughput(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, max_throughput_within: dict[str, float]
+) -> ModelWrapper:
+    """Fold the partition's kernels to the most throughput whose shell's resources stay
+    within ``max_throughput_within``, a fraction of the part's for each resource named
+    (``{"lut": 0.5}``), the pins held. A budget even the least parallelism exceeds is a
+    limitation, logged, and that point is kept. Writes
+    report/step_max_throughput.json, with every budget tried."""
+    explored = _explore_partition(
+        model, cfg, "step_max_throughput", MaxThroughput(max_throughput_within)
+    )
+    each = explored.report["strategy"]
+    _LOG.info(
+        f"Kernel choices: max_throughput reached {each['bottleneck']['cycles']} cycles a "
+        f"frame within {each['budget']} ({'fits' if each['fits'] else 'does not fit'}; "
+        f"binding: {each['binding']}; {len(each['tried'])} budgets tried)"
+    )
+    return model
+
+
+def step_size_fifos(
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    fifo_margin: int = 0,
+    fifo_ram_style: str | None = None,
+) -> ModelWrapper:
+    """Size each channel of the partition from the beat patterns at both its ends, at the
+    folding the steps before it chose: a direct connection, or a FIFO of the least depth
+    that keeps its producer within its idle time, plus ``fifo_margin`` words. A pinned
+    channel is kept. ``fifo_ram_style`` commits a memory style with each FIFO's depth;
+    None leaves it to FinnLib's own selection (``auto``). Run it after the last step
+    that changes the folding; the build's plan refuses a folding step after it. Writes
+    report/step_size_fifos.json."""
+    strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
+    _explore_partition(model, cfg, "step_size_fifos", strategy)
+    return model
+
+
+def step_baseline_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Set every choice of the partition that is not pinned back to its baseline: a
+    build resumed from a partition explored before starts over with it. Writes
+    report/step_baseline_choices.json."""
+    _explore_partition(model, cfg, "step_baseline_choices", Rebaseline())
+    return model
+
+
+def step_placeholder_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """For debugging: set every open required choice of the partition to its first
+    allowed value, so that a design can be generated while no strategy makes that choice
+    yet; each is logged ``DEBUG: set by placeholder``. A FIFO's depth has no first value:
+    it is refused, by name (run step_size_fifos). Writes
+    report/step_placeholder_choices.json."""
+    _explore_partition(model, cfg, "step_placeholder_choices", DebugPlaceholder())
     return model
 
 
@@ -411,13 +477,18 @@ def _verify_partition_python(model: ModelWrapper, cfg: DataflowBuildConfig) -> b
 
 
 def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Check the partition before a shell builds it: its choices are complete and
-    current, its ports match its graph's inputs and outputs in order (configured_root),
-    and its target is the configuration's (refuse_drift). Then run the optional checks
-    ``verify_steps`` asks for: PARTITION_PYTHON compares the partition's outputs with
-    the model before conversion (_verify_partition_python), and PARTITION_ELABORATION
-    compiles and elaborates its RTL in XSim."""
+    """Write the partition's choices, as the strategy steps left them, to
+    kernel_choices.json, by node or tensor name (kernel_choices_config; the file
+    step_pin_choices pins). Then check the partition before a shell builds it: its
+    choices are complete and current, its ports match its graph's inputs and outputs in
+    order (configured_root), and its target is the configuration's (refuse_drift). Then
+    run the optional checks ``verify_steps`` asks for: PARTITION_PYTHON compares the
+    partition's outputs with the model before conversion (_verify_partition_python), and
+    PARTITION_ELABORATION compiles and elaborates its RTL in XSim."""
     node, body, _ = partition_body(model)
+    os.makedirs(cfg.output_dir, exist_ok=True)
+    with open(os.path.join(cfg.output_dir, KERNEL_CHOICES_FILE), "w") as f:
+        json.dump(kernel_choices_config(body), f, indent=2)
     configured_root(body, node.name)
     refuse_drift(read_target(body), cfg.resolved_target, "build")
     if VerificationStepType.PARTITION_PYTHON in cfg.verify_steps:
@@ -499,7 +570,11 @@ def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mod
 
 
 def step_build_bitfile(
-    model: ModelWrapper, cfg: DataflowBuildConfig, *, hw_debug: bool = False
+    model: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    *,
+    hw_debug: bool = False,
+    target_fps: float | None = None,
 ) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
     directory, if BITFILE is asked. Only the pynq shell has a bitfile build
@@ -512,7 +587,11 @@ def step_build_bitfile(
     clock is logged as a warning.
 
     ``hw_debug``: insert integrated logic analyzers on the ends' streams. A shell
-    without a build (``ip``) refuses it before the build starts."""
+    without a build (``ip``) refuses it before the build starts.
+
+    ``target_fps``: the throughput step_target_throughput folded the partition to, the
+    objective report/delivered_clock.json states beside what the delivered clock
+    gives."""
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
         return model
@@ -521,6 +600,7 @@ def step_build_bitfile(
         Path(cfg.output_dir),
         toolchain=_tools(cfg, "step_build_bitfile"),
         hw_debug=hw_debug,
+        objective_fps=target_fps,
     )
     model = model.transform(building)
     for report in REPORTS.values():
@@ -677,8 +757,10 @@ build_dataflow_phases: dict[str, list[Step]] = {
     "phase_convert_to_hardware": [step_convert_to_hw],
     # Cut the KernelOps into one partition; the other nodes stay on the host.
     "phase_create_accelerator": [step_create_dataflow_partition],
-    # Choose the partition's parameters with the strategies, then check it.
-    "phase_optimize_hardware": [step_explore, step_verify_partition],
+    # Choose the partition's parameters, one strategy step at a time (by default its
+    # FIFOs sized at the baseline folding), then check it. The other strategy steps are
+    # added by name (KERNEL_STRATEGY_STEPS).
+    "phase_optimize_hardware": [step_size_fifos, step_verify_partition],
     # Generate the partition's HDL and package it as an IP.
     "phase_emit_hardware": [step_package_partition],
     # Make the outputs the configuration asks for: bitfile, driver, resources report,
@@ -691,9 +773,36 @@ build_dataflow_phases: dict[str, list[Step]] = {
     ],
 }
 
-#: The build's steps by name.
+#: The steps that choose the partition's parameters, one strategy each, which a
+#: configuration adds to its list by name (by default, only step_size_fifos runs).
+KERNEL_STRATEGY_STEPS: list[Step] = [
+    step_pin_choices,
+    step_target_throughput,
+    step_max_throughput,
+    step_size_fifos,
+    step_baseline_choices,
+    step_placeholder_choices,
+]
+
+#: The strategy steps that may change the kernels' folding, which FIFO sizing reads (a
+#: pin may too, and going back to the baselines does), and those that size the FIFOs at
+#: the folding they find: a build's plan refuses a folding step after its last sizing
+#: step (finn.builder.build_dataflow_plan).
+FOLDING_STEPS: tuple[Step, ...] = (
+    step_pin_choices,
+    step_target_throughput,
+    step_max_throughput,
+    step_baseline_choices,
+)
+FIFO_SIZING_STEPS: tuple[Step, ...] = (step_size_fifos,)
+
+#: The build's steps by name: the phases' and the strategy steps.
 build_dataflow_step_lookup: dict[str, Step] = {
-    step.__name__: step for steps in build_dataflow_phases.values() for step in steps
+    step.__name__: step
+    for step in [
+        *(step for steps in build_dataflow_phases.values() for step in steps),
+        *KERNEL_STRATEGY_STEPS,
+    ]
 }
 
 #: The entries a build without ``steps`` runs: every phase, in order.

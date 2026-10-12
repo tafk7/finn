@@ -305,11 +305,14 @@ def explored(
     tfc: ModelWrapper, fps: float, target: Target = ULTRA96, *, sizing: bool = False
 ) -> tuple[ModelWrapper, dict[str, Any]]:
     """TFC explored at ``fps`` for ``target`` (its shell's ends), by the target
-    throughput and, if ``sizing``, FIFO sizing."""
+    throughput and, if ``sizing``, FIFO sizing after it, each an exploration of its own:
+    the last one's report, with each exploration's strategy entry in order
+    (``strategies``)."""
     model = ModelWrapper(tfc.model.__deepcopy__())
     write_target(model, target)
     strategies: list[Explorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
-    return model, dict(explore_kernel_choices(model, strategies).report)
+    reports = [explore_kernel_choices(model, strategy).report for strategy in strategies]
+    return model, {**reports[-1], "strategies": [each["strategy"] for each in reports]}
 
 
 def pumping(name: str) -> dict[str, object]:

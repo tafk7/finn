@@ -335,10 +335,10 @@ def _is_path(kind) -> bool:
 
 def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuildConfig:
     """``cfg`` with each relative path joined to ``directory``: ``output_dir``,
-    ``verify_input_npy``, the toolchain's settings scripts and command directory, each
-    setting a step of the build declares as a path (finn.builder.build_dataflow_plan),
-    and the ``path`` of each spec in the ``strategies`` setting (the ``pinned`` choices
-    file). Absolute paths and an empty command directory are kept as they are."""
+    ``verify_input_npy``, the toolchain's settings scripts and command directory, and
+    each setting a step of the build declares as a path (finn.builder.build_dataflow_plan;
+    the preprocessing model, the pinned choices). Absolute paths and an empty command
+    directory are kept as they are."""
 
     def resolve(path: str) -> str:
         return os.path.join(directory, path)
@@ -348,14 +348,6 @@ def _resolved_against(cfg: DataflowBuildConfig, directory: str) -> DataflowBuild
     for name, value in settings.items():
         if isinstance(value, str) and _is_path(declared.get(name)):
             settings[name] = resolve(value)
-    strategies = settings.get("strategies")
-    if isinstance(strategies, list):
-        settings["strategies"] = [
-            {**spec, "path": resolve(spec["path"])}
-            if isinstance(spec, dict) and isinstance(spec.get("path"), str)
-            else spec
-            for spec in strategies
-        ]
     toolchain = cfg.toolchain
     if toolchain is not None:
         toolchain = replace(

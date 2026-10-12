@@ -372,15 +372,15 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
     assert (project / "output/time_per_step.json").is_file()
     assert os.getcwd() == cwd and dict(os.environ) == env
     # A step that fails on an empty model: no partition to explore.
-    assert build_dataflow_directory(str(state("step_explore"))) == -1
-    with pytest.raises(ValueError, match="Unknown step or phase: not_a_step"):
+    assert build_dataflow_directory(str(state("step_size_fifos"))) == -1
+    with pytest.raises(ValueError, match="'not_a_step' is no step or phase"):
         build_dataflow_directory(str(state("not_a_step")))
     assert os.getcwd() == cwd
     assert command().returncode == 0
-    assert command("step_explore").returncode == 255
+    assert command("step_size_fifos").returncode == 255
     refused = command("not_a_step")
     assert refused.returncode == 1
-    assert b"ValueError: Unknown step or phase: not_a_step" in refused.stderr
+    assert b"ValueError: steps[0]: 'not_a_step' is no step or phase" in refused.stderr
     assert os.getcwd() == cwd and dict(os.environ) == env
 
 

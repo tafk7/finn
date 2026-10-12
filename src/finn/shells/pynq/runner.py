@@ -79,7 +79,7 @@ from finn.shells.pynq.ipgen import (
 )
 from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.toolchain.vivado import PL_CLOCKS, delivered_clock, tcl_quote, vivado_jobs
-from finn.transformation.kernels.choose import EXPLORATION_REPORT, shell_bottleneck
+from finn.transformation.kernels.choose import shell_bottleneck
 from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
 from finn.transformation.kernels.package import PackagePartition
 from finn.util.basic import make_build_dir
@@ -431,21 +431,6 @@ def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
     return row
 
 
-def objective_fps(directory: Path) -> float | None:
-    """The throughput the exploration's ``target_throughput`` strategy asked, if any,
-    from the exploration's report the build wrote under ``directory``
-    (``EXPLORATION_REPORT``); None where it asked none or there is no report."""
-    report = Path(directory) / EXPLORATION_REPORT
-    if not report.is_file():
-        return None
-    asked: list[float] = [
-        each["fps"]
-        for each in json.loads(report.read_text()).get("strategies", [])
-        if each.get("strategy") == "target_throughput" and "fps" in each
-    ]
-    return asked[0] if asked else None
-
-
 def delivered_clock_findings(clock: dict[str, Any], timing_report: str) -> tuple[Finding, ...]:
     """The limitations of a delivered clock (``finn.toolchain.vivado.delivered_clock``), for
     report/delivered_clock.json: no PL clock in the routed design's timing report
@@ -499,7 +484,7 @@ class BuildPynqBitfile(Transformation):
     the template's impl_1 hierarchical utilization (report/placed_utilization.xml), each
     IP's out-of-context synthesis utilization (report/out_of_context/), and the
     delivered clock beside the one asked, with the shell root's bottleneck, ends
-    included, and the throughput the exploration asked (``objective_fps``)
+    included, and the throughput asked (``objective_fps``, the build's ``target_fps``)
     (report/delivered_clock.json), with its limitations (``delivered_clock_findings``,
     the report's ``findings``). The shell, board, part and clock are the target the
     partition's body states (``pynq_row``); the ends' scratch models are kept in
@@ -513,9 +498,10 @@ class BuildPynqBitfile(Transformation):
     (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's
     (``host_toolchain``), prepared once, when the transformation is made;
     Vivado launches as many runs at once as its selection says (``vivado_jobs``).
-    ``hw_debug`` inserts integrated logic analyzers (``PynqOptions``). ``bitfile``
-    and ``clock`` hold the bitfile's path and the delivered clock's report, ``findings``
-    its limitations."""
+    ``hw_debug`` inserts integrated logic analyzers (``PynqOptions``); ``objective_fps``
+    is the throughput the partition was folded for, if any. ``bitfile`` and ``clock``
+    hold the bitfile's path and the delivered clock's report, ``findings`` its
+    limitations."""
 
     def __init__(
         self,
@@ -523,9 +509,11 @@ class BuildPynqBitfile(Transformation):
         *,
         toolchain: Toolchain | None = None,
         hw_debug: bool = False,
+        objective_fps: float | None = None,
     ) -> None:
         super().__init__()
         self.directory = Path(directory)
+        self.objective_fps = objective_fps
         self.toolchain = host_toolchain() if toolchain is None else toolchain
         self.options = PynqOptions(hw_debug=hw_debug)
         self.bitfile = self.directory / BITFILE
@@ -562,7 +550,7 @@ class BuildPynqBitfile(Transformation):
             built.timing,
             export.period_ns,
             None if bottleneck is None else bottleneck.cycles,
-            objective_fps(self.directory) if bottleneck is not None else None,
+            self.objective_fps if bottleneck is not None else None,
         )
         self.findings = delivered_clock_findings(self.clock, built.timing)
         self.clock["findings"] = [finding_record(finding) for finding in self.findings]
@@ -612,7 +600,6 @@ __all__ = [
     "delivered_clock_findings",
     "generate_end_ip",
     "iodma_model",
-    "objective_fps",
     "project_script",
     "pynq_row",
     "refuse_stale_bitfile",

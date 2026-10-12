@@ -134,7 +134,7 @@ def test_an_entry_is_a_phase_a_step_an_import_path_or_in_python_the_object() -> 
     """Each entry's name is the step's function's, or the Transformation's class's."""
     entries: list[StepEntry] = [
         "phase_create_accelerator",
-        "step_explore",
+        "step_size_fifos",
         f"{__name__}.step_scaled",
         "qonnx.transformation.general.GiveUniqueNodeNames",
         functools.partial(step_tidy_up),
@@ -144,7 +144,7 @@ def test_an_entry_is_a_phase_a_step_an_import_path_or_in_python_the_object() -> 
     plan = resolve_plan(config(steps=entries))
     assert names(plan) == [
         "step_create_dataflow_partition",
-        "step_explore",
+        "step_size_fifos",
         "step_scaled",
         "GiveUniqueNodeNames",
         "step_tidy_up",
@@ -182,14 +182,14 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
     "entry, message",
     [
         (
-            "step_explorer",
-            "steps[1]: 'step_explorer' is no step or phase; the steps: step_tidy_up, ",
+            "step_size_fifo",
+            "steps[1]: 'step_size_fifo' is no step or phase; the steps: step_tidy_up, ",
         ),
         ("finn.builder.nowhere.step_x", "steps[1]: 'finn.builder.nowhere.step_x': no module"),
         (
-            "finn.builder.build_dataflow_steps.step_explorer",
-            "steps[1]: 'finn.builder.build_dataflow_steps.step_explorer': "
-            "finn.builder.build_dataflow_steps has no 'step_explorer'",
+            "finn.builder.build_dataflow_steps.step_size_fifo",
+            "steps[1]: 'finn.builder.build_dataflow_steps.step_size_fifo': "
+            "finn.builder.build_dataflow_steps has no 'step_size_fifo'",
         ),
         ("pathlib.Path", "steps[1]: Path is a class, not a Transformation"),
         (3, "steps[1]: 3 is no step: a phase or step name, an import path, a function"),
@@ -211,7 +211,7 @@ DEFAULT = [
     "step_widen_containers",
     "step_convert_to_hw",
     "step_create_dataflow_partition",
-    "step_explore",
+    "step_size_fifos",
     "step_verify_partition",
     "step_package_partition",
     "step_build_bitfile",
@@ -224,7 +224,7 @@ DEFAULT = [
 def test_each_edit_changes_the_default_list_in_order() -> None:
     edits = [
         {"after": "step_streamline", "insert": "qonnx.transformation.general.GiveUniqueNodeNames"},
-        {"before": "step_tidy_up", "insert": [f"{__name__}.step_scaled", "step_explore"]},
+        {"before": "step_tidy_up", "insert": [f"{__name__}.step_scaled", "step_size_fifos"]},
         {"remove": "step_verify_partition"},
         # An import path names a step by what it imports.
         {"replace": f"{__name__}.step_scaled", "with": GiveReadableTensorNames()},
@@ -234,7 +234,7 @@ def test_each_edit_changes_the_default_list_in_order() -> None:
     plan = resolve_plan(config(step_edits=edits))
     assert names(plan) == [
         "GiveReadableTensorNames",
-        "step_explore",
+        "step_size_fifos",
         "step_tidy_up",
         "step_qonnx_to_finn",
         "step_add_pre_post_processing",
@@ -244,7 +244,7 @@ def test_each_edit_changes_the_default_list_in_order() -> None:
         "step_widen_containers",
         "step_convert_to_hw",
         "step_create_dataflow_partition",
-        "step_explore",
+        "step_size_fifos",
         "step_build_bitfile",
         "step_make_driver",
         "step_resources_report",
@@ -265,7 +265,7 @@ def test_a_phase_target_is_the_phase_as_a_whole_a_step_target_joins_its_phase() 
         start_step="phase_optimize_hardware",
         stop_step="phase_optimize_hardware",
     )
-    inside = ["step_explore", "GiveReadableTensorNames", "step_verify_partition"]
+    inside = ["step_size_fifos", "GiveReadableTensorNames", "step_verify_partition"]
     assert names(resolve_plan(phase)) == inside
     whole = names(resolve_plan(config(step_edits=edits)))
     position = whole.index("step_scaled")
@@ -290,16 +290,16 @@ def test_an_edit_applies_to_steps_when_given() -> None:
     "edits, message",
     [
         (
-            [{"after": "step_streamlin", "insert": "step_explore"}],
+            [{"after": "step_streamlin", "insert": "step_size_fifos"}],
             "step_edits[0].after: 'step_streamlin' names 0 steps of the list, not one; its "
             "steps: step_tidy_up, step_qonnx_to_finn,",
         ),
         (
             [
-                {"after": "step_tidy_up", "insert": "step_explore"},
-                {"replace": "step_explore", "with": "step_tidy_up"},
+                {"after": "step_tidy_up", "insert": "step_size_fifos"},
+                {"replace": "step_size_fifos", "with": "step_tidy_up"},
             ],
-            "step_edits[1].replace: 'step_explore' names 2 steps of the list, not one",
+            "step_edits[1].replace: 'step_size_fifos' names 2 steps of the list, not one",
         ),
         (
             [{"remove": "phase_create_accelerator"}, {"remove": "phase_create_accelerator"}],
@@ -310,17 +310,17 @@ def test_an_edit_applies_to_steps_when_given() -> None:
             "step_edits[0]: 'after' takes the keys ['after', 'insert'], not ['after']",
         ),
         (
-            [{"remove": "step_tidy_up", "with": "step_explore"}],
+            [{"remove": "step_tidy_up", "with": "step_size_fifos"}],
             "step_edits[0]: 'remove' takes the keys ['remove'], not ['remove', 'with']",
         ),
         (
-            [{"before": "step_tidy_up", "after": "step_explore", "insert": []}],
+            [{"before": "step_tidy_up", "after": "step_size_fifos", "insert": []}],
             "step_edits[0]: exactly one of before, after, replace, remove, not",
         ),
         ([{"remove": 3}], "step_edits[0].remove: a phase or step name, or an import path, not 3"),
         (
-            [{"after": "step_tidy_up", "insert": ["step_explore", "step_explorer"]}],
-            "step_edits[0].insert[1]: 'step_explorer' is no step or phase",
+            [{"after": "step_tidy_up", "insert": ["step_size_fifos", "step_size_fifo"]}],
+            "step_edits[0].insert[1]: 'step_size_fifo' is no step or phase",
         ),
         (["step_tidy_up"], "step_edits[0]: an object such as"),
     ],
@@ -333,7 +333,7 @@ def test_an_edit_whose_target_is_not_once_in_the_list_is_refused_naming_its_plac
 
 def test_no_edit_is_the_default_list() -> None:
     assert names(resolve_plan(config())) == DEFAULT
-    nothing = [{"before": "finn.builder.build_dataflow_steps.step_explore", "insert": []}]
+    nothing = [{"before": "finn.builder.build_dataflow_steps.step_size_fifos", "insert": []}]
     assert names(resolve_plan(config(step_edits=nothing))) == DEFAULT
 
 
@@ -527,3 +527,89 @@ def test_a_refused_plan_is_the_builds_outcome_before_its_first_step(tmp_path: Pa
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     assert manifest["outcome"]["status"] == "refused"
     assert manifest["plan"] is None and manifest["steps"] == []
+
+
+# -- the kernel strategy steps' order ----------------------------------------------------------
+
+
+def test_a_step_that_folds_after_the_last_fifo_sizing_is_refused_when_the_plan_resolves() -> None:
+    """FIFO depths are sized at the folding before them, and the engine keeps a stored
+    depth valid when the folding changes: a step that may change the folding (a target or
+    a maximum throughput, a pin, going back to the baselines) after the run's last FIFO
+    sizing is refused, naming both, before any step runs."""
+    after = config(
+        step_edits=[{"after": "step_size_fifos", "insert": "step_target_throughput"}],
+        settings={"target_fps": 1000.0},
+    )
+    assert refused(after) == (
+        "step_target_throughput (step 10 of the run) follows step_size_fifos (step 9), the "
+        "last that sizes FIFOs: their depths are sized at the folding before it and would go "
+        "stale; size FIFOs after the last step that changes the folding"
+    )
+    folds = {
+        "step_pin_choices": {"kernel_choices_file": "pins.json"},
+        "step_baseline_choices": {},
+        "step_max_throughput": {"max_throughput_within": {"lut": 0.5}},
+    }
+    for folding, settings in folds.items():
+        steps = ["phase_create_accelerator", "step_size_fifos", folding]
+        cfg = config(steps=steps, settings=settings)
+        assert refused(cfg).startswith(f"{folding} (step 3 of the run) follows step_size_fifos")
+    # Sized again after it, the run is current; a step that does not fold (the debug
+    # placeholder) may follow the sizing.
+    again = [
+        "phase_create_accelerator",
+        "step_size_fifos",
+        "step_target_throughput",
+        "step_size_fifos",
+        "step_placeholder_choices",
+    ]
+    plan = resolve_plan(config(steps=again, settings={"target_fps": 1000.0}))
+    assert names(plan) == ["step_create_dataflow_partition", *again[1:]]
+    # Before the sizing, as the default phase lists it, the plan resolves.
+    before = [{"before": "step_size_fifos", "insert": "step_target_throughput"}]
+    plan = resolve_plan(config(step_edits=before, settings={"target_fps": 1000.0}))
+    assert names(plan)[8:10] == ["step_target_throughput", "step_size_fifos"]
+
+
+def test_a_step_that_folds_with_no_sizing_after_it_needs_the_cut_before_it() -> None:
+    """Without FIFO sizing after it, a step that folds is accepted only in a run that cuts
+    the partition before it: every channel the cut creates is direct, while a partition
+    an earlier run made may hold FIFOs sized at another folding."""
+    cut = ["phase_create_accelerator", "step_target_throughput"]
+    plan = resolve_plan(config(steps=cut, settings={"target_fps": 1000.0}))
+    assert names(plan) == ["step_create_dataflow_partition", "step_target_throughput"]
+    resumed = config(steps=cut, start_step="step_target_throughput", settings={"target_fps": 1.0})
+    assert refused(resumed) == (
+        "step_target_throughput (step 1 of the run) may change the folding, and no step after "
+        "it sizes FIFOs: the partition comes from an earlier run (no "
+        "step_create_dataflow_partition before it), whose FIFOs may be sized at another "
+        "folding; add step_size_fifos after it"
+    )
+    sized = config(
+        steps=["step_target_throughput", "step_size_fifos"], settings={"target_fps": 1.0}
+    )
+    assert names(resolve_plan(sized)) == ["step_target_throughput", "step_size_fifos"]
+
+
+def test_a_target_throughput_without_its_target_is_refused_before_the_first_step() -> None:
+    """target_fps is optional to the plan (the bitfile's build reads it too, as its
+    objective), and required by the configuration checks where the target throughput
+    runs."""
+    cut = ["phase_create_accelerator", "step_target_throughput"]
+    cfg = config(steps=cut)
+    (check,) = [
+        check
+        for check in run_all_config_checks(cfg, resolve_plan(cfg)).checks
+        if check.name == "target_fps"
+    ]
+    assert (check.severity, check.passed) == (Severity.ERROR, False)
+    assert check.message == (
+        "step_target_throughput runs, and no target_fps is given: the frames a second it "
+        "folds the partition to"
+    )
+    given = config(steps=cut, settings={"target_fps": 1000})
+    plan = resolve_plan(given)
+    checks = run_all_config_checks(given, plan).checks
+    assert not [check for check in checks if check.name == "target_fps"]
+    assert plan.settings["target_fps"].value == 1000.0

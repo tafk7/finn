@@ -15,7 +15,7 @@ one root (a shell root, its members its channels and kernels, each at its path:
   is not viable. A forced Decision is never a choice.
 - ``attempt(point, {key: value, ...})``: ``Accepted(point')`` or
   ``Refused({key: findings})``. A batch is accepted when (1) no key is forced or held (a
-  pin of this run, ``held``) to another value, and every value of an open choice is
+  pin, ``held``) to another value, and every value of an open choice is
   one of its viable cases (a membership-only value, or a value replacing a stored
   one, is its domain's to check), (2) the engine accepts the batch atomically
   (membership, requirements, applicability: a key nested under a selector the same
@@ -58,9 +58,11 @@ required=True)`` has no safe baseline and stays open until a strategy sets it
   key ``held`` comes back to its held value, or the settle is refused naming the pin.
 
 ``set(point, changes)`` replaces values: an attempt, the stored choices it makes
-invalid cleared and the attempt repeated, then a settle. ``held`` is the run's own:
-the keys a ``Pinned`` strategy fixed, which no later strategy changes (an attempt
-refuses another value for one), logged by the exploration and never stored.
+invalid cleared and the attempt repeated, then a settle. ``held`` holds the pinned
+keys with their values, which no strategy changes (an attempt refuses another value
+for one): those a ``Pinned`` strategy fixes, and those the seam's maker seeds. The
+build's exploration seeds the pins its partition's body records, so that a pin holds
+for the whole build (``finn.transformation.kernels.choose``).
 
 The engine decides validity; an explorer only proposes and prefers. An
 ``Explorer`` (``explore(seam, point) -> point``) proposes batches, and may keep,
@@ -76,7 +78,7 @@ The strategies, each an objective and its constraints searched through the seam:
 
 - ``Pinned(path)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
   a kernel's under its node, a channel's under its tensor, the form the kernel path's
-  ``kernel_choices.json`` takes), set as one batch and held for the run;
+  ``kernel_choices.json`` takes), set as one batch and held;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
   folding through an unordered choice its cycles wait on by trying each case (a
@@ -96,9 +98,9 @@ The strategies, each an objective and its constraints searched through the seam:
   only (a FIFO's depth) is refused, by name;
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
-A strategy that changes folding (``folds``) after the last ``SizeFifos`` leaves its
-depths stale: the engine keeps a stored depth valid when its ends' folding changes,
-so the order is the exploration's to check (``finn.transformation.kernels``).
+A strategy that changes folding after the last ``SizeFifos`` leaves its depths stale:
+the engine keeps a stored depth valid when its ends' folding changes, so the order is
+the build plan's to check (``finn.builder.build_dataflow_plan``).
 """
 
 from __future__ import annotations
@@ -335,8 +337,8 @@ class Seam:
     name: a kernel's node, a channel's tensor); the
     ``platform`` its kernels are built for (its clock, which a throughput reads).
     ``attempts`` counts the attempts made through it;
-    ``held`` holds the keys pinned for the run, with their values; ``runs`` records
-    each strategy's run, in order."""
+    ``held`` holds the pinned keys, with their values; ``runs`` records each strategy's
+    run, in order."""
 
     def __init__(
         self,
@@ -437,7 +439,7 @@ class Seam:
             if key not in infos:
                 why[key] = _refusal(key, "not-a-decision", "not a Decision of this root")
             elif held is not _ABSENT and held != value:
-                why[key] = _refusal(key, "held", f"held to {held!r} by pinned for this run")
+                why[key] = _refusal(key, "held", f"held to {held!r} by a pin")
             elif choice is None:
                 if forced is None:
                     forced = {item.key: item.value for item in inspection.forced(point)}
@@ -572,8 +574,8 @@ class Seam:
                 if isinstance(outcome, Refused):
                     raise Unsettled(
                         choice.key,
-                        f"held to {held!r} by pinned for this run, refused after the "
-                        "change: " + _reasons(outcome.why),
+                        f"held to {held!r} by a pin, refused after the change: "
+                        + _reasons(outcome.why),
                     )
                 point, kept[choice.key] = outcome.point, held
                 continue
@@ -602,9 +604,7 @@ class Seam:
             found = values.get(key, forced.get(key, _ABSENT))
             if found != value:
                 now = "inapplicable or open" if found is _ABSENT else f"now {found!r}"
-                raise Unsettled(
-                    key, f"held to {value!r} by pinned for this run, {now} after the change"
-                )
+                raise Unsettled(key, f"held to {value!r} by a pin, {now} after the change")
 
     def set(self, point: S, changes: Mapping[str, object]) -> Accepted[S] | Refused:
         """``changes`` replacing ``point``'s values, then the point settled from its own
@@ -740,6 +740,27 @@ class Seam:
         """Every Decision ``point`` commits, by key: the choices made on purpose."""
         return chosen(point)
 
+    def keyed(
+        self, point: Space, values: Mapping[str, Mapping[str, object]], source: str
+    ) -> dict[str, object]:
+        """``values`` by owner and key there (``{graph name: {key: value}}``: a kernel's
+        under its node, a channel's under its tensor) as root keys, each value as its
+        Decision takes it. An owner or key no member of the root owns is an
+        ``ExploreError`` naming them and ``source``, where the values come from."""
+        found: dict[str, object] = {}
+        unknown: list[str] = []
+        for owner, held in values.items():
+            for name, value in held.items():
+                key = self.key(owner, name)
+                if key is None:
+                    unknown.append(f"{owner}.{name}")
+                else:
+                    found[key] = value
+        if unknown:
+            raise ExploreError(f"{source}: no member of the root is owned by {unknown}")
+        self._info(point)  # the Decisions read, so that values are typed as they take them
+        return self._typed(found)
+
     def _typed(self, batch: Mapping[str, object]) -> dict[str, object]:
         """``batch`` as the Decisions take it: an integer for a ``bool`` Decision (an ONNX
         ``i`` attribute) becomes a bool."""
@@ -803,7 +824,6 @@ class Ranked:
     to settling (their earlier value, if still accepted) or the next explorer."""
 
     strategy = "ranked"
-    folds = True
 
     def __init__(self, policy: RankPolicy) -> None:
         self.policy = policy
@@ -865,7 +885,6 @@ class Rebaseline:
     starts an exploration over from the kernels' baselines, the pins kept."""
 
     strategy = "baseline"
-    folds = True
 
     def explore(self, seam: Seam, point: S) -> S:
         return seam.run(
@@ -885,7 +904,6 @@ class DebugPlaceholder:
 
     strategy = "placeholder"
     label = "DEBUG: set by placeholder"
-    folds = False
 
     def __init__(self) -> None:
         self.set: dict[str, object] = {}
@@ -918,15 +936,14 @@ class Pinned:
     """Fixed choices by owner and key (``{graph name: {key: value}}``: a kernel's under
     its node, a channel's under its tensor, the form ``kernel_choices.json`` takes),
     read from ``path``, set as one batch (``Seam.set``: replacing what is stored, the
-    choices the change makes invalid cleared and settled) and held for the rest of the
-    run (``Seam.held``): no later strategy changes them. A choice already at the same
-    value is not in the batch, and held all the same; anything the seam refuses (an
-    owner or key that is no choice here, a value it does not take, a key another pin
-    holds otherwise) is refused, named. Written first, so that the strategies after it
-    fold around the pins."""
+    choices the change makes invalid cleared and settled) and held (``Seam.held``): no
+    strategy after it changes them. A choice already at the same value is not in the
+    batch, and held all the same; anything the seam refuses (an owner or key that is no
+    choice here, a value it does not take, a key another pin holds otherwise) is
+    refused, named. Pins go first, so that the strategies after them fold around them.
+    ``held`` keeps the keys it held, with their values."""
 
     strategy = "pinned"
-    folds = False
 
     def __init__(self, path: str | PathLike[str]) -> None:
         self.path = str(path)
@@ -941,19 +958,7 @@ class Pinned:
 
     def explore(self, seam: Seam, point: S) -> S:
         stored = seam.chosen(point)
-        wanted: dict[str, object] = {}
-        unknown: list[str] = []
-        for owner, values in self.choices.items():
-            for name, value in values.items():
-                key = seam.key(owner, name)
-                if key is None:
-                    unknown.append(f"{owner}.{name}")
-                else:
-                    wanted[key] = value
-        if unknown:
-            raise ExploreError(f"{self.path}: no member of the root is owned by {unknown}")
-        seam.declared(point)  # the Decisions read, so that values are typed as they take them
-        wanted = seam._typed(wanted)
+        wanted = seam.keyed(point, self.choices, self.path)
         refused = {
             key: _refusal(key, "held", f"held to {seam.held[key]!r} by an earlier pin")
             for key, value in wanted.items()
@@ -1034,7 +1039,6 @@ class TargetCycles:
     """
 
     strategy = "target_cycles"
-    folds = True
 
     def __init__(self, cycles: int, *, relax: bool = True) -> None:
         if cycles < 1:
@@ -1476,7 +1480,6 @@ class MaxThroughput:
     """
 
     strategy = "max_throughput"
-    folds = True
 
     def __init__(self, within: Mapping[str, float]) -> None:
         if not within:
@@ -1763,7 +1766,6 @@ class SizeFifos:
     """
 
     strategy = "size_fifos"
-    folds = False
 
     def __init__(
         self,

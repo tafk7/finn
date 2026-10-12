@@ -48,7 +48,7 @@ def kernel_model(target: Target = TARGET) -> ModelWrapper:
 
 
 def ranked(policy: RankPolicy) -> ExploreKernelChoices:
-    return ExploreKernelChoices([Ranked(policy)])
+    return ExploreKernelChoices(Ranked(policy))
 
 
 def offer(key: str, cases: tuple[object, ...], refused: dict[str, str]) -> Choice:
@@ -161,7 +161,7 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     # Preferring the FIFO transport opens its depth, a domain known by membership only
     # and required: no baseline takes a case of it. The exploration leaves it open
     # and reports it; emission completes nothing and refuses it, named, with what sets it.
-    explore = ExploreKernelChoices([Ranked(Last())])
+    explore = ExploreKernelChoices(Ranked(Last()))
     model = kernel_model().transform(explore)
     assert explore.explored is not None
     left = explore.explored.report["open"]
@@ -169,11 +169,12 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     with pytest.raises(KernelOpError, match=r"refused at emission: ") as refused:
         configured_root(model, "the chain")
     assert all(key.endswith("transport.fifo.buffer.depth") for key in refused.value.keys)
-    assert str(refused.value).count("(required: run size_fifos or placeholder)") == len(left)
+    required = "(required: run step_size_fifos or step_placeholder_choices)"
+    assert str(refused.value).count(required) == len(left)
     # The debug placeholder strategy takes the first case of a required choice, and
     # refuses one known by membership only, named.
     with pytest.raises(ExploreError, match=r"no case to take .*transport.fifo.buffer.depth"):
-        kernel_model().transform(ExploreKernelChoices([Ranked(Last()), DebugPlaceholder()]))
+        model.transform(ExploreKernelChoices(DebugPlaceholder()))
 
 
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:

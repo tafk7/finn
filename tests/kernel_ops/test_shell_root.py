@@ -227,7 +227,8 @@ def test_an_explored_point_persists_and_replays_as_itself() -> None:
     goes back to its owner (a node or a tensor) by path and replays onto the same
     point."""
     model = kernel_model()
-    explored = explore_kernel_choices(model, [Ranked(Lanes(2)), SizeFifos()])
+    explore_kernel_choices(model, Ranked(Lanes(2)))
+    explored = explore_kernel_choices(model, SizeFifos())
     made = chosen(explored.point)
     assert {"x.transport", "y.transport", "levels.transport"} <= set(made)
     assert "first.compute.packed.pe" in made

@@ -100,7 +100,7 @@ def test_tfc_w2a2s_kernel_ops_verify_open_and_explored(tmp_path: Path) -> None:
     """Every KernelOp TFC converts to verifies with its choices open, as the cut
     leaves its partition's body, and with them committed, as exploration leaves it."""
     _, body, _ = cut(streamlined(tmp_path), tmp_path)
-    for stage in (body, body.transform(ExploreKernelChoices([Ranked(LANES)]))):
+    for stage in (body, body.transform(ExploreKernelChoices(Ranked(LANES)))):
         kernel_ops = [kernel_op(stage, node) for node in stage.graph.node if node.domain == DOMAIN]
         assert len(kernel_ops) == 8
         assert {op.label: op.verify_node() for op in kernel_ops} == {

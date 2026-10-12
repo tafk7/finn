@@ -194,7 +194,7 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
     assert {name: config[name] for name in nodes} == nodes
     assert all(held["transport"] == "direct" for name, held in config.items() if name not in nodes)
-    assert explore_kernel_choices(model, []).report["baselined"] == []
+    assert explore_kernel_choices(model).report["baselined"] == []
     first = kernel_op(model, model.graph.node[0])
     first.set_nodeattr("compute.packed.simd", 2)
     first.set_nodeattr("compute.packed.pe", 3)
@@ -217,20 +217,20 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
 
 
 def test_the_baseline_strategy_resets_the_bodys_channel_choices_too() -> None:
-    """To start over, a list writes the ``baseline`` strategy first: what the body
-    states, nodes' and channels' alike, goes back to its baseline, the values a body
-    stating nothing is baselined to."""
+    """To start over, the ``baseline`` strategy: what the body states, nodes' and
+    channels' alike, goes back to its baseline, the values a body stating nothing is
+    baselined to."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
-    explored = explore_kernel_choices(model, [Rebaseline()])
-    (reset,) = explored.report["strategies"]
+    explored = explore_kernel_choices(model, Rebaseline())
+    reset = explored.report["strategy"]
     assert reset["strategy"] == "baseline" and reset["changed"]
     cleared = kernel_model()
     for node in cleared.graph.node:
         op = kernel_op(cleared, node)
         op.save(dict.fromkeys(op.choices()))
     clear_channel_choices(cleared)
-    explore_kernel_choices(cleared, [])
+    explore_kernel_choices(cleared)
     assert kernel_choices_config(model) == kernel_choices_config(cleared)
 
 
@@ -239,7 +239,7 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     the tensors' channel choices, in graph order. Pinned commits it on another body, and
     the report names each choice's owner the same way."""
     model = open_model()
-    explore_kernel_choices(model, [Ranked(Lanes(2))])
+    explore_kernel_choices(model, Ranked(Lanes(2)))
     config = kernel_choices_config(model)
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
     assert config["first"]["compute.packed.pe"] == 2
@@ -247,7 +247,7 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     path = tmp_path / "kernel_choices.json"
     path.write_text(json.dumps(config))
     blank = open_model()
-    report = explore_kernel_choices(blank, [Pinned(path)]).report
+    report = explore_kernel_choices(blank, Pinned(path)).report
     assert kernel_choices_config(blank) == config
     # Every value is held, by its owner as the file names it; what it changed is logged
     # as the pin's.
@@ -258,7 +258,7 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     # refused, named.
     path.write_text(json.dumps({"second": {"x.transport": "direct"}}))
     with pytest.raises(ExploreError, match="second.x.transport: not a Decision of this root"):
-        explore_kernel_choices(open_model(), [Pinned(path)])
+        explore_kernel_choices(open_model(), Pinned(path))
 
 
 def test_the_export_is_in_graph_order_on_tfcs_body(tfc: ModelWrapper) -> None:
@@ -266,7 +266,7 @@ def test_the_export_is_in_graph_order_on_tfcs_body(tfc: ModelWrapper) -> None:
     channels not yet written (its weights, the parameter a MatMul owns, among them), the
     node, its output channel; a MultiThreshold's thresholds state no channel."""
     model = ModelWrapper(tfc.model.__deepcopy__())
-    explore_kernel_choices(model, [Ranked(LANES)])
+    explore_kernel_choices(model, Ranked(LANES))
     expected = ["Reshape_0_out0"]
     for layer in range(4):
         threshold, matmul = f"MultiThreshold_{layer}", f"MatMul_{layer}"

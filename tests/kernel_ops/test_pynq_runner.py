@@ -61,13 +61,11 @@ from finn.shells.pynq.runner import (
     block_design,
     build_pynq,
     collect,
-    objective_fps,
     project_script,
 )
 from finn.shells.pynq.templates import custom_zynq_shell_template
 from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
-from finn.transformation.kernels.choose import EXPLORATION_REPORT
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from kernel_ops.models import configure_partition, streamed_w2_model
@@ -467,18 +465,16 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     """BuildPynqBitfile reads the shell, board, part and clock from the target the
     partition's body states, runs the build (the ends' scratch models beside the body's
     file) and collects what Vivado made into the output directory it is given; the
-    delivered clock's report states the throughput the exploration's report asked. The
+    delivered clock's report states the throughput asked, the objective it is given. The
     parent graph states the bitfile, its handoff and reports, what it was made from and
     the options it was built with."""
     recorded_tools(monkeypatch, tmp_path)
     parent = zynq_model(tmp_path)
     output = tmp_path / "output"
-    exploration = output / EXPLORATION_REPORT
-    exploration.parent.mkdir(parents=True)
-    asked = [{"strategy": "target_throughput", "fps": 1000}, {"strategy": "size_fifos"}]
-    exploration.write_text(json.dumps({"strategies": asked}))
     vivado = FakeVivado(timing=TIMING_REPORT)
-    building = BuildPynqBitfile(output, toolchain=cast(Toolchain, vivado), hw_debug=True)
+    building = BuildPynqBitfile(
+        output, toolchain=cast(Toolchain, vivado), hw_debug=True, objective_fps=1000
+    )
     built = parent.transform(building)
     ((_, _, script),) = vivado.runs
     assert "set FREQ_MHZ 200\n" in script and f"set FPGA_PART {ZYNQ.part}\n" in script
@@ -514,23 +510,6 @@ def test_the_bitfile_build_is_a_transformation_of_the_parent_graph(
     assert "bottleneck_cycles" in clock
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
     assert [finding.code for finding in building.findings] == ["clock-below-asked"]
-
-
-def test_the_throughput_asked_is_read_from_the_explorations_report(tmp_path: Path) -> None:
-    """The first target_throughput strategy's fps in the exploration's report under the
-    output directory; none where no strategy asked one, or there is no report."""
-    assert objective_fps(tmp_path) is None
-    report = tmp_path / EXPLORATION_REPORT
-    report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({"strategies": [{"strategy": "size_fifos"}]}))
-    assert objective_fps(tmp_path) is None
-    asked = [
-        {"strategy": "max_throughput", "within": {"lut": 0.5}},
-        {"strategy": "target_throughput", "fps": 2.5e5},
-        {"strategy": "target_throughput", "fps": 1e6},
-    ]
-    report.write_text(json.dumps({"strategies": asked}))
-    assert objective_fps(tmp_path) == 2.5e5
 
 
 def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:

@@ -34,36 +34,49 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import FindingKind
+from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.base import write_target
+from finn.kernels.explore import (
+    Explorer,
+    MaxThroughput,
+    Pinned,
+    Rebaseline,
+    SizeFifos,
+    TargetThroughput,
+)
 from finn.kernels.target import Target
 from finn.kernels.utilization import Resources, total
 from finn.platform import resolve_target
-from finn.transformation.kernels import (
-    explore_kernel_choices,
-    kernel_choices_config,
-    strategy,
-)
+from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from kernel_ops.models import TARGET, kernel_model
 from kernel_ops.tfc import ULTRA96
 
 ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period_ns)
 SHELLS = {"ip": ULTRA96_IP, "pynq": ULTRA96}
-SIZE_FIFOS = {"strategy": "size_fifos"}
-BASELINE = {"strategy": "baseline"}
 
 
-def within(lut: float) -> list[dict[str, Any]]:
-    return [{"strategy": "max_throughput", "within": {"lut": lut}}, SIZE_FIFOS]
+def within(lut: float) -> list[Explorer]:
+    """The search within ``lut`` of the part's LUTs, then FIFO sizing."""
+    return [MaxThroughput({"lut": lut}), SizeFifos()]
 
 
-def explored(model: ModelWrapper, target: Target, specs: list[dict[str, Any]]) -> dict[str, Any]:
-    """A copy of ``model`` explored for ``target`` by the strategies ``specs`` write, as a
-    build lists them (``BASELINE`` first: from every choice's baseline); the report."""
+def explore_each(
+    model: ModelWrapper, strategies: list[Explorer]
+) -> tuple[dict[str, Any], tuple[Finding, ...]]:
+    """``model`` explored by each of ``strategies`` in turn, an exploration each, as a
+    build's strategy steps run them: the last exploration's report, with each one's
+    strategy entry in order (``strategies``), and every finding, in order."""
+    results = [explore_kernel_choices(model, each) for each in strategies]
+    report = {**results[-1].report, "strategies": [each.report["strategy"] for each in results]}
+    return report, tuple(finding for each in results for finding in each.findings)
+
+
+def explored(model: ModelWrapper, target: Target, strategies: list[Explorer]) -> dict[str, Any]:
+    """A copy of ``model`` explored for ``target`` by each of ``strategies`` in turn
+    (``Rebaseline()`` first: from every choice's baseline); the report (``explore_each``)."""
     model = ModelWrapper(model.model.__deepcopy__())
     write_target(model, target)
-    strategies = [strategy(spec) for spec in specs]
-    return dict(explore_kernel_choices(model, strategies).report)
+    return explore_each(model, strategies)[0]
 
 
 # -- on ip ---------------------------------------------------------------------------------
@@ -73,7 +86,7 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
     """Half a percent of the part's LUTs (352) on ip: the fastest fold does not fit, the
     least parallelism does, and bisection between them keeps the least budget that
     fits. The report states the point against the budget, read from settled costs."""
-    report = explored(kernel_model(), TARGET, [BASELINE, *within(0.005)])
+    report = explored(kernel_model(), TARGET, [Rebaseline(), *within(0.005)])
     _, searched, sized = report["strategies"]
     assert searched["within"] == {"lut": 0.005} and searched["budget"] == {"lut": 352}
     tried = searched["tried"]
@@ -102,7 +115,7 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
 def searched_tfc(
     tfc: ModelWrapper, shell: str, fraction: float, budget: int, cycles: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """[max_throughput {lut: fraction}, size_fifos] on TFC: bisection between the fastest
+    """max_throughput {lut: fraction}, then size_fifos, on TFC: bisection between the fastest
     fold, which does not fit, and the least parallelism, which does, through budgets
     that fit and budgets that do not, keeps the least budget that fits, ``cycles``,
     and the report states its point against the budget. The search's entry and the
@@ -151,7 +164,7 @@ def test_in_the_zynq_shell_the_search_costs_the_shell_s_total() -> None:
     """The whole part on pynq: the fastest fold, relaxed to the ends' 16 cycles, fits at
     once, so it is the one fold. What it costs is the shell's total, its ends and its
     static region beside its partition."""
-    report = explored(kernel_model(), ULTRA96, [BASELINE, *within(1.0)])
+    report = explored(kernel_model(), ULTRA96, [Rebaseline(), *within(1.0)])
     searched = report["strategies"][1]
     assert [(row["cycles"], row["relaxed_to"], row["fits"]) for row in searched["tried"]] == [
         (1, 16, True)
@@ -179,15 +192,13 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     sizing places one on the output, so the report's total is above the search's."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    strategies = [strategy(spec) for spec in [BASELINE, *within(0.1)]]
-    result = explore_kernel_choices(model, strategies)
-    report = result.report
+    report, findings = explore_each(model, [Rebaseline(), *within(0.1)])
     _, searched, sized = report["strategies"]
     (budget,) = searched["findings"]
     assert (budget["kind"], budget["code"]) == ("limitation", "resource-budget")
     assert "most of lut: lut 9882 of 7056" in budget["message"]
     assert budget["details"] == {"binding": "lut", "over": ("lut",)}
-    assert [finding.code for finding in result.findings][0] == "resource-budget"
+    assert [finding.code for finding in findings][0] == "resource-budget"
     assert [row["cycles"] for row in searched["tried"]] == [1, None]
     assert searched["fits"] is False and searched["binding"] == "lut"
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48
@@ -224,9 +235,7 @@ def test_a_point_over_the_part_is_a_finding_naming_the_binding_resource() -> Non
     same (RC5)."""
     small = Resources(lut=500, ff=141120, bram18=432, uram=0, dsp=360)
     part = replace(TARGET, platform=replace(TARGET.platform, resources=small))
-    report = explored(
-        kernel_model(), part, [BASELINE, {"strategy": "target_throughput", "fps": 2e8}]
-    )
+    report = explored(kernel_model(), part, [Rebaseline(), TargetThroughput(2e8)])
     resources = report["resources"]
     assert report["bottleneck"]["cycles"] == 3
     assert resources["binding"] == "lut" and list(resources["over"]) == ["lut"]
@@ -246,13 +255,11 @@ def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound(tmp_path
     pinned.write_text('{"first": {"compute.packed.reducer": "compressor"}}')
     model = ModelWrapper(kernel_model().model.__deepcopy__())
     write_target(model, TARGET)
-    specs = [BASELINE, {"strategy": "pinned", "path": str(pinned)}, *within(0.005)]
-    result = explore_kernel_choices(model, [strategy(spec) for spec in specs])
-    report = result.report
+    report, findings = explore_each(model, [Rebaseline(), Pinned(pinned), *within(0.005)])
     searched = report["strategies"][2]
     assert searched["lower_bound"] is True and list(searched["unstated"]) == ["first"]
     assert all(record["code"] for record in searched["unstated"]["first"])
-    (unstated,) = [f for f in result.findings if f.code == "resources-unstated"]
+    (unstated,) = [f for f in findings if f.code == "resources-unstated"]
     assert unstated.kind is FindingKind.LIMITATION and unstated.owner == "max_throughput"
     assert re.search(r"\bfirst .*compressor", unstated.message)
     assert dict(unstated.details)["members"] == ("first",) and unstated.causes

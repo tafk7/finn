@@ -129,7 +129,7 @@ def test_an_attempt_replaces_a_stored_value_but_never_a_held_one() -> None:
                 FindingKind.REJECTION,
                 "held",
                 "y.transport",
-                "held to 'direct' by pinned for this run",
+                "held to 'direct' by a pin",
             ),
         )
     }
@@ -489,7 +489,7 @@ def test_a_held_choice_a_change_reaches_must_settle_back_or_the_change_is_refuse
     assert isinstance(refused, Refused)
     ((key, (found,)),) = refused.why.items()
     assert (key, found.code, found.owner) == ("first.compute.packed.compute_pumping", "held", key)
-    assert found.message == "held to True by pinned for this run, now False after the change"
+    assert found.message == "held to True by a pin, now False after the change"
     # Reached and still viable, it comes back: SIMD 4 keeps pumping viable.
     kept = explorer.set(pumped.point, {"first.compute.packed.simd": 4})
     assert isinstance(kept, Accepted)

@@ -130,14 +130,12 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     directory.mkdir()
     cfg = builder_config(
         verify_input_npy="inputs/input.npy",
+        step_edits=[{"before": "step_size_fifos", "insert": "step_pin_choices"}],
         settings={
             "preprocessing": "preproc.onnx",
             "topk": 1,
-            "strategies": [
-                {"strategy": "pinned", "path": "kernel_choices.json"},
-                {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
-                {"strategy": "size_fifos", "margin": 2},
-            ],
+            "kernel_choices_file": "kernel_choices.json",
+            "fifo_margin": 2,
             "input_datatype": "UINT8",
         },
         toolchain=Selection(settings=("settings64.sh", "/opt/site.sh"), command_dir="tools"),
@@ -146,19 +144,27 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == str(directory / "out")
     assert read.verify_input_npy == str(directory / "inputs/input.npy")
-    # The settings a step declares as a path, and the pinned strategies' files; the rest
-    # of them as stated, a str a step does not declare as a path included.
+    # The settings a step declares as a path (the preprocessing model, the pinned
+    # choices); the rest of them as stated, a str a step does not declare as a path
+    # included.
     assert read.settings == {
         "preprocessing": str(directory / "preproc.onnx"),
         "topk": 1,
-        "strategies": [
-            {"strategy": "pinned", "path": str(directory / "kernel_choices.json")},
-            {"strategy": "pinned", "path": "/elsewhere/kernel_choices.json"},
-            {"strategy": "size_fifos", "margin": 2},
-        ],
+        "kernel_choices_file": str(directory / "kernel_choices.json"),
+        "fifo_margin": 2,
         "input_datatype": "UINT8",
     }
-    assert resolve_plan(read).settings["preprocessing"].value == directory / "preproc.onnx"
+    settings = resolve_plan(read).settings
+    assert settings["preprocessing"].value == directory / "preproc.onnx"
+    assert settings["kernel_choices_file"].value == directory / "kernel_choices.json"
+    # An absolute path stays as stated.
+    absolute = builder_config(
+        step_edits=[{"before": "step_size_fifos", "insert": "step_pin_choices"}],
+        settings={"kernel_choices_file": "/elsewhere/kernel_choices.json"},
+    )
+    (directory / build_dataflow.CONFIG_FILE).write_text(absolute.to_json())
+    read_again = build_dataflow.read_build_config(str(directory))
+    assert read_again.settings == {"kernel_choices_file": "/elsewhere/kernel_choices.json"}
     assert read.toolchain == Selection(
         settings=(str(directory / "settings64.sh"), "/opt/site.sh"),
         command_dir=str(directory / "tools"),

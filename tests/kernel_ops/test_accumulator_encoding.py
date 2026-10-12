@@ -174,13 +174,14 @@ def source(case: Case) -> ModelWrapper:
 
 def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) -> ModelWrapper:
     """The case as KernelOps, inferred, every choice committed at two lanes; ``compute``
-    pins each MatMul's core for the exploration (``Pinned``): ranking reopens every choice
-    not held, so a core saved on the node would be ranked again, and the pin replaces the
-    core conversion stored with the choices under it."""
+    pins each MatMul's core first (``Pinned``, held in the body for the ranking after
+    it): ranking reopens every choice not held, so a core saved on the node would be
+    ranked again, and the pin replaces the core conversion stored with the choices under
+    it."""
     model = source(case).transform(ToKernelOps(target)).transform(InferKernelTensors())
     ranked = Ranked(Lanes(2))
     if compute is None:
-        return model.transform(ExploreKernelChoices([ranked]))
+        return model.transform(ExploreKernelChoices(ranked))
     pins = {
         node.name: {"compute": compute} for node in model.graph.node if node.op_type == "MatMul"
     }
@@ -188,7 +189,8 @@ def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) ->
         path = Path(directory) / "pinned.json"
         path.write_text(json.dumps(pins))
         pinned = Pinned(path)
-    return model.transform(ExploreKernelChoices([pinned, ranked]))
+    model = model.transform(ExploreKernelChoices(pinned))
+    return model.transform(ExploreKernelChoices(ranked))
 
 
 def _matmuls(model: ModelWrapper) -> list[Any]:

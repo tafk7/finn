@@ -632,8 +632,8 @@ def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[s
     at conversion, a channel's at the cut) and replaced by the strategies, so nothing
     is completed here. A stale choice; an open choice, each by name: one no case of
     which is viable (each case's reason), a required one no strategy set ("required:
-    run size_fifos or placeholder"), any other one never baselined ("not created:
-    BaselineChoices"); a point the shell does not admit
+    run step_size_fifos or step_placeholder_choices"), any other one never baselined
+    ("not created: BaselineChoices"); a point the shell does not admit
     (``admission_refusal``); or graph inputs and outputs out of port order refuse,
     named."""
     root = shell_root(model, model.graph.node)
@@ -655,7 +655,7 @@ def configured_root(model: ModelWrapper, label: str) -> tuple[Any, tuple[tuple[s
         named = [
             f"{key}: no case is viable: {unviable[key]}"
             if key in unviable
-            else f"{key} (required: run size_fifos or placeholder)"
+            else f"{key} (required: run step_size_fifos or step_placeholder_choices)"
             if key in required
             else f"{key} (not created: BaselineChoices)"
             for key in open_keys

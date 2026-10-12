@@ -36,6 +36,13 @@ reported by the configuration checks as a warning (``unread``).
 
 **Start and stop.** ``start_step`` and ``stop_step`` name a phase (its first step, or
 its last) or a step, once in the list.
+
+**The kernel strategy steps' order.** The engine keeps a stored FIFO depth valid when
+its ends' folding changes, so the run's order must keep the depths current
+(finn.builder.build_dataflow_steps.FOLDING_STEPS, FIFO_SIZING_STEPS): a step that may
+change the folding after the run's last step that sizes FIFOs is refused; so is one
+with no sizing step after it in a run that does not cut the partition before it, whose
+partition an earlier run made and may have sized at another folding.
 """
 
 from __future__ import annotations
@@ -55,9 +62,12 @@ from qonnx.transformation.base import Transformation
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig, decoded
 from finn.builder.build_dataflow_steps import (
+    FIFO_SIZING_STEPS,
+    FOLDING_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
     default_build_dataflow_steps,
+    step_create_dataflow_partition,
 )
 
 #: The operations of an edit, each with the key that holds its entries (None: none).
@@ -73,12 +83,15 @@ EDITS: Mapping[str, str | None] = {
 class PlannedStep:
     """A step of the plan: its ``name``; the phase of the phase table that lists a step
     of that name (None for any other); the ``function`` the build calls as ``function(model,
-    cfg, **settings)``; and ``settings``, the value of each setting it declares."""
+    cfg, **settings)``; ``settings``, the value of each setting it declares; and what an
+    import path names it by (``origin``: the function, a partial's own, or the
+    Transformation's class)."""
 
     name: str
     phase: str | None
     function: Callable[..., ModelWrapper]
     settings: Mapping[str, Any]
+    origin: object
 
     def run(self, model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
         return self.function(model, cfg, **self.settings)
@@ -422,7 +435,9 @@ def resolve_plan(cfg: DataflowBuildConfig) -> BuildPlan:
             phases.setdefault(group.phase, []).append(span)
         for step in group.steps:
             values = {name: settings[name].value for name in step.declared}
-            edited.append(PlannedStep(step.name, listing.get(step.name), step.function, values))
+            edited.append(
+                PlannedStep(step.name, listing.get(step.name), step.function, values, step.origin)
+            )
     plan = BuildPlan(
         tuple(edited),
         {phase: tuple(spans) for phase, spans in phases.items()},
@@ -435,7 +450,35 @@ def resolve_plan(cfg: DataflowBuildConfig) -> BuildPlan:
     last = len(edited) - 1 if cfg.stop_step is None else plan.index(cfg.stop_step, last=True)
     running = {name for step in edited[first : last + 1] for name in step.settings}
     unread = tuple(sorted(name for name in cfg.settings if name not in running))
-    return replace(plan, first=first, last=last, unread=unread)
+    plan = replace(plan, first=first, last=last, unread=unread)
+    _refuse_stale_fifos(plan.steps)
+    return plan
+
+
+def _refuse_stale_fifos(run: tuple[PlannedStep, ...]) -> None:
+    """Refuse a run whose order would build FIFO depths sized at another folding than the
+    one built (the module docstring): a step that may change the folding after the last
+    step that sizes FIFOs, or with no sizing step after it and no cut before it."""
+    sizing = [index for index, step in enumerate(run) if step.origin in FIFO_SIZING_STEPS]
+    last = max(sizing, default=None)
+    for index, step in enumerate(run):
+        if step.origin not in FOLDING_STEPS:
+            continue
+        place = f"{step.name} (step {index + 1} of the run)"
+        if last is not None and index > last:
+            raise ValueError(
+                f"{place} follows {run[last].name} (step {last + 1}), the last that sizes "
+                "FIFOs: their depths are sized at the folding before it and would go stale; "
+                "size FIFOs after the last step that changes the folding"
+            )
+        cut = any(each.origin is step_create_dataflow_partition for each in run[:index])
+        if last is None and not cut:
+            raise ValueError(
+                f"{place} may change the folding, and no step after it sizes FIFOs: the "
+                "partition comes from an earlier run (no step_create_dataflow_partition "
+                "before it), whose FIFOs may be sized at another folding; add "
+                "step_size_fifos after it"
+            )
 
 
 __all__ = [

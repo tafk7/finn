@@ -1,49 +1,51 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Exploring a model's kernel choices through the DSE seam, and saving them.
+"""Exploring a partition body's kernel choices through the DSE seam, one strategy at a
+time, and saving them.
 
-``ExploreKernelChoices(strategies)`` explores a partition's body, the model of
-KernelOps the kernel path's cut made (``CutKernelPartition``; ``ExplorePartition``, the
-build's, explores it through the parent graph's node, ``partition_body``, and saves it
-in its file), so which KernelOps go together is the
-cut's alone: a model holding any other node is refused. It builds the body's shell root
-once (``shell_root``: their kernels, the channels between them and the channels on its
-boundary; the nodes' and the channels' saved choices replayed, a stale one dropped with
-why; members named as the graph, ``MatMul_0``), gives every choice the body leaves open
-its baseline (``Seam.baseline``: what ``BaselineChoices`` does, a no-op on a body the
-cut created; on a body made by hand, or for a choice replay dropped as stale, the report
-names what it baselined), runs the strategies in order through one ``Seam``
-(``finn.kernels.explore``), each reopening the choices it decides, exploring and
-settling, from the point the one before returned, and then:
+``explore_kernel_choices(model, strategy)`` explores a partition's body, the model of
+KernelOps the kernel path's cut made (``CutKernelPartition``; the build's strategy steps
+open it through the parent graph's node, ``partition_body``, and save it in its file),
+so which KernelOps go together is the cut's alone: a model holding any other node is
+refused. It builds the body's shell root (``shell_root``: their kernels, the channels
+between them and the channels on its boundary; the nodes' and the channels' saved
+choices replayed, a stale one dropped with why; members named as the graph,
+``MatMul_0``) and its ``Seam`` (``finn.kernels.explore``), holds the pins the body
+records (``HELD``), gives every choice the body leaves open its baseline
+(``Seam.baseline``: what ``BaselineChoices`` does, a no-op on a body the cut created; on
+a body made by hand, or for a choice replay dropped as stale, the report names what it
+baselined), runs the strategy, which reopens the choices it decides, explores and
+settles, and then:
 
 - refuses a point a member refuses (``Seam.refusals``) or its shell does not admit
   (``admission_refusal``: its AXI-Lite buses, memory ports and doubled clock against
   the shell's row), by name (a ``KernelOpError`` carrying their findings);
-- refuses a run where a strategy changed anything but the transports with FIFOs placed
-  before it and no ``size_fifos`` after it, naming the FIFOs: the engine keeps a
-  stored depth valid when its ends' folding changes, so the run checks it. A list
-  where a strategy that folds follows the last ``size_fifos`` is refused before
-  anything runs (``refuse_folding_after_sizing``);
 - persists every value of the point where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
   (``configured_root``);
-- keeps what it found (``explored``): the point, its cost and the report, a log of this
-  run: the choices the body left open and the baseline took (``baselined``); each
-  strategy with every value it changed (``changed``: before and after, by owner), how
-  many it reopened and settling kept, the ones settling re-baselined, a pin's held
-  keys, attempts and time; every value by its owner (a node or a tensor, by graph
-  name, and the key there, as ``kernel_choices.json`` names it), with who set it last
-  in this run (``saved``: the body, ``baseline``, or a strategy); the keys held; the
-  choices left open (a required one named so); each FIFO's memory style beside the
-  storage FinnLib's selection gives it and what it uses (``fifo_storage``: its
-  ``auto`` is FinnLib's, not Vivado's); whether FIFOs were sized; the dropped choices
-  with why, per member cycles, buffering and resources, the bottleneck, and the
-  shell's resources against the platform's, ``resources``), so an outer search can
-  compare; and every limitation the run found (``findings``: the strategies' and the
-  resources'), in the report where each was found. Who set a value is logged here,
-  never stored in the model.
+- records the pins held, those the body recorded and those the strategy pinned, in the
+  body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
+  the body holds them: a pin holds for the build, and re-baselining keeps it;
+- keeps what it found (``explored``): the point, its cost and the report: the choices
+  the body left open and the baseline took (``baselined``); the strategy with every
+  value it changed (``changed``: before and after, by owner), how many it reopened and
+  settling kept, the ones settling re-baselined, a pin's held keys, attempts and time;
+  every value by its owner (a node or a tensor, by graph name, and the key there, as
+  ``kernel_choices.json`` names it), with who set it (``saved``: the body, ``baseline``,
+  or the strategy); the keys held; the choices left open (a required one named so); each
+  FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
+  (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
+  sized; the dropped choices with why, per member cycles, buffering and resources, the
+  bottleneck, and the shell's resources against the platform's, ``resources``), so an
+  outer search can compare; and every limitation it found (``findings``: the
+  strategy's and the resources'), in the report where each was found. Who set a value
+  is logged in the report, never stored in the model.
+
+The order of strategies is the build plan's: pins first, and FIFO sizing after the last
+strategy that changes the folding (``finn.builder.build_dataflow_plan``), since the
+engine keeps a stored FIFO depth valid when its ends' folding changes.
 
 The resources are the shell root's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
@@ -70,27 +72,17 @@ The shell is the model's target's (``shell_root``): its row offers the boundary
 channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
 has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
-
-To start over from the kernels' baselines, a list writes the ``baseline`` strategy
-first: every choice not held back at its baseline.
-
-A strategy is written as a spec, ``{"strategy": name, **parameters}``
-(``strategy(spec)``, the names ``KERNEL_STRATEGIES``), as a build configuration
-lists them: ``[{"strategy": "target_throughput", "fps": 1000000}, {"strategy":
-"size_fifos"}]``, or ``[{"strategy": "max_throughput", "within": {"lut": 0.5}},
-{"strategy": "size_fifos"}]``. A list runs as written: nothing is appended, and nothing is
-read from anywhere else. Pins go first, held for the run; sizing after the last
-strategy that folds.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from functools import reduce
 from typing import TYPE_CHECKING, Any
 
+from qonnx.core.metadata import JSON, Namespace
 from qonnx.transformation.base import Transformation
 
 from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
@@ -102,22 +94,10 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
     shell_root,
 )
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
+from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
-from finn.kernels.explore import (
-    Bottleneck,
-    Cost,
-    DebugPlaceholder,
-    ExploreError,
-    Explorer,
-    MaxThroughput,
-    Pinned,
-    Rebaseline,
-    Seam,
-    SizeFifos,
-    TargetThroughput,
-)
+from finn.kernels.explore import Bottleneck, Cost, Explorer, Pinned, Seam, SizeFifos
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
@@ -126,45 +106,32 @@ from finn.platform import part_report
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-KERNEL_STRATEGIES: Mapping[str, Callable[..., Explorer]] = {
-    "pinned": Pinned,
-    "baseline": Rebaseline,
-    "target_throughput": TargetThroughput,
-    "max_throughput": MaxThroughput,
-    "size_fifos": SizeFifos,
-    "placeholder": DebugPlaceholder,
-}
-"""The strategies a spec names, each made from the spec's other keys: ``pinned``
-(``path``), ``baseline`` (every choice not held back at its baseline),
-``target_throughput`` (``fps``, ``relax``), ``max_throughput`` (``within``, required:
-``{resource: fraction}`` of the part's), ``size_fifos`` (``method``, ``margin``,
-``ram_style``, ``frames``), and ``placeholder``, for debugging (every open required
-choice at its first case)."""
+CHOICES = Namespace("finn.choices", version=1)
+"""What a partition's body records about its choices beyond their values (typed graph
+metadata, qonnx's ``qonnx.core.metadata``): the pins its explorations hold
+(``HELD``)."""
+
+
+def _by_owner_values(value: object) -> bool:
+    return isinstance(value, dict) and all(isinstance(held, dict) for held in value.values())
+
+
+HELD = CHOICES.key(
+    "held", JSON, check=_by_owner_values, expect="{graph name: {key: value}}, the pinned choices"
+)
+"""The choices pinned in a partition's body, by owner and key there (``{graph name: {key:
+value}}``, the form ``kernel_choices.json`` takes): every exploration of the body holds
+them (``Seam.held``), so a pin holds for the build. Absent where nothing is pinned."""
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
 
 
-def strategy(spec: Mapping[str, Any]) -> Explorer:
-    """The strategy ``spec`` writes: ``{"strategy": name, **parameters}``."""
-    parameters = dict(spec)
-    name = parameters.pop("strategy", None)
-    if name not in KERNEL_STRATEGIES:
-        raise ValueError(
-            f"{dict(spec)} names no kernel strategy (one of {sorted(KERNEL_STRATEGIES)})"
-        )
-    try:
-        return KERNEL_STRATEGIES[name](**parameters)
-    except TypeError as error:
-        raise ValueError(f"{dict(spec)}: {error}") from error
-
-
 @dataclass(frozen=True)
 class Explored:
     """An exploration's result: the point of the shell root (every value, settled after
-    the last strategy), its cost, the report (JSON values), and every limitation
-    the run found (``findings``: each strategy's, then the resources'), never a
-    refusal (RC5)."""
+    the strategy), its cost, the report (JSON values), and every limitation it found
+    (``findings``: the strategy's, then the resources'), never a refusal (RC5)."""
 
     point: Any
     cost: Cost
@@ -350,52 +317,24 @@ def _by_owner(seam: Seam, values: Mapping[str, object]) -> dict[str, dict[str, o
 
 
 def _fifos(
-    strategies: Sequence[Explorer], explorers: Sequence[Mapping[str, Any]], placed: Sequence[str]
+    strategy: Explorer | None, entry: Mapping[str, Any] | None, placed: Sequence[str]
 ) -> str:
-    """Whether FIFOs were sized, said so that a design without sizing does not read as
-    sized: by ``size_fifos`` in the list (the channels it sized, the FIFOs placed), or
-    not, and why."""
-    sized = [
-        report for explorer, report in zip(strategies, explorers) if isinstance(explorer, SizeFifos)
-    ]
-    if not sized:
+    """Whether this exploration sized the FIFOs, said so that a design without sizing does
+    not read as sized: by ``size_fifos`` (the channels it sized, the FIFOs placed), or not,
+    with the FIFOs placed as they were."""
+    if not isinstance(strategy, SizeFifos) or entry is None:
         held = f"; FIFOs placed: {', '.join(placed)}" if placed else ""
-        return "not sized (no size_fifos in the list): each transport as it was" + held
-    channels = len(sized[-1]["channels"])
+        return "not sized here (no size_fifos): each transport as it was" + held
+    channels = len(entry["channels"])
     if not channels:
         return "not sized: size_fifos found every transport held"
     return f"sized by size_fifos: {channels} channels, {len(placed)} FIFOs placed"
 
 
-def refuse_folding_after_sizing(strategies: Sequence[Explorer]) -> None:
-    """Refuse a list where a strategy that changes folding (``folds``) follows the last
-    ``size_fifos``, naming both: the engine keeps a stored FIFO depth valid when its ends'
-    folding changes, so the depths it sized would go stale."""
-    last = max(
-        (index for index, explorer in enumerate(strategies) if isinstance(explorer, SizeFifos)),
-        default=None,
-    )
-    if last is None:
-        return
-    after = [
-        f"{explorer.strategy} (strategy {index + 1})"  # type: ignore[attr-defined]
-        for index, explorer in enumerate(strategies)
-        if index > last and getattr(explorer, "folds", False)
-    ]
-    if after:
-        raise ExploreError(
-            f"{', '.join(after)} follows the last size_fifos (strategy {last + 1}): FIFO "
-            "depths are sized at the folding before them and would go stale; size FIFOs "
-            "after the last strategy that folds"
-        )
-
-
-def _placed(
-    seam: Seam, point: Any, chosen: Mapping[str, object] | None = None
-) -> dict[str, object]:
-    """Every FIFO placed on ``point`` (or in its root's values ``chosen``): each transport
-    at its FIFO case, with its depth (None where it is open)."""
-    chosen = seam.chosen(point) if chosen is None else chosen
+def _placed(seam: Seam, point: Any) -> dict[str, object]:
+    """Every FIFO placed on ``point``: each transport at its FIFO case, with its depth
+    (None where it is open)."""
+    chosen = seam.chosen(point)
     found: dict[str, object] = {}
     for key, fifo in seam.transports(point).items():
         if chosen.get(key) == fifo:
@@ -438,12 +377,18 @@ def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
     return rows
 
 
-def explore_kernel_choices(
-    model: ModelWrapper,
-    strategies: Sequence[Explorer],
-) -> Explored:
-    """The KernelOps of a partition's body, ``model``, explored by ``strategies`` and every
-    value persisted, on the shell root of the model's target; see the module docstring."""
+def held_choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
+    """The choices pinned in a partition's body, ``model``, by owner and key there
+    (``HELD``); none where nothing is pinned."""
+    held: dict[str, dict[str, object]] | None = model.get(HELD)
+    return {} if held is None else held
+
+
+def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
+    """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
+    the body's open choices given their baselines) and every value persisted, on the shell
+    root of the model's target, the body's pins held and recorded; see the module
+    docstring."""
     if not model.graph.node:
         raise KernelOpError("no KernelOp to explore")
     others = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
@@ -452,27 +397,27 @@ def explore_kernel_choices(
             f"{', '.join(others)}: not KernelOps; exploration reads a partition's body, the "
             "KernelOps the cut put together (CutKernelPartition, partition_body)"
         )
-    refuse_folding_after_sizing(strategies)
     nodes = list(model.graph.node)
     started = time.perf_counter()
     root = shell_root(model, nodes)
     seam = Seam(root.members, root.owners, read_target(model).platform)
+    seam.held.update(seam.keyed(root.point, held_choices(model), HELD.entry))
     saved = seam.chosen(root.point)
-    # A choice the body leaves open takes its baseline before the strategies run.
+    # A choice the body leaves open takes its baseline before the strategy runs; a pin
+    # the body records must hold there.
     point = seam.baseline(root.point)
     values = seam.chosen(point)
     baselined = [key for key in values if key not in saved]
-    # Who set each value in this run: the body (``saved``), the baseline, or a strategy.
+    # Who set each value: the body (``saved``), the baseline, or the strategy.
     set_by = {key: "saved" if key in saved else "baseline" for key in values}
-    explorers: list[dict[str, object]] = []
-    stale: tuple[str, dict[str, object]] | None = None
-    for explorer in strategies:
-        attempts, began, runs = seam.attempts, time.perf_counter(), len(seam.runs)
+    entry: dict[str, object] | None = None
+    if strategy is not None:
+        attempts, began = seam.attempts, time.perf_counter()
         before = seam.chosen(point)
-        point = explorer.explore(seam, point)
-        report = explorer.report()
+        point = strategy.explore(seam, point)
+        report = strategy.report()
         after = seam.chosen(point)
-        label = str(getattr(explorer, "label", report["strategy"]))
+        label = str(getattr(strategy, "label", report["strategy"]))
         changed = [
             key
             for key in dict.fromkeys([*before, *after])
@@ -483,32 +428,18 @@ def explore_kernel_choices(
                 set_by[key] = label
             else:
                 set_by.pop(key, None)
-        done = seam.runs[runs:]
-        entry: dict[str, object] = {
+        entry = {
             **report,
             "committed": sum(key in after for key in changed),
             "changed": {_owned(seam, key): [before.get(key), after.get(key)] for key in changed},
-            "reopened": len({key for run in done for key in run.reopened}),
-            "kept": len({key for run in done for key in run.kept}),
-            "re-baselined": [_owned(seam, key) for run in done for key in run.baselined],
+            "reopened": len({key for run in seam.runs for key in run.reopened}),
+            "kept": len({key for run in seam.runs for key in run.kept}),
+            "re-baselined": [_owned(seam, key) for run in seam.runs for key in run.baselined],
             "attempts": seam.attempts - attempts,
             "seconds": round(time.perf_counter() - began, 3),
         }
-        if isinstance(explorer, Pinned):
-            entry["held"] = [_owned(seam, key) for key in explorer.held]
-        explorers.append(entry)
-        # A FIFO placed before a strategy that changes anything but the transports, and
-        # not sized again after it, is stale: its depth was sized at the folding before.
-        if isinstance(explorer, SizeFifos):
-            stale = None
-        elif any(seam.transport_of(point, key) is None for key in changed):
-            kept = {
-                key: depth
-                for key, depth in _placed(seam, point, before).items()
-                if key not in seam.held and _placed(seam, point, after).get(key, _ABSENT) == depth
-            }
-            if kept:
-                stale = (str(report["strategy"]), kept)
+        if isinstance(strategy, Pinned):
+            entry["held"] = [_owned(seam, key) for key in strategy.held]
     refused = seam.refusals(point)
     if refused:
         raise KernelOpError(
@@ -518,13 +449,6 @@ def explore_kernel_choices(
             ),
             findings=tuple(finding for why in refused.values() for finding in why),
         )
-    if stale is not None:
-        name, fifos = stale
-        raise KernelOpError(
-            f"{name} changed the design with FIFOs placed and no size_fifos after it: "
-            + ", ".join(f"{_owned(seam, key)} (depth {depth})" for key, depth in fifos.items())
-            + " would keep depths sized at another folding; run size_fifos after it"
-        )
     unadmitted = admission_refusal(point)
     if unadmitted:
         raise KernelOpError(
@@ -533,6 +457,8 @@ def explore_kernel_choices(
             findings=unadmitted,
         )
     persist(model, root, point)
+    if seam.held:
+        model.set(HELD, _by_owner(seam, seam.held))
     left = [
         _owned(seam, choice.key) + (" (required)" if choice.required else "")
         for choice in seam.choices(point)
@@ -549,8 +475,9 @@ def explore_kernel_choices(
     if root.ends and not cost.waiting and not cost.refused:
         ends = {"ends": _end_rows(point, root.ends), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(point)
-    report = {
-        "strategies": explorers,
+    placed = [_owned(seam, key) for key in _placed(seam, point)]
+    explored = {
+        "strategy": entry,
         "baselined": [_owned(seam, key) for key in baselined],
         "choices": _by_owner(
             seam, {key: {"value": final[key], "by": set_by[key]} for key in final}
@@ -558,16 +485,14 @@ def explore_kernel_choices(
         "held": _by_owner(seam, seam.held),
         "open": left,
         "fifo_storage": _fifo_storage(seam, point),
-        "fifos": _fifos(strategies, explorers, [_owned(seam, key) for key in _placed(seam, point)]),
+        "fifos": _fifos(strategy, entry, placed),
         "dropped": dict(root.dropped),
         **_cost_report(seam, cost, resources),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
-    found = tuple(
-        finding for explorer in strategies for finding in getattr(explorer, "findings", ())
-    )
-    return Explored(point, cost, report, (*found, *over_part))
+    found = tuple(getattr(strategy, "findings", ()))
+    return Explored(point, cost, explored, (*found, *over_part))
 
 
 def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
@@ -580,54 +505,26 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
 
 
 class ExploreKernelChoices(Transformation):
-    """A partition body's KernelOps explored by ``strategies``, in order, and every value
-    saved, on the shell root of the model's target; ``explored`` holds the result
-    (``explore_kernel_choices``)."""
+    """A partition body's KernelOps explored by ``strategy`` and every value saved, on the
+    shell root of the model's target, the body's pins held and recorded; ``explored``
+    holds the result (``explore_kernel_choices``)."""
 
-    def __init__(self, strategies: Sequence[Explorer]) -> None:
+    def __init__(self, strategy: Explorer | None = None) -> None:
         super().__init__()
-        self.strategies = tuple(strategies)
+        self.strategy = strategy
         self.explored: Explored | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        self.explored = explore_kernel_choices(model, self.strategies)
+        self.explored = explore_kernel_choices(model, self.strategy)
         return model, False
-
-
-class ExplorePartition(Transformation):
-    """The kernel path's parent graph's partition explored through its node: its body
-    opened through the partition node (``partition_body``), its KernelOps explored by
-    ``strategies``, in order, every value saved (``explore_kernel_choices``), and the
-    body saved again in its file, as the cut saved it; the parent graph itself
-    unchanged. ``explored`` holds the result and ``body`` the body as saved."""
-
-    def __init__(self, strategies: Sequence[Explorer]) -> None:
-        super().__init__()
-        self.strategies = tuple(strategies)
-        self.explored: Explored | None = None
-        self.body: ModelWrapper | None = None
-
-    def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        _, body, body_file = partition_body(model)
-        self.explored = explore_kernel_choices(body, self.strategies)
-        body.save(body_file)
-        self.body = body
-        return model, False
-
-
-#: Where the build writes the exploration's report (``Explored.report``), under its
-#: output directory; the bitfile's build reads the throughput asked from it.
-EXPLORATION_REPORT = "report/kernel_exploration.json"
 
 
 __all__ = [
-    "EXPLORATION_REPORT",
-    "KERNEL_STRATEGIES",
+    "CHOICES",
+    "HELD",
     "ExploreKernelChoices",
-    "ExplorePartition",
     "Explored",
     "explore_kernel_choices",
-    "refuse_folding_after_sizing",
+    "held_choices",
     "shell_bottleneck",
-    "strategy",
 ]

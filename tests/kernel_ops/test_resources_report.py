@@ -88,7 +88,7 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
 ) -> None:
     """SZ2: the pynq shell was built and timed on Ultra96 only, its ends and static region
     characterised on xczu3eg and xczu7ev. Every pynq row says so; on another board
-    kernel_exploration.json's ``exact`` and resources.json's ``caveat`` name it, the
+    an exploration's report's ``exact`` and resources.json's ``caveat`` name it, the
     board and its part; on Ultra96 neither has a caveat."""
     row = shell_row("pynq", board)
     assert row.characterised == PYNQ_CHARACTERISED
@@ -97,7 +97,7 @@ def test_off_the_board_the_shell_was_timed_on_both_reports_name_the_caveat(
     model = kernel_model()
     write_target(model, resolve_target(board=board, period_ns=5.0, shell="pynq"))
     configure_partition(model)
-    exact = explore_kernel_choices(model, []).report["resources"]["exact"]
+    exact = explore_kernel_choices(model).report["resources"]["exact"]
     # Every memory is counted in the target's fabric's table; a FIFO's shallow hi space
     # is Vivado's, a model; any other memory in auto is Vivado's, not stated.
     assert "every memory's block RAM, UltraRAM and LUTRAM storage" in exact

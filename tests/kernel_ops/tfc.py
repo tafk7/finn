@@ -15,7 +15,7 @@ partition and the label select (TopK) after it, both on the host.
 Every kernel choice is created at its baseline, a KernelOp's own at conversion and a
 channel's at the cut; then every one (folding, memories, transports) is set again on the
 partition's body, as the build explores it, ranked by hand
-(``ExploreKernelChoices([Ranked(Lanes(16))])``, ``kernels.helpers.Lanes``): 16 lanes
+(``ExploreKernelChoices(Ranked(Lanes(16)))``, ``kernels.helpers.Lanes``): 16 lanes
 where they divide, the whole extent otherwise, every other choice its kernel's baseline.
 
 Building TFC takes about 17 s (torch, the export, streamlining). A test that only
@@ -142,7 +142,7 @@ def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, Mode
     partition's body, cut first, then every choice committed at 16 lanes (``LANES``) and
     the body saved again in its file."""
     parent, body, body_file = cut(source, directory)
-    body = body.transform(ExploreKernelChoices([Ranked(LANES)]))
+    body = body.transform(ExploreKernelChoices(Ranked(LANES)))
     body.save(body_file)
     return parent, body
 

@@ -45,13 +45,14 @@ from finn.builder.build_dataflow_config import (
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
+    KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
+    build_dataflow_step_lookup,
     step_build_bitfile,
     step_convert_to_hw,
     step_deployment_package,
-    step_explore,
     step_make_driver,
-    step_resources_report,
+    step_size_fifos,
     step_verify_partition,
 )
 from finn.core.space import Finding, FindingKind, finding_record
@@ -85,6 +86,7 @@ from finn.shells.pynq.runner import (
 from finn.toolchain.launcher import Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
+    HELD,
     explore_kernel_choices,
     kernel_choices_config,
     shell_bottleneck,
@@ -97,7 +99,6 @@ from kernel_ops.models import (
     configure_partition,
     host_between_source,
     kernel_model,
-    matmul_model,
 )
 from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
 from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
@@ -115,16 +116,34 @@ KERNEL_PATH = ["phase_convert_to_hardware", "phase_create_accelerator", "phase_o
 STEPS = (
     "step_convert_to_hw",
     "step_create_dataflow_partition",
-    "step_explore",
+    "step_size_fifos",
     "step_verify_partition",
 )
 
 
-def explore(source: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """``source`` through the kernel path's steps to its exploration, with ``cfg``'s
-    strategies: the parent graph, cut once, its body's choices explored and saved."""
-    steps = ["step_convert_to_hw", "step_create_dataflow_partition", "step_explore"]
+def explore(
+    source: ModelWrapper,
+    cfg: DataflowBuildConfig,
+    strategies: tuple[str, ...] = ("step_size_fifos",),
+) -> ModelWrapper:
+    """``source`` through the kernel path's steps to its exploration by the strategy steps
+    ``strategies``, with ``cfg``'s settings, and its verification: the parent graph, cut
+    once, its body's choices explored and saved, and kernel_choices.json written."""
+    steps = [
+        "step_convert_to_hw",
+        "step_create_dataflow_partition",
+        *strategies,
+        "step_verify_partition",
+    ]
     return run_steps(source, replace(cfg, steps=steps))
+
+
+def strategy_report(cfg: DataflowBuildConfig, step: str) -> dict[str, Any]:
+    """The report the strategy step ``step`` wrote under ``cfg``'s output directory."""
+    report: dict[str, Any] = json.loads(
+        (Path(cfg.output_dir) / "report" / f"{step}.json").read_text()
+    )
+    return report
 
 
 @pytest.fixture(scope="module")
@@ -205,6 +224,10 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
     assert indexed["step_verify_partition"]["verifications"] == {"partition_python": "pass"}
+    # Each strategy step's report is its own, listed under it.
+    assert [report["path"] for report in indexed["step_size_fifos"]["reports"]] == [
+        "report/step_size_fifos.json"
+    ]
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
     converted = seen["step_convert_to_hw"]
@@ -247,8 +270,8 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
     assert seen["step_verify_partition"].graph.node[1].name == "partition"
     # The partition's body: the one tfc.py makes by hand, every choice it left open saved
-    # at its baseline and its FIFOs sized (the default exploration, [size_fifos]: the
-    # exploration stores every value, and the partition is built from them).
+    # at its baseline and its FIFOs sized (the default strategy step, step_size_fifos: it
+    # stores every value, and the partition is built from them).
     _, body = partition(source, tmp_path / "by_hand")
     assert [node.op_type for node in built.graph.node] == ["Thresholding", "MatMul"] * 4
 
@@ -269,7 +292,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(built)
     # Every folding at its first viable case, one lane: the baseline's, stored at
     # conversion, every value saved.
-    report = json.loads((output / "report" / "kernel_exploration.json").read_text())
+    report = strategy_report(cfg, "step_size_fifos")
     folding = {
         f"{node}.{attribute}": entry
         for node, held in report["choices"].items()
@@ -279,9 +302,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert len(folding) == 12 and {entry["value"] for entry in folding.values()} == {1}
     assert {entry["by"] for entry in folding.values()} == {"saved"}
     assert report["open"] == []
-    # The default list sizes every transport at that folding, at its period: on TFC each
+    # The default sizes every transport at that folding, at its period: on TFC each
     # direct.
-    (sizing,) = report["strategies"]
+    sizing = report["strategy"]
     assert sizing["strategy"] == "size_fifos" and sizing["period"] == 50176
     assert {row["transport"] for row in sizing["channels"].values()} == {"direct"}
     assert len(sizing["channels"]) == 13
@@ -308,24 +331,141 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
 def test_the_debug_placeholder_sets_nothing_on_tfc(
     source: ModelWrapper, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The debug placeholder is a strategy (``placeholder``), written in the list: on TFC
-    no required choice is open, so it sets nothing, logs no DEBUG value, and the
+    """The debug placeholder is a strategy step (step_placeholder_choices): on TFC no
+    required choice is open, so it sets nothing, logs no DEBUG value, and the
     verification passes."""
-    cfg = config(tmp_path, settings={"strategies": [{"strategy": "placeholder"}]})
+    cfg = config(tmp_path)
     with caplog.at_level(logging.INFO, logger=STEPS_LOG):
-        model = explore(source, cfg)
-    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
+        model = explore(source, cfg, ("step_placeholder_choices",))
+    report = strategy_report(cfg, "step_placeholder_choices")
     assert report["open"] == [] and "completion" not in report and "completed" not in report
-    (placeholder,) = report["strategies"]
+    placeholder = report["strategy"]
     assert (placeholder["strategy"], placeholder["set"], placeholder["changed"]) == (
         "placeholder",
         {},
         {},
     )
     logged = [record.getMessage() for record in caplog.records if record.name == STEPS_LOG]
-    assert "Kernel choices: placeholder changed 0" in logged
+    assert "Kernel choices: step_placeholder_choices changed 0" in logged
     assert not [line for line in logged if line.startswith("DEBUG:")]
     step_verify_partition(model, cfg)
+
+
+#: The Chain's target (``kernel_ops.models.TARGET``) as a configuration states it.
+CHAIN_TARGET = TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0)
+
+#: 6 cycles a frame at 5 ns: the activation's, which folds each of the Chain's MatMuls to
+#: PE 2, SIMD 4 unpinned.
+CHAIN_FPS = 1_000_000_000 // (5 * 6)
+
+#: A pin of the first MatMul's SIMD at its baseline, which the target throughput moves.
+CHAIN_PINS = {"first": {"compute.packed.simd": 1}}
+
+
+def chain_build(directory: Path, strategies: list[str], **settings: Any) -> DataflowBuildConfig:
+    """The Chain cut into a partition and explored by the strategy steps ``strategies``,
+    then verified, in the ``ip`` shell, nothing else asked."""
+    return config(
+        directory,
+        target=CHAIN_TARGET,
+        generate_outputs=[],
+        steps=["step_create_dataflow_partition", *strategies, "step_verify_partition"],
+        settings=settings,
+    )
+
+
+def test_a_pin_holds_across_a_later_folding_step(tmp_path: Path) -> None:
+    """A pin recorded in the partition's body by step_pin_choices holds for the build: the
+    target throughput, a step of its own, folds around it as one exploration of both
+    strategies did, and FIFO sizing keeps it; kernel_choices.json states it."""
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps(CHAIN_PINS))
+    folding = ["step_target_throughput", "step_size_fifos"]
+    free = chain_build(tmp_path / "free", folding, target_fps=CHAIN_FPS)
+    _, body, _ = partition_body(run_steps(kernel_model(), free))
+    assert kernel_choices_config(body)["first"]["compute.packed.simd"] == 4
+    pinned = chain_build(
+        tmp_path / "pinned",
+        ["step_pin_choices", *folding],
+        target_fps=CHAIN_FPS,
+        kernel_choices_file=pins,
+    )
+    _, body, _ = partition_body(run_steps(kernel_model(), pinned))
+    held = kernel_choices_config(body)
+    assert held["first"]["compute.packed.simd"] == 1
+    assert held["second"]["compute.packed.simd"] == 4
+    assert body.get(HELD) == CHAIN_PINS
+    written = json.loads((Path(pinned.output_dir) / "kernel_choices.json").read_text())
+    assert written == held
+    for step in folding:
+        assert strategy_report(pinned, step)["held"] == CHAIN_PINS
+
+
+def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Path) -> None:
+    """Each strategy step writes its own report (report/<step>.json, its strategy's entry
+    and the partition after it), listed under it in the build's manifest, whose order
+    gives the sequence; the plan records each step's settings. kernel_choices.json is
+    written once, by step_verify_partition, from the final choices."""
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps(CHAIN_PINS))
+    strategies = {
+        "step_pin_choices": "pinned",
+        "step_baseline_choices": "baseline",
+        "step_target_throughput": "target_throughput",
+        "step_max_throughput": "max_throughput",
+        "step_size_fifos": "size_fifos",
+        "step_placeholder_choices": "placeholder",
+    }
+    cfg = chain_build(
+        tmp_path,
+        list(strategies),
+        kernel_choices_file=str(pins),
+        target_fps=CHAIN_FPS,
+        max_throughput_within={"lut": 0.5},
+        fifo_margin=2,
+    )
+    model_file = tmp_path / "chain.onnx"
+    kernel_model().save(str(model_file))
+    assert build_dataflow_cfg(str(model_file), cfg) == 0
+    output = Path(cfg.output_dir)
+    manifest = json.loads((output / MANIFEST_FILE).read_text())
+    ran = {step["name"]: step for step in manifest["steps"]}
+    assert list(ran) == [
+        "step_create_dataflow_partition",
+        *strategies,
+        "step_verify_partition",
+    ]
+    for step, strategy in strategies.items():
+        assert [report["path"] for report in ran[step]["reports"]] == [f"report/{step}.json"]
+        report = strategy_report(cfg, step)
+        assert report["strategy"]["strategy"] == strategy
+        assert report["held"] == CHAIN_PINS
+    assert strategy_report(cfg, "step_pin_choices")["strategy"]["held"] == [
+        "first.compute.packed.simd"
+    ]
+    assert strategy_report(cfg, "step_size_fifos")["strategy"]["margin"] == 2
+    target = strategy_report(cfg, "step_target_throughput")["strategy"]
+    assert target["fps"] == CHAIN_FPS and target["changed"]
+    planned = {step["name"]: step["settings"] for step in manifest["plan"]["steps"]}
+    assert planned["step_target_throughput"] == {
+        "target_fps": CHAIN_FPS,
+        "relax_target_fps": True,
+    }
+    assert planned["step_pin_choices"] == {"kernel_choices_file": str(pins)}
+    assert planned["step_max_throughput"] == {"max_throughput_within": {"lut": 0.5}}
+    body = ModelWrapper(str(output / "partition" / "partition.onnx"))
+    assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(body)
+
+
+def test_the_default_phase_sizes_fifos_then_verifies() -> None:
+    """By default the hardware's optimization is FIFO sizing at the baseline folding,
+    then the verification; the other strategy steps are named to add them."""
+    assert build_dataflow_phases["phase_optimize_hardware"] == [
+        step_size_fifos,
+        step_verify_partition,
+    ]
+    for step in KERNEL_STRATEGY_STEPS:
+        assert build_dataflow_step_lookup[step.__name__] is step
 
 
 @pytest.mark.slow
@@ -531,10 +671,11 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
 
 def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None:
     """A build's steps are the kernel path's: another name is refused, naming its steps
-    and phases, and the default steps are its six phases' steps, in order."""
+    (the strategy steps no phase runs by default among them) and phases, and the default
+    steps are its six phases' steps, in order."""
     with pytest.raises(ValueError, match="'step_hw_codegen' is no step or phase") as refused:
         resolve_plan(config(tmp_path, steps=["step_hw_codegen"]))
-    assert "step_explore" in str(refused.value)
+    assert "step_target_throughput" in str(refused.value)
     assert "phase_optimize_hardware" in str(refused.value)
     assert [step.name for step in resolve_plan(config(tmp_path)).steps] == [
         "step_tidy_up",
@@ -545,7 +686,7 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
         "step_widen_containers",
         "step_convert_to_hw",
         "step_create_dataflow_partition",
-        "step_explore",
+        "step_size_fifos",
         "step_verify_partition",
         "step_package_partition",
         "step_build_bitfile",
@@ -553,15 +694,6 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
         "step_resources_report",
         "step_deployment_package",
     ]
-
-
-def test_a_strategy_the_builder_does_not_know_is_refused(tmp_path: Path) -> None:
-    cfg = config(tmp_path)
-    with pytest.raises(ValueError, match="names no kernel strategy"):
-        step_explore(matmul_model(), cfg, strategies=[{"strategy": "fifo_depths"}])
-    misspelt = [{"strategy": "target_throughput", "fsp": 1}]
-    with pytest.raises(ValueError, match="unexpected keyword argument 'fsp'"):
-        step_explore(matmul_model(), cfg, strategies=misspelt)
 
 
 def set_folding() -> dict[str, dict[str, int]]:
@@ -640,17 +772,16 @@ TFC_BUILT = tfc_built()
 def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
-    specs = [{"strategy": "target_throughput", "fps": 1_000_000}]
-    cfg = config(tmp_path, settings={"strategies": specs})
-    _, body, _ = partition_body(explore(source, cfg))
+    cfg = config(tmp_path, settings={"target_fps": 1_000_000})
+    _, body, _ = partition_body(explore(source, cfg, ("step_target_throughput",)))
     folding = {
         node: {key: value for key, value in held.items() if key.endswith(("pe", "simd"))}
         for node, held in kernel_choices_config(body).items()
     }
     # Every value is saved: the channels' too, which state no folding.
     assert {node: each for node, each in folding.items() if each} == SET_FOLDING
-    report = json.loads((Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text())
-    (target,) = report["strategies"]
+    report = strategy_report(cfg, "step_target_throughput")
+    target = report["strategy"]
     assert (target["strategy"], target["cycles"], target["relaxed_to"]) == (
         "target_throughput",
         200,
@@ -662,13 +793,13 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     # Of TFC's 57 choices, every one saved: the target throughput changes the folding off
     # its baseline (6 of 12) and gives each MatMul's pumping, a choice at SIMD 2 and
     # more, its baseline; the rest keep the baselines stored at their creation (a node's
-    # at conversion, a channel's at the cut), transports direct (no size_fifos in the
-    # list). The report names who set each.
+    # at conversion, a channel's at the cut), transports direct (no step_size_fifos).
+    # The report names who set each.
     assert target["committed"] == 10
     made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
     assert (made_by.count("target_throughput"), made_by.count("saved")) == (10, 47)
     assert report["open"] == []
-    assert report["fifos"] == "not sized (no size_fifos in the list): each transport as it was"
+    assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
@@ -687,33 +818,29 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
 def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     source: ModelWrapper, tmp_path: Path
 ) -> None:
-    """Criterion 3 (FS5): SizeFifos in the chain after the target throughput proposes
-    ``direct`` for every TFC channel, says why, and leaves every value as the chain
-    without it builds them (TFC's configuration: the target throughput and FIFO
-    sizing)."""
-    target = {"strategy": "target_throughput", "fps": 1_000_000}
+    """Criterion 3 (FS5): step_size_fifos after step_target_throughput proposes ``direct``
+    for every TFC channel, says why, and leaves every value as the target alone builds
+    them (TFC's configuration: the target throughput and FIFO sizing)."""
     explored: dict[str, Any] = {}
-    for name, specs in (
-        ("sized", [target, {"strategy": "size_fifos"}]),
-        ("plain", [target]),
+    for name, strategies in (
+        ("sized", ("step_target_throughput", "step_size_fifos")),
+        ("plain", ("step_target_throughput",)),
     ):
-        cfg = config(tmp_path / name, settings={"strategies": specs})
-        explore(source, cfg)
-        report = json.loads(
-            (Path(cfg.output_dir) / "report" / "kernel_exploration.json").read_text()
-        )
+        cfg = config(tmp_path / name, settings={"target_fps": 1_000_000})
+        explore(source, cfg, strategies)
+        reports = [strategy_report(cfg, step) for step in strategies]
         persisted = json.loads((tmp_path / name / "output" / "kernel_choices.json").read_text())
-        explored[name] = (persisted, report)
-    (sized, report), (plain, plain_report) = explored["sized"], explored["plain"]
-    # Without sizing in the list, every transport keeps its baseline, direct: the same
-    # design, every value saved.
+        explored[name] = (persisted, reports)
+    (sized, (target, report)), (plain, (plain_report,)) = explored["sized"], explored["plain"]
+    # Without sizing, every transport keeps its baseline, direct: the same design, every
+    # value saved.
     assert sized == plain
     assert plain_report["open"] == report["open"] == []
-    sizing = report["strategies"][1]
+    sizing = report["strategy"]
     # At the period the input end sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It reopens the 13 transports and changes none.
-    assert [each["committed"] for each in report["strategies"]] == [10, 0]
+    assert [target["strategy"]["committed"], sizing["committed"]] == [10, 0]
     assert sizing["reopened"] == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The ends change no choice: TFC is built with the baseline build's 57 values.
@@ -798,18 +925,20 @@ def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) ->
 
 def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     model = kernel_model()
-    explored = explore_kernel_choices(model, [Ranked(Lanes(2))])
+    explored = explore_kernel_choices(model, Ranked(Lanes(2)))
     assert shell_bottleneck(model) == explored.cost.bottleneck
     assert shell_bottleneck(model) is not None
     # On a body made by hand, once its choices are created, it is the bottleneck of the
     # point as it is built.
     made = kernel_model()
-    expected = explore_kernel_choices(kernel_model(), []).cost.bottleneck
+    expected = explore_kernel_choices(kernel_model()).cost.bottleneck
     assert shell_bottleneck(made.transform(BaselineChoices())) == expected
 
 
-#: Z0's chain: the Zynq landing's baseline build explored TFC so.
-Z0_CHAIN = [{"strategy": "target_throughput", "fps": 1_000_000}, {"strategy": "size_fifos"}]
+#: Z0's strategy steps and their setting: the Zynq landing's baseline build explored TFC
+#: so.
+Z0_CHAIN = ("step_target_throughput", "step_size_fifos")
+Z0_SETTINGS = {"target_fps": 1_000_000}
 
 #: TFC's Zynq build in the HWCustomOp flow at the finn-dev oracle, Vivado and Vitis HLS
 #: stubbed (``tfc_zynq_build``): SetFolding's folding, the label select on the host.
@@ -845,7 +974,7 @@ def z0_cut(tfc_cache: Path, tfc_streamlined: Path) -> Path:
 
     def cut(directory: Path) -> ModelWrapper:
         source = ModelWrapper(str(tfc_streamlined))
-        return explore(source, config(directory, settings={"strategies": Z0_CHAIN}))
+        return explore(source, config(directory, settings=Z0_SETTINGS), Z0_CHAIN)
 
     return built(tfc_cache / "z0" / "parent.onnx", cut)
 
@@ -1101,7 +1230,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
     cfg = config(
         tmp_path,
-        settings={"strategies": Z0_CHAIN},
+        settings=Z0_SETTINGS,
         generate_outputs=[
             DataflowOutputType.BITFILE,
             DataflowOutputType.PYNQ_DRIVER,
@@ -1114,14 +1243,12 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
     for stale in ("driver/stale.py", "deploy/driver/stale.py", "deploy/stale.bit"):
         (Path(cfg.output_dir) / stale).parent.mkdir(parents=True, exist_ok=True)
         (Path(cfg.output_dir) / stale).write_text("an earlier build's")
-    parent = explore(source, cfg)
-    for step in (
-        step_build_bitfile,
-        step_make_driver,
-        step_resources_report,
-        step_deployment_package,
-    ):
-        parent = step(parent, cfg)
+    parent = explore(source, cfg, Z0_CHAIN)
+    # The outputs' phase, its steps given their settings by the plan (and the build's
+    # toolchain, the fake, by cfg): the bitfile's build reads target_fps, the objective,
+    # as the target throughput read it.
+    for step in resolve_plan(replace(cfg, steps=["phase_generate_outputs"])).steps:
+        parent = step.run(parent, cfg)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
     ((_, _, script),) = vivado.runs
     assert "create_bd_cell -type ip -vlnv xilinx_finn:finn:odma0:1.0 odma0\n" in script

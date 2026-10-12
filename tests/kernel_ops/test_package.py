@@ -80,7 +80,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     with pytest.raises(
         KernelOpError,
         match=r"open choices, refused at emission: levels.transport.fifo.buffer.depth "
-        r"\(required: run size_fifos or placeholder\)",
+        r"\(required: run step_size_fifos or step_placeholder_choices\)",
     ) as refused:
         configured_root(model, "sdp_1")
     assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
