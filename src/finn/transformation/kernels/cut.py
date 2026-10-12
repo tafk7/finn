@@ -5,10 +5,10 @@
 
 Partitioning is a graph operation, and the kernel path's first after inference: it
 decides which nodes run in the fabric and which on the host. ``CutKernelPartition``
-cuts a model of KernelOps and host nodes once (``partition_kernel_ops``, the one rule of
-which KernelOps go together: all of them, contiguous): the KernelOps become one
-StreamingDataflowPartition (``finn.custom_op.partition``) and the nodes before and after
-it stay on the host. The result is the parent graph, which the build keeps as its model.
+cuts a model of KernelOps and host nodes once, by one rule of which KernelOps go
+together (all of them, contiguous): the KernelOps become one StreamingDataflowPartition
+(``finn.custom_op.partition``) and the nodes before and after it stay on the host. The
+result is the parent graph, which the build keeps as its model.
 The partition has one name, ``PARTITION`` (``partition``), for its node, its body's file
 (``<directory>/partition.onnx``), the IP it is packaged as (the shell root's module,
 ``finn_partition``) and the block design's instance; its body carries the parent's
@@ -31,8 +31,10 @@ applies to the body. A model of KernelOps only is a body already, and the cut mo
 its channels' choices into the body it makes: each follows its tensor there, and the
 parent's copy of a boundary tensor's is cleared, so a channel has one home.
 
-KernelOps that form more than one partition are refused: several partitions are to be
-designed as one shell root, when CNV or Alveo needs them, not as neighbouring roots.
+A second partition of KernelOps cannot arise here: the cut puts every KernelOp in its
+one partition, and a model that holds a partition already is refused (the shell root
+refuses KernelOps outside its partition too). Several partitions are to be designed as
+one shell root, when CNV or Alveo needs them, not as neighbouring roots.
 """
 
 from __future__ import annotations
@@ -57,7 +59,6 @@ from finn.custom_op.partition.kernel_partitions import (
     KERNEL_OPS_DOMAIN,
     PARTITION_DOMAIN,
     PARTITION_OP,
-    kernel_partition_nodes,
 )
 from finn.transformation.kernels.convert import between_kernel_ops
 
@@ -68,54 +69,6 @@ _KERNEL_OPS = "kernels"
 
 def _kernel_ops_together(node: NodeProto) -> str | int:
     return _KERNEL_OPS if node.domain == KERNEL_OPS_DOMAIN else -1
-
-
-def partition_kernel_ops(model: ModelWrapper, directory: Path) -> ModelWrapper:
-    """The parent graph of ``model``: its KernelOps as one StreamingDataflowPartition
-    (``PARTITION_DOMAIN``, the domain imported), its body ``model`` attribute a file in
-    ``directory``, every other node on the host, and the channel choices its tensors
-    state in the body only (module docstring); the body's choices at their baselines
-    (``BaselineChoices``). KernelOps a host node stands between are refused
-    (``KernelOpError``, naming the host nodes: the partition would depend on itself); a
-    model without KernelOps is returned as it is."""
-    parent = _partition(model, directory)
-    for node in kernel_partition_nodes(parent):
-        _baseline(node)
-    return parent
-
-
-def _partition(model: ModelWrapper, directory: Path) -> ModelWrapper:
-    """``partition_kernel_ops`` before the bodies' baselines."""
-    between = between_kernel_ops(model)
-    if between:
-        raise KernelOpError(
-            f"{len(between)} host nodes sit between KernelOps, so a partition of the "
-            f"KernelOps would depend on itself: {', '.join(between)}"
-        )
-    refuse_outside_body(model, model.tensors_stating(CHANNEL))
-    partitioning = PartitionFromLambda(  # type: ignore[no-untyped-call]
-        partitioning=_kernel_ops_together, partition_dir=str(directory)
-    )
-    parent: ModelWrapper = model.transform(partitioning)
-    clear_channel_choices(parent)
-    nodes = parent.get_nodes_by_op_type("GenericPartition")
-    imported = {opset.domain for opset in parent.model.opset_import}
-    if nodes and PARTITION_DOMAIN not in imported:
-        parent.model.opset_import.append(helper.make_opsetid(PARTITION_DOMAIN, 1))
-    for node in nodes:
-        node.op_type, node.domain = PARTITION_OP, PARTITION_DOMAIN
-    return parent
-
-
-def _baseline(node: NodeProto) -> dict[str, str]:
-    """The body of the partition ``node`` (its ``model`` file) at its baselines
-    (``BaselineChoices``) and saved again, nothing else changed (no cleanup); the
-    choices replay dropped as stale."""
-    body_file = str(getCustomOp(node).get_nodeattr("model"))
-    body = ModelWrapper(body_file)
-    dropped = baseline_choices(body)
-    body.save(body_file)
-    return dropped
 
 
 class BaselineChoices(Transformation):
@@ -136,10 +89,12 @@ class BaselineChoices(Transformation):
 
 class CutKernelPartition(Transformation):
     """Cut the model's KernelOps once into the partition ``PARTITION``, its body saved in
-    ``directory`` with every choice at its baseline; see the module docstring. A model
-    whose KernelOps do not form one partition, or that holds a partition already, is
-    refused (``KernelOpError``). ``dropped`` holds the nodes' choices the cut found
-    stale in context and re-baselined, by root key, with why."""
+    ``directory`` with every choice at its baseline; see the module docstring. Refused
+    (``KernelOpError``): a model that holds a partition already, one without KernelOps,
+    one where host nodes stand between KernelOps (named: the partition would depend on
+    itself), one whose host nodes state channel choices, and one with a host node named
+    ``PARTITION``. ``dropped`` holds the nodes' choices the cut found stale in context
+    and re-baselined, by root key, with why."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -149,30 +104,45 @@ class CutKernelPartition(Transformation):
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         if model.get_nodes_by_op_type(PARTITION_OP):
             raise KernelOpError("the model holds a partition already: the kernel path cuts once")
+        host = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
+        if len(host) == len(model.graph.node):
+            raise KernelOpError("the model holds no KernelOps: there is nothing to cut")
+        between = between_kernel_ops(model)
+        if between:
+            raise KernelOpError(
+                f"{len(between)} host nodes sit between KernelOps, so a partition of the "
+                f"KernelOps would depend on itself: {', '.join(between)}"
+            )
+        refuse_outside_body(model, model.tensors_stating(CHANNEL))
+        if PARTITION in host:
+            raise KernelOpError(f"a host node is named {PARTITION!r}, the partition's name")
         self.directory.mkdir(parents=True, exist_ok=True)
         cut = Path(tempfile.mkdtemp(prefix="cut_", dir=self.directory))
-        parent = _partition(model, cut)
-        found = kernel_partition_nodes(parent)
-        if len(found) != 1:
-            raise KernelOpError(
-                f"the KernelOps form {len(found)} partitions; the kernel path cuts them into "
-                "one (a second partition of KernelOps waits for several partitions designed "
-                "as one shell root)"
-            )
-        (node,) = found
-        if any(each.name == PARTITION for each in parent.graph.node if each is not node):
-            raise KernelOpError(f"a host node is named {PARTITION!r}, the partition's name")
+        partitioning = PartitionFromLambda(  # type: ignore[no-untyped-call]
+            partitioning=_kernel_ops_together, partition_dir=str(cut)
+        )
+        parent: ModelWrapper = model.transform(partitioning)
+        clear_channel_choices(parent)
+        # PartitionFromLambda makes one node per partition id, named by it; the KernelOps
+        # share one id, so this is the one partition node the cut makes.
+        (node,) = [
+            each
+            for each in parent.get_nodes_by_op_type("GenericPartition")
+            if each.name == f"GenericPartition_{_KERNEL_OPS}"
+        ]
+        node.op_type, node.domain, node.name = PARTITION_OP, PARTITION_DOMAIN, PARTITION
+        if PARTITION_DOMAIN not in {opset.domain for opset in parent.model.opset_import}:
+            parent.model.opset_import.append(helper.make_opsetid(PARTITION_DOMAIN, 1))
         op = getCustomOp(node)
         cut_file = Path(str(op.get_nodeattr("model")))
         body = ModelWrapper(str(cut_file))
+        self.dropped = baseline_choices(body)
         body_file = self.directory / f"{PARTITION}.onnx"
         body.save(str(body_file))
         cut_file.unlink()
         cut.rmdir()
-        node.name = PARTITION
         op.set_nodeattr("model", str(body_file))
-        self.dropped = _baseline(node)
         return parent, False
 
 
-__all__ = ["BaselineChoices", "CutKernelPartition", "partition_kernel_ops"]
+__all__ = ["BaselineChoices", "CutKernelPartition"]

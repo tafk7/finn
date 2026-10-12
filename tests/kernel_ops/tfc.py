@@ -9,7 +9,7 @@ hub cache), exported by Brevitas with its preprocessing beside it
 graph-preparation phase as TFC's build states it (``io_settings``: the preprocessing
 merged, the input UINT8, the label select appended) to the streamlined graph
 (``prepared``), then ``ToKernelOps``, ``InferKernelTensors``
-and ``partition_kernel_ops``: the input flatten (a Reshape) before the
+and the build's cut (``CutKernelPartition``): the input flatten (a Reshape) before the
 partition and the label select (TopK) after it, both on the host.
 
 Every kernel choice is created at its baseline, a KernelOp's own at conversion and a
@@ -44,7 +44,7 @@ from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
 )
-from finn.transformation.kernels.cut import partition_kernel_ops
+from finn.transformation.kernels.cut import CutKernelPartition
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
@@ -138,7 +138,7 @@ def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapp
     TopK), the partition's body, every choice at its baseline (a KernelOp's own created
     at conversion, a channel's at the cut), and the body's file."""
     model = source.transform(ToKernelOps(ULTRA96)).transform(InferKernelTensors())
-    parent = partition_kernel_ops(model, directory)
+    parent = model.transform(CutKernelPartition(directory))
     body_file = getCustomOp(parent.graph.node[1]).get_nodeattr("model")
     return parent, ModelWrapper(body_file), body_file
 
