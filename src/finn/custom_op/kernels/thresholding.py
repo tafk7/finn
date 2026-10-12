@@ -85,7 +85,7 @@ LOWERING = "ExtractMultiThresholdScaleBias"
 
 
 def stored_thresholds(
-    stored: npt.NDArray[np.floating], input_dtype: QONNXDataType
+    stored: npt.NDArray[Any], input_dtype: QONNXDataType
 ) -> tuple[tuple[tuple[int, ...], ...], QONNXDataType]:
     """The table the kernel holds for the thresholds ``stored`` on an input of
     ``input_dtype``, and its type (the module docstring). The thresholds of an input
