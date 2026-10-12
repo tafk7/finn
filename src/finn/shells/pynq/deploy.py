@@ -23,13 +23,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.custom_op.partition.kernel_partitions import (
-    OUTPUT_BITFILE,
-    OUTPUT_HWH,
-    OUTPUT_IP,
-    design_digest,
-    partition_body,
-)
+from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_HWH, OUTPUT_IP
+from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT
 from finn.shells.pynq.runner import BITFILE, pynq_row, refuse_stale_bitfile
 

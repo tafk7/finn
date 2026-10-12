@@ -17,7 +17,8 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import KernelOpError, write_target
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.errors import KernelOpError
 from finn.transformation.kernels import (
     InferKernelTensors,
     Outcome,

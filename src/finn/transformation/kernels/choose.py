@@ -88,11 +88,13 @@ from dataclasses import asdict, dataclass
 from functools import reduce
 from typing import TYPE_CHECKING, Any
 
-from qonnx.core.metadata import JSON, Namespace
 from qonnx.transformation.base import Transformation
 
+from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_choices
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
-from finn.custom_op.kernels.base import KernelOpError, read_target
 from finn.custom_op.kernels.shell import (
     ShellResources,
     admission_refusal,
@@ -100,7 +102,6 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
     shell_root,
 )
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
@@ -121,28 +122,6 @@ from finn.platform import part_report
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-CHOICES = Namespace("finn.choices", version=1)
-"""What a partition's body records about its choices beyond their values (typed graph
-metadata, qonnx's ``qonnx.core.metadata``): the pins its explorations hold
-(``HELD``)."""
-
-
-def _by_owner_values(value: object) -> bool:
-    return isinstance(value, dict) and all(isinstance(held, dict) for held in value.values())
-
-
-HELD = CHOICES.key(
-    "held", JSON, check=_by_owner_values, expect="{graph name: {key: value}}, the pinned choices"
-)
-"""The choices pinned in a partition's body, by owner and key there (``{graph name: {key:
-value}}``, the form ``kernel_choices.json`` takes): every exploration of the body holds
-them (``Seam.held``), so a pin holds for the build. Absent where nothing is pinned."""
-
-OBJECTIVE_FPS = CHOICES.key("objective_fps", float)
-"""The frames a second a target throughput explored the body to (``TargetThroughput``),
-which a shell's build reports its delivered clock against. Absent where none did, or
-where another strategy that may change the folding (``FOLDING``) explored it since."""
 
 #: The strategies other than a target throughput that may change the kernels' folding
 #: (the build's FOLDING_STEPS run them): each removes the body's ``OBJECTIVE_FPS``, which
@@ -403,13 +382,6 @@ def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
     return rows
 
 
-def held_choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
-    """The choices pinned in a partition's body, ``model``, by owner and key there
-    (``HELD``); none where nothing is pinned."""
-    held: dict[str, dict[str, object]] | None = model.get(HELD)
-    return {} if held is None else held
-
-
 def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
     the body's open choices given their baselines) and every value persisted, on the shell
@@ -582,14 +554,10 @@ class ExploreKernelChoices(Transformation):
 
 
 __all__ = [
-    "CHOICES",
-    "HELD",
-    "OBJECTIVE_FPS",
     "ExploreKernelChoices",
     "Explored",
     "explore_kernel_choices",
     "explore_partition",
     "exploration_summary",
-    "held_choices",
     "shell_bottleneck",
 ]

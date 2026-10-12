@@ -33,7 +33,7 @@ OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
 # tens of seconds each) are deselected in either mode, so this step stays at a few
 # minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado slow
-gate_ruff src/finn/kernels tests/kernels src/finn/platform \
+gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/graph \
     src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
@@ -51,7 +51,8 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform \
 # finn.builder's kernel path: its configuration, its plan, its checks
 # and steps, the ip shell's testbench, the partition's Python verification and the
 # resources per shell member.
-gate_mypy -p finn.kernels -p finn.platform -p finn.custom_op.kernels -p finn.custom_op.partition \
+gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.kernels \
+    -p finn.custom_op.partition \
     -p finn.transformation.kernels -p finn.analysis -p finn.harness \
     -m finn.util.draws \
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \

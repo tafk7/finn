@@ -23,10 +23,11 @@ from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.transformation.infer_shapes import InferShapes
 
 import finn.custom_op.kernels as domain
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels import MatMul
-from finn.custom_op.kernels.base import Match, kernel_op, write_target
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.kernels.base import Match, kernel_op
 from finn.harness.reference import (
     Coverage,
     Impure,

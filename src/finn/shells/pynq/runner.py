@@ -56,9 +56,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.util.basic import qonnx_make_model
 
 from finn import resources
-from finn.core.space import Finding, FindingKind, finding_record
-from finn.custom_op.kernels.base import read_target
-from finn.custom_op.partition.kernel_partitions import (
+from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
@@ -66,9 +64,10 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
-    design_digest,
-    partition_body,
 )
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.partition import design_digest, partition_body
+from finn.core.space import Finding, FindingKind, finding_record
 from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.pynq import iodma, templates
 from finn.shells.pynq.ipgen import (

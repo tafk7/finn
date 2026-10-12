@@ -4,18 +4,17 @@
 """FINN's layers, what each may import, and the one import walker that checks them.
 
 ```text
-finn.core.space  <-  finn.kernels  <-  finn.platform  <-  finn.custom_op.kernels
-finn.dataflow    <-                                   <-  finn.transformation.kernels
-                                                          <-  finn.shells
-                                                      <-  the XSim testbench
-                                                      <-  the executors
-                                                      <-  the partition node
-                                                      <-  finn.harness
-                                                      <-  the flow (all other finn)
-finn.custom_op.partition.kernel_partitions  <-  finn.custom_op.kernels,
-                                                finn.transformation.kernels, the
-                                                executors, the partition node,
-                                                finn.harness, finn.shells, the flow
+finn.core.space <- finn.kernels <- finn.platform <- finn.core.graph <- finn.custom_op.kernels
+finn.dataflow   <-                                                  <- finn.transformation.kernels
+                                                                       <- finn.shells
+                                                                    <- the XSim testbench
+                                                                    <- the executors
+                                                                    <- the partition node
+                                                                    <- finn.harness
+                                                                    <- the flow (all other finn)
+finn.core.graph.partition,           <-  finn.core.graph, finn.custom_op.kernels,
+finn.core.graph.annotations.outputs      finn.transformation.kernels, the executors, the
+                                         partition node, finn.harness, finn.shells, the flow
 finn.toolchain  <-  finn.util (with finn.xsi, finn.resources)  <-  finn.transformation.kernels,
                                                                 the XSim testbench, the
                                                                 executors, finn.harness,
@@ -29,12 +28,14 @@ finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.genera
                                                             imports it)
 ```
 
-Each row imports every row to its left: the XSim testbench
+Each row imports every row to its left: FINN's view of the ONNX model (finn.core.graph:
+its metadata, the facts a graph states of a tensor, the walks over its dataflow) reads
+the kernels' values and types, the XSim testbench
 (finn.core.rtlsim_bench, with finn.core.rtlsim_pacing) builds and simulates a kernel
 module, the executors (finn.core.executor, the XSim executor finn.core.rtlsim_exec, and
 finn.core.onnx_exec, which runs a model with them) run the KernelOps and a
-partition's hardware with it, the partition node (finn.custom_op.partition, less
-kernel_partitions) runs its body with the executors of the run that reached it,
+partition's hardware with it, the partition node (finn.custom_op.partition) runs its
+body with the executors of the run that reached it,
 the harness (the hardware against the KernelOps' oracle, two runs of the
 executors) imports the testbench and the executors, and the flow imports all.
 
@@ -116,25 +117,36 @@ LAYERS: tuple[Layer, ...] = (
     # kernels read. The shell root reads its shell's row. A refusal carries its finding
     # (the engine's reason type).
     Layer("platform", ("finn.platform",), ("space", "kernels"), (), "tests/kernel_ops"),
-    # What is read and built of a partition (kernel_partitions): below both its writers
-    # (the cut, PackagePartition) and its readers (the KernelOps, whose channel choices a
-    # partition's body states; the builder, the integration export, the shell's build,
-    # the executors). qonnx (and onnx, which qonnx depends on: its nodes are NodeProto)
-    # only, so the builder reads it without loading the kernel stack.
+    # What is read of a partition and what a build made of it (finn.outputs): below both
+    # its writers (the cut, PackagePartition) and its readers (the channel's annotation,
+    # whose choices a partition's body states; the builder, the integration export, the
+    # shell's build, the executors). qonnx (and onnx, which qonnx depends on: its nodes
+    # are NodeProto) only, so the builder reads it without loading the kernel stack.
     Layer(
-        "partition",
-        ("finn.custom_op.partition.kernel_partitions",),
+        "graph.partition",
+        ("finn.core.graph.partition", "finn.core.graph.annotations.outputs"),
         (),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
+    # FINN's view of the ONNX model: its graph metadata (the target, a channel's choices,
+    # a body's pins), the facts a graph states of a tensor, the walks over its dataflow.
+    # Above the kernels: a channel's keys are generated from Channel's Decisions, and the
+    # facts are read as the kernels' values.
+    Layer(
+        "graph",
+        ("finn.core.graph",),
+        (*_KERNEL_STACK, "platform", "graph.partition"),
+        ("numpy", "onnx", "qonnx"),
+        "tests/kernel_ops",
+    ),
     # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
-    # A channel's choices are stated in a partition's body only (kernel_partitions says
-    # what one is).
+    # A channel's choices are stated in a partition's body only (finn.core.graph.partition
+    # says what one is).
     Layer(
         "custom_op.kernels",
         ("finn.custom_op.kernels",),
-        (*_KERNEL_STACK, "platform", "partition"),
+        (*_KERNEL_STACK, "platform", "graph.partition", "graph"),
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -195,7 +207,15 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "transformation.kernels",
         ("finn.transformation.kernels",),
-        (*_KERNEL_STACK, "platform", "custom_op.kernels", "partition", "toolchain", "util"),
+        (
+            *_KERNEL_STACK,
+            "platform",
+            "graph.partition",
+            "graph",
+            "custom_op.kernels",
+            "toolchain",
+            "util",
+        ),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -226,8 +246,9 @@ LAYERS: tuple[Layer, ...] = (
         (
             *_KERNEL_STACK,
             "platform",
+            "graph.partition",
+            "graph",
             "custom_op.kernels",
-            "partition",
             "toolchain",
             "util",
             "transformation.kernels",
@@ -236,14 +257,13 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel path's partition node, its ONNX domain (finn.custom_op.partition, less
-    # kernel_partitions): it runs its body with the executors of the run that reached it
-    # (finn.core.onnx_exec.running), imported when it runs, since the executors read
-    # kernel_partitions, under this package.
+    # The kernel path's partition node, its ONNX domain (finn.custom_op.partition): it
+    # runs its body with the executors of the run that reached it
+    # (finn.core.onnx_exec.running), imported when it runs.
     Layer(
         "custom_op.partition",
         ("finn.custom_op.partition",),
-        ("partition", "executors"),
+        ("graph.partition", "executors"),
         ("qonnx",),
         "tests/kernel_ops",
     ),
@@ -269,8 +289,9 @@ LAYERS: tuple[Layer, ...] = (
         (
             *_KERNEL_STACK,
             "platform",
+            "graph.partition",
+            "graph",
             "custom_op.kernels",
-            "partition",
             "toolchain",
             "util",
             "transformation.kernels",
@@ -291,8 +312,9 @@ LAYERS: tuple[Layer, ...] = (
         (
             *_KERNEL_STACK,
             "platform",
+            "graph.partition",
+            "graph",
             "custom_op.kernels",
-            "partition",
             "toolchain",
             "util",
             "transformation.kernels",
@@ -307,8 +329,9 @@ LAYERS: tuple[Layer, ...] = (
         (
             *_KERNEL_STACK,
             "platform",
+            "graph.partition",
+            "graph",
             "custom_op.kernels",
-            "partition",
             "toolchain",
             "util",
             "platform.generate",

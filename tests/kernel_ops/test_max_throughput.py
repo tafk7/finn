@@ -34,8 +34,8 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.annotations.platform import write_target
 from finn.core.space import Finding, FindingKind
-from finn.custom_op.kernels.base import write_target
 from finn.kernels.explore import (
     Explorer,
     MaxThroughput,

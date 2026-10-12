@@ -18,8 +18,10 @@ import pytest
 from kernels.helpers import FULL_DSP58
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.errors import KernelOpError
 from finn.core.space import DefinitionError, Rejected, design_space
-from finn.custom_op.kernels.base import KernelOpError, kernel_op, write_target
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import save_channels, shell_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel

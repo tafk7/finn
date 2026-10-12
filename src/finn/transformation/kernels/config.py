@@ -20,8 +20,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from finn.custom_op.kernels.base import CHANNEL, KernelOpError, channel_choices, kernel_op
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.core.graph.annotations.channel import CHANNEL, channel_choices
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN
+from finn.custom_op.kernels.base import kernel_op
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

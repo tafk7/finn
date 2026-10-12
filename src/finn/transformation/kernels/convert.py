@@ -65,21 +65,15 @@ from onnx import NodeProto, helper
 from qonnx.transformation.base import Transformation
 
 import finn.custom_op.kernels as domain
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.errors import FactUnstated, KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN
+from finn.core.graph.walk import between, upstream
 from finn.core.space import Finding, FindingKind, by_code, finding_record, finding_text
-from finn.custom_op.kernels.base import (
-    FactUnstated,
-    KernelOp,
-    KernelOpError,
-    Match,
-    kernel_op,
-    unstated,
-    write_target,
-)
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.target import Target
 from finn.transformation.kernels.infer import infer_node
-from finn.util.graph import between, upstream
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -367,7 +361,7 @@ def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object
 def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:
     """The host nodes on a path that leaves the KernelOps and re-enters them, in graph
     order: a partition of every KernelOp would depend on itself through them. Graph
-    convexity, not node order (``finn.util.graph.between``)."""
+    convexity, not node order (``finn.core.graph.walk.between``)."""
     return tuple(_label(node) for node in between(model, lambda n: n.domain == KERNEL_OPS_DOMAIN))
 
 

@@ -53,7 +53,10 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.core.space.declarations", "space"),
         ("finn.kernels.artifacts.module.Leaf", "kernels.artifacts"),
         ("finn.kernels.dotp", "kernels"),
-        ("finn.custom_op.partition.kernel_partitions.partition_body", "partition"),
+        ("finn.core.graph.partition.partition_body", "graph.partition"),
+        ("finn.core.graph.annotations.outputs.OUTPUT_IP", "graph.partition"),
+        ("finn.core.graph.annotations.channel.CHANNEL", "graph"),
+        ("finn.core.graph.walk.between", "graph"),
         ("finn.custom_op.partition.StreamingDataflowPartition", "custom_op.partition"),
         ("finn.builder.build_dataflow_steps", "flow"),
         ("finn.shells.pynq.runner.build_pynq", "shells"),
@@ -108,8 +111,10 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         # What is read of a partition reads qonnx only, below the kernel stack, the
         # executors and the flow; the partition node runs its body with the executors,
         # which never import the node.
-        ("partition", "finn.core.onnx_exec.execute_onnx"),
-        ("partition", "finn.custom_op.kernels.shell.PARTITION"),
+        ("graph.partition", "finn.core.onnx_exec.execute_onnx"),
+        ("graph.partition", "finn.custom_op.kernels.shell.PARTITION"),
+        ("graph.partition", "finn.core.graph.annotations.channel.CHANNEL"),
+        ("graph.partition", "finn.kernels.channels.Channel"),
         ("custom_op.partition", "finn.custom_op.kernels.shell.PARTITION"),
         ("executors", "finn.custom_op.partition.StreamingDataflowPartition"),
         ("tests.kernels", "finn.custom_op.kernels.base"),
@@ -143,8 +148,12 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("analysis", "finn.custom_op.kernels.base"),
         ("analysis", "pytest"),
         ("harness", "finn.analysis.equivalence"),
+        # FINN's view of the graph: above the kernels, below the KernelOps.
+        ("kernels", "finn.core.graph.facts.edge_tensor"),
+        ("graph", "finn.custom_op.kernels.base.KernelOp"),
+        ("graph", "finn.transformation.kernels.choose"),
         # The draws read a graph's annotations, not the KernelOps' facts.
-        ("draws", "finn.custom_op.kernels.base.datatype"),
+        ("draws", "finn.core.graph.facts.datatype"),
         ("draws", "finn.harness.ops"),
     ],
 )
@@ -161,7 +170,11 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("dataflow", "numpy"),
         ("kernels", "numpy.typing"),
         ("kernels", "finn.kernels.artifacts.module.Leaf"),
-        ("transformation.kernels", "finn.custom_op.partition.kernel_partitions"),
+        ("transformation.kernels", "finn.core.graph.partition"),
+        ("graph", "finn.kernels.channels.Channel"),
+        ("graph", "finn.core.graph.partition.is_kernel_partition"),
+        ("custom_op.kernels", "finn.core.graph.annotations.channel.CHANNEL"),
+        ("shells", "finn.core.graph.annotations.outputs.OUTPUT_BITFILE"),
         ("transformation.kernels", "finn.util.basic.make_build_dir"),
         ("flow", "finn.transformation.kernels.package.PackagePartition"),
         ("util", "finn_xsi.adapter"),
@@ -193,10 +206,10 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         # The partition node runs its body under the executors of the run that reached it.
         ("custom_op.partition", "finn.core.onnx_exec.running"),
         ("executors", "finn.core.onnx_exec.running"),
-        ("executors", "finn.custom_op.partition.kernel_partitions.kernel_partition_body"),
+        ("executors", "finn.core.graph.partition.kernel_partition_body"),
         ("flow", "finn.shells.pynq.runner.build_pynq"),
         ("shells", "finn.transformation.kernels.integration.integration"),
-        ("shells", "finn.custom_op.partition.kernel_partitions.partition_body"),
+        ("shells", "finn.core.graph.partition.partition_body"),
     ],
 )
 def test_the_table_accepts_an_import_down_its_order(layer: str, name: str) -> None:

@@ -5,7 +5,7 @@
 partition, read from its shell root's ends.
 
 ``integration(model)`` takes the kernel path's parent graph (its one partition node,
-``kernel_partitions.partition_body``), configures the partition's shell root as hardware
+``finn.core.graph.partition.partition_body``), configures the partition's shell root as hardware
 generation does (``configured_root``) and reads the ends its boundary channels place
 (``Channel.end_contract``) and its shell's row. For the Zynq block design
 (``vivado-block-design``, the ``pynq`` shell) it states:
@@ -47,9 +47,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from finn.custom_op.kernels.base import known_shape, read_target
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.facts import known_shape
+from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import configured_root, member
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract

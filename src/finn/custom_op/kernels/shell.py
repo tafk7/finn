@@ -105,6 +105,16 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from onnx import NodeProto
 from qonnx.core.metadata import MetadataError
 
+from finn.core.graph.annotations.channel import (
+    CHANNEL,
+    CHANNEL_KEYS,
+    channel_choices,
+    refuse_outside_body,
+)
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import edge_tensor
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.space import (
     Available,
     ConstraintGroup,
@@ -124,22 +134,9 @@ from finn.core.space import (
     inspection,
     reject,
 )
-from finn.custom_op.kernels.base import (
-    CHANNEL,
-    CHANNEL_KEYS,
-    KernelOp,
-    KernelOpError,
-    channel_choices,
-    committed,
-    edge_tensor,
-    kernel_op,
-    read_target,
-    refusal,
-    refuse_outside_body,
-    typed_choices,
-)
+from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN
+from finn.custom_op.kernels.replay import committed, refusal, typed_choices
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.base import Kernel

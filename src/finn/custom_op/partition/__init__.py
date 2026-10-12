@@ -6,11 +6,11 @@
 The kernel path cuts its KernelOps once (``finn.transformation.kernels.cut``): the parent
 graph holds one ``StreamingDataflowPartition`` of this domain, whose ``model``
 attribute names its body, a model of KernelOps. The node runs its body, nothing more:
-no placement, no estimates. What the flow reads of a partition and what a build made of
-it are ``kernel_partitions``'s.
+no placement, no estimates. What the flow reads of a partition is ``finn.core.graph.partition``'s,
+and what a build made of it ``finn.core.graph.annotations.outputs``'s.
 
 qonnx resolves this domain by importing it and reads its op classes from ``__all__``, so
-this module exports op classes only. It imports qonnx and ``kernel_partitions`` only;
+this module exports op classes only. It imports qonnx and ``finn.core.graph.partition`` only;
 the executors it runs its body with (``finn.core.onnx_exec``), when it runs.
 """
 
@@ -19,7 +19,7 @@ from typing import Any
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.general.genericpartition import GenericPartition
 
-from finn.custom_op.partition.kernel_partitions import body_file
+from finn.core.graph.partition import body_file
 
 opset_version = 1
 
@@ -43,7 +43,7 @@ class StreamingDataflowPartition(GenericPartition):
         return {"model": ("s", True, "")}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
-        # Imported here: the executors read kernel_partitions, under this package.
+        # Imported when it runs: resolving the domain loads no executor.
         from finn.core.onnx_exec import execute_onnx, running, window  # noqa: PLC0415
 
         node = self.onnx_node

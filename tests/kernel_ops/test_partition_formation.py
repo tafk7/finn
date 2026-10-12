@@ -24,8 +24,9 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 import finn.custom_op.partition as partition_domain
+from finn.core.graph.annotations.channel import CHANNEL, channel_choices
+from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.kernels.base import CHANNEL, KernelOpError, channel_choices
 from finn.custom_op.kernels.shell import configured_root, member, save_channels, shell_root
 from finn.kernels.configure import commit
 from finn.transformation.kernels.cut import CutKernelPartition

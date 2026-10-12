@@ -40,11 +40,8 @@ from qonnx.util.basic import gen_finn_dt_tensor
 
 import finn.util
 import finn.util.data_packing
-from finn.custom_op.partition.kernel_partitions import (
-    OUTPUT_BITFILE,
-    design_digest,
-    partition_body,
-)
+from finn.core.graph.annotations.outputs import OUTPUT_BITFILE
+from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.pynq import templates
 from finn.shells.pynq.ipgen import data_path
 from finn.shells.pynq.runner import DELIVERED_CLOCK, pynq_row, refuse_stale_bitfile

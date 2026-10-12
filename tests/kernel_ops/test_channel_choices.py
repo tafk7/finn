@@ -24,17 +24,17 @@ from onnx import StringStringEntryProto, TensorProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import inspection
-from finn.custom_op.kernels.base import (
+from finn.core.graph.annotations.channel import (
     CHANNEL,
     CHANNEL_KEYS,
-    KernelOpError,
     channel_choices,
     clear_channel_choices,
-    kernel_op,
 )
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
+from finn.core.space import inspection
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, partition_body
 from finn.kernels.channels import Channel
 from finn.kernels.explore import ExploreError, Pinned, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config

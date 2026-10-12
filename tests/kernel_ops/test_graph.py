@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``finn.util.graph.between``: the nodes outside a set on a path that leaves it and
+"""``finn.core.graph.walk.between``: the nodes outside a set on a path that leaves it and
 re-enters it, by the graph's tensors, in graph order. Its reader's cases are the
 KernelOps' (``test_outcomes``). ``upstream``: the nodes outside a set it depends on
 (nested patterns, ``test_nested_patterns``)."""
@@ -12,7 +12,7 @@ from onnx import NodeProto, TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.util.graph import between, upstream
+from finn.core.graph.walk import between, upstream
 
 
 def graph(nodes: list[NodeProto], outputs: list[str]) -> ModelWrapper:

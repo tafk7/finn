@@ -44,17 +44,10 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from qonnx.custom_op.general.im2col import im2col_indices_nchw
 
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import known_shape, shape
 from finn.core.space import Finding, Rejected
-from finn.custom_op.kernels.base import (
-    KernelOpError,
-    Match,
-    Shapes,
-    known_shape,
-    node_attributes,
-    refused,
-    shape,
-    unstated,
-)
+from finn.custom_op.kernels.base import Match, Shapes, node_attributes, refused, unstated
 from finn.custom_op.kernels.matmul import MatMul
 from finn.dataflow.gemm import Window
 from finn.kernels.matmul import MatMulKernel

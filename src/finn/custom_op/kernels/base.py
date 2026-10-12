@@ -71,132 +71,43 @@ inapplicable one too (it carries no finding of its own).
 
 from __future__ import annotations
 
-from array import array
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass, fields
-from math import prod
-from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard
 
-import numpy as np
-import numpy.typing as npt
 from onnx import helper
-from qonnx.analysis.tensor_value_summary import (
-    UnsupportedTensorValueError,
-    initializer_value_summary,
-)
-from qonnx.core.metadata import JSON, Key, MetadataError, Namespace
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
 
+from finn.core.graph.annotations.channel import CHANNEL, channel_choices, value_type
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import edge_tensor
 from finn.core.space import (
     Available,
     Finding,
     FindingKind,
-    Inapplicable,
     Rejected,
     Space,
     inspection,
 )
 from finn.custom_op.kernels.cache import BIND_CACHE, Facts
+from finn.custom_op.kernels.replay import committed, refusal, typed_choices
 from finn.custom_op.kernels.roots import node_root, placed
-from finn.custom_op.partition.kernel_partitions import KERNEL_OPS_DOMAIN, is_kernel_partition
-from finn.dataflow.datatypes import (
-    DatatypeError,
-    QONNXDataType,
-    canonical_qonnx_datatype,
-    is_ordinary_integer,
-    ordinary_integer_bounds,
-)
-from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
-from finn.kernels.target import DspBlock, Platform, Target
-from finn.kernels.utilization import Fabric, Resources
-from finn.kernels.values.domains import stored_element
-from finn.kernels.values.semantics import IntegerTensorValue, integer_bytes, integer_digest
+from finn.kernels.target import Target
 
 if TYPE_CHECKING:
     from onnx import NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
-S = TypeVar("S", bound=Space)
-
-PLATFORM = Namespace("finn.platform", version=1, inherit=True)
-"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part,
-the shell, the board (``null`` when none is stated) and the platform
-(``finn.kernels.target.Platform``: the clock period and the capabilities, its resources
-``null`` when the part's are not known), every key stated. It inherits: a subgraph body
-reads its parent's. A model stating another shape of it (a key it does not declare, or
-one missing) is refused, each key named: it is converted again (``ToKernelOps``)."""
-
-RESOURCE_COUNTS = tuple(field.name for field in fields(Resources))
-
-
-def _resources_or_none(value: object) -> bool:
-    return value is None or (
-        isinstance(value, dict)
-        and set(value) == set(RESOURCE_COUNTS)
-        and all(type(count) is int and count >= 0 for count in value.values())
-    )
-
-
-PLATFORM_KEYS: dict[str, Key[Any]] = dict(
-    part=PLATFORM.key("part", str, check=bool, expect="a part name"),
-    shell=PLATFORM.key("shell", str, check=bool, expect="a shell name"),
-    board=PLATFORM.key(
-        "board",
-        JSON,
-        check=lambda v: v is None or (isinstance(v, str) and bool(v)),
-        expect="a board name, or null when none is stated",
-    ),
-    period_ns=PLATFORM.key("period_ns", float, check=lambda v: v > 0, expect="a period > 0"),
-    dsp=PLATFORM.key("dsp", DspBlock),
-    fabric=PLATFORM.key("fabric", Fabric),
-    uram=PLATFORM.key("uram", bool),
-    uram_init=PLATFORM.key("uram_init", bool),
-    resources=PLATFORM.key(
-        "resources",
-        JSON,
-        check=_resources_or_none,
-        expect=f"the counts {', '.join(RESOURCE_COUNTS)}, or null when unknown",
-    ),
-)
-
-PLATFORM_FIELDS = tuple(field.name for field in fields(Platform))
-"""The ``finn.platform`` keys that are ``Platform``'s fields: all but the part, the
-shell and the board."""
-
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
 
 Shapes = dict[str, tuple[tuple[int, ...], QONNXDataType]]
-
-
-class KernelOpError(ValueError):
-    """A node or a channel the KernelOps cannot bind or configure: a missing or refused
-    fact, or a refused choice. ``keys`` names what is refused, as its owner states it,
-    when there is something to name: a node's choice attributes (``compute.packed.pe``),
-    a channel's keys (``transport``, or ``<tensor>.<key>`` where a node's point or
-    packaging names the owner), or the tensors whose channel choices are refused
-    whole. ``findings`` are the refusal's reasons where they have codes (the kernels'
-    findings, the shell's, a conversion's): what a reader of the build asserts on."""
-
-    def __init__(
-        self, message: str, keys: tuple[str, ...] = (), findings: Iterable[Finding] = ()
-    ) -> None:
-        super().__init__(message)
-        self.keys = keys
-        self.findings = tuple(findings)
-
-
-class FactUnstated(KernelOpError):
-    """A fact binding reads that the graph does not state (``tensor``'s shape or its
-    datatype annotation): not a contradiction, so conversion leaves the node on the
-    host with a ``fact-unstated`` finding instead of stopping the build."""
-
-    def __init__(self, message: str, tensor: str) -> None:
-        super().__init__(message)
-        self.tensor = tensor
 
 
 # -- patterns ----------------------------------------------------------------------------
@@ -225,279 +136,6 @@ def unstated(owner: str, message: str, **details: object) -> Finding:
 def refused(owner: str, code: str, message: str, **details: object) -> Finding:
     """A pattern's refusal, by its code."""
     return Finding(FindingKind.REJECTION, code, owner, message, tuple(details.items()))
-
-
-# -- facts -------------------------------------------------------------------------------
-
-
-def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
-    """The annotation of ``tensor``; an unannotated tensor is refused (qonnx reads it
-    as FLOAT32, which is not a statement)."""
-    if not model.has_tensor_datatype(tensor):
-        produced = model.find_producer(tensor) is not None
-        raise FactUnstated(
-            f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32"
-            + ("; InferKernelTensors states each node's outputs in order)" if produced else ")"),
-            tensor,
-        )
-    return canonical_qonnx_datatype(model.get_tensor_datatype(tensor))
-
-
-def known_shape(model: ModelWrapper, tensor: str) -> tuple[int, ...] | None:
-    """The shape of ``tensor`` if the graph states it: None for none, or for one with an
-    extent it does not state (qonnx reads both as a list, the first as empty)."""
-    found = model.get_tensor_shape(tensor)
-    if not found or any(type(dim) is not int or dim < 1 for dim in found):
-        return None
-    return tuple(found)
-
-
-def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
-    """The shape of ``tensor``; one not known yet is refused."""
-    found = known_shape(model, tensor)
-    if found is None:
-        raise FactUnstated(f"{label}: {tensor} has no shape yet (run InferKernelTensors)", tensor)
-    return found
-
-
-def rows(dims: tuple[int, ...]) -> tuple[int, int]:
-    """Leading axes are rows: (1, M, K) is M rows of K."""
-    return prod(dims[:-1]), dims[-1]
-
-
-def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
-    """The tensor a channel carries, as the graph states it: its shape as rows and its
-    annotation; an initializer of integers (``admitted``) as its owner states it, over
-    its values' range in the encoding they need (``stored_element``: INT8-typed ternary
-    weights are ``INT2 over [-1, 1]``)."""
-    dtype = datatype(model, tensor, label)
-    stored = model.get_initializer(tensor)
-    element = (
-        stored_element(dtype, (int(stored.min()), int(stored.max())))
-        if stored is not None and is_ordinary_integer(dtype)
-        else ScalarEncoding(dtype)
-    )
-    return Tensor(rows(shape(model, tensor, label)), element)
-
-
-def read_target(model: ModelWrapper) -> Target:
-    """The build target, from the model's ``finn.platform`` metadata (a subgraph body
-    opened through its parent reads the parent's).
-
-    The one reader of the target; ``write_target`` is the one writer. A key missing,
-    malformed or not declared (another shape's) is refused, by name.
-    """
-    try:
-        stated = model.namespace(PLATFORM)
-    except MetadataError as error:
-        raise KernelOpError(
-            f"the model's target is not one: {error}; run ToKernelOps to state it again"
-        ) from error
-    missing = [name for name in PLATFORM_KEYS if name not in stated]
-    if missing:
-        raise KernelOpError(
-            f"the model states no target (finn.platform: {', '.join(missing)} missing; "
-            "run ToKernelOps)"
-        )
-    values = {name: stated[name] for name in PLATFORM_FIELDS}
-    if values["resources"] is not None:
-        values["resources"] = Resources(**values["resources"])
-    platform = Platform(**values)
-    return Target(
-        part=stated["part"], platform=platform, shell=stated["shell"], board=stated["board"]
-    )
-
-
-def write_target(model: ModelWrapper, target: Target) -> None:
-    """State the build target in the model's ``finn.platform`` metadata, every key,
-    where ``read_target`` reads it."""
-    platform = target.platform
-    if platform.dsp is None:
-        raise KernelOpError("a target states its DSP block (finn.platform.resolve_target)")
-    values: dict[str, object] = dict(
-        part=target.part,
-        shell=target.shell,
-        board=target.board,
-        **{name: getattr(platform, name) for name in PLATFORM_FIELDS},
-    )
-    if platform.resources is not None:
-        values["resources"] = asdict(platform.resources)
-    try:
-        for name, key in PLATFORM_KEYS.items():
-            key.encode(values[name])  # every key checked before any is written
-    except MetadataError as error:
-        raise KernelOpError(f"the target is not one: {error}") from error
-    for name, key in PLATFORM_KEYS.items():
-        model.set(key, values[name])
-
-
-def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
-    """An initializer holds integers its annotation admits, by its value summary; the
-    summary's ``content_digest``, which keys the node's binding."""
-    try:
-        summary = initializer_value_summary(model, tensor)
-    except UnsupportedTensorValueError as error:
-        raise KernelOpError(f"{label}: {tensor}: {error}") from error
-    if summary is None:
-        raise KernelOpError(f"{label}: {tensor} is not an initializer")
-    try:
-        low, high = ordinary_integer_bounds(dtype)
-    except DatatypeError:
-        # Not an ordinary integer (FLOAT32 holds 0.5): no contradiction, the kernel refuses it.
-        return str(summary.content_digest)
-    if not summary.is_integral:
-        raise KernelOpError(f"{label}: {tensor} holds values that are not integers")
-    if summary.minimum is None or summary.maximum is None:  # integral with no range: empty
-        raise KernelOpError(f"{label}: {tensor} is empty: it holds no values")
-    observed = (int(summary.minimum), int(summary.maximum))
-    if not low <= observed[0] <= observed[1] <= high:
-        raise KernelOpError(
-            f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"
-        )
-    return str(summary.content_digest)
-
-
-def integer_tensor(values: npt.NDArray[Any]) -> IntegerTensorValue:
-    """An initializer of integers (``admitted``) as an integer tensor value: its shape,
-    range and digest read from the array, its integers loaded only when first read (a
-    memory image packs them)."""
-    found = np.asarray(values)
-    shape = tuple(int(extent) for extent in found.shape)
-    least, greatest = int(found.min()), int(found.max())
-    if not -(2**63) <= least <= greatest < 2**63:
-        return IntegerTensorValue.flat(shape, [int(value) for value in found.ravel()])
-    stored = array("q")
-    stored.frombytes(found.astype("=i8").tobytes())
-    digest = integer_digest(shape, integer_bytes(stored))
-    return IntegerTensorValue(shape, (least, greatest), digest, lambda: stored)
-
-
-# -- replay ------------------------------------------------------------------------------
-
-
-def value_type(item: inspection.DecisionInfo[object]) -> str:
-    """A decision's value type by its semantics' name (``int``, ``bool``, ``str``)."""
-    semantics = item.reference.semantics
-    if semantics is None:
-        raise KernelOpError(f"{item.key} has no value semantics")
-    return semantics.name
-
-
-def typed_choices(
-    subjects: Iterable[Space | type[Space]], choices: Mapping[str, object]
-) -> dict[str, object]:
-    """``choices``, by decision key of ``subjects`` (spaces or space classes), as replay
-    takes them: an ONNX ``i`` attribute of a ``bool`` decision becomes a bool."""
-    kinds = {item.key: value_type(item) for each in subjects for item in inspection.decisions(each)}
-    return {
-        key: bool(value) if kinds.get(key) == "bool" else value for key, value in choices.items()
-    }
-
-
-def refusal(label: str, found: Mapping[str, str]) -> KernelOpError:
-    """The error for choices replay refused: each one, by name, with why."""
-    return KernelOpError(
-        f"{label}: refused choices: "
-        + "; ".join(f"{name}: {why}" for name, why in sorted(found.items())),
-        tuple(sorted(found)),
-    )
-
-
-def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
-    """``choices`` committed on ``point`` atomically, or each refused key with why. An
-    inapplicable key carries no finding of its own, so it is named here."""
-    handles = {item.key: item.reference for item in inspection.decisions(point)}
-    found = {key: "not a choice here" for key in choices if key not in handles}
-    if found:
-        return found
-    report = point.try_with_choices({handles[key]: value for key, value in choices.items()})
-    if report.accepted:
-        return report.instance
-    for outcome in report.outcomes:
-        if outcome.status == "refused":
-            result = outcome.result
-            found[outcome.owner] = (
-                "inapplicable" if isinstance(result, Inapplicable) else describe([result])
-            )
-    return found or dict.fromkeys(choices, "refused together")
-
-
-# -- channels ----------------------------------------------------------------------------
-
-CHANNEL = Namespace("finn.channel", version=1, follow=True)
-"""A channel's stated choices, typed metadata of the tensor it carries (qonnx's
-``qonnx.core.metadata``; entries ``finn.channel/transport``), each at its baseline from
-the cut on (``BaselineChoices``) until a strategy replaces it; absent only on a body no
-cut created or for a required choice (a FIFO's depth) no strategy has set. One key per
-Decision ``Channel`` declares (``CHANNEL_KEYS``), generated from them
-as a KernelOp's schema is from its node root, its type the Decision's value semantics'
-and a selector's values its cases. Stated in a partition's body only
-(``channel_choices``). It follows its tensor into the body the cut makes, and the cut
-clears the parent's copy, so a channel has one home. A tensor stating another shape of
-it (a key ``Channel`` does not declare, or another version) is refused, by name: the
-partition is explored again."""
-
-CHANNEL_TYPES: dict[str, type] = {"int": int, "bool": bool, "str": str}
-
-
-def _channel_key(item: inspection.DecisionInfo[object]) -> Key[Any]:
-    kind = CHANNEL_TYPES[value_type(item)]
-    if not item.selector:
-        return CHANNEL.key(item.key, kind)
-    cases = item.cases
-    return CHANNEL.key(
-        item.key, kind, check=lambda value: value in cases, expect=f"one of {list(cases)}"
-    )
-
-
-CHANNEL_KEYS: dict[str, Key[Any]] = {
-    item.key: _channel_key(item) for item in inspection.decisions(Channel)
-}
-"""``CHANNEL``'s keys by name: ``Channel``'s decision keys (``transport``,
-``transport.fifo.buffer.depth``, ``source.memstream.ram_style``, ...)."""
-
-
-def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
-    """Refuse the channel choices ``tensors`` state, by name, unless ``model`` is a
-    partition's body (its nodes all KernelOps): a graph with nodes on the host (the
-    whole graph, before the cut) states none; the build's choices come in through
-    ``kernel_choices.json`` (``Pinned``), which exploration applies to the body."""
-    named = list(tensors)
-    if not named or is_kernel_partition(model):
-        return
-    hosts = [
-        node.name or node.op_type for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN
-    ]
-    raise KernelOpError(
-        f"{', '.join(named)}: channel choices ({CHANNEL.name}) are stated in a partition's "
-        f"body only, not on a graph with nodes on the host ({', '.join(hosts) or 'none'}): "
-        "state them through kernel_choices.json (Pinned), which exploration applies to the "
-        "body",
-        tuple(named),
-    )
-
-
-def channel_choices(model: ModelWrapper, tensor: str) -> dict[str, object]:
-    """The choices ``tensor``'s channel states (``CHANNEL``), by key: only those present.
-    Stated outside a partition's body (``refuse_outside_body``), or in a shape
-    ``CHANNEL`` does not declare, they are refused, by name."""
-    try:
-        stated: dict[str, object] = model.namespace(CHANNEL, tensor=tensor)
-    except MetadataError as error:
-        raise KernelOpError(
-            f"{tensor}: its channel choices are not {CHANNEL.name}'s: {error}; explore the "
-            "partition again",
-            (tensor,),
-        ) from error
-    if stated:
-        refuse_outside_body(model, [tensor])
-    return stated
-
-
-def clear_channel_choices(model: ModelWrapper) -> None:
-    """Clear the choices every tensor's channel states (``CHANNEL``)."""
-    for tensor in model.tensors_stating(CHANNEL):
-        model.clear(CHANNEL, tensor=tensor)
 
 
 # -- the op ------------------------------------------------------------------------------
@@ -879,33 +517,11 @@ def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
 
 
 __all__ = [
-    "CHANNEL",
-    "CHANNEL_KEYS",
-    "PLATFORM",
-    "PLATFORM_FIELDS",
-    "PLATFORM_KEYS",
     "KernelOp",
-    "FactUnstated",
-    "KernelOpError",
     "Match",
     "Shapes",
-    "admitted",
-    "channel_choices",
-    "clear_channel_choices",
-    "committed",
-    "datatype",
-    "edge_tensor",
-    "integer_tensor",
     "kernel_op",
-    "known_shape",
     "node_attributes",
-    "read_target",
-    "refusal",
-    "refuse_outside_body",
     "refused",
-    "rows",
-    "shape",
-    "typed_choices",
     "unstated",
-    "write_target",
 ]

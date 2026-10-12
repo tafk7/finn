@@ -12,8 +12,8 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
+from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.kernels.base import KernelOpError
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.transformation.kernels import InferKernelTensors

@@ -22,8 +22,10 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 
 import finn.custom_op.kernels as domain
+from finn.core.graph.annotations.channel import channel_choices
+from finn.core.graph.annotations.platform import PLATFORM_KEYS
+from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.kernels.base import PLATFORM_KEYS, KernelOpError, channel_choices
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.shell import save_channels

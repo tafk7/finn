@@ -85,15 +85,17 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn.custom_op.kernels.base import KernelOpError, read_target, shape
-from finn.custom_op.kernels.shell import configured_root, member, shell_root
-from finn.custom_op.partition.kernel_partitions import (
+from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
-    design_digest,
 )
+from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import shape
+from finn.core.graph.partition import design_digest
+from finn.custom_op.kernels.shell import configured_root, member, shell_root
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface

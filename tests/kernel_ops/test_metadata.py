@@ -17,17 +17,7 @@ from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.custom_op.kernels.base import (
-    PLATFORM,
-    PLATFORM_FIELDS,
-    PLATFORM_KEYS,
-    KernelOpError,
-    kernel_op,
-    read_target,
-    write_target,
-)
-from finn.custom_op.kernels.shell import save_channels
-from finn.custom_op.partition.kernel_partitions import (
+from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
@@ -36,8 +26,18 @@ from finn.custom_op.partition.kernel_partitions import (
     OUTPUT_IP,
     OUTPUT_MADE_FROM,
     OUTPUT_VLNV,
-    design_digest,
 )
+from finn.core.graph.annotations.platform import (
+    PLATFORM,
+    PLATFORM_FIELDS,
+    PLATFORM_KEYS,
+    read_target,
+    write_target,
+)
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import design_digest
+from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.shell import save_channels
 from finn.kernels.target import Target
 from finn.platform import resolve_target
 from finn.transformation.kernels import ToKernelOps

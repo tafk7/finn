@@ -19,14 +19,11 @@ from kernels.helpers import FULL_DSP48E2, Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 
+from finn.core.graph.annotations.channel import CHANNEL, channel_choices
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.errors import KernelOpError
 from finn.core.space import inspection
-from finn.custom_op.kernels.base import (
-    CHANNEL,
-    KernelOpError,
-    channel_choices,
-    kernel_op,
-    write_target,
-)
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy

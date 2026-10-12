@@ -17,9 +17,11 @@ import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.annotations.platform import write_target
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import integer_tensor
 from finn.custom_op.kernels import MatMul, Thresholding
 from finn.custom_op.kernels import matmul as matmul_op
-from finn.custom_op.kernels.base import KernelOpError, integer_tensor, write_target
 from finn.custom_op.kernels.cache import LeastRecentlyUsed
 from finn.custom_op.kernels.shell import (
     SHELLS,

@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.partition import partition_body
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.partition.kernel_partitions import partition_body
 
 _LOG = logging.getLogger(__name__)
 

@@ -49,13 +49,13 @@ from typing import Any
 import numpy as np
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.partition import partition_body
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import WordsDiffer
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import STALLED, Pacing
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
-from finn.custom_op.partition.kernel_partitions import partition_body
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import pack
 from finn.harness.orders import Reference, Stream, decode

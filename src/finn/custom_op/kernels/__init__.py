@@ -10,7 +10,7 @@ the choices its node holds (its kernel's) and those of the parameter channels
 it owns, which their initializers' tensors state, and answers the compiler's queries
 from the configured point (``base``); a shell root (``shell``) places the same
 placement on channels its nodes share, each channel's choices stated on its tensor
-(``base.CHANNEL``). qonnx resolves this
+(``finn.core.graph.annotations.channel.CHANNEL``). qonnx resolves this
 domain by importing it and reads its op classes from ``__all__``, so this module
 exports op classes only; their mechanics live in its submodules, the graph
 transformations in ``finn.transformation.kernels``.

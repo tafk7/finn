@@ -36,21 +36,10 @@ from typing import TYPE_CHECKING, Any, ClassVar
 import numpy as np
 import numpy.typing as npt
 
+from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import admitted, datatype, integer_tensor, known_shape, rows, shape
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import (
-    KernelOp,
-    KernelOpError,
-    Match,
-    Shapes,
-    admitted,
-    datatype,
-    integer_tensor,
-    known_shape,
-    refused,
-    rows,
-    shape,
-    unstated,
-)
+from finn.custom_op.kernels.base import KernelOp, Match, Shapes, refused, unstated
 from finn.custom_op.kernels.cache import Facts
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
