@@ -4,9 +4,9 @@
 """The boards a build may name: each board's part, the Vivado board preset the
 Zynq shell's block design selects for it, and any Vivado release it needs.
 
-FINN's PYNQ boards, each with its part. A board is a FINN name for one board revision.
-A board without a Vivado preset (ZCU111) can only be named for its part, on the ``ip``
-shell.
+FINN's PYNQ boards and the V80, each with its part. A board is a FINN name for one board
+revision. A board without a Vivado preset (ZCU111, the V80) can only be named for its
+part, on the ``ip`` shell.
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ BOARDS: dict[str, Board] = {
             preset="realdigital.org:aup-zu3-8gb:part0:1.0",
             vivado=(2024, 1),
         ),
+        Board(name="V80", part="xcv80-lsva4737-2MHP-e-S", preset=None),
     )
 }
 

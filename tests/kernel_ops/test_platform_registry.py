@@ -43,6 +43,13 @@ PYNQ_BOARD_FACTS = {
     "AUP-ZU3_8GB": ("xczu3eg-sfvc784-2-e", "DSP48E2", 128),
 }
 
+#: The boards no shell builds yet, each with its part: named for the part on the ``ip``
+#: shell, refused on ``pynq`` by name.
+UNBUILT_BOARD_PARTS = {
+    "ZCU111": "xczu28dr-ffvg1517-2-e",
+    "V80": "xcv80-lsva4737-2MHP-e-S",
+}
+
 #: The parts of the deleted flow's other boards (Alveo, Versal), and their DSP block.
 OTHER_PART_DSPS = {
     "xcu50-fsvh2104-2L-e": "DSP48E2",
@@ -58,8 +65,8 @@ OTHER_PART_DSPS = {
 # -- boards ------------------------------------------------------------------------------
 
 
-def test_the_boards_are_the_pynq_boards_less_the_retired() -> None:
-    assert set(BOARDS) == set(PYNQ_BOARD_FACTS)
+def test_the_boards_are_the_pynq_boards_less_the_retired_and_the_v80() -> None:
+    assert set(BOARDS) == set(PYNQ_BOARD_FACTS) | {"V80"}
 
 
 PYNQ_BOARDS = sorted(board for shell, board in ROWS if shell == "pynq" and board is not None)
@@ -81,7 +88,7 @@ def test_on_ip_a_board_names_its_part(board: str) -> None:
     # On ip the board names its part, and the target states none: the part's target.
     on_ip = resolve_target(board=board, period_ns=5.0)
     assert on_ip == resolve_target(part=BOARDS[board].part, period_ns=5.0)
-    assert on_ip.part == PYNQ_BOARD_FACTS[board][0] and on_ip.platform.resources is not None
+    assert on_ip.part == BOARDS[board].part and on_ip.platform.resources is not None
     assert (on_ip.shell, on_ip.board) == ("ip", None)
 
 
@@ -119,13 +126,40 @@ def test_every_pynq_rows_board_has_a_branch_in_the_zynq_template() -> None:
         name: branches.get(name, (None, None))[0] for name in BOARDS
     }
     unbuilt = sorted(set(BOARDS) - set(PYNQ_BOARDS))
-    assert unbuilt == ["ZCU111"] and "ZCU111" not in branches
+    assert unbuilt == sorted(UNBUILT_BOARD_PARTS) and not set(unbuilt) & set(branches)
     with pytest.raises(
         TargetRefused,
         match="no-shell-row: the 'pynq' shell has no row for board 'ZCU111': the Zynq "
         "template has no branch for it",
     ):
         resolve_target(board="ZCU111", period_ns=5.0, shell="pynq")
+
+
+@pytest.mark.parametrize("board", sorted(UNBUILT_BOARD_PARTS))
+def test_a_board_no_shell_builds_resolves_on_ip_and_is_refused_on_pynq(board: str) -> None:
+    """A board with no shell row (no Vivado preset) is a board all the same: on ``ip`` it
+    names its part, and ``pynq`` refuses it by name, ``no-shell-row``."""
+    on_ip = resolve_target(board=board, period_ns=5.0)
+    assert on_ip == resolve_target(part=UNBUILT_BOARD_PARTS[board], period_ns=5.0)
+    assert (on_ip.part, on_ip.shell, on_ip.board) == (UNBUILT_BOARD_PARTS[board], "ip", None)
+    with pytest.raises(TargetRefused) as refused:
+        resolve_target(board=board, period_ns=5.0, shell="pynq")
+    (found,) = refused.value.findings
+    assert found.code == "no-shell-row"
+    assert str(refused.value) == (
+        f"no-shell-row: the 'pynq' shell has no row for board {board!r}: the Zynq template "
+        "has no branch for it (no board preset)"
+    )
+
+
+def test_the_v80_resolves_to_its_versal_part() -> None:
+    platform = resolve_target(board="V80", period_ns=5.0).platform
+    assert (platform.dsp, platform.fabric, platform.uram, platform.uram_init) == (
+        DspBlock.DSP58,
+        Fabric.VERSAL,
+        True,
+        True,
+    )
 
 
 # -- parts -------------------------------------------------------------------------------
