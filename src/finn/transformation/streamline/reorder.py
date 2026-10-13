@@ -526,9 +526,6 @@ class MoveScalarLinearPastInvariants(Transformation):
                         continue
                     if np.prod(init0.shape) != 1:
                         continue
-                    if model.is_fork_node(prod0):
-                        model = model.transform(MoveOpPastFork(prod0.op_type))
-                        return (model, True)
                     if len(init0.shape) > 0:
                         init0 = init0.flatten()[0]
                         model.set_initializer(prod0.input[1], init0)
