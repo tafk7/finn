@@ -239,9 +239,9 @@ class Rooted:
         reached = self._again(report.instance)
         if check:
             refused: dict[Key, tuple[Finding, ...]] = {}
-            for item in inspection.viable(reached.point):
+            # Read once of the point reached (``viable``), which settling reads next.
+            for key, item in reached.viable():
                 if not item.cases:
-                    key = self.key(item.key)
                     detail = "; ".join(f"{case}: {why}" for case, why in item.refused.items())
                     refused[key] = (
                         Finding(
