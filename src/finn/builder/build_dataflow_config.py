@@ -9,12 +9,13 @@ steps. Everything else it states is a setting: a value a step of the build
 declares as one of its keyword-only parameters (finn.builder.build_dataflow_plan). In
 JSON a setting is a top-level key beside the fields; in Python an entry of ``settings``.
 
-This module reads and writes the JSON (``from_json``, ``to_json``). Reading refuses,
-naming its place (``configuration.target: ...``), a key a nested type does not declare,
-a null where a field is not optional, a value of the wrong type and an unknown enum
-value. The settings are decoded when the build's plan resolves, by the annotations of
-the steps that declare them (``decoded``). The relative paths of a configuration read
-from a build directory name files in it (``base_dir``).
+This module reads and writes the JSON (``from_json``, ``to_json``), each field by its
+annotation (finn.util.typed_json). Reading refuses, naming its place
+(``configuration.target: ...``), a key a nested type does not declare, a null where a
+field is not optional, a value of the wrong type and an unknown enum value. The
+settings are decoded when the build's plan resolves, by the annotations of the steps
+that declare them. The relative paths of a configuration read from a build directory
+name files in it (``base_dir``).
 
 A build refuses a configuration before its first step with one error,
 ``ConfigurationRefused``, carrying every rejection found: the target's, the plan's and the
@@ -23,17 +24,14 @@ configuration checks'.
 
 from __future__ import annotations
 
-import collections.abc
 import functools
 import json
 import os
-import types
-import typing
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import MISSING, dataclass, field, fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 from functools import cached_property
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import Any, Union
 
 from qonnx.core.modelwrapper import ModelWrapper
@@ -43,6 +41,7 @@ from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
+from finn.util.typed_json import decoded_fields, encoded
 
 #: The owner of the findings about a build's configuration.
 OWNER = "finn.builder"
@@ -175,8 +174,8 @@ class DataflowBuildConfig:
 
     #: The directory the relative paths name files in (read_build_config: the build
     #: directory), else the working directory: ``output_dir`` and the toolchain's
-    #: settings scripts and command directory are joined to it here, and each setting a
-    #: step declares as a ``Path`` when the plan decodes it. Not in JSON.
+    #: settings scripts and command directory are joined to it here, and each path in a
+    #: setting's value, given or default, when the plan resolves it. Not in JSON.
     base_dir: str | None = None
 
     def __post_init__(self) -> None:
@@ -206,11 +205,11 @@ class DataflowBuildConfig:
             raise ValueError(f"configuration: a JSON object, not {stated!r}")
         if "settings" in stated:
             raise ValueError("configuration.settings: JSON states each setting as a top-level key")
-        hints = typing.get_type_hints(cls)
         known = {name: value for name, value in stated.items() if name in _FIELDS}
-        decoded_fields = _decoded_fields(cls, hints, known, "configuration")
         settings = {name: value for name, value in stated.items() if name not in _FIELDS}
-        return cls(**decoded_fields, settings=settings, base_dir=base_dir)
+        return cls(
+            **decoded_fields(cls, known, "configuration"), settings=settings, base_dir=base_dir
+        )
 
     @classmethod
     def from_json(cls, text: str, base_dir: str | None = None) -> DataflowBuildConfig:
@@ -220,6 +219,13 @@ class DataflowBuildConfig:
         """The configuration as JSON states it: the fields, then the settings beside
         them. Refuses a function, a partial or a Transformation in a list of steps:
         JSON names a step by its name or import path."""
+        for index, entry in enumerate(self.steps or ()):
+            if callable(entry) or isinstance(entry, Transformation):
+                name = getattr(entry, "__name__", type(entry).__name__)
+                raise ValueError(
+                    f"configuration.steps[{index}]: {name} is a Python object; JSON names a "
+                    "step by its name or import path"
+                )
         stated = {
             item.name: encoded(getattr(self, item.name), f"configuration.{item.name}")
             for item in fields(self)
@@ -257,146 +263,6 @@ class DataflowBuildConfig:
 _FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"settings", "base_dir"}
 
 
-def _decoded_fields(
-    kind: type, hints: Mapping[str, Any], stated: Mapping[str, Any], place: str
-) -> dict[str, Any]:
-    """The fields of the dataclass ``kind`` that ``stated`` gives, each decoded by its
-    type; refuses a required field ``stated`` does not give."""
-    missing = [
-        item.name
-        for item in fields(kind)
-        if item.default is MISSING and item.default_factory is MISSING and item.name not in stated
-    ]
-    if missing:
-        raise ValueError(f"{place}: no {', '.join(missing)}, which {kind.__name__} requires")
-    return {name: decoded(hints[name], value, f"{place}.{name}") for name, value in stated.items()}
-
-
-def _text(kind: Any) -> str:
-    """``kind`` as a refusal names it."""
-    if isinstance(kind, type) and not typing.get_args(kind):
-        return kind.__name__
-    return str(kind).replace("typing.", "").replace("collections.abc.", "")
-
-
-def decoded(kind: Any, stated: Any, place: str, base_dir: str | None = None) -> Any:
-    """``stated`` (as JSON states it, or as Python gives it) as a value of the type
-    ``kind``: a bool, an int, a float (an int accepted), a str, a ``Path`` (from a str,
-    joined to ``base_dir`` where given), an enum (from its value), a list, tuple or
-    sequence, a dict or mapping with str keys, a dataclass (from an object of its
-    fields), a union (``X | None``), a callable, ``Any``, or an instance of any other
-    class. Refuses, naming ``place``, a null where ``kind`` is not optional, a value of
-    another type, an unknown enum value and a key a dataclass does not declare."""
-    origin, args = typing.get_origin(kind), typing.get_args(kind)
-    if kind is Any:
-        return stated
-    if origin in (Union, types.UnionType):
-        if stated is None and type(None) in args:
-            return None
-        if stated is None:
-            raise ValueError(f"{place}: null, and it is not optional")
-        members = [each for each in args if each is not type(None)]
-        if len(members) == 1:
-            return decoded(members[0], stated, place, base_dir)
-        for each in members:
-            try:
-                return decoded(each, stated, place, base_dir)
-            except ValueError:
-                continue
-        raise ValueError(f"{place}: {_text(kind)}, not {stated!r}")
-    if stated is None:
-        raise ValueError(f"{place}: null, and it is not optional")
-    if origin is collections.abc.Callable or kind is collections.abc.Callable:
-        if not callable(stated):
-            raise ValueError(f"{place}: a function, not {stated!r}")
-        return stated
-    if origin is type:
-        if not (isinstance(stated, type) and issubclass(stated, args[0])):
-            raise ValueError(f"{place}: a {_text(args[0])} class, not {stated!r}")
-        return stated
-    if isinstance(kind, type) and is_dataclass(kind):
-        if isinstance(stated, kind):
-            return stated
-        if not isinstance(stated, Mapping):
-            raise ValueError(f"{place}: an object of {kind.__name__}'s fields, not {stated!r}")
-        unknown = sorted(set(stated) - {item.name for item in fields(kind)})
-        if unknown:
-            raise ValueError(f"{place}: keys {kind.__name__} does not declare: {unknown}")
-        values = _decoded_fields(kind, typing.get_type_hints(kind), stated, place)
-        try:
-            return kind(**values)
-        except ValueError as refused:
-            raise ValueError(f"{place}: {refused}") from None
-    if isinstance(kind, type) and issubclass(kind, Enum):
-        if isinstance(stated, kind):
-            return stated
-        try:
-            return kind(stated)
-        except ValueError:
-            allowed = [each.value for each in kind]
-            raise ValueError(f"{place}: {stated!r}; one of {allowed}") from None
-    if origin in (list, tuple, collections.abc.Sequence):
-        if not isinstance(stated, (list, tuple)):
-            raise ValueError(f"{place}: a list, not {stated!r}")
-        each = args[0] if args else Any
-        items = [
-            decoded(each, value, f"{place}[{index}]", base_dir)
-            for index, value in enumerate(stated)
-        ]
-        return tuple(items) if origin is tuple else items
-    if origin in (dict, collections.abc.Mapping):
-        if not isinstance(stated, Mapping):
-            raise ValueError(f"{place}: an object, not {stated!r}")
-        value_kind = args[1] if args else Any
-        for key in stated:
-            if not isinstance(key, str):
-                raise ValueError(f"{place}: keys are strings, not {key!r}")
-        return {
-            key: decoded(value_kind, value, f"{place}.{key}", base_dir)
-            for key, value in stated.items()
-        }
-    if isinstance(kind, type) and issubclass(kind, PurePath):
-        if not isinstance(stated, (str, os.PathLike)):
-            raise ValueError(f"{place}: a path, not {stated!r}")
-        return kind(stated) if base_dir is None else kind(base_dir, stated)
-    if kind is float and type(stated) is int:
-        return float(stated)
-    if kind is int and isinstance(stated, bool):
-        raise ValueError(f"{place}: an int, not {stated!r}")
-    if isinstance(kind, type) and not isinstance(stated, kind):
-        name = _text(kind)
-        article = "an" if name[0] in "aeiouAEIOU" else "a"
-        raise ValueError(f"{place}: {article} {name}, not {stated!r}")
-    return stated
-
-
-def encoded(value: Any, place: str) -> Any:
-    """``value`` as JSON states it: a dataclass as an object of its fields, an enum as
-    its value, a path as a str, a tuple as a list. Refuses, naming ``place``, a
-    function, a partial, a Transformation and any other object JSON cannot state."""
-    if is_dataclass(value) and not isinstance(value, type):
-        return {
-            item.name: encoded(getattr(value, item.name), f"{place}.{item.name}")
-            for item in fields(value)
-        }
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, PurePath):
-        return str(value)
-    if isinstance(value, (list, tuple)):
-        return [encoded(each, f"{place}[{index}]") for index, each in enumerate(value)]
-    if isinstance(value, Mapping):
-        return {key: encoded(each, f"{place}.{key}") for key, each in value.items()}
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if callable(value) or isinstance(value, (functools.partial, Transformation)):
-        name = getattr(value, "__name__", type(value).__name__)
-        raise ValueError(
-            f"{place}: {name} is a Python object; JSON names a step by its name or import path"
-        )
-    raise ValueError(f"{place}: {value!r} has no JSON form")
-
-
 __all__ = [
     "OUTPUT_NEEDS",
     "OWNER",
@@ -407,7 +273,5 @@ __all__ = [
     "StepEntry",
     "StepFunction",
     "config_finding",
-    "decoded",
-    "encoded",
     "finding_line",
 ]

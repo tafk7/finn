@@ -66,8 +66,6 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
     config_finding,
-    decoded,
-    encoded,
 )
 from finn.builder.build_dataflow_steps import (
     FIFO_SIZING_STEPS,
@@ -79,6 +77,7 @@ from finn.builder.build_dataflow_steps import (
     step_verify_partition_python,
 )
 from finn.core.space import Finding
+from finn.util.typed_json import decoded, encoded
 
 
 @dataclass(frozen=True)
@@ -283,21 +282,34 @@ def _settings(
         kind, default = readers[0][1], defaults[0]
         if name in cfg.settings:
             try:
-                value = decoded(kind, cfg.settings[name], place, cfg.base_dir)
+                value = decoded(kind, cfg.settings[name], place)
             except ValueError as invalid:
                 # decoded names the place it refuses, this setting's or one inside it.
                 where, _, message = str(invalid).partition(": ")
                 refused.append(config_finding("setting-invalid", message, where))
-            else:
-                settings[name] = Setting(value, True, names)
+                continue
         elif default is inspect.Parameter.empty:
             message = f"{', '.join(names)} require it, and it is not given"
             refused.append(config_finding("setting-required", message, place))
+            continue
         else:
-            if isinstance(default, PurePath) and cfg.base_dir is not None:
-                default = type(default)(cfg.base_dir, default)
-            settings[name] = Setting(default, False, names)
+            value = default
+        if cfg.base_dir is not None:
+            value = _in_directory(value, cfg.base_dir)
+        settings[name] = Setting(value, name in cfg.settings, names)
     return settings, refused
+
+
+def _in_directory(value: Any, directory: str) -> Any:
+    """``value`` with each path in it, in its lists, tuples and dicts too, joined to
+    ``directory``."""
+    if isinstance(value, PurePath):
+        return type(value)(directory, value)
+    if type(value) in (list, tuple):
+        return type(value)(_in_directory(each, directory) for each in value)
+    if type(value) is dict:
+        return {key: _in_directory(each, directory) for key, each in value.items()}
+    return value
 
 
 def resolve_plan(cfg: DataflowBuildConfig) -> Plan:
