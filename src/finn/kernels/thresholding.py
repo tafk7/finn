@@ -42,9 +42,9 @@ runtime-writable thresholds a port named for their control bus (``control``), ea
 a named refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
-disabled outputs may be unspecified. Placed in a kernel with children, it reads
-an input tensor and (with several sets) a tensor of set indices, facts its parent
-gives, and writes its output tensor; it states the end of each of its ports
+disabled outputs may be unspecified. Bound by a network (or placed in a kernel with
+children), it reads an input tensor and (with several sets) a tensor of set indices,
+facts it is given, and writes its output tensor; it states the end of each of its ports
 (``input_end``, ``output_end``, ``set_end``), which the channels on them take; its
 AXI-Lite bus is presented, at the port its placement names (``control``), when
 thresholds are runtime-writable (``controlled``), and otherwise held idle by its
@@ -229,7 +229,7 @@ class ThresholdingAxiKernel(LeafKernel):
 
     channels = extent_of(c)  # the input's channels, bound by its tensor
     pe: int = Decision(domain=divisors_of(channels))  # channels a beat
-    # Where a parent places it: the tensors its input ports read, and the port its
+    # Given by whoever binds it: the tensors its input ports read, and the port its
     # AXI-Lite interface is presented at when thresholds are runtime-writable.
     input_tensor: Tensor = Param(required=False)
     set_tensor: Tensor = Param(required=False)
@@ -238,8 +238,8 @@ class ThresholdingAxiKernel(LeafKernel):
 
     @derived
     def controllable(self) -> bool:
-        """Whether a parent named a port for its control bus, which runtime writes reach it
-        by."""
+        """Whether whoever binds it named a port for its control bus, which runtime writes
+        reach it by."""
         return self.present(ThresholdingAxiKernel.control)
 
     # Runtime-writable thresholds need a control bus to export their AXI-Lite

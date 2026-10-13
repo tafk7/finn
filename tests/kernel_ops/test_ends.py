@@ -408,8 +408,8 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     max(beats, 98) + 13 = 111, the bottleneck that fold reaches (TargetCycles as
     built: the report states the budget relaxed to and the cycles reached).
 
-    No board's row has a 64-bit port: the shell root reads Ultra96's row with its
-    end narrowed."""
+    No board's row has a 64-bit port: the partition's network reads Ultra96's row with
+    its end narrowed."""
     _, wide = explored(tfc, 3e6)
     with monkeypatch.context() as patched:
         patched.setattr(graph_network, "shell_row", lambda *row: narrowed(shell_row(*row)))

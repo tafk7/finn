@@ -5,7 +5,7 @@
 
 It buffers the words of a tensor (``input_tensor``) and presents on both sides what
 arrives (``arriving``, a beat sequence it is given: a channel's transport gives it what
-reaches it), as memstream presents its given sequence; its words are opaque to the RTL.
+reaches it); its words are opaque to the RTL.
 ``DATA_WIDTH`` is its input port's word, the lanes a beat of the tensor's element. Its
 cycles are its ports' beats, as every leaf's, and its buffering its depth of words.
 DEPTH is the requested capacity; the native
@@ -127,36 +127,35 @@ def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabri
     the primitive left ``auto`` (a model, ``_hi_style``). The control (pointers, the
     output register, the UltraRAM output queue) is taken from the HWCustomOp flow's FIFO
     model (``finn.custom_op.fpgadataflow.resource_models._fifo_cost``, fitted against
-    finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor; the flow is
-    deleted, and the finn-dev oracle's capture ``fifo_cost`` keeps its values); the terms
-    it does not carry over are listed below."""
+    finn-rtllib's ``fifo.sv``, the same design with an occupancy monitor); the terms it
+    does not carry over are listed below."""
     # Carried over from ``finn.custom_op.fpgadataflow.resource_models._fifo_cost``, the
-    # HWCustomOp flow's model of the same RTL. Where the two differ, by what this one does
-    # not carry over (FinnLib's ``rtl/infra/fifo.sv``):
+    # HWCustomOp flow's model of the same RTL (the HWCustomOp model below). Where the two
+    # differ, by what this one does not carry over (FinnLib's ``rtl/infra/fifo.sv``):
     # - the storage is stated by ``finn.kernels.utilization`` from the arrays the RTL
-    #   declares, in the fabric's primitives, not by the legacy model's fitted packing. A
+    #   declares, in the fabric's primitives, not by the HWCustomOp model's fitted packing. A
     #   LUTRAM is RAM64M8s (``lutram``), as fifo.sv's header sizes its ``distributed``
     #   path ("1 LUT/bit via RAM64M8"; DEPTH 257, "the natural capacity of 4x RAM64M8
-    #   per byte"), with a write decode and a read multiplexer over its banks; the legacy
-    #   model counts RAM32X2s with a fitted 5/4 and a mux LUT for every two bits a
+    #   per byte"), with a write decode and a read multiplexer over its banks; that model
+    #   counts RAM32X2s with a fitted 5/4 and a mux LUT for every two bits a
     #   further 128 rows. At 32 bits on UltraScale the two agree to depth 65 and are 2 to
     #   4 LUTs apart above it (257 x 32 bits: 261 LUTs here, 257 there).
-    # - the shift path's cascade mux over SRLC32Es, which the legacy model counts on
-    #   Versal only (UltraScale+'s F7/F8 absorb it), and the URAM read pipeline's 20 LUTs
-    #   on Versal: measured on the legacy model's FIFO, not on this one.
+    # - the shift path's cascade mux over SRLC32Es, which that model counts on Versal
+    #   only (UltraScale+'s F7/F8 absorb it), and the URAM read pipeline's 20 LUTs on
+    #   Versal: measured on that model's FIFO, not on this one.
     # - the block path's cascade decode (3 LUTs a level of the tile plan, 2 a 5 tiles):
-    #   Vivado's decode of ``MemLo`` across tiles, which fifo.sv does not write and the
-    #   legacy model fits; 2028 x 32 bits is 54 LUTs here, 67 there.
+    #   Vivado's decode of ``MemLo`` across tiles, which fifo.sv does not write and that
+    #   model fits; 2028 x 32 bits is 54 LUTs here, 67 there.
     # - the lo/hi output select of a decomposed memory (fifo.sv's ``genOutMux``, a
     #   DATA_WIDTH-wide 2:1 mux and its pointer compare; 18 + 3W/7 fitted), and under
     #   UltraRAM a LUTRAM ``hi`` space's delay to the URAM read latency (W LUTs);
     #   1500 x 32 bits, a 1024-word and a 512-word space, is 54 LUTs here, 92 there.
     # - the UltraRAM read pipeline's growth: fifo.sv's ``PIPE_DEPTH`` is
-    #   3 + (2**lo - 1)/8192, a stage more each 8192 rows, which the legacy model fits as
+    #   3 + (2**lo - 1)/8192, a stage more each 8192 rows, which that model fits as
     #   a further W LUTs each 4 cascaded URAMs past 12; here the output queue is W at
     #   any depth (100000 x 72 bits is 180 LUTs here, 540 there).
     # The last three are not measured against this model: they are under-counts of
-    # deep or decomposed FIFOs, kept as R1 carried the control over, not refit.
+    # deep or decomposed FIFOs, kept as the control was carried over, not refit.
     bits, effective = data_width, _selected(depth, data_width, ram_style)
     counter = depth.bit_length() + 1
     if effective == "shift":

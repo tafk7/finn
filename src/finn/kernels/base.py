@@ -3,85 +3,29 @@
 
 """The kernel protocol: two bases, a leaf and a kernel with children, and what they share.
 
-A kernel is a Space whose choices configure one module. It is one of two kinds, each
-a base that declares what a kernel of its kind must state with the engine's
-``required()``: a class that leaves one unmet cannot be placed, nor named as a
-Decision's candidate. What ``required()`` cannot name (a group the base's own views
-require, the port nodes) is checked when a class that states the rest is made; a
-class that leaves some unmet is a base of kernels (dotp's cores share one), and its
-subclasses are checked.
+A kernel is a Space whose choices configure hardware. Each base declares what a kernel of
+its kind states, with the engine's ``required()``: a class that leaves one unmet is a base
+of kernels (dotp's cores share one), not placed. The rest is checked when a class is made.
 
-A **leaf** (``LeafKernel``) binds one FinnLib module. It states:
+A **leaf** (``LeafKernel``) binds one FinnLib module. It states its ``rtl_module`` and
+``sources`` (an HLS kernel's one source is its build request), its ``parameters``, its
+``resource_use`` (a refusal where it has no model of it, never nothing), its
+``admission`` and its ports (``finn.kernels.port``), each stream port taking the tensor
+it reads as a fact (absent: an idle port). It may state its ``clocking``, and
+``other_pins``, ``held`` and ``controlled`` for pins that are no port's. The base derives
+its module (``codegen``, a ``Leaf``), checks its pins (``pins_accounted``, ``clocked``),
+and takes its cycles as the most beats any of its ports carries a frame.
 
-- ``rtl_module``: the RTL module it instantiates, and ``sources``, the source files
-  that provide it and any data they read. An HLS kernel's one source is its build
-  request (``HlsSource``), and its ``rtl_module`` the stem of the request's top: the
-  module it instantiates is that top, ``<rtl_module>_<key16>``;
-- ``parameters``: the module's parameters, from its choices;
-- ``resource_use``: what it uses of the device, from its RTL's parameters and its
-  memory styles (``finn.kernels.utilization``); a leaf with no model of it states its
-  refusal (``kernel-resources``), never nothing;
-- its ``admission``: the constraint group by which it refuses a configuration it
-  cannot build (``ConstraintGroup()`` when it refuses none), checked when the class
-  is made;
-- its ports: one ``Port`` node per interface of its module (``finn.kernels.port``),
-  each exporting its pins, its clock and what it holds while idle; at least one,
-  checked when the class is made. A leaf places no kernel.
+A **kernel with children** (``ComposedKernel``) places kernels and channels, and names
+for each interface it presents (``interfaces``) the child that serves it. It merges its
+members' netlists and control buses, and is no module of its own: a network
+(``finn.kernels.network``) composes one. A channel is one (``finn.kernels.channels``).
 
-Each stream port takes the tensor it reads, a fact (``x_tensor: Tensor =
-Param(required=False)``, given to its port's ``tensor``; absent, the port is an
-interface not used, idle), or writes: the leaf's own statement of its output, a view
-of its facts (``y_tensor``), whose element is what the module produces. Optionally a
-leaf states its ``clocking`` (its clock and reset pins, when not the plain ``ap_clk``
-and ``ap_rst_n``), and ``other_pins``, ``held`` and ``controlled``: pins that are no
-port's (an AXI-Lite bus), what it holds of them, and the buses among them it presents
-(``finn.kernels.control``: a kernel exports its ``Control`` itself, under ``CONTROL``).
-
-The leaf base derives the rest. ``codegen`` is its ``Leaf``: its pins (clocking, other
-pins, then every port's), parameters, sources and data, and what it holds (the
-doubled clock while unused, idle ports, and its own ``held``). Two constraints account
-for its pins: ``pins_accounted`` (every input among its other pins is held or
-presented) and ``clocked`` (every port runs on its clock). Its cycles are the most
-beats any of its ports carries a frame (``BEATS``: one beat a cycle at best), so a leaf
-states no cycles of its own. It holds nothing between a channel's ends, unless it is a
-channel's stage that buffers (a FIFO, an ``input_gen``), which states what it holds
-(``held_bits``).
-
-A **kernel with children** (``ComposedKernel``) places kernels and the channels
-between them. A channel is one too (``finn.kernels.channels``): its members are its
-source, its adapters' stages, its FIFO and its end, though it is no module of its own.
-It states:
-
-- ``interfaces``: the names of the interfaces it presents, each the end of a view
-  ``<name>_end`` that names the child serving it (below); a channel's stages present
-  none. Each named view is checked when the class is made;
-- its children: the kernels and channels it places, its members. It merges their
-  netlists (``NETLIST``: each child's and each channel's ``Fragment``, under its node)
-  and the control buses its children present (``CONTROL``); one that places no kernel is
-  refused (``kernel-module``). It gives its interfaces' tensors to the children that
-  read them, and the channels between its children are its own. It is no module of its
-  own: a network (``finn.kernels.network``) composes the module its netlist is part of,
-  and merges with the same function (``merged``). Its cycles are its slowest member's,
-  kernels and channels alike; its buffering and resources the sums over its members.
-
-**One contract per interface.** A kernel states, for each stream interface by name
-(``x``, ``w``, ``y``), its end: a view ``<name>_end`` of a ``PortEnd``, the contract its
-port presents there and the port's label relative to the kernel. A leaf states it with
-``interface``: ``x_end = interface("x")`` is its port ``x``'s contract, labelled ``x``.
-A kernel with children names the child that serves the interface and the port's label
-below it (MatMul's ``x_end`` is the selected core's, ``compute.packed.x``). Facts flow
-one way: a kernel's input tensors in, its ends and its output tensors out. A channel
-(``finn.kernels.channels``) takes the two ends on it as facts, ``producer`` and
-``consumer``, each labelled from the network that holds both (``Interface``:
-``matmul.compute.packed.x``), so that its hops name the kernel whose port it is
-(``^matmul.compute.packed``).
-
-Every kernel exports its netlist (``NETLIST``), and a leaf its ``module`` (``MODULE``,
-its ``Leaf``), accepted under its admission (and a leaf's pins accounted for). It also
-exports what a design space exploration ranks by: cost, not validity, so no cost export
-waits on an admission, and each reads only the choices it depends on: ``cycles``
-(``CYCLES``), the clock cycles a frame takes; ``buffering`` (``BUFFERING``), the bits its
-channels' stages hold; ``resources`` (``RESOURCES``), what it uses of the device.
+A kernel states one contract per stream interface: a view ``<name>_end`` of a
+``PortEnd`` (on a leaf ``interface("x")``; on a kernel with children the serving child's,
+labelled below it: MatMul's ``compute.packed.x``). Every kernel exports its netlist
+(``NETLIST``), a leaf its module (``MODULE``), and what an exploration ranks by, which
+waits on no admission: ``CYCLES``, ``BUFFERING`` and ``RESOURCES``.
 """
 
 from __future__ import annotations
@@ -159,10 +103,11 @@ MODULE = ViewKey("module", MODULE_SEMANTICS)
 NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
 NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
 """A kernel's or a channel's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
-relative to itself; its parent merges its members' under their nodes."""
+relative to itself; whatever holds it (a network, a kernel with children) merges it
+under its node."""
 
 BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A channel's AXIS bus on the root's boundary: one, or none when both of its ends are
+"""A channel's AXIS bus on its network's boundary: one, or none when both of its ends are
 kernels."""
 
 PINS = ViewKey("pins", default_semantics(tuple))
@@ -207,13 +152,14 @@ class PortEnd:
     path relative to the member that states the end (``x`` for a leaf's port,
     ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
     set port; empty for an end the member presents itself, which is no port's).
-    ``under`` labels it from the Space that places that member."""
+    ``under`` labels it from the network (or kernel with children) that holds the
+    member."""
 
     label: str
     contract: StreamContract
 
     def under(self, member: str) -> PortEnd:
-        """The end as seen from the Space where ``member`` is placed."""
+        """The end as seen from where ``member`` is held."""
         return PortEnd(f"{member}.{self.label}" if self.label else member, self.contract)
 
 
@@ -293,8 +239,8 @@ def _inputs(pin: Pin) -> tuple[str, ...]:
 
 
 class Kernel(Space):
-    """A named Space class configuring one module: a ``LeafKernel`` or a
-    ``ComposedKernel`` (the module docstring)."""
+    """A named Space class configuring hardware: a ``LeafKernel`` or a ``ComposedKernel``
+    (the module docstring)."""
 
     id: ClassVar[str] = ""
     version: ClassVar[int] = 1
@@ -505,8 +451,8 @@ class LeafKernel(Kernel, protocol=True):
 
     @derived
     def fragment(self) -> Fragment:
-        """Its accepted module, the empty label (its parent's ``under(node)`` names it
-        ``node``)."""
+        """Its accepted module, the empty label (``under(node)`` names it ``node`` where
+        it is held)."""
         leaf = self.module
         assert isinstance(leaf, Leaf)
         return Fragment((("", leaf),))

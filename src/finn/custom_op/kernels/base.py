@@ -56,8 +56,7 @@ tensor) and the kernel's views of what its channel carries, downstream of the ke
 the tensor (``carried``, ``w_carried``) and the values its source stores (``stored``,
 ``w_stored``). A network wires the kernel and its channels by it
 (``finn.kernels.network``): each channel's tensor (a parameter channel's from the
-kernel's views, ``Fact``) and its end from the kernel (``Interface``). Facts flow one
-way: tensor, kernel, end, channel.
+kernel's views, ``Fact``) and its end from the kernel (``Interface``).
 """
 
 from __future__ import annotations

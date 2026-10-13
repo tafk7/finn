@@ -8,7 +8,6 @@ columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
 candidate of a channel's ``adapter`` Decision (``finn.kernels.adapters``): a
 kernel with children places it explicitly, and a channel realizes lane regroups
 through the common lane count instead.
-No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
 from __future__ import annotations
@@ -98,7 +97,7 @@ class TransposeKernel(LeafKernel):
     version = 1
     rtl_module = "inner_shuffle"
 
-    # The tensor its input port reads: a fact its parent gives.
+    # The tensor its input port reads: a fact it is given.
     input_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
 

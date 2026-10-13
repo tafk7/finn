@@ -57,7 +57,7 @@ before it is marked stale (``FIFOS_STALE``), and packaging refuses the body.
 The resources are the shell's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
 and its channels, boundary channels included), each end and its static region, and
-their sum, ``used``; where members state none (a memory pinned ``auto``, which
+their sum, ``used``; where members state none (a memory in ``auto``, which
 Vivado places), ``used`` is the sum of those that
 do, a lower bound (``lower_bound``), each other named with why (``unstated``, its
 findings), and the
@@ -73,7 +73,7 @@ and where they come from (``source``);
 and ``over`` each it uses more of than the part has. A point over the part is a
 limitation (``resources-over-part``, in the result's and the resources' ``findings``)
 naming the binding resource, whichever strategy chose it: the report ranks and states
-it, and refuses nothing (RC5).
+it, and refuses nothing.
 
 The shell is the model's target's (``finn.custom_op.kernels.network``): its row offers the
 boundary channels its ends (none: the ``ip`` shell). Where a channel has an end, the
@@ -140,7 +140,7 @@ _ABSENT = object()
 class Explored:
     """An exploration's result: the body's network (every value, settled after the
     strategy), its cost, the report (JSON values), and every limitation it found
-    (``findings``: the strategy's, then the resources'), never a refusal (RC5)."""
+    (``findings``: the strategy's, then the resources'), never a refusal."""
 
     network: Partition
     cost: Cost
@@ -246,7 +246,7 @@ def _resources_report(
 
 
 def _over_part(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> tuple[Finding, ...]:
-    """What the report states where the shell uses more than the part has (RC5): a
+    """What the report states where the shell uses more than the part has: a
     ``resources-over-part`` limitation naming the binding resource, and each resource
     over with its count and the part's."""
     if not exceeded:

@@ -3,11 +3,11 @@
 
 """Commit a configuration's choices named by their stable keys; name the open ones.
 
-Facts are the root node's typed formals: ``design_space(MatMulKernel(x_tensor=...,
-...))``. Keys are the ones ``inspection`` reports: a structural Decision such as ``"compute"``,
-or a candidate-local choice such as ``"compute.packed.pe"`` or
-``"w.source.memstream.ram_style"``. All choices are committed in one atomic
-batch. Refusals are raised as ``ValueError`` with their findings.
+Facts are the formals of the declaration given to ``design_space``
+(``design_space(MatMulKernel(x_tensor=..., ...))``). Keys are the ones ``inspection``
+reports: a structural Decision such as ``"compute"``, or a candidate-local choice such as
+``"compute.packed.pe"`` or ``"w.source.memstream.ram_style"``. All choices are committed
+in one atomic batch. Refusals are raised as ``ValueError`` with their findings.
 
 A Decision whose one viable case is forced needs no commitment (the engine's
 ``inspection.forced``); ``inspection.admission`` reads a kernel's own refusal,

@@ -277,7 +277,7 @@ class Schedule:
         closes), a held one's on its first (before the run). A port reading every
         beat is ``0, 1, …, beat_count - 1``; an output closing a reduction of ``s``
         steps innermost is ``s - 1, 2s - 1, …``. Times count schedule beats from the
-        frame's first: one a clock cycle when the kernel runs at its rate (K10),
+        frame's first: one a clock cycle when the kernel runs at its rate,
         before its pipeline's constant latency.
         """
         self._known(*reduces, *holds)

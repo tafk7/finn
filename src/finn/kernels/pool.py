@@ -5,8 +5,8 @@
 
 ``pooling_stream`` (FinnLib ``hls/nonlin/pooling.hpp``) is a reduction alone: it
 takes the maximum of the beats it is given until one arrives with ``last``, and
-then presents it. It does not walk a feature map: the window is the channel's
-(decision K2). The kernel's input port reads an ``(H, W, C)`` tensor, or one at the
+then presents it. It does not walk a feature map: the window is the channel's.
+The kernel's input port reads an ``(H, W, C)`` tensor, or one at the
 graph's rank, ``(1, H, W, C)`` (each leading axis one, read at ``ZERO``), through the
 window, ``(oh * SH + kh, ow * SW + kw, c)``, on the schedule ``(oh, ow, c, kh, kw)``
 with ``c`` folded by PE, and closes each window with the marker of its innermost
@@ -30,7 +30,6 @@ Its domain is what that hardware takes: ordinary integers (``max`` over
 dividing the channels. Its resources are not characterised: it states so
 (``kernel-resources``). Its computation's reference is test-side until a KernelOp
 reaches it: ``tests/kernels/specs/pool.py``.
-No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
 from __future__ import annotations
@@ -165,7 +164,7 @@ class PoolKernel(LeafKernel):
     window: tuple[int, int] = Param()
     stride: tuple[int, int] = Param()
     platform: Platform = Param()
-    # The tensor its input port reads: a fact its parent gives.
+    # The tensor its input port reads: a fact it is given.
     input_tensor: Tensor = Param(required=False)
 
     @constraint

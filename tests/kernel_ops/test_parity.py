@@ -8,8 +8,8 @@ declares none. ``finn.harness.ops.check_parity`` builds the hardware a one-node 
 generates at a chosen point and checks it in XSim against the op's ``execute_node`` on
 the same inputs: random integers of each input's datatype, seeded, and its extremes.
 
-The points are drawn from the node's shell root (``finn.harness.points.covering``
-of the op's own kernel Decisions, decision KT10): each case of each Decision once, each
+The points are drawn from the node's network (``finn.harness.points.covering``
+of the op's own kernel Decisions): each case of each Decision once, each
 ordered domain at its extremes; the rest (transports, adapter memories) at the
 baselines the cut gives them (``CutKernelPartition``), as packaging replays them. A
 handful of simulations an op, stalled, and the first point of each op free running too

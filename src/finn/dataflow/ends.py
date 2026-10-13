@@ -9,7 +9,7 @@ its own element; ``End`` and ``Ends`` hold what the two ends present, and
 ``misfit`` is the logical rule between them and the tensor: each end
 traverses the tensor's shape, the source's values fit the tensor's element,
 and the tensor's fit the sink's. What joins the two sequences is
-``finn.dataflow.plan``. How the ends are found (the kernels' ports, the root's
+``finn.dataflow.plan``. How the ends are found (the kernels' ports, the network's
 boundary) is the channel's, not this layer's. These ends are not
 ``finn.kernels.ends``'s, which are where a partition's boundary stream meets
 memory (``Channel.end``).
@@ -27,7 +27,7 @@ from finn.dataflow.traversal import BeatSequence
 class End:
     """What one end of a channel presents: its element and beat sequence.
 
-    ``owner`` names the kernel presenting it, or None for the root's boundary.
+    ``owner`` names the kernel presenting it, or None for the network's boundary.
     """
 
     owner: str | None

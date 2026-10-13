@@ -83,7 +83,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     }
     assert described["ip"]["top"].startswith("finn_partition__")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
-    # Each stream states its port's boundary facts, as the configured root's channels
+    # Each stream states its port's boundary facts, as the configured network's channels
     # state them, and the order its free side presents the tensor in: the Chain's,
     # row-major.
     inputs, outputs = boundary_facts(model, point, boundary, "sdp_1")

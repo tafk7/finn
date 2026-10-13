@@ -291,7 +291,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert wiring(built) == wiring(body)
     assert kernel_choices_config(built) != kernel_choices_config(body)
     assert read_target(built) == read_target(parent) == ULTRA96
-    # The body's boundary, read from its configured root: the pynq shell's IODMA_hls on
+    # The body's boundary, read from its configured network: the pynq shell's IODMA_hls on
     # both.
     point, boundary = configured_network(built, "partition")
     inputs, outputs = boundary_facts(built, point, boundary, "partition")

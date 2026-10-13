@@ -3,13 +3,13 @@
 
 """The ends a shell offers on its boundary channels: where a partition's stream meets memory.
 
-A boundary channel of a partition's network has a side without a user, its **free
-side**: the AXIS port the network presents (``Channel.free_side``). A shell with ends offers each
-such channel the ends it can place there (``EndOffer``), and the channel's ``end``
-Decision chooses one, by kind (``ENDS``), as it places its ``source``; one offered is
-forced, so nothing is persisted. An end binds no RTL in the root's module: the
-module's pins stay the root's, and the shell integrates the end beside the IP from
-its facts (``EndContract``).
+A boundary channel of a partition's network has a side without an end, its **free
+side**: the AXIS port the network presents (``Channel.free_side``). A shell with ends
+offers each such channel the ends it can place there (``EndOffer``), and the channel's
+``end`` Decision chooses one, by kind (``ENDS``), as it places its ``source``; one
+offered is forced, so nothing is persisted. An end binds no RTL in the partition's
+module: its pins stay its own, and the shell integrates the end beside the IP from its
+facts (``EndContract``).
 
 **``IODMA_hls``** (kind ``iodma_hls``), the Zynq shell's memory mover, modelled at its
 stream side, the free side's contract:
@@ -197,7 +197,7 @@ def iodma_hls(width_cap: int, *, frames_per_call: int = 1) -> EndOffer:
 class EndContract:
     """An end's facts, as the shell integrates it and an exploration costs it:
 
-    - ``kind``; ``direction``: ``in`` (memory to the root's input) or ``out``;
+    - ``kind``; ``direction``: ``in`` (memory to the module's input) or ``out``;
     - the stream side, the free side's contract: ``port`` (its AXIS port), ``tdata``
       (bits), ``beats`` a frame, ``lanes`` a beat and ``element`` (the channel's);
     - the memory side: ``memory_width`` (bits), ``words`` a frame, and whether a width
@@ -299,7 +299,7 @@ class IodmaEnd(Space):
         tdata, beats = side.transport.data_width, side.form.beats
         memory = gcd(tdata * beats, offer.width_cap)
         converter = memory != tdata
-        # Seen from inside the root, its input is the AXIS target.
+        # Seen from inside the module, its input is the AXIS target.
         direction = "in" if side.transport.endpoint is Endpoint.TARGET else "out"
         return EndContract(
             kind=IODMA_HLS,

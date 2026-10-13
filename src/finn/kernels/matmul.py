@@ -30,7 +30,7 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the
-tensors its parent gives, ``x_tensor`` (the activations) and ``w_tensor`` (the
+tensors it is given, ``x_tensor`` (the activations) and ``w_tensor`` (the
 weights), and present its interfaces (``x``, ``w``, ``y``): ``x_end``, ``w_end`` and
 ``y_end`` are the selected core's ports' ends, labelled ``compute.<core>.x``
 (``finn.kernels.base.PortEnd``). Each channel, its adapter, its FIFO and its source
@@ -51,7 +51,7 @@ contents its source stores, block-diagonal for a dense realization of a
 depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
 carries, over the stored values' range, narrowed to it (``stored_element``:
 INT8-typed ternary weights are ``INT2``); without known weights, ``w_carried``
-is ``w_tensor``. The parent binds the weight channel's ``tensor`` and
+is ``w_tensor``. Its network binds the weight channel's ``tensor`` and
 ``contents`` to them. With several weight sets the contents hold one operand a
 set, and the channel's ``sets`` and ``index_tensor`` select one per row. Each
 core reads its weights from ``w_carried``: its weight width, and the packed
@@ -185,7 +185,7 @@ class MatMulKernel(ComposedKernel):
     # A dense form read through a window: a lowered convolution (module docstring).
     window: Window = Param(required=False)
     platform: Platform = Param()
-    # The tensors its ports read, and the known weights: facts its parent gives.
+    # The tensors its ports read, and the known weights: facts it is given.
     x_tensor: Tensor = Param()
     w_tensor: Tensor = Param(required=False)
     w_contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)

@@ -6,7 +6,7 @@
 It regroups ``lanes_in`` elements a beat into ``lanes_out``, through vectors of
 their least common multiple. It presents the sequences it is given on its two ports
 (``arriving``, ``leaving``: the same elements of its tensor, ``input_tensor``, in the
-same order), as memstream presents its given sequence, and derives its generics from
+same order), and derives its generics from
 them: ``lanes_in`` and ``lanes_out`` their lanes, ``W`` the tensor's element. Words
 are opaque on FinnLib's native pins. On a channel, ``vpc`` is a stage of the
 channel's adapter (``finn.kernels.adapters``), which gives it the two sides of its

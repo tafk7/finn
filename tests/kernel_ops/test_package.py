@@ -158,7 +158,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     }
     assert list(model.model.metadata_props) == []
     # The part and period are the model's target. Packaging states what it made, in
-    # finn.outputs, and nothing else: the boundary is the configured root's, not stored.
+    # finn.outputs, and nothing else: the boundary is the configured network's, not stored.
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
     assert {item.key.split("/")[0] for item in model.graph.metadata_props} == {
         "finn.platform",
