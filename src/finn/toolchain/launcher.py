@@ -34,11 +34,14 @@ import shutil
 import signal
 import subprocess
 import time
+from collections import Counter
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
+
+from finn.core.reporting.manifest import RECORDS, TOOL_RUN
 
 # Modules, not names: finn.toolchain.vivado and .hls import this module in turn.
 from finn.toolchain import hls, host, vivado
@@ -47,20 +50,12 @@ StrPath = str | os.PathLike[str]
 
 _LOG = logging.getLogger(__name__)
 
-#: The logger of the records a build's manifest indexes: tool runs, reports and verdicts.
-#: A build sets its level, so quieting another of FINN's loggers keeps them.
-RECORDS = logging.getLogger("finn.records")
-
 # Vendor tools start slowly (a JVM behind vitis-run), more so many at once: a probe's
 # answer is cached per process, by the selection and the environment's PATH.
 PROBE_TIMEOUT = 120
 _VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
 
-#: The ``extra`` key of a tool run's log records: the run's number in this process
-#: (``run``) and, when it starts, ``tool``, ``command``, ``cwd``, ``transcript`` and
-#: ``status`` ``running``; when it ends, ``status`` (``completed``, ``failed``, or
-#: ``stopped`` with the ``error``), ``seconds`` and ``exit``.
-TOOL_RUN = "finn_tool_run"
+#: A tool run's number in this process (``TOOL_RUN``'s ``run``).
 _RUNS = itertools.count(1)
 
 
@@ -85,6 +80,18 @@ def transcript_files(stem: StrPath) -> tuple[Path, Path]:
     """The two files of the transcript ``stem``: what the tool printed on its standard
     output (``<stem>.stdout.log``) and on its standard error (``<stem>.stderr.log``)."""
     return Path(f"{os.fspath(stem)}.stdout.log"), Path(f"{os.fspath(stem)}.stderr.log")
+
+
+def _messages(files: Iterable[Path]) -> dict[str, int]:
+    """A tool run's messages by severity (``finn.toolchain.vivado.messages``), from the
+    files of its transcript."""
+    counts: Counter[str] = Counter()
+    for each in files:
+        if each.is_file():
+            read = vivado.messages(each.read_text(errors="replace"))
+            for (severity, _), count in read.counts.items():
+                counts[severity] += count
+    return dict(sorted(counts.items()))
 
 
 class ToolRun(subprocess.CompletedProcess[bytes]):
@@ -126,8 +133,9 @@ def run_process(
     With ``check``, a non-zero exit raises ``CalledProcessError``. A remote wrapper
     cancels its own remote descendants.
 
-    A run that keeps a transcript is a tool run a build indexes: its records carry
-    ``TOOL_RUN``'s fields, the run named ``tool`` (by default its command's first word).
+    A run that keeps a transcript is a tool run a run's manifest lists: its records
+    carry ``TOOL_RUN``'s fields, the run named ``tool`` (by default its command's first
+    word).
     """
     command = [os.fspath(arg) for arg in argv]
     if not command:
@@ -142,6 +150,13 @@ def run_process(
         if files is None:
             return None
         return {TOOL_RUN: {"run": run, **state}}
+
+    def ended(**state: object) -> dict[str, dict[str, object]] | None:
+        # The messages are read only while a manifest records them (it sets RECORDS to
+        # INFO): a transcript can be large.
+        if files is not None and RECORDS.isEnabledFor(logging.INFO):
+            state["messages"] = _messages(files)
+        return indexed(**state)
 
     log.info(
         "command=%s cwd=%s transcript=%s",
@@ -222,7 +237,7 @@ def run_process(
             "command stopped duration=%.3fs result=%s",
             seconds,
             type(exc).__name__,
-            extra=indexed(status="stopped", seconds=round(seconds, 3), error=type(exc).__name__),
+            extra=ended(status="stopped", seconds=round(seconds, 3), error=type(exc).__name__),
         )
         raise
     if files is not None:
@@ -233,7 +248,7 @@ def run_process(
         "command finished duration=%.3fs result=%s",
         seconds,
         proc.returncode,
-        extra=indexed(
+        extra=ended(
             status="completed" if proc.returncode == 0 else "failed",
             seconds=round(seconds, 3),
             exit=proc.returncode,

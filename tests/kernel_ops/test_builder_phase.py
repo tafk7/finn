@@ -73,6 +73,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.module import module_name
@@ -91,7 +92,7 @@ from finn.shells.pynq.runner import (
     iodma_model,
     project_script,
 )
-from finn.toolchain.launcher import RECORDS, Selection, Toolchain
+from finn.toolchain.launcher import Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
     explore_kernel_choices,
@@ -122,7 +123,7 @@ from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition
 
 #: The steps' logger, whose lines a step called outside a build logs.
 STEPS_LOG = "finn.builder.build_dataflow_steps"
-#: The logger of the reports a step writes (finn.builder.build_dataflow_manifest.reported).
+#: The logger of the reports a step writes (finn.core.reporting.manifest.reported).
 REPORTS_LOG = RECORDS.name
 
 #: The steps of the builder's phases from the prepared graph to the verified partition,
@@ -234,13 +235,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
     # Each strategy step's report is its own, listed under it.
-    assert [report["path"] for report in indexed["step_size_fifos"]["reports"]] == [
-        "report/step_size_fifos.json"
-    ]
+    assert indexed["step_size_fifos"]["reports"] == ["report/step_size_fifos.json"]
     # The partition's choices, by graph name, listed under the step that wrote them.
-    assert indexed["step_verify_partition"]["reports"] == [
-        {"path": "kernel_choices.json", "findings": {}}
-    ]
+    assert indexed["step_verify_partition"]["reports"] == ["kernel_choices.json"]
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
     converted = seen["step_convert_to_hw"]
@@ -260,9 +257,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
         if outcome["op"] is None
         for finding in outcome["findings"]
     } == {"no-kernel-op"}
-    assert indexed["step_convert_to_hw"]["reports"] == [
-        {"path": "report/kernel_ops.json", "findings": {"no-kernel-op": 2}}
-    ]
+    # The report is listed by path; its findings are in it, and the step notes none.
+    assert indexed["step_convert_to_hw"]["reports"] == ["report/kernel_ops.json"]
+    assert indexed["step_convert_to_hw"]["findings"] == []
     # Each KernelOp's own choices are created as it is converted, each at its baseline
     # (28 values on the 8 nodes); a channel's wait for the cut.
     created = kernel_choices_config(converted)
@@ -488,7 +485,7 @@ def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Pa
         "step_verify_partition",
     ]
     for step, strategy in strategies.items():
-        assert [report["path"] for report in ran[step]["reports"]] == [f"report/{step}.json"]
+        assert ran[step]["reports"] == [f"report/{step}.json"]
         report = strategy_report(cfg, step)
         assert report["strategy"]["strategy"] == strategy
         assert report["held"] == CHAIN_PINS
@@ -726,6 +723,45 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     parent.save(str(saved))
     step_build_bitfile(ModelWrapper(str(saved)), cfg)
     assert ObjectiveSeen.seen == [None, 1000.0, 1000.0]
+
+
+#: A delivered clock's shortfall, as the bitfile's build finds it.
+CLOCK_SHORT = Finding(
+    FindingKind.LIMITATION, "clock-below-asked", "delivered_clock", "187.5 MHz of 200 asked"
+)
+
+
+class ClockShort(ObjectiveSeen):
+    """The bitfile's build stand-in, finding the delivered clock short."""
+
+    def __init__(
+        self, directory: Path, *, toolchain: Toolchain, hw_debug: bool, objective_fps: float | None
+    ) -> None:
+        super().__init__(
+            directory, toolchain=toolchain, hw_debug=hw_debug, objective_fps=objective_fps
+        )
+        self.findings = (CLOCK_SHORT,)
+
+
+def test_the_bitfiles_clock_findings_are_noted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A finding of the bitfile's build is noted once: one warning on the records logger,
+    its line the finding's, the finding attached for the manifest."""
+    monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ClockShort)
+    monkeypatch.setattr(ObjectiveSeen, "seen", [])
+    model = kernel_model()
+    write_target(model, ULTRA96)
+    configure_partition(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "cut"))
+    cfg = config(tmp_path)
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
+    with caplog.at_level(logging.INFO, logger=REPORTS_LOG):
+        step_build_bitfile(parent, cfg)
+    (noted,) = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert (noted.name, noted.levelno) == (REPORTS_LOG, logging.WARNING)
+    assert noted.getMessage() == str(CLOCK_SHORT)
+    assert getattr(noted, FINDING) is CLOCK_SHORT
 
 
 def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
@@ -1274,7 +1310,7 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
         assert (code / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[end.instance]
 
 
-#: TFC's bottleneck at Z0's choices on its shell root, ends included: the input end's 196
+#: TFC's bottleneck at Z0's choices on its partition's network, ends included: the input end's 196
 #: beats and its call's constant, 4 (cycles a frame; Z0's report, without the ends,
 #: read its slowest layer's 196).
 TFC_BOTTLENECK = 200
@@ -1349,8 +1385,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
 
     - The parent graph stays the build's model and states what a later step consumes,
       typed, and no flat key: the bitfile and its handoff, no report; the reports are
-      collected beside them, the delivered clock's with the shell root's bottleneck,
-      ends included.
+      collected beside them, the delivered clock's with the partition's network's
+      bottleneck, ends included.
     - The driver's io_shape_dict is the build's before the runner, the logits
       INT8, and it sets PL0 to the delivered clock; report/driver.json states what it
       takes and returns.
@@ -1406,8 +1442,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
     assert [end["iodma"] for end in integrated["ends"]] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
-    # The delivered clock against the one asked, the bottleneck the shell root's, its
-    # ends included: the input end.
+    # The delivered clock against the one asked, the bottleneck the partition's network's,
+    # its ends included: the input end.
     clock = json.loads((report / "delivered_clock.json").read_text())
     bottleneck = shell_bottleneck(body)
     assert bottleneck is not None

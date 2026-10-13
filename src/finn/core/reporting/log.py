@@ -3,9 +3,10 @@
 
 """One run's log: FINN's records and Python's warnings, to a log file and the console.
 
-``log_run`` sets it up for a ``with`` block, ``running_step`` names the step stamped on
-each record, and ``FILE_ONLY`` keeps a record off the console. The standard library
-only, so any entry point can use it.
+``log_run`` sets it up for a ``with`` block (``finn.core.reporting.manifest.recorded_run``
+sets it up with the run's manifest), ``running_step`` names the step stamped on each
+record, and ``FILE_ONLY`` keeps a record off the console. The standard library only, so
+any entry point can use it.
 """
 
 import contextlib

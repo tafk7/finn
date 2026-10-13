@@ -31,7 +31,6 @@
 checks the configuration, then runs the plan's steps, logging and recording each."""
 
 import clize
-import contextlib
 import json
 import logging
 import os
@@ -47,8 +46,7 @@ from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
-    Manifest,
-    ManifestHandler,
+    BuildManifest,
     finn_revision,
 )
 from finn.builder.build_dataflow_plan import Plan, resolve_plan
@@ -59,10 +57,11 @@ from finn.builder.build_dataflow_steps import (
     default_steps,
 )
 from finn.core.reporting.findings import Finding, FindingKind, by_code
+from finn.core.reporting.log import FILE_ONLY, running_step
+from finn.core.reporting.manifest import note, recorded_run
 from finn.platform.refusal import TargetRefused
 from finn.platform.target import Target
-from finn.toolchain.launcher import RECORDS, ToolFailed, ToolUnavailable, host_selection
-from finn.util.run_log import FILE_ONLY, log_run, running_step
+from finn.toolchain.launcher import ToolFailed, ToolUnavailable, host_selection
 
 #: A build directory's configuration file, beside its model.onnx.
 CONFIG_FILE = "dataflow_build_config.json"
@@ -106,7 +105,7 @@ def _log_failure(step: str, error: BaseException) -> str:
     return kind
 
 
-def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Manifest):
+def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: BuildManifest):
     """Run the plan's steps in order, each with its settings, recording each in the
     ``manifest``. Returns 0, or -1 at the first step that fails, after logging and
     recording the failure and, with ``enable_build_pdb_debug``, opening the postmortem
@@ -165,25 +164,14 @@ def _identity(output_dir: str, selection: dict | None, target: Target | None) ->
     }
 
 
-@contextlib.contextmanager
-def _indexed(cfg: DataflowBuildConfig, target: Target | None):
-    """The build's manifest for the ``with`` block, filled from the records of
-    ``RECORDS``."""
+def _manifest(cfg: DataflowBuildConfig, target: Target | None) -> BuildManifest:
+    """The build's manifest, its identity stated: the toolchain's selection where it
+    reads, and the resolved ``target``."""
     try:
         selection = asdict(host_selection(stated=cfg.toolchain))
     except ValueError:
         selection = None
-    manifest = Manifest(cfg.output_dir, _identity(cfg.output_dir, selection, target))
-    handler = ManifestHandler(manifest)
-    level = RECORDS.level
-    RECORDS.setLevel(logging.INFO)
-    RECORDS.addHandler(handler)
-    try:
-        yield manifest
-    finally:
-        RECORDS.removeHandler(handler)
-        RECORDS.setLevel(level)
-        handler.close()
+    return BuildManifest(cfg.output_dir, _identity(cfg.output_dir, selection, target))
 
 
 def build_plan(cfg: DataflowBuildConfig) -> Plan:
@@ -194,11 +182,11 @@ def build_plan(cfg: DataflowBuildConfig) -> Plan:
 
 
 def _configured(
-    cfg: DataflowBuildConfig, target: Target | None, found: list[Finding], manifest: Manifest
+    cfg: DataflowBuildConfig, target: Target | None, found: list[Finding], manifest: BuildManifest
 ) -> Plan:
     """The build's plan, once the configuration is checked: the target's findings
     (``found``) with the plan's, or with the configuration checks'. Each finding is
-    recorded, each limitation logged as a warning, and the rejections raised together
+    recorded, each limitation noted as a warning, and the rejections raised together
     as one ConfigurationRefused."""
     plan = None
     try:
@@ -212,7 +200,7 @@ def _configured(
     manifest.configured(found)
     for finding in found:
         if finding.kind is not FindingKind.REJECTION:
-            _LOG.warning("%s", finding)
+            note(finding)
     rejections = [finding for finding in found if finding.kind is FindingKind.REJECTION]
     if rejections:
         raise ConfigurationRefused(rejections)
@@ -232,7 +220,7 @@ def _log_refusal(error: BaseException) -> None:
     _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
 
 
-def _refused(manifest: Manifest, error: BaseException) -> None:
+def _refused(manifest: BuildManifest, error: BaseException) -> None:
     """Log a build stopped before its first step and record it as ``refused``."""
     _log_refusal(error)
     manifest.refused(error)
@@ -247,37 +235,38 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     made and the configuration checked; their rejections are raised together as one
     ConfigurationRefused."""
     log_file = os.path.join(cfg.output_dir, LOG_FILE)
-    with log_run(log_file, runner=_LOG.name, verbose=cfg.verbose):
+    try:
+        target, found = cfg.resolved_target, []
+    except TargetRefused as refused:
+        target, found = None, list(refused.findings)
+    with recorded_run(
+        log_file, _manifest(cfg, target), runner=_LOG.name, verbose=cfg.verbose
+    ) as manifest:
         try:
-            target, found = cfg.resolved_target, []
-        except TargetRefused as refused:
-            target, found = None, list(refused.findings)
-        with _indexed(cfg, target) as manifest:
-            try:
-                _LOG.info("Intermediate outputs will be generated in %s", resources.scratch())
-                _LOG.info("Final outputs will be generated in %s", cfg.output_dir)
-                _LOG.info("Build log is at %s", log_file)
-                _LOG.info("Build manifest is at %s", os.path.join(cfg.output_dir, MANIFEST_FILE))
-                plan = _configured(cfg, target, found, manifest)
-                if cfg.start_step is None:
-                    source = model_filename
-                else:
-                    before = plan.steps[plan.run.start - 1].name
-                    source = cfg.output_dir + "/intermediate_models/%s.onnx" % before
-                _LOG.info("Building dataflow accelerator from %s", source)
-                model = ModelWrapper(source)
-                manifest.identify(model=os.path.abspath(source))
-            except Exception as error:
-                _refused(manifest, error)
-                raise
-            return _run_build_steps(model, cfg, plan, manifest)
+            _LOG.info("Intermediate outputs will be generated in %s", resources.scratch())
+            _LOG.info("Final outputs will be generated in %s", cfg.output_dir)
+            _LOG.info("Build log is at %s", log_file)
+            _LOG.info("Build manifest is at %s", os.path.join(cfg.output_dir, MANIFEST_FILE))
+            plan = _configured(cfg, target, found, manifest)
+            if cfg.start_step is None:
+                source = model_filename
+            else:
+                before = plan.steps[plan.run.start - 1].name
+                source = cfg.output_dir + "/intermediate_models/%s.onnx" % before
+            _LOG.info("Building dataflow accelerator from %s", source)
+            model = ModelWrapper(source)
+            manifest.identify(model=os.path.abspath(source))
+        except Exception as error:
+            _refused(manifest, error)
+            raise
+        return _run_build_steps(model, cfg, plan, manifest)
 
 
 def _refused_in(output_dir: str, refused: ConfigurationRefused) -> None:
     """Log and record in ``output_dir`` a build refused before its configuration
     decoded, replacing the manifest an earlier build left there."""
-    with log_run(os.path.join(output_dir, LOG_FILE), runner=_LOG.name):
-        manifest = Manifest(output_dir, _identity(output_dir, None, None))
+    manifest = BuildManifest(output_dir, _identity(output_dir, None, None))
+    with recorded_run(os.path.join(output_dir, LOG_FILE), manifest, runner=_LOG.name):
         manifest.configured(list(refused.findings))
         _refused(manifest, refused)
 
