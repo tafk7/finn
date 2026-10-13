@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 import numpy.typing as npt
-from qonnx.core.datatype import DataType
 
 from finn.kernels.eltwise import EltwiseKernel
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58
@@ -56,8 +55,6 @@ def computed(
 
 FACTS = dict(
     operation="ADD",
-    lhs_dtype=DataType["INT4"],
-    rhs_dtype=DataType["INT4"],
     b_scale=1.0,
     platform=FULL_DSP58,
 )
@@ -99,10 +96,14 @@ SPEC = KernelSpec(
         Probe(
             "floating-point arithmetic without DSP58",
             lambda: placed(
-                eltwise(),
+                {
+                    **eltwise(),
+                    "inputs": {
+                        "lhs_channel": tensor((PIXELS, CHANNELS), "FLOAT32"),
+                        "rhs_channel": tensor((CHANNELS,), "FLOAT32"),
+                    },
+                },
                 {"pe": 1},
-                lhs_dtype=DataType["FLOAT32"],
-                rhs_dtype=DataType["FLOAT32"],
                 platform=FULL_DSP48E2,
             ),
             frozenset({"eltwise-target"}),

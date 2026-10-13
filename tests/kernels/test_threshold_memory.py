@@ -18,11 +18,14 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Inapplicable, Rejected, design_space, inspection
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import Platform
 from kernels.helpers import FULL_DSP48E2
 
 INT8 = DataType["INT8"]
+# One row of the tables' four channels.
+INPUT = Tensor((1, 4), ScalarEncoding(INT8))
 
 
 def table(count: int, channels: int = 4) -> tuple[tuple[tuple[int, ...], ...], ...]:
@@ -32,7 +35,7 @@ def table(count: int, channels: int = 4) -> tuple[tuple[tuple[int, ...], ...], .
 def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingAxiKernel:
     base = design_space(
         ThresholdingAxiKernel(
-            input_dtype=INT8,
+            input_tensor=INPUT,
             threshold_dtype=INT8,
             thresholds=table(count),
             bias=0,
@@ -70,7 +73,7 @@ def test_the_stage_counts_range_over_the_rtl_stages(count: int, stages: int) -> 
     assert point.stages == stages
     base = design_space(
         ThresholdingAxiKernel(
-            input_dtype=INT8,
+            input_tensor=INPUT,
             threshold_dtype=INT8,
             thresholds=table(count),
             bias=0,
@@ -162,7 +165,7 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
     def point(platform: Platform) -> ThresholdingAxiKernel:
         return design_space(
             ThresholdingAxiKernel(
-                input_dtype=INT8,
+                input_tensor=INPUT,
                 threshold_dtype=INT8,
                 thresholds=table(3),
                 bias=0,

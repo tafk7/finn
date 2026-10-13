@@ -92,12 +92,10 @@ def placed(case: Case) -> Any:
         tensor=y, port="m_axis_0", producer=namespace["y_end"], platform=FULL_DSP48E2
     )
     facts: dict[str, Any] = dict(
-        input_dtype=ELEMENT,
         threshold_dtype=ELEMENT,
         thresholds=(case.initial,),
         bias=0,
         input_tensor=x,
-        output_tensor=y,
         platform=FULL_DSP48E2,
     )
     if case.written is not None:

@@ -13,8 +13,6 @@ No KernelOp binds it yet: the harness's test cases are its references, and it is
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -26,12 +24,11 @@ from finn.core.space import (
     reject,
     requiring,
 )
-from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of, interface
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, extent_of, interface
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -41,7 +38,6 @@ from finn.kernels.utilization import (
     memory_styles,
     uram_requirements,
 )
-from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 i, j = Index("i"), Index("j")
@@ -64,7 +60,7 @@ def inner_shuffle_resources(
     return banks + rotators + skids
 
 
-class TransposeKernel(Kernel):
+class TransposeKernel(LeafKernel):
     """FinnLib ``inner_shuffle``: an (I, J) matrix's rows in, its columns out.
 
     The input is the last two axes of its tensor in row-major order, SIMD
@@ -77,7 +73,10 @@ class TransposeKernel(Kernel):
     two rows when SIMD does not divide J (it rotates its write banks by
     ``gcd(J, SIMD)``). The input reads its matrix through a row-major ``(J, I)``
     view: the same flat order, walked by the output's schedule, ``I / SIMD``
-    beats of SIMD lanes for each of J. A beat never spans two matrices.
+    beats of SIMD lanes for each of J. A beat never spans two matrices. Its output,
+    the tensor it states (``output_tensor``), is its input's shape and element, its
+    data presented column by column. Its cycles are the beats its ports carry, as
+    every leaf's.
 
     The RTL writes matrices alternately into two pages, and reads a page only
     once all of it is written, its last beat included (FinnLib ``99d75e8`` and
@@ -99,14 +98,14 @@ class TransposeKernel(Kernel):
     version = 1
     rtl_module = "inner_shuffle"
 
+    # The tensor its input port reads: a fact its parent gives.
     input_tensor: Tensor = Param(required=False)
-    output_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
 
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
         """Each index's extent: the input reads its tensor through a view, which binds
-        none, so the kernel gives its axes' extents; the output's read must agree."""
+        none, so the kernel gives its axes' extents."""
         return self._bound(dict(zip(self.indices, self.input_tensor.shape)))
 
     rows = extent_of(i)  # I
@@ -150,10 +149,13 @@ class TransposeKernel(Kernel):
         read as each matrix's ``(J, I)`` view, walks it too: its rows, flat."""
         return self.bound_schedule(self.columns, {i: self.simd})
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    def dtype(self) -> QONNXDataType:
-        """The element it moves: the input's, unchanged."""
-        return self.input_tensor.element.dtype
+    @derived
+    def output_tensor(self) -> Tensor | Rejected:
+        """Its output: the input's shape and element, unchanged."""
+        shape = self.spanned(self.indices)
+        if isinstance(shape, Rejected):
+            return shape
+        return Tensor(shape, self.input_tensor.element)
 
     input = AxiStreamPort(
         name="input",
@@ -163,7 +165,6 @@ class TransposeKernel(Kernel):
         index=columns,
         lanes=(i,),
         reshaped=True,
-        dtype=dtype,
         signals=("idat", "ivld", "irdy"),
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
@@ -175,7 +176,6 @@ class TransposeKernel(Kernel):
         schedule=columns_out,
         index=indices,
         lanes=(i,),
-        dtype=dtype,
         signals=("odat", "ovld", "ordy"),
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
@@ -200,7 +200,8 @@ class TransposeKernel(Kernel):
             fabric=self.platform.fabric,
         )
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         return {
             "BITS": self.input_tensor.element.bits,
             "I": self.rows,
@@ -209,7 +210,8 @@ class TransposeKernel(Kernel):
             "SIMD": self.simd,
         }
 
-    def sources(self) -> tuple[CopiedSource, ...]:
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
         return (
             CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),
             CopiedSource(

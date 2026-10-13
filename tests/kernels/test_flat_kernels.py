@@ -1,7 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Authoring examples assessed against native modules, not copied width formulas."""
+"""Authoring examples assessed against native modules, not copied width formulas.
+
+Each kernel is a module alone: its inputs' tensors given, its outputs unplaced.
+"""
 
 import struct
 from dataclasses import replace
@@ -17,6 +20,7 @@ from finn.core.space import (
     Rejected,
     design_space,
 )
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
@@ -25,6 +29,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import integer_shape
 from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, point_for
 from kernels.xsim import requires_xsim
@@ -67,13 +72,16 @@ def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
     )
 
 
-def eltwise(pe=2, **changes):
-    """Flat: no channel binds its extent, so its folding factor is any the RTL takes, committed
-    as a choice."""
+def operand(dtype, shape=(1, 4)):
+    return Tensor(shape, ScalarEncoding(dtype))
+
+
+def eltwise(pe=2, lhs=DataType["INT3"], rhs=DataType["INT3"], **changes):
+    """Alone on two (1, 4) operands of ``lhs`` and ``rhs``, its folding factor committed."""
     facts = dict(
         operation="ADD",
-        lhs_dtype=DataType["INT3"],
-        rhs_dtype=DataType["INT3"],
+        lhs_tensor=operand(lhs),
+        rhs_tensor=operand(rhs),
         b_scale=1.0,
         platform=FULL_DSP58,
     )
@@ -81,18 +89,22 @@ def eltwise(pe=2, **changes):
     return point_for(EltwiseKernel, facts, pe=pe)
 
 
-def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
-    """Flat, its PE is any the RTL takes with its table's rows; ``pe=None`` leaves it open
-    with the memories (a table of no (sets, rows, thresholds) shape has no rows to commit
-    a PE against, nor stages)."""
+def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, channels=None, **changes):
+    """Alone on one row of ``channels`` INT8 inputs (the table's rows; with one row shared,
+    PE of them); ``pe=None`` leaves PE open with the memories (a table of no (sets, rows,
+    thresholds) shape has no rows to commit a PE against, nor stages)."""
     facts = dict(
-        input_dtype=DataType["INT8"],
         threshold_dtype=DataType["INT5"],
         thresholds=(((-2, 0, 3), (-1, 1, 4)),),
         bias=-1,
         platform=FULL_DSP48E2,
     )
     facts.update(changes)
+    if channels is None:
+        shape = integer_shape(facts["thresholds"])
+        rows = shape[1] if shape is not None and len(shape) == 3 else 1
+        channels = rows if rows > 1 or pe is None else pe
+    facts["input_tensor"] = operand(DataType["INT8"], (1, channels))
     factors = {} if pe is None else {"pe": pe, "ram_style": "auto", "ultra_stages": 0}
     # Runtime-writable thresholds present their bus through a control node.
     place = controlled if use_axilite else point_for
@@ -150,13 +162,12 @@ def native_ports(requirements, tmp_path):
         generator,
         lambda: generator(frame_words=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
         eltwise,
-        lambda: eltwise(operation="SUB", lhs_dtype=DataType["UINT7"], rhs_dtype=DataType["UINT7"]),
-        lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"]),
-        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], rhs_dtype=DataType["FLOAT32"], b_scale=0.25),
+        lambda: eltwise(operation="SUB", lhs=DataType["UINT7"], rhs=DataType["UINT7"]),
+        lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"]),
+        lambda: eltwise(lhs=DataType["FLOAT32"], rhs=DataType["FLOAT32"], b_scale=0.25),
         threshold,
         lambda: threshold(use_axilite=True, deep_pipeline=True),
         lambda: threshold(pe=2),
-        lambda: threshold(pe=4),  # PE a multiple of C: rows carried in the lanes
         # One row shared by every channel (C = 1), its configuration address from N alone,
         # and none at all for one threshold.
         lambda: threshold(use_axilite=True, pe=4, thresholds=(((-2, 0, 3),),)),
@@ -195,12 +206,12 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: generator(dims=(2, 6), strides=(1, 1)),
         lambda: generator(strides=(-1, 1)),
         lambda: eltwise(operation="DIV"),
-        lambda: eltwise(lhs_dtype=DataType["INT4"]),
-        lambda: eltwise(lhs_dtype=DataType["BIPOLAR"]),
+        lambda: eltwise(lhs=DataType["INT4"]),
+        lambda: eltwise(lhs=DataType["BIPOLAR"]),
         lambda: eltwise(b_scale=1e100),
         lambda: eltwise(b_scale=0.5),
-        lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"], b_scale=0.5),
-        lambda: eltwise(lhs_dtype=DataType["FLOAT32"], platform=FULL_DSP48E2),
+        lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"], b_scale=0.5),
+        lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2),
         lambda: threshold(thresholds=((-2, 0, 3),), pe=None),  # no sets axis
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),
@@ -220,9 +231,9 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
     "factory",
     [
         lambda: eltwise(pe=0),
-        lambda: eltwise(pe=1 << 32),  # beyond the RTL's 32-bit PE
+        lambda: eltwise(pe=3),  # no divisor of the operands' four channels
         lambda: threshold(pe=0),
-        # Neither of the table's two rows and PE 3 is a multiple of the other.
+        # PE divides the input's channels, the table's two rows.
         lambda: threshold(pe=3),
     ],
 )
@@ -258,7 +269,7 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     ],
 )
 def test_elementwise_output_encoding_follows_operation_and_operand_types(operation, a, b, result):
-    point = eltwise(operation=operation, lhs_dtype=DataType[a], rhs_dtype=DataType[b])
+    point = eltwise(operation=operation, lhs=DataType[a], rhs=DataType[b])
     _ = point.module
     assert point.result_dtype == DataType[result]
 
@@ -366,7 +377,7 @@ def flow_case(case):
         return point, 8, 1, 8, [item & 255 for item in numbers], [], outputs, "", connections
     connections = ".clk, .rst, .adat, .avld, .ardy, .bdat, .bvld, .brdy, .odat, .ovld, .ordy"
     if case == "integer":
-        point = eltwise(operation="SUB", lhs_dtype=DataType["UINT3"], rhs_dtype=DataType["UINT3"])
+        point = eltwise(operation="SUB", lhs=DataType["UINT3"], rhs=DataType["UINT3"])
         a, b = [(0, 7), (3, 1), (7, 7), (2, 5)], [(7, 0), (1, 7), (7, 7), (6, 2)]
 
         def pack3(row):
@@ -374,7 +385,7 @@ def flow_case(case):
 
         outputs = [((x[0] - y[0]) & 15) | (((x[1] - y[1]) & 15) << 4) for x, y in zip(a, b)]
         return point, 6, 6, 8, list(map(pack3, a)), list(map(pack3, b)), outputs, "", connections
-    point = eltwise(pe=1, rhs_dtype=DataType["FLOAT32"])
+    point = eltwise(pe=1, rhs=DataType["FLOAT32"])
     a, b = [-4, 3, -1, 0], [1.5, -2.5, 0.5, -0.25]
     return (
         point,

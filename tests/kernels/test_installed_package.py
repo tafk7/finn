@@ -103,7 +103,6 @@ placed_dotp = Network({
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
         w_tensor=W2,
-        y_tensor=Y2,
         platform=PLATFORM,
     ),
 })
@@ -198,7 +197,7 @@ for memory in ("none", "memstream"):
         "y": wire(
             tensor=y_tensor, port="out0_V", producer=Interface("matmul", "y_end"), platform=PLATFORM
         ),
-        "matmul": MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights),
+        "matmul": MatMulKernel(**facts, x_tensor=x_tensor, **weights),
     })
     root = root.with_choices({
         ("matmul", "compute"): "packed",

@@ -103,17 +103,16 @@ def placed(case: Case) -> Any:
     lhs, rhs = DataType[case.lhs], DataType[case.rhs]
     facts: dict[str, Any] = dict(
         operation=case.operation,
-        lhs_dtype=lhs,
-        rhs_dtype=rhs,
         b_scale=case.scale,
         platform=FULL_DSP58,
     )
-    result = design_space(EltwiseKernel(**facts)).result_dtype
-    tensors = {
+    operands = {
         "lhs": Tensor(case.lhs_shape, ScalarEncoding(lhs)),
         "rhs": Tensor(case.rhs_shape, ScalarEncoding(rhs)),
-        "result": Tensor(case.lhs_shape, ScalarEncoding(result)),
     }
+    # The results' channel carries what the kernel states it produces.
+    alone = EltwiseKernel(**facts, lhs_tensor=operands["lhs"], rhs_tensor=operands["rhs"])
+    tensors = {**operands, "result": design_space(alone).result_tensor}
     members: dict[str, Any] = {}
     for name, tensor in tensors.items():
         end = Interface("arithmetic", f"{name}_end")
@@ -123,7 +122,6 @@ def placed(case: Case) -> Any:
         **facts,
         lhs_tensor=tensors["lhs"],
         rhs_tensor=tensors["rhs"],
-        result_tensor=tensors["result"],
     )
     return with_direct_transports(choose(Network(members), {"arithmetic.pe": case.pe}))
 

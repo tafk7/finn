@@ -28,7 +28,7 @@ and for the lane order (the two levels of a split channel index swapped). The
 same kernels declaring the RTL's orders pass both.
 
 The checks refuse: a module whose pins its sources contradict, and a kernel
-whose ``parameters()`` omit a module parameter, including for modules with a
+whose ``parameters`` omit a module parameter, including for modules with a
 parameter whose value the RTL checker does not establish (thresholding's
 array, eltwise's real, which is itself the omission checked).
 
@@ -45,9 +45,8 @@ through the bus as its kernel declares it before the streams start.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import numpy as np
 import pytest
@@ -57,6 +56,7 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import LeafKernel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -98,7 +98,7 @@ class RowsFirst(ThresholdingAxiKernel):
     def schedule(self) -> Schedule | Rejected:
         *outer, last = self.indices
         order = (last, *outer) if type(self).channels_outer else (*outer, last)
-        return self.bound_schedule(tuple(order), self.factors)
+        return self.bound_schedule(tuple(order), {c: self.pe})
 
 
 class ChannelsFirst(RowsFirst):
@@ -132,7 +132,6 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
-        dtype=ThresholdingAxiKernel.input_dtype,
     )
     output = AxiStreamPort(
         name="m_axis",
@@ -141,7 +140,6 @@ def split_ports(schedule: Any, lanes: tuple[Index, ...]) -> tuple[AxiStreamPort,
         schedule=schedule,
         index=(r, co * 3 + ci),
         lanes=lanes,
-        dtype=ThresholdingAxiKernel.result_dtype,
     )
     return input, output
 
@@ -153,8 +151,14 @@ class LanesInOrder(ThresholdingAxiKernel):
 
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
-        # The window axis binds nothing: the split's extents are the author's, a row a channel.
-        return self._bound({co: self.rows // 3, ci: 3})
+        # The window axis binds nothing: the split's extents are the author's, a row a
+        # channel, and the channels' its rows.
+        return self._bound({co: self.rows // 3, ci: 3, c: self.rows})
+
+    @derived
+    def indices(self) -> tuple[Index, ...]:
+        """The rows and the channels, the output's axes."""
+        return (r, c)
 
     @derived
     def schedule(self) -> Schedule | Rejected:
@@ -349,19 +353,26 @@ class Misnamed(MemStreamKernel):
         endpoint=Endpoint.INITIATOR,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,
-        dtype=MemStreamKernel.dtype,
         clock="clk",
         reset="rst",
     )
+
+
+def without(kernel: type[LeafKernel], omitted: str) -> Any:
+    """A ``parameters`` member: ``kernel``'s, less ``omitted``."""
+    stated = cast(Any, vars(kernel)["parameters"]).function
+
+    def parameters(self: LeafKernel) -> dict[str, int | str]:
+        return {key: value for key, value in stated(self).items() if key != omitted}
+
+    return derived(parameters)
 
 
 class Unbound(MemStreamKernel):
     """memstream_axi without RAM_STYLE, which the module declares with a default."""
 
     id = "test.memstream_axi.unbound"
-
-    def parameters(self) -> Mapping[str, int | str]:
-        return {key: value for key, value in super().parameters().items() if key != "RAM_STYLE"}
+    parameters = without(MemStreamKernel, "RAM_STYLE")
 
 
 class Unpipelined(ThresholdingAxiKernel):
@@ -374,18 +385,14 @@ class Unpipelined(ThresholdingAxiKernel):
     """
 
     id = "test.thresholding_axi.unpipelined"
-
-    def parameters(self) -> Mapping[str, int | str]:
-        return {key: value for key, value in super().parameters().items() if key != "DEEP_PIPELINE"}
+    parameters = without(ThresholdingAxiKernel, "DEEP_PIPELINE")
 
 
 class Unscaled(EltwiseKernel):
     """eltwise without B_SCALE: a real, named by the checker but not valued."""
 
     id = "test.eltwise.unscaled"
-
-    def parameters(self) -> Mapping[str, int | str]:
-        return {key: value for key, value in super().parameters().items() if key != "B_SCALE"}
+    parameters = without(EltwiseKernel, "B_SCALE")
 
 
 def test_a_module_whose_sources_contradict_its_pins_is_refused() -> None:

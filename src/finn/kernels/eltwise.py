@@ -10,7 +10,8 @@ Float arithmetic uses the native DSP58 implementation, so it needs a ``platform`
 whose DSP block is DSP58. b_scale is rounded to binary32 before checking its
 native restrictions and emitting the parameter.
 Operation and scale describe the computation; they are supplied inputs, not
-interchangeable implementation choices.
+interchangeable implementation choices. The operands' types are their tensors'.
+Its resources are not characterised: it states so (``kernel-resources``).
 No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
@@ -18,7 +19,6 @@ from __future__ import annotations
 
 import math
 import struct
-from collections.abc import Mapping
 
 from finn.core.space import (
     ConstraintGroup,
@@ -27,27 +27,29 @@ from finn.core.space import (
     Rejected,
     constraint,
     derived,
+    divisors_of,
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain, interface
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, extent_of, interface
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.values.domains import Integer
+from finn.kernels.utilization import RESOURCES_SEMANTICS
+from finn.kernels.values.domains import Integer, admit_element
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.platform.capabilities import DspBlock, Platform
+from finn.platform.capabilities import DspBlock, Platform, Resources
 
 c = Index("c")
 
 
-class EltwiseKernel(Kernel):
+class EltwiseKernel(LeafKernel):
     """PE results a beat of ``lhs`` and ``rhs``, element by element.
 
-    Placed on its tensors, each operand's is walked row-major, PE elements
-    of its innermost axis a beat, on one schedule over ``lhs``'s axes. An
+    Each operand's tensor is walked row-major, PE elements of its innermost axis a
+    beat, on one schedule over ``lhs``'s axes; the result keeps ``lhs``'s shape. An
     ``rhs`` whose shape is a trailing part of ``lhs``'s (a channel vector, say)
     reads the trailing indices, so it is broadcast: the port presents it once
     per ``lhs`` element it meets, and its channel's adapter replays it. An
@@ -59,14 +61,22 @@ class EltwiseKernel(Kernel):
     rtl_module = "eltwise"
 
     operation: str = Param()
-    # PE elements of the innermost axis a beat: its divisors placed, any the RTL takes flat.
-    pe: int = Decision(domain=factor_domain(c))
-    lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    # The tensors its ports read and write, when a parent places it.
+    # The tensors its operand ports read: facts its parent gives.
     lhs_tensor: Tensor = Param(required=False)
     rhs_tensor: Tensor = Param(required=False)
-    result_tensor: Tensor = Param(required=False)
+    channels = extent_of(c)  # the innermost axis
+    # PE elements of the innermost axis a beat.
+    pe: int = Decision(domain=divisors_of(channels))
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def lhs_dtype(self) -> QONNXDataType:
+        """``lhs``'s element type: its tensor's."""
+        return self.lhs.element.dtype
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def rhs_dtype(self) -> QONNXDataType:
+        """``rhs``'s element type: its tensor's."""
+        return self.rhs.element.dtype
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -142,28 +152,28 @@ class EltwiseKernel(Kernel):
         return indices[max(0, len(indices) - rank) :]  # a longer rhs is refused by rank
 
     @derived
-    def factors(self) -> dict[Index, int]:
-        return {c: self.pe}
-
-    @derived
     def schedule(self) -> Schedule | Rejected:
         """Row-major over lhs's axes, ``c`` split by PE innermost."""
-        return self.bound_schedule(self.indices, self.factors)
+        return self.bound_schedule(self.indices, {c: self.pe})
 
     @derived
-    def frame_cycles(self) -> int:
-        """Its schedule's beats, one a cycle at best."""
-        return self.schedule.beat_count
+    def result_tensor(self) -> Tensor | Rejected:
+        """Its results: ``lhs``'s shape, in ``result_dtype``."""
+        shape = self.spanned(self.indices)
+        if isinstance(shape, Rejected):
+            return shape
+        element = admit_element(self.result_dtype, None)
+        if isinstance(element, Rejected):
+            return element
+        return Tensor(shape, element)
 
     lhs = AxiStreamPort(
         name="lhs",
         endpoint=Endpoint.TARGET,
         tensor=lhs_tensor,
         schedule=schedule,
-        factors=factors,
         index=indices,
         lanes=(c,),
-        dtype=lhs_dtype,
         signals=("adat", "avld", "ardy"),
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
@@ -173,10 +183,8 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.TARGET,
         tensor=rhs_tensor,
         schedule=schedule,
-        factors=factors,
         index=rhs_indices,
         lanes=(c,),
-        dtype=rhs_dtype,
         signals=("bdat", "bvld", "brdy"),
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
@@ -186,10 +194,8 @@ class EltwiseKernel(Kernel):
         endpoint=Endpoint.INITIATOR,
         tensor=result_tensor,
         schedule=schedule,
-        factors=factors,
         index=indices,
         lanes=(c,),
-        dtype=result_dtype,
         signals=("odat", "ovld", "ordy"),
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
@@ -202,7 +208,12 @@ class EltwiseKernel(Kernel):
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        return reject("kernel-resources", "the eltwise module's resources are not characterised")
+
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         a, b = self.lhs_dtype, self.rhs_dtype
         return {
             "OP": f'"{self.operation}"',
@@ -217,7 +228,8 @@ class EltwiseKernel(Kernel):
             "FORCE_BEHAVIORAL": 0,
         }
 
-    def sources(self) -> tuple[CopiedSource, ...]:
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
         return tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (

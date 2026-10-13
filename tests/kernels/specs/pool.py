@@ -40,6 +40,9 @@ def max_pool(
     )
 
 
+INT4 = ScalarEncoding(DataType["INT4"])
+
+
 def pool(
     shape: tuple[int, int, int] = SHAPE,
     window: tuple[int, int] = WINDOW,
@@ -71,7 +74,11 @@ SPEC = KernelSpec(
         ),
         Probe(
             "a window no wider than nothing",
-            lambda: placed(pool(), window=(0, 2)),
+            # The output's tensor given: the kernel states none for no window.
+            lambda: placed(
+                {**pool(), "outputs": {"output_channel": Tensor((2, 3, 6), INT4)}},
+                window=(0, 2),
+            ),
             frozenset({"pool-geometry"}),
         ),
     ),

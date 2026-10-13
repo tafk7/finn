@@ -16,7 +16,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue
+from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue, integer_shape
 from kernels.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
@@ -33,12 +33,17 @@ def threshold(
     axilite: bool = False,
     deep: bool = False,
 ) -> ThresholdingAxiKernel:
-    """PE is committed as a choice; ``None`` leaves it open."""
+    """On one row of channels, the table's rows (with one row shared, PE of them). PE is
+    committed as a choice; ``None`` leaves it open."""
+    shape = integer_shape(table)
+    rows = shape[1] if shape is not None and len(shape) == 3 else 1
+    channels = rows if rows > 1 or pe is None else pe
     base = threshold_base(
         table=table,
         bias=bias,
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,
+        channels=channels,
     )
     factors: dict[str, object] = {} if pe is None else {"pe": pe}
     if pe is not None:
@@ -46,8 +51,9 @@ def threshold(
         factors |= AUTO_MEMORY if memory is None else memory
     if axilite:
         # Runtime-writable thresholds present their bus through a control node.
+        element = ScalarEncoding(resolve_qonnx_datatype_name(input_dtype))
         facts = dict(
-            input_dtype=resolve_qonnx_datatype_name(input_dtype),
+            input_tensor=Tensor((1, channels), element),
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
             bias=bias,
@@ -134,11 +140,11 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
         with pytest.raises(DefinitionError, match="integer tensor"):
             threshold(table=cast(IntegerTensor, malformed), pe=None)
-    # Flat, PE is any the RTL takes with the table's two rows (one a multiple of the
-    # other); another is refused where it is committed.
-    for pe in (0, 3, 5):
+    # PE divides the input's channels, the table's two rows; another is refused where it
+    # is committed.
+    for pe in (0, 3, 4, 5):
         assert not threshold_base().try_with_choices(pe=pe).accepted
-    assert threshold_base().try_with_choices(pe=4).accepted
+    assert threshold_base().try_with_choices(pe=2).accepted
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
@@ -163,12 +169,10 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(
-                input_dtype=DataType["INT8"],
                 threshold_dtype=DataType["INT5"],
                 thresholds=table,
                 bias=-1,
                 input_tensor=x_tensor,
-                output_tensor=y_tensor,
                 platform=FULL_DSP48E2,
             ),
         }
@@ -235,7 +239,7 @@ def _clog2(value: int) -> int:
 
 @pytest.mark.parametrize(
     "sets,rows,count,pe",
-    [(1, 1, 3, 4), (1, 6, 3, 2), (1, 4, 4, 4), (2, 6, 5, 2), (3, 2, 7, 1), (2, 2, 1, 4)],
+    [(1, 1, 3, 4), (1, 6, 3, 2), (1, 4, 4, 4), (2, 6, 5, 2), (3, 2, 7, 1), (2, 1, 1, 4)],
 )
 def test_the_thresholds_file_holds_each_threshold_where_the_rtl_reads_it(
     sets: int, rows: int, count: int, pe: int

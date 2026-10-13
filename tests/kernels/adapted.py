@@ -61,11 +61,9 @@ def adapted(
                 dtype=DataType["INT4"],
                 form=source,
                 contents=values(rows, channels),
-                output_tensor=x_tensor,
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(
-                input_dtype=DataType["INT4"],
                 threshold_dtype=DataType["INT4"],
                 thresholds=(tuple(LEVELS for _ in range(channels)),),
                 bias=0,
@@ -73,7 +71,6 @@ def adapted(
                 ram_style="auto",
                 ultra_stages=0,
                 input_tensor=x_tensor,
-                output_tensor=y_tensor,
                 platform=FULL_DSP48E2,
             ),
         }
@@ -127,9 +124,7 @@ def transposed(
                 producer=Interface("shuffle", "output_end"),
                 platform=platform,
             ),
-            "shuffle": TransposeKernel(
-                input_tensor=tensor, output_tensor=tensor, platform=platform
-            ),
+            "shuffle": TransposeKernel(input_tensor=tensor, platform=platform),
         }
     )
     point = choose(network, {"shuffle.ram_style": ram_style, "shuffle.simd": simd})

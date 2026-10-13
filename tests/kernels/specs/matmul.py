@@ -31,7 +31,7 @@ FACTS: dict[str, Any] = dict(
 def matmul() -> dict[str, Any]:
     """Y = X @ W on the packed core, its weights streamed: its activations replayed and framed
     by the channel's adapter, as its core's port states; its result element its own view."""
-    result = design_space(MatMulKernel(**FACTS)).result_tensor
+    result = design_space(MatMulKernel(**FACTS)).y_tensor
     return dict(
         space_type=MatMulKernel,
         inputs={
@@ -57,7 +57,7 @@ def depthwise() -> dict[str, Any]:
         "w_channel": tensor((REDUCTION, OUTPUTS), "INT4"),
     }
     case["outputs"] = {
-        "y_channel": design_space(MatMulKernel(**FACTS, form=Form.DEPTHWISE)).result_tensor
+        "y_channel": design_space(MatMulKernel(**FACTS, form=Form.DEPTHWISE)).y_tensor
     }
     case["facts"] = {**FACTS, "form": Form.DEPTHWISE}
     return case

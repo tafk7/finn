@@ -61,7 +61,7 @@ with several ``sets``, the tensor of the set indices is ``index_tensor``)
 carries a ``source`` Decision over the kernels that can drive it with that
 value (``SOURCES``: a memory). It applies only when the value is known
 (``valued``), and it has no ``none`` case: one viable candidate is forced. The
-source is the channel's producer end, placed by the channel (``staged``), its
+source is the channel's producer end, placed by the channel, its
 leaf below the channel at ``source.<case>``; it stores one period of the value
 in the order the channel's consumer reads it. The invariant: **a channel with
 a value has its source as its only producer** (``channel-users``). With several
@@ -371,7 +371,6 @@ class Channel(Space):
         sets=sets,
         set_tensor=index_tensor,
         platform=platform,
-        staged=True,
     )
     source_case = selected(source)
     source_module = View(source.module)

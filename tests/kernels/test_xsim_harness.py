@@ -117,11 +117,11 @@ def test_a_stream_given_no_words_is_an_undriven_input(tmp_path: Path) -> None:
     assert not any(tmp_path.iterdir())
 
 
-def _flat_thresholds() -> Any:
-    """thresholding_axi alone, a leaf module: unplaced, it holds its streams and its
-    AXI-Lite bus idle."""
+def _thresholds_alone() -> Any:
+    """thresholding_axi alone, a leaf module on its input: it holds its set stream (one
+    set) and its AXI-Lite bus idle."""
     facts = dict(
-        input_dtype=DataType["INT4"],
+        input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT4"])),
         threshold_dtype=DataType["INT4"],
         thresholds=(((-2, 0, 3),),),
         bias=0,
@@ -132,17 +132,23 @@ def _flat_thresholds() -> Any:
 
 
 def test_a_leaf_s_held_inputs_are_driven_to_their_declared_values(tmp_path: Path) -> None:
-    leaf = _flat_thresholds().module
+    leaf = _thresholds_alone().module
     held = dict(leaf.held.inputs)
     assert held["s_axilite_AWVALID"] == 0 and "s_axis_set_tvalid" in held
-    bench = stream_bench(leaf, tmp_path, inputs={}, outputs={}, toolchain=host_toolchain())
+    bench = stream_bench(
+        leaf,
+        tmp_path,
+        inputs={"s_axis": ([1], 8)},
+        outputs={"m_axis": ([0], 8)},
+        toolchain=host_toolchain(),
+    )
     for pin, value in held.items():
         assert re.search(rf"logic (\[\d+:0\] )?{pin} = \d+'h{value:x};", bench.text), pin
-    with pytest.raises(ValueError, match="the module holds the streams s_axis"):
+    with pytest.raises(ValueError, match="the module holds the streams s_axis_set"):
         stream_bench(
             leaf,
             tmp_path / "held",
-            inputs={"s_axis": ([1], 8)},
+            inputs={"s_axis_set": ([1], 8)},
             outputs={},
             toolchain=host_toolchain(),
         )
@@ -151,7 +157,7 @@ def test_a_leaf_s_held_inputs_are_driven_to_their_declared_values(tmp_path: Path
 def test_an_input_the_module_declares_no_value_for_is_refused_naming_it(tmp_path: Path) -> None:
     """Held nothing, the leaf's set stream, given no words, has no value: its AXI-Lite bus is
     the testbench's to write (no write declared) and its other streams are given words."""
-    leaf = _flat_thresholds().module
+    leaf = _thresholds_alone().module
     unheld = replace(leaf, held=Held())
     with pytest.raises(Undriven) as refused:
         stream_bench(

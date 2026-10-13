@@ -23,7 +23,7 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.configure import commit, describe
+from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -67,12 +67,7 @@ def test_one_root_serves_stored_and_streamed_weights() -> None:
     assert commit(streamed, {"matmul.compute": "packed"}).matmul.compute is not None
 
 
-def test_a_bare_kernel_cannot_commit_folding_but_its_node_root_can() -> None:
-    bare = design_space(MatMulKernel(**FACTS)).with_choices({MatMulKernel.compute: "packed"})
-    report = bare.try_with_choices({MatMulKernel.packed.pe: 2})
-    assert not report.accepted
-    assert "kernel-extents" in describe(outcome.result for outcome in report.outcomes)
-
+def test_the_node_root_commits_folding_on_its_tensors() -> None:
     packed = commit(stored(), {"matmul.compute": "packed"})
     assert commit(packed, {"matmul.compute.packed.pe": 2}).matmul.compute.pe == 2
     with pytest.raises(ValueError, match="domain-membership"):
@@ -87,10 +82,9 @@ def test_the_views_answer_from_facts() -> None:
     streamed = design_space(
         root(**FACTS, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)))
     )
-    assert streamed.matmul.result_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), (-48, 64)))
+    assert streamed.matmul.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), (-48, 64)))
     owned = design_space(root(**FACTS, x_tensor=X, w_tensor=W, w_contents=WEIGHTS))
-    assert owned.matmul.result_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT5"), (-11, 11)))
-    assert design_space(MatMulKernel(**FACTS)).result_tensor == streamed.matmul.result_tensor
+    assert owned.matmul.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT5"), (-11, 11)))
     # The weight channel carries the graph's statement: the values' range, and the value,
     # which its source restates.
     point = stored()
@@ -100,14 +94,14 @@ def test_the_views_answer_from_facts() -> None:
     assert point.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(INT3))
     table = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(4)),)
     facts: dict[str, Any] = dict(
-        input_dtype=dtype("INT8"),
         threshold_dtype=dtype("INT8"),
         thresholds=table,
         bias=0,
         platform=TARGET.platform,
     )
-    assert design_space(ThresholdingAxiKernel(**facts)).result_dtype.name == "UINT2"
     edge = Tensor((3, 4), ScalarEncoding(dtype("INT8")))
+    alone = design_space(ThresholdingAxiKernel(**facts, input_tensor=edge))
+    assert alone.result_dtype.name == "UINT2"
     result = Tensor((3, 4), ScalarEncoding(dtype("UINT2")))
     activate = design_space(Thresholding.root()(**facts, x_tensor=edge, y_tensor=result))
     assert activate.y.tensor.element.value_range == (0, 3)

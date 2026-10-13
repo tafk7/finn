@@ -28,7 +28,7 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.base import Kernel
+from finn.kernels.base import LeafKernel
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
 from finn.platform.capabilities import DspBlock
@@ -55,7 +55,7 @@ def kernel(space_type=PackedDotpKernel, **updates):
 
 
 def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():
-    assert DotpAxiKernel.__bases__ == (Kernel,)
+    assert DotpAxiKernel.__bases__ == (LeafKernel,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
     assert [
@@ -84,7 +84,6 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "window",
         "x_tensor",
         "w_tensor",
-        "y_tensor",
     }
     # The core's own choices.
     assert {item.key for item in inspection.decisions(point)} == {
@@ -250,9 +249,9 @@ def test_pumping_needs_lanes_to_split_and_is_not_offered_with_one():
 
 def test_narrow_weights_derive_from_the_weight_stream_s_range():
     narrow = kernel(weights_dtype=DataType["INT4"], weights_range=(-7, 7))
-    assert narrow.narrow_weights and narrow.parameters()["NARROW_WEIGHTS"] == 1
+    assert narrow.narrow_weights and narrow.parameters["NARROW_WEIGHTS"] == 1
     plain = kernel(weights_dtype=DataType["INT4"])
-    assert not plain.narrow_weights and plain.parameters()["NARROW_WEIGHTS"] == 0
+    assert not plain.narrow_weights and plain.parameters["NARROW_WEIGHTS"] == 0
     # A range that holds the minimum is not narrow, however tight its top.
     assert not kernel(weights_dtype=DataType["INT4"], weights_range=(-8, 0)).narrow_weights
 
@@ -264,10 +263,10 @@ def test_narrow_weights_may_be_as_wide_as_the_dsp_a_input():
         weights_dtype=DataType["INT25"],
         result_dtype=DataType["INT48"],
     )
-    plain = kernel(**wide).inspect(DotpAxiKernel.core_supported).result
+    plain = kernel(**wide).inspect(PackedDotpKernel.core_supported).result
     assert codes(plain) == {"dotp-weight-width"}
     narrow = kernel(**wide, weights_range=(-(1 << 24) + 1, (1 << 24) - 1))
-    assert narrow.inspect(DotpAxiKernel.core_supported).result == Available(True)
+    assert narrow.inspect(type(narrow).core_supported).result == Available(True)
 
 
 def test_pumped_compute_is_offered_on_any_platform():
@@ -296,14 +295,14 @@ def test_the_reducer_left_open_is_a_choice_no_platform_refuses(dsp):
 
 def test_the_core_refuses_before_its_folding_factors_are_chosen():
     point = kernel(weights_dtype=DataType["INT27"], pe=None, simd=None, compute_pumping=None)
-    assert codes(point.inspect(DotpAxiKernel.core_supported).result) == {"dotp-weight-width"}
+    assert codes(point.inspect(type(point).core_supported).result) == {"dotp-weight-width"}
     # The module waits on the folding factors; the refusal is already known.
     module = point.inspect(DotpAxiKernel.module).accepted_result
     assert not isinstance(module, Available)
     # Folding factors left open leave an admissible core unresolved, not refused (with
     # extents of 1 every factor would be forced).
     open_factors = kernel(pe=None, simd=None, compute_pumping=None, outputs=2, reduction=4)
-    assert isinstance(open_factors.inspect(DotpAxiKernel.core_supported).result, Available)
+    assert isinstance(open_factors.inspect(type(open_factors).core_supported).result, Available)
     assert isinstance(open_factors.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
     assert open_factors.x.element.bits == 3
 
@@ -343,10 +342,10 @@ def test_the_packed_core_takes_accumulators_wider_than_p(platform, activation, w
         weights_dtype=DataType[weight],
         result_dtype=DataType[accumulator],
     )
-    assert point.inspect(DotpAxiKernel.accumulator_width_supported).result == Available(True)
+    assert point.inspect(type(point).accumulator_width_supported).result == Available(True)
     assert dict(point.module.parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
     int8 = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"])
-    refused = int8.inspect(DotpAxiKernel.accumulator_width_supported).result
+    refused = int8.inspect(type(int8).accumulator_width_supported).result
     assert codes(refused) == {"dotp-accumulator-width"}
     assert kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT58"]).module
 
@@ -384,7 +383,7 @@ def test_each_core_accumulates_in_the_ranges_own_encoding(space_type, result_ran
     point = helpers.placed_dotp(
         space_type, **facts, result_dtype=DataType[accumulator], result_range=result_range
     )
-    assert point.result_dtype == DataType[accumulator]
+    assert point.accumulator == DataType[accumulator]
     assert point.y.element == ScalarEncoding(DataType[accumulator], result_range)
     assert dict(point.module.parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
 
@@ -463,8 +462,9 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
         requirements = kernel(space_type).module
         assert requirements.implementation_id == space_type.id
         assert dict(requirements.parameters)["CORE"] == f'"{core}"'
-    refused = kernel(DotpAxiKernel).inspect(DotpAxiKernel.module).accepted_result
-    assert codes(refused) == {"dotp-core"}
+    # The shared base states none of what each core states: it is not placed.
+    with pytest.raises(DefinitionError, match="leaves required members unmet: DotpAxiKernel"):
+        kernel(DotpAxiKernel)
 
 
 @pytest.mark.parametrize(

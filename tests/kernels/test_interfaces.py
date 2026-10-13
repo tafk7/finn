@@ -68,11 +68,9 @@ class Activated(Root):
         result_range=ordinary_integer_bounds(R),
         x_tensor=X,
         w_tensor=WEIGHT_TENSOR,
-        y_tensor=RESULT_TENSOR,
         platform=FULL_DSP48E2,
     )
     activate = ThresholdingAxiKernel(
-        input_dtype=R,
         threshold_dtype=R,
         thresholds=THRESHOLDS,
         bias=0,
@@ -80,7 +78,6 @@ class Activated(Root):
         ram_style="auto",
         ultra_stages=0,
         input_tensor=RESULT_TENSOR,
-        output_tensor=LEVEL_TENSOR,
         control=config,
         platform=FULL_DSP48E2,
     )
@@ -143,7 +140,6 @@ def test_writable_thresholds_export_their_bus_through_the_control_node():
 def test_writable_thresholds_without_a_control_bus_are_not_offered():
     class Unexported(Activated):
         activate = ThresholdingAxiKernel(
-            input_dtype=R,
             threshold_dtype=R,
             thresholds=THRESHOLDS,
             bias=0,
@@ -151,7 +147,6 @@ def test_writable_thresholds_without_a_control_bus_are_not_offered():
             ram_style="auto",
             ultra_stages=0,
             input_tensor=RESULT_TENSOR,
-            output_tensor=LEVEL_TENSOR,
             platform=FULL_DSP48E2,
         )
 
@@ -211,7 +206,6 @@ def test_several_threshold_sets_take_a_set_selector_stream():
 
     def thresholding(sets: Tensor) -> ThresholdingAxiKernel:
         return ThresholdingAxiKernel(
-            input_dtype=R,
             threshold_dtype=R,
             thresholds=two_sets,
             bias=0,
@@ -219,7 +213,6 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             ram_style="auto",
             ultra_stages=0,
             input_tensor=RESULT_TENSOR,
-            output_tensor=LEVEL_TENSOR,
             set_tensor=sets,
             platform=FULL_DSP48E2,
         )

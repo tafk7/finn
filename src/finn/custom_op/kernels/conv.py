@@ -143,7 +143,7 @@ class Conv(MatMul):
         return rows * columns, n, k, {"window": window}
 
     def output_tensors(self) -> Shapes:
-        result = self.view("result_tensor")
+        result = self.view("y_tensor")
         rows, columns = self.window().output
         return {
             self.onnx_node.output[0]: ((1, rows, columns, result.shape[-1]), result.element.dtype)

@@ -588,7 +588,6 @@ def kernel_fixtures(api):
             PackedDotpKernel(
                 x_tensor=dotp_tensors[0],
                 w_tensor=dotp_tensors[1],
-                y_tensor=dotp_tensors[2],
                 result_range=(-128, 127),  # int8's: the core's accumulator is INT8
                 platform=platform,
             ),
@@ -614,7 +613,6 @@ def kernel_fixtures(api):
                 platform=platform,
                 x_tensor=matmul_tensors[0],
                 w_tensor=matmul_tensors[1],
-                y_tensor=matmul_tensors[2],
             ),
             lambda point, index: commit(
                 point,

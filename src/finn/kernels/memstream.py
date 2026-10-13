@@ -7,7 +7,8 @@ The consumer supplies the operand ``contents`` and the beat ``form`` it reads
 them in; the kernel packs one image per set in that form into the memory, so
 the consumer's order needs no adapter. Initial contents go through INIT_FILE, a generated data file
 named by its contents, so they are part of the build identity. It owns the
-values it streams, so it states their ``value_range`` on its output: its element is
+values it streams, so it states their ``value_range`` in its output's tensor
+(``output_tensor``, one set of the operand in the consumer's form): its element is
 ``dtype`` over the minimum and maximum of every set's contents.
 
 - With one set, the image streams cyclically.
@@ -18,10 +19,11 @@ values it streams, so it states their ``value_range`` on its output: its element
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
 It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by the
-channel it drives, ``staged``, its output presents its given sequence without an
-output tensor, and its set port reads the channel's ``index_tensor``. Placed by
-a parent, it states its ends (``output_end``, ``set_end``), which the channels on
-them take.
+channel it drives, its output presents its given sequence, and its set port reads
+the channel's ``index_tensor``. Placed by a parent, it states its ends
+(``output_end``, ``set_end``), which the channels on them take. Its cycles are the
+beats its output carries a frame, as every leaf's: one pass with one set, one pass
+an index with several.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -36,7 +38,6 @@ doubled clock, which its module states and the shell root admits (``clock-unavai
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import replace
 from math import ceil, prod
 
@@ -55,7 +56,6 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
-from finn.dataflow.schedule import Index
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
@@ -72,7 +72,7 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, interface
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -95,9 +95,6 @@ from finn.kernels.values.semantics import (
     row_major,
 )
 from finn.platform.capabilities import Fabric, Platform, Resources
-
-LANE = Index("lane")
-"""The lanes of a stored word, one per lane of the consumer's form."""
 
 
 def memstream_resources(
@@ -123,7 +120,9 @@ _MEMSTREAM_LUT = Fit(4.2, (1.026,))
 _MEMSTREAM_FF = Fit(4.4, (2.028,))
 
 
-class MemStreamKernel(Kernel):
+class MemStreamKernel(LeafKernel):
+    """A stored operand streamed in its consumer's order; see the module docstring."""
+
     id = "finnlib.memstream_axi"
     version = 1
     rtl_module = "memstream_axi"
@@ -132,11 +131,8 @@ class MemStreamKernel(Kernel):
     form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
-    # Where a parent places it: the tensor it drives and the set indices (several sets
-    # only); or, as a channel's source, placed by the channel (staged), no output tensor.
-    output_tensor: Tensor = Param(required=False)
+    # The set indices its set port reads (several sets only): a fact its parent gives.
     set_tensor: Tensor = Param(required=False)
-    staged: bool = Param(default=False)
     platform: Platform = Param()
 
     @derived
@@ -176,6 +172,12 @@ class MemStreamKernel(Kernel):
             return admitted
         low, high = self.value_range
         return admit_element(self.dtype, (low, high))
+
+    @derived
+    def output_tensor(self) -> Tensor:
+        """What it streams: one set of the operand, in the consumer's form, over its
+        contents' range."""
+        return Tensor(self.form.shape, self.element)
 
     @derived
     def word_bits(self) -> int:
@@ -309,17 +311,6 @@ class MemStreamKernel(Kernel):
             fabric=self.platform.fabric,
         )
 
-    @derived
-    def frame_cycles(self) -> int:
-        """Its output's beats a pass (a set's, with several), one a cycle at best: a
-        memory states no schedule, its stream is its form."""
-        return self.form.beats
-
-    @derived
-    def word_factors(self) -> dict[Index, int]:
-        """The lanes of a word: the form's lanes, carried by an idle output too."""
-        return {LANE: self.form.lanes}
-
     set = AxiStreamPort(
         name="set",
         endpoint=Endpoint.TARGET,
@@ -334,12 +325,7 @@ class MemStreamKernel(Kernel):
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
-        staged=staged,
         sequence=output_sequence,
-        dtype=dtype,
-        value_range=value_range,
-        lanes=(LANE,),
-        factors=word_factors,
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
     )
@@ -352,7 +338,8 @@ class MemStreamKernel(Kernel):
         pumped = self.pumped_memory
         return replace(NATIVE_CLOCKING, doubled="clk2x", doubling=pumped)
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         return {
             "DEPTH": self.form.beats,
             "INIT_FILE": f'"{self.init_file.path}"',
@@ -362,6 +349,7 @@ class MemStreamKernel(Kernel):
             "WIDTH": self.word_bits,
         }
 
+    @derived
     def sources(self) -> tuple[Contribution, ...]:
         return (
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
@@ -375,9 +363,11 @@ class MemStreamKernel(Kernel):
             self.init_file,
         )
 
+    @derived
     def other_pins(self) -> tuple[Pin, ...]:
         return (self.config_bus,)
 
+    @derived
     def held(self) -> Held:
         """AXI-Lite, always: the contents are fixed at build time."""
         return held_bus(self.config_bus)

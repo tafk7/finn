@@ -18,8 +18,8 @@ from finn.dataflow.plan import Step, plan
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
+from finn.kernels.channels import Channel
 from finn.kernels.network import dotted
-from finn.kernels.transpose import TransposeKernel
 from kernels.conformance import KERNEL, unchosen
 from kernels.helpers import FULL_DSP48E2, choose
 from kernels.specs.base import placed
@@ -71,6 +71,9 @@ def test_its_input_is_each_matrix_flat_and_its_output_each_column(simd: int) -> 
     assert parameters == {"BITS": 4, "I": ROWS, "J": COLS, "RAM_STYLE": '"auto"', "SIMD": simd}
     widths = {pin.name: pin.width for pin in kernel.module.abi.pins if isinstance(pin, Signal)}
     assert widths["idat"] == widths["odat"] == 4 * simd
+    # Its cycles a frame are the beats its ports carry, as every leaf's: a matrix's
+    # elements, SIMD a beat, each batch.
+    assert kernel.cycles == BATCHES * ROWS * COLS // simd
 
 
 def test_a_producer_of_rows_at_another_lane_count_is_only_a_width_conversion_away() -> None:
@@ -81,23 +84,23 @@ def test_a_producer_of_rows_at_another_lane_count_is_only_a_width_conversion_awa
         assert plan(produced, _transpose(simd).input.presented).steps == (Step.WIDTH,)
 
 
-def test_its_output_must_read_the_inputs_matrices() -> None:
-    """The input reads through a view, so the kernel gives its extents; an output of
-    another shape is refused, naming the axis."""
+def test_its_output_is_its_inputs_matrices() -> None:
+    """The input reads through a view, so the kernel gives its extents; its output, the
+    tensor it states, is its input's shape, and a channel of another refuses it."""
     transposed = (BATCHES, COLS, ROWS)
     case = {**transpose(), "outputs": {"output_channel": transposed}}
-    refused = unchosen(**case).member(KERNEL).query(TransposeKernel.extents)
+    point = choose(unchosen(**case), {f"{KERNEL}.simd": 2, f"{KERNEL}.ram_style": "auto"})
+    assert point.member(KERNEL).output_tensor.shape == (BATCHES, ROWS, COLS)
+    refused = point.member("output_channel").query(Channel.well_formed)
     assert isinstance(refused, Rejected)
-    assert [(f.code, f.message) for f in refused.findings] == [
-        ("kernel-extents", f"i is {ROWS} (given) and {COLS} (output axis 1)")
-    ]
+    assert {f.code for f in refused.findings} == {"channel-tensor"}
 
 
 def test_a_tensor_of_one_axis_is_no_matrix() -> None:
     case = {
         **transpose(),
         "inputs": {"input_channel": tensor((ROWS,), "INT4")},
-        "outputs": {"output_channel": (ROWS,)},
+        "outputs": {"output_channel": tensor((ROWS,), "INT4")},
     }
     kernel: Space = unchosen(**case).member(KERNEL)
     assert rejected(kernel) == {"kernel-extents"}

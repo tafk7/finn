@@ -11,9 +11,10 @@ window, ``(oh * SH + kh, ow * SW + kw, c)``, on the schedule ``(oh, ow, c, kh, k
 with ``c`` folded by PE, and closes each window with the marker of its innermost
 two indices (``closes``), so the channel's adapter (``input_gen``) presents the
 windows in order and its loop-end marker becomes the stream's TLAST, as dotp's
-activation TLAST closes each reduction. Its output reads ``(oh, ow, c)``, presented
-after each window (``reduces``), PE channels a beat, in the input's element: the
-maximum of values in a range stays in it.
+activation TLAST closes each reduction. Its output, the tensor it states
+(``output_tensor``), is ``(oh, ow, c)``, presented after each window (``reduces``), PE
+channels a beat, in the input's element: the maximum of values in a range stays in
+it.
 
 The module is an HLS top that FINN writes from the point's values (``pool_top``,
 an ``HlsSource``): ``hls::vector`` lanes of the element's ``ap_int``/``ap_uint``,
@@ -24,8 +25,9 @@ spelled as HLS spells them (``s_axis_TDATA``). Its period is the platform's.
 
 Its domain is what that hardware takes: ordinary integers (``max`` over
 ``ap_int``/``ap_uint``), any window and stride its channel can present, any PE
-dividing the channels. Its computation's reference is test-side until a KernelOp
-reaches it (decision KT12 A1): ``tests/kernels/specs/pool.py``.
+dividing the channels. Its resources are not characterised: it states so
+(``kernel-resources``). Its computation's reference is test-side until a KernelOp
+reaches it: ``tests/kernels/specs/pool.py``.
 No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
@@ -38,20 +40,22 @@ from finn.core.space import (
     Rejected,
     constraint,
     derived,
+    divisors_of,
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.kernels.base import Kernel, factor_domain, interface
+from finn.kernels.base import LeafKernel, extent_of, interface
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import AxisSpelling
+from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-from finn.platform.capabilities import Platform
+from finn.platform.capabilities import Platform, Resources
 
 oh, ow, c, kh, kw = (Index(name) for name in ("oh", "ow", "c", "kh", "kw"))
 
@@ -146,7 +150,7 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 """
 
 
-class PoolKernel(Kernel):
+class PoolKernel(LeafKernel):
     """Max pooling of each ``window`` at ``stride`` (rows, columns) of an HWC tensor;
     see the module docstring."""
 
@@ -158,8 +162,8 @@ class PoolKernel(Kernel):
     window: tuple[int, int] = Param()
     stride: tuple[int, int] = Param()
     platform: Platform = Param()
+    # The tensor its input port reads: a fact its parent gives.
     input_tensor: Tensor = Param(required=False)
-    output_tensor: Tensor = Param(required=False)
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -172,7 +176,7 @@ class PoolKernel(Kernel):
     def extents(self) -> dict[Index, int] | Rejected:
         """The window's extents are its own, and the windows' from the input: as many as
         fit whole, ``(H - KH) // SH + 1`` a row (no padding: a pad is its own stage). The
-        channels are bound from the tensors, as is the output, which must agree."""
+        channels are bound from the input's tensor."""
         (rows, columns), (row_step, column_step) = self.window, self.stride
         shape = self.input_tensor.shape
         if len(shape) != 3 or shape[0] < rows or shape[1] < columns:
@@ -183,7 +187,8 @@ class PoolKernel(Kernel):
         }
         return self._bound({kh: rows, kw: columns, **windows})
 
-    pe: int = Decision(domain=factor_domain(c))
+    channels = extent_of(c)
+    pe: int = Decision(domain=divisors_of(channels))
 
     @derived
     def input_index(self) -> tuple[Affine, ...]:
@@ -194,11 +199,6 @@ class PoolKernel(Kernel):
     def schedule(self) -> Schedule | Rejected:
         """Window by window, PE channels a beat, the window's positions innermost."""
         return self.bound_schedule(order=(oh, ow, c, kh, kw), factors={c: self.pe})
-
-    @derived
-    def frame_cycles(self) -> int:
-        """Its schedule's beats, one a cycle at best: an input beat a cycle."""
-        return self.schedule.beat_count
 
     input = AxiStreamPort(
         name="s_axis",
@@ -218,9 +218,12 @@ class PoolKernel(Kernel):
         return self.input.element.dtype
 
     @derived
-    def element_range(self) -> tuple[int, ...]:
-        found = self.input.element.value_range
-        return () if found is None else tuple(found)
+    def output_tensor(self) -> Tensor | Rejected:
+        """Its output: ``(OH, OW, C)``, in the input's element."""
+        shape = self.spanned((oh, ow, c))
+        if isinstance(shape, Rejected):
+            return shape
+        return Tensor(shape, self.input.element)
 
     output = AxiStreamPort(
         name="m_axis",
@@ -231,8 +234,6 @@ class PoolKernel(Kernel):
         index=(oh, ow, c),
         lanes=(c,),
         reduces=(kh, kw),
-        dtype=element_dtype,
-        value_range=element_range,
         spelling=AxisSpelling.UPPER,
     )
     input_end = interface("input")
@@ -245,7 +246,17 @@ class PoolKernel(Kernel):
 
     admission = ConstraintGroup(geometry_supported, element_supported)
 
-    def sources(self) -> tuple[HlsSource, ...]:
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        return reject("kernel-resources", "the pooling module's resources are not characterised")
+
+    @derived
+    def parameters(self) -> dict[str, int | str]:
+        """None: the HLS top is written from the point's values."""
+        return {}
+
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
         element, pe = self.element_dtype, self.pe
         input_bits, output_bits = self.input.axis.carrier_bits, self.output.axis.carrier_bits
         return (

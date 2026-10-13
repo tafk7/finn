@@ -1,42 +1,59 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A kernel's module: a leaf binds one FinnLib module and accounts for its pins at creation.
+"""The kernel contract: two bases, and what each must state.
 
-Every input among a leaf's other pins is held or presented as a control bus
+A leaf (``LeafKernel``) binds one FinnLib module. It states its module, parameters,
+sources and resources (``required()``: a class that leaves one unmet is not placed),
+and its admission and ports, which are checked when the class is made; it places
+no kernel. Every input among its other pins is held or presented as a control bus
 (``pins_accounted``), and every port runs on its clock (``clocked``); both are
-refused when the kernel is created, not when it is composed. Its ``module`` is
-the ``Leaf``; a kernel with children merges its members' netlists into one
-``Composed`` module.
+refused when the kernel is created, not when it is composed. Its ``module`` is the
+``Leaf``. A kernel with children (``ComposedKernel``) states the interfaces it
+presents, each a view ``<name>_end``, and merges its members' netlists into one
+``Composed`` module. A kernel is one of the two.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
+import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, Param, derived, design_space
+from finn.core.space import (
+    Available,
+    ConstraintGroup,
+    DefinitionError,
+    Param,
+    Rejected,
+    derived,
+    design_space,
+    reject,
+)
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
+from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Held, Leaf
-from finn.kernels.base import Clocking, Kernel, interface
+from finn.kernels.base import Clocking, ComposedKernel, Kernel, LeafKernel, interface
+from finn.kernels.channels import end_of
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
+from finn.kernels.utilization import RESOURCES_SEMANTICS
+from finn.platform.capabilities import Resources
 from kernels.helpers import FULL_DSP48E2, codes
 
 INT4 = DataType["INT4"]
 TENSOR = Tensor((4,), ScalarEncoding(INT4))
 
 
-class Probe(Kernel):
+class Probe(LeafKernel):
     """A model-only leaf: one input port, a mode pin, and a clocking of its choice."""
 
     id = "test.probe"
     rtl_module = "probe"
+    admission = ConstraintGroup()
 
     tensor: Tensor = Param(required=False)
     hold_mode: bool = Param(default=True)
@@ -55,14 +72,25 @@ class Probe(Kernel):
     def clocking(self) -> Clocking:
         return Clocking(doubled="ap_clk2x", doubling=True)
 
+    @derived
     def other_pins(self) -> tuple[Pin, ...]:
         return (Signal("mode", Direction.IN, 2), Signal("busy", Direction.OUT, 1))
 
+    @derived
     def held(self) -> Held:
         return Held((("mode", 1),)) if self.hold_mode else Held()
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         return {}
+
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
+        return ()
+
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        return reject("kernel-resources", "a model only")
 
 
 def probe(**facts: object) -> Probe:
@@ -85,11 +113,11 @@ def test_a_leaf_holds_or_presents_every_input_that_is_no_ports() -> None:
     held = probe().module
     assert isinstance(held, Leaf) and held.held.inputs == (("mode", 1),)
     # The output is no one's to drive: left open, not accounted.
-    assert codes(probe(hold_mode=False).query(Kernel.module)) == {"kernel-pins"}
+    assert codes(probe(hold_mode=False).query(LeafKernel.module)) == {"kernel-pins"}
 
 
 def test_a_port_runs_on_its_kernels_clock() -> None:
-    assert codes(probe(port_clock="ap_clk2x").query(Kernel.module)) == {"kernel-clock"}
+    assert codes(probe(port_clock="ap_clk2x").query(LeafKernel.module)) == {"kernel-clock"}
 
 
 def test_a_held_bus_is_accounted_for() -> None:
@@ -99,4 +127,79 @@ def test_a_held_bus_is_accounted_for() -> None:
         )
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})
-    assert memory.query(Kernel.pins_accounted) == Available(True)
+    assert memory.query(LeafKernel.pins_accounted) == Available(True)
+
+
+def test_a_leafs_cycles_are_the_most_beats_a_port_carries() -> None:
+    assert probe().cycles == 4
+    assert codes(probe().query(LeafKernel.resources)) == {"kernel-resources"}
+
+
+def test_a_leaf_that_leaves_a_required_member_unmet_is_not_placed() -> None:
+    class Unsourced(LeafKernel):
+        id = "test.unsourced"
+        rtl_module = "probe"
+        admission = ConstraintGroup()
+        x = AxiStreamPort(name="s_axis", endpoint=Endpoint.TARGET, sequence=Probe.x.sequence)
+
+        @derived
+        def parameters(self) -> dict[str, int | str]:
+            return {}
+
+    with pytest.raises(DefinitionError, match=r"LeafKernel\.sources, LeafKernel\.resource_use"):
+        Unsourced()
+
+
+def stated(name: str, **members: object) -> type[LeafKernel]:
+    """A leaf named ``name`` stating its module, parameters, sources and resources, and
+    ``members``."""
+
+    def parameters(self: LeafKernel) -> dict[str, int | str]:
+        return {}
+
+    def sources(self: LeafKernel) -> tuple[Contribution, ...]:
+        return ()
+
+    def resource_use(self: LeafKernel) -> Resources:
+        return Resources()
+
+    body = {
+        "id": f"test.{name}",
+        "rtl_module": "probe",
+        "parameters": derived(parameters),
+        "sources": derived(sources),
+        "resource_use": derived(semantics=RESOURCES_SEMANTICS)(resource_use),
+        **members,
+    }
+    return type(name, (LeafKernel,), body)
+
+
+def port() -> AxiStreamPort:
+    return AxiStreamPort(name="s_axis", endpoint=Endpoint.TARGET, sequence=Probe.x.sequence)
+
+
+def test_a_leaf_states_its_admission_and_its_ports_and_places_no_kernel() -> None:
+    stated("Complete", admission=ConstraintGroup(), x=port())
+    with pytest.raises(DefinitionError, match="Unadmitted states no admission"):
+        stated("Unadmitted", x=port())
+    with pytest.raises(DefinitionError, match="Portless places no port"):
+        stated("Portless", admission=ConstraintGroup())
+    with pytest.raises(DefinitionError, match=r"Nesting places the kernels \['inner'\]"):
+        stated("Nesting", admission=ConstraintGroup(), x=port(), inner=Probe(tensor=TENSOR))
+
+
+def test_a_kernel_with_children_names_the_end_of_each_interface() -> None:
+    with pytest.raises(DefinitionError, match=r"the interfaces \['y'\] without their ends"):
+
+        class Unended(ComposedKernel):
+            id = "test.unended"
+            interfaces = ("x", "y")
+            x_end = end_of("kernel", "x_end")
+            kernel = Probe(tensor=TENSOR)
+
+
+def test_a_kernel_is_a_leaf_or_a_kernel_with_children() -> None:
+    with pytest.raises(DefinitionError, match="a kernel is a LeafKernel"):
+
+        class Neither(Kernel):
+            id = "test.neither"

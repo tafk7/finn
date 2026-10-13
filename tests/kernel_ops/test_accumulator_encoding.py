@@ -210,7 +210,7 @@ def test_each_result_is_its_ranges_smallest_encoding_and_its_cores_accumulator(n
         assert model.get_tensor_datatype(op.onnx_node.output[0]).name == result
         assert root.matmul.result_type.name == result
         assert str(root.w.tensor.element) == weights
-        rtl = dict(op.point().matmul.compute.parameters())
+        rtl = dict(op.point().matmul.compute.parameters)
         assert rtl["ACCU_WIDTH"] == accumulator
         assert rtl["WEIGHT_WIDTH"] == root.w.tensor.element.bits
 

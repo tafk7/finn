@@ -132,7 +132,6 @@ def stored(platform: Platform) -> Network:
             "matmul": MatMulKernel(
                 **{**FACTS, "platform": platform},
                 x_tensor=Tensor((3, 4), INT3),
-                y_tensor=Tensor((3, 4), INT7),
                 w_contents=WEIGHTS,
             ),
         }
@@ -242,7 +241,7 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
     assert external.result_type == DataType["INT8"]
     core = configured(base(weights=WEIGHTS), style="block").member("matmul").compute
     assert core.y.element == ScalarEncoding(DataType["INT7"], (-30, 40))
-    assert core.parameters()["ACCU_WIDTH"] == 7
+    assert core.parameters["ACCU_WIDTH"] == 7
 
 
 @pytest.mark.parametrize(
@@ -261,7 +260,7 @@ def test_a_narrow_result_range_is_the_result_and_the_accumulator(weights, value_
     assert matmul.result_range == value_range
     assert matmul.result_type == DataType[result]
     assert matmul.compute.y.element == ScalarEncoding(DataType[result], value_range)
-    assert matmul.compute.parameters()["ACCU_WIDTH"] == DataType[result].bitwidth()
+    assert matmul.compute.parameters["ACCU_WIDTH"] == DataType[result].bitwidth()
     assert isinstance(module_of(point, "matmul"), Available)
 
 
@@ -281,7 +280,7 @@ def test_the_cores_do_not_wait_on_the_source():
     # owner states on the channel.
     compute = point.member("matmul").compute
     assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Available)
-    assert compute.parameters()["NARROW_WEIGHTS"] == 0  # the weights hold -4
+    assert compute.parameters["NARROW_WEIGHTS"] == 0  # the weights hold -4
     assert compute.inspect(DotpAxiKernel.admission).result == Available(True)
     folding = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})
     folding = choose(folding, {"matmul.compute.packed.simd": 4})
@@ -345,7 +344,6 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
             "matmul": MatMulKernel(
                 **FACTS,
                 x_tensor=Tensor((3, 4), INT3),
-                y_tensor=Tensor((3, 4), INT7),
                 w_contents=(WEIGHTS, WEIGHTS),
             ),
         }
@@ -407,9 +405,7 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
                 producer=Interface("matmul", "y_end"),
                 platform=FULL_DSP48E2,
             ),
-            "matmul": MatMulKernel(
-                **FACTS, x_tensor=x_tensor, w_tensor=w_tensor, y_tensor=y_tensor
-            ),
+            "matmul": MatMulKernel(**FACTS, x_tensor=x_tensor, w_tensor=w_tensor),
         }
     )
     answer = folded(produced).member("y").query(Channel.endpoints)

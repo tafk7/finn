@@ -70,7 +70,7 @@ and budgets.
   ``BaselineChoices``' for a body made by hand); ``save_channels`` states
   channels' choices on their tensors, checked by replaying the root, which alone
   holds both of a channel's ends;
-- **admission** (``Shell.interfaces``): what the module presents, within what the
+- **admission** (``Shell.budgets``): what the module presents, within what the
   row takes. The AXI-Lite buses the module presents and its ends present (each
   end's contract, ``END``) are within the row's ``control_budget``, and the AXI
   memory ports the module initiates (a bus beside its streams that it initiates)
@@ -147,7 +147,7 @@ from finn.custom_op.kernels.replay import committed, refusal, typed_choices
 from finn.custom_op.kernels.rooted import Rooted
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.kernels.base import Kernel, PortEnd
+from finn.kernels.base import ComposedKernel, Kernel, PortEnd
 from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import chosen, member_of, undecided
 from finn.kernels.ends import END, EndContract, EndOffer
@@ -183,7 +183,7 @@ class ShellResources:
         return total((self.partition, *(used for _, used in self.ends + self.static_region)))
 
 
-class Shell(Kernel):
+class Shell(ComposedKernel):
     """A shell root: a set of nodes' channels and kernels, admitted by its shell's
     ``row``; its resources the sum of its partition's, its ends' and its row's static
     region's."""
@@ -192,6 +192,8 @@ class Shell(Kernel):
     # partition's, so the IP's name and digest are the partition's.
     id = "finn.custom_op.kernels.partition"
     version = 1
+    # A root: its boundary channels are its pins, it presents no interface.
+    interfaces = ()
 
     row: ShellRow = Param()
     placed_ends = Members(END)
@@ -209,7 +211,7 @@ class Shell(Kernel):
         return control, memory
 
     @constraint
-    def interfaces(self) -> bool | Rejected:
+    def budgets(self) -> bool | Rejected:
         """The module's AXI-Lite buses and its ends', and the memory ports it initiates,
         within the row's budgets; its doubled clock, if it takes one, the row's."""
         row, abi = self.row, self.composed_abi
@@ -235,7 +237,7 @@ class Shell(Kernel):
             )
         return True
 
-    admission = ConstraintGroup(interfaces)
+    admission = ConstraintGroup(budgets)
 
     @derived(semantics=default_semantics(ShellResources))
     def resources_by_member(self) -> ShellResources | Rejected:
@@ -734,7 +736,7 @@ def shell_resources(point: Shell) -> ShellResources | tuple[Finding, ...]:
 
 
 def admission_refusal(point: Shell) -> tuple[Finding, ...]:
-    """Why the shell refuses ``point``, a point of a shell root (``Shell.interfaces``):
+    """Why the shell refuses ``point``, a point of a shell root (``Shell.budgets``):
     its findings, none where it is admitted or not decided far enough to say."""
     admitted = inspection.admission(point)
     return admitted.findings if isinstance(admitted, Rejected) else ()

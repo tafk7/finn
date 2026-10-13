@@ -338,7 +338,7 @@ def dsp58_matmul() -> tuple[Seam, Network]:
 
     x_tensor = Tensor((chain.ROWS, chain.INPUTS), ScalarEncoding(chain.A))
 
-    def first(**tensors: Any) -> MatMulKernel:
+    def first() -> MatMulKernel:
         return MatMulKernel(
             m=chain.ROWS,
             n=chain.HIDDEN,
@@ -348,10 +348,9 @@ def dsp58_matmul() -> tuple[Seam, Network]:
             platform=FULL_DSP58,
             x_tensor=x_tensor,
             w_contents=chain.W1,
-            **tensors,
         )
 
-    y_tensor = design_space(first()).result_tensor
+    y_tensor = design_space(first()).y_tensor
     network = Network(
         {
             "x": wire(
@@ -372,7 +371,7 @@ def dsp58_matmul() -> tuple[Seam, Network]:
                 producer=Interface("first", "y_end"),
                 platform=FULL_DSP58,
             ),
-            "first": first(y_tensor=y_tensor),
+            "first": first(),
         }
     )
     return Seam(FULL_DSP58), network

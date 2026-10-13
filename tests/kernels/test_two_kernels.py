@@ -28,7 +28,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.kernels.base import BUFFERING, Kernel
+from finn.kernels.base import BUFFERING
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
@@ -67,7 +67,6 @@ def _layer(result: DataType, x_tensor: Tensor, w_tensor: Tensor, y_tensor: Tenso
         result_range=ordinary_integer_bounds(result),
         x_tensor=x_tensor,
         w_tensor=w_tensor,
-        y_tensor=y_tensor,
         platform=FULL_DSP48E2,
     )
 
@@ -133,14 +132,12 @@ def layered(*, adaptable: bool = True) -> Network:
                 dtype=W,
                 form=periods["first"],
                 contents=W1,
-                output_tensor=w1_tensor,
             ),
             "rom2": MemStreamKernel(
                 platform=FULL_DSP48E2,
                 dtype=W,
                 form=periods["second"],
                 contents=W2,
-                output_tensor=w2_tensor,
             ),
         }
     )
@@ -208,7 +205,7 @@ KERNELS, CHANNELS = ("rom1", "rom2", "first", "second"), ("x", "h", "y")
 
 def test_the_network_s_cycles_are_its_slowest_member_s_and_its_buffering_their_sum():
     point = layered()
-    cycles = {name: point.member(name).query(Kernel.cycles).value for name in KERNELS}
+    cycles = {name: point.member(name).cycles for name in KERNELS}
     cycles |= {name: point.member(name).query(Channel.cycles).value for name in CHANNELS}
     # The hidden stream's input_gen replays each row once per output fold: twelve beats.
     assert point.member("h").query(Channel.cycles).value == 12 == cycles["second"]

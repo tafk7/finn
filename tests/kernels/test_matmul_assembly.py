@@ -260,7 +260,6 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             result_range=MatMulKernel.result_range,
             x_tensor=MatMulKernel.x_tensor,
             w_tensor=MatMulKernel.w_carried,
-            y_tensor=MatMulKernel.y_tensor,
         )
 
     # Substitute a fully authored Space class, without mutating declarations.

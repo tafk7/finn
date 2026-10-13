@@ -27,9 +27,10 @@ from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import inspection
+from finn.core.space import Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import persist, save_channels, shell_root
+from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, commit
 from finn.kernels.explore import Ranked, SizeFifos
 from finn.toolchain.launcher import host_toolchain
@@ -129,10 +130,14 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     streamed = kernel_op(model, model.graph.node[0])
     assert streamed.facts().owned == ()
     # The output was inferred from the stored weights' columns; unknown, they give the
-    # datatypes' wider range, so the graph's y is stale: the node refuses it until
-    # inference, run again, states it from the node's new facts.
-    (stale,) = streamed.verify_node()
-    assert "matmul-tensor" in stale
+    # datatypes' wider range. The kernel states its results from its new facts, so its
+    # choices stand; the graph's y is stale, and the node root's output channel, which
+    # carries it, refuses the kernel's results until inference, run again, states it.
+    assert streamed.verify_node() == []
+    folded: Any = commit(streamed.point(), {"matmul.compute.packed.simd": 2})
+    refused = folded.y.query(Channel.well_formed)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"channel-tensor"}
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's.

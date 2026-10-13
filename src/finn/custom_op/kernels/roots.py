@@ -9,7 +9,7 @@ from the graph, each port's tensor, and the values of an initializer the node ho
 Binding those Params to a node's facts gives the node's point.
 
 The root wires its members by ordinary edges, by the op's ``wiring``
-(``finn.custom_op.kernels.base``): the kernel takes each port's tensor (and a held
+(``finn.custom_op.kernels.base``): the kernel takes each input port's tensor (and a held
 initializer's values) from the root's Params; each channel carries the port's tensor,
 a parameter channel the tensor and values the kernel states for it (MatMul's
 ``w_carried`` and ``w_stored``), and takes as its end the one the kernel presents at the
@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, cast, get_type_hints
 
 from finn.core.space import UNSUPPLIED, Param, composite, default_semantics, supplied
 from finn.dataflow.tensor import Tensor
-from finn.kernels.base import Kernel
+from finn.kernels.base import ComposedKernel, Kernel
 from finn.kernels.channels import Channel, end_of
 from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 
@@ -46,9 +46,12 @@ def placed(
     tensors: Mapping[str, object],
     values: Mapping[str, object],
 ) -> Kernel:
-    """``op``'s kernel from ``formals``, each port's tensor ``tensors`` and each held
-    initializer's ``values`` (by port; Params or literals), by the op's ``wiring``."""
-    given = {op.wiring[port].tensor: tensor for port, tensor in tensors.items()}
+    """``op``'s kernel from ``formals``, each input port's tensor in ``tensors`` and each
+    held initializer's ``values`` (by port; Params or literals), by the op's ``wiring``.
+    An output's tensor is the kernel's statement, never given to it."""
+    given = {
+        op.wiring[port].tensor: tensor for port, tensor in tensors.items() if port not in op.outputs
+    }
     held = {cast(str, op.wiring[port].contents): value for port, value in values.items()}
     placement: Kernel = cast(Any, op.kernel)(**formals, **given, **held)
     return placement
@@ -111,11 +114,16 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
         else:
             settings["tensor"] = tensors[port]
         channels[port] = Channel(port=f"{side}{index}_V", platform=platform, **settings)
-    identity = {"id": f"finn.custom_op.kernels.node.{op.op_type.lower()}", "version": op.op_version}
+    identity = {
+        "id": f"finn.custom_op.kernels.node.{op.op_type.lower()}",
+        "version": op.op_version,
+        # A root: its boundary channels are its pins, it presents no interface.
+        "interfaces": (),
+    }
     return composite(
         f"{op.__name__}Node",
         {**identity, **members, **channels, op.member: kernel},
-        base=Kernel,
+        base=ComposedKernel,
         annotations=annotations,
     )
 
