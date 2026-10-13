@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell's admission (``shell.budgets``): what the module presents, within what
-its shell's row takes.
+"""The shell's admission (``finn.platform.shells.budgets``): what the module presents,
+within what its shell's row takes.
 
 The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its ends'
 together (each ``IODMA_hls`` end presents one), gives a partition no memory port of its
@@ -25,16 +25,17 @@ import pytest
 from kernels.helpers import built, choose, with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
-import finn.custom_op.kernels.shell as shell
+import finn.custom_op.kernels.network as graph_network
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import budgets, bus_counts, configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.platform.shells import IP_ROW, ShellRow, shell_row
+from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from kernel_ops.models import MATMUL, configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96
@@ -131,10 +132,10 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
     model = kernel_model()
     write_target(model, ULTRA96)
     explore_kernel_choices(model)
-    configured_root(model, "chain")
+    configured_network(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        patched.setattr(graph_network, "shell_row", lambda *_: narrow)
         bound = network(model, model.graph.node, name="chain")
         assert bound.row == narrow
         with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:
@@ -142,7 +143,7 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
         with pytest.raises(
             KernelOpError, match="takes 1 AXI-Lite buses; the partition presents 0"
         ) as packaged:
-            configured_root(model, "chain")
+            configured_network(model, "chain")
     # Each refusal carries the shell's findings, by code.
     for refused in (explored, packaged):
         assert [f.code for f in refused.value.findings] == ["interface-budget-exceeded"]
@@ -157,7 +158,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     pumped = {**MATMUL, "compute.packed.compute_pumping": True}
     kernel_op(model, model.graph.node[0]).save(pumped)
     configure_partition(model)
-    point, _ = configured_root(model, "chain")
+    point, _ = configured_network(model, "chain")
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
     write_target(model, ULTRA96)
@@ -167,7 +168,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         match="clock-unavailable: the partition takes an aligned doubled clock "
         r"\(ap_clk2x\), which the 'pynq' shell does not supply",
     ):
-        configured_root(model, "chain")
+        configured_network(model, "chain")
 
 
 def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:

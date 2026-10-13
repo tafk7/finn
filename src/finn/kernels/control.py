@@ -9,9 +9,9 @@ Param(required=False)``), and exports, under ``CONTROL``, the bus it presents th
 with that port and the writes that put its configuration into the bus's registers
 (``RegisterMap``): a ``Control``. A kernel with children (``Members(CONTROL)``) and a
 network (``finn.kernels.network``) each collect their members' controls
-(``presented``), present each in their netlist (``BusExport``), each parent prefixing
-its port with the child's node (``first_s_axilite``), and the root's module renames the
-bus to that port (``top_bus``), associated with its clock and reset. One kernel is
+(``presented``) and present each in their netlist (``BusExport``), prefixing its port
+with the member's node (``first_s_axilite``); the top module renames the bus to that port
+(``top_bus``), associated with its clock and reset. One kernel is
 presented at one port.
 
 A kernel not given a port, or that exposes no bus in its configuration

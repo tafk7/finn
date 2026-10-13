@@ -56,10 +56,10 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         interfaces = ()
 
     assert Empty.version == 1
-    # The protocol's views; a kernel with children that places none builds no module.
+    # The protocol's views; a kernel with children that places none has no netlist.
     empty = design_space(Empty())
-    assert views(empty) == ["buffering", "cycles", "module", "netlist", "resources"]
-    refused = empty.query(Empty.module)
+    assert views(empty) == ["buffering", "cycles", "netlist", "resources"]
+    refused = empty.query(Empty.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"kernel-module"}
 

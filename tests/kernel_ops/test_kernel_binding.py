@@ -39,8 +39,8 @@ STORED = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
 
 
 def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
-    """A node's choice attributes are its kernel's own decision keys: no node root, no
-    member prefix to strip."""
+    """A node's choice attributes are its kernel's own decision keys, with no member
+    prefix to strip."""
     keys = {item.key for item in inspection.decisions(MatMulKernel)}
     assert set(MatMul.schema()) == keys
     assert set(Thresholding.schema()) == {

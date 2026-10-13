@@ -147,7 +147,7 @@ def test_a_change_replaces_a_stored_value_but_never_a_held_one() -> None:
                 FindingKind.REJECTION,
                 "held",
                 "y.transport",
-                "held to 'direct' by a pin",
+                "held to 'direct'",
             ),
         )
     }
@@ -563,7 +563,7 @@ def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
         "held",
         "first.compute.packed.compute_pumping",
     )
-    assert found.message.startswith("held to True by a pin, dropped by the change: ")
+    assert found.message.startswith("held to True, dropped by the change: ")
     assert "pumping requires SIMD >= 2" in found.message
     # Not reached, it stays: SIMD 4 keeps pumping viable.
     kept = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 4}))

@@ -551,7 +551,7 @@ def _committed(subject: P, choices: Mapping[str, object]) -> P:
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     """Each open adapter input_gen's memory takes ``ram_style``, or where None its
     baseline, the first viable case (an explicit style, by the size the buffer holds),
-    as ``Seam.baseline`` takes it, on a network or a point (a shell root's). Each
+    as ``Seam.baseline`` takes it, on a network or a point. Each
     channel's adapter, its one viable chain, is forced."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:

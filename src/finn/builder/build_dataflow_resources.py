@@ -55,12 +55,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import design_digest, partition_body
-from finn.custom_op.kernels.shell import (
-    ShellResources,
-    configured_root,
-    member,
-    shell_resources,
-)
+from finn.custom_op.kernels.network import member
+from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
@@ -170,7 +166,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     absent."""
     node, body, _ = partition_body(parent)
     target = read_target(body)
-    point, _ = configured_root(body, node.name)
+    point, _ = configured_network(body, node.name)
     modelled = shell_resources(point)
     instances = _member_instances(parent)
     columns: dict[str, dict[str, Resources | None]] = {key: {} for key in instances}

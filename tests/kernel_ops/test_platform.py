@@ -22,7 +22,7 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.space import DefinitionError, Rejected, design_space
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import Partition, network, save_channels
+from finn.custom_op.kernels.network import Partition, network, save_channels
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel

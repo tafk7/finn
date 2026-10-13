@@ -132,7 +132,7 @@ class ModelStatistics:
     scope (a Decision over nodes is one member), plus each placed node
     (including every candidate). Reused templates therefore count at every
     placement. A fresh binding replaces its child formal and is counted once;
-    generated output, guard, selection and located nodes are excluded.
+    generated output, guard and select nodes are excluded.
     """
 
     authored_declarations: int

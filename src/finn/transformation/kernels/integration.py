@@ -6,7 +6,7 @@ partition, read from its network's ends.
 
 ``integration(model)`` takes the build's parent graph (its one partition node,
 ``finn.core.graph.partition.partition_body``), configures the partition's network as hardware
-generation does (``configured_root``) and reads the ends its boundary channels place
+generation does (``configured_network``) and reads the ends its boundary channels place
 (``Channel.end_contract``) and its shell's row. For the Zynq block design
 (``vivado-block-design``, the ``pynq`` shell) it states:
 
@@ -51,7 +51,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.facts import known_shape
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
@@ -247,10 +247,10 @@ def _aperture(bus: Bus, least: int) -> int:
 
 def integration(model: ModelWrapper) -> Integration:
     """The integration export of the build's parent graph ``model``: its partition's
-    network, as emission builds it (``configured_root``), in its shell's integration
+    network, as emission builds it (``configured_network``), in its shell's integration
     (see the module docstring)."""
     node, body, _ = partition_body(model)
-    point, boundary = configured_root(body, node.name)
+    point, boundary = configured_network(body, node.name)
     row = point.row
     if row.integration != VIVADO_BLOCK_DESIGN or row.static_region is None:
         raise IntegrationError(

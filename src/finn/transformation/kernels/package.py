@@ -39,7 +39,7 @@ The partition's choices are its nodes' and its channels' (each on its tensor,
 ``finn.channel``), every one stored where it is created and replaced by the
 exploration: the network is replayed from them (a stale choice refuses, named), a
 Decision with one viable case is forced, and an open choice refuses, named
-(``configured_root``). A body whose FIFOs were sized at another folding than its own
+(``configured_network``). A body whose FIFOs were sized at another folding than its own
 (``finn.choices/fifos_stale``) is refused (``fifos-stale``). The body's graph
 inputs and outputs, in order, are the network's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
@@ -98,7 +98,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.custom_op.kernels.shell import Configured, configured_root
+from finn.custom_op.kernels.shell import Configured, configured_network
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
@@ -137,7 +137,7 @@ def end_facts(contract: EndContract) -> dict[str, Any]:
 
 def free_side(point: Configured, tensor: str) -> Any:
     """The stream at the free side of the boundary channel carrying ``tensor`` in a
-    configured network (``configured_root``): the channel's end no kernel of the
+    configured network (``configured_network``): the channel's end no kernel of the
     partition owns (a ``StreamContract``), as the channel derives it
     (``Channel.free_side``)."""
     return point.channel(tensor).free_side
@@ -246,7 +246,7 @@ def ooc_member_resources(model: ModelWrapper, project: Path) -> dict[str, Any]:
     """The out-of-context resources of a partition packaged with ``run_synth`` in
     ``project``, per member of its network: the top's ``total``, and each member's
     instances summed (``members``, by graph name). The instances are the module's that
-    PackagePartition packaged (``configured_root``). An instance is its member's by its
+    PackagePartition packaged (``configured_network``). An instance is its member's by its
     label (``instance_name``), below the member's node in the module; an instance no
     member claims is stated under its netlist name.
     Synthesis flattens small instances into the top: what no reported instance holds is
@@ -254,7 +254,7 @@ def ooc_member_resources(model: ModelWrapper, project: Path) -> dict[str, Any]:
     row are ``unreported_instances``. Every count is Vivado's synthesis estimate out of
     context, not placed."""
     report = partition_utilization_report(project)
-    point, _ = configured_root(model, "the packaged partition")
+    point, _ = configured_network(model, "the packaged partition")
     owners = {point.node(name): name for name in point.network.members}
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
     rows = vivado.hierarchical_utilization(report.read_text())
@@ -341,7 +341,7 @@ class PackagePartition(Transformation):
             stale = Finding(FindingKind.REJECTION, "fifos-stale", "PackagePartition", message)
             raise KernelOpError(message, findings=(stale,))
         built = read_target(model)
-        point, boundary = configured_root(model, self.ip_name)
+        point, boundary = configured_network(model, self.ip_name)
         module = point.module
         project = Path(
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
@@ -417,7 +417,7 @@ class ElaboratePartition(Transformation):
         self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        point, _ = configured_root(model, "the partition")
+        point, _ = configured_network(model, "the partition")
         directory = Path(
             self.directory or make_build_dir(prefix="elaborate_partition_")  # type: ignore[no-untyped-call]
         ).resolve()

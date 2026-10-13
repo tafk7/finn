@@ -32,7 +32,8 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.shell import configured_root, save_channels
+from finn.custom_op.kernels.network import save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 from finn.toolchain.vivado import hierarchical_utilization
@@ -46,8 +47,8 @@ from kernel_ops.packaging import NoVivado, reaches_vivado
 
 def test_the_partition_packages_its_nodes_choices() -> None:
     configure_partition(model := kernel_model())
-    module = configured_root(model, "sdp_1")[0].module
-    reference = configured_root(model, "partition")[0].module
+    module = configured_network(model, "sdp_1")[0].module
+    reference = configured_network(model, "partition")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
     assert module.stem == "finn_partition"
     assert [port.name for port in module.abi.pins] == [
@@ -64,12 +65,12 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     # does), the body packages as configure_partition commits them.
     model = kernel_model()
     with pytest.raises(KernelOpError, match=r"not created: BaselineChoices") as refused:
-        configured_root(model, "sdp_1")
+        configured_network(model, "sdp_1")
     assert refused.value.keys and all(key.endswith(".ram_style") for key in refused.value.keys)
     assert kernel_choices_config(model) == kernel_choices_config(kernel_model())
     configure_partition(configured := kernel_model())
-    reference = configured_root(configured, "partition")[0].module
-    module = configured_root(model.transform(BaselineChoices()), "sdp_1")[0].module
+    reference = configured_network(configured, "partition")[0].module
+    module = configured_network(model.transform(BaselineChoices()), "sdp_1")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
 
 
@@ -84,18 +85,18 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
         match=r"open choices, refused at emission: levels.transport.fifo.buffer.depth "
         r"\(required: run step_size_fifos or step_placeholder_choices\)",
     ) as refused:
-        configured_root(model, "sdp_1")
+        configured_network(model, "sdp_1")
     assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
 
 
 def test_the_graphs_input_order_is_the_port_order() -> None:
     model = kernel_model(second_weights=False)
     configure_partition(model)
-    pins = configured_root(model, "sdp_1")[0].module.abi.pins
+    pins = configured_network(model, "sdp_1")[0].module.abi.pins
     assert {port.name for port in pins} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
     with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
-        configured_root(model, "sdp_1")
+        configured_network(model, "sdp_1")
 
 
 def test_the_chains_emitted_top_elaborates_before_vivado(
@@ -157,7 +158,7 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     }
     assert list(model.model.metadata_props) == []
     # The part and period are the model's target. Packaging states what it made, in
-    # finn.outputs, and nothing else: the boundary is the configured root's, not stored.
+    # finn.outputs, and nothing else: the boundary is the configured network's, not stored.
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
     assert {item.key.split("/")[0] for item in model.graph.metadata_props} == {
         "finn.platform",

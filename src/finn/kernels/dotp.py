@@ -3,61 +3,37 @@
 
 """Physical FinnLib ``dotp_axi`` around one compute core, on three tensors.
 
-Each compute core is its own kernel: ``PackedDotpKernel`` (FinnLib ``dotp``,
-lanes packed into DSP48E1, DSP48E2 or DSP58 slices) and
-``Int8Dsp58DotpKernel`` (``dotp_8sx9_dsp58``, the INT8 mode of DSP58). A parent
-chooses between them with a Decision over kernels; each refuses what its core
-cannot build. ``DotpAxiKernel`` is their shared declaration, which cannot be placed:
-each core states what is its own (``required()``), its ``sources`` and
-``resource_use`` as every leaf does, and its ``accumulator``, the ``activations`` it
-takes, ``narrow_weights``, its ``reducer``, and its admission: the bounds of its core
-on the operands and the form (``core_supported``) and on the accumulator
-(``accumulator_width_supported``), beside dotp_axi's own (``stream_widths_supported``).
+Each compute core is its own kernel: ``PackedDotpKernel`` (FinnLib ``dotp``, lanes packed
+into DSP48E1, DSP48E2 or DSP58 slices) and ``Int8Dsp58DotpKernel`` (``dotp_8sx9_dsp58``,
+the INT8 mode of DSP58). A parent chooses between them with a Decision over kernels.
+``DotpAxiKernel`` is their shared declaration, which cannot be placed: each core states
+its ``sources``, ``resource_use``, ``accumulator``, the ``activations`` it takes,
+``narrow_weights``, its ``reducer`` and its admission (``core_supported``,
+``accumulator_width_supported``), beside dotp_axi's own (``stream_widths_supported``).
 
-dotp computes ``Y[m, n] = sum_k X * W`` in the ``form`` (``finn.dataflow.gemm``)
-its parent gives. ``DENSE``: each activation beat carries SIMD lanes,
-broadcast to the PE accumulators. ``DEPTHWISE``: each activation beat carries
-SIMD window positions of PE channels, channel fastest, and lane p accumulates
-channel p alone; only the INT8 core reads it. Each weight beat carries PE *
-SIMD lanes, SIMD varying fastest; each result beat PE lanes. Lanes are
-packed low first; only the complete beat is padded to a byte boundary.
-Activation TLAST closes each reduction and produces one result beat.
+dotp computes ``Y[m, n] = sum_k X * W`` in the ``form`` (``finn.dataflow.gemm``) its
+parent gives. ``DENSE``: each activation beat carries SIMD lanes, broadcast to the PE
+accumulators. ``DEPTHWISE`` (the INT8 core only): each activation beat carries SIMD
+window positions of PE channels, and lane p accumulates channel p alone. Each weight beat
+carries PE * SIMD lanes, SIMD fastest; each result beat PE lanes; activation TLAST closes
+each reduction.
 
-Its input ports (``x``, ``w``) take the tensors its parent gives (``x_tensor``,
-``w_tensor``), and its output port ``y`` writes its results, ``y_tensor``, which it
-states; it states the end each port presents (``x_end``, ``w_end``, ``y_end``;
-``finn.kernels.base.interface``). The extents are bound from the tensors the inputs
-read, which must agree (``kernel-extents``): x reads ``(m, k)`` (``(m, k, n)``
-depthwise), w ``(k, n)`` (weights stored ``(k, n)``); the results are ``(m, n)``. PE
-and SIMD are dotp's own Decisions, the folding factors of ``n`` and ``k``, and its
-``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every port's beat sequence
-derives from it. ``reshape_activations`` reads (M, K, N) activations as (M, K * N): a
-densely realized depthwise operation, whose rows are the activations' leading axis.
-Dense activations of another rank than two, ``(..., K)`` at the graph's rank, are read
-through the view ``(m, k)`` (``rows_viewed``), ``m`` every leading axis together, and
-the results are stated at the activations' rank, ``(..., N)``, written through the view
-``(m, n)``.
+Its ports ``x`` and ``w`` read the tensors its parent gives (``x_tensor``, ``w_tensor``),
+and ``y`` writes its results, ``y_tensor``; each states its end (``x_end``, ``w_end``,
+``y_end``). The extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k,
+n)`` depthwise), w ``(k, n)``, and the results are ``(m, n)``. Dense activations at the
+graph's rank, ``(..., K)``, are read through the view ``(m, k)`` (``rows_viewed``), the
+results stated at that rank; ``reshape_activations`` reads ``(M, K, N)`` as ``(M, K *
+N)``, a densely realized depthwise operation. PE and SIMD fold ``n`` and ``k``, and the
+``schedule`` walks ``m``, then ``n``, then ``k`` innermost. A dense form read through a
+``window`` (``finn.dataflow.gemm.Window``, a lowered convolution) reads the image's
+pixels and window positions, ``(oh, ow, n, kh, kw, c)``; the core sees the beats of a
+dense form of ``K = KH * KW * C``, the window being the activation channel's.
 
-A dense form read through a ``window`` (``finn.dataflow.gemm.Window``, a lowered
-convolution) splits ``m`` into the pixels ``(oh, ow)`` and ``k`` into the window
-``(kh, kw, c)``: x reads the image's ``(H * W, C)`` rows at
-``(oh * SH + kh * DH, ow * SW + kw * DW, c)``, w its ``(K, N)`` viewed
-``(KH, KW, C, N)`` and y ``(OH * OW, N)``; the schedule walks ``(oh, ow, n, kh, kw,
-c)`` with ``n`` split by PE and ``c`` by SIMD (so SIMD divides the channels), and
-activation TLAST closes each window. An image at the graph's rank, ``(1, H, W, C)``, is
-read as it is and the results are ``(1, OH, OW, N)`` (``Window.over``). The window's
-extents are its own, the channels the image's and the outputs the weights' last axis.
-The core sees the beats of a dense form of
-``K = KH * KW * C``: the window is the activation channel's (its adapter reads the
-image through it), not the core's.
-
-The results' range, ``result_range``, is its parent's statement (MatMul's);
-each core derives from it its accumulator (``accumulator``, ``ACCU_WIDTH``), the
-encoding of the results it states, ``y_tensor``'s, over that range: both current cores
-compute exactly at the range's own encoding, ``INT<b>`` or ``UINT<b>`` (FinnLib's
-``p`` is the sum modulo ``2**ACCU_WIDTH``, read in either signedness). The range
-is not a proof that an arbitrary frame fits it: the parent must bound each
-frame's accumulation to it, every partial sum included.
+The results' range, ``result_range``, is its parent's statement (MatMul's); each core
+derives its accumulator (``ACCU_WIDTH``) and ``y_tensor``'s encoding from it. The range
+is not a proof that a frame fits it: the parent must bound each frame's accumulation to
+it, every partial sum included.
 """
 
 from __future__ import annotations
@@ -510,7 +486,7 @@ class PackedDotpKernel(DotpAxiKernel):
 
     Its accumulator is the range's own encoding: FinnLib's packed lanes resolve the sum
     modulo ``2**ACCU_WIDTH``, exact when the sum and every partial sum fit, which
-    the range bounds (FinnLib ``229b35f``: ``ACCU_WIDTH >= 1``), so one product's width
+    the range bounds (FinnLib's ``ACCU_WIDTH >= 1``), so one product's width
     is no floor, and the DSP's P path (48 bits, 58 on DSP58) no ceiling: the top lane
     takes its low bits from P and counts P's wraps in a high sideband sized from
     ``ACCU_WIDTH`` (``dotp.sv``'s ``sliceLanes`` and ``hi_width``), so an accumulator
@@ -555,7 +531,7 @@ class PackedDotpKernel(DotpAxiKernel):
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        """Any width of a bit or more (FinnLib ``229b35f``: ``ACCU_WIDTH >= 1``): the packed
+        """Any width of a bit or more (FinnLib's ``ACCU_WIDTH >= 1``): the packed
         lanes resolve the sum modulo ``2**ACCU_WIDTH``."""
         bits = self.y.element.bits
         if bits < 1:

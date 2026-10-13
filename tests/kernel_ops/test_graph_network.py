@@ -23,6 +23,7 @@ from kernels.helpers import Lanes, built, choose, cycles_of, labels
 from kernels.xsim import requires_xsim
 from qonnx.transformation.infer_shapes import InferShapes
 
+import finn.custom_op.kernels.network as graph_network
 from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
@@ -31,7 +32,7 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Available
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import network, persist, save_channels
+from finn.custom_op.kernels.network import network, persist, save_channels
 from finn.kernels.explore import Ranked, SizeFifos
 from finn.kernels.network import dotted
 from finn.toolchain.launcher import host_toolchain
@@ -367,14 +368,14 @@ def test_persist_checks_every_value_before_it_writes_any(
     bound = configure_partition(model)
     held = kernel_choices_config(model)
     changed = choose(bound, {"second.compute.packed.pe": 1})
-    checked = shell._encoded
+    checked = graph_network._encoded
 
     def refuse_y(tensor: str, values: Any) -> None:
         if tensor == "y":
             raise KernelOpError(f"{tensor}: refused")
         checked(tensor, values)
 
-    monkeypatch.setattr(shell, "_encoded", refuse_y)
+    monkeypatch.setattr(graph_network, "_encoded", refuse_y)
     with pytest.raises(KernelOpError, match="y: refused"):
         persist(model, changed)
     assert kernel_choices_config(model) == held

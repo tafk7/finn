@@ -17,7 +17,7 @@ import pytest
 from oracle import CAPTURES, capture_file, document
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.custom_op.kernels.shell import network
+from finn.custom_op.kernels.network import network
 from kernel_ops.measure_cycles import finn_cycles, schedule_of
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.tfc import partition

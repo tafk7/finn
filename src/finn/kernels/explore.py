@@ -3,83 +3,30 @@
 
 """The DSE seam: what a design space exploration asks of a network, and strategies.
 
-A ``Seam`` answers three questions about a network (``finn.kernels.network``: kernels
-and channels by name, each its own space, immutable like a point). Every choice is a
-pair, ``(owner, key)``: a member by name (a kernel's node, a channel's tensor) and the
-decision key in its space (``("first", "compute.packed.pe")``, ``("y", "transport")``):
-
-- ``choices(network)``: each open Decision as a ``Choice``: its key, the Space class
-  that declares it, its viable cases in domain order (or ``None``: known by membership
-  only, a FIFO's depth), whether that order is one (``Domain.ordered``), and why each
-  other case is not viable. A forced Decision is never a choice.
-- ``set(network, {key: value, ...})``: the one change. ``Accepted(network', dropped)``
-  or ``Refused({key: findings})``. A batch is refused where a key is no Decision, is
-  forced or held (``held``) to another value, or a value of an open choice is not one
-  of its viable cases (a membership-only value, or a value replacing a stored one, is
-  its domain's to check); where the engine refuses it (membership, requirements,
-  applicability: a key nested under a selector the same batch commits is the engine's to
-  accept); where it leaves a Decision of a member it touches without a viable case; or
-  where such a member refuses itself (its ``admission``, as far as it is decided). It
-  is otherwise committed, and what it makes stale is dropped: a stored choice of a
-  kernel the engine refuses beside it, or a channel's that replay refuses once the
-  kernel's ends change (``Network.trial``). Each one dropped is named with why
-  (``Accepted.dropped``), so a drop is never silent, and settled again (its baseline,
-  where it has one). A held choice is never dropped: the change is refused, naming it.
-  Viable is not feasible: a refusal names why, so an explorer can recover: the engine's
-  findings (``finn.core.reporting.findings.Finding``), or the seam's own (``SEAM_CODES``:
-  ``not-a-decision``, ``held``, ``forced``, ``case-not-viable``, ``request-refused``,
-  ``refused-together``, ``inapplicable``, ``decision-no-viable-case``), each owned by
-  its key.
-- ``cost(network)``: each member's cycles a frame, buffering and resources, as the
-  kernels and channels export them (``CYCLES``, ``BUFFERING``, ``RESOURCES``); the
-  bottleneck, every member tied at the most cycles, once every member's cycles are
-  known; and the resources used, once every member states its own. A member whose
-  cycles wait on open choices names them (a channel's ends wait on its kernels'), and a
-  member that states no resources says why (its memory style open, a memory in
-  ``auto``, or no model of its leaf), by its findings.
-
-Beside them, ``resources(network)`` is what the network uses as far as it is stated: its
-members' sum, or, where a member states none, the sum of those that do, a lower bound
-naming the others (``Stated``).
-
-The rank order is kernels first, then channels in the order the wiring reads them, and
-within a member its own (an enclosing choice before those it guards): a channel's
-facts follow from its ends. Viability is read per member and kept with the member's
-point, so a change reads again one kernel and its channels.
+A ``Seam`` answers what an exploration asks of a network (``finn.kernels.network``,
+immutable like a point), each choice keyed by a pair ``(owner, key)``: a member by name (a
+kernel's node, a channel's tensor) and the decision key in its space (``("first",
+"compute.packed.pe")``, ``("y", "transport")``). ``choices`` gives each open Decision
+with its viable cases (a forced one is never a choice); ``set`` is the one change, which
+drops what it makes stale and names it, or refuses with findings, the engine's or the
+seam's own (``SEAM_CODES``); ``cost`` gives each member's cycles a frame, buffering and
+resources, and the bottleneck; ``resources`` what the network uses as far as it is
+stated. The engine decides validity; an explorer only proposes and prefers.
 
 A network is complete when every choice with cases that is not required holds a value,
-its baseline until a strategy sets another. A kernel lists each Decision's cases
-baseline first, its author's knowledge with the reason beside it; a ``Decision(
-required=True)`` has no safe baseline and stays open until a strategy sets it
-(``SizeFifos`` a FIFO's depth). Three operations keep a network complete:
+its baseline until a strategy sets another; a required Decision (a FIFO's depth) stays
+open until a strategy sets it. ``baseline``, ``reopen`` and ``settle`` keep a network
+complete, in rank order: kernels first, then channels in the order the wiring reads them.
+``held`` maps the keys no strategy changes to their values: those a ``Pinned`` strategy
+fixes, and those the build seeds from its partition's body (``HELD``,
+``finn.transformation.kernels.choose``).
 
-- ``baseline(network)``: every open choice with cases that is not required at its
-  first viable case, in rank order;
-- ``reopen(network, keys)``: ``keys`` cleared; where the engine refuses because a
-  stored choice reads one of them (left unresolved, refused or inapplicable), that
-  choice is cleared too, and the clear tried again: what a change reaches is what the
-  engine names, never a list kept here. A channel whose ends the clear leaves open waits,
-  its choices with it. It returns the network and every key it cleared;
-- ``settle(network, prior)``: every open choice, in rank order, at its ``prior`` value
-  where that is still accepted, else (with cases, not required) at its baseline. A key
-  ``held`` comes back to its held value, or the settle is refused naming the pin.
-
-``held`` holds the pinned keys with their values, which no strategy changes (``set``
-refuses another value for one, and refuses to drop one): those a ``Pinned`` strategy
-fixes, and those the seam's maker seeds. The build's exploration seeds the pins its
-partition's body records, so that a pin holds for the whole build
-(``finn.transformation.kernels.choose``).
-
-The engine decides validity; an explorer only proposes and prefers. An
-``Explorer`` (``explore(seam, network) -> network``) proposes batches, and may keep,
-compare and backtrack over networks, which are immutable: nothing persists until the
-explorers return, and then every value of the network they return. Explorers chain
-(``explore``): each explores what the one before returned and says what it did
-(``report``). A strategy runs through ``Seam.run``: it reopens its scope (the choices
-it decides, none held), explores as it always has, and settles, so a value it does not
-decide keeps what an earlier strategy set; ``Seam.runs`` records what each reopened,
-kept and re-baselined. A report names a value by its owner and key, joined
-(``first.compute.packed.pe``), as ``kernel_choices.json`` does.
+An ``Explorer`` (``explore(seam, network) -> network``) proposes batches, and may keep,
+compare and backtrack over networks; nothing persists until the explorers return.
+Explorers chain (``explore``), each saying what it did (``report``, which names a value
+by its owner and key joined, ``first.compute.packed.pe``). A strategy runs through
+``Seam.run``: it reopens its scope (the choices it decides, none held), explores and
+settles, so a value it does not decide keeps what an earlier strategy set.
 
 The strategies, each an objective and its constraints searched through the seam:
 
@@ -144,10 +91,10 @@ T = TypeVar("T")
 
 class Composition(Protocol):
     """What the seam explores: a ``finn.kernels.network.Network`` (the graph's binds one,
-    ``finn.custom_op.kernels.shell.network``, in its shell). Its members by name, ranked,
+    ``finn.custom_op.kernels.network.network``, in its shell). Its members by name, ranked,
     its channels among them, and per member its point, its exports, its Decisions, what
     of them is viable, open, forced and stored, its admission, and a change (``trial``);
-    what it uses beside its members (``own_resources``)."""
+    its own statement of what it uses, where it makes one (``own_resources``)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...
@@ -333,7 +280,7 @@ class Run:
 
 
 class Unsettled(ExploreError):
-    """A held key (a pin of this run) that settling cannot bring back to its held value
+    """A held key that settling cannot bring back to its held value
     (``pin-unsettled``, owned by the key): the change that reached it is refused."""
 
     def __init__(self, key: Key, why: str, causes: Iterable[Finding] = ()) -> None:
@@ -401,7 +348,7 @@ def _records(why: Mapping[str, Iterable[Finding]]) -> dict[str, list[dict[str, A
 class Seam:
     """The seam over the networks of one exploration: the ``platform`` its kernels are
     built for (its clock, which a throughput reads). ``attempts`` counts the changes tried
-    through it; ``held`` holds the pinned keys, with their values; ``runs`` records each
+    through it; ``held`` maps each held key to its value; ``runs`` records each
     strategy's run, in order."""
 
     def __init__(self, platform: Platform | None = None) -> None:
@@ -443,8 +390,21 @@ class Seam:
         return tuple(found)
 
     def set(self, network: S, changes: Mapping[Key, object]) -> Accepted[S] | Refused:
-        """``changes`` committed on ``network``, what they make stale dropped (each named,
-        with why) and settled again, or why not; see the module docstring."""
+        """``changes`` committed on ``network``: ``Accepted(network', dropped)`` or
+        ``Refused({key: findings})``.
+
+        A batch is refused where a key is no Decision, is forced or held (``held``) to
+        another value, or a value of an open choice is not one of its viable cases (a
+        membership-only value, or a value replacing a stored one, is its domain's to
+        check); where the engine refuses it (a key nested under a selector the same batch
+        commits is the engine's to accept); where it leaves a Decision of a member it
+        touches without a viable case; or where such a member refuses itself (its
+        ``admission``, as far as it is decided). It is otherwise committed, and what it
+        makes stale is dropped: a stored choice of a kernel the engine refuses beside it,
+        or a channel's that replay refuses once the kernel's ends change
+        (``Network.trial``). Each one dropped is named with why (``Accepted.dropped``) and
+        settled again. A held choice is never dropped: the change is refused, naming it.
+        """
         self.attempts += 1
         changes = self._typed(network, changes)
         why = self._screen(network, changes)
@@ -470,8 +430,7 @@ class Seam:
                     key: _refusal(
                         key,
                         "held",
-                        f"held to {self.held[key]!r} by a pin, dropped by the change: "
-                        + _text(key, why),
+                        f"held to {self.held[key]!r}, dropped by the change: " + _text(key, why),
                     )
                     for key, why in held.items()
                 }
@@ -493,7 +452,7 @@ class Seam:
             if network.decision(key) is None:
                 why[key] = _refusal(key, "not-a-decision", "not a Decision of this network")
             elif held is not _ABSENT and held != value:
-                why[key] = _refusal(key, "held", f"held to {held!r} by a pin")
+                why[key] = _refusal(key, "held", f"held to {held!r}")
             elif choice is None:
                 if forced is None:
                     forced = network.forced({k[0] for k in batch})
@@ -608,8 +567,7 @@ class Seam:
                 if isinstance(outcome, Refused):
                     raise Unsettled(
                         choice.key,
-                        f"held to {held!r} by a pin, refused after the change: "
-                        + _reasons(outcome.why),
+                        f"held to {held!r}, refused after the change: " + _reasons(outcome.why),
                         _all(outcome.why),
                     )
                 network, kept[choice.key] = outcome.network, held
@@ -642,7 +600,7 @@ class Seam:
             found = values.get(key, forced.get(key, _ABSENT))
             if found != value:
                 now = "inapplicable or open" if found is _ABSENT else f"now {found!r}"
-                raise Unsettled(key, f"held to {value!r} by a pin, {now} after the change")
+                raise Unsettled(key, f"held to {value!r}, {now} after the change")
 
     def run(
         self,
@@ -786,7 +744,7 @@ class Explorer(Protocol):
     """Explores from ``network`` and returns the network it keeps; ``report`` says what it
     did (its parameters and findings, as JSON values). An explorer that finds the network
     it keeps short of what it was asked (``MaxThroughput``: over its budget) states it
-    in ``findings`` too, never a refusal (RC5)."""
+    in ``findings`` too, never a refusal."""
 
     def explore(self, seam: Seam, network: S) -> S: ...
 
@@ -994,7 +952,7 @@ class Pinned:
         stored = seam.chosen(network)
         wanted = seam.keyed(network, self.choices, self.path)
         refused = {
-            key: _refusal(key, "held", f"held to {seam.held[key]!r} by an earlier pin")
+            key: _refusal(key, "held", f"already held to {seam.held[key]!r}")
             for key, value in wanted.items()
             if key in seam.held and seam.held[key] != value
         }
@@ -1502,7 +1460,7 @@ class _Tried:
 class MaxThroughput:
     """The most throughput, the fewest cycles a frame at the bottleneck, whose resources
     stay within ``within``: for each resource named (``RESOURCE_NAMES``), a fraction of
-    what the seam's platform's part has (``Platform.resources``, RC1), its budget.
+    what the seam's platform's part has (``Platform.resources``), its budget.
 
     The search is bisection on ``TargetCycles``' budget: ``TargetCycles(1)`` (relaxed to
     the fastest bottleneck the folding reaches) and, if that does not fit, no budget
@@ -1516,10 +1474,10 @@ class MaxThroughput:
     the next; then the first tried), and returns it, settled. Fewer cycles, more
     resources is the assumption, as ``TargetCycles``' is; where a budget's network
     departs from it (a larger budget reaching fewer cycles or using more, or a budget
-    relaxed above itself: an end's converter, SZ6), the report states it, and the
+    relaxed above itself: an end's converter), the report states it, and the
     search goes on as bisection: a better network it reached on the way is still kept.
 
-    A member that states no resources (a compressor reducer, a memory pinned ``auto``, a
+    A member that states no resources (a compressor reducer, a memory in ``auto``, a
     kernel with no model) is
     allowed: the budget is checked against what is stated, a lower bound, and it says so
     once (a ``resources-unstated`` limitation in ``findings``), naming each such member,
@@ -1530,7 +1488,7 @@ class MaxThroughput:
     asking again, and a network already costed is not settled and costed again. Each
     budget's network is the one ``TargetCycles`` alone folds it to.
 
-    It refuses nothing (RC5): where even the least parallelism does not fit, it returns
+    It refuses nothing: where even the least parallelism does not fit, it returns
     that network and states it (a ``resource-budget`` limitation in ``findings``), naming
     the binding resource. ``findings`` are in its ``report`` too. ``report`` states the budget,
     the budget whose network it kept (``kept_budget``, ``None`` for no budget), the
@@ -1748,7 +1706,7 @@ class MaxThroughput:
     def _departures(self) -> list[str]:
         """Where the budgets tried depart from the search's assumption (fewer cycles,
         more resources): a budget relaxed above itself past the fastest bottleneck, or
-        relaxed and still not met (SZ6: the refold changes an end's converter); and a
+        relaxed and still not met (the refold changes an end's converter); and a
         larger budget that reached fewer cycles or used more of a budgeted resource."""
         found = [
             f"budget {tried.cycles} relaxed to {tried.relaxed_to}, reaching {tried.reached.cycles}"
@@ -1824,7 +1782,7 @@ class _Proposal:
 
 
 class SizeFifos:
-    """The FIFO-sizing strategy (K12, DSE8, DSE14, FS1, FS4): a depth for every open
+    """The FIFO-sizing strategy: a depth for every open
     transport, from both ends' beat patterns at the bottleneck period.
 
     It reopens every transport not held (``scope``: a transport, its depth and its
@@ -1834,17 +1792,17 @@ class SizeFifos:
     choice on a ``Channel`` one of whose cases nests the Decisions a ``FifoKernel``
     declares (its ``depth`` and ``ram_style``) and another nothing. For each it reads
     the channel's ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the
-    producer within its idle time, FS1) and proposes, all in one batch, ``direct`` or
+    producer within its idle time) and proposes, all in one batch, ``direct`` or
     the FIFO case with its depth (the least DEPTH whose storage holds the least words
     plus ``margin``, in ``ram_style``'s storage). ``ram_style`` ``None``, the default,
     leaves the FIFO's style to settling (its earlier value, else its baseline, ``auto``:
     FinnLib's own selection by depth and width, which the depth is sized for); a style
-    named is committed with the depth (SZ18). A channel the model does not read (a
+    named is committed with the depth. A channel the model does not read (a
     boundary without an end, a memory source) is direct, with why. Where the seam refuses
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
     batch is attempted again.
 
-    ``method`` is ``"analytical"`` (K12), the only one; ``frames`` the frames the
+    ``method`` is ``"analytical"``, the only one; ``frames`` the frames the
     model runs to reach its periodic state.
     """
 

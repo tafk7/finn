@@ -30,7 +30,8 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import Partition, configured_root, network, save_channels
+from finn.custom_op.kernels.network import Partition, network, save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,
@@ -244,7 +245,7 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
     } == values
     # Nothing is left open, where it is explored or generated.
     assert report["open"] == []
-    point, _ = configured_root(model, "the chain")
+    point, _ = configured_network(model, "the chain")
     assert {
         f"{node}.{attribute}": value for (node, attribute), value in point.network.chosen().items()
     } == values
@@ -431,7 +432,7 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
     """A pin recorded in the body holds for every later exploration of it, as one run of
     several strategies held it: a fold, FIFO sizing and going back to the baselines keep
     a pinned FIFO and a pinned folding, and pinning a held key to another value is
-    refused, naming the earlier pin."""
+    refused, naming the value it is held to."""
     pinned = tmp_path / "pins.json"
     pins = {
         "first": {"compute.packed.simd": 1},
@@ -452,7 +453,7 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
     assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its baseline
     assert model.get(HELD) == pins
     pinned.write_text(json.dumps({"first": {"compute.packed.simd": 2}}))
-    with pytest.raises(ExploreError, match="held to 1 by an earlier pin"):
+    with pytest.raises(ExploreError, match="already held to 1"):
         explore_kernel_choices(model, Pinned(pinned))
 
 
@@ -564,7 +565,7 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
     assert report["open"] == []
     # Emission replays the saved choices: the configured network is the explored one.
-    point, _ = configured_root(model, "the partition")
+    point, _ = configured_network(model, "the partition")
     assert point.network.viable() == () and len(point.network.decisions()) > 57
 
 

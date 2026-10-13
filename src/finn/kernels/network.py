@@ -3,10 +3,10 @@
 
 """The network: kernels and channels by name, each its own space, and the wiring between them.
 
-A network composes what one Space root used to: kernels by name, channels by name, and
-the wiring. Each member is a space of its own, bound from plain facts: a kernel from
-its declaration (``MatMulKernel(m=..., x_tensor=...)``, its formals and its tensors),
-a channel from its ``Wire``, the facts of a ``Channel``. A wire's fact is a value, or
+A network composes kernels by name, channels by name, and the wiring. Each member is a
+space of its own, bound from plain facts: a kernel from its declaration
+(``MatMulKernel(x_tensor=..., platform=...)``, its formals and its tensors), a channel
+from its ``Wire``, the facts of a ``Channel``. A wire's fact is a value, or
 read from a member:
 
 - an end (``Interface(member, view)``): the ``PortEnd`` a member presents at an
@@ -23,13 +23,13 @@ open choice, or is refused, leaves the channel unbound: it waits with the read's
 findings, and its stored choices wait with it. A read that does not apply (a kernel
 without known weights states no contents) leaves the fact absent.
 
-Each Space class is linked once per process (the engine compiles a root of plain
-values once per class); a kernel is bound once per network, or given bound already (by
-its owner's cache: a graph's node has one binding, ``finn.custom_op.kernels.cache``), a
-channel once per set of facts. A channel's binding is cached by its facts, by value (its
-tensor, its two ends, its platform, a parameter channel's contents), and so is a replay
-of choices on it. The choices each member stores are replayed as it is bound
-(``stored``): what replay refuses of them is dropped, each with why (``dropped``).
+Each Space class is compiled and linked once per process; a kernel is bound once per
+network, or given bound already (by its owner's cache: a graph's node has one binding,
+``finn.custom_op.kernels.cache``), a channel once per set of facts. A channel's binding
+is cached by its facts, by value (its tensor, its two ends, its platform, a parameter
+channel's contents), and so is a replay of choices on it. The choices each member
+stores are replayed as it is bound (``stored``): what replay refuses of them is
+dropped, each with why (``dropped``).
 
 A network is immutable, like a point. ``trial({(owner, key): value}, clear=...)`` is
 a change, atomic over the members it reaches:
@@ -51,9 +51,9 @@ declaration inside the member's space; the network names the member beside them.
 **The module.** A network is emitted as one ``Composed`` module (``module``): each
 member's netlist under its node (its name, unless the network is given another,
 ``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
-(its instance order, which the text follows), with every boundary channel's AXIS bus. The merge is
-``compose``, one plain function a kernel with children's module calls too
-(``finn.kernels.base``), so the text is the same either way.
+(its instance order, which the text follows), with every boundary channel's AXIS bus
+(``compose``). A kernel with children merges its own netlist with the same function
+(``merged``).
 """
 
 from __future__ import annotations
@@ -116,7 +116,7 @@ class NetworkError(ValueError):
     """A network that cannot be built as declared, or a member read that is no member's."""
 
 
-# -- the module: one function, for a network and for a kernel with children --------------
+# -- the module ---------------------------------------------------------------------------
 
 
 def merged(
@@ -179,8 +179,8 @@ def compose(
     presented: Iterable[Exported] = (),
 ) -> Composed | Rejected:
     """One composed module: each netlist under its node in order (``merged``), the pins
-    of ``module_abi`` and the module ``assembled``. A kernel with children's module and a
-    network's are this one function's."""
+    of ``module_abi`` and the module ``assembled``: a network's. A kernel with children
+    merges its netlist with ``merged`` too."""
     fragment = merged(netlists, presented)
     if isinstance(fragment, Rejected):
         return fragment
@@ -281,7 +281,7 @@ _MODELS: dict[int, tuple[object, Mapping[str, inspection.DecisionInfo[object]]]]
 
 def _decisions(subject: Space | type[Space]) -> Mapping[str, inspection.DecisionInfo[object]]:
     """Every Decision of a point's compiled model, or a Space class's, by key: one reading
-    per model (a class's, or a declaration's that pins a choice)."""
+    per compiled model (one per Space class)."""
     model = inspection.model(subject)
     held = _MODELS.get(id(model))
     if held is None or held[0] is not model:
@@ -963,7 +963,7 @@ class Network:
     # -- what it is ---------------------------------------------------------------------------
 
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
-        """Its composed module (``compose``): each member's netlist under its name, in the
+        """Its composed module (``compose``): each member's netlist under its node, in the
         order declared, with each boundary channel's AXIS bus and each control bus its
         kernels present (``CONTROL``, at the port each was given); or why not, every member's
         refusal (or, where none refuses, what they wait on), each finding naming its member
@@ -1018,8 +1018,9 @@ class Network:
         return finding.about(**{"tensor" if member in self._wires else "node": member})
 
     def own_resources(self) -> QueryResult[Resources] | None:
-        """What the network uses beside its members: nothing; a network that holds more
-        (a partition's, in its shell: its ends and static region) states its total."""
+        """Its own statement of what it uses, members included, or None: a plain network
+        makes none; a partition's, in its shell, states its total with its ends and static
+        region."""
         return None
 
     def __repr__(self) -> str:

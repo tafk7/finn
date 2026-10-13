@@ -42,7 +42,8 @@ from qonnx.util.basic import qonnx_make_model
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.explore import Pinned, Ranked
 from finn.kernels.matmul import column_range
@@ -249,7 +250,7 @@ def test_narrowed_weights_shrink_the_memory_image() -> None:
 def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
     """The input and the expected output as each boundary port's words, row-major in its
     lanes, from the partition's boundary facts (its configured network's)."""
-    point, boundary = configured_root(model, "partition")
+    point, boundary = configured_network(model, "partition")
     inputs, outputs = boundary_facts(model, point, boundary, "partition")
     words = {}
     for facts, values in ((inputs[0], x), (outputs[0], y)):
@@ -266,7 +267,7 @@ def _computes(case: Case, directory: Path, **options: Any) -> None:
     model = kernel_ops(case, **options)
     bound = network(model, model.graph.node)
     assert bound.undecided() == () and not bound.stale
-    point, _ = configured_root(model, "partition")
+    point, _ = configured_network(model, "partition")
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)
     x = np.random.default_rng(5).integers(low, high + 1, size=(ROWS, k)).astype(np.float32)

@@ -131,7 +131,7 @@ class MemStreamKernel(LeafKernel):
     form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
-    # The set indices its set port reads (several sets only): a fact its parent gives.
+    # The set indices its set port reads (several sets only): a fact it is given.
     set_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
 

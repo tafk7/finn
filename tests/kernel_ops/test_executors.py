@@ -50,7 +50,7 @@ from finn.core.onnx_exec import (
     running,
 )
 from finn.core.rtlsim_exec import Unstreamable, XSim, _read, boundary, links
-from finn.custom_op.kernels.shell import PARTITION
+from finn.custom_op.kernels.network import PARTITION
 from finn.dataflow.traversal import pack, vector_major
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.util.draws import boundary_inputs

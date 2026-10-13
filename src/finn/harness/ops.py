@@ -13,7 +13,7 @@ generates computes what those ops compute, on the same inputs:
    saved under ``directory``, its tensors' channel choices moved into the body; the
    hardware checked is the partition a build ships;
 2. **the network**: the body's network, its nodes' persisted choices and its tensors'
-   channel choices replayed, as packaging builds it (``configured_root``, which refuses
+   channel choices replayed, as packaging builds it (``configured_network``, which refuses
    an open choice): a chosen design point is the choices saved on the nodes and the
    tensors, every one stored where it was created (at conversion and at the cut);
 3. **the oracle**: each graph output as the nodes' ``execute_node`` computes it, the
@@ -55,7 +55,7 @@ from finn.core.rtlsim_bench import WordsDiffer
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import STALLED, Pacing
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import pack
 from finn.harness.orders import Reference, Stream, decode
@@ -106,7 +106,7 @@ def check_parity(
     hardware computed otherwise), ``SimulationFailed`` or ``Disagreement``."""
     parent = model.transform(CutKernelPartition(directory))
     _, body, _ = partition_body(parent)
-    point, boundary = configured_root(body, label)
+    point, boundary = configured_network(body, label)
     expected = dict(execute_onnx(model, inputs) if reference is None else reference(inputs))
     outputs = {item.name for item in model.graph.output}
     if set(expected) != outputs:

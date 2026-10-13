@@ -7,7 +7,7 @@
 of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
 
 1. **the network**: the body's network, its nodes' and its tensors' channel choices
-   replayed, and its boundary (``configured_root``, which refuses an open choice): each
+   replayed, and its boundary (``configured_network``, which refuses an open choice): each
    graph input and output at its port;
 2. **the words**: each input tensor, as integers of its boundary element (a value
    that is no integer, or one the element does not hold, is refused: ``Unstreamable``),
@@ -67,7 +67,7 @@ from finn.core.graph.partition import kernel_partition_body
 from finn.core.onnx_exec import running, window
 from finn.core.rtlsim_bench import Receive, SimulationFailed, Tap, Words, stream_out
 from finn.core.rtlsim_pacing import STALLED, Pacing
-from finn.custom_op.kernels.shell import Configured, configured_root
+from finn.custom_op.kernels.shell import Configured, configured_network
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
 from finn.toolchain.launcher import Toolchain, host_toolchain
@@ -262,10 +262,10 @@ def _read(
 
 
 def boundary(body: ModelWrapper, node: NodeProto) -> tuple[Configured, tuple[Stream, ...]]:
-    """The body's configured network (``configured_root``) and its boundary ports,
+    """The body's configured network (``configured_network``) and its boundary ports,
     each with the tensor it carries in the parent graph: the partition node's inputs and
     outputs, by position, are its body's graph inputs and outputs."""
-    point, ports = configured_root(body, node.name)
+    point, ports = configured_network(body, node.name)
     # As the partition op maps them: its i-th input is its body's i-th graph input.
     outer = {body.graph.input[index].name: name for index, name in enumerate(node.input)}
     outputs = {item.name for item in body.graph.output}

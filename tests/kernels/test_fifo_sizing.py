@@ -281,7 +281,7 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Every transport not held is reopened, its FIFO's depth and style with it, and
-    sized again; a transport held by a pin is not reopened."""
+    sized again; a held transport is not reopened."""
     explorer, point = _folded()
     placed = explorer.set(
         point, keyed({"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64})

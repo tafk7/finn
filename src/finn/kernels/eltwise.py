@@ -12,7 +12,6 @@ native restrictions and emitting the parameter.
 Operation and scale describe the computation; they are supplied inputs, not
 interchangeable implementation choices. The operands' types are their tensors'.
 Its resources are not characterised: it states so (``kernel-resources``).
-No KernelOp binds it yet: the harness's test cases are its references, and it is kept.
 """
 
 from __future__ import annotations
@@ -61,7 +60,7 @@ class EltwiseKernel(LeafKernel):
     rtl_module = "eltwise"
 
     operation: str = Param()
-    # The tensors its operand ports read: facts its parent gives.
+    # The tensors its operand ports read: facts it is given.
     lhs_tensor: Tensor = Param(required=False)
     rhs_tensor: Tensor = Param(required=False)
     channels = extent_of(c)  # the innermost axis

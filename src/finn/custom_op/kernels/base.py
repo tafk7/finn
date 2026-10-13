@@ -6,7 +6,7 @@
 A KernelOp is a qonnx ``CustomOp`` whose node stands for a kernel of ``finn.kernels``
 with its choices still open. It does not own the hardware of the graph: the channels
 between nodes belong to the tensors they carry, and a selection of nodes is bound as a
-network (``shell.network``), each node's kernel on channels the nodes share.
+network (``network.network``), each node's kernel on channels the nodes share.
 
 Three terms, used throughout the package:
 
@@ -41,7 +41,7 @@ choices are stored on its tensor instead, and only in a partition's body (``CHAN
 Its outputs are its kernel's product, one rule for every op: the kernel bound on its
 inputs states each output's tensor (``output_tensors``), which inference writes on the
 graph. The graph's annotation of an output is the record of that statement: a network
-that finds the two differ refuses the graph as stale (``shell.network``,
+that finds the two differ refuses the graph as stale (``network.network``,
 ``tensor-stale``).
 
 **Wiring.** Each ONNX input and output that carries a stream (a *port*: ``x``, ``w``,
@@ -56,8 +56,7 @@ tensor) and the kernel's views of what its channel carries, downstream of the ke
 the tensor (``carried``, ``w_carried``) and the values its source stores (``stored``,
 ``w_stored``). A network wires the kernel and its channels by it
 (``finn.kernels.network``): each channel's tensor (a parameter channel's from the
-kernel's views, ``Fact``) and its end from the kernel (``Interface``). Facts flow one
-way: tensor, kernel, end, channel.
+kernel's views, ``Fact``) and its end from the kernel (``Interface``).
 """
 
 from __future__ import annotations
@@ -396,7 +395,7 @@ class KernelOp(CustomOp):
     def save(self, choices: Mapping[str, object | None]) -> None:
         """Store ``choices`` as the node's attributes, over its stored ones, after
         checking them all together on a fresh point; ``None`` clears one. Channel
-        choices go through ``shell.save_channels``."""
+        choices go through ``network.save_channels``."""
         merged = self.saved(choices)
         self.write(merged)
 

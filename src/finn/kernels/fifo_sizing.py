@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A channel's FIFO depth, analytically from both ends' beat patterns (K12, DSE13, FS1).
+"""A channel's FIFO depth, analytically from both ends' beat patterns.
 
 A channel runs ``source -> output adapter -> transport -> input adapter ->
 consumer`` (``finn.kernels.channels``); its ``transport`` is ``direct`` or a
@@ -11,7 +11,7 @@ partition's bottleneck period ``P`` (its ``CYCLES``):
 
 - the **supply**: when each word arrives at the transport, unthrottled. The
   producer's beat times, which its port states with its contract (``Pace``: one
-  schedule beat a cycle, K10), carried through the output adapter's width
+  schedule beat a cycle), carried through the output adapter's width
   conversion (a word leaves once its last element arrived, one a cycle), and the
   producer's span, the beats its kernel takes a frame;
 - the **acceptance**: when the input side takes a word. With no input adapter,
@@ -28,7 +28,7 @@ it is accepted (``FIFO_LATENCY``), and a slot taken is free the cycle after. The
 lateness is how far its last word of the frame left after its unthrottled time. A
 producer may be late by its idle time a period (``P`` minus its span) without
 starting its next frame late; ``least_depth`` is the least depth for which it
-never is later than that (FS1), by bisection. A kernel's pipeline latency is a constant
+never is later than that, by bisection. A kernel's pipeline latency is a constant
 shift of an end's times, and the acceptance follows the supply's data, so they do
 not change the depth.
 
@@ -43,8 +43,8 @@ end (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
 consumer) and an end no schedule paces are not modelled: direct, with that
 reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
-The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; the rtlsim
-check is evidence outside it (K12).
+The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim
+check is evidence outside it.
 """
 
 from __future__ import annotations

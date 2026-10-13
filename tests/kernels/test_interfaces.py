@@ -17,12 +17,12 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.rtlsim_bench import stream_through
-from finn.core.space import Available, Rejected, Space, design_space, inspection
+from finn.core.space import Available, Rejected, design_space, inspection
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
-from finn.kernels.channels import Channel, end_of
+from finn.kernels.base import NETLIST
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -219,52 +219,56 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     selectors = Tensor((REPETITIONS * HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
-    def thresholding(sets: Tensor) -> ThresholdingAxiKernel:
-        return ThresholdingAxiKernel(
-            threshold_dtype=R,
-            thresholds=two_sets,
-            bias=0,
-            input_tensor=RESULT_TENSOR,
-            set_tensor=sets,
-            platform=FULL_DSP48E2,
+    def selected(sets: Tensor) -> Network:
+        """A thresholding of two sets, its values, its set indices ``sets`` and its levels
+        each a channel, every choice at its baseline."""
+        network = Network(
+            {
+                "values": wire(
+                    tensor=RESULT_TENSOR,
+                    port="in0_V",
+                    consumer=Interface("activate", "input_end"),
+                    platform=FULL_DSP48E2,
+                ),
+                "sets": wire(
+                    tensor=sets,
+                    port="in1_V",
+                    consumer=Interface("activate", "set_end"),
+                    platform=FULL_DSP48E2,
+                ),
+                "levels": wire(
+                    tensor=LEVEL_TENSOR,
+                    port="out0_V",
+                    producer=Interface("activate", "output_end"),
+                    platform=FULL_DSP48E2,
+                ),
+                "activate": ThresholdingAxiKernel(
+                    threshold_dtype=R,
+                    thresholds=two_sets,
+                    bias=0,
+                    input_tensor=RESULT_TENSOR,
+                    set_tensor=sets,
+                    platform=FULL_DSP48E2,
+                ),
+            }
         )
+        chosen = choose(
+            network,
+            {
+                "activate.pe": 1,
+                "activate.ultra_stages": 0,
+                "activate.ram_style": "auto",
+                "activate.use_axilite": False,
+                "activate.deep_pipeline": False,
+            },
+        )
+        return with_direct_transports(chosen)
 
-    class Selected(Space):
-        values_end = end_of("activate", "input_end")
-        sets_end = end_of("activate", "set_end")
-        levels_end = end_of("activate", "output_end")
-        values = Channel(
-            tensor=RESULT_TENSOR, port="in0_V", consumer=values_end, platform=FULL_DSP48E2
-        )
-        sets = Channel(tensor=selectors, port="in1_V", consumer=sets_end, platform=FULL_DSP48E2)
-        levels = Channel(
-            tensor=LEVEL_TENSOR, port="out0_V", producer=levels_end, platform=FULL_DSP48E2
-        )
-        activate = thresholding(selectors)
-
-    point = with_direct_transports(design_space(Selected())).with_choices(
-        {
-            Selected.activate.pe: 1,
-            Selected.activate.ultra_stages: 0,
-            Selected.activate.ram_style: "auto",
-            Selected.activate.use_axilite: False,
-            Selected.activate.deep_pipeline: False,
-        }
-    )
-    assert isinstance(point.sets.query(Channel.netlist), Available)
-    assert point.sets.endpoints.sink.transport.name == "s_axis_set"
+    point = selected(selectors)
+    assert isinstance(point.query("sets", NETLIST), Available)
+    assert point.member("sets").endpoints.sink.transport.name == "s_axis_set"
     # One set index for every input beat: a shorter selector channel is refused.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
-
-    class Short(Selected):
-        sets = Channel(
-            tensor=short, port="in1_V", consumer=Selected.sets_end, platform=FULL_DSP48E2
-        )
-        activate = thresholding(short)
-
-    short_point = with_direct_transports(design_space(Short())).with_choices(
-        {Short.activate.pe: 1, Short.activate.ultra_stages: 0, Short.activate.ram_style: "auto"}
-    )
-    refused = short_point.sets.query(Channel.netlist)
+    refused = selected(short).query("sets", NETLIST)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"threshold-set-channel"}

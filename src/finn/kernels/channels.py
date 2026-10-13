@@ -3,118 +3,43 @@
 
 """Channels: one tensor from one producer to one consumer, a kernel with children taking its ends.
 
-A ``Channel`` is one real producer-to-consumer edge, a node of its own,
-declared in the kernel with children (or the root) that owns the edge, beside
-the kernels it joins, carrying one ``tensor`` its owner supplies: stated, or
-read from a kernel's fact-level view (``MatMulKernel.w_carried``). Facts flow
-one way: a kernel takes its tensors as facts (``x_tensor: Tensor = Param()``,
-given to its port's ``tensor``, ``finn.kernels.port``), states the end each
-port presents (``finn.kernels.base.PortEnd``: the port's contract and its
-label), and the channel takes its two ends as facts, ``producer`` and
-``consumer``, each the end of a kernel's interface (``x_end``) or of another
-member's, labelled from the Space that declares the channel (``end_of``:
-``matmul.compute.packed.x``), or absent: the root's boundary. Each end presents
-its own traversal of its tensor in its contract; the channel's tensor is never
-derived from an end. The contract's transport endpoint says whether the end
-produces into the channel (initiator) or consumes from it (target).
+A ``Channel`` is one producer-to-consumer edge, a member of a network
+(``finn.kernels.network``) or of a kernel with children, carrying one ``tensor`` given as
+a fact. Its two ends are facts too, ``producer`` and ``consumer``: each the ``PortEnd`` a
+member presents at an interface (a kernel's ``x_end``), labelled from the network
+(``Interface``: ``matmul.compute.packed.x``), or absent: the network's boundary. The
+channel's tensor is never derived from an end.
 
-Its ``ends`` are the contracts' logical part (``finn.dataflow.ends``): each
-must traverse the tensor (``well_formed``, ``channel-tensor``), and the
-``plan`` between their beat sequences (``finn.dataflow.plan``) must be one a
-chain of steps carries out (``channel-plan``). A channel runs, in order:
+Each end must traverse the tensor (``channel-tensor``), and the plan between their beat
+sequences (``finn.dataflow.plan``) must be one a chain of FinnLib modules carries out
+(``channel-plan``). A channel runs, in order:
 
     source -> output adapter -> transport -> input adapter -> consumer
 
-The plan splits at the transport. Its output side (width conversions) opens
-the ``output_adapter`` Decision over nodes, its input side (a reorder, replay
-included, and markers) the ``adapter`` Decision; the candidates of each are
-fixed chains of FinnLib modules (``finn.kernels.adapters``), each refusing a
-plan it does not carry out, so at most one survives a side. A channel whose
-``adaptable`` input is False admits no adapter and refuses any plan.
+The plan splits at the transport: its output side (width conversions) is the
+``output_adapter`` Decision, its input side (a reorder, replay included, and markers) the
+``adapter`` Decision, each over fixed chains (``finn.kernels.adapters``). The
+``transport`` Decision is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (required:
+an exploration sizes it) and its ``ram_style``, and carries data words only
+(``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
-A channel with an end on one side only is a boundary of the root that
-declares it. Its ``port`` input names the top-level AXIS port (``in0_V``): an
-ABI name is design data of the channel, independent of its node name, which
-is its identity and the prefix of its persisted decision keys. A boundary
-whose ``port`` is not supplied is refused (``channel-boundary``): a root names
-a port only for what may cross it, an ONNX input or output of a partition.
-The boundary presents what its internal end presents, by one rule: an input
-boundary without the replay or the window its receiver realizes (``unreplayed``: a
-window's image once, row-major), an output boundary as produced, neither with
-markers and both as a single pass.
+A channel with an end on one side only is a boundary: its ``port`` names the module's
+AXIS port (``in0_V``), refused where absent (``channel-boundary``). The boundary presents
+what its inner end presents, by one rule: an input without the replay or window its
+receiver realizes (``unreplayed``), an output as produced, neither with markers. Where a
+shell offers ends (``end_offer``, ``finn.kernels.ends``), the ``end`` Decision places one
+on that free side; it binds no RTL in the module and exports its contract (``END``) for
+the shell's admission and resources.
 
-Every channel, boundaries included, owns a ``transport`` Decision over two
-nodes between its adapters: ``direct`` or ``fifo``. The FIFO candidate owns its
-``depth``, a Decision known by its domain's membership only, which a design
-space exploration proposes, and the FIFO's ``ram_style``; it is an identity
-stage presenting what arrives at it (its ``FifoKernel`` is given it, and its ports
-present it), inside the root that declares the channel (on a boundary, between the
-root's pins and its port). A FIFO carries data
-words only: where what arrives carries markers (a producer whose own output
-carries them; a width conversion drops them), the FIFO refuses itself
-(``fifo-markers``). The adapters' and transport's stages are checked on both
-sides, on the channel's ``platform``. Their keys are the channel's
-(``x.output_adapter``, ``x.transport``, ``x.adapter``), so they belong to
-whoever owns the edge.
+A channel whose tensor has a known value (``contents``) has a ``source`` (``SOURCES``: a
+memory) as its only producer (``channel-users``), storing one period in the order its
+consumer reads it; with several sets, the source's set port is the channel's interface
+(``set_end``), which the index tensor's channel consumes.
 
-A channel whose tensor has a known value (``contents``, one operand per set;
-with several ``sets``, the tensor of the set indices is ``index_tensor``)
-carries a ``source`` Decision over the kernels that can drive it with that
-value (``SOURCES``: a memory). It applies only when the value is known
-(``valued``), and it has no ``none`` case: one viable candidate is forced. The
-source is the channel's producer end, placed by the channel, its
-leaf below the channel at ``source.<case>``; it stores one period of the value
-in the order the channel's consumer reads it. The invariant: **a channel with
-a value has its source as its only producer** (``channel-users``). With several
-sets, the source's set port is an interface of the channel (``set_end``,
-labelled ``source.<case>.set``): the index tensor's channel takes it as its
-consumer, so an end may be any member's interface, a kernel's or a channel's.
-
-A channel is a kernel with children (``finn.kernels.base.ComposedKernel``): its
-members are its source, its output adapter, its transport and its input adapter (each
-a kernel with children of its stages, the FIFO's ``ChannelFifo``) and its end,
-declared in the order the stream runs through them. Each stage is a leaf presenting on
-its ports the beat sequences its step of the plan gives it, so its contracts are its
-ports' (``Stage``: its module and its ports' contracts, labelled below the channel).
-Beside ``compatible``, each checked hop is resolved into wires (``wired``), and the
-channel exports its netlist under ``NETLIST``: its members' netlists under their
-nodes, in that order, so its stages' leaves sit at their labels below it
-(``output_adapter.vpc.vpc``, ``transport.fifo.buffer``,
-``adapter.input_gen.input_gen``), and its hops. An end belongs to the kernel whose
-``Port`` it is, beside the channel (``^matmul.compute.packed``); a boundary end is
-the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its boundary side
-presents, if any. It is a composition inside its parent's module, not a module of
-its own: it exports no ``MODULE``, and its ``module`` is refused
-(``channel-module``).
-
-A channel refuses itself as a kernel does, through its ``admission``
-(``well_formed``, ``realizable``, ``compatible``). It exports its cost, its
-members', which waits on no admission and reads no memory style: under ``CYCLES``
-the clock cycles a frame takes through its own members, the slowest's (its
-source's or an adapter's stages', each the most beats its ports carry a frame, and
-its end's, if it has one; a FIFO presents what arrives, whose beats are counted
-where they are made, so its transport states none, and a channel of wires takes none
-of its own), under ``BUFFERING`` the bits its stages hold, their sum (an adapter's
-``input_gen`` buffers, a FIFO's depth), and under ``RESOURCES`` what its source and
-stages use of the device, their sum (a channel of wires uses none). Its end states
-no resources here: the shell integrates it beside the root, and its resources are
-the shell's.
-
-A boundary channel's side without an end is its **free side** (``free_side``):
-the AXIS port the root presents. A shell that integrates ends supplies the ends
-it offers there (``end_offer``, ``finn.kernels.ends``), and the channel's ``end``
-Decision places one, as it places its ``source``: it applies only when offers
-are supplied, its candidates are the kinds ``ENDS`` knows, each refusing a kind
-not offered, so one offered is forced and nothing is persisted. The shell's end
-is not a port's: it reads the free side the channel's one end determines, binds no RTL
-(the root's pins stay its pins), and exports its facts (``end_contract``). It
-exports its cycles a frame, the channel's member that it is, and under
-``END`` the channel exports its end's contract (none without an end), whose AXI-Lite buses
-the shell's admission counts, and whose resources and memory ports it counts
-with its static region.
-
-A channel's source is a ``MemStreamKernel`` (``finn.kernels.memstream``), which
-this module imports.
+As a kernel with children, its members are its source, its adapters' stages, its FIFO
+(``ChannelFifo``) and its end, in the order the stream runs through them. It exports
+their netlists with its hops (``NETLIST``), its boundary's AXIS bus (``BOUNDARY``), and
+their cycles, buffering and resources. It is no module of its own.
 """
 
 from __future__ import annotations
@@ -145,13 +70,12 @@ from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.artifacts.module import Composed, Fragment, Leaf, Link, LinkEnd, Marker, merge
+from finn.kernels.artifacts.module import Fragment, Leaf, Link, LinkEnd, Marker, merge
 from finn.kernels.base import (
     BOUNDARY,
     BUFFERING,
     CLOCK,
     CYCLES,
-    MODULE_SEMANTICS,
     NETLIST,
     PORT_END,
     RESET,
@@ -295,10 +219,9 @@ class ChannelFifo(ComposedKernel):
 
 @dataclass(frozen=True)
 class ChannelEnds:
-    """A channel's two ends: each end's owner (its port's label from the Space that
-    declares the channel, ``matmul.compute.packed.x``; the channel's source label,
-    ``source.<case>``, for a known value; None at the root's boundary) and its
-    contract."""
+    """A channel's two ends: each end's owner (its port's label from the network,
+    ``matmul.compute.packed.x``; the channel's source label, ``source.<case>``, for a known
+    value; None on the boundary) and its contract."""
 
     source_owner: str | None
     source: StreamContract
@@ -309,21 +232,14 @@ class ChannelEnds:
 class Channel(ComposedKernel):
     """One tensor between the ports whose ends it takes: one producer, one consumer.
 
-    ``producer`` and ``consumer`` are the ends of the ports on it, facts its
-    declarer gives (``end_of``), each labelled from the Space that declares the
-    channel. A side without an end is the root's boundary, presented as the AXIS
-    port ``port``, where the ``end`` the shell offers (``end_offer``) sits. A
-    channel with a known value has its ``source`` as its producer, and with several
-    sets its source reads the set indices (``index_tensor``) from the channel whose
-    consumer is ``set_end``, the one interface it presents. ``platform`` is the
-    target's, stated by whoever declares the channel: its source, its adapter's stages
-    and its FIFO read it.
-
-    It is a kernel with children: its source, its adapters (their stages), its
-    transport (its FIFO) and its end, declared in the order the stream runs through
-    them, so that its netlist places them in that order. Its netlist, buffering and
-    resources are theirs, by the base; it is a composition inside its parent's module,
-    not a module of its own.
+    ``producer`` and ``consumer`` are the ends of the ports on it, facts its network
+    gives (``Interface``). A side without an end is the boundary, presented as the AXIS
+    port ``port``, where the ``end`` the shell offers (``end_offer``) sits. A channel
+    with a known value has its ``source`` as its producer; with several sets, the
+    source reads the set indices (``index_tensor``) from the channel whose consumer is
+    ``set_end``, the one interface it presents. ``platform`` is the target's: its
+    source, its adapters' stages and its FIFO read it. Its members are declared in the
+    order the stream runs through them, so its netlist places them in that order.
     """
 
     id = "finn.channel"
@@ -441,12 +357,12 @@ class Channel(ComposedKernel):
         if not (producers and consumers) and not self.present(Channel.port):
             return reject(
                 "channel-boundary",
-                "a boundary of its root, but no port names it: only an ONNX input or output "
+                "a boundary of its network, but no port names it: only an ONNX input or output "
                 "of a partition crosses its boundary",
             )
         try:
             # A side without an end is the boundary. Seen from inside, the
-            # root's input is the AXIS target and its output the initiator.
+            # module's input is the AXIS target and its output the initiator.
             if not producers:
                 inside = consumers[0][1]
                 producers.append((None, self._boundary(inside, Endpoint.TARGET)))
@@ -463,7 +379,7 @@ class Channel(ComposedKernel):
 
     @derived
     def free_side(self) -> StreamContract | Rejected:
-        """The side without a port's end, as the root presents it: where a shell's end
+        """The side without a port's end, as the module presents it: where a shell's end
         sits."""
         found = self.endpoints
         if found.source_owner is None:
@@ -630,9 +546,9 @@ class Channel(ComposedKernel):
 
         An end belongs to its kernel beside the channel: its label is a
         kernel's ``Port`` (``matmul.compute.packed.x``, at any depth below the
-        channel's owner), its kernel the node above it (``^matmul.compute.packed``).
+        network), its kernel the node above it (``^matmul.compute.packed``).
         A stage and the source sit below the channel at their labels; a
-        boundary end is the root's own pins (``None``).
+        boundary end is the module's own pins (``None``).
         """
         ends = self.endpoints
         owners: list[str | None] = []
@@ -672,13 +588,6 @@ class Channel(ComposedKernel):
         except ArtifactError as error:
             return reject("kernel-netlist", str(error))
 
-    @derived(semantics=MODULE_SEMANTICS)
-    def built(self) -> Leaf | Composed | Rejected:
-        return reject(
-            "channel-module",
-            "a channel is a composition inside its parent's module, not a module of its own",
-        )
-
     # -- what a design space exploration ranks by ------------------------------------------
 
     @derived
@@ -690,14 +599,13 @@ class Channel(ComposedKernel):
 
     @view(requires=(well_formed, realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
-        """The AXIS bus the root presents for it, when one side has no end."""
+        """The AXIS bus the module presents for it, when one side has no end."""
         ends = self.endpoints
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
     end_export = View(placed_end)
 
-    # Not ``MODULE``: a channel is no module of its own.
     exports = {
         NETLIST: ComposedKernel.netlist,
         BOUNDARY: boundary_bus,
@@ -706,21 +614,6 @@ class Channel(ComposedKernel):
         RESOURCES: ComposedKernel.resources,
         END: end_export,
     }
-
-
-def end_of(member: str, interface: str) -> PortEnd:
-    """A derived member of a Space that declares channels: the end its member ``member``
-    presents at ``interface`` (a view of a ``PortEnd``: a kernel's ``x_end``, a channel's
-    ``set_end``), labelled from that Space (``matmul.compute.packed.x``). Name it in the
-    class body (``x_consumer = end_of("matmul", "x_end")``) and give that name to a
-    channel's ``producer`` or ``consumer``; it reads ``member`` by name, so the channel
-    may be declared before it."""
-
-    def end(self: Space) -> PortEnd:
-        found: PortEnd = getattr(getattr(self, member), interface)
-        return found.under(member)
-
-    return derived(semantics=PORT_END)(end)
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
@@ -735,6 +628,5 @@ __all__ = [
     "ChannelEnds",
     "ChannelFifo",
     "boundary_contract",
-    "end_of",
     "wired",
 ]

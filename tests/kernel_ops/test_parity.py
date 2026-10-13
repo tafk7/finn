@@ -8,8 +8,8 @@ declares none. ``finn.harness.ops.check_parity`` builds the hardware a one-node 
 generates at a chosen point and checks it in XSim against the op's ``execute_node`` on
 the same inputs: random integers of each input's datatype, seeded, and its extremes.
 
-The points are drawn from the node's shell root (``finn.harness.points.covering``
-of the op's own kernel Decisions, decision KT10): each case of each Decision once, each
+The points are drawn from the node's network (``finn.harness.points.covering``
+of the op's own kernel Decisions): each case of each Decision once, each
 ordered domain at its extremes; the rest (transports, adapter memories) at the
 baselines the cut gives them (``CutKernelPartition``), as packaging replays them. A
 handful of simulations an op, stalled, and the first point of each op free running too
@@ -63,7 +63,8 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_pacing import FREE
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network, persist
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import configured_network
 from finn.harness.ops import Disagreement, check_parity
 from finn.harness.points import Covering, covering
 from finn.harness.reference import platform_rows
@@ -313,7 +314,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
     assert VERSAL.platform.dsp is DspBlock.DSP58 and VERSAL.platform.uram
     assert VERSAL.platform.uram_init
     model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(BaselineChoices())
-    point, _ = configured_root(model, "versal")
+    point, _ = configured_network(model, "versal")
     assert type(point.network.member("first").compute).__name__ == "Int8Dsp58DotpKernel"
     styles = {
         label: dict(leaf.parameters).get("RAM_STYLE")

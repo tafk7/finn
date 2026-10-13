@@ -38,7 +38,8 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.core.rtlsim_bench import SimulationFailed
-from finn.custom_op.kernels.shell import configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
@@ -73,7 +74,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     stub = cast(Toolchain, PackagedByStub())
     model = model.transform(PackagePartition("sdp_1", directory=project, toolchain=stub))
     described = json.loads((project / "interface.json").read_text())
-    point, boundary = configured_root(model, "sdp_1")
+    point, boundary = configured_network(model, "sdp_1")
     read_back(described, point.module.abi.pins, 5.0)
     assert described["ip"] == {
         "name": "sdp_1",
@@ -82,7 +83,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
     }
     assert described["ip"]["top"].startswith("finn_partition__")
     assert (described["part"], described["period_ns"]) == ("xczu3eg-sbva484-1-e", 5.0)
-    # Each stream states its port's boundary facts, as the configured root's channels
+    # Each stream states its port's boundary facts, as the configured network's channels
     # state them, and the order its free side presents the tensor in: the Chain's,
     # row-major.
     inputs, outputs = boundary_facts(model, point, boundary, "sdp_1")
@@ -152,7 +153,7 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
 ) -> None:
     # Its adapters' memories at their baselines: the module is the one packaged.
     configure_partition(model := kernel_model())
-    point, _ = configured_root(model, "chain")
+    point, _ = configured_network(model, "chain")
     labels = [label for label, _ in point.module.fragment.instances]
     # Each instance 10 LUTs and its index in FFs; synthesis flattened the last into the
     # top, which so has no row for it.
@@ -388,7 +389,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     # The partition the build packaged, opened through the parent graph the step saved.
     parent = ModelWrapper(str(output / "intermediate_models" / "step_package_partition.onnx"))
     _, body, _ = partition_body(parent)
-    point, _ = configured_root(body, "partition")
+    point, _ = configured_network(body, "partition")
     described = json.loads((ip / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
     # The IP is the partition's, of its one name; the body states it.

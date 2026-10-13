@@ -144,12 +144,13 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The platform registry: parts, boards and shell rows, resolved to the build's target
     # (finn.platform.target), the capabilities kernels read with the part, shell and
-    # board. A partition's network reads its shell's row. A refusal carries its finding
+    # board. A partition's network reads its shell's row, whose budgets a module's pins
+    # (finn.kernels.artifacts) are held to. A refusal carries its finding
     # (finn.core.reporting).
     Layer(
         "platform",
         ("finn.platform",),
-        ("reporting", "space", "platform.capabilities", "kernels"),
+        ("reporting", "space", "kernels.artifacts", "platform.capabilities", "kernels"),
         (),
         "tests/kernel_ops",
     ),
@@ -177,9 +178,10 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The KernelOps: qonnx custom ops that each bind one kernel point, on ONNX nodes.
-    # A channel's choices are stated in a partition's body only (finn.core.graph.partition
-    # says what one is).
+    # The KernelOps, qonnx custom ops that each bind one kernel point on an ONNX node, and
+    # the networks they compose: a selection of their nodes bound as one network, and a
+    # partition's in its shell. A channel's choices are stated in a partition's body only
+    # (finn.core.graph.partition says what one is).
     Layer(
         "custom_op.kernels",
         ("finn.custom_op.kernels",),
@@ -271,7 +273,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The executors and the execution that runs a model with them (finn.core.onnx_exec):
     # what runs a model's nodes, chosen by the caller. They run the KernelOps (by their
-    # domain) and a partition's hardware (XSim: configured_root, the testbench).
+    # domain) and a partition's hardware (XSim: configured_network, the testbench).
     # Nothing below the flow imports them but the partition node, which executes its
     # body with them.
     Layer(

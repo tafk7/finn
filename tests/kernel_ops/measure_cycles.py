@@ -46,13 +46,8 @@ from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.graph.annotations.channel import channel_choices
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import link_stream, measure
-from finn.custom_op.kernels.shell import (
-    Partition,
-    configured_root,
-    member,
-    network,
-    save_channels,
-)
+from finn.custom_op.kernels.network import Partition, member, network, save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.harness.toolchain import print_identity
 from finn.toolchain.launcher import host_toolchain
 
@@ -177,7 +172,7 @@ def measure_partition(
     """The stitched partition of ``model``'s nodes and each node alone, measured."""
     context = execute_onnx(model, feed, return_full_exec_context=True)
     nodes = list(model.graph.node)
-    point, boundary = configured_root(model, label)
+    point, boundary = configured_network(model, label)
     bound = network(model, nodes, name=label)
     inputs, outputs = boundary_words(model, point, boundary, context, label)
     print(f"== {label}: stitched", flush=True)
@@ -212,7 +207,7 @@ def measure_partition(
     for index, node in enumerate(nodes):
         schedule = schedule_of(bound, node)
         body = alone_body(model, node)
-        alone_point, alone_boundary = configured_root(body, node.name)
+        alone_point, alone_boundary = configured_network(body, node.name)
         alone_in, alone_out = boundary_words(body, alone_point, alone_boundary, context, node.name)
         print(f"== {label}: {node.name} alone", flush=True)
         alone = measure(

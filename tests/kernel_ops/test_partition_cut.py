@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The kernel path's one cut, its partition's boundary (the ends' facts, read from the
-configured root: ``boundary_facts``), what is built of it (``finn.outputs``) and the
+configured network: ``boundary_facts``), what is built of it (``finn.outputs``) and the
 integration export read from its ends.
 
 The Chain (``kernels.chain``), its choices saved, as the partition; with its second
@@ -32,7 +32,8 @@ from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, wri
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import Seam
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -77,9 +78,9 @@ def chain(shell: str = "ip") -> ModelWrapper:
 
 
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The boundary facts of ``model``'s configured root, as the interface description
+    """The boundary facts of ``model``'s configured network, as the interface description
     and the testbench read them."""
-    point, boundary = configured_root(model, "partition")
+    point, boundary = configured_network(model, "partition")
     return boundary_facts(model, point, boundary, "partition")
 
 
@@ -159,7 +160,7 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
     # Only the body is left in the directory: the cut's own file is gone.
     assert sorted(path.name for path in tmp_path.iterdir()) == ["partition.onnx"]
     # The body carries the target, and its nodes as they were: of the space the cut
-    # stores only the choices' baselines (no boundary facts; its configured root states
+    # stores only the choices' baselines (no boundary facts; its configured network states
     # them).
     assert read_target(body) == read_target(parent) == ZYNQ
     assert {item.key for item in body.graph.metadata_props} == {
@@ -282,7 +283,7 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             kernel_op(model, second).save(folding)
         configure_partition(model)
         with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable") as refused:
-            configured_root(model, "partition")
+            configured_network(model, "partition")
         for refusal in refusals:
             assert re.search(refusal, str(refused.value))
         assert ("end-order" in str(refused.value)) == (tiled in refusals)
@@ -358,7 +359,7 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices at
     their baselines (28 values on 8 nodes) and no channel's; the cut creates the
     channels' (25 values on 13 tensors: transports, the weights' memories, the input
-    buffers' memories) on the body's shell root, where it re-checks the nodes' in
+    buffers' memories) on the body's network, where it re-checks the nodes' in
     context: 53 values, the nodes' the same 28 (none dropped), nothing left open."""
     model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(ULTRA96))
     model = model.transform(InferKernelTensors())

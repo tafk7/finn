@@ -23,7 +23,7 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp, kernel_op
-from finn.custom_op.kernels.shell import Partition, network, persist, save_channels
+from finn.custom_op.kernels.network import Partition, network, persist, save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -48,7 +48,7 @@ def matmul_model(
     """x (1, 3, 4) -> MatMul ``first`` (domain ``finn.custom_op.kernels``) with w -> y.
 
     ``stored``: w an initializer (the node's own), else a graph input. ``infer``: y
-    stated by ``InferKernelTensors``, as the node root reads it; without it, only
+    stated by ``InferKernelTensors``, as the node's network reads it; without it, only
     the node's facts are read.
     """
     weights = np.asarray(weights, dtype=np.float32)

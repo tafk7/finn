@@ -76,7 +76,7 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.explore import Ranked, TargetThroughput
 from finn.platform.refusal import TargetRefused
@@ -293,9 +293,9 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert wiring(built) == wiring(body)
     assert kernel_choices_config(built) != kernel_choices_config(body)
     assert read_target(built) == read_target(parent) == ULTRA96
-    # The body's boundary, read from its configured root: the pynq shell's IODMA_hls on
+    # The body's boundary, read from its configured network: the pynq shell's IODMA_hls on
     # both.
-    point, boundary = configured_root(built, "partition")
+    point, boundary = configured_network(built, "partition")
     inputs, outputs = boundary_facts(built, point, boundary, "partition")
     assert [(port["tensor"], port["end"]["kind"]) for port in inputs + outputs] == [
         ("Reshape_0_out0", "iodma_hls"),
@@ -1224,7 +1224,7 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     # Z0's module, its memories in their explicit baseline styles (SZ18), its thresholds a data
     # file (THRESHOLDS_FILE), and choices.
     node, body, _ = partition_body(parent)
-    point, _ = configured_root(body, node.name)
+    point, _ = configured_network(body, node.name)
     assert module_name(point.module) == "finn_partition__c909af9fb6b548ee"
     persisted = json.loads((output / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)

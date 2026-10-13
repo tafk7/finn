@@ -12,13 +12,13 @@ rows of its image, not the frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
-It presents the sequences it is given on its ports, as memstream presents its given
-sequence: ``arriving`` on its input, and on its output ``leaving``'s order with every
-level its nest closes there (``olst``'s bits, ``Generate.levels``). It derives its
-generics from them (``generated``): ``DATA_WIDTH`` its input's word, and the nest
-(``FM_SIZE``, ``DIMS``, ``COEFS``) the reorder between their orders (``classify``),
-or, for the same order, frames as long as the widest marker ``leaving`` requires,
-split or grouped until it closes each of ``leaving``'s markers. On a channel,
+It presents the sequences it is given on its ports: ``arriving`` on its input, and on
+its output ``leaving``'s order with every level its nest closes there (``olst``'s bits,
+``Generate.levels``). It derives its generics from them (``generated``): ``DATA_WIDTH``
+its input's word, and the nest (``FM_SIZE``, ``DIMS``, ``COEFS``) the reorder between
+their orders (``classify``), or, for the same order, frames as long as the widest marker
+``leaving`` requires, split or grouped until it closes each of ``leaving``'s markers. On
+a channel,
 ``input_gen`` is a stage of the channel's adapter (``finn.kernels.adapters``), which
 gives it the two sides of its step of the channel's plan. Its cycles are its ports'
 beats, as every leaf's, and its buffering its buffer, ``BUF_SIZE`` input words.
@@ -27,7 +27,7 @@ buffer can hold (``frame_bits``, a frame), then ``auto``, which states no resour
 (``finn.kernels.utilization.memory_styles``); ``ultra`` requires the ``platform``'s
 UltraRAM. The buffer starts empty, so no initial contents are asked of it.
 
-What the buffer does is read from the RTL, not copied (decision FS6):
+What the buffer does is read from the RTL, not copied:
 ``nest_geometry`` elaborates FinnLib's ``input_gen.sv`` with slang at a nest's
 parameters and reads the constants it derives (``BUF_SIZE``, ``MAX_OCCUPANCY``,
 ``R_FLAG``, ``TERMINAL_RP_INC``, ``TERMINAL_FP_INC``). Only the runtime rule
