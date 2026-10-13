@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, Rejected, Space, design_space
+from finn.core.space import Available, Rejected
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
@@ -35,15 +35,17 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
+from finn.kernels.base import NETLIST
+from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    choose,
     codes,
     matmul_point,
     with_adapter_memories,
@@ -88,38 +90,46 @@ def placed(
     w_tensor = Tensor(w, ScalarEncoding(W))
     r_tensor = Tensor(y, ScalarEncoding(R))
 
-    class Placed(Space):
-        a_end = end_of("compute", "x_end")
-        w_producer = end_of("weights", "output_end")
-        w_consumer = end_of("compute", "w_end")
-        r_end = end_of("compute", "y_end")
-        a = Channel(tensor=a_tensor, port="in0_V", consumer=a_end, platform=FULL_DSP48E2)
-        w_s = Channel(
-            platform=FULL_DSP48E2,
-            tensor=w_tensor,
-            adaptable=adaptable,
-            producer=w_producer,
-            consumer=w_consumer,
-        )
-        r = Channel(tensor=r_tensor, port="out0_V", producer=r_end, platform=FULL_DSP48E2)
-        weights = MemStreamKernel(
-            platform=FULL_DSP48E2,
-            dtype=W,
-            form=tiled,
-            contents=weight_values(w),
-            output_tensor=w_tensor,
-        )
-        compute = core(
-            form=form,
-            result_range=ordinary_integer_bounds(R),
-            x_tensor=a_tensor,
-            w_tensor=w_tensor,
-            y_tensor=r_tensor,
-            platform=FULL_DSP58,
-        )
-
-    return commit(
-        with_direct_transports(design_space(Placed())),
+    network = Network(
+        {
+            "a": wire(
+                tensor=a_tensor,
+                port="in0_V",
+                consumer=Interface("compute", "x_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "w_s": wire(
+                platform=FULL_DSP48E2,
+                tensor=w_tensor,
+                adaptable=adaptable,
+                producer=Interface("weights", "output_end"),
+                consumer=Interface("compute", "w_end"),
+            ),
+            "r": wire(
+                tensor=r_tensor,
+                port="out0_V",
+                producer=Interface("compute", "y_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "weights": MemStreamKernel(
+                platform=FULL_DSP48E2,
+                dtype=W,
+                form=tiled,
+                contents=weight_values(w),
+                output_tensor=w_tensor,
+            ),
+            "compute": core(
+                form=form,
+                result_range=ordinary_integer_bounds(R),
+                x_tensor=a_tensor,
+                w_tensor=w_tensor,
+                y_tensor=r_tensor,
+                platform=FULL_DSP58,
+            ),
+        }
+    )
+    chosen = choose(
+        network,
         {
             "compute.pe": pe,
             "compute.simd": SIMD,
@@ -129,11 +139,19 @@ def placed(
             "weights.pumped_memory": False,
         },
     )
+    return with_direct_transports(chosen)
 
 
 def test_every_port_presents_what_the_schedule_derives():
     point = placed()
-    x, w, y = (port.presented for port in (point.compute.x, point.compute.w, point.compute.y))
+    x, w, y = (
+        port.presented
+        for port in (
+            point.member("compute").x,
+            point.member("compute").w,
+            point.member("compute").y,
+        )
+    )
     assert x.form == vector_major((ROWS, REDUCTION), SIMD).replayed(
         OUTPUTS // PE, inner_beats=REDUCTION // SIMD
     )
@@ -145,19 +163,19 @@ def test_every_port_presents_what_the_schedule_derives():
     assert y.form == vector_major((ROWS, OUTPUTS), PE)
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
     # Each end is presented by a port node, labelled after it from the root.
-    assert point.r.producer.label == "compute.y"
+    assert point.member("r").producer.label == "compute.y"
     # The cyclic weights and the results connect as derived.
-    assert isinstance(point.w_s.query(Channel.netlist), Available)
-    assert isinstance(point.r.query(Channel.netlist), Available)
+    assert isinstance(point.member("w_s").query(Channel.netlist), Available)
+    assert isinstance(point.member("r").query(Channel.netlist), Available)
 
 
 def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     point = placed(Form.DEPTHWISE)
-    form = point.compute.x.presented.form
+    form = point.member("compute").x.presented.form
     assert form.lanes == PE * SIMD and form.shape == (ROWS, REDUCTION, OUTPUTS)
     # Lane s * PE + p is window position s of channel p (FinnLib's order).
     assert next(form.positions()) == ((0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1))
-    assert isinstance(point.w_s.query(Channel.netlist), Available)
+    assert isinstance(point.member("w_s").query(Channel.netlist), Available)
 
 
 def test_a_folding_factor_that_does_not_divide_its_extent_is_refused_where_it_is_committed():
@@ -173,19 +191,19 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
         ((1, PE, 1), (0, SIMD, 1)),
     )
     point = placed(weights_form=columns_first)
-    assert point.w_s.plan.steps == (Step.REORDER,)
-    assert isinstance(with_adapter_memories(point).w_s.query(Channel.netlist), Available)
+    assert point.member("w_s").plan.steps == (Step.REORDER,)
+    assert isinstance(with_adapter_memories(point).member("w_s").query(Channel.netlist), Available)
     # Probe: the tile's own sequence, one weight a beat where dotp reads PE x SIMD.
     narrow = placed(weights_form=regrouped(weights_tile(), 1))
-    assert narrow.w_s.plan.steps == (Step.WIDTH,)
+    assert narrow.member("w_s").plan.steps == (Step.WIDTH,)
     # Another order at other lanes, the stored weights row-major, one a beat.
     rows = placed(weights_form=vector_major((REDUCTION, OUTPUTS), 1))
-    assert rows.w_s.plan.steps == (Step.REORDER, Step.WIDTH)
+    assert rows.member("w_s").plan.steps == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
-    assert isinstance(narrow.compute.w.query(AxiStreamPort.contract), Available)
+    assert isinstance(narrow.member("compute").w.query(AxiStreamPort.contract), Available)
     # A channel that admits no adapter refuses the plan, naming it.
     fixed = placed(weights_form=columns_first, adaptable=False)
-    refused = fixed.w_s.query(Channel.netlist)
+    refused = fixed.member("w_s").query(Channel.netlist)
     assert "channel-plan" in codes(refused) and "reorder" in str(refused)
 
 
@@ -196,10 +214,12 @@ def test_a_producer_s_lane_order_is_wires():
         ((1, OUTPUTS // PE, PE), (0, REDUCTION // SIMD, SIMD)),
         ((0, SIMD, 1), (1, PE, 1)),
     )
-    assert isinstance(placed(weights_form=transposed).w_s.query(Channel.netlist), Available)
+    assert isinstance(
+        placed(weights_form=transposed).member("w_s").query(Channel.netlist), Available
+    )
     # hlslib's per-channel order (window positions fastest) is likewise a
     # lane permutation of FinnLib's.
-    finnlib = placed(Form.DEPTHWISE).compute.x.presented.form
+    finnlib = placed(Form.DEPTHWISE).member("compute").x.presented.form
     window_fastest = Traversal(
         finnlib.shape, finnlib.beat_loops, tuple(reversed(finnlib.lane_loops))
     )
@@ -209,7 +229,7 @@ def test_a_producer_s_lane_order_is_wires():
 def test_one_kernel_refusal_reaches_only_its_own_stream():
     # Unsigned weights are refused by dotp's weight port. The
     # activations and the results are untouched.
-    point = commit(
+    point = choose(
         matmul_point(
             m=3,
             n=4,
@@ -219,7 +239,6 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             platform=FULL_DSP48E2,
         ),
         {
-            "w.transport": "direct",
             "matmul.compute": "packed",
             "matmul.compute.packed.pe": 2,
             "matmul.compute.packed.simd": 2,
@@ -228,9 +247,10 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
         },
     )
     point = with_direct_transports(with_adapter_memories(point))
-    assert isinstance(point.x.query(Channel.netlist), Available)
-    assert isinstance(point.y.query(Channel.netlist), Available)
-    assert codes(point.w.query(Channel.netlist)) == {"dtype-family"}
+    assert isinstance(point.query("x", NETLIST), Available)
+    assert isinstance(point.query("y", NETLIST), Available)
+    # The refused end leaves its channel unbound, refused with it.
+    assert codes(point.query("w", NETLIST)) == {"dtype-family"}
 
 
 def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
@@ -241,26 +261,40 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
     rhs_tensor = Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype]))
     out_tensor = Tensor((3, 4), ScalarEncoding(DataType["INT5"]))
 
-    class Added(Space):
-        lhs_end = end_of("add", "lhs_end")
-        rhs_end = end_of("add", "rhs_end")
-        out_end = end_of("add", "result_end")
-        lhs = Channel(platform=FULL_DSP48E2, tensor=lhs_tensor, port="in0_V", consumer=lhs_end)
-        rhs = Channel(tensor=rhs_tensor, port="in1_V", consumer=rhs_end, platform=FULL_DSP48E2)
-        out = Channel(tensor=out_tensor, port="out0_V", producer=out_end, platform=FULL_DSP48E2)
-        add = EltwiseKernel(
-            operation="ADD",
-            pe=2,
-            lhs_dtype=int4,
-            rhs_dtype=int4,
-            b_scale=1.0,
-            platform=FULL_DSP58,
-            lhs_tensor=lhs_tensor,
-            rhs_tensor=rhs_tensor,
-            result_tensor=out_tensor,
-        )
-
-    return with_direct_transports(design_space(Added()))
+    network = Network(
+        {
+            "lhs": wire(
+                platform=FULL_DSP48E2,
+                tensor=lhs_tensor,
+                port="in0_V",
+                consumer=Interface("add", "lhs_end"),
+            ),
+            "rhs": wire(
+                tensor=rhs_tensor,
+                port="in1_V",
+                consumer=Interface("add", "rhs_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "out": wire(
+                tensor=out_tensor,
+                port="out0_V",
+                producer=Interface("add", "result_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "add": EltwiseKernel(
+                operation="ADD",
+                pe=2,
+                lhs_dtype=int4,
+                rhs_dtype=int4,
+                b_scale=1.0,
+                platform=FULL_DSP58,
+                lhs_tensor=lhs_tensor,
+                rhs_tensor=rhs_tensor,
+                result_tensor=out_tensor,
+            ),
+        }
+    )
+    return with_direct_transports(network)
 
 
 def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
@@ -268,21 +302,24 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # The rhs port presents the channel vector once per pixel it meets: a whole
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
-    assert point.add.rhs.presented.form == repeated
-    assert point.rhs.endpoints.source.form == repeated
-    assert all(stream.plan.steps == () for stream in (point.lhs, point.rhs, point.out))
-    assert dict(point.add.module.parameters)["PE"] == 2
+    assert point.member("add").rhs.presented.form == repeated
+    assert point.member("rhs").endpoints.source.form == repeated
+    assert all(
+        stream.plan.steps == ()
+        for stream in (point.member("lhs"), point.member("rhs"), point.member("out"))
+    )
+    assert dict(point.member("add").module.parameters)["PE"] == 2
 
 
 def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     # A channel vector of another length disagrees with lhs on the channels.
     misshaped = eltwise_between((3,))
-    refused = misshaped.add.query(EltwiseKernel.extents)
+    refused = misshaped.member("add").query(EltwiseKernel.extents)
     assert isinstance(refused, Rejected)
     assert {(finding.code, finding.message) for finding in refused.findings} == {
         ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
     }
     # An operand channel of another element: the channel refuses the port's end.
-    other = eltwise_between((4,), rhs_dtype="INT3").rhs.query(Channel.netlist)
+    other = eltwise_between((4,), rhs_dtype="INT3").member("rhs").query(Channel.netlist)
     assert isinstance(other, Rejected)
     assert "channel-tensor" in {finding.code for finding in other.findings}

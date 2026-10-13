@@ -246,7 +246,7 @@ FIFO = KernelSpec(
             "UltraRAM on a platform without it",
             lambda: placed(fifo(), platform=replace(FULL_DSP48E2, uram=False)),
             frozenset({"uram-absent"}),
-            {"kernel.ram_style": "ultra"},
+            {"ram_style": "ultra"},
         ),
     ),
     sweeps=(
@@ -278,7 +278,7 @@ INPUT_GEN = KernelSpec(
             "UltraRAM on a platform without it",
             lambda: placed(input_gen(), platform=replace(FULL_DSP48E2, uram=False)),
             frozenset({"uram-absent"}),
-            {"kernel.ram_style": "ultra"},
+            {"ram_style": "ultra"},
         ),
     ),
     sweeps=(ADAPTERS,),

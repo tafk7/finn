@@ -13,13 +13,14 @@ through in2_V.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import tile
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import dotted
 from kernels.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
@@ -136,5 +137,5 @@ def test_several_weight_sets_take_a_set_index_per_row():
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
     # The memory's choices are the weight channel's, keyed below it.
-    keys = {item.key for item in inspection.decisions(built.point)}
+    keys = {dotted(key) for key in built.network.decisions()}
     assert {"w.source.memstream.ram_style", "w.source.memstream.pumped_memory"} <= keys

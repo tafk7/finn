@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -27,42 +28,63 @@ from layering import ROOT
 
 from finn.core.space import Available, Space
 from finn.harness.points import covering, refusal, refused_cases, rejected
-from finn.kernels.configure import commit, undecided
-from kernels.conformance import KERNEL, unchosen
-from kernels.helpers import with_adapter_memories
+from finn.kernels.configure import undecided
+from finn.kernels.network import Network
+from kernels.conformance import (
+    KERNEL,
+    configured,
+    design_member,
+    design_module,
+    kernel_space,
+    unchosen,
+)
 from kernels.specs import SPECS, conformance_cases
 from kernels.specs.base import ORACLE, TEST_SIDE, KernelSpec, Probe
 
 BY_NAME = {spec.name: spec for spec in SPECS}
-PATTERN = f"{KERNEL}.*"
 
 
 def _base(spec: KernelSpec) -> Any:
     return unchosen(**spec.cases[spec.space]())
 
 
+def _covering(base: Any) -> Any:
+    """The covering points of a design's kernel's Decisions, each keyed ``kernel.<key>``."""
+    space, pattern, prefix = kernel_space(base)
+    found = covering(space, pattern)
+    return replace(
+        found,
+        points=tuple(
+            {prefix + key: value for key, value in point.items()} for point in found.points
+        ),
+        targets=tuple((prefix + key, value) for key, value in found.targets),
+        missed=tuple((prefix + key, value) for key, value in found.missed),
+    )
+
+
 @pytest.mark.parametrize("name", sorted(BY_NAME))
 def test_the_covering_points_reach_every_case_and_are_admitted(name: str) -> None:
     spec = BY_NAME[name]
     base = _base(spec)
-    found = covering(base, PATTERN)
+    found = _covering(base)
     assert not found.missed, f"{name}: no covering point takes {found.missed}"
     assert {key for key, _ in found.targets} == {key for point in found.points for key in point}, (
         f"{name}: a Decision no point commits"
     )
     for chosen in found.points or ({},):
-        point = with_adapter_memories(commit(base, chosen))
-        kernel: Space = getattr(point, KERNEL)
+        point = configured(base, chosen)
+        kernel: Space = design_member(point, KERNEL)
         assert not rejected(kernel), f"{name} refuses its covering point {chosen}"
-        assert not undecided(point, "*"), f"{name} at {chosen}"
-        module = point.query(type(point).module)
+        open_ = point.undecided() if isinstance(point, Network) else undecided(point, "*")
+        assert not open_, f"{name} at {chosen}"
+        module = design_module(point, spec.kernel)
         assert isinstance(module, Available), f"{name} at {chosen}: {module}"
 
 
 def test_an_ordered_domain_is_covered_at_its_extremes_and_any_other_whole() -> None:
     """Thresholding's PE (the divisors of 6) at 1 and 6, never 2 or 3; its pipeline, a
     bool, both ways."""
-    found = covering(_base(BY_NAME["ThresholdingAxiKernel"]), PATTERN)
+    found = _covering(_base(BY_NAME["ThresholdingAxiKernel"]))
     assert sorted({point["kernel.pe"] for point in found.points}) == [1, 6]  # type: ignore[type-var]
     assert {point["kernel.deep_pipeline"] for point in found.points} == {False, True}
 
@@ -70,7 +92,9 @@ def test_an_ordered_domain_is_covered_at_its_extremes_and_any_other_whole() -> N
 @pytest.mark.parametrize("name", sorted(BY_NAME))
 def test_the_refused_side_is_what_the_spec_states(name: str) -> None:
     spec = BY_NAME[name]
-    assert set(refused_cases(_base(spec), PATTERN)) == set(spec.refuses)
+    space, pattern, prefix = kernel_space(_base(spec))
+    found = {replace(each, key=prefix + each.key) for each in refused_cases(space, pattern)}
+    assert found == set(spec.refuses)
 
 
 PROBES = [(spec.name, probe) for spec in SPECS for probe in spec.probes]

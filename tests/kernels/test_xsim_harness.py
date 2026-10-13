@@ -64,13 +64,20 @@ from finn.toolchain.launcher import (
     host_toolchain,
 )
 from finn.toolchain.xsim import TOOLS, available
-from kernels.chain import chain
-from kernels.conformance import Sample, place
-from kernels.helpers import FULL_DSP48E2, full_platform, point_for
+from kernels.chain import STEM, chain
+from kernels.conformance import Sample, design_module, place
+from kernels.helpers import FULL_DSP48E2, built, full_platform, point_for
 from kernels.sweeps.threshold_numeric import CHANNELS, ELEMENT, PIXELS, VALUES, Case, placed
 from kernels.xsim import requires_xsim
 
 CHAIN_IN: dict[str, Words] = {"s_axis_0": ([1, 2, 3], 6)}
+
+
+def chain_module() -> Any:
+    """The Chain's module (``kernels.chain``)."""
+    return built(chain(), STEM)
+
+
 CHAIN_OUT: dict[str, Words] = {"m_axis_0": ([4, 5], 16)}
 
 
@@ -96,7 +103,7 @@ def test_a_stream_the_module_lacks_is_refused_naming_its_ports(
 ) -> None:
     with pytest.raises(ValueError, match=complaint):
         stream_through(
-            chain().module, tmp_path, inputs=inputs, outputs=outputs, toolchain=host_toolchain()
+            chain_module(), tmp_path, inputs=inputs, outputs=outputs, toolchain=host_toolchain()
         )
     assert not any(tmp_path.iterdir())  # refused before anything was built
 
@@ -104,7 +111,7 @@ def test_a_stream_the_module_lacks_is_refused_naming_its_ports(
 def test_a_stream_given_no_words_is_an_undriven_input(tmp_path: Path) -> None:
     with pytest.raises(Undriven, match=r"m_axis_0_tready \(stream m_axis_0, given no words\)"):
         stream_bench(
-            chain().module, tmp_path, inputs=CHAIN_IN, outputs={}, toolchain=host_toolchain()
+            chain_module(), tmp_path, inputs=CHAIN_IN, outputs={}, toolchain=host_toolchain()
         )
     assert not any(tmp_path.iterdir())
 
@@ -163,7 +170,7 @@ def test_an_input_the_module_declares_no_value_for_is_refused_naming_it(tmp_path
 def test_stimulus_and_expectations_are_files_beside_the_stream_bench(tmp_path: Path) -> None:
     words = list(range(1000))
     bench = stream_bench(
-        chain().module,
+        chain_module(),
         tmp_path,
         inputs={"s_axis_0": (words, 6)},
         outputs=CHAIN_OUT,
@@ -179,7 +186,7 @@ def test_the_stream_bench_keeps_each_outputs_words_for_a_decoding(tmp_path: Path
     """A word that differs is displayed and counted, not fatal at once: the run fails when
     every output has presented its words, which it writes out first."""
     bench = stream_bench(
-        chain().module, tmp_path, inputs=CHAIN_IN, outputs=CHAIN_OUT, toolchain=host_toolchain()
+        chain_module(), tmp_path, inputs=CHAIN_IN, outputs=CHAIN_OUT, toolchain=host_toolchain()
     )
     assert "m_axis_0_got[m_axis_0_beats] <= m_axis_0_tdata[15:0];" in bench.text
     assert '$writememh("m_axis_0.received.mem", m_axis_0_got);' in bench.text
@@ -190,7 +197,7 @@ def test_the_stream_bench_keeps_each_outputs_words_for_a_decoding(tmp_path: Path
 def test_a_tap_reads_a_link_at_its_producers_nets_and_only_when_asked(tmp_path: Path) -> None:
     """A tap reads the netlist's nets from the testbench: the module's sources are the same,
     and a testbench without taps has none of a tap's text."""
-    module = chain().module
+    module = chain_module()
     link = next(
         link for link in module.fragment.links if link.source.instance and link.sink.instance
     )
@@ -220,7 +227,7 @@ def test_a_tap_reads_a_link_at_its_producers_nets_and_only_when_asked(tmp_path: 
 
 
 def test_a_tap_the_module_cannot_present_is_refused(tmp_path: Path) -> None:
-    module = chain().module
+    module = chain_module()
     link = next(link for link in module.fragment.links if link.source.instance)
     with pytest.raises(ValueError, match="places no instance nowhere"):
         stream_bench(
@@ -261,7 +268,7 @@ def test_the_watchdog_is_derived_from_the_paced_beats_and_names_each_stream(
     tmp_path: Path, pacing: Pacing
 ) -> None:
     bench = stream_bench(
-        chain().module,
+        chain_module(),
         tmp_path,
         inputs=CHAIN_IN,
         outputs=CHAIN_OUT,
@@ -296,7 +303,7 @@ def test_a_pumped_module_gets_its_doubled_clock_aligned(tmp_path: Path) -> None:
             "result_range": datatype_range(6, DataType["INT8"], DataType["INT8"]),
         },
     )
-    module = point.module
+    module = design_module(point, Int8Dsp58DotpKernel).value
     assert module.abi.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)
     words: dict[str, Words] = {name: ([0], 8) for name in inputs}
     bench = stream_bench(
@@ -483,7 +490,7 @@ def test_a_stopped_stream_fires_the_watchdog_naming_it_and_its_beat(tmp_path: Pa
     one word was taken."""
     with pytest.raises(SimulationFailed) as failed:
         stream_through(
-            chain().module,
+            chain_module(),
             tmp_path,
             inputs={"s_axis_0": ([1], 6)},
             outputs=CHAIN_OUT,

@@ -57,7 +57,7 @@ from __future__ import annotations
 import functools
 import weakref
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Generic, TypeVar
 
@@ -200,7 +200,12 @@ class Fact:
     view: str
 
 
-@dataclass(frozen=True)
+# A wire, an unbound channel and a trial are records the network reads, never values a
+# Space holds: plain dataclasses, since a frozen one is a value class, which holds
+# immutable values only.
+
+
+@dataclass
 class Wire:
     """A channel as a network declares it: the facts of a ``Channel``, each a value, or
     read from a member (``Interface``, ``Fact``)."""
@@ -208,7 +213,7 @@ class Wire:
     facts: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "facts", MappingProxyType(dict(self.facts)))
+        self.facts = MappingProxyType(dict(self.facts))
 
     @property
     def reads(self) -> tuple[str, ...]:
@@ -228,7 +233,7 @@ def wire(**facts: object) -> Wire:
     return Wire(facts)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Unbound:
     """A channel whose facts are not known: the read of member ``member`` waits or is
     refused (``result``, its findings naming ``member``'s keys), and the choices it
@@ -242,7 +247,7 @@ class Unbound:
 N = TypeVar("N")
 
 
-@dataclass(frozen=True)
+@dataclass
 class Trial(Generic[N]):
     """A change tried on a network: the network it reaches (the one tried, where it is
     refused), the stored choices replay dropped, each with why, and why it is refused, by
@@ -585,6 +590,14 @@ class Network:
             raise NetworkError(f"{name} is no member of the network")
         return point
 
+    def facts(self, name: str) -> dict[str, object]:
+        """The facts channel ``name`` is bound from, each read from its members; a
+        ``NetworkError`` where it is not bound."""
+        found = self._facts.get(name)
+        if found is None:
+            raise NetworkError(f"{name} is no bound channel of the network")
+        return dict(found)
+
     def unbound(self, name: str) -> Unbound | None:
         """Why channel ``name`` is not bound, or None where it is."""
         return self._unbound.get(name)
@@ -835,9 +848,10 @@ class Network:
         return refused
 
     def with_choices(self, changes: Mapping[Key, object]) -> Network:
-        """``changes`` committed, every stored choice kept; a refusal, or a stored choice the
-        change would drop, is a ``NetworkError`` naming each."""
-        trial = self.trial(changes)
+        """``changes`` committed as the engine accepts them (a member's own refusal is its
+        admission's to state, not checked here), every stored choice kept; a refusal, or a
+        stored choice the change would drop, is a ``NetworkError`` naming each."""
+        trial = self.trial(changes, check=False)
         why = {**trial.refused, **trial.dropped}
         if why:
             raise NetworkError(
@@ -855,28 +869,29 @@ class Network:
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
         """Its composed module (``compose``): each member's netlist under its name, in the
         order declared, with each boundary channel's AXIS bus; or why not, every member's
-        refusal (or, where none refuses, what they wait on)."""
+        refusal (or, where none refuses, what they wait on), each finding owned by its path
+        from the network (``first.well_formed``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
-        failed: list[QueryResult[object]] = []
+        failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
             netlist = self.query(name, NETLIST)
             if isinstance(netlist, Available):
                 netlists.append((name, netlist.value))
             else:
-                failed.append(netlist)
+                failed.append((name, netlist))
             if name in self._wires:
                 buses = self.query(name, BOUNDARY)
                 if isinstance(buses, Available):
                     boundary.extend(buses.value)
                 else:
-                    failed.append(buses)
-        rejected = [each for each in failed if isinstance(each, Rejected)]
-        if rejected or failed:
+                    failed.append((name, buses))
+        if failed:
+            rejected = [(name, each) for name, each in failed if isinstance(each, Rejected)]
             findings = tuple(
                 dict.fromkeys(
-                    finding
-                    for each in (rejected or failed)
+                    self._owned(name, finding)
+                    for name, each in (rejected or failed)
                     for finding in getattr(each, "findings", ())
                 )
             )
@@ -885,6 +900,13 @@ class Network:
             return Unresolved(findings) if findings else Inapplicable()
         built = compose(producer, stem, netlists, boundary)
         return built if isinstance(built, Rejected) else Available(built)
+
+    def _owned(self, name: str, finding: Finding) -> Finding:
+        """A finding of member ``name``'s (or of the member an unbound channel's read
+        names), owned by its path from the network (``first.well_formed``)."""
+        held = self._unbound.get(name)
+        member = held.member if held is not None else name
+        return replace(finding, owner=dotted((member, finding.owner)))
 
     def own_resources(self) -> None:
         """What the network uses beside its members: nothing (a root of its own, the

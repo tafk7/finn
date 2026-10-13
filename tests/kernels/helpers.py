@@ -261,17 +261,33 @@ def _views(
     space_type: type[MatMulKernel], facts: Mapping[str, Any], realization: str | None
 ) -> Any:
     """A MatMul of ``space_type`` on ``facts`` alone, its ``realization`` committed where
-    it is depthwise (as named; else ``dense`` with known weights, ``native`` without):
-    what its views of its tensors read. The result's range is the same either way."""
+    it is depthwise (as named; else ``dense`` with known weights, ``native`` without, or
+    whichever commits): what its views of its activations and results read. The result's
+    range is the same in either realization."""
     probe = design_space(space_type(**facts))
-    if facts.get("form") is Form.DEPTHWISE:
-        case = realization or ("dense" if "w_contents" in facts else "native")
-        probe = commit(probe, {"realization": case})
+    if facts.get("form") is not Form.DEPTHWISE:
+        return probe
+    preferred = realization or ("dense" if "w_contents" in facts else "native")
+    for case in (preferred, *(other for other in ("native", "dense") if other != preferred)):
+        try:
+            return commit(probe, {"realization": case})
+        except ValueError:
+            if realization is not None:
+                raise
     return probe
 
 
+def _view(probe: Any, name: str) -> Tensor:
+    """MatMul's view ``name`` of a tensor, or a ``ValueError`` naming why it states none."""
+    found = probe.query(getattr(type(probe), name))
+    if not isinstance(found, Available):
+        raise ValueError(f"MatMul's {name} is refused: {describe([found])}")
+    tensor: Tensor = found.value
+    return tensor
+
+
 def matmul_network(
-    space_type: type[MatMulKernel] = MatMulKernel,
+    space_type: type[MatMulKernel] | None = None,
     *,
     m: int,
     n: int,
@@ -284,9 +300,10 @@ def matmul_network(
     weight_sets: int = 1,
     realization: str | None = None,
 ) -> Network:
-    """A MatMul of ``space_type`` (``matmul``) on the channels of a network, its tensors its
-    own views of them, the weights given to it; see the module docstring. ``realization``
-    is committed where given."""
+    """A MatMul of ``space_type`` (``matmul``; a ``MatMulKernel`` by default) on the
+    channels of a network, its tensors its own views of them, the weights given to it;
+    see the module docstring. ``realization`` is committed where given."""
+    space_type = space_type or MatMulKernel
     facts: dict[str, Any] = dict(
         m=m,
         n=n,
@@ -300,11 +317,18 @@ def matmul_network(
         facts["w_contents"] = weights
     views = _views(space_type, facts, realization)
     tensors: dict[str, Any] = {
-        "x_tensor": views.activation_tensor,
-        "y_tensor": views.result_tensor,
+        "x_tensor": _view(views, "activation_tensor"),
+        "y_tensor": _view(views, "result_tensor"),
     }
     if weights is None:
-        tensors["w_tensor"] = views.weight_tensor
+        # Unknown weights are MatMul's view of them at the realization committed; with
+        # none, as stored, (K, N) in their datatype.
+        stated = views.query(type(views).weight_tensor)
+        tensors["w_tensor"] = (
+            stated.value
+            if isinstance(stated, Available)
+            else Tensor((k, n), ScalarEncoding(weights_dtype))
+        )
     several = weight_sets > 1
     set_tensor = Tensor((m,), ScalarEncoding(set_index_dtype(weight_sets)))
     members: dict[str, Space | Wire] = {
@@ -525,7 +549,7 @@ class MatMulAssembly:
     weight_delivery: WeightDelivery
     module: Composed
     initializer: tuple[int, ...]
-    point: Any
+    network: Network
 
 
 def _frozen(values: object) -> object:

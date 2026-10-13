@@ -3,12 +3,12 @@
 
 """The Chain (``kernels.chain``): one flat netlist, its edges' adapters, its channels' tensors.
 
-Each MatMul passes the root's tensors to the kernels that read them, and presents
-their ends on the root's channels: each channel is one real edge, so each adapter
-sits on the edge that needs it (a replay before each MatMul's core, none inside a
-MatMul). The root's module is one netlist of every leaf; it computes
-``thresholds(x @ W1) @ W2`` in XSim. A tensor the root states instead of reading
-it from a MatMul must be the one MatMul derives (``carried``).
+Each MatMul passes its tensors to the kernels that read them, and presents their
+ends on the network's channels: each channel is one real edge, so each adapter sits
+on the edge that needs it (a replay before each MatMul's core, none inside a MatMul).
+The network's module is one netlist of every leaf; it computes
+``thresholds(x @ W1) @ W2`` in XSim. A tensor given to a MatMul must be the one MatMul
+derives (``carried``).
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from kernels.chain import (
     PE,
     ROWS,
     SIMD,
+    STEM,
     THRESHOLDS,
     W1,
     W2,
@@ -41,17 +42,20 @@ from kernels.chain import (
     chain,
     matmul,
 )
-from kernels.helpers import FULL_DSP48E2, exact_result_dtype, labels
+from kernels.helpers import FULL_DSP48E2, built, cycles_of, exact_result_dtype, labels
 from kernels.xsim import requires_xsim
 
 
 def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
     point = chain()
-    # A replay before each MatMul's core, on the root's edge into it; none inside a MatMul.
-    assert point.x.plan.steps == point.levels.plan.steps == (Step.REORDER, Step.MARKERS)
-    assert point.hidden.plan.steps == ()
-    # Each weight memory is its channel's source: a leaf below the channel, in member order.
-    assert labels(point.module) == [
+    x, levels = point.member("x"), point.member("levels")
+    # A replay before each MatMul's core, on the edge into it; none inside a MatMul.
+    assert x.plan.steps == levels.plan.steps == (Step.REORDER, Step.MARKERS)
+    assert point.member("hidden").plan.steps == ()
+    module = built(point, STEM)
+    # Each weight memory is its channel's source: a leaf below the channel, in the order
+    # the network declares its members.
+    assert labels(module) == [
         "x.adapter.input_gen.input_gen",
         "w1.source.memstream",
         "levels.adapter.input_gen.input_gen",
@@ -60,14 +64,14 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
         "activate",
         "second.compute.packed",
     ]
-    # The root's own ports are its boundary channels.
-    assert {port.name for port in point.module.abi.pins} == {
+    # The module's own ports are its boundary channels.
+    assert {port.name for port in module.abi.pins} == {
         "ap_clk",
         "ap_rst_n",
         "s_axis_0",
         "m_axis_0",
     }
-    assert point.module.stem == "finn_chain"
+    assert module.stem == "finn_chain"
 
 
 def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
@@ -160,7 +164,7 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
     a_bits, y_bits = A.bitwidth(), Y.bitwidth()
     design = chain()
     stream_through(
-        design.module,
+        built(design, STEM),
         tmp_path,
         inputs={
             "s_axis_0": (
@@ -182,6 +186,6 @@ def test_the_chain_computes_in_xsim(tmp_path: Path) -> None:
                 PE * y_bits,
             )
         },
-        cycles=design.cycles,
+        cycles=cycles_of(design).value,
         toolchain=host_toolchain(),
     )

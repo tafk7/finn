@@ -59,40 +59,39 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
     assert [
-        item.key
-        for item in inspection.members(point)
-        if item.kind == "view" and item.scope == "compute"
+        item.key for item in inspection.members(point) if item.kind == "view" and item.scope == ""
     ] == [
-        "compute.buffering",
-        "compute.cycles",
-        "compute.module",
-        "compute.netlist",
-        "compute.resources",
+        "buffering",
+        "cycles",
+        "module",
+        "netlist",
+        "resources",
         # The end each port presents, which the channel on it takes.
-        "compute.w_end",
-        "compute.x_end",
-        "compute.y_end",
+        "w_end",
+        "x_end",
+        "y_end",
     ]
     for port in (point.x, point.w, point.y):
         assert isinstance(port, AxiStreamPort)
     found = {item.key: item.kind for item in inspection.members(point)}
-    # Facts, supplied by the placing parent (constants of this placement).
-    facts = {key for key, kind in found.items() if kind == "const" and key.count(".") == 1}
+    # Facts, bound from the network's (a window only where a convolution reads one).
+    facts = {key for key, kind in found.items() if kind == "param"}
     assert facts == {
-        "compute.form",
-        "compute.reshape_activations",
-        "compute.result_range",
-        "compute.platform",
-        "compute.x_tensor",
-        "compute.w_tensor",
-        "compute.y_tensor",
+        "form",
+        "reshape_activations",
+        "result_range",
+        "platform",
+        "window",
+        "x_tensor",
+        "w_tensor",
+        "y_tensor",
     }
     # The core's own choices.
     assert {item.key for item in inspection.decisions(point)} == {
-        "compute.pe",
-        "compute.simd",
-        "compute.compute_pumping",
-        "compute.reducer",
+        "pe",
+        "simd",
+        "compute_pumping",
+        "reducer",
     }
     for name in ("activation_dtype", "activation_type", "activation", "iteration", "contraction"):
         assert not hasattr(DotpAxiKernel, name)
@@ -237,15 +236,15 @@ def test_pumping_needs_lanes_to_split_and_is_not_offered_with_one():
     """Pumping splits SIMD lanes over the doubled clock: with SIMD 1 its case is refused
     where it is declared, so the Decision is forced, never a dead end."""
     one = kernel(simd=1, compute_pumping=None, outputs=2, reduction=4)
-    (forced,) = [item for item in inspection.forced(one) if item.key == "compute.compute_pumping"]
+    (forced,) = [item for item in inspection.forced(one) if item.key == "compute_pumping"]
     assert forced.value is False and "dotp-pumping" in forced.refused["True"]
     with pytest.raises(ValueError, match="dotp-pumping"):
         kernel(simd=1, compute_pumping=True, reduction=4)
     two = kernel(simd=2, compute_pumping=None, outputs=2, reduction=4)
-    (viable,) = [item for item in inspection.viable(two) if item.key == "compute.compute_pumping"]
+    (viable,) = [item for item in inspection.viable(two) if item.key == "compute_pumping"]
     assert viable.cases == (False, True)
     # Its cases read SIMD, so pumping is committed with or after it.
-    with pytest.raises(ValueError, match="compute.simd: decision-unassigned"):
+    with pytest.raises(ValueError, match="compute.compute_pumping: simd: decision-unassigned"):
         kernel(simd=None, compute_pumping=False, reduction=4)
 
 
@@ -290,7 +289,7 @@ def test_the_packed_core_states_its_reducer_to_finnlib():
 @pytest.mark.parametrize("dsp", list(DspBlock))
 def test_the_reducer_left_open_is_a_choice_no_platform_refuses(dsp):
     point = kernel(reducer=None, platform=full_platform(dsp))
-    (choice,) = [item for item in inspection.viable(point) if item.key == "compute.reducer"]
+    (choice,) = [item for item in inspection.viable(point) if item.key == "reducer"]
     assert set(choice.cases) == set(REDUCERS) and not choice.refused
     assert not isinstance(point.inspect(DotpAxiKernel.module).accepted_result, Available)
 
@@ -313,7 +312,7 @@ def test_the_platform_is_a_required_fact():
     facts = parameters()
     facts.pop("platform")
     # A bare call is legal; the missing formal is refused when design_space() prepares it.
-    with pytest.raises(DefinitionError, match="compute.platform is not supplied"):
+    with pytest.raises(DefinitionError, match="platform is not supplied"):
         helpers.placed_dotp(PackedDotpKernel, **facts)
 
 

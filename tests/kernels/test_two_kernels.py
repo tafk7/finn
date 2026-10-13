@@ -9,34 +9,40 @@ output fold, framed by reduction. Neither kernel knows the other: each
 presents its own traversal of the hidden tensor, derived from its own schedule
 over its own folding factors, and the channel between them takes both ends.
 The channel between them plans a width conversion, a replay and the frame, and
-its adapter places a ``vpc`` and an ``input_gen``. The root's module computes
+its adapter places a ``vpc`` and an ``input_gen``. The network's module computes
 ``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a channel that admits no
 adapter refuses it.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
-from finn.core.space import Rejected, derived, design_space
+from finn.core.space import Rejected, design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, end_of
+from finn.kernels.base import BUFFERING, Kernel
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import (
     FULL_DSP48E2,
-    Root,
+    built,
+    choose,
+    cycles_of,
     exact_result_dtype,
     labels,
+    module_of,
     with_adapter_memories,
     with_direct_transports,
 )
@@ -52,78 +58,94 @@ W2 = tuple(tuple((2 * n + 5 * k) % 7 - 3 for n in range(OUTPUTS)) for k in range
 X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(ROWS))
 
 
-def layered(*, adaptable: bool = True):
+STEM = "layered"
+"""The two layers' module's stem: ``finn_layered``."""
+
+
+def _layer(result: DataType, x_tensor: Tensor, w_tensor: Tensor, y_tensor: Tensor) -> Any:
+    return PackedDotpKernel(
+        result_range=ordinary_integer_bounds(result),
+        x_tensor=x_tensor,
+        w_tensor=w_tensor,
+        y_tensor=y_tensor,
+        platform=FULL_DSP48E2,
+    )
+
+
+def _period(layer: Any, pe: int, simd: int) -> Traversal:
+    """One pass of a layer's weights, in the order it reads them at its folding."""
+    folded = commit(
+        design_space(layer),
+        {"pe": pe, "simd": simd, "compute_pumping": False, "reducer": "tree"},
+    )
+    return period(folded.w.presented.form)
+
+
+def layered(*, adaptable: bool = True) -> Network:
     x_tensor = Tensor((ROWS, INPUTS), ScalarEncoding(A))
     w1_tensor = Tensor((INPUTS, HIDDEN), ScalarEncoding(W))
     h_tensor = Tensor((ROWS, HIDDEN), ScalarEncoding(H))
     w2_tensor = Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W))
     y_tensor = Tensor((ROWS, OUTPUTS), ScalarEncoding(Y))
-
-    class Layered(Root):
-        x_consumer = end_of("first", "x_end")
-        w1_producer = end_of("rom1", "output_end")
-        w1_consumer = end_of("first", "w_end")
-        h_producer = end_of("first", "y_end")
-        h_consumer = end_of("second", "x_end")
-        w2_producer = end_of("rom2", "output_end")
-        w2_consumer = end_of("second", "w_end")
-        y_producer = end_of("second", "y_end")
-        x = Channel(platform=FULL_DSP48E2, tensor=x_tensor, port="in0_V", consumer=x_consumer)
-        w1 = Channel(
-            tensor=w1_tensor, producer=w1_producer, consumer=w1_consumer, platform=FULL_DSP48E2
-        )
-        h = Channel(
-            tensor=h_tensor,
-            adaptable=adaptable,
-            producer=h_producer,
-            consumer=h_consumer,
-            platform=FULL_DSP48E2,
-        )
-        w2 = Channel(
-            tensor=w2_tensor, producer=w2_producer, consumer=w2_consumer, platform=FULL_DSP48E2
-        )
-        y = Channel(platform=FULL_DSP48E2, tensor=y_tensor, port="out0_V", producer=y_producer)
-        first = PackedDotpKernel(
-            result_range=ordinary_integer_bounds(H),
-            x_tensor=x_tensor,
-            w_tensor=w1_tensor,
-            y_tensor=h_tensor,
-            platform=FULL_DSP48E2,
-        )
-        second = PackedDotpKernel(
-            result_range=ordinary_integer_bounds(Y),
-            x_tensor=h_tensor,
-            w_tensor=w2_tensor,
-            y_tensor=y_tensor,
-            platform=FULL_DSP48E2,
-        )
-
-        # One pass of each layer's weights, in the order that layer reads them.
-        @derived
-        def first_period(self) -> Traversal:
-            return period(self.first.w.presented.form)
-
-        @derived
-        def second_period(self) -> Traversal:
-            return period(self.second.w.presented.form)
-
-        rom1 = MemStreamKernel(
-            platform=FULL_DSP48E2,
-            dtype=W,
-            form=first_period,
-            contents=W1,
-            output_tensor=w1_tensor,
-        )
-        rom2 = MemStreamKernel(
-            platform=FULL_DSP48E2,
-            dtype=W,
-            form=second_period,
-            contents=W2,
-            output_tensor=w2_tensor,
-        )
-
-    point = commit(
-        with_direct_transports(design_space(Layered())),
+    layers = {
+        "first": (H, x_tensor, w1_tensor, h_tensor, PE1, SIMD1),
+        "second": (Y, h_tensor, w2_tensor, y_tensor, PE2, SIMD2),
+    }
+    # One pass of each layer's weights, in the order that layer reads them.
+    periods = {name: _period(_layer(*facts[:4]), *facts[4:]) for name, facts in layers.items()}
+    network = Network(
+        {
+            "x": wire(
+                platform=FULL_DSP48E2,
+                tensor=x_tensor,
+                port="in0_V",
+                consumer=Interface("first", "x_end"),
+            ),
+            "w1": wire(
+                tensor=w1_tensor,
+                producer=Interface("rom1", "output_end"),
+                consumer=Interface("first", "w_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "h": wire(
+                tensor=h_tensor,
+                adaptable=adaptable,
+                producer=Interface("first", "y_end"),
+                consumer=Interface("second", "x_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "w2": wire(
+                tensor=w2_tensor,
+                producer=Interface("rom2", "output_end"),
+                consumer=Interface("second", "w_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "y": wire(
+                platform=FULL_DSP48E2,
+                tensor=y_tensor,
+                port="out0_V",
+                producer=Interface("second", "y_end"),
+            ),
+            "first": _layer(*layers["first"][:4]),
+            "second": _layer(*layers["second"][:4]),
+            "rom1": MemStreamKernel(
+                platform=FULL_DSP48E2,
+                dtype=W,
+                form=periods["first"],
+                contents=W1,
+                output_tensor=w1_tensor,
+            ),
+            "rom2": MemStreamKernel(
+                platform=FULL_DSP48E2,
+                dtype=W,
+                form=periods["second"],
+                contents=W2,
+                output_tensor=w2_tensor,
+            ),
+        }
+    )
+    network = choose(
+        network,
         {
             "rom1.ram_style": "auto",
             "rom1.pumped_memory": False,
@@ -140,31 +162,32 @@ def layered(*, adaptable: bool = True):
         },
     )
     # A channel admitting no adapter keeps its Decision closed; the others' are forced.
-    return with_adapter_memories(point)
+    return with_adapter_memories(with_direct_transports(network))
 
 
 def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():
     point = layered()
-    assert point.h.plan.steps == (Step.WIDTH, Step.REORDER, Step.MARKERS)
-    stages = point.h.stages
+    hidden = point.member("h")
+    assert hidden.plan.steps == (Step.WIDTH, Step.REORDER, Step.MARKERS)
+    stages = hidden.stages
     # The width conversion before the transport, the replay and frame after it.
     assert [stage.label for stage in stages] == [
         "output_adapter.vpc.vpc",
         "adapter.input_gen.input_gen",
     ]
     # The first layer's activations need only their frame closed.
-    assert point.x.plan.steps == (Step.MARKERS,)
+    assert point.member("x").plan.steps == (Step.MARKERS,)
     assert {
         "first",
         "second",
         "x.adapter.input_gen.input_gen",
         "h.output_adapter.vpc.vpc",
         "h.adapter.input_gen.input_gen",
-    } <= set(labels(point.module))
+    } <= set(labels(built(point, STEM)))
     # The ends belong to the layers' ports; the instances are the layers'.
-    ends = point.h.endpoints
+    ends = hidden.endpoints
     assert (ends.source_owner, ends.sink_owner) == ("first.y", "second.x")
-    assert [(link.source.instance, link.sink.instance) for link in point.h.netlist.links] == [
+    assert [(link.source.instance, link.sink.instance) for link in hidden.netlist.links] == [
         ("^first", "output_adapter.vpc.vpc"),
         ("output_adapter.vpc.vpc", "adapter.input_gen.input_gen"),
         ("adapter.input_gen.input_gen", "^second"),
@@ -183,25 +206,25 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
 KERNELS, CHANNELS = ("rom1", "rom2", "first", "second"), ("x", "h", "y")
 
 
-def test_the_root_s_cycles_are_its_slowest_member_s_and_its_buffering_their_sum():
+def test_the_network_s_cycles_are_its_slowest_member_s_and_its_buffering_their_sum():
     point = layered()
-    cycles = {name: getattr(point, name).query(Kernel.cycles).value for name in KERNELS}
-    cycles |= {name: getattr(point, name).query(Channel.cycles).value for name in CHANNELS}
+    cycles = {name: point.member(name).query(Kernel.cycles).value for name in KERNELS}
+    cycles |= {name: point.member(name).query(Channel.cycles).value for name in CHANNELS}
     # The hidden stream's input_gen replays each row once per output fold: twelve beats.
-    assert point.h.query(Channel.cycles).value == 12 == cycles["second"]
-    assert point.query(Kernel.cycles).value == max(cycles.values()) == 12
+    assert point.member("h").query(Channel.cycles).value == 12 == cycles["second"]
+    assert cycles_of(point).value == max(cycles.values()) == 12
     # Only channels hold bits between their ends.
-    held = sum(getattr(point, name).query(Channel.buffering).value for name in CHANNELS)
-    assert point.query(Kernel.buffering).value == held > 0
+    held = sum(point.member(name).query(Channel.buffering).value for name in CHANNELS)
+    assert sum(point.query(name, BUFFERING).value for name in KERNELS) == 0 and held > 0
 
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
     point = layered(adaptable=False)
-    refused = point.h.query(Channel.netlist)
+    refused = point.member("h").query(Channel.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert plan and "width_conversion -> reorder -> markers" in plan[0].message
-    assert isinstance(point.query(Kernel.module), Rejected)
+    assert isinstance(module_of(point, STEM), Rejected)
 
 
 @requires_xsim
@@ -217,7 +240,7 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
     a_bits, y_bits = A.bitwidth(), Y.bitwidth()
     design = layered()
     stream_through(
-        design.module,
+        built(design, STEM),
         tmp_path,
         inputs={
             "in0_V": (
@@ -240,6 +263,6 @@ def test_the_two_layers_compute_in_xsim(tmp_path, stalled):
             )
         },
         pacing=STALLED if stalled else FREE,
-        cycles=design.cycles,
+        cycles=cycles_of(design).value,
         toolchain=host_toolchain(),
     )

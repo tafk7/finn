@@ -65,7 +65,7 @@ SPEC = KernelSpec(
             "UltraRAM on a platform without it",
             lambda: placed(memstream(), platform=replace(FULL_DSP48E2, uram=False)),
             frozenset({"uram-absent"}),
-            {"kernel.ram_style": "ultra"},
+            {"ram_style": "ultra"},
         ),
         Probe(
             "a pumped memory of one-bit words",

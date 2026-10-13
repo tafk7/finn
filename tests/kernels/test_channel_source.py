@@ -3,15 +3,16 @@
 
 """A channel with a known value carries a ``source``: MatMul's weights on its weight channel.
 
-The MatMul sits in a test root (``kernels.helpers.placed_matmul``) that
-declares its channels and owns the weights, which it gives MatMul: the weight
-channel carries what MatMul states for it, its ``contents`` and its tensor over
-their range. Known weights give the channel a value, so its ``source``
-applies (``memstream``, its one candidate, forced) and stores them; unknown
-weights leave the channel without a source, and it is the boundary ``in1_V``.
-These tests cover the forced source, laziness, the memory's own choices,
-persistence, the platform's capabilities, the invariant that a channel with a
-value has its source as its only producer, and the weight channel's FIFO.
+The MatMul sits in a network (``kernels.helpers.matmul_point``) that gives it its
+weights: the weight channel carries what MatMul states for it, its ``contents`` and
+its tensor over their range. Known weights give the channel a value, so its
+``source`` applies (``memstream``, its one candidate, forced) and stores them;
+unknown weights leave the channel without a source, and it is the boundary ``in1_V``.
+The channel's ends are MatMul's, known once its folding is: its choices are committed
+after the kernel's. These tests cover the forced source, laziness, the memory's own
+choices, their replay on another network, the platform's capabilities, the invariant
+that a channel with a value has its source as its only producer, and the weight
+channel's FIFO.
 """
 
 from dataclasses import replace
@@ -22,35 +23,34 @@ from qonnx.core.datatype import DataType
 from finn.core.space import (
     Available,
     Inapplicable,
-    Param,
     Rejected,
     Unresolved,
-    design_space,
     inspection,
-    selections,
 )
-from finn.core.space.errors import ConfigurationError, RequestError
+from finn.core.space.errors import ConfigurationError
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, end_of
+from finn.kernels.base import NETLIST
+from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
+from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
 from finn.platform.capabilities import Platform
 from kernels.helpers import (
     FULL_DSP48E2,
-    Root,
     WeightDelivery,
+    built,
+    choose,
     codes,
+    keyed,
     labels,
     matmul_assembly,
     matmul_point,
+    module_of,
     placed,
-    view_of,
     with_adapter_memories,
     with_direct_transports,
 )
@@ -71,10 +71,22 @@ FACTS = dict(
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 # The result of WEIGHTS' columns over INT3 activations (K7): [-30, 40].
 INT7 = ScalarEncoding(DataType["INT7"])
+FOLDING = {
+    "matmul.compute": "packed",
+    "matmul.compute.packed.compute_pumping": False,
+    "matmul.compute.packed.reducer": "tree",
+}
 
 
 def base(**facts):
     return matmul_point(**{**FACTS, **facts})
+
+
+def folded(point, *, pe=2, simd=2):
+    """``point`` with MatMul's core and folding committed: its channels' ends known."""
+    return choose(
+        point, {**FOLDING, "matmul.compute.packed.pe": pe, "matmul.compute.packed.simd": simd}
+    )
 
 
 def handle(point, key):
@@ -82,7 +94,7 @@ def handle(point, key):
 
 
 def configured(point, *, style=None, pe=2, simd=2):
-    choices = {"w.transport": "direct", "matmul.compute": "packed"}
+    choices = {"w.transport": "direct"}
     if style is not None:
         choices |= {
             "w.source.memstream.ram_style": style,
@@ -90,48 +102,45 @@ def configured(point, *, style=None, pe=2, simd=2):
         }
     # The activation channel's adapter is forced by the folding; its memory is the flow's.
     return with_direct_transports(
-        with_adapter_memories(
-            commit(
-                commit(point, choices),
-                {
-                    "matmul.compute.packed.pe": pe,
-                    "matmul.compute.packed.simd": simd,
-                    "matmul.compute.packed.compute_pumping": False,
-                    "matmul.compute.packed.reducer": "tree",
-                },
-            )
-        )
+        with_adapter_memories(choose(folded(point, pe=pe, simd=simd), choices))
     )
 
 
-class Stored(Root):
-    """MatMul with known weights (``weights``), its channels on ``platform``: the weight
-    channel carries what MatMul states for it."""
-
-    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
-    platform: Platform = Param()
-    w_tensor = view_of("matmul", "w_carried")
-    w_contents: IntegerTensor = view_of("matmul", "w_stored", INTEGER_TENSOR)
-    x_end = end_of("matmul", "x_end")
-    w_end = end_of("matmul", "w_end")
-    y_end = end_of("matmul", "y_end")
-    x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", consumer=x_end, platform=platform)
-    w = Channel(tensor=w_tensor, contents=w_contents, consumer=w_end, platform=platform)
-    y = Channel(tensor=Tensor((3, 4), INT7), port="out0_V", producer=y_end, platform=platform)
-    matmul = MatMulKernel(
-        **{**FACTS, "platform": platform},
-        x_tensor=Tensor((3, 4), INT3),
-        y_tensor=Tensor((3, 4), INT7),
-        w_contents=weights,
+def stored(platform: Platform) -> Network:
+    """MatMul with known weights, its channels on ``platform``: the weight channel
+    carries what MatMul states for it."""
+    return Network(
+        {
+            "x": wire(
+                tensor=Tensor((3, 4), INT3),
+                port="in0_V",
+                consumer=Interface("matmul", "x_end"),
+                platform=platform,
+            ),
+            "w": wire(
+                tensor=Fact("matmul", "w_carried"),
+                contents=Fact("matmul", "w_stored"),
+                consumer=Interface("matmul", "w_end"),
+                platform=platform,
+            ),
+            "y": wire(
+                tensor=Tensor((3, 4), INT7),
+                port="out0_V",
+                producer=Interface("matmul", "y_end"),
+                platform=platform,
+            ),
+            "matmul": MatMulKernel(
+                **{**FACTS, "platform": platform},
+                x_tensor=Tensor((3, 4), INT3),
+                y_tensor=Tensor((3, 4), INT7),
+                w_contents=WEIGHTS,
+            ),
+        }
     )
 
 
 def instance_parameters(point, instance):
-    return dict(placed(point.module, instance).parameters)
-
-
-def forced(point):
-    return {item.key: item.value for item in inspection.forced(point)}
+    return dict(placed(built(point, "matmul"), instance).parameters)
 
 
 def owners(result):
@@ -140,85 +149,85 @@ def owners(result):
 
 def test_known_weights_give_the_weight_channel_its_source():
     external = configured(base())
-    stored = configured(base(weights=WEIGHTS), style="block")
+    stored_ = configured(base(weights=WEIGHTS), style="block")
     compute = "matmul.compute.packed"
     for point, ports, instances in (
         (external, {"in0_V", "in1_V", "out0_V"}, [ADAPTER_INSTANCE, compute]),
-        (stored, {"in0_V", "out0_V"}, [ADAPTER_INSTANCE, STORED_INSTANCE, compute]),
+        (stored_, {"in0_V", "out0_V"}, [ADAPTER_INSTANCE, STORED_INSTANCE, compute]),
     ):
-        module = point.module
+        module = built(point, "matmul")
         assert isinstance(module, Composed)
         assert {p.name for p in module.abi.pins if isinstance(p, Bus)} == ports
         assert labels(module) == instances
     # Known weights: the channel has a value, and its one source is forced, never committed.
-    assert stored.w.valued and forced(stored)["w.source"] == "memstream"
-    state = stored.field(handle(stored, "w.source")).state
+    w = stored_.member("w")
+    assert w.valued and stored_.forced(("w",))[("w", "source")] == "memstream"
+    state = w.field(handle(w, "source")).state
     assert isinstance(state, Available) and state.value.status == "unassigned"
-    assert isinstance(stored.w.source, MemStreamKernel)
-    assert stored.w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
+    assert isinstance(w.source, MemStreamKernel)
+    assert w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # The weight channel's producer is its source, a leaf below the channel.
-    assert stored.w.endpoints.source_owner == "source.memstream"
-    assert instance_parameters(stored, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
+    assert w.endpoints.source_owner == "source.memstream"
+    assert instance_parameters(stored_, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
     # Unknown weights: no value, no source; the channel is the boundary in1_V.
-    assert not external.w.valued
-    assert isinstance(external.w.query(Channel.source), Inapplicable)
-    assert external.w.endpoints.source_owner is None
+    unvalued = external.member("w")
+    assert not unvalued.valued
+    assert isinstance(unvalued.query(Channel.source), Inapplicable)
+    assert unvalued.endpoints.source_owner is None
     # MatMul's netlist is its cores' alone, and it derives the same either way.
-    assert [item.node for item in stored.matmul.netlists] == ["compute.packed"]
-    assert external.matmul.producer_identity() == stored.matmul.producer_identity()
+    matmul = stored_.member("matmul")
+    assert [item.node for item in matmul.netlists] == ["compute.packed"]
+    assert external.member("matmul").producer_identity() == matmul.producer_identity()
 
 
 def test_an_unvalued_channel_never_demands_its_source():
-    point = configured(base())
-    evidence = inspection.explain(point, Kernel.module)
+    w = configured(base()).member("w")
+    evidence = inspection.explain(w, Channel.netlist)
     visited = {node.declaration.key for node in evidence.nodes}
     # Whether the channel has a value is read (the weights' presence), never the value.
-    assert {"w.valued", "w.ends", "w.endpoints"} <= visited
-    assert "w_contents" not in visited
+    assert {"valued", "ends", "endpoints"} <= visited
     # Nothing of the source runs.
     reached = {
         node.declaration.key: node.result
         for node in evidence.nodes
-        if node.declaration.key.startswith("w.source.")
+        if node.declaration.key.startswith("source.")
     }
     assert all(isinstance(result, Inapplicable) for result in reached.values())
 
 
 def test_the_channel_owns_its_source_and_its_choices():
-    records = {item.key: item for item in inspection.decisions(base(weights=WEIGHTS))}
-    assert records["w.source"].selector and records["w.source"].cases == ("memstream",)
-    local = records["w.source.memstream.ram_style"]
+    records = {item.key: item for item in inspection.decisions(Channel)}
+    assert records["source"].selector and records["source"].cases == ("memstream",)
+    local = records["source.memstream.ram_style"]
     # The choice belongs to the memory kernel the channel places as its source.
-    assert local.scope == "w.source.memstream" and not local.selector
-    assert not any(key.startswith("matmul.memory") for key in records)
+    assert local.scope == "source.memstream" and not local.selector
+    assert not any(key[1].startswith("memory") for key in base(weights=WEIGHTS).decisions())
     # Its choices apply as soon as the source is forced: the explicit styles, LUTRAM first
     # for a table of 64 bits, and ``auto`` last.
-    chosen = base(weights=WEIGHTS).w.source
+    chosen = folded(base(weights=WEIGHTS)).member("w").source
     assert chosen.field(MemStreamKernel.ram_style).candidates() == Available(
         ("distributed", "block", "ultra", "auto")
     )
     # Without a value the source is inapplicable, and so are its choices.
-    unvalued = base().try_with_choices({handle(base(), "w.source.memstream.ram_style"): "block"})
-    assert not unvalued.accepted
-    assert all(
-        isinstance(outcome.result, Inapplicable)
-        for outcome in unvalued.outcomes
-        if outcome.status == "refused"
+    unvalued = folded(base()).trial(keyed({"w.source.memstream.ram_style": "block"}))
+    assert unvalued.refused and all(
+        finding.code == "inapplicable" for why in unvalued.refused.values() for finding in why
     )
 
 
 def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     uncommitted = configured(base(weights=WEIGHTS))
-    assert isinstance(uncommitted.query(Kernel.module), Unresolved)
+    assert isinstance(module_of(uncommitted, "matmul"), Unresolved)
     # Weights outside their type are refused where MatMul states their range on the
-    # weight channel's tensor.
+    # weight channel's tensor; the channel, which carries it, is refused with it.
     outside = base(weights=((4,) * 4,) * 4)
-    refused = outside.query(type(outside).w_carried)
+    refused = outside.member("matmul").query(MatMulKernel.w_carried)
     assert isinstance(refused, Rejected)
     assert codes(refused) == {"dtype-storage"}
-    assert owners(refused) == {"matmul.w_carried"}
+    assert owners(refused) == {"w_carried"}
+    assert codes(outside.query("w", NETLIST)) == {"dtype-storage"}
     # A shape error is refused by the memory that packs them.
-    wrong = configured(base(weights=((0,),)), style="auto").query(Kernel.module)
+    wrong = module_of(configured(base(weights=((0,),)), style="auto"), "matmul")
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
 
 
@@ -226,12 +235,12 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
     """With a value on the weight channel, each output column's dot products over the
     activation datatype, unioned over columns; without one, the datatypes' (K7). The
     core states the range on what it produces."""
-    stored, external = base(weights=WEIGHTS), base()
-    assert stored.matmul.result_range == (-30, 40)
-    assert stored.matmul.result_type == DataType["INT7"]
-    assert external.matmul.result_range == (-48, 64)
-    assert external.matmul.result_type == DataType["INT8"]
-    core = configured(stored, style="block").matmul.compute
+    stored_, external = base(weights=WEIGHTS).member("matmul"), base().member("matmul")
+    assert stored_.result_range == (-30, 40)
+    assert stored_.result_type == DataType["INT7"]
+    assert external.result_range == (-48, 64)
+    assert external.result_type == DataType["INT8"]
+    core = configured(base(weights=WEIGHTS), style="block").member("matmul").compute
     assert core.y.element == ScalarEncoding(DataType["INT7"], (-30, 40))
     assert core.parameters()["ACCU_WIDTH"] == 7
 
@@ -248,16 +257,17 @@ def test_a_narrow_result_range_is_the_result_and_the_accumulator(weights, value_
     INT3 product (3 + 3 - 1 bits), and the packed core accumulates in it: FinnLib's
     packed dotp computes the sum modulo 2**ACCU_WIDTH, exact where the range bounds it."""
     point = configured(base(weights=weights), style="block")
-    assert point.matmul.result_range == value_range
-    assert point.matmul.result_type == DataType[result]
-    assert point.matmul.compute.y.element == ScalarEncoding(DataType[result], value_range)
-    assert point.matmul.compute.parameters()["ACCU_WIDTH"] == DataType[result].bitwidth()
-    assert isinstance(point.query(Kernel.module), Available)
+    matmul = point.member("matmul")
+    assert matmul.result_range == value_range
+    assert matmul.result_type == DataType[result]
+    assert matmul.compute.y.element == ScalarEncoding(DataType[result], value_range)
+    assert matmul.compute.parameters()["ACCU_WIDTH"] == DataType[result].bitwidth()
+    assert isinstance(module_of(point, "matmul"), Available)
 
 
 def test_the_cores_do_not_wait_on_the_source():
-    point = commit(base(weights=WEIGHTS), {"matmul.compute": "packed"})
-    point = commit(
+    point = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})
+    point = choose(
         point,
         {
             "matmul.compute.packed.pe": 4,
@@ -266,29 +276,27 @@ def test_the_cores_do_not_wait_on_the_source():
             "matmul.compute.packed.reducer": "tree",
         },
     )
-    assessment = point.inspect(Kernel.module)
-    assert isinstance(assessment.accepted_result, Unresolved)
+    assert isinstance(module_of(point, "matmul"), Unresolved)
     # The packed core does not wait for the memory: its weights' range is the one their
     # owner states on the channel.
-    compute = point.matmul.compute.inspect(DotpAxiKernel.module)
-    assert isinstance(compute.accepted_result, Available)
-    assert point.matmul.compute.parameters()["NARROW_WEIGHTS"] == 0  # the weights hold -4
-    assert point.matmul.compute.inspect(DotpAxiKernel.admission).result == Available(True)
-    folding = commit(base(weights=WEIGHTS), {"matmul.compute": "packed"})
-    folding = commit(folding, {"matmul.compute.packed.simd": 4})
+    compute = point.member("matmul").compute
+    assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Available)
+    assert compute.parameters()["NARROW_WEIGHTS"] == 0  # the weights hold -4
+    assert compute.inspect(DotpAxiKernel.admission).result == Available(True)
+    folding = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})
+    folding = choose(folding, {"matmul.compute.packed.simd": 4})
     # Folding refusals come before a PE or a memory style is chosen.
-    trial = folding.try_with_choices({handle(folding, "matmul.compute.packed.pe"): 3})
-    assert not trial.accepted
+    trial = folding.trial(keyed({"matmul.compute.packed.pe": 3}))
     assert "domain-membership" in {
-        finding.code for outcome in trial.outcomes for finding in outcome.result.findings
+        finding.code for why in trial.refused.values() for finding in why
     }
 
 
-def test_the_sources_choices_round_trip_through_an_empty_root():
+def test_the_sources_choices_round_trip_through_another_network():
     point = configured(base(weights=WEIGHTS), style="block")
-    saved = selections.capture(point)
+    saved = point.chosen()
     # Only choices made on purpose: the forced source and adapter selector are not saved.
-    assert saved.keys == (
+    assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
         "matmul.compute.packed.pe",
@@ -300,58 +308,57 @@ def test_the_sources_choices_round_trip_through_an_empty_root():
         "x.adapter.input_gen.input_gen.ram_style",
         "x.transport",
         "y.transport",
-    )
-    replayed = selections.restore(base(weights=WEIGHTS), saved)
-    assert replayed.accepted
-    assert replayed.instance.module == point.module
-    # Replay under different supplied facts: the same choices, a new image.
-    other = selections.restore(base(weights=tuple(row[::-1] for row in WEIGHTS)), saved)
-    assert other.accepted
-    assert other.instance.w.source.image != point.w.source.image
+    ]
+    replayed = base(weights=WEIGHTS).with_choices(saved)
+    assert built(replayed, "matmul") == built(point, "matmul")
+    # Replay under different facts: the same choices, a new image.
+    other = base(weights=tuple(row[::-1] for row in WEIGHTS)).with_choices(saved)
+    assert other.member("w").source.image != point.member("w").source.image
     # Without known weights the channel has no source: its choices are stale, refused.
-    assert not selections.restore(base(), saved).accepted
+    with pytest.raises(NetworkError, match="w.source.memstream.ram_style: .*inapplicable"):
+        base().with_choices(saved)
     # Facts that invalidate a saved folding refuse replay atomically.
-    changed = base(weights=WEIGHTS, n=5)
-    refused = selections.restore(changed, saved)
-    assert not refused.accepted and refused.instance is changed
-    # A configured receiver is not a replay target.
-    with pytest.raises(RequestError):
-        selections.restore(point, saved)
+    with pytest.raises(NetworkError, match="matmul.compute.packed.pe"):
+        base(weights=WEIGHTS, n=5).with_choices(saved)
 
 
 def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused():
     # No value, no source: nothing consumes the set index, which refuses itself.
     point = configured(base(weight_sets=2))
-    answer = point.query(Kernel.module)
+    answer = module_of(point, "matmul")
     assert isinstance(answer, Rejected)
     assert "channel-unused" in codes(answer)
 
 
 def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
     # Several sets need the set channel; a memory without one refuses itself.
-    class Unindexed(Stored):
-        w = Channel(
-            tensor=Stored.w_tensor,
-            contents=Stored.w_contents,
-            sets=2,
-            consumer=Stored.w_end,
-            platform=FULL_DSP48E2,
-        )
-
-    point = design_space(Unindexed(weights=(WEIGHTS, WEIGHTS), platform=FULL_DSP48E2))
-    answer = point.w.query(Channel.source)
+    network = Network(
+        {
+            **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
+            "w": wire(
+                tensor=Fact("matmul", "w_carried"),
+                contents=Fact("matmul", "w_stored"),
+                sets=2,
+                consumer=Interface("matmul", "w_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "matmul": MatMulKernel(
+                **FACTS,
+                x_tensor=Tensor((3, 4), INT3),
+                y_tensor=Tensor((3, 4), INT7),
+                w_contents=(WEIGHTS, WEIGHTS),
+            ),
+        }
+    )
+    w = folded(network).member("w")
+    answer = w.query(Channel.source)
     assert isinstance(answer, Rejected) and codes(answer) == {"decision-no-viable-case"}
     assert "memstream-set-channel" in answer.findings[0].message
     # Committed on purpose, the case is accepted (committing never checks a kernel
     # case's admission), and the candidate then refuses the configuration.
-    chosen = commit(point, {"w.source": "memstream"})
-    refusal = inspection.admission(chosen.w.source)
+    chosen = commit(w, {"source": "memstream"})
+    refusal = inspection.admission(chosen.source)
     assert isinstance(refusal, Rejected) and "memstream-set-channel" in codes(refusal)
-
-
-def placed_with(platform: Platform):
-    """MatMul with known weights, its weight channel on ``platform``."""
-    return design_space(Stored(weights=WEIGHTS, platform=platform))
 
 
 @pytest.mark.parametrize(
@@ -363,15 +370,15 @@ def placed_with(platform: Platform):
     ),
 )
 def test_the_platform_narrows_the_source_memory(platform, refused):
-    point = placed_with(platform)
-    report = point.try_with_choices({handle(point, "w.source.memstream.ram_style"): "ultra"})
-    assert report.accepted == (not refused)
+    point = folded(stored(platform))
+    trial = point.trial(keyed({"w.source.memstream.ram_style": "ultra"}))
+    assert trial.accepted == (not refused)
     if refused:
-        (outcome,) = report.outcomes
-        assert codes(outcome.result) == refused
+        (why,) = trial.refused.values()
+        assert {finding.code for finding in why} == refused
     # The platform does not narrow pumping: the doubled clock is the shell's, which
     # its root admits.
-    assert "w.source.memstream.pumped_memory" not in forced(placed_with(platform))
+    assert ("w", "source.memstream.pumped_memory") not in point.forced()
 
 
 def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
@@ -380,22 +387,32 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
         Tensor((4, 4), INT3),
         Tensor((3, 4), INT8),
     )
-
-    class Produced(Root):
-        x_end = end_of("matmul", "x_end")
-        w_end = end_of("matmul", "w_end")
-        y_end = end_of("matmul", "y_end")
-        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
-        w = Channel(tensor=w_tensor, port="in1_V", consumer=w_end, platform=FULL_DSP48E2)
-        y = Channel(
-            tensor=y_tensor,
-            contents=((0,) * 4,) * 3,
-            producer=y_end,
-            platform=FULL_DSP48E2,
-        )
-        matmul = MatMulKernel(**FACTS, x_tensor=x_tensor, w_tensor=w_tensor, y_tensor=y_tensor)
-
-    answer = configured(design_space(Produced())).y.query(Channel.endpoints)
+    produced = Network(
+        {
+            "x": wire(
+                tensor=x_tensor,
+                port="in0_V",
+                consumer=Interface("matmul", "x_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "w": wire(
+                tensor=w_tensor,
+                port="in1_V",
+                consumer=Interface("matmul", "w_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "y": wire(
+                tensor=y_tensor,
+                contents=((0,) * 4,) * 3,
+                producer=Interface("matmul", "y_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "matmul": MatMulKernel(
+                **FACTS, x_tensor=x_tensor, w_tensor=w_tensor, y_tensor=y_tensor
+            ),
+        }
+    )
+    answer = folded(produced).member("y").query(Channel.endpoints)
     assert isinstance(answer, Rejected) and codes(answer) == {"channel-users"}
     assert "only producer" in answer.findings[0].message
 
@@ -409,18 +426,18 @@ def test_public_adapter_matches_the_space_path(delivery):
         weights=[list(row) for row in WEIGHTS] if known else None,
     )
     point = configured(base(weights=WEIGHTS) if known else base(), style="auto" if known else None)
-    assert adapted.module == point.module
+    assert adapted.module == built(point, "matmul")
 
 
 @pytest.mark.parametrize("style", ("auto", "distributed", "block", "ultra"))
 def test_ram_style_reaches_the_stored_memory(style):
-    built = matmul_assembly(
+    assembled = matmul_assembly(
         **{**FACTS, "pe": 2, "simd": 2},
         weight_delivery=WeightDelivery.MEMSTREAM,
         weights=WEIGHTS,
         ram_style=style,
     )
-    assert ("RAM_STYLE", f'"{style}"') in placed(built.module, STORED_INSTANCE).parameters
+    assert ("RAM_STYLE", f'"{style}"') in placed(assembled.module, STORED_INSTANCE).parameters
 
 
 def test_adapter_rejects_an_unknown_ram_style():
@@ -444,7 +461,7 @@ def buffered(point, depth=None):
     choices = {"w.transport": "fifo", FIFO_RAM_STYLE: "auto"}
     if depth is not None:
         choices[FIFO_DEPTH] = depth
-    return commit(point, choices)
+    return choose(point, choices)
 
 
 def test_a_buffered_channel_places_a_fifo_between_its_producer_and_consumer():
@@ -452,7 +469,7 @@ def test_a_buffered_channel_places_a_fifo_between_its_producer_and_consumer():
         point = configured(
             base(weights=weights) if weights else base(), style=("auto" if weights else None)
         )
-        module = buffered(point, depth=32).module
+        module = built(buffered(point, depth=32), "matmul")
         assert FIFO in labels(module)
         hops = {(link.source.instance, link.sink.instance) for link in module.fragment.links}
         producer = STORED_INSTANCE if weights else None
@@ -463,34 +480,45 @@ def test_a_buffered_channel_places_a_fifo_between_its_producer_and_consumer():
 
 def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
     point = configured(base())
-    records = {item.key: item for item in inspection.decisions(point)}
-    assert records[FIFO_DEPTH].scope == FIFO
-    assert isinstance(point.field(handle(point, FIFO_DEPTH)).query(), Inapplicable)
+    w = point.member("w")
+    records = {item.key: item for item in inspection.decisions(w)}
+    assert records["transport.fifo.buffer.depth"].scope == "transport.fifo.buffer"
+    depth = handle(w, "transport.fifo.buffer.depth")
+    assert isinstance(w.field(depth).query(), Inapplicable)
     undecided = buffered(point)
-    assert isinstance(undecided.query(Kernel.module), Unresolved)
+    assert isinstance(module_of(undecided, "matmul"), Unresolved)
     with pytest.raises(ConfigurationError):
-        point.with_choices(
+        w.with_choices(
             {
-                handle(point, "w.transport"): "fifo",
-                handle(point, FIFO_RAM_STYLE): "auto",
-                handle(point, FIFO_DEPTH): 1,
+                handle(w, "transport"): "fifo",
+                handle(w, "transport.fifo.buffer.ram_style"): "auto",
+                depth: 1,
             }
         )
     deep = buffered(point, depth=64)
-    saved = selections.capture(deep)
-    assert FIFO_DEPTH in saved.keys
-    assert selections.restore(base(), saved).instance.module == deep.module
-    # Removing the FIFO requires clearing its stale depth and memory style atomically.
-    stale = deep.try_with_choices({handle(deep, "w.transport"): "direct"})
+    saved = deep.chosen()
+    assert ("w", "transport.fifo.buffer.depth") in saved
+    assert built(base().with_choices(saved), "matmul") == built(deep, "matmul")
+    # In the channel's space, removing the FIFO requires clearing its stale depth and
+    # memory style atomically.
+    fifo = deep.member("w")
+    stale = fifo.try_with_choices({handle(fifo, "transport"): "direct"})
     assert not stale.accepted
-    direct = deep.with_choices(
-        deep.field(handle(deep, "w.transport")).change("direct"),
-        deep.field(handle(deep, FIFO_DEPTH)).clear(),
-        deep.field(handle(deep, FIFO_RAM_STYLE)).clear(),
+    direct = fifo.with_choices(
+        fifo.field(handle(fifo, "transport")).change("direct"),
+        fifo.field(handle(fifo, "transport.fifo.buffer.depth")).clear(),
+        fifo.field(handle(fifo, "transport.fifo.buffer.ram_style")).clear(),
     )
-    assert direct.module == point.module
+    assert direct.netlist == w.netlist
+    # In the network, the change drops them, named.
+    trial = deep.trial(keyed({"w.transport": "direct"}))
+    assert set(trial.dropped) == {
+        ("w", "transport.fifo.buffer.depth"),
+        ("w", "transport.fifo.buffer.ram_style"),
+    }
+    assert built(trial.network, "matmul") == built(point, "matmul")
 
 
 def test_adapter_places_the_weight_fifo_on_request():
-    built = matmul_assembly(**{**FACTS, "pe": 2, "simd": 2}, weight_fifo_depth=16)
-    assert FIFO in labels(built.module)
+    assembled = matmul_assembly(**{**FACTS, "pe": 2, "simd": 2}, weight_fifo_depth=16)
+    assert FIFO in labels(assembled.module)

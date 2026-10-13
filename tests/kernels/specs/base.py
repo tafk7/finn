@@ -13,8 +13,7 @@ from typing import Any
 from finn.core.space import Space
 from finn.harness.points import Refused
 from finn.kernels.base import Kernel
-from finn.kernels.configure import commit
-from kernels.conformance import KERNEL, unchosen
+from kernels.conformance import KERNEL, configured, design_member, unchosen
 
 Case = Callable[[], dict[str, Any]]
 """A conformance case: the arguments of ``kernels.conformance.conformance``, its
@@ -89,8 +88,8 @@ def placed(case: dict[str, Any], choices: Mapping[str, object] = EMPTY, **facts:
     """A case's kernel, placed as ``unchosen`` places it, on its facts but ``facts``, with
     ``choices`` (by its own decision keys: ``pe``) committed."""
     point = unchosen(**{**case, "facts": {**case.get("facts", {}), **facts}})
-    point = commit(point, {f"{KERNEL}.{key}": value for key, value in choices.items()})
-    kernel: Space = getattr(point, KERNEL)
+    point = configured(point, {f"{KERNEL}.{key}": value for key, value in choices.items()})
+    kernel: Space = design_member(point, KERNEL)
     return kernel
 
 

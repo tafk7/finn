@@ -96,7 +96,7 @@ PACKED = KernelSpec(
             "pumped compute with one SIMD lane",
             lambda: placed(dotp(PackedDotpKernel, DspBlock.DSP48E2, 4)),
             frozenset({"dotp-pumping"}),
-            {"kernel.simd": 1, "kernel.compute_pumping": True},
+            {"simd": 1, "compute_pumping": True},
         ),
     ),
     sweeps=(SWEEPS,),
