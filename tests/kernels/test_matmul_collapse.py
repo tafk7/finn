@@ -70,10 +70,10 @@ def _kernel(case: str, *, collapsed: bool, chosen: bool = True) -> Space:
     point = network.member("matmul")
     facts = {
         name: getattr(point, name)
-        for name in ("x_tensor", "w_tensor", "w_contents")
+        for name in ("x_tensor", "w_tensor", "w_contents", "weights_dtype")
         if point.present(getattr(MatMulKernel, name))
     }
-    declared = MatMulKernel(**{**FACTS, **facts})
+    declared = MatMulKernel(platform=FULL_DSP48E2, **facts)
     opened = open_space(declared, collapsed=collapsed)
     if not chosen:
         return opened

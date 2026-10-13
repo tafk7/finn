@@ -3,8 +3,8 @@
 
 """Commit a configuration's choices named by their stable keys; name the open ones.
 
-Facts are the root node's typed formals: ``design_space(MatMulKernel(m=..., ...))``. Keys
-are the ones ``inspection`` reports: a structural Decision such as ``"compute"``,
+Facts are the root node's typed formals: ``design_space(MatMulKernel(x_tensor=...,
+...))``. Keys are the ones ``inspection`` reports: a structural Decision such as ``"compute"``,
 or a candidate-local choice such as ``"compute.packed.pe"`` or
 ``"w.source.memstream.ram_style"``. All choices are committed in one atomic
 batch. Refusals are raised as ``ValueError`` with their findings.
@@ -13,13 +13,11 @@ A Decision whose one viable case is forced needs no commitment (the engine's
 ``inspection.forced``); ``inspection.admission`` reads a kernel's own refusal,
 its ``admission`` member. ``undecided`` names the open Decisions: neither
 committed nor forced; ``chosen`` the committed ones, the choices made on purpose.
-In a root whose members are named by path (``MatMul_0``, ``x.adapter``), ``member_of``
-names the member a key belongs to.
 """
 
 from __future__ import annotations
 
-from collections.abc import Container, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from fnmatch import fnmatchcase
 from typing import Any, TypeVar
 
@@ -95,16 +93,4 @@ def chosen(point: Space) -> dict[str, object]:
     return found
 
 
-def member_of(paths: Container[str], key: str) -> str | None:
-    """The longest of ``paths``, member paths of a root (``MatMul_0``), that is ``key`` or
-    one of its prefixes at a segment (``MatMul_0.compute.pe``), or None: the member a key
-    belongs to."""
-    parts = key.split(".")
-    for end in range(len(parts), 0, -1):
-        path = ".".join(parts[:end])
-        if path in paths:
-            return path
-    return None
-
-
-__all__ = ["chosen", "commit", "describe", "member_of", "undecided"]
+__all__ = ["chosen", "commit", "describe", "undecided"]

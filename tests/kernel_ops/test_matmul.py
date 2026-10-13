@@ -28,7 +28,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
-from finn.custom_op.kernels.shell import save_channels
+from finn.custom_op.kernels.shell import network, save_channels
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -63,23 +63,22 @@ def attributes(model: ModelWrapper) -> list[str]:
 def test_facts_come_from_the_model() -> None:
     model = matmul_model()
     facts = op(model).facts()
-    # One node root, stored or streamed: the node owns the weights when they are an
+    # One kernel, stored or streamed: the node owns the weights when they are an
     # initializer.
-    assert facts.root is MatMul.root() and facts.owned == ("w",)
-    formals = facts.formals()
-    assert (formals["m"], formals["k"], formals["n"]) == (3, 4, 4)
-    # The weights are the weight channel's value, not a formal of MatMul's; the channel's
-    # tensor is the initializer's, over its values' range.
-    assert "weights" not in formals
+    assert facts.kernel is MatMulKernel and facts.owned == ("w",)
+    arguments = facts.arguments()
+    # Its extents and datatypes are its tensors': beside them, the platform and the known
+    # weights' declared datatype. Known weights are its contents, never a tensor: the
+    # weight channel carries what MatMul states over their values' range.
+    assert set(arguments) == {"weights_dtype", "platform", "x_tensor", "w_contents"}
     value = IntegerTensorValue.of(tuple(tuple(int(v) for v in row) for row in WEIGHTS))
-    assert facts.values() == {"w": value}
-    assert facts.inputs()["w"].element.value_range == value.range
-    # The output keeps the input's leading axes.
-    assert op(model).output_tensors() == {
-        "y": ((1, 3, 4), op(model).view("y_tensor").element.dtype)
-    }
+    assert arguments["w_contents"] == value
+    assert op(model).bound().w_carried.element.value_range == value.range
+    # The output keeps the input's leading axes: the kernel states it at their rank.
+    (result,) = op(model).output_tensors().values()
+    assert op(model).infer_output_tensors(model) == {"y": ((1, 3, 4), result.element.dtype)}
     streamed = matmul_model(stored=False)
-    assert op(streamed).facts().root is MatMul.root()
+    assert op(streamed).facts().kernel is MatMulKernel
     assert op(streamed).facts().owned == ()
 
 
@@ -136,7 +135,7 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
     assert attributes(model) == sorted(FOLDING)
     assert op(model).choices()["compute.packed.pe"] == 2
     point = op(model).point()
-    assert point.matmul.compute.pe == 2
+    assert point.compute.pe == 2
     # A refused save writes nothing; the refusal names the key.
     with pytest.raises(KernelOpError) as error:
         op(model).save({"compute.packed.pe": 3})
@@ -159,22 +158,24 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
         op(model).save({"w.transport": "direct"})
 
 
-def test_the_weight_sources_choices_persist_on_the_weights_and_the_node_replays_them() -> None:
+def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_replays_them() -> None:
     """The node owns its weight channel, whose choices are stated on the initializer's
-    tensor, beside its value, never on the node; the node's point replays them. The
-    source, its one case forced, is written only when saved on purpose."""
+    tensor, beside its value, never on the node; the network replays them, the node its
+    kernel's alone. The source, its one case forced, is written only when saved on
+    purpose."""
     model = matmul_model()
+    op(model).save(FOLDING)  # its ends known, so its channels bind
     save_channels(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
-    assert attributes(model) == []
+    assert attributes(model) == sorted(FOLDING)
     assert channel_choices(model, "w") == {
         "source.memstream.ram_style": "block",
         "transport": "direct",
     }
-    point = op(model).point()
-    assert point.w.source.ram_style == "block" and isinstance(point.w.source, MemStreamKernel)
+    weights = network(model, model.graph.node).member("w")
+    assert weights.source.ram_style == "block" and isinstance(weights.source, MemStreamKernel)
     save_channels(model, {"w": {"source": "memstream"}})
     assert channel_choices(model, "w")["source"] == "memstream"
-    assert op(model).point().w.source.ram_style == "block"
+    assert network(model, model.graph.node).member("w").source.ram_style == "block"
 
 
 def test_a_forced_choice_is_never_saved() -> None:
@@ -182,7 +183,7 @@ def test_a_forced_choice_is_never_saved() -> None:
     node, so nothing goes stale on another target."""
     model = matmul_model()
     point = op(model).point({"compute.packed.pe": 2})
-    assert point.matmul.compute.pe == 2  # under the forced selector
+    assert point.compute.pe == 2  # under the forced selector
     op(model).save({"compute.packed.pe": 2})
     assert attributes(model) == ["compute.packed.pe"]
 
@@ -220,7 +221,7 @@ def test_a_matmul_no_core_admits_is_refused_while_its_choices_are_open() -> None
     for name in ("x", "w"):
         model.set_tensor_datatype(name, DataType["INT32"])
     (problem,) = op(model.transform(InferKernelTensors())).verify_node()
-    assert problem.startswith("first: matmul.compute: decision-no-viable-case: no case is viable: ")
+    assert problem.startswith("first: compute: decision-no-viable-case: no case is viable: ")
     assert "dotp-activation-width" in problem and "dotp-target" in problem
 
 
@@ -240,10 +241,10 @@ def test_apply_config_writes_choices_replay_checks() -> None:
     model = model.transform(
         ApplyConfig({"first": {**FOLDING, "compute.packed.compute_pumping": 0}})
     )
-    assert op(model).point().matmul.compute.pe == 2
+    assert op(model).point().compute.pe == 2
     # A folding config naming only the nested key replays under the forced selector.
     alone = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 2}}))
-    assert op(alone).point().matmul.compute.pe == 2
+    assert op(alone).point().compute.pe == 2
     refused = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 3}}))
     assert "compute.packed.pe" in op(refused).verify_node()[0]
 
@@ -254,7 +255,7 @@ def test_choices_survive_save_and_load(tmp_path: Path) -> None:
     model.save(str(tmp_path / "model.onnx"))
     loaded = ModelWrapper(str(tmp_path / "model.onnx"))
     assert op(loaded).choices() == op(model).choices()
-    assert op(loaded).point().matmul.compute.pe == 2
+    assert op(loaded).point().compute.pe == 2
 
 
 # -- execution and identity -------------------------------------------------------------

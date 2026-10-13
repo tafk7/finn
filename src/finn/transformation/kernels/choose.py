@@ -8,23 +8,21 @@ time, and saving them.
 KernelOps the build's cut made (``CutKernelPartition``; ``explore_partition``, which
 the build's strategy steps run, opens it through the parent graph's node,
 ``partition_body``, and saves it in its file), so which KernelOps go together is the
-cut's alone: a model holding any other node is refused. It builds the body's shell root
-(``shell_root``: their kernels, the channels between them and the channels on its
-boundary; the nodes' and the channels' saved
-choices replayed, a stale one dropped with why; members named as the graph,
-``MatMul_0``), presents it to its ``Seam`` (``finn.kernels.explore``) as a network
-(``ShellRoot.network``: each choice keyed by its owner, a node or a tensor, and the key
-there), holds the pins the body
-records (``HELD``), gives every choice the body leaves open its baseline
-(``Seam.baseline``: what ``BaselineChoices`` does, a no-op on a body the cut created; on
-a body made by hand, or for a choice replay dropped as stale, the report names what it
-baselined), runs the strategy, which reopens the choices it decides, explores and
-settles, and then:
+cut's alone: a model holding any other node is refused. It binds the body's network
+(``shell.network``: their kernels, the channels between them and the channels on its
+boundary, members named as the graph, ``MatMul_0``; the nodes' and the channels' saved
+choices replayed, a stale one dropped with why), which its ``Seam``
+(``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
+tensor, and the key there; holds the pins the body records (``HELD``), gives every
+choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
+does, a no-op on a body the cut created; on a body made by hand, or for a choice replay
+dropped as stale, the report names what it baselined), runs the strategy, which reopens
+the choices it decides, explores and settles, and then:
 
-- refuses a point a member refuses (``Seam.refusals``) or its shell does not admit
+- refuses a network a member refuses (``Seam.refusals``) or its shell does not admit
   (``admission_refusal``: its AXI-Lite buses, memory ports and doubled clock against
   the shell's row), by name (a ``KernelOpError`` carrying their findings);
-- persists every value of the point where it is stated, each owner's whole
+- persists every value of the network where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
   (``configured_root``);
@@ -35,7 +33,7 @@ settles, and then:
   may change the folding removes (``FOLDING``); and whether its FIFOs are stale
   (``FIFOS_STALE``): set by any strategy but FIFO sizing and the debug placeholder where
   the body holds a FIFO, removed by FIFO sizing;
-- keeps what it found (``explored``): the point, its cost and the report: the choices
+- keeps what it found (``explored``): the network, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
   settling kept, the ones settling re-baselined, a pin's held keys, attempts and time;
@@ -56,7 +54,7 @@ Pins go first, and FIFO sizing after the last strategy that changes the folding:
 engine keeps a stored FIFO depth valid when its ends' folding changes, so a FIFO sized
 before it is marked stale (``FIFOS_STALE``), and packaging refuses the body.
 
-The resources are the shell root's (``shell_resources``), each member its own
+The resources are the shell's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
 and its channels, boundary channels included), each end and its static region, and
 their sum, ``used``; where members state none (a memory pinned ``auto``, which
@@ -77,7 +75,7 @@ limitation (``resources-over-part``, in the result's and the resources' ``findin
 naming the binding resource, whichever strategy chose it: the report ranks and states
 it, and refuses nothing (RC5).
 
-The shell is the model's target's (``shell_root``): its row offers the boundary
+The shell is the model's target's (``shell.network``): its row offers the boundary
 channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
 has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
@@ -99,13 +97,13 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
-from finn.custom_op.kernels.rooted import Rooted
+from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.shell import (
+    Partition,
     ShellResources,
     admission_refusal,
     persist,
     shell_resources,
-    shell_root,
 )
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
@@ -145,11 +143,11 @@ _ABSENT = object()
 
 @dataclass(frozen=True)
 class Explored:
-    """An exploration's result: the point of the shell root (every value, settled after
-    the strategy), its cost, the report (JSON values), and every limitation it found
+    """An exploration's result: the body's network (every value, settled after the
+    strategy), its cost, the report (JSON values), and every limitation it found
     (``findings``: the strategy's, then the resources'), never a refusal (RC5)."""
 
-    point: Any
+    network: Partition
     cost: Cost
     report: Mapping[str, Any]
     findings: tuple[Finding, ...] = ()
@@ -274,7 +272,7 @@ def _over_part(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> t
     )
 
 
-def _cost_report(network: Rooted, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
+def _cost_report(network: Partition, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
     bottleneck = cost.bottleneck
     return {
         "members": {
@@ -293,7 +291,7 @@ def _cost_report(network: Rooted, cost: Cost, resources: dict[str, object]) -> d
     }
 
 
-def _fifo_storage(seam: Seam, network: Rooted) -> dict[str, dict[str, object]]:
+def _fifo_storage(seam: Seam, network: Partition) -> dict[str, dict[str, object]]:
     """Each FIFO's memory style, by the graph name (a node or a tensor) and key that
     persist it, beside the storage the RTL selects for it (FinnLib's ``auto``: shift,
     distributed, block or ultra) and what it uses."""
@@ -343,7 +341,7 @@ def _fifos(
     return f"sized by size_fifos: {channels} channels, {len(placed)} FIFOs placed"
 
 
-def _placed(seam: Seam, network: Rooted) -> dict[Key, object]:
+def _placed(seam: Seam, network: Partition) -> dict[Key, object]:
     """Every FIFO placed on ``network``: each transport at its FIFO case, with its depth
     (None where it is open)."""
     chosen = seam.chosen(network)
@@ -364,7 +362,7 @@ def _placed(seam: Seam, network: Rooted) -> dict[Key, object]:
     return found
 
 
-def _end_rows(network: Rooted, ends: Sequence[str]) -> dict[str, dict[str, object]]:
+def _end_rows(network: Partition, ends: Sequence[str]) -> dict[str, dict[str, object]]:
     """Each end's facts and cycles a frame, by its boundary channel."""
     rows: dict[str, dict[str, object]] = {}
     for name in ends:
@@ -393,9 +391,9 @@ def _end_rows(network: Rooted, ends: Sequence[str]) -> dict[str, dict[str, objec
 
 def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
-    the body's open choices given their baselines) and every value persisted, on the shell
-    root of the model's target, the body's pins held and recorded; see the module
-    docstring."""
+    the body's open choices given their baselines) and every value persisted, on its
+    network in the shell of the model's target, the body's pins held and recorded; see the
+    module docstring."""
     if not model.graph.node:
         raise KernelOpError("no KernelOp to explore")
     others = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
@@ -406,9 +404,9 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         )
     nodes = list(model.graph.node)
     started = time.perf_counter()
-    root = shell_root(model, nodes)
+    bound = shell.network(model, nodes)
     seam = Seam(read_target(model).platform)
-    network = root.network()
+    network = bound
     seam.held.update(seam.keyed(network, held_choices(model), HELD.entry))
     saved = seam.chosen(network)
     # A choice the body leaves open takes its baseline before the strategy runs; a pin
@@ -457,15 +455,14 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             ),
             findings=tuple(finding for why in refused.values() for finding in why),
         )
-    point = network.point
-    unadmitted = admission_refusal(point)
+    unadmitted = admission_refusal(network)
     if unadmitted:
         raise KernelOpError(
-            f"the explored point is refused by the {root.row.shell!r} shell: "
+            f"the explored point is refused by the {network.row.shell!r} shell: "
             + "; ".join(map(finding_text, unadmitted)),
             findings=unadmitted,
         )
-    persist(model, root, point)
+    persist(model, network)
     if seam.held:
         model.set(HELD, _by_owner(seam.held))
     if isinstance(strategy, TargetThroughput):
@@ -484,15 +481,14 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     cost = seam.cost(network)
     resources, over_part = _resources_report(
         cost,
-        shell_resources(point),
+        shell_resources(network),
         seam.platform,
         part_report(read_target(model).part),
-        root.row.caveat,
+        network.row.caveat,
     )
     ends: dict[str, object] = {}
-    if root.ends and not cost.waiting and not cost.refused:
-        boundary = [root.owners.get(path, path) for path in root.ends]
-        ends = {"ends": _end_rows(network, boundary), "memory_latency": MEMORY_LATENCY}
+    if network.ends and not cost.waiting and not cost.refused:
+        ends = {"ends": _end_rows(network, network.ends), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(network)
     placed = [dotted(key) for key in _placed(seam, network)]
     explored = {
@@ -503,13 +499,13 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         "open": left,
         "fifo_storage": _fifo_storage(seam, network),
         "fifos": _fifos(strategy, entry, placed),
-        "dropped": dict(root.dropped),
+        "dropped": dict(bound.stale),
         **_cost_report(network, cost, resources),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
     found = tuple(getattr(strategy, "findings", ()))
-    return Explored(point, cost, explored, (*found, *over_part))
+    return Explored(network, cost, explored, (*found, *over_part))
 
 
 def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
@@ -545,17 +541,17 @@ def exploration_summary(explored: Explored, label: str) -> list[tuple[int, str]]
 
 
 def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
-    """The slowest members of a partition model of KernelOps' shell root, ends included,
+    """The slowest members of a partition model of KernelOps' network, ends included,
     and their cycles a frame, its saved choices replayed (None where a member's cycles
     wait on a choice left open)."""
-    root = shell_root(model, model.graph.node)
-    return Seam(read_target(model).platform).cost(root.network()).bottleneck
+    bound = shell.network(model, model.graph.node)
+    return Seam(read_target(model).platform).cost(bound).bottleneck
 
 
 class ExploreKernelChoices(Transformation):
-    """A partition body's KernelOps explored by ``strategy`` and every value saved, on the
-    shell root of the model's target, the body's pins held and recorded; ``explored``
-    holds the result (``explore_kernel_choices``)."""
+    """A partition body's KernelOps explored by ``strategy`` and every value saved, on its
+    network in the shell of the model's target, the body's pins held and recorded;
+    ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(self, strategy: Explorer | None = None) -> None:
         super().__init__()

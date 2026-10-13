@@ -340,10 +340,6 @@ def dsp58_matmul() -> tuple[Seam, Network]:
 
     def first() -> MatMulKernel:
         return MatMulKernel(
-            m=chain.ROWS,
-            n=chain.HIDDEN,
-            k=chain.INPUTS,
-            activation_dtype=chain.A,
             weights_dtype=chain.W,
             platform=FULL_DSP58,
             x_tensor=x_tensor,

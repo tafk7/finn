@@ -33,7 +33,7 @@ so the style is chosen before, with or after the folding), then ``auto``, which
 states no resources (``finn.kernels.utilization.memory_styles``). ``ultra`` states
 what it needs of the ``platform``: UltraRAM that takes initial contents (on Zynq
 UltraScale+ an initialized UltraRAM is built as block RAM). A pumped memory takes the
-doubled clock, which its module states and the shell root admits (``clock-unavailable``).
+doubled clock, which its module states and the shell admits (``clock-unavailable``).
 """
 
 from __future__ import annotations

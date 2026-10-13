@@ -54,6 +54,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from kernels.helpers import choose
 from kernels.xsim import requires_xsim
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -61,11 +62,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.platform import write_target
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_pacing import FREE
-from finn.custom_op.kernels.shell import configured_root, persist, shell_root
+from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.shell import configured_root, network, persist
 from finn.harness.ops import Disagreement, check_parity
 from finn.harness.points import Covering, covering
 from finn.harness.reference import platform_rows
-from finn.kernels.configure import commit
 from finn.platform.capabilities import DspBlock
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
@@ -113,10 +114,10 @@ MODELS: dict[str, tuple[Callable[..., ModelWrapper], str]] = {
 
 
 def points(build: Any, member: str) -> Covering:
-    """The op's covering points: its own kernel's Decisions in the node's shell root, at
-    its member's name."""
+    """The op's covering points: its own kernel's Decisions, its kernel bound alone; each
+    key its node's, ``member``."""
     model = build()
-    return covering(shell_root(model, model.graph.node).point, f"{member}.*")
+    return covering(kernel_op(model, model.graph.node[0]).bound())
 
 
 COVERING = {name: points(*MODELS[name]) for name in MODELS}
@@ -151,14 +152,14 @@ ON_VERSAL: dict[str, Mapping[str, object]] = {
 
 def chosen(name: str, index: int) -> ModelWrapper:
     """The model with the covering point's choices persisted on its node."""
-    build, _ = MODELS[name]
-    return persisted(build(), COVERING[name].points[index])
+    build, member = MODELS[name]
+    point = COVERING[name].points[index]
+    return persisted(build(), {f"{member}.{key}": value for key, value in point.items()})
 
 
 def persisted(model: ModelWrapper, choices: Mapping[str, object]) -> ModelWrapper:
-    """``model`` with ``choices`` committed in its node's shell root, persisted."""
-    root = shell_root(model, model.graph.node)
-    persist(model, root, commit(root.point, choices))
+    """``model`` with ``choices`` (``member.key``) committed in its network, persisted."""
+    persist(model, choose(network(model, model.graph.node), choices))
     return model
 
 
@@ -313,7 +314,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
     assert VERSAL.platform.uram_init
     model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(BaselineChoices())
     point, _ = configured_root(model, "versal")
-    assert type(point.first.compute).__name__ == "Int8Dsp58DotpKernel"
+    assert type(point.network.member("first").compute).__name__ == "Int8Dsp58DotpKernel"
     styles = {
         label: dict(leaf.parameters).get("RAM_STYLE")
         for label, leaf in point.module.fragment.instances
@@ -322,8 +323,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
         "x.adapter.input_gen.input_gen"
     ], styles
     model = thresholding(target=VERSAL)
-    point = shell_root(model, model.graph.node).point
-    assert commit(point, {"activate.ultra_stages": 1})
+    assert choose(network(model, model.graph.node), {"activate.ultra_stages": 1})
 
 
 @requires_xsim
@@ -347,6 +347,5 @@ def test_a_wide_matmul_computes_what_its_kernel_op_computes(tmp_path: Path) -> N
 def test_a_shared_row_computes_what_its_kernel_op_computes(tmp_path: Path) -> None:
     """One row for every channel (C = 1), at PE 2: the table bound once, each lane a copy."""
     model = thresholding(SHARED)
-    root = shell_root(model, model.graph.node)
-    persist(model, root, commit(root.point, {"activate.pe": 2}))
+    persisted(model, {"activate.pe": 2})
     check_parity(model, tmp_path, inputs=boundary_inputs(model, seed("shared")), label="shared")

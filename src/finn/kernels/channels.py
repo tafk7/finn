@@ -110,7 +110,7 @@ is not a port's: it reads the free side the channel's one end determines, binds 
 (the root's pins stay its pins), and exports its facts (``end_contract``). It
 exports its cycles a frame, the channel's member that it is, and under
 ``END`` the channel exports its end's contract (none without an end), whose AXI-Lite buses
-the shell root's admission counts, and whose resources and memory ports it counts
+the shell's admission counts, and whose resources and memory ports it counts
 with its static region.
 
 A channel's source is a ``MemStreamKernel`` (``finn.kernels.memstream``), which

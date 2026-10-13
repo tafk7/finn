@@ -22,10 +22,8 @@ from qonnx.transformation.infer_shapes import InferShapes
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, shell_root
-from finn.kernels.configure import undecided
+from finn.custom_op.kernels.shell import configured_root, network
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
 from finn.kernels.network import dotted
 from finn.platform.target import Target
@@ -126,9 +124,9 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     assert saved["activate"]["pe"] == 2
     model.save(tmp_path / "chosen.onnx")
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
-    root = shell_root(again, again.graph.node)
-    assert undecided(root.point, "*") == [] and not root.dropped
-    assert inspection.viable(root.point) == ()
+    bound = network(again, again.graph.node)
+    assert bound.undecided() == () and not bound.stale
+    assert bound.viable() == ()
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
     assert choices(again.transform(ranked(Lanes(2)))) == saved

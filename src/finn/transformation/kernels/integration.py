@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The integration export: what a shell's integration builds around the build's
-partition, read from its shell root's ends.
+partition, read from its network's ends.
 
 ``integration(model)`` takes the build's parent graph (its one partition node,
-``finn.core.graph.partition.partition_body``), configures the partition's shell root as hardware
+``finn.core.graph.partition.partition_body``), configures the partition's network as hardware
 generation does (``configured_root``) and reads the ends its boundary channels place
 (``Channel.end_contract``) and its shell's row. For the Zynq block design
 (``vivado-block-design``, the ``pynq`` shell) it states:
@@ -36,10 +36,10 @@ order, the static region's instances ``<ip>_0`` (``finn.platform.shells.StaticRe
 end's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
 (``IODMA_PINS``).
 
-It is a function of the shell root, not a view on it: the export is the integration's
-(a block design's names, addresses and Vivado IPs), needed once a build and not at
-every point an exploration costs, and the partition's name is its graph node's, which
-the shell root does not hold. A shell without an integration (``ip``) has no export.
+It is a function of the configured network: the export is the integration's (a block
+design's names, addresses and Vivado IPs), needed once a build and not at every point
+an exploration costs, and the partition's name is its graph node's. A shell without an
+integration (``ip``) has no export.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.facts import known_shape
 from finn.core.graph.partition import partition_body
-from finn.custom_op.kernels.shell import configured_root, member
+from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
@@ -210,8 +210,8 @@ def iodma_configuration(contract: EndContract) -> IodmaConfiguration:
 
 def wire_one_bus_each(contract: EndContract, where: str) -> None:
     """Refuse an end (at ``where``, for the message) the block design cannot wire: it
-    connects one AXI-Lite bus and one memory port an end, while the shell root's
-    admission and costing read the counts the end's contract states."""
+    connects one AXI-Lite bus and one memory port an end, while the shell's admission
+    and costing read the counts the end's contract states."""
     if (contract.control_buses, contract.memory_ports) != (1, 1):
         raise IntegrationError(
             f"{where}: its {contract.kind} end states {contract.control_buses} AXI-Lite "
@@ -231,7 +231,7 @@ def _aperture(bus: Bus, least: int) -> int:
 
 def integration(model: ModelWrapper) -> Integration:
     """The integration export of the build's parent graph ``model``: its partition's
-    shell root, as emission builds it (``configured_root``), in its shell's integration
+    network, as emission builds it (``configured_root``), in its shell's integration
     (see the module docstring)."""
     node, body, _ = partition_body(model)
     point, boundary = configured_root(body, node.name)
@@ -246,7 +246,7 @@ def integration(model: ModelWrapper) -> Integration:
     counts = {"in": 0, "out": 0}
     ends = []
     for tensor, port in boundary:
-        channel = getattr(point, member(tensor))
+        channel = point.channel(tensor)
         if not channel.ended:
             raise IntegrationError(
                 f"{tensor} ({port}): the {row.shell!r} shell places no end on it; its "

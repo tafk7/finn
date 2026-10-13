@@ -12,7 +12,7 @@ generates computes what those ops compute, on the same inputs:
    one cut): a parent graph of one partition node, its body
    saved under ``directory``, its tensors' channel choices moved into the body; the
    hardware checked is the partition a build ships;
-2. **the point**: the body's shell root, its nodes' persisted choices and its tensors'
+2. **the network**: the body's network, its nodes' persisted choices and its tensors'
    channel choices replayed, as packaging builds it (``configured_root``, which refuses
    an open choice): a chosen design point is the choices saved on the nodes and the
    tensors, every one stored where it was created (at conversion and at the cut);

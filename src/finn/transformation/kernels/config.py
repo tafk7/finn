@@ -10,8 +10,8 @@ KernelOp node's choices as its node holds them, each channel's as its tensor sta
 them (``finn.channel``), absent ones absent (on a body the cut created, every choice
 but a required one no strategy set), in graph order: each node's input channels
 not yet written (a parameter it owns among them), the node, its output channels. A
-node and a tensor never share a name in a partition's body (its shell root refuses
-it, and this export too, by raw name, on a body no root has seen), so
+node and a tensor never share a name in a partition's body (its network refuses it,
+and this export too, by raw name, on a body no network has seen), so
 ``{graph name: {key: value}}`` names each once. The nodes' entries are also
 the form ``ApplyConfig`` applies; it applies no tensor's.
 """

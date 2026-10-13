@@ -108,12 +108,12 @@ def test_the_image_enters_once_and_its_channel_reads_the_windows(
     body = folded(name, simd, pe, tmp_path)
     (node,) = body.graph.node
     point, _ = configured_root(body, name)
-    channel = getattr(point, node.input[0])
+    channel = point.channel(node.input[0])
     ends = channel.ends
     assert ends.source.sequence.form == vector_major(channel.tensor.shape, simd)
     assert ends.source.sequence.markers == ()
     (marker,) = ends.sink.sequence.markers
-    kernel = getattr(point, node.name).compute
+    kernel = point.network.member(node.name).compute
     assert marker.beats == kernel.schedule.beat_count // kernel.y.presented.form.beats
     instances = dict(point.module.fragment.instances)
     parameters = dict(instances[f"{node.input[0]}.adapter.input_gen.input_gen"].parameters)
@@ -174,7 +174,7 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
 ) -> None:
     # Converted, not cut: its channels' choices created as the cut creates them.
     point, _ = configured_root(thresholded(pe, simd).transform(BaselineChoices()), "inside")
-    assert tuple(hop.step.value for hop in point.a.plan.hops) == steps
+    assert tuple(hop.step.value for hop in point.channel("a").plan.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels
 

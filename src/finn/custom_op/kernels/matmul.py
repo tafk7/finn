@@ -3,9 +3,10 @@
 
 """The MatMul KernelOp: ONNX ``MatMul``, Y = A @ B, on ``MatMulKernel``.
 
-A's leading axes are rows, and B is the (k, n) matrix ONNX stores. When B is an
-initializer, the node holds the weights and the kernel stores them; otherwise they
-arrive on a stream like any other input.
+A is read at the graph's rank, its leading axes the kernel's rows, and B is the (k, n)
+matrix ONNX stores. When B is an initializer, the node holds the weights and the kernel
+stores them, given with the datatype the graph declares them in; otherwise they arrive on
+a stream like any other input, their tensor a fact like A's.
 
 ``execute_node`` is the reference: for integer operands, the exact integer product, as
 the hardware computes it (``product``); for float operands, as ONNX computes it. The
@@ -22,9 +23,9 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import admitted, datatype, integer_tensor, known_shape, rows, shape
+from finn.core.graph.facts import admitted, datatype, integer_tensor, known_shape, shape
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import KernelOp, Match, Shapes, Wiring, refused, unstated
+from finn.custom_op.kernels.base import KernelOp, Match, Wiring, refused, unstated
 from finn.custom_op.kernels.cache import Facts
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -64,15 +65,7 @@ class MatMul(KernelOp):
     op_type = "MatMul"
     op_version = MatMulKernel.version
     kernel = MatMulKernel
-    member = "matmul"
-    formals: ClassVar[tuple[str, ...]] = (
-        "m",
-        "n",
-        "k",
-        "activation_dtype",
-        "weights_dtype",
-        "platform",
-    )
+    formals: ClassVar[tuple[str, ...]] = ("weights_dtype", "platform")
     ports = ("x", "w")
     wiring = {
         "x": Wiring("x_tensor", "x_end"),
@@ -106,46 +99,29 @@ class MatMul(KernelOp):
         k, n = weights_shape
         return k, n
 
-    def extents(self) -> tuple[int, int, int, dict[str, object]]:
-        """(m, n, k), A's leading axes as rows, and the other kernel arguments read from
-        shapes: none for MatMul."""
+    def shaped(self) -> dict[str, object]:
+        """The kernel arguments read from shapes beside its tensors: none for MatMul. A's
+        last axis must be B's rows."""
         model, label = self.model(), self.label
         a, b = self.onnx_node.input
-        m, k = rows(shape(model, a, label))
-        k_b, n = self.weights()
+        k = shape(model, a, label)[-1]
+        k_b, _ = self.weights()
         if k != k_b:
             raise KernelOpError(f"{label}: {a} has {k} columns and {b} {k_b} rows")
-        return m, n, k, {}
+        return {}
 
     def facts(self) -> Facts:
         model, label = self.model(), self.label
-        a, b = self.onnx_node.input
-        m, n, k, shaped = self.extents()
-        activation, weights_dtype = datatype(model, a, label), datatype(model, b, label)
+        b = self.onnx_node.input[1]
+        shaped = self.shaped()
         platform = self.target().platform
-        common: dict[str, object] = dict(
-            m=m,
-            n=n,
-            k=k,
-            activation_dtype=activation,
-            weights_dtype=weights_dtype,
-            platform=platform,
-            **shaped,
-        )
-        key = (
-            self.op_type,
-            self.op_version,
-            m,
-            n,
-            k,
-            activation.name,
-            weights_dtype.name,
-            platform,
-            *shaped.values(),
-        )
-        root, edges = self.root(), (self.input_edges, self.output_edges)
+        key = (self.op_type, self.op_version, platform, *shaped.values())
         if model.get_initializer(b) is None:
-            return Facts(root, (*key, None), lambda: common, *edges)
+            streamed: dict[str, object] = dict(platform=platform, **shaped)
+            return self.binding((*key, None), lambda: streamed)
+        # Known weights: their values, and the datatype the graph declares them in.
+        weights_dtype = datatype(model, b, label)
+        common: dict[str, object] = dict(weights_dtype=weights_dtype, platform=platform, **shaped)
         digest = admitted(model, b, weights_dtype, label)
 
         def values() -> dict[str, IntegerTensorValue]:
@@ -154,12 +130,7 @@ class MatMul(KernelOp):
                 raise KernelOpError(f"{label}: {b} is not an initializer")
             return {"w": integer_tensor(stored)}
 
-        return Facts(root, (*key, digest), lambda: common, *edges, values, ("w",))
-
-    def output_tensors(self) -> Shapes:
-        result = self.view("y_tensor")
-        leading = shape(self.model(), self.onnx_node.input[0], self.label)[:-1]
-        return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
+        return self.binding((*key, weights_dtype.name, digest), lambda: common, ("w",), values)
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """Y = A @ B, by ``product``."""

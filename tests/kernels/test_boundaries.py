@@ -84,20 +84,17 @@ assert point.x.axis.payload_bits == 6
 
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
-    facts = dict(
-        m=2,
-        k=4,
-        n=4,
-        activation_dtype=DataType["INT3"],
-        weights_dtype=DataType["INT3"],
-        platform=PLATFORM,
-    )
+    facts = dict(platform=PLATFORM)
     # Stored weights are MatMul's, and the weight channel's value, which its source
     # stores; the result is their columns' (the identity's, [-4, 3]: INT3), or the
-    # datatypes' (INT8).
-    weights, result = {"w_tensor": Tensor((4, 4), INT3)}, INT8
+    # datatypes' (INT8). Its extents and datatypes are its tensors'.
+    weights: dict[str, object] = {"w_tensor": Tensor((4, 4), INT3)}
+    result = INT8
     if memory == "memstream":
-        weights = {"w_contents": ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))}
+        weights = {
+            "w_contents": ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)),
+            "weights_dtype": DataType["INT3"],
+        }
         result = INT3
     x_tensor, y_tensor = Tensor((2, 4), INT3), Tensor((2, 4), result)
     # The weight channel carries what MatMul states for it.

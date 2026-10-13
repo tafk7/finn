@@ -36,12 +36,11 @@ from qonnx.analysis.tensor_value_summary import (
 )
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import datatype, integer_tensor, known_shape, rows, shape
+from finn.core.graph.facts import datatype, integer_tensor, known_shape, shape
 from finn.core.space import Finding, Rejected
 from finn.custom_op.kernels.base import (
     KernelOp,
     Match,
-    Shapes,
     Wiring,
     node_attributes,
     refused,
@@ -96,7 +95,6 @@ class Thresholding(KernelOp):
     op_type = "Thresholding"
     op_version = ThresholdingAxiKernel.version
     kernel = ThresholdingAxiKernel
-    member = "activate"
     formals = ("threshold_dtype", "thresholds", "bias", "platform")
     ports = ("x", None)
     wiring = {
@@ -147,7 +145,7 @@ class Thresholding(KernelOp):
     def facts(self) -> Facts:
         model, label = self.model(), self.label
         x, thresholds = self.onnx_node.input
-        _, channels = rows(shape(model, x, label))
+        channels = shape(model, x, label)[-1]
         stored = model.get_initializer(thresholds)
         if stored is None:
             raise KernelOpError(
@@ -189,11 +187,7 @@ class Thresholding(KernelOp):
             platform,
             summary.content_digest,
         )
-        return Facts(self.root(), key, formals, self.input_edges, self.output_edges)
-
-    def output_tensors(self) -> Shapes:
-        dims = shape(self.model(), self.onnx_node.input[0], self.label)
-        return {self.onnx_node.output[0]: (dims, self.view("result_dtype"))}
+        return self.binding(key, formals)
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """The reference: count(X >= T[c]) + bias, in X's element type."""

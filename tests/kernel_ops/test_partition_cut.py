@@ -32,7 +32,7 @@ from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, wri
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, shell_root
+from finn.custom_op.kernels.shell import configured_root, network
 from finn.kernels.explore import Seam
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -266,12 +266,12 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
     ``end-repetition``, at any folding; at the Chain's own each pass is also in 2 x 2
     tiles, which the driver's row-major buffer does not hold, ``end-order``."""
     repeated = (
-        r"w2\.end\.iodma_hls\.single_pass: end-repetition: s_axis_1: an iodma_hls end moves "
+        r"w2\.end: .*end\.iodma_hls\.single_pass: end-repetition: s_axis_1: an iodma_hls end moves "
         r"one pass of a \[4, 4\] buffer a frame, and this free side presents it 3 times a "
         r"frame \(repetition by the host or the end is not designed yet\)"
     )
     tiled = (
-        r"w2\.end\.iodma_hls\.row_major: end-order: s_axis_1: an iodma_hls end moves a "
+        r"w2\.end: .*end\.iodma_hls\.row_major: end-order: s_axis_1: an iodma_hls end moves a "
         r"row-major buffer, and this free side presents 4 beats of 4 lanes of \[4, 4\]"
     )
     for folding, refusals in ((None, (tiled, repeated)), (ROW_MAJOR_W2, (repeated,))):
@@ -375,6 +375,6 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     channels = {name: held for name, held in config.items() if name not in converted}
     assert (len(channels), sum(map(len, channels.values()))) == (13, 25)
     assert {held["transport"] for held in channels.values()} == {"direct"}
-    root = shell_root(body, body.graph.node)
-    assert root.dropped == {}
-    assert Seam().choices(root.network()) == ()
+    bound = network(body, body.graph.node)
+    assert bound.stale == {}
+    assert Seam().choices(bound) == ()

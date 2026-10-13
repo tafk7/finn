@@ -3,8 +3,8 @@
 
 """The ends a shell offers on its boundary channels: where a partition's stream meets memory.
 
-A boundary channel of a shell root has a side without a user, its **free side**: the
-AXIS port the root presents (``Channel.free_side``). A shell with ends offers each
+A boundary channel of a partition's network has a side without a user, its **free
+side**: the AXIS port the network presents (``Channel.free_side``). A shell with ends offers each
 such channel the ends it can place there (``EndOffer``), and the channel's ``end``
 Decision chooses one, by kind (``ENDS``), as it places its ``source``; one offered is
 forced, so nothing is persisted. An end binds no RTL in the root's module: the
@@ -34,7 +34,7 @@ stream side, the free side's contract:
   cycles a call with a converter, 13 without; the call ends two converter words
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
-  which the shell root's admission counts against the shell's budget beside the
+  which the shell's admission counts against the shell's budget beside the
   partition's (``END``, ``EndContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
@@ -53,7 +53,7 @@ stream side, the free side's contract:
   out of context (``SHELL_CHARACTERISED``), which overstates the placed end.
 
 A boundary channel exports its end's contract under ``END`` (none without an end),
-which the shell root sums with its static region (``finn.custom_op.kernels.shell``).
+which the shell sums with its static region (``finn.custom_op.kernels.shell``).
 The end exports its cycles a frame under ``CYCLES``, the channel's member that it is:
 the channel's are at least its end's.
 These ends are not ``finn.dataflow.ends``'s, which are the two beat sequences a channel's
@@ -93,7 +93,7 @@ MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 
 END = ViewKey("end", default_semantics(tuple))
 """A boundary channel's end, as its contract (``EndContract``): one, or none without an
-end. The shell root's admission counts their AXI-Lite buses, and it sums their
+end. The shell's admission counts their AXI-Lite buses, and it sums their
 resources and counts their memory ports."""
 
 NO_CONVERTER, DIVISIBLE, LCM = "none", "divisible", "lcm"

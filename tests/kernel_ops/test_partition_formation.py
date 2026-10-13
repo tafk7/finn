@@ -27,8 +27,8 @@ import finn.custom_op.partition as partition_domain
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
-from finn.custom_op.kernels.shell import configured_root, member, save_channels, shell_root
-from finn.kernels.configure import commit
+from finn.core.space import Available
+from finn.custom_op.kernels.shell import configured_root, network, save_channels
 from finn.transformation.kernels.cut import CutKernelPartition
 from kernel_ops.models import configure_partition, kernel_model
 
@@ -124,15 +124,16 @@ def test_the_body_is_the_partition_packaging_takes(tmp_path: Path) -> None:
     source, parent, channels = partitioned(tmp_path)
     body = ModelWrapper(getCustomOp(parent.graph.node[1]).get_nodeattr("model"))
     module = configured_root(body, parent.graph.node[1].name)[0].module
-    # The same module as the root of the KernelOps where they stood, with the channel
+    # The same module as the network of the KernelOps where they stood, with the channel
     # choices the body states.
     kernel_ops = [node for node in source.graph.node if node.domain == "finn.custom_op.kernels"]
     stated = {
-        f"{member(tensor)}.{key}": value
-        for tensor, held in channels.items()
-        for key, value in held.items()
+        (tensor, key): value for tensor, held in channels.items() for key, value in held.items()
     }
-    reference = commit(shell_root(source, kernel_ops).point, stated).module
+    bound = network(source, kernel_ops, name=parent.graph.node[1].name)
+    built = bound.with_choices(stated).module_of()
+    assert isinstance(built, Available)
+    reference = built.value
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",

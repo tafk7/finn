@@ -19,10 +19,10 @@ from typing import Any
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import design_space
+from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.matmul import MatMulKernel, column_range
-from finn.kernels.network import Fact, Interface, Network, wire
+from finn.kernels.network import Fact, Interface, Network, Wire, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
 from kernels.helpers import (
@@ -54,13 +54,10 @@ MEMBERS = ("first", "activate", "second", "x", "w1", "hidden", "levels", "w2", "
 """The Chain's members, ranked: its kernels, then its channels."""
 
 
-def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> MatMulKernel:
-    """A MatMul of ``k`` by ``n`` known ``weights`` on activations of ``dtype``."""
+def matmul(weights: Any, x_tensor: Any) -> MatMulKernel:
+    """A MatMul of known ``weights`` (``W``) on the activations ``x_tensor``: its extents
+    and the activations' datatype are its tensors'."""
     return MatMulKernel(
-        m=ROWS,
-        n=n,
-        k=k,
-        activation_dtype=dtype,
         weights_dtype=W,
         platform=FULL_DSP48E2,
         x_tensor=x_tensor,
@@ -68,24 +65,30 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> MatMulKer
     )
 
 
-def result(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> Tensor:
+def result(weights: Any, x_tensor: Any) -> Tensor:
     """The tensor of a MatMul's results: its statement, which reads its facts and weights."""
-    found: Tensor = design_space(matmul(k, n, dtype, weights, x_tensor)).y_tensor
+    found: Tensor = design_space(matmul(weights, x_tensor)).y_tensor
     return found
 
 
-HIDDEN_TENSOR = result(INPUTS, HIDDEN, A, W1, X_TENSOR)
-Y_TENSOR = result(HIDDEN, OUTPUTS, T, W2, LEVELS)
+HIDDEN_TENSOR = result(W1, X_TENSOR)
+Y_TENSOR = result(W2, LEVELS)
 
 
 def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
-    """The Chain, nothing chosen. The input is the network's to state, and the levels'
-    channel's tensor too, as a graph states the thresholding's output. Each MatMul's
-    results are its statement, which reads only its facts and its weights, and each
-    weight channel carries what its MatMul states for it. The hidden channel's tensor,
-    which the thresholding reads, is ``hidden``: the first MatMul's results by default."""
+    """The Chain, nothing chosen (``members``)."""
+    return Network(members(hidden))
+
+
+def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
+    """The Chain's members, as declared. The input is the network's to state, and the
+    levels' channel's tensor too, as a graph states the thresholding's output. Each
+    MatMul's results are its statement, which reads only its facts and its weights, and
+    each weight channel carries what its MatMul states for it. The hidden channel's
+    tensor, which the thresholding reads, is ``hidden``: the first MatMul's results by
+    default."""
     platform = FULL_DSP48E2
-    return Network(
+    return dict(
         {
             "x": wire(
                 platform=platform,
@@ -123,7 +126,7 @@ def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
                 producer=Interface("second", "y_end"),
                 platform=platform,
             ),
-            "first": matmul(INPUTS, HIDDEN, A, W1, X_TENSOR),
+            "first": matmul(W1, X_TENSOR),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=THRESHOLD_DTYPE,
                 thresholds=THRESHOLDS,
@@ -132,7 +135,7 @@ def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
                 input_tensor=hidden,
                 platform=platform,
             ),
-            "second": matmul(HIDDEN, OUTPUTS, T, W2, LEVELS),
+            "second": matmul(W2, LEVELS),
         }
     )
 

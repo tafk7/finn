@@ -151,10 +151,8 @@ TEST = ProducerIdentity("test.root", "1")
 
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
-    facts = dict(
-        m=3, k=4, n=4, activation_dtype=DataType["INT3"], weights_dtype=DataType["INT3"],
-        platform=PLATFORM,
-    )
+    # Its extents and datatypes are its tensors'; known weights state theirs.
+    facts = dict(platform=PLATFORM)
     choices = {
         ("x", "transport"): "direct",
         ("w", "transport"): "direct",
@@ -169,7 +167,8 @@ for memory in ("none", "memstream"):
         # Stored (k, n): the columns of the by-output rows; MatMul's, and the weight
         # channel's value.
         weights = {
-            "w_contents": ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+            "w_contents": ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4)),
+            "weights_dtype": DataType["INT3"],
         }
         bits = 7
         choices |= {

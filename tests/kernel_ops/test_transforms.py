@@ -138,7 +138,7 @@ def test_a_fact_change_that_widens_a_result_reaches_what_follows() -> None:
     activate = kernel_op(model, model.graph.node[1])
     assert activate.input_edges()["x"].element.dtype == wide
     point: Any = activate.point()
-    assert point.activate.input_dtype == wide
+    assert point.input_dtype == wide
     assert [kernel_op(model, node).verify_node() for node in model.graph.node] == [[], [], []]
 
 
@@ -295,7 +295,7 @@ def test_the_graph_keeps_the_thresholds_and_the_kernel_holds_them_as_integers(
     # The graph's thresholds as they were: the same values, unannotated.
     assert np.array_equal(model.get_initializer("thresholds"), source.get_initializer("thresholds"))
     assert not model.has_tensor_datatype("thresholds")
-    formals = kernel_op(model, model.graph.node[1]).facts().formals()
+    formals = kernel_op(model, model.graph.node[1]).facts().arguments()
     assert formals["thresholds"] == IntegerTensorValue.of(((tuple(table),),))
     assert formals["threshold_dtype"] == DataType[threshold_dtype]
     # Exact: every value of the input type, in both graphs.
@@ -321,6 +321,6 @@ def test_a_shared_table_is_held_against_each_readers_input_type() -> None:
         assert stored.dtype == np.float32
         assert np.array_equal(stored, source.get_initializer("thresholds"))
         assert model.get_tensor_datatype(thresholds) == DataType["FLOAT32"]
-        formals = kernel_op(model, nodes[name]).facts().formals()
+        formals = kernel_op(model, nodes[name]).facts().arguments()
         assert formals["thresholds"] == IntegerTensorValue.of(((table,),))
         assert formals["threshold_dtype"] == DataType[threshold_dtype]

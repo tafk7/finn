@@ -22,8 +22,8 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.rtlsim_bench import measure
-from finn.core.space import Available, Rejected
-from finn.dataflow.tensor import ScalarEncoding
+from finn.core.space import Available, Rejected, design_space
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, unreplayed
 from finn.harness.hls import c_simulate
 from finn.kernels.artifacts.contributions import HlsSource
@@ -43,7 +43,7 @@ from kernels.conformance import (
     design_module,
     place,
 )
-from kernels.specs.pool import max_pool, pool
+from kernels.specs.pool import INT4, max_pool, pool
 from kernels.xsim import requires_hls
 
 
@@ -92,6 +92,34 @@ def test_a_strided_window_counts_the_windows_that_fit_and_drops_the_rest() -> No
     assert ends["input_channel"].form.beats == 2 * 3 * 6
     reference = max_pool(values["input_channel"], (2, 3), (2, 2))
     assert reference.shape == (2, 3, 2)
+
+
+def test_an_image_at_the_graphs_rank_is_read_as_it_is() -> None:
+    """(1, H, W, C), the graph's NHWC image: one image, its windows those of (H, W, C),
+    presented in the same order, and its output (1, OH, OW, C)."""
+    flat = pool()
+    image = Tensor((1, *flat["inputs"]["input_channel"].shape), INT4)
+    case = dict(
+        flat,
+        inputs={"input_channel": image},
+        outputs={"output_channel": (1, *flat["outputs"]["output_channel"])},
+    )
+    point, sample, _ = placed(case, 3)
+    kernel = design_member(point, KERNEL)
+    assert kernel.output_tensor.shape == (1, *flat["outputs"]["output_channel"])
+    ranked = _ends(point, PoolKernel, sample, ["input_channel"])["input_channel"]
+    reference, _, _ = placed(flat, 3)
+    plain = _ends(reference, PoolKernel, sample, ["input_channel"])["input_channel"]
+    assert (ranked.form.beat_loops, ranked.form.lane_loops) == (
+        plain.form.beat_loops,
+        plain.form.lane_loops,
+    )
+    assert ranked.markers == plain.markers
+    # Two images are not one: their leading axis is refused.
+    two = PoolKernel(**flat["facts"], input_tensor=Tensor((2, *image.shape[1:]), INT4))
+    refused = design_space(two).query(PoolKernel.extents)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"pool-geometry"}
 
 
 def test_its_output_is_the_windows_and_a_channel_of_another_shape_refuses_it() -> None:

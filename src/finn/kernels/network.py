@@ -24,9 +24,12 @@ findings, and its stored choices wait with it. A read that does not apply (a ker
 without known weights states no contents) leaves the fact absent.
 
 Each Space class is linked once per process (the engine compiles a root of plain
-values once per class); a kernel is bound once per network, a channel once per set of
-facts. A channel's binding is cached by its facts, by value (its tensor, its two ends,
-its platform, a parameter channel's contents), and so is a replay of choices on it.
+values once per class); a kernel is bound once per network, or given bound already (by
+its owner's cache: a graph's node has one binding, ``finn.custom_op.kernels.cache``), a
+channel once per set of facts. A channel's binding is cached by its facts, by value (its
+tensor, its two ends, its platform, a parameter channel's contents), and so is a replay
+of choices on it. The choices each member stores are replayed as it is bound
+(``stored``): what replay refuses of them is dropped, each with why (``dropped``).
 
 A network is immutable, like a point. ``trial({(owner, key): value}, clear=...)`` is
 a change, atomic over the members it reaches:
@@ -46,8 +49,9 @@ Keys are pairs, ``(owner, key)``: a member by name and the decision key in its s
 declaration inside the member's space; the network names the member beside them.
 
 **The module.** A network is emitted as one ``Composed`` module (``module``): each
-member's netlist under its name, in the order the network was declared (its instance
-order, which the text follows), with every boundary channel's AXIS bus. The merge is
+member's netlist under its node (its name, unless the network is given another,
+``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
+(its instance order, which the text follows), with every boundary channel's AXIS bus. The merge is
 ``compose``, one plain function a kernel with children's module calls too
 (``finn.kernels.base``), so the text is the same either way.
 """
@@ -56,10 +60,11 @@ from __future__ import annotations
 
 import functools
 import weakref
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Self, TypeVar
 
 from finn.core.space import (
     Available,
@@ -91,6 +96,7 @@ from finn.kernels.base import BOUNDARY, CLOCK2X, NETLIST, Clocking, PortEnd
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, undecided
 from finn.kernels.control import Exported, top_bus
+from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
 
@@ -465,6 +471,22 @@ def _channel(
 # -- the network ----------------------------------------------------------------------------
 
 
+def _point(name: str, member: Space) -> Space:
+    """Kernel ``name``'s point: bound from its declaration, or the point given (bound
+    already, by its owner's cache)."""
+    try:
+        inspection.model(member)
+    except RequestError:
+        pass
+    else:
+        return member
+    try:
+        point: Space = design_space(member)
+    except RequestError as error:
+        raise NetworkError(f"{name}: not a kernel's declaration: {error}") from error
+    return point
+
+
 def _ranked(kernels: Sequence[str], wires: Mapping[str, Wire]) -> tuple[str, ...]:
     """Kernels in their order, then each channel after the channels it reads, otherwise in
     the order declared."""
@@ -490,8 +512,10 @@ class Network:
     the module docstring. Immutable: ``trial`` and ``with_choices`` return another."""
 
     __slots__ = (
+        "_dropped",
         "_facts",
         "_kernels",
+        "_nodes",
         "_order",
         "_points",
         "_rank",
@@ -505,14 +529,29 @@ class Network:
     _ranked: tuple[str, ...]
     _rank: Mapping[str, int]
     _wires: Mapping[str, Wire]
+    _nodes: Mapping[str, str]
     _points: Mapping[str, Space]
     _unbound: Mapping[str, Unbound]
     _facts: Mapping[str, FactsKey]
+    _dropped: Mapping[Key, tuple[Finding, ...]]
 
-    def __init__(self, members: Mapping[str, Space | Wire]) -> None:
+    def __init__(
+        self,
+        members: Mapping[str, Space | Wire],
+        *,
+        stored: Mapping[Key, object] | None = None,
+        nodes: Mapping[str, str] | None = None,
+    ) -> None:
         """A network of ``members`` by name, in the order its module places them: each a
-        kernel's declaration (a Space with its facts, not yet bound) or a channel's
-        ``Wire``. Its kernels are bound, then each channel from what it reads."""
+        kernel's declaration (a Space with its facts, not yet bound) or its point (bound
+        already, by its owner's cache), or a channel's ``Wire``. Its kernels are bound,
+        then each channel from what it reads.
+
+        ``stored``: the choices each member stores, by key, replayed as it is bound (a
+        channel's once its facts are known; until then it holds them): what replay
+        refuses of them is dropped, with why (``dropped``). ``nodes``: each member's node
+        in the module, the prefix of its instances and of the ends it presents (its name
+        where none is given); two members of one node are refused."""
         kernels: dict[str, Space] = {}
         wires: dict[str, Wire] = {}
         for name, member in members.items():
@@ -525,47 +564,77 @@ class Network:
         undeclared = sorted({read for each in wires.values() for read in each.reads} - set(members))
         if undeclared:
             raise NetworkError(f"the wiring reads {undeclared}, which are no members")
+        named = {name: (nodes or {}).get(name, name) for name in members}
+        shared = [node for node, count in Counter(named.values()).items() if count > 1]
+        if shared:
+            raise NetworkError(
+                "members share a node in the module: "
+                + "; ".join(
+                    f"{node}: {', '.join(name for name in named if named[name] == node)}"
+                    for node in shared
+                )
+            )
+        held: dict[str, dict[str, object]] = {}
+        for (owner, key), value in (stored or {}).items():
+            if owner not in members:
+                raise NetworkError(f"{dotted((owner, key))}: no member of the network stores it")
+            held.setdefault(owner, {})[key] = value
         self._order = tuple(members)
         self._kernels = tuple(kernels)
         self._wires = MappingProxyType(wires)
+        self._nodes = MappingProxyType(named)
         self._ranked = _ranked(self._kernels, wires)
         self._rank = MappingProxyType({name: index for index, name in enumerate(self._ranked)})
         points: dict[str, Space] = {}
+        dropped: dict[Key, tuple[Finding, ...]] = {}
         for name, declared in kernels.items():
-            try:
-                points[name] = design_space(declared)
-            except RequestError as error:
-                raise NetworkError(f"{name}: not a kernel's declaration: {error}") from error
+            point = _point(name, declared)
+            if name in held:
+                replayed, lost, _ = _replayed(point, held[name], {})
+                assert replayed is not None
+                point = replayed
+                dropped |= {(name, key): why for key, why in lost.items()}
+            points[name] = point
         unbound: dict[str, Unbound] = {}
         facts: dict[str, FactsKey] = {}
         for name in self._ranked[len(self._kernels) :]:
             read = self._resolve(name, points, unbound)
             if isinstance(read, Unbound):
-                unbound[name] = read
+                unbound[name] = Unbound(read.member, read.result, held.get(name, {}))
                 continue
-            point, _, refused = _channel(read, {}, {}, ())
-            assert point is not None and not refused
-            points[name], facts[name] = point, read
+            bound, lost, refused = _channel(read, held.get(name, {}), {}, ())
+            assert bound is not None and not refused
+            points[name], facts[name] = bound, read
+            dropped |= {(name, key): why for key, why in lost.items()}
         self._points = MappingProxyType(points)
         self._unbound = MappingProxyType(unbound)
         self._facts = MappingProxyType(facts)
+        self._dropped = MappingProxyType(dropped)
 
-    @classmethod
     def _made(
-        cls,
-        like: Network,
+        self,
         points: Mapping[str, Space],
         unbound: Mapping[str, Unbound],
         facts: Mapping[str, FactsKey],
-    ) -> Network:
-        made = cls.__new__(cls)
-        made._order, made._kernels, made._ranked = like._order, like._kernels, like._ranked
-        made._rank = like._rank
-        made._wires = like._wires
+    ) -> Self:
+        """This network, of its class, with other bindings (a change's): what it keeps
+        beside them carried, what a subclass read of its members read again
+        (``_changed``)."""
+        made = object.__new__(type(self))
+        for klass in type(self).__mro__:
+            for slot in getattr(klass, "__slots__", ()):
+                if hasattr(self, slot):
+                    object.__setattr__(made, slot, getattr(self, slot))
         made._points = MappingProxyType(dict(points))
         made._unbound = MappingProxyType(dict(unbound))
         made._facts = MappingProxyType(dict(facts))
+        made._dropped = MappingProxyType({})
+        made._changed()
         return made
+
+    def _changed(self) -> None:
+        """Called on a network made by a change: a subclass forgets what it read of the
+        members it was made from."""
 
     # -- its members ----------------------------------------------------------------------
 
@@ -588,6 +657,17 @@ class Network:
     def channels(self) -> tuple[str, ...]:
         """Its channels, ranked."""
         return self._ranked[len(self._kernels) :]
+
+    def node(self, name: str) -> str:
+        """Member ``name``'s node in the module: the prefix of its instances and of the
+        ends it presents."""
+        return self._nodes[name]
+
+    @property
+    def dropped(self) -> Mapping[Key, tuple[Finding, ...]]:
+        """The stored choices replay refused as this network was bound, by key, each with
+        why (a network made by a change names its own, ``Trial.dropped``)."""
+        return self._dropped
 
     def wiring(self, name: str) -> Wire:
         """Channel ``name``'s facts as declared."""
@@ -760,7 +840,7 @@ class Network:
             if isinstance(value, Interface):
                 if not isinstance(found, PortEnd):
                     raise NetworkError(f"{name}: {source}.{value.view} is no end: {found!r}")
-                found = found.under(source)
+                found = found.under(self._nodes[source])
             resolved[fact] = found
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
 
@@ -770,7 +850,7 @@ class Network:
 
     def trial(
         self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
-    ) -> Trial[Network]:
+    ) -> Trial[Self]:
         """``changes`` committed and ``clear`` cleared, atomically over the members they
         reach; see the module docstring. ``check`` false skips step 4 (a reopen's clear,
         or a probe of what forces a choice)."""
@@ -840,7 +920,7 @@ class Network:
             changed.append(name)
         if refused:
             return Trial(self, dropped, refused)
-        network = Network._made(self, points, unbound, facts)
+        network = self._made(points, unbound, facts)
         if check:
             refused = network.checked(name for name in changed if name in points)
             if refused:
@@ -865,7 +945,7 @@ class Network:
                 refused[(name, "")] = admitted
         return refused
 
-    def with_choices(self, changes: Mapping[Key, object]) -> Network:
+    def with_choices(self, changes: Mapping[Key, object]) -> Self:
         """``changes`` committed as the engine accepts them (a member's own refusal is its
         admission's to state, not checked here), every stored choice kept; a refusal, or a
         stored choice the change would drop, is a ``NetworkError`` naming each."""
@@ -895,7 +975,7 @@ class Network:
         for name in self._order:
             netlist = self.query(name, NETLIST)
             if isinstance(netlist, Available):
-                netlists.append((name, netlist.value))
+                netlists.append((self._nodes[name], netlist.value))
             else:
                 failed.append((name, netlist))
             if name in self._wires:
@@ -926,9 +1006,9 @@ class Network:
         member = held.member if held is not None else name
         return replace(finding, owner=dotted((member, finding.owner)))
 
-    def own_resources(self) -> None:
-        """What the network uses beside its members: nothing (a root of its own, the
-        shell's, states its ends and static region too)."""
+    def own_resources(self) -> QueryResult[Resources] | None:
+        """What the network uses beside its members: nothing; a network that holds more
+        (a partition's, in its shell: its ends and static region) states its total."""
         return None
 
     def __repr__(self) -> str:

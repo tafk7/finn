@@ -28,7 +28,7 @@ An HLS leaf's request is synthesized for the partition's part before the module 
 emitted (``finn.transformation.kernels.hls.built_hls``, cached).
 
 The partition's boundary, the ends' facts, is not stored on the model: it is read
-from the configured root's boundary channels, each the stream at its free side and
+from the configured network's boundary channels, each the stream at its free side and
 the end the shell places there (``boundary_facts``), wherever it is needed (the
 interface description, the testbench).
 
@@ -37,11 +37,11 @@ The part and the clock period are the model's build target (``read_target(model)
 
 The partition's choices are its nodes' and its channels' (each on its tensor,
 ``finn.channel``), every one stored where it is created and replaced by the
-exploration: the root is replayed from them (a stale choice refuses, named), a
+exploration: the network is replayed from them (a stale choice refuses, named), a
 Decision with one viable case is forced, and an open choice refuses, named
 (``configured_root``). A body whose FIFOs were sized at another folding than its own
 (``finn.choices/fifos_stale``) is refused (``fifos-stale``). The body's graph
-inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
+inputs and outputs, in order, are the network's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
 Before Vivado runs, the emitted top is elaborated with slang
@@ -59,7 +59,7 @@ bus's register map), for a user who integrates the IP in their own design.
 
 ``run_synth`` synthesizes the module out of context and packages the checkpoint
 instead of the sources, as CreateStitchedIP does for Vitis and SLASH. Its
-hierarchical utilization report is read per member of the shell root by
+hierarchical utilization report is read per member of the network by
 ``ooc_member_resources``.
 
 ``ElaboratePartition`` is a check, not a build step: it emits the same module and
@@ -98,7 +98,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
 from finn.core.graph.partition import design_digest
 from finn.core.space import Finding, FindingKind
-from finn.custom_op.kernels.shell import configured_root, member, shell_root
+from finn.custom_op.kernels.shell import Configured, configured_root
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
@@ -106,7 +106,6 @@ from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
 from finn.kernels.artifacts.module import Abi, declared_registers, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.kernels.configure import member_of
 from finn.kernels.ends import EndContract
 from finn.platform.capabilities import Resources
 from finn.resources import finnlib_root
@@ -136,11 +135,12 @@ def end_facts(contract: EndContract) -> dict[str, Any]:
     }
 
 
-def free_side(point: Any, tensor: str) -> Any:
-    """The stream at the free side of the boundary channel carrying ``tensor``: the
-    channel's end no kernel of the partition owns (a ``StreamContract``), as the channel
-    derives it (``Channel.free_side``)."""
-    return getattr(point, member(tensor)).free_side
+def free_side(point: Configured, tensor: str) -> Any:
+    """The stream at the free side of the boundary channel carrying ``tensor`` in a
+    configured network (``configured_root``): the channel's end no kernel of the
+    partition owns (a ``StreamContract``), as the channel derives it
+    (``Channel.free_side``)."""
+    return point.channel(tensor).free_side
 
 
 def stream_order(form: Traversal) -> dict[str, Any]:
@@ -160,7 +160,7 @@ def stream_order(form: Traversal) -> dict[str, Any]:
 
 
 def boundary_facts(
-    model: ModelWrapper, point: Any, boundary: Sequence[tuple[str, str]], label: str
+    model: ModelWrapper, point: Configured, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Each boundary port's facts, inputs then outputs, in port order: the port, the ONNX
     tensor and its shape; the stream at the channel's free side, the partition's own end
@@ -169,7 +169,7 @@ def boundary_facts(
     ``None``."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
-        channel = getattr(point, member(tensor))
+        channel = point.channel(tensor)
         side = free_side(point, tensor)
         element = side.element
         facts = {
@@ -189,7 +189,7 @@ def boundary_facts(
 
 def interface_description(
     model: ModelWrapper,
-    point: Any,
+    point: Configured,
     boundary: Sequence[tuple[str, str]],
     ip_name: str,
 ) -> dict[str, Any]:
@@ -244,18 +244,18 @@ def partition_utilization_report(project: Path) -> Path:
 
 def ooc_member_resources(model: ModelWrapper, project: Path) -> dict[str, Any]:
     """The out-of-context resources of a partition packaged with ``run_synth`` in
-    ``project``, per member of its shell root: the top's ``total``, and each member's
-    instances summed (``members``, by member path). The instances are the module's that
-    PackagePartition packaged (``configured_root``). An instance is
-    its member's by its label (``instance_name``), named as the shell root's members;
-    an instance no member claims is stated under its netlist name.
+    ``project``, per member of its network: the top's ``total``, and each member's
+    instances summed (``members``, by graph name). The instances are the module's that
+    PackagePartition packaged (``configured_root``). An instance is its member's by its
+    label (``instance_name``), below the member's node in the module; an instance no
+    member claims is stated under its netlist name.
     Synthesis flattens small instances into the top: what no reported instance holds is
     ``unattributed`` (the total less the members'), and the module's instances with no
     row are ``unreported_instances``. Every count is Vivado's synthesis estimate out of
     context, not placed."""
     report = partition_utilization_report(project)
-    paths = shell_root(model, model.graph.node).members
     point, _ = configured_root(model, "the packaged partition")
+    owners = {point.node(name): name for name in point.network.members}
     labels = {instance_name(label): label for label, _ in point.module.fragment.instances}
     rows = vivado.hierarchical_utilization(report.read_text())
     members: dict[str, Resources] = {}
@@ -266,8 +266,8 @@ def ooc_member_resources(model: ModelWrapper, project: Path) -> dict[str, Any]:
         counted = resources_of(counts)
         reported.add(instance)
         label = labels.get(instance)
-        path = None if label is None else member_of(paths, label)
-        key = path or instance
+        owner = None if label is None else owners.get(label.partition(".")[0])
+        key = owner or instance
         members[key] = members[key] + counted if key in members else counted
     total = vars(resources_of(rows[0][2]))
     claimed = sum(members.values(), Resources())

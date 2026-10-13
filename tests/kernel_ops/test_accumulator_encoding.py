@@ -42,9 +42,8 @@ from qonnx.util.basic import qonnx_make_model
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, shell_root
+from finn.custom_op.kernels.shell import configured_root, network
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.configure import undecided
 from finn.kernels.explore import Pinned, Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
@@ -204,22 +203,22 @@ def test_each_result_is_its_ranges_smallest_encoding_and_its_cores_accumulator(n
     for op, result, weights, accumulator in zip(
         _matmuls(model), case.results, case.weights, case.accumulators, strict=True
     ):
-        root = op.base()
+        bound = op.bound()
         # Inference writes the result type on the output; the weights' owner states them
         # narrowed to their values, and the core reads that encoding.
         assert model.get_tensor_datatype(op.onnx_node.output[0]).name == result
-        assert root.matmul.result_type.name == result
-        assert str(root.w.tensor.element) == weights
-        rtl = dict(op.point().matmul.compute.parameters)
+        assert bound.result_type.name == result
+        assert str(bound.w_carried.element) == weights
+        rtl = dict(op.point().compute.parameters)
         assert rtl["ACCU_WIDTH"] == accumulator
-        assert rtl["WEIGHT_WIDTH"] == root.w.tensor.element.bits
+        assert rtl["WEIGHT_WIDTH"] == bound.w_carried.element.bits
 
 
 def test_a_thresholding_reads_an_unsigned_result() -> None:
     model = kernel_ops(CASES["unsigned"])
     (thresholding,) = [kernel_op(model, n) for n in model.graph.node if n.op_type != "MatMul"]
     point: Any = thresholding.point()
-    assert point.x.tensor.element == ScalarEncoding(DataType["UINT6"])
+    assert point.input.tensor.element == ScalarEncoding(DataType["UINT6"])
     assert thresholding.verify_node() == []
 
 
@@ -229,7 +228,7 @@ def test_a_pinned_core_is_the_one_explored(name: str) -> None:
     nothing conversion stored under the packed core is left."""
     model = kernel_ops(CASES[name], target=VCK190, compute="int8_dsp58")
     for op in _matmuls(model):
-        assert type(op.point().matmul.compute).__name__ == "Int8Dsp58DotpKernel"
+        assert type(op.point().compute).__name__ == "Int8Dsp58DotpKernel"
         stored = op.choices()
         assert stored["compute"] == "int8_dsp58"
         assert not [key for key in stored if key.startswith("compute.packed.")]
@@ -238,16 +237,18 @@ def test_a_pinned_core_is_the_one_explored(name: str) -> None:
 def test_narrowed_weights_shrink_the_memory_image() -> None:
     """The source stores each weight at its stated width: INT8-typed ternary weights at two
     bits, so a beat of PE x SIMD = 2 x 2 weights is 8 bits, not 32."""
-    (op,) = _matmuls(kernel_ops(CASES["ternary"]))
+    model = kernel_ops(CASES["ternary"])
+    (op,) = _matmuls(model)
     point: Any = op.point()
-    assert point.w.tensor.element.bits == 2
-    assert point.w.source.output.axis.payload_bits == 2 * 2 * 2
-    assert point.matmul.compute.w.axis.payload_bits == 2 * 2 * 2
+    assert point.w_carried.element.bits == 2
+    weights = network(model, model.graph.node).member(op.onnx_node.input[1])
+    assert weights.source.output.axis.payload_bits == 2 * 2 * 2
+    assert point.compute.w.axis.payload_bits == 2 * 2 * 2
 
 
 def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
     """The input and the expected output as each boundary port's words, row-major in its
-    lanes, from the partition's boundary facts (its configured root's)."""
+    lanes, from the partition's boundary facts (its configured network's)."""
     point, boundary = configured_root(model, "partition")
     inputs, outputs = boundary_facts(model, point, boundary, "partition")
     words = {}
@@ -263,8 +264,9 @@ def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:
 
 def _computes(case: Case, directory: Path, **options: Any) -> None:
     model = kernel_ops(case, **options)
-    root = shell_root(model, model.graph.node)
-    assert undecided(root.point, "*") == [] and not root.dropped
+    bound = network(model, model.graph.node)
+    assert bound.undecided() == () and not bound.stale
+    point, _ = configured_root(model, "partition")
     low, high = int(DataType[case.activations].min()), int(DataType[case.activations].max())
     k = len(case.layers[0].weights)
     x = np.random.default_rng(5).integers(low, high + 1, size=(ROWS, k)).astype(np.float32)
@@ -277,11 +279,11 @@ def _computes(case: Case, directory: Path, **options: Any) -> None:
     (port_in,) = [port for port in words if port.startswith("s_axis")]
     (port_out,) = [port for port in words if port.startswith("m_axis")]
     stream_through(
-        root.point.module,
+        point.module,
         directory,
         inputs={port_in: words[port_in]},
         outputs={port_out: words[port_out]},
-        cycles=root.point.cycles,
+        cycles=point.cycles,
         toolchain=host_toolchain(),
     )
 

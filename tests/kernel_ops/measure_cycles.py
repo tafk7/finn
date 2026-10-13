@@ -46,7 +46,13 @@ from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.graph.annotations.channel import channel_choices
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import link_stream, measure
-from finn.custom_op.kernels.shell import ShellRoot, member, save_channels, shell_root
+from finn.custom_op.kernels.shell import (
+    Partition,
+    configured_root,
+    member,
+    network,
+    save_channels,
+)
 from finn.harness.toolchain import print_identity
 from finn.toolchain.launcher import host_toolchain
 
@@ -75,8 +81,8 @@ class Layer:
     """Alone, the first frame's latency."""
 
 
-def schedule_of(root: ShellRoot, node: NodeProto) -> Any:
-    kernel = getattr(root.point, member(node.name))
+def schedule_of(bound: Partition, node: NodeProto) -> Any:
+    kernel = bound.member(node.name)
     return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
 
 
@@ -171,20 +177,21 @@ def measure_partition(
     """The stitched partition of ``model``'s nodes and each node alone, measured."""
     context = execute_onnx(model, feed, return_full_exec_context=True)
     nodes = list(model.graph.node)
-    root = shell_root(model, nodes, name=label)
-    inputs, outputs = boundary_words(model, root.point, root.boundary, context, label)
+    point, boundary = configured_root(model, label)
+    bound = network(model, nodes, name=label)
+    inputs, outputs = boundary_words(model, point, boundary, context, label)
     print(f"== {label}: stitched", flush=True)
     stitched = measure(
-        root.point.module,
+        point.module,
         directory / "stitched",
         inputs=inputs,
         outputs=outputs,
         frames=frames,
-        cycles=root.point.cycles,
+        cycles=point.cycles,
         toolchain=host_toolchain(),
     )
     # The hop out of each layer, by the layer's leaves: its member and what lies under it.
-    links = root.point.module.fragment.links
+    links = point.module.fragment.links
     hops: list[str] = []
     for node in nodes:
         name = member(node.name)
@@ -203,20 +210,18 @@ def measure_partition(
     layers = []
     recorded = {"stitched": dict(stitched.beats)}
     for index, node in enumerate(nodes):
-        schedule = schedule_of(root, node)
+        schedule = schedule_of(bound, node)
         body = alone_body(model, node)
-        alone_root = shell_root(body, body.graph.node, name=node.name)
-        alone_in, alone_out = boundary_words(
-            body, alone_root.point, alone_root.boundary, context, node.name
-        )
+        alone_point, alone_boundary = configured_root(body, node.name)
+        alone_in, alone_out = boundary_words(body, alone_point, alone_boundary, context, node.name)
         print(f"== {label}: {node.name} alone", flush=True)
         alone = measure(
-            alone_root.point.module,
+            alone_point.module,
             directory / node.name,
             inputs=alone_in,
             outputs=alone_out,
             frames=frames,
-            cycles=alone_root.point.cycles,
+            cycles=alone_point.cycles,
             toolchain=host_toolchain(),
         )
         recorded[node.name] = dict(alone.beats)

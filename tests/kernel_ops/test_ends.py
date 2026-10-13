@@ -3,12 +3,12 @@
 
 """The ends a shell offers on its boundary channels (``finn.kernels.ends``).
 
-The shell root reads its target's shell row (``finn.platform.shells``), whose offer places
+A partition's network reads its target's shell row (``finn.platform.shells``), whose offer places
 an ``IODMA_hls`` end on each free side that meets the host: forced, so nothing is
 persisted; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
 both boundaries through it; its resources by its widths are the shell's, which
-the shell root sums with its partition's and its static region's. On the Chain
+the shell sums with its partition's and its static region's. On the Chain
 (``kernels.chain`` as KernelOps), and on TFC_W2A2 for Ultra96 in the Zynq shell
 (``pynq``), whose memory port is 128 bits wide.
 """
@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from kernels.helpers import built as module_built
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
@@ -29,17 +30,18 @@ from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.partition import partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.shell import (
+    Partition,
     ShellResources,
     configured_root,
+    network,
     persist,
     shell_resources,
-    shell_root,
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.configure import chosen
+from finn.kernels.base import RESOURCES
 from finn.kernels.ends import (
     DIVISIBLE,
     IODMA_HLS,
@@ -190,90 +192,92 @@ def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
 # -- on the Chain --------------------------------------------------------------------------
 
 
-def chain_root(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> Any:
-    """The Chain's shell root for ``target`` (its model's target, restated)."""
+def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> Partition:
+    """The Chain's network for ``target`` (its model's target, restated)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    return shell_root(model, model.graph.node, name="chain")
+    return network(model, model.graph.node, name="chain")
 
 
-def test_the_shell_root_reads_its_targets_shell_row() -> None:
-    root = chain_root()
-    assert root.row == shell_row("pynq", "Ultra96") and root.row.ends == (iodma_hls(128),)
-    assert chain_root(TARGET).row == IP_ROW
+def test_the_network_reads_its_targets_shell_row() -> None:
+    bound = chain_network()
+    assert bound.row == shell_row("pynq", "Ultra96") and bound.row.ends == (iodma_hls(128),)
+    assert chain_network(TARGET).row == IP_ROW
 
 
 def test_an_offer_places_a_forced_end_on_each_free_side() -> None:
-    root = chain_root()
-    assert root.ends == ("x", "y")
-    point = root.point
+    bound = chain_network()
+    assert bound.ends == ("x", "y")
     # Forced: no key of an end is committed, so none is persisted.
-    assert not [key for key in chosen(point) if ".end" in key]
-    x, y = point.x.end_contract, point.y.end_contract
+    assert not [key for key in bound.chosen() if key[1].startswith("end")]
+    x, y = bound.member("x").end_contract, bound.member("y").end_contract
     # x: two INT3 lanes padded to a byte, 6 beats; 48 bits a frame share 16 with 128.
     assert (x.direction, x.port, x.tdata, x.beats, x.lanes) == ("in", "s_axis_0", 8, 6, 2)
     assert (x.element.dtype.name, x.memory_width, x.words, x.converter) == ("INT3", 16, 3, True)
     assert (y.direction, y.port, y.memory_width, y.words) == ("out", "m_axis_0", 32, 3)
     # The end's cycles are the channel's, beside its stages': y has none of its own.
-    assert point.y.cycles == y.cycles == 6 + 4
-    assert point.x.cycles == max(12, x.cycles)
+    assert bound.member("y").cycles == y.cycles == 6 + 4
+    assert bound.member("x").cycles == max(12, x.cycles)
 
 
-def test_the_shell_root_s_resources_are_its_partition_s_its_ends_and_its_static_region_s() -> None:
+def test_the_shell_s_resources_are_its_partition_s_its_ends_and_its_static_region_s() -> None:
     """The Chain's two ends on pynq, each stated by its widths: two memory ports into
     the SmartConnect, two AXI-Lite buses (the ends') from the interconnect. On ip:
     neither ends nor a static region."""
     model = kernel_model()
     configure_partition(model)
-    point = chain_root(model=model).point
-    split = shell_resources(point)
+    bound = chain_network(model=model)
+    split = shell_resources(bound)
     assert isinstance(split, ShellResources)
-    x, y = point.x.end_contract, point.y.end_contract
+    x, y = bound.member("x").end_contract, bound.member("y").end_contract
     assert split.ends == (
         ("x", iodma_hls_resources(direction="in", intf_width=16, stream_width=8)),
         ("y", iodma_hls_resources(direction="out", intf_width=32, stream_width=y.tdata)),
     )
     assert (x.memory_width, x.tdata, y.memory_width) == (16, 8, 32)
     assert split.static_region == ZYNQ_STATIC_REGION.resources(masters=2, slaves=2)
-    assert split.partition == total(item.value for item in point.member_resources)
+    members = [bound.query(name, RESOURCES) for name in bound.members]
+    assert split.partition == total(each.value for each in members if isinstance(each, Available))
     assert (
-        point.resources
-        == split.total
-        == total((split.partition, *(used for _, used in split.ends + split.static_region)))
+        bound.own_resources()
+        == Available(split.total)
+        == Available(
+            total((split.partition, *(used for _, used in split.ends + split.static_region)))
+        )
     )
-    ip = chain_root(TARGET, model=model).point
+    ip = chain_network(TARGET, model=model)
     assert shell_resources(ip) == ShellResources(split.partition, (), ())
-    assert ip.resources == split.partition
+    assert ip.own_resources() == Available(split.partition)
 
 
-def test_a_shell_root_waits_for_its_members_resources() -> None:
-    waiting = shell_resources(chain_root().point)
+def test_a_network_waits_for_its_members_resources() -> None:
+    waiting = shell_resources(chain_network())
     assert isinstance(waiting, tuple) and waiting
     assert {finding.code for finding in waiting} == {"decision-unassigned"}
 
 
 def test_the_ip_shell_offers_no_end() -> None:
-    root = chain_root(TARGET)
-    assert root.ends == ()
-    assert not root.point.x.ended and root.point.y.cycles == 0
+    bound = chain_network(TARGET)
+    assert bound.ends == ()
+    assert not bound.member("x").ended and bound.member("y").cycles == 0
 
 
 def test_an_end_binds_no_rtl() -> None:
     model = kernel_model()
     configure_partition(model)
-    ip = chain_root(TARGET, model=model).point.module
-    ended = chain_root(model=model).point.module
+    ip = module_built(chain_network(TARGET, model=model), "chain")
+    ended = module_built(chain_network(model=model), "chain")
     assert ended.fragment == ip.fragment
     assert ended.abi == ip.abi
 
 
-def test_an_ended_point_persists_and_replays_as_itself() -> None:
+def test_an_ended_network_persists_and_replays_as_itself() -> None:
     model = kernel_model()
-    root = chain_root(model=model)
-    held = persist(model, root, root.point)
+    bound = chain_network(model=model)
+    held = persist(model, bound)
     assert not [key for values in held.values() for key in values if "end" in key.split(".")]
-    again = chain_root(model=model)
-    assert chosen(again.point) == chosen(root.point) and not again.dropped
+    again = chain_network(model=model)
+    assert again.chosen() == bound.chosen() and not again.stale
 
 
 def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
@@ -285,15 +289,15 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 
 
 def test_sizing_reads_a_free_side_its_end_paces() -> None:
-    ended = chain_root().point
-    x = ended.x.end_contract
-    supply, _ = ends(ended.x)
+    ended = chain_network()
+    x = ended.member("x").end_contract
+    supply, _ = ends(ended.member("x"))
     assert supply == Pattern(x.times, x.cycles)
-    y = ended.y.end_contract
-    _, accept = ends(ended.y)
+    y = ended.member("y").end_contract
+    _, accept = ends(ended.member("y"))
     assert accept == Pattern(y.times, y.cycles)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        ends(chain_root(TARGET).point.x)
+        ends(chain_network(TARGET).member("x"))
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------

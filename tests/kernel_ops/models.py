@@ -4,7 +4,7 @@
 """Small ONNX models of KernelOps, and of the source graphs conversion reads.
 
 Also the Chain (``kernels.chain``) as KernelOps with its choices saved (each kernel's
-on its node, each channel's on its tensor), its partition root rebuilt, and a
+on its node, each channel's on its tensor), its partition's network bound again, and a
 KernelOp's schema digest."""
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 from kernels import chain
-from kernels.helpers import ADAPTER_RAM_STYLES, with_adapter_memories
+from kernels.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -23,8 +23,7 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp, kernel_op
-from finn.custom_op.kernels.shell import ShellRoot, persist, save_channels, shell_root
-from finn.kernels.configure import undecided
+from finn.custom_op.kernels.shell import Partition, network, persist, save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -340,20 +339,20 @@ def streamed_w2_model() -> ModelWrapper:
     return model
 
 
-def open_memories(root: ShellRoot) -> tuple[Any, list[str]]:
-    """The root's point and its open adapter memories."""
-    return root.point, undecided(root.point, ADAPTER_RAM_STYLES)
+def open_memories(bound: Partition) -> tuple[Partition, list[str]]:
+    """The network and its open adapter memories, by ``member.key``."""
+    return bound, open_choices(bound, ADAPTER_RAM_STYLES)
 
 
-def configure_partition(model: ModelWrapper) -> tuple[ShellRoot, Any]:
-    """The root, its open adapter memories chosen (each its baseline) and saved on their
-    owners, rebuilt."""
-    root = shell_root(model, model.graph.node, name="chain")
-    persist(model, root, with_adapter_memories(root.point))
-    root = shell_root(model, model.graph.node, name="chain")
-    point, open_styles = open_memories(root)
-    assert open_styles == [] and not root.dropped
-    return root, point
+def configure_partition(model: ModelWrapper) -> Partition:
+    """The partition's network, its open adapter memories chosen (each its baseline) and
+    saved on their owners, bound again."""
+    bound = network(model, model.graph.node, name="chain")
+    persist(model, with_adapter_memories(bound))
+    bound = network(model, model.graph.node, name="chain")
+    _, open_styles = open_memories(bound)
+    assert open_styles == [] and not bound.stale
+    return bound
 
 
 __all__ = [

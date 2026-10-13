@@ -145,7 +145,10 @@ def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
     return found
 
 
-def choose(network: Network, choices: Mapping[str, object]) -> Network:
+N = TypeVar("N", bound=Network)
+
+
+def choose(network: N, choices: Mapping[str, object]) -> N:
     """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal, or a
     stored choice the change would drop, is a ``NetworkError`` (a ``ValueError``)."""
     return network.with_choices(keyed(choices)) if choices else network
@@ -312,34 +315,30 @@ def matmul_network(
     realization: str | None = None,
 ) -> Network:
     """A MatMul of ``space_type`` (``matmul``; a ``MatMulKernel`` by default) on the
-    channels of a network, its tensors its own views of them, the weights given to it;
-    see the module docstring. ``realization`` is committed where given."""
+    channels of a network: its activations ``(m, k)`` (``(m, k, n)`` depthwise) of
+    ``activation_dtype``, its weights known (``weights``, declared ``weights_dtype``) or
+    streamed (``(k, n)`` of ``weights_dtype``), its results its own statement; see the
+    module docstring. ``realization`` is committed where given."""
     space_type = space_type or MatMulKernel
+    shape = (m, k, n) if form is Form.DEPTHWISE else (m, k)
     facts: dict[str, Any] = dict(
-        m=m,
-        n=n,
-        k=k,
-        form=form,
-        activation_dtype=activation_dtype,
-        weights_dtype=weights_dtype,
-        platform=platform,
+        form=form, platform=platform, x_tensor=Tensor(shape, ScalarEncoding(activation_dtype))
     )
     if weights is not None:
-        facts["w_contents"] = weights
+        facts |= {"w_contents": weights, "weights_dtype": weights_dtype}
+    else:
+        facts["w_tensor"] = Tensor((k, n), ScalarEncoding(weights_dtype))
     views = _views(space_type, facts, realization)
     tensors: dict[str, Any] = {
-        "x_tensor": _view(views, "activation_tensor"),
+        "x_tensor": facts.pop("x_tensor"),
         "y_tensor": _view(views, "y_tensor"),
     }
     if weights is None:
         # Unknown weights are MatMul's view of them at the realization committed; with
         # none, as stored, (K, N) in their datatype.
         stated = views.query(type(views).weight_tensor)
-        tensors["w_tensor"] = (
-            stated.value
-            if isinstance(stated, Available)
-            else Tensor((k, n), ScalarEncoding(weights_dtype))
-        )
+        given = facts.pop("w_tensor")
+        tensors["w_tensor"] = stated.value if isinstance(stated, Available) else given
     several = weight_sets > 1
     set_tensor = Tensor((m,), ScalarEncoding(set_index_dtype(weight_sets)))
     members: dict[str, Space | Wire] = {
@@ -544,6 +543,12 @@ ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
 
 P = TypeVar("P", bound=Space | Network)
+
+
+def open_choices(network: Network, pattern: str) -> list[str]:
+    """The open choices of ``network`` matching ``pattern`` (``fnmatch``), as
+    ``member.key``."""
+    return _undecided(network, pattern)
 
 
 def _undecided(subject: Space | Network, pattern: str) -> list[str]:

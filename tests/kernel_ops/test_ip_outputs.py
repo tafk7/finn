@@ -38,7 +38,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import FindingKind
-from finn.custom_op.kernels.shell import configured_root, shell_root
+from finn.custom_op.kernels.shell import configured_root, network
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
@@ -147,7 +147,7 @@ def test_the_hierarchical_report_is_read_by_depth_in_the_devices_units() -> None
     ]
 
 
-def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
+def test_out_of_context_resources_are_stated_per_member_of_the_network(
     tmp_path: Path,
 ) -> None:
     # Its adapters' memories at their baselines: the module is the one packaged.
@@ -178,7 +178,7 @@ def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
         "first": 4,
         "activate": 5,
     }
-    assert set(found["members"]) <= set(shell_root(model, model.graph.node).members)
+    assert set(found["members"]) <= set(network(model, model.graph.node).members)
     # The flattened instance's resources are the top's, attributed to no member.
     assert found["unattributed"] == {"lut": 10, "ff": 6, "bram18": 0, "uram": 0, "dsp": 0}
     assert found["unreported_instances"] == ["second.compute.packed"]

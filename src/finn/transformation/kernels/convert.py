@@ -8,10 +8,12 @@ order, inferring shapes and datatypes as it goes (``infer_node``), so each node 
 inputs as the nodes before it left them.
 
 The KernelOps anchored at a node's op type each try to match it. The matches are tried
-on a copy of the model, largest first, and the kernels are asked to admit each
-(``KernelOp.admission``). The first match admitted replaces the nodes it covers with one
+on a copy of the model, largest first, and each is asked to admit it
+(``KernelOp.admission``: its kernel, and the node alone as a network, whose channels
+must be realized). The first match admitted replaces the nodes it covers with one
 KernelOp, which keeps the anchor's name and the covered nodes' outside tensors, and its
-choices are set to their baselines (``baseline_kernel_op``). A node that no match
+choices are set to their baselines on the node alone (``baseline_kernel_op``): its
+kernel's, never a channel's, so nothing is written on a tensor. A node that no match
 converts stays on the host, unchanged. Two KernelOps matching the same nodes is an
 authoring error: one computation is one KernelOp, its alternatives a decision of its
 kernel.
@@ -44,8 +46,6 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.graph.walk import between, upstream
 from finn.core.space import Finding, FindingKind, by_code, finding_record, finding_text
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
-from finn.custom_op.kernels.rooted import Rooted
-from finn.kernels.explore import ExploreError, Seam
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
 
@@ -307,17 +307,13 @@ def _trial(
 
 
 def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object]:
-    """Set the KernelOp ``node``'s own choices to their baselines (``Seam.baseline``)
-    and store them as its attributes. Channel choices wait for the cut, where each
-    channel has both its ends (``baseline_choices``). Returns the node's choices."""
+    """Set the KernelOp ``node``'s own choices to their baselines on the node alone
+    (``KernelOp.baselined``: its one-node network) and store them as its attributes: its
+    kernel's choices only, nothing on a tensor. Channel choices wait for the cut, where
+    each channel has both its ends (``baseline_choices``). Returns the node's choices."""
     op = kernel_op(model, node)
-    ports = tuple(port for port in (*op.ports, *op.outputs) if port is not None)
-    rooted = Rooted(op.point(), (op.member, *ports), {op.member: node.name})
-    try:
-        baselined = Seam().baseline(rooted)
-    except ExploreError as error:
-        raise KernelOpError(f"{op.label}: no baseline: {error}") from error
-    own = {key: value for (owner, key), value in baselined.chosen().items() if owner == node.name}
+    baselined = op.baselined()
+    own = {key: value for (owner, key), value in baselined.chosen().items() if owner == op.label}
     op.save(own)
     return op.choices()
 
