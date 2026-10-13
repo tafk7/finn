@@ -93,8 +93,12 @@ def test_each_channel_owns_its_refusal_and_independent_refusals_are_all_visible(
     assert isinstance(point.query("second", NETLIST), Rejected)
     refusal = module_of(point, "constants")
     assert isinstance(refusal, Rejected)
-    # Each finding names its channel, from the network.
-    assert {f.owner for f in refusal.findings} == {"first.well_formed", "second.well_formed"}
+    # Each finding keeps its owner, the channel's own declaration; the network names the
+    # channel beside it.
+    assert {(f.owner, dict(f.details)["tensor"]) for f in refusal.findings} == {
+        ("well_formed", "first"),
+        ("well_formed", "second"),
+    }
     assert {f.code for f in refusal.findings} == {"channel-tensor"}
     # One channel refusing leaves the other channel's netlist accepted.
     mixed = constants(first=wide)
