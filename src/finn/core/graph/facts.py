@@ -1,9 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What the KernelOps read of a tensor: its datatype annotation, its shape, and the
-values of an initializer of integers. A missing shape or annotation raises
-``FactUnstated``; anything that contradicts the graph raises ``KernelOpError``.
+"""What the KernelOps read of a tensor: its datatype annotation with its range, its
+shape, and the values of an initializer of integers; and what they write of one, its
+element (``state``). A missing shape or annotation raises ``FactUnstated``; anything
+that contradicts the graph raises ``KernelOpError``.
+
+A tensor's range is part of its datatype fact (``qonnx.core.ranges``, stored on the
+model by ``qonnx.core.tensor_ranges``): written with the datatype in one call
+(``ModelWrapper.set_tensor_datatype``), so that a datatype stated without its range
+clears it. A tensor that states none reads as its datatype's full range.
 """
 
 from __future__ import annotations
@@ -17,6 +23,8 @@ from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
     initializer_value_summary,
 )
+from qonnx.core import tensor_ranges
+from qonnx.core.metadata import MetadataError
 
 from finn.core.graph.errors import FactUnstated, KernelOpError
 from finn.dataflow.datatypes import (
@@ -64,20 +72,43 @@ def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
     return found
 
 
+def element(model: ModelWrapper, tensor: str, label: str) -> ScalarEncoding:
+    """The element of ``tensor``, not an initializer: its datatype over the range it
+    states with it (``qonnx.core.tensor_ranges.stated``), else over its datatype's full range.
+    A stored range that is malformed, or that its datatype does not hold, is refused."""
+    dtype = datatype(model, tensor, label)
+    try:
+        found = tensor_ranges.stated(model, tensor)
+        return ScalarEncoding(dtype, found)
+    except (MetadataError, ValueError) as error:
+        raise KernelOpError(f"{label}: {tensor}: {error}") from error
+
+
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
     """The tensor as a fact, which a kernel's port reads and a channel carries: the
     graph's shape, whole (a kernel that reads another view of it, MatMul's rows, states
-    so), and its datatype. For an initializer of integers, the datatype is narrowed to
-    its values' range (``stored_element``: INT8-typed ternary weights become INT2 over
-    [-1, 1])."""
-    dtype = datatype(model, tensor, label)
+    so), and its element, its datatype over its range (``element``: its producer's
+    statement, as inference wrote it). For an initializer of integers, the datatype is
+    narrowed to its values' range (``stored_element``: INT8-typed ternary weights become
+    INT2 over [-1, 1])."""
     stored = model.get_initializer(tensor)
-    element = (
-        stored_element(dtype, (int(stored.min()), int(stored.max())))
-        if stored is not None and is_ordinary_integer(dtype)
-        else ScalarEncoding(dtype)
-    )
-    return Tensor(shape(model, tensor, label), element)
+    if stored is None:
+        found = element(model, tensor, label)
+    else:
+        dtype = datatype(model, tensor, label)
+        found = (
+            stored_element(dtype, (int(stored.min()), int(stored.max())))
+            if is_ordinary_integer(dtype)
+            else ScalarEncoding(dtype)
+        )
+    return Tensor(shape(model, tensor, label), found)
+
+
+def state(model: ModelWrapper, tensor: str, stated: ScalarEncoding) -> None:
+    """Write ``stated`` as ``tensor``'s datatype and range, one fact in one call
+    (``set_tensor_datatype``): a range no tighter than the datatype's is stored as none,
+    and clears one stored before."""
+    model.set_tensor_datatype(tensor, stated.dtype, stated.value_range)
 
 
 def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
@@ -125,7 +156,9 @@ __all__ = [
     "admitted",
     "datatype",
     "edge_tensor",
+    "element",
     "integer_tensor",
     "known_shape",
     "shape",
+    "state",
 ]

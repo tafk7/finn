@@ -76,7 +76,8 @@ def test_facts_come_from_the_model() -> None:
     assert op(model).bound().w_carried.element.value_range.span == value.range
     # The output keeps the input's leading axes: the kernel states it at their rank.
     (result,) = op(model).output_tensors().values()
-    assert op(model).infer_output_tensors(model) == {"y": ((1, 3, 4), result.element.dtype)}
+    assert op(model).infer_output_tensors(model) == {"y": result}
+    assert result.shape == (1, 3, 4)
     streamed = matmul_model(stored=False)
     assert op(streamed).facts().kernel is MatMulKernel
     assert op(streamed).facts().owned == ()

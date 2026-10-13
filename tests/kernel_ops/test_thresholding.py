@@ -10,6 +10,7 @@ import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.ranges import TensorRange
 from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.errors import KernelOpError
@@ -38,8 +39,10 @@ def test_facts_and_the_output() -> None:
         (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
     )
     assert formals["bias"] == -1
-    ((dims, dtype),) = op(model).infer_output_tensors(model).values()
-    assert dims == (3, 4) and dtype.name == "INT3"  # [-1, 2], in the RTL's output width
+    (tensor,) = op(model).infer_output_tensors(model).values()
+    # [-1, 2], in the RTL's output width, over that range
+    assert tensor.shape == (3, 4) and tensor.element.dtype.name == "INT3"
+    assert tensor.element.value_range == TensorRange(-1, 2)
     assert op(thresholding_model()).output_tensors()["y"].element.dtype.name == "UINT2"
 
 

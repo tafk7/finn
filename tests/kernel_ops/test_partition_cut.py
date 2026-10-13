@@ -119,13 +119,14 @@ def iodma(direction: str, memory_width: int) -> dict[str, Any]:
 X = port("s_axis_0", "x", [3, 4], "INT3", 2, 6, 8)
 # The weights' repetition stays at the boundary: three rows, 4 beats each.
 W2 = port("s_axis_1", "w2", [4, 4], "INT3", 4, 12, 16)
-Y = port("m_axis_0", "y", [3, 4], "INT7", 2, 6, 16)
+# y is its producer's statement, INT7 over the MatMul's range, which inference wrote.
+Y = {**port("m_axis_0", "y", [3, 4], "INT7", 2, 6, 16), "range": [-48, 36]}
 #: The boundary on pynq (``streamed_w2_model``): one row, each MatMul at PE 4, x and w2
 #: one pass a frame; y four lanes a beat, a 32-bit stream its end moves without a
 #: converter.
 PYNQ_X = port("s_axis_0", "x", [1, 4], "INT3", 2, 2, 8)
 PYNQ_W2 = port("s_axis_1", "w2", [4, 4], "INT3", 4, 4, 16)
-PYNQ_Y = port("m_axis_0", "y", [1, 4], "INT7", 4, 1, 32)
+PYNQ_Y = {**port("m_axis_0", "y", [1, 4], "INT7", 4, 1, 32), "range": [-48, 36]}
 PYNQ_Y_END = {**iodma("out", 32), "converter": False, "call_cycles": 13}
 
 

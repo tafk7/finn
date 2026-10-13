@@ -39,10 +39,12 @@ keys (``compute.packed.pe``), each set to its baseline at conversion. A channel'
 choices are stored on its tensor instead, and only in a partition's body (``CHANNEL``).
 
 Its outputs are its kernel's product, one rule for every op: the kernel bound on its
-inputs states each output's tensor (``output_tensors``), which inference writes on the
-graph. The graph's annotation of an output is the record of that statement: a network
-that finds the two differ refuses the graph as stale (``network.network``,
-``tensor-stale``).
+inputs states each output's tensor (``output_tensors``), its shape and its element, a
+datatype over a range (MatMul's results over their exact range), which inference writes
+on the graph, the range with the datatype (``finn.core.graph.facts.state``). The
+graph's annotation of an output is the record of that statement: a network that finds
+the two differ refuses the graph as stale (``network.network``, ``tensor-stale``). The
+next node reads it as its input's tensor (``edge_tensor``), its range included.
 
 **Wiring.** Each ONNX input and output that carries a stream (a *port*: ``x``, ``w``,
 ``y``) meets the kernel as a ``Wiring``: an input's the kernel's Param its tensor is
@@ -73,11 +75,10 @@ from qonnx.util.basic import get_by_name
 from finn.core.graph.annotations.channel import CHANNEL, value_type
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor
+from finn.core.graph.facts import edge_tensor, state
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Rejected, Space, inspection
 from finn.custom_op.kernels.cache import BIND_CACHE, Facts
-from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import describe
@@ -91,9 +92,6 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
-
-Shapes = dict[str, tuple[tuple[int, ...], QONNXDataType]]
-
 
 # -- patterns ----------------------------------------------------------------------------
 
@@ -507,21 +505,19 @@ class KernelOp(CustomOp):
             found[name] = answer.value
         return found
 
-    def infer_output_tensors(self, model: ModelWrapper) -> Shapes:
-        """Each output's ONNX shape and datatype (``output_tensors``)."""
+    def infer_output_tensors(self, model: ModelWrapper) -> dict[str, Tensor]:
+        """Each output's tensor, by graph name (``output_tensors``), on ``model``."""
         self.attach_model(model)
-        return {
-            name: (tensor.shape, tensor.element.dtype)
-            for name, tensor in self.output_tensors().items()
-        }
+        return self.output_tensors()
 
     def make_shape_compatible_op(self, model: ModelWrapper) -> Any:
-        ((dims, _),) = self.infer_output_tensors(model).values()
-        return self.make_const_shape_op(list(dims))
+        (tensor,) = self.infer_output_tensors(model).values()
+        return self.make_const_shape_op(list(tensor.shape))
 
     def infer_node_datatype(self, model: ModelWrapper) -> None:
-        for name, (_, dtype) in self.infer_output_tensors(model).items():
-            model.set_tensor_datatype(name, dtype)
+        """Each output's datatype and range, as its kernel states them (``state``)."""
+        for name, tensor in self.infer_output_tensors(model).items():
+            state(model, name, tensor.element)
 
     def refusals(self, point: Kernel) -> tuple[Finding, ...]:
         """What stops its kernel from building ``point``, whatever its open choices: the
@@ -632,7 +628,6 @@ __all__ = [
     "KernelOp",
     "Match",
     "Wiring",
-    "Shapes",
     "kernel_op",
     "node_attributes",
     "refusal",

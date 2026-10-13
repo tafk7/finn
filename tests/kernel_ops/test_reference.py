@@ -21,6 +21,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
+from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_shapes import InferShapes
 
 import finn.custom_op.kernels as domain
@@ -287,6 +288,18 @@ def test_an_annotation_that_does_not_hold_the_values_is_unsound() -> None:
     model.set_tensor_datatype("y", DataType["INT4"])
     observed = observe(source, model, drawn_inputs(source, 0)[0])
     with pytest.raises(Unsound, match="annotated INT4"):
+        check_sound(observed)
+
+
+def test_a_range_that_does_not_hold_the_values_is_unsound() -> None:
+    """The range stated with the datatype is part of the annotation: one narrower than the
+    values is unsound too."""
+    source = matmul.matmul()
+    model, _ = converted(source, TARGET)
+    dtype = model.get_tensor_datatype("y")
+    model.set_tensor_datatype("y", dtype, TensorRange(0, 0))
+    observed = observe(source, model, drawn_inputs(source, 0)[0])
+    with pytest.raises(Unsound, match=rf"annotated {dtype.name} over \[0, 0\]"):
         check_sound(observed)
 
 

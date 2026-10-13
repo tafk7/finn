@@ -36,6 +36,7 @@ from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
@@ -219,7 +220,8 @@ def test_a_thresholding_reads_an_unsigned_result() -> None:
     model = kernel_ops(CASES["unsigned"])
     (thresholding,) = [kernel_op(model, n) for n in model.graph.node if n.op_type != "MatMul"]
     point: Any = thresholding.point()
-    assert point.input.tensor.element == ScalarEncoding(DataType["UINT6"])
+    # The MatMul's result as inference wrote it: UINT6 over its exact range, [0, 48].
+    assert point.input.tensor.element == ScalarEncoding(DataType["UINT6"], TensorRange(0, 48))
     assert thresholding.verify_node() == []
 
 

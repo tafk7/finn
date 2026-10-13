@@ -45,7 +45,10 @@ def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:
         nodes[1].input[0] = "hidden_copy"
         nodes.insert(1, helper.make_node("Identity", [hidden], ["hidden_copy"], name="copy"))
         model.set_tensor_shape("hidden_copy", model.get_tensor_shape(hidden))
-        model.set_tensor_datatype("hidden_copy", model.get_tensor_datatype(hidden))
+        # A copy holds its input's values: the datatype with its range, one fact.
+        model.set_tensor_datatype(
+            "hidden_copy", model.get_tensor_datatype(hidden), model.get_tensor_range(hidden)
+        )
     nodes[-1].output[0] = "y_kernel"
     nodes.insert(0, helper.make_node("Identity", ["x"], ["x_flat"], name="flatten"))
     nodes.append(helper.make_node("Identity", ["y_kernel"], ["y"], name="select"))
@@ -54,7 +57,9 @@ def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:
     model.graph.node.extend(nodes)
     for name, source in (("x_flat", "x"), ("y_kernel", "y")):
         model.set_tensor_shape(name, model.get_tensor_shape(source))
-        model.set_tensor_datatype(name, model.get_tensor_datatype(source))
+        model.set_tensor_datatype(
+            name, model.get_tensor_datatype(source), model.get_tensor_range(source)
+        )
     return model
 
 

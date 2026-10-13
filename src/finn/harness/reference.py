@@ -27,8 +27,8 @@ the op (``OpSpec``, in ``tests/``):
      ``execute_node`` computes what FINN's execution of the graph computes
      (``observe``, ``check_values``), every output element equal; any difference is
      ``Unequal``;
-  4. inference is sound: each KernelOp output's annotation holds every value
-     observed there (``check_sound``).
+  4. inference is sound: each KernelOp output's annotation, its datatype and its range,
+     holds every value observed there (``check_sound``).
 - **negative graphs**, each with a finding code: ``match`` leaves the model
   unchanged, and ``ToKernelOps`` leaves the anchor's node on the host with that
   code among its findings (``check_negative``): a pattern's or the kernels'.
@@ -64,6 +64,7 @@ import finn.custom_op.kernels as kernel_ops
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.dataflow.tensor import full
 from finn.harness.ops import executed
 from finn.platform.architectures import RULES
 from finn.platform.boards import BOARDS
@@ -282,18 +283,20 @@ def check_values(observed: Observed) -> None:
 
 
 def check_sound(observed: Observed) -> None:
-    """Each KernelOp output's annotation in the conversion holds the values the reference
-    computed there."""
+    """Each KernelOp output's annotation in the conversion, its datatype and the range
+    stated with it, holds the values the reference computed there."""
     model = observed.converted
     for node in model.graph.node:
         if node.domain != kernel_ops.__name__:  # the KernelOps' domain is their package
             continue
         for name in node.output:
-            dtype = model.get_tensor_datatype(name)
+            dtype, stated = model.get_tensor_datatype(name), model.get_tensor_range(name)
             values = np.asarray(observed.reference[name])
-            if not np.all(dtype.allowed(values)):
+            within = stated.least <= values.min() and values.max() <= stated.greatest
+            if not (np.all(dtype.allowed(values)) and within):
+                annotated = dtype.name + (f" over {stated}" if stated != full(dtype) else "")
                 raise Unsound(
-                    f"{node.name}: {name} is annotated {dtype.name} and holds values over "
+                    f"{node.name}: {name} is annotated {annotated} and holds values over "
                     f"[{values.min()}, {values.max()}]"
                 )
 

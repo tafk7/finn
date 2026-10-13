@@ -96,7 +96,8 @@ class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
                 "inputDataType changing for %s: %s -> %s", node.name, self.get_input_datatype(), idt
             )
         self.set_nodeattr("dataType", idt.name)
-        model.set_tensor_datatype(node.output[0], idt)
+        # A copy: its output holds its input's values, the datatype with its range.
+        model.set_tensor_datatype(node.output[0], idt, model.get_tensor_range(node.input[0]))
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         pass

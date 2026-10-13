@@ -1200,8 +1200,9 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
         ("odma0", "MatMul_3_out0", "m_axis_0"),
     ]
     assert [end.iodma.attributes for end in export.ends] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
-    # The bytes' element is the channel's: the pixels and the logits.
-    assert [end.contract.element.dtype.name for end in export.ends] == ["UINT8", "INT8"]
+    # The bytes' element is the channel's: the pixels and the logits, INT7 over the last
+    # MatMul's range, [-61, 61], read from the activations' [-1, 1].
+    assert [str(end.contract.element) for end in export.ends] == ["UINT8", "INT7 over [-61, 61]"]
     clocked = [
         Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
         for instance in ("idma0", "partition", "odma0")
@@ -1222,10 +1223,11 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     )
     assert (export.period_ns, export.vlnv) == (5.0, "xilinx_finn:finn:partition:1.0")
     # Z0's module, its memories in their explicit baseline styles (SZ18), its thresholds a data
-    # file (THRESHOLDS_FILE), and choices.
+    # file (THRESHOLDS_FILE), and choices; its MatMuls after the first INT7, reading each
+    # thresholding's range.
     node, body, _ = partition_body(parent)
     point, _ = configured_network(body, node.name)
-    assert module_name(point.module) == "finn_partition__c909af9fb6b548ee"
+    assert module_name(point.module) == "finn_partition__023b52bd70edebcc"
     persisted = json.loads((output / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
     assert persisted == TFC_BUILT
@@ -1345,10 +1347,11 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
 TFC_BOTTLENECK = 200
 
 #: The generated driver's io_shape_dict for TFC at Z0's choices, as the build's
-#: driver wrote it before the runner (from ZynqBuild's link graph), the logits INT8.
+#: driver wrote it before the runner (from ZynqBuild's link graph), the logits INT7 (the last
+#: MatMul's result over its activations' range, [-61, 61]).
 TFC_IO_SHAPES = {
     "idt": [DataType["UINT8"]],
-    "odt": [DataType["INT8"]],
+    "odt": [DataType["INT7"]],
     "ishape_normal": [(1, 784)],
     "oshape_normal": [(1, 10)],
     "ishape_folded": [(1, 196, 4)],
@@ -1417,7 +1420,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
       collected beside them, the delivered clock's with the partition's network's
       bottleneck, ends included.
     - The driver's io_shape_dict is the build's before the runner, the logits
-      INT8, and it sets PL0 to the delivered clock; report/driver.json states what it
+      INT7, and it sets PL0 to the delivered clock; report/driver.json states what it
       takes and returns.
     - report/resources.json states each member of the shell by the model, out of
       context (the fake per-IP runs) and placed (the fake hierarchy), by its instance;
@@ -1480,7 +1483,8 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     assert (bottleneck.members, bottleneck.cycles) == (("Reshape_0_out0",), TFC_BOTTLENECK)
     assert clock["objective_fps"] == 1_000_000
     assert [finding["code"] for finding in clock["findings"]] == ["clock-below-asked"]
-    # The resources per member: Z7's model of TFC; the fake reports' counts.
+    # The resources per member: Z7's model of TFC (the thresholdings read INT7 sums); the
+    # fake reports' counts.
     stated = json.loads((report / "resources.json").read_text())
     assert (stated["shell"], stated["absent"]) == ("pynq", {})
     assert "partition_members" not in stated
@@ -1504,7 +1508,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         return {"lut": lut, "ff": ff, "bram18": bram18, "uram": 0, "dsp": dsp}
 
     assert {key: row["model"] for key, row in rows.items()} == {
-        "partition": counts(5270, 7081, 19, 100),
+        "partition": counts(5270, 7077, 19, 100),
         "ends.Reshape_0_out0": counts(1305, 2279, 4),
         "ends.MatMul_3_out0": counts(1390, 2069),
         "static_region.zynq_ultra_ps_e": counts(264, 0),
@@ -1528,7 +1532,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "static_region.axi_interconnect": counts(100, 200),
     }
     assert stated["total"] == {
-        "model": counts(15014, 21534, 23, 100),
+        "model": counts(15014, 21530, 23, 100),
         "out_of_context": counts(600, 30, 15, 9),
         "placed": counts(1000, 2000, 5, 4),
     }
@@ -1549,7 +1553,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "takes": [
             {"name": "Reshape_0_out0", "element": "UINT8", "shape": [1, 784], "dma": "idma0"}
         ],
-        "returns": [{"name": "MatMul_3_out0", "element": "INT8", "shape": [1, 10], "dma": "odma0"}],
+        "returns": [{"name": "MatMul_3_out0", "element": "INT7", "shape": [1, 10], "dma": "odma0"}],
         "host": {"before": ["Reshape_0"], "after": ["TopK_0"]},
         "made_from": design_digest(body),
     }
