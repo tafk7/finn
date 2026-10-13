@@ -395,6 +395,21 @@ def test_a_multithreshold_is_annotated_with_what_it_computes(
 
 
 @pytest.mark.transform
+@pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
+def test_a_one_bit_signed_quants_multithreshold_is_binary():
+    """A 1-bit signed Quant's MultiThreshold computes 0 and 1, the Add (-0.5) and Mul behind
+    it the Quant's -1 and 1: it is BINARY, not the Quant's BIPOLAR. (The converted graph's
+    scale is a float64 initializer the float32 Mul cannot execute with, so its values are
+    not compared here.)"""
+    model = _activation_model(None, "Quant", 1.0, 1, True, False)
+    converted = model.transform(ConvertQONNXtoFINN())
+    (node,) = [node for node in converted.graph.node if node.op_type == "MultiThreshold"]
+    assert getCustomOp(node).get_nodeattr("out_dtype") == "BINARY"
+    assert converted.get_tensor_datatype(node.output[0]) == DataType["BINARY"]
+    assert [n.op_type for n in converted.graph.node] == ["MultiThreshold", "Add", "Mul"]
+
+
+@pytest.mark.transform
 @pytest.mark.parametrize(
     "out_bias, out_scale, steps, expected",
     [
