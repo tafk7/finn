@@ -283,7 +283,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # Analysis passes: generic functions of a graph returning their findings, which no
     # build step runs. Neither the harness nor the builder: what a finding stops is the
-    # caller's. The equivalence analysis runs both graphs with FINN's execution (the
+    # caller's. The graph comparison runs both graphs with FINN's execution (the
     # executors' finn.core.onnx_exec), which computes integers exactly.
     Layer(
         "analysis",

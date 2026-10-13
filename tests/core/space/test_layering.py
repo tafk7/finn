@@ -189,7 +189,7 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("harness", "numpy.typing"),
         # The ONNX entry: the reference against FINN's execution of the source graph.
         ("harness", "finn.transformation.kernels.convert.ToKernelOps"),
-        # The equivalence analysis runs both graphs with FINN's execution.
+        # The graph comparison runs both graphs with FINN's execution.
         ("analysis", "finn.core.onnx_exec.execute_onnx"),
         ("analysis", "finn.util.draws.drawn_inputs"),
         ("analysis", "finn.core.space.Finding"),

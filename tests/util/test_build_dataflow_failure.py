@@ -22,7 +22,6 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     DataflowOutputType,
 )
-from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import SELECTED_BY, ToolFailed, ToolUnavailable
@@ -153,13 +152,6 @@ def test_a_tool_unavailable_is_logged_naming_what_selects_it(capsys):
     named = f"vivado: not on the route; {SELECTED_BY}"
     assert err.splitlines()[0] == f"ERROR: step_fails: ToolUnavailable: {named}"
     assert "Traceback" not in err
-
-
-@pytest.mark.util
-def test_a_verdict_is_logged_with_what_the_check_found_no_traceback(capsys):
-    err, log = logged_failure(capsys, SimulationFailed("FAIL: 3 words differ"))
-    assert err.splitlines()[0] == "ERROR: step_fails: SimulationFailed: FAIL: 3 words differ"
-    assert "Traceback" not in err and "Traceback" in log
 
 
 @pytest.mark.util

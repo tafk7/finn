@@ -33,7 +33,8 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
-from finn.analysis.equivalence import DEVIATIONS, Draw, Explanation, equivalence_with
+from finn.analysis.comparison import Explanation, Run
+from finn.analysis.equivalence import DEVIATIONS, equivalence_with
 from finn.analysis.initializers import annotated_initializers
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
@@ -63,49 +64,47 @@ def _producer(model: ModelWrapper, tensor: str) -> Any:
     return next((node for node in model.graph.node if tensor in node.output), None)
 
 
-def _everywhere(draw: Draw, index: int, explained: bool) -> npt.NDArray[np.bool_]:
-    shape = np.shape(draw.computed[draw.prepared.graph.output[index].name])
-    return np.full(shape, explained)
+def _everywhere(run: Run, computed: str, explained: bool) -> npt.NDArray[np.bool_]:
+    return np.full(np.shape(run.computed[computed]), explained)
 
 
-def topk_affine(draw: Draw, index: int) -> npt.NDArray[np.bool_]:
+def topk_affine(run: Run, expected: str, computed: str) -> npt.NDArray[np.bool_]:
     """The output is a TopK's values, and the TopK's indices are the export's: the values
     differ by the scale and bias the phase dropped ahead of it."""
-    name = draw.prepared.graph.output[index].name
-    node = _producer(draw.prepared, name)
-    exported = _producer(draw.reference, draw.reference.graph.output[index].name)
+    node = _producer(run.model, computed)
+    exported = _producer(run.reference, expected)
     explained = (
         node is not None
         and exported is not None
         and node.op_type == exported.op_type == "TopK"
-        and name == node.output[0]
-        and np.array_equal(draw.computed[node.output[1]], draw.expected[exported.output[1]])
+        and computed == node.output[0]
+        and np.array_equal(run.computed[node.output[1]], run.expected[exported.output[1]])
     )
-    return _everywhere(draw, index, explained)
+    return _everywhere(run, computed, explained)
 
 
-def sign_at_zero(draw: Draw, index: int) -> npt.NDArray[np.bool_]:
+def sign_at_zero(run: Run, expected: str, computed: str) -> npt.NDArray[np.bool_]:
     """A Sign of the export saw an exact 0 in the draw: every output may differ."""
     zeros = any(
-        np.any(np.asarray(draw.expected[node.input[0]]) == 0)
-        for node in draw.reference.graph.node
+        np.any(np.asarray(run.expected[node.input[0]]) == 0)
+        for node in run.reference.graph.node
         if node.op_type == "Sign"
     )
-    return _everywhere(draw, index, zeros)
+    return _everywhere(run, computed, zeros)
 
 
-def threshold_float32(draw: Draw, index: int) -> npt.NDArray[np.bool_]:
+def threshold_float32(run: Run, expected: str, computed: str) -> npt.NDArray[np.bool_]:
     """A MultiThreshold of the prepared graph saw an input within a float32 rounding of
     one of its thresholds in the draw: every output may differ."""
     near = False
-    for node in draw.prepared.graph.node:
+    for node in run.model.graph.node:
         if (node.domain, node.op_type) != MULTITHRESHOLD:
             continue
-        values = np.asarray(draw.computed[node.input[0]], dtype=np.float32).reshape(-1)
-        thresholds = np.asarray(draw.prepared.get_initializer(node.input[1]), dtype=np.float32)
+        values = np.asarray(run.computed[node.input[0]], dtype=np.float32).reshape(-1)
+        thresholds = np.asarray(run.model.get_initializer(node.input[1]), dtype=np.float32)
         gaps = np.abs(values[:, None] - thresholds.reshape(-1)[None, :])
         near = near or bool(np.any(gaps <= np.spacing(np.abs(thresholds.reshape(-1)))))
-    return _everywhere(draw, index, near)
+    return _everywhere(run, computed, near)
 
 
 #: The predicate of each deviation the phase declares.
@@ -190,7 +189,7 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     made = ModelWrapper(str(tfc_streamlined))
     reference_graph = reference(export, tfc_directory)
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
-    assert checked == {"draws": 12, "findings": ()}
+    assert checked == {"runs": 12, "findings": ()}
     # The streamlined TFC: the input flatten, four MultiThreshold and MatMul layers, the
     # label select; INT2 activations, and each MatMul's exact range as qonnx's interval
     # rule states it (G3a, qonnx b7bc357): INT10 for the 784-wide first layer, INT8 after.
@@ -255,7 +254,7 @@ def test_cnv_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     made = ModelWrapper(str(cnv_streamlined))
     reference_graph = reference(export, cnv_export.parent)
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
-    assert checked == {"draws": 12, "findings": ()}
+    assert checked == {"runs": 12, "findings": ()}
     held = made.analysis(annotated_initializers)
     weights = [node.input[1] for node in made.graph.node if node.op_type == "MatMul"]
     assert len(weights) == 9 and sorted(held["checked"]) == sorted(weights)
@@ -420,7 +419,7 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
         assert np.array_equal(context["scaled"], scaled)
     # The equivalence analysis on its draws: nothing found.
     checked = made.analysis(equivalence_with(export, EXPLAINS, seeds=1))
-    assert checked == {"draws": 3, "findings": ()}
+    assert checked == {"runs": 3, "findings": ()}
 
 
 def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(
@@ -480,7 +479,8 @@ def test_a_difference_no_deviation_explains_fails_the_equivalence() -> None:
 
     assert adding(1.0).analysis(equivalence_with(adding(1.0), EXPLAINS))["findings"] == ()
     (found,) = adding(2.0).analysis(equivalence_with(adding(1.0), EXPLAINS))["findings"]
-    assert found.code == "equivalence-unexplained" and "preparation declares" in found.message
+    assert (found.code, dict(found.details)["tensor"]) == ("values-differ", "y")
+    assert found.message.startswith("y: 2 of 2 values differ from the reference's y, none")
 
 
 def test_an_integer_annotation_the_prepared_graph_breaks_on_a_draw_is_unsound() -> None:
@@ -511,7 +511,7 @@ def test_topk_affine_explains_the_values_of_a_label_select_whose_scale_was_dropp
     export = selecting([helper.make_node("Mul", ["x", "two"], ["s"], name="Mul_0")])
     made = selecting([helper.make_node("Identity", ["x"], ["s"], name="Identity_0")])
     assert codes(made.analysis(equivalence_with(export))["findings"]) == [
-        ("equivalence-unexplained", FindingKind.REJECTION)
+        ("values-differ", FindingKind.REJECTION)
     ]
     explained = equivalence_with(export, {"topk-affine": topk_affine})
     assert made.analysis(explained)["findings"] == ()
@@ -526,7 +526,7 @@ def test_sign_at_zero_explains_a_sign_turned_threshold_at_zero() -> None:
         {"t": [[0.0]]},
     )
     assert codes(made.analysis(equivalence_with(export))["findings"]) == [
-        ("equivalence-unexplained", FindingKind.REJECTION)
+        ("values-differ", FindingKind.REJECTION)
     ]
     explained = equivalence_with(export, {"sign-at-zero": sign_at_zero})
     assert made.analysis(explained)["findings"] == ()
@@ -539,7 +539,7 @@ def test_threshold_float32_explains_a_threshold_one_rounding_from_the_exports() 
     export = thresholding(float(np.nextafter(np.float32(3), np.float32(4))))
     made = thresholding(3.0)
     assert codes(made.analysis(equivalence_with(export))["findings"]) == [
-        ("equivalence-unexplained", FindingKind.REJECTION)
+        ("values-differ", FindingKind.REJECTION)
     ]
     explained = equivalence_with(export, {"threshold-float32": threshold_float32})
     assert made.analysis(explained)["findings"] == ()

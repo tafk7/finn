@@ -26,11 +26,6 @@ change the folding (``FOLDING_STEPS``) is refused after the run's last step that
 FIFOs, and so is one with no sizing step after it where no cut before it made the
 partition.
 
-**The checks' inputs.** step_verify_partition_python reads the model saved before
-step_convert_to_hw, which the list has once, after another step and before the check,
-with ``save_intermediate_models`` on; step_run_testbench runs the testbench a
-step_package_partition before it writes, with ``stitched_ip`` asked.
-
 ``resolve_plan`` refuses at the first entry that does not resolve; otherwise it refuses
 every rejection of the settings, the bounds and the order together, as one
 ``ConfigurationRefused``.
@@ -53,7 +48,6 @@ from qonnx.transformation.base import Transformation
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
-    DataflowOutputType,
     config_finding,
 )
 from finn.builder.build_dataflow_steps import (
@@ -62,8 +56,6 @@ from finn.builder.build_dataflow_steps import (
     build_dataflow_phases,
     build_dataflow_step_lookup,
     step_create_dataflow_partition,
-    step_run_testbench,
-    step_verify_partition_python,
 )
 from finn.core.space import Finding
 from finn.util.typed_json import decoded, encoded
@@ -332,7 +324,6 @@ def resolve_plan(cfg: DataflowBuildConfig) -> Plan:
             refused.append(config_finding("start-without-model", message, "start_step"))
         plan = Plan(steps, slice(first, last + 1), settings)
         refused.extend(_stale_fifos(plan.steps[plan.run]))
-        refused.extend(_unmade_inputs(cfg, plan))
     if refused:
         raise ConfigurationRefused(refused)
     return plan
@@ -365,40 +356,6 @@ def _stale_fifos(run: tuple[Step, ...]) -> list[Finding]:
                 "step_size_fifos after it"
             )
             refused.append(config_finding("fifos-unsized", message))
-    return refused
-
-
-def _unmade_inputs(cfg: DataflowBuildConfig, plan: Plan) -> list[Finding]:
-    """The rejections of a check in the run whose input no earlier step of the list
-    makes (the module docstring)."""
-    refused = []
-    names = [step.name for step in plan.steps]
-    for index in range(plan.run.start, plan.run.stop):
-        origin = _origin(plan.steps[index].function)
-        place = f"{names[index]} (step {index - plan.run.start + 1} of the run)"
-        if origin is step_verify_partition_python:
-            converting = [at for at, name in enumerate(names) if name == "step_convert_to_hw"]
-            if len(converting) != 1 or not 0 < converting[0] < index:
-                message = (
-                    f"{place} reads the model saved before step_convert_to_hw: the list "
-                    "needs that step once, after another step and before the check"
-                )
-                refused.append(config_finding("check-order", message))
-            if not cfg.save_intermediate_models:
-                message = f"{place} reads the model saved before step_convert_to_hw"
-                where = "configuration.save_intermediate_models"
-                refused.append(config_finding("intermediate-models-off", message, where))
-        elif origin is step_run_testbench:
-            if "step_package_partition" not in names[:index]:
-                message = (
-                    f"{place} runs the testbench step_package_partition writes, and no "
-                    "step_package_partition comes before it"
-                )
-                refused.append(config_finding("check-order", message))
-            if DataflowOutputType.STITCHED_IP not in cfg.generate_outputs:
-                message = f"{place} runs the testbench stitched_ip writes, which is not asked"
-                where = "configuration.generate_outputs"
-                refused.append(config_finding("testbench-output", message, where))
     return refused
 
 

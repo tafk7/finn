@@ -4,8 +4,8 @@
 """The build's manifest, ``report/build.json`` (finn.builder.build_dataflow_manifest):
 the index of a run, which a machine reads after the exit code, never the log. It is
 written from the build's start and rewritten as the build goes: each step with its
-status, seconds, reports and their findings, and tool runs and their transcripts; the
-verdicts; what checking the configuration found; the outcome, by the failure's kind.
+status, seconds, reports and their findings, and tool runs and their transcripts; what
+checking the configuration found; the outcome, by the failure's kind.
 The steps and the tool are fakes; no Vivado."""
 
 import pytest
@@ -30,9 +30,7 @@ from finn.builder.build_dataflow_manifest import (
     findings_by_code,
     finn_revision,
     reported,
-    verdict,
 )
-from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind, finding_record
 from finn.platform.request import TargetRequest
 from finn.toolchain import launcher
@@ -85,14 +83,12 @@ def build_of(tmp_path: Path, steps, **fields) -> tuple[int, dict, DataflowBuildC
 
 
 def step_reports(model, cfg):
-    """Writes a report with two findings of one code, one of another, and says so; and
-    a check's verdict, passed."""
+    """Writes a report with two findings of one code, one of another, and says so."""
     path = Path(cfg.output_dir) / "report" / "checked.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     stated = [finding_record(blocker(code)) for code in ("odd", "odd", "even")]
     path.write_text(json.dumps({"section": {"findings": stated}}))
     reported(path)
-    verdict("a_check", True)
     return model
 
 
@@ -142,7 +138,7 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
     assert steps["step_reports"]["reports"] == [
         {"path": "report/checked.json", "findings": {"even": 1, "odd": 2}}
     ]
-    assert manifest["verifications"] == {"a_check": "pass"}
+    assert "verifications" not in manifest
     runs = steps["step_tools"]["tools"]
     assert sorted(run["transcript"] for run in runs) == [
         "logs/step_tools/xvlog.2.stdout.log",
@@ -179,7 +175,6 @@ class Refused(ValueError):
         (Refused([blocker("odd"), blocker("odd"), blocker("x")]), "refusal"),
         (ToolFailed("vivado", 1, "/logs/package.sh.stdout.log", ("ERROR: no",)), "tool-failed"),
         (ToolUnavailable("vivado", "not on the route"), "tool-unavailable"),
-        (SimulationFailed("FAIL: 3 words differ"), "verdict"),
         (AssertionError("unreachable"), "bug"),
     ],
 )
@@ -195,21 +190,6 @@ def test_a_failed_step_is_the_outcome_by_its_kind(tmp_path, error, kind):
     # A refusal's findings are the outcome's.
     assert outcome["findings"] == ({"odd": 2, "x": 1} if kind == "refusal" else {})
     assert manifest["steps"][0]["status"] == "completed"
-
-
-def step_checks(model, cfg):
-    """A check that fails, and the build continues past it."""
-    verdict("a_check", False)
-    return model
-
-
-def test_a_verdict_is_recorded_from_its_record_only(tmp_path):
-    """``pass`` or ``fail`` as the check's verdict states it; a step that fails concludes
-    no verification: its failure is the outcome's, with its kind."""
-    status, manifest, _ = build_of(tmp_path, [step_checks, raising(SimulationFailed("differs"))])
-    assert status == -1
-    assert manifest["verifications"] == {"a_check": "fail"}
-    assert (manifest["outcome"]["step"], manifest["outcome"]["kind"]) == ("step_fails", "verdict")
 
 
 def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
@@ -229,7 +209,6 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     assert manifest["steps"] == []
     found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
     assert found == [("shell-outputs", "rejection"), ("setting-unread", "limitation")]
-    assert manifest["verifications"] == {}
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
@@ -268,7 +247,7 @@ def test_findings_are_counted_at_any_depth_but_inside_a_finding():
 
 
 def test_a_module_logger_a_caller_quiets_drops_nothing_from_the_manifest(tmp_path):
-    """The reports, verdicts and tool runs reach the manifest through one logger whose
+    """The reports and tool runs reach the manifest through one logger whose
     level the build sets: a caller that quiets the toolchain's and the builder's loggers
     drops none of them, and gets its own level back after the build."""
     quieted = [logging.getLogger(name) for name in ("finn.toolchain", "finn.builder")]
@@ -289,5 +268,4 @@ def test_a_module_logger_a_caller_quiets_drops_nothing_from_the_manifest(tmp_pat
     assert [report["path"] for report in steps["step_reports"]["reports"]] == [
         "report/checked.json"
     ]
-    assert manifest["verifications"] == {"a_check": "pass"}
     assert [run["status"] for run in steps["step_tools"]["tools"]] == ["completed"] * 2

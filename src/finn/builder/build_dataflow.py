@@ -74,16 +74,13 @@ _LOG = logging.getLogger(__name__)
 
 def _failure_kind(error: BaseException) -> str:
     """The kind of a failed step's error, as the manifest records it: ``tool-unavailable``,
-    ``tool-failed``, ``refusal`` (an error with ``findings``), ``verdict`` (a subclass of
-    ``AssertionError``: a failed check), else ``bug``."""
+    ``tool-failed``, ``refusal`` (an error with ``findings``), else ``bug``."""
     if isinstance(error, ToolUnavailable):
         return "tool-unavailable"
     if isinstance(error, ToolFailed):
         return "tool-failed"
     if hasattr(error, "findings"):
         return "refusal"
-    if isinstance(error, AssertionError) and type(error) is not AssertionError:
-        return "verdict"
     return "bug"
 
 
@@ -92,7 +89,7 @@ def _log_failure(step: str, error: BaseException) -> str:
     the log file, and for a bug to the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
-    if kind in ("tool-unavailable", "tool-failed", "verdict"):
+    if kind in ("tool-unavailable", "tool-failed"):
         _LOG.error("%s: %s: %s", step, name, error)
     elif kind == "refusal":
         findings = tuple(error.findings)

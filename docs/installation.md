@@ -470,7 +470,7 @@ builds ahead of time; `--check` only checks prerequisites.
 process, starting no child, as `build_dataflow_directory` and `build_dataflow_cfg` do,
 and changes no working directory: the configuration's relative paths (`output_dir`,
 the preparation's `preprocessing`, the pinned choices' `kernel_choices_file`, the
-checks' `verify_input_npy`, the toolchain's settings scripts and command directory) name files in the project
+toolchain's settings scripts and command directory) name files in the project
 directory (`read_build_config` reads it with the directory as its `base_dir`: a field's
 path is joined to it when read, a path setting's, given or by default, when the build decodes it), and a relative `FINN_BUILD_DIR`
 is relative to the directory the command runs from. Every tool runs in the
@@ -497,12 +497,12 @@ configuration found (its rejections and the limitations warned of), the plan (th
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
 `completed` or `failed`), seconds, the reports it wrote with their findings by code,
-and its tool runs with their transcripts, status, exit and messages by severity; each
-verifying step that concluded with its verdict (`pass` or `fail`), by its name; and the `outcome`: `completed`, `failed` (the step, the error's kind:
-`refusal`, `tool-unavailable`, `tool-failed`, `verdict` or `bug`, the error, a
-refusal's findings by code) or `refused` (the configuration, before the first step).
-It is rewritten as the build goes, so a build that stopped says where. Its reports,
-verdicts and tool runs reach it as records of one logger, `finn.records`, whose level
+and its tool runs with their transcripts, status, exit and messages by severity; and the
+`outcome`: `completed`, `failed` (the step, the error's kind: `refusal`,
+`tool-unavailable`, `tool-failed` or `bug`, the error, a refusal's findings by code) or
+`refused` (the configuration, before the first step). It is rewritten as the build
+goes, so a build that stopped says where. Its reports and tool runs reach it as records
+of one logger, `finn.records`, whose level
 the build sets: a caller that quiets another of FINN's loggers keeps them. The model
 records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
 `vlnv`, `interfaces`, `made_from`) on the partition's body, the bitfile (`bitfile`,
@@ -581,8 +581,8 @@ own outputs, on any shell: `stitched_ip/` holds the packaged IP, its interface
 description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
 AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
 bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
-of `verify_input_npy` or a generated one, checked against the partition in
-Python; `step_run_testbench` runs it); `ooc_synth` synthesizes the IP out of context. Every build
+drawn from the partition's input datatypes, checked against the partition in
+Python; the build does not run it); `ooc_synth` synthesizes the IP out of context. Every build
 writes `report/resources.json`: each member of the shell (the partition, each end,
 each IP of the static region) and their total, as the model states them, as Vivado
 synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
@@ -616,8 +616,7 @@ the same name share its value, and a step that names a parameter like a field is
 refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
-the strategy steps theirs (below); `step_package_partition` and
-`step_verify_partition_python` `verify_input_npy` (default `input.npy`); `step_build_bitfile` `hw_debug` (integrated
+the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
 logic analyzers on the ends' streams, refused on `ip`); its clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
@@ -677,19 +676,20 @@ a kernel's choices under its node, a channel's under the tensor it carries, in g
 order: each node's input channels, the node, its output channels), the file
 `step_pin_choices` reads.
 
-The verifying steps check the partition, and no phase holds them: a build asks for a
-check by listing its step (in Python, `default_steps()` with the step inserted).
-`step_verify_partition_python`, after the strategy steps, executes the parent graph,
-its partition running the KernelOps, on each input of `verify_input_npy` (an `.npy`
-file, one input a row) and compares the partition's outputs with the model the build
-saved before `step_convert_to_hw` (`intermediate_models/`); a mismatch is recorded
-`fail`, and the build continues. `step_elaborate_partition` compiles and elaborates the
-partition's RTL in XSim; `step_run_testbench`, after `step_package_partition`, runs the
-packaged IP's testbench. Either fails the build when its check fails. Each records its
-verdict in the manifest's `verifications` under its own name. The plan refuses, before
-the first step, a Python check without `step_convert_to_hw` once before it (after
-another step) or with `save_intermediate_models` off, and a testbench run without a
-`step_package_partition` before it or without `stitched_ip` asked.
+A build makes the partition and its outputs; checking them is for tests and for
+utilities a user runs over a finished build's output directory, none of them a step.
+`finn.builder.build_dataflow_verification.verify_partition_python(output_dir,
+inputs_file)` executes the last model the build saved, the parent graph with its
+partition running the KernelOps, and the model it saved before `step_convert_to_hw`
+(`intermediate_models/`, so `save_intermediate_models` on), on each input of an `.npy`
+file (one input a row), and compares the partition's outputs value for value; it
+returns the graph comparison's result (`finn.analysis.comparison`: the runs, and a
+`values-differ` finding for each output that differs). The packaged IP's testbench runs
+with `finn.builder.build_dataflow_testbench.run_testbench` on its directory
+(`stitched_ip/testbench` in the output directory), which raises `SimulationFailed` on a
+mismatch. The partition's RTL compiles and elaborates in XSim when its body
+(`partition/partition.onnx` in the output directory) is transformed by
+`finn.transformation.kernels.package.ElaboratePartition`.
 
 Explicit selections, and a build's configuration, name the frontend
 (`vivado_hls`, `vitis_hls` or `vitis-run`) directly; the machine's follows the
