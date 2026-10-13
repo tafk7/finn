@@ -2,11 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """What a partition's body records about its choices beyond their values: the
-``finn.choices`` namespace, on the body.
-
-``HELD`` holds the pins every exploration of the body keeps, by owner and key.
-``OBJECTIVE_FPS`` is the throughput a target-throughput exploration chose the folding
-for, until another strategy that may change the folding explores the body.
+``finn.choices`` namespace.
 """
 
 from __future__ import annotations
@@ -19,9 +15,7 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 CHOICES = Namespace("finn.choices", version=1)
-"""What a partition's body records about its choices beyond their values (typed graph
-metadata, qonnx's ``qonnx.core.metadata``): the pins its explorations hold
-(``HELD``)."""
+"""The namespace, on a partition's body: ``HELD`` and ``OBJECTIVE_FPS``."""
 
 
 def _by_owner_values(value: object) -> bool:
@@ -31,9 +25,10 @@ def _by_owner_values(value: object) -> bool:
 HELD = CHOICES.key(
     "held", JSON, check=_by_owner_values, expect="{graph name: {key: value}}, the pinned choices"
 )
-"""The choices pinned in a partition's body, by owner and key there (``{graph name: {key:
-value}}``, the form ``kernel_choices.json`` takes): every exploration of the body holds
-them (``Seam.held``), so a pin holds for the build. Absent where nothing is pinned."""
+"""The choices pinned in a partition's body, by owner and key (``{graph name: {key:
+value}}``, the form ``kernel_choices.json`` takes). Every exploration of the body keeps
+them (``Seam.held``), so a pin holds for the whole build. Absent where nothing is
+pinned."""
 
 OBJECTIVE_FPS = CHOICES.key("objective_fps", float)
 """The frames a second a target throughput explored the body to (``TargetThroughput``),

@@ -1,32 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The MatMul KernelOp: ONNX ``MatMul`` semantics, Y = A @ B, bound to ``MatMulKernel``.
+"""The MatMul KernelOp: ONNX ``MatMul``, Y = A @ B, on ``MatMulKernel``.
 
-The graph decides which weights the node owns: weights that are an initializer
-are the node's own (``Facts.owned``), the weight channel's known value
-(``Facts.values``), which its ``source`` stores, keyed by their value summary's
-digest, and the channel's tensor states their range; weights on any other
-tensor arrive on a channel like any edge. One node root serves both: the weight
-channel's contents are supplied only when the node owns them. MatMul consumes
-the weights from the channel. A's leading axes are rows; B is the (k, n)
-matrix ONNX stores. The output is A's leading axes and n.
+A's leading axes are rows, and B is the (k, n) matrix ONNX stores. When B is an
+initializer, the node holds the weights and the kernel stores them; otherwise they
+arrive on a stream like any other input.
 
-Its reference, ``execute_node``, is ONNX's MatMul wherever ONNX's is defined. For
-integer operands (by their annotations) it is exact integer arithmetic, as the
-hardware's accumulator is: the integer product of its operands, held in A's element
-type where that type holds every value of it exactly, else in float64 (a float A)
-or int64 (``product``), so the reference never rounds. FINN executes ONNX's MatMul with exact
-integers too (``finn.core.onnx_exec``), so the two agree on every integer node. For
-float operands it computes in their element type, as ONNX does (ONNX leaves the order
-of a float sum open, so two executions agree bit for bit where every partial sum is
-exact). Whether a kernel builds a float MatMul is the kernels' to say: today they
-refuse it (``matmul-arithmetic``), and a float kernel would be a new kernel, not a new
-pattern.
+``execute_node`` is the reference: for integer operands, the exact integer product, as
+the hardware computes it (``product``); for float operands, as ONNX computes it. The
+kernels refuse float MatMuls today (``matmul-arithmetic``).
 
-Its pattern: an ONNX ``MatMul`` whose B is a matrix. A batched B (any other rank)
-is not this op (``matmul-batched``); B's shape unstated is ``fact-unstated``. It
-reads no datatype.
+The pattern refuses a B that is not 2-D (``matmul-batched``).
 """
 
 from __future__ import annotations
@@ -118,8 +103,8 @@ class MatMul(KernelOp):
         return k, n
 
     def extents(self) -> tuple[int, int, int, dict[str, object]]:
-        """(m, n, k), A's leading axes its rows, and the kernel's other formals that read
-        the graph's shapes: none."""
+        """(m, n, k), A's leading axes as rows, and the other kernel arguments read from
+        shapes: none for MatMul."""
         model, label = self.model(), self.label
         a, b = self.onnx_node.input
         m, k = rows(shape(model, a, label))
@@ -173,16 +158,15 @@ class MatMul(KernelOp):
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
-        """Y = A @ B (module docstring): exactly for integer operands; in the operands'
-        element type for floats."""
+        """Y = A @ B, by ``product``."""
         a, b = self.onnx_node.input
         context[self.onnx_node.output[0]] = self.product(context[a], context[b])
 
     def product(self, x: Any, w: Any) -> npt.NDArray[Any]:
-        """``x @ w``, the values of this node's A and B (module docstring). For integer
-        operands (by their annotations), the exact integer product, held in ``x``'s
-        element type where it holds every value exactly, else in float64 (a float ``x``)
-        or int64 where that does; for floats, in the operands' element type."""
+        """``x @ w``, the values of this node's A and B. For integer operands (by their
+        annotations), the exact integer product: in ``x``'s element type if that holds it
+        exactly, else in the first of float64 (for a float ``x``) and int64 that does,
+        else in Python integers. For floats, in the operands' element type."""
         model, label = self.model(), self.label
         a, b = self.onnx_node.input
         held = np.asarray(x).dtype

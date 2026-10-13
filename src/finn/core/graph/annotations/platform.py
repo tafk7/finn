@@ -1,12 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build target in a model's graph metadata: the ``finn.platform`` namespace.
-
-Every key is stated: the part, the shell, the board, and the platform's fields (the
-clock period and the capabilities, with the part's resources where they are known).
-``read_target`` is its one reader and ``write_target`` its one writer. The namespace
-inherits, so a partition's body opened through its parent reads the parent's target.
+"""The build target, stored in a model's graph metadata (the ``finn.platform``
+namespace).
 """
 
 from __future__ import annotations
@@ -24,12 +20,11 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 PLATFORM = Namespace("finn.platform", version=1, inherit=True)
-"""The build target, typed graph metadata (qonnx's ``qonnx.core.metadata``): the part,
-the shell, the board (``null`` when none is stated) and the platform
-(``finn.kernels.target.Platform``: the clock period and the capabilities, its resources
-``null`` when the part's are not known), every key stated. It inherits: a subgraph body
-reads its parent's. A model stating another shape of it (a key it does not declare, or
-one missing) is refused, each key named: it is converted again (``ToKernelOps``)."""
+"""The build target's namespace: the part, the shell, the board (``null`` if none) and
+the fields of ``Platform`` (the clock period and the capabilities; the resources ``null``
+if the part's are unknown), every key present. A partition's body opened through its
+parent reads the parent's. ``read_target`` and ``write_target`` are its only reader and
+writer."""
 
 RESOURCE_COUNTS = tuple(field.name for field in fields(Resources))
 
@@ -70,12 +65,8 @@ shell and the board."""
 
 
 def read_target(model: ModelWrapper) -> Target:
-    """The build target, from the model's ``finn.platform`` metadata (a subgraph body
-    opened through its parent reads the parent's).
-
-    The one reader of the target; ``write_target`` is the one writer. A key missing,
-    malformed or not declared (another shape's) is refused, by name.
-    """
+    """The build target from the model's ``finn.platform`` metadata. Refuses missing,
+    malformed or undeclared keys, by name."""
     try:
         stated = model.namespace(PLATFORM)
     except MetadataError as error:
@@ -98,8 +89,7 @@ def read_target(model: ModelWrapper) -> Target:
 
 
 def write_target(model: ModelWrapper, target: Target) -> None:
-    """State the build target in the model's ``finn.platform`` metadata, every key,
-    where ``read_target`` reads it."""
+    """Store the build target in the model's ``finn.platform`` metadata, every key."""
     platform = target.platform
     if platform.dsp is None:
         raise KernelOpError("a target states its DSP block (finn.platform.resolve_target)")

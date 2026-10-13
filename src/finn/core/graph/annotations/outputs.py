@@ -3,14 +3,14 @@
 
 """What a build made of a partition of KernelOps: the ``finn.outputs`` namespace.
 
-On the partition's body: the packaged IP (its directory, VLNV and interface names) and
-the digest of the design it was made from. On the build's parent graph: the bitfile
-the shell's integration made, its hardware handoff, the digest of the IP's design and
-the shell options the bitfile was built with. A reader compares a stated digest with
-the body's now (``finn.core.graph.partition.design_digest``), so an artifact is keyed
-by its design and never cleared.
+On the partition's body: the packaged IP and the digest of the design it was made from.
+On the parent graph: the bitfile, its hardware handoff, and the digest and shell options
+it was built with. A reader compares a recorded digest with the body's current one
+(``finn.core.graph.partition.design_digest``), so an artifact is never cleared when the
+design changes.
 
-It imports qonnx only.
+It imports only qonnx, so the builder and the partition's readers use it without
+loading the kernels.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ OUTPUT_INTERFACES = OUTPUTS.key(
     check=_interface_names,
     expect="interface names by kind (clk, rst, s_axis, m_axis, axilite, ...)",
 )
-"""The packaged IP's interface names by kind, as the stitched-IP contract lists them."""
+"""The packaged IP's interface names, by kind."""
 OUTPUT_MADE_FROM = OUTPUTS.key(
     "made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
 )

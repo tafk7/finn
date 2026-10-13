@@ -1,20 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's partition: its node, its body, and the digest of its design.
+"""The partition of KernelOps: its node in the parent graph, its body, and the digest of
+its design.
 
-A kernel partition is a model whose nodes are all KernelOps (``KERNEL_OPS_DOMAIN``), or
-the ``StreamingDataflowPartition`` node (``PARTITION_DOMAIN``) whose ``model`` attribute
-names such a body. The kernel path cuts its model once, so its parent graph holds one
-such node, and ``partition_body`` opens the body through it.
+A kernel partition is a model whose nodes are all KernelOps, or the
+``StreamingDataflowPartition`` node whose body is one. The cut makes exactly one
+(``partition_body`` opens it). ``design_digest`` identifies a design, so an artifact can
+record the design it was made from (``annotations.outputs``).
 
-``design_digest`` is the digest of a model's design: the model serialized
-deterministically, with ``finn.outputs`` cleared and the orders that carry no meaning
-made canonical. It covers the choices, the facts, the weights and the target, and
-nothing a build made, so an artifact states the digest of the design it was made from.
-
-It imports qonnx only, so the builder and the flow read a partition without the kernel
-stack.
+It imports nothing of the kernels, so the builder reads a partition without loading
+them.
 """
 
 from __future__ import annotations
@@ -50,13 +46,10 @@ def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
 
 
 def design_digest(model: ModelWrapper) -> str:
-    """The digest of ``model``'s design: its ``ModelProto`` with ``finn.outputs`` cleared,
-    the orders that carry no meaning made canonical (the model's and the graph's
-    metadata entries, each node's attributes, the initializers, the value infos, the
-    tensors' annotations and their entries), serialized deterministically, as
-    ``sha256:<hex>``. It covers the choices (node attributes, ``finn.channel`` on the
-    tensors), the facts, the weights and the target, and is the same for the model
-    saved and read back. The model is not changed."""
+    """``model``'s design, as ``sha256:<hex>``: the model with ``finn.outputs`` removed
+    and every order that carries no meaning made canonical, serialized
+    deterministically. It covers the choices, the facts, the weights and the target, and
+    survives a save and a reload. ``model`` is not changed."""
     proto = ModelProto()
     proto.CopyFrom(model.model)
     graph = proto.graph
@@ -111,9 +104,8 @@ def kernel_partition_nodes(model: ModelWrapper) -> list[NodeProto]:
 
 
 def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
-    """The kernel path's parent graph's one partition node of KernelOps, its body opened
-    through the node, and the body's file. A graph with none, or more than one, is
-    refused: the kernel path cuts its KernelOps once."""
+    """The parent graph's one partition node of KernelOps, its body opened through the
+    node, and the body's file. Refuses a graph with none or more than one."""
     found = kernel_partition_nodes(model)
     if len(found) != 1:
         raise ValueError(

@@ -1,14 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What a graph states of a tensor, as the KernelOps read their facts.
-
-A tensor's datatype is its annotation, and an unannotated tensor is refused rather than
-read as FLOAT32. Its shape is the one the graph states, every extent known, and its
-leading axes are rows. An initializer of integers is admitted by its value summary
-against its annotation, and its digest keys the node's binding; as a channel's tensor
-it is stated over its values' range, in the encoding they need. A fact the graph does
-not state raises ``FactUnstated``; a contradiction raises ``KernelOpError``.
+"""What the KernelOps read of a tensor: its datatype annotation, its shape, and the
+values of an initializer of integers. A missing shape or annotation raises
+``FactUnstated``; anything that contradicts the graph raises ``KernelOpError``.
 """
 
 from __future__ import annotations
@@ -41,8 +36,8 @@ if TYPE_CHECKING:
 
 
 def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
-    """The annotation of ``tensor``; an unannotated tensor is refused (qonnx reads it
-    as FLOAT32, which is not a statement)."""
+    """The datatype annotation of ``tensor``. A tensor without one is refused, not read
+    as FLOAT32 as qonnx would."""
     if not model.has_tensor_datatype(tensor):
         produced = model.find_producer(tensor) is not None
         raise FactUnstated(
@@ -54,8 +49,8 @@ def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
 
 
 def known_shape(model: ModelWrapper, tensor: str) -> tuple[int, ...] | None:
-    """The shape of ``tensor`` if the graph states it: None for none, or for one with an
-    extent it does not state (qonnx reads both as a list, the first as empty)."""
+    """The shape of ``tensor``, or None if the graph has none (qonnx gives an empty
+    list) or one with an unknown extent."""
     found = model.get_tensor_shape(tensor)
     if not found or any(type(dim) is not int or dim < 1 for dim in found):
         return None
@@ -76,10 +71,9 @@ def rows(dims: tuple[int, ...]) -> tuple[int, int]:
 
 
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
-    """The tensor a channel carries, as the graph states it: its shape as rows and its
-    annotation; an initializer of integers (``admitted``) as its owner states it, over
-    its values' range in the encoding they need (``stored_element``: INT8-typed ternary
-    weights are ``INT2 over [-1, 1]``)."""
+    """The tensor a channel carries: its shape as rows and its datatype. For an
+    initializer of integers, the datatype is narrowed to its values' range
+    (``stored_element``: INT8-typed ternary weights become INT2 over [-1, 1])."""
     dtype = datatype(model, tensor, label)
     stored = model.get_initializer(tensor)
     element = (
@@ -91,8 +85,8 @@ def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
 
 
 def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
-    """An initializer holds integers its annotation admits, by its value summary; the
-    summary's ``content_digest``, which keys the node's binding."""
+    """Check that the initializer ``tensor`` holds integers its datatype ``dtype``
+    allows, and return its content digest, which keys the node's binding."""
     try:
         summary = initializer_value_summary(model, tensor)
     except UnsupportedTensorValueError as error:
