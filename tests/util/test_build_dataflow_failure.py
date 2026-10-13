@@ -123,32 +123,36 @@ def test_a_refusal_is_logged_as_its_findings_its_traceback_in_the_file_only(caps
         capsys,
         Refused([blocker("odd", "one is odd"), blocker("odd", "three is odd"), blocker("x", "x")]),
     )
-    assert err.splitlines()[:3] == [
+    assert err.splitlines()[:4] == [
         "ERROR: step_fails refused: 3 findings (Refused)",
-        "ERROR:   odd (blocker) 2: one is odd; and 1 more",
-        "ERROR:   x (blocker) 1: x",
+        "ERROR:   test: odd: one is odd",
+        "ERROR:   test: odd: three is odd",
+        "ERROR:   test: x: x",
     ]
     assert "Traceback" not in err and "Traceback" in log
     assert "ERROR step_fails finn.builder.build_dataflow: step_fails refused: 3 findings" in log
 
 
 @pytest.mark.util
-def test_a_refused_steps_findings_are_logged_once(capsys):
+def test_a_refused_steps_findings_are_logged_once_with_their_owners(capsys):
     """A refusal's message is its findings' lines: the step's line leaves it out, so each
-    finding is listed once on the console, and the log file has it once beside the
-    traceback."""
-    found = [blocker("odd", "one is odd"), blocker("x", "x is unknown")]
+    finding's line, its owner first, is on the console once, and in the log file once
+    before the traceback."""
+    found = [
+        Finding(FindingKind.REJECTION, "member-unknown", "/build/pins.json", "no member owns x"),
+        blocker("x", "x is unknown"),
+    ]
     refusal = Refusal(found)
-    assert str(refusal) == "test: odd: one is odd\ntest: x: x is unknown"
+    assert str(refusal) == "\n".join(map(str, found))
     err, log = logged_failure(capsys, refusal)
     assert err.splitlines()[:3] == [
         "ERROR: step_fails refused: 2 findings (Refusal)",
-        "ERROR:   odd (blocker) 1: one is odd",
-        "ERROR:   x (blocker) 1: x is unknown",
+        "ERROR:   /build/pins.json: member-unknown: no member owns x",
+        "ERROR:   test: x: x is unknown",
     ]
     listed = log.split("step_fails: the traceback")[0]
     for finding in found:
-        assert err.count(finding.message) == 1 and listed.count(finding.message) == 1
+        assert err.count(str(finding)) == 1 and listed.count(str(finding)) == 1
 
 
 @pytest.mark.util
