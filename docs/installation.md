@@ -498,13 +498,14 @@ toolchain's selection, the target and the model), what checking the
 configuration found (its rejections and the limitations warned of), the plan (the steps
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
-`completed` or `failed`), seconds, the reports it wrote with their findings by code,
-and its tool runs with their transcripts, status, exit and messages by severity; and the
+`completed` or `failed`), seconds, the reports it wrote (by path), its tool runs with
+their transcripts, status, exit and messages by severity, and the findings it noted (a
+limitation the run goes on with, such as the delivered clock's shortfall); and the
 `outcome`: `completed`, `failed` (the step, the error's kind: `refusal`,
 `tool-unavailable`, `tool-failed` or `bug`, the error, a refusal's findings by code) or
 `refused` (the configuration, before the first step). It is rewritten as the build
-goes, so a build that stopped says where. Its reports and tool runs reach it as records
-of one logger, `finn.records`, whose level
+goes, so a build that stopped says where. Its reports, tool runs and noted findings
+reach it as records of one logger, `finn.core.reporting.manifest`, whose level
 the build sets: a caller that quiets another of FINN's loggers keeps them. The model
 records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
 `vlnv`, `interfaces`, `made_from`) on the partition's body, the bitfile (`bitfile`,

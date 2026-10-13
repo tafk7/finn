@@ -83,7 +83,6 @@ says what the cycles leave out (``memory_latency``: unmeasured, each call adds i
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -518,24 +517,22 @@ def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
     return explored
 
 
-def exploration_summary(explored: Explored, label: str) -> list[tuple[int, str]]:
-    """An exploration's lines for a build's log, each with its level: how many values
-    the strategy ``label`` changed; each limitation found, a warning; each value a
-    debugging strategy set; the choices left open; and the FIFOs."""
+def exploration_summary(explored: Explored, label: str) -> list[str]:
+    """An exploration's lines for a build's log: how many values the strategy ``label``
+    changed; each value a debugging strategy set; the choices left open; and the FIFOs.
+    Its limitations are its ``findings``."""
     report = explored.report
     changed = len(report["strategy"]["changed"])
-    lines = [(logging.INFO, f"Kernel choices: {label} changed {changed}")]
-    lines += [(logging.WARNING, f"Kernel choices: {each}") for each in explored.findings]
+    lines = [f"Kernel choices: {label} changed {changed}"]
     lines += [
-        (logging.INFO, f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
+        f"{entry['by']}: {node}.{attribute} = {entry['value']!r}"
         for node, held in report["choices"].items()
         for attribute, entry in held.items()
         if str(entry["by"]).startswith("DEBUG")
     ]
     if report["open"]:
-        left = ", ".join(report["open"])
-        lines.append((logging.INFO, f"Kernel choices: open, refused at packaging: {left}"))
-    lines.append((logging.INFO, f"FIFOs: {report['fifos']}"))
+        lines.append(f"Kernel choices: open, refused at packaging: {', '.join(report['open'])}")
+    lines.append(f"FIFOs: {report['fifos']}")
     return lines
 
 

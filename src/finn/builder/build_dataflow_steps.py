@@ -50,7 +50,6 @@ from finn.builder.build_dataflow_config import (
     StepFunction,
     config_finding,
 )
-from finn.builder.build_dataflow_manifest import reported, write_report
 from finn.builder.build_dataflow_resources import (
     RESOURCES_FILE,
     built_reports,
@@ -60,6 +59,7 @@ from finn.builder.build_dataflow_testbench import TESTBENCH_DIR, generated_frame
 from finn.core.graph.annotations.choices import OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
+from finn.core.reporting.manifest import note, reported, write_report
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.explore import (
     DebugPlaceholder,
@@ -250,12 +250,14 @@ def _explore(
     model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
 ) -> Explored:
     """Explore the partition by ``strategy``, its pins held, and save it; write the
-    step's report, report/<step>.json, and log its summary, each limitation a
-    warning."""
+    step's report, report/<step>.json, log its summary and note each limitation found as
+    a warning."""
     explored = explore_partition(model, strategy)
     write_report(Path(cfg.output_dir) / "report" / f"{step}.json", explored.report)
-    for level, line in exploration_summary(explored, step):
-        _LOG.log(level, line)
+    for line in exploration_summary(explored, step):
+        _LOG.info(line)
+    for finding in explored.findings:
+        note(finding)
     return explored
 
 
@@ -429,7 +431,7 @@ def step_build_bitfile(
     packaged it from its design as it is. Refuses a partition built for another target
     than the configuration's. The model records the bitfile and its hardware handoff,
     what it was built from and with which options; the build's reports are collected
-    under report/. A shortfall of the delivered clock is logged as a warning, against the
+    under report/. A shortfall of the delivered clock is noted as a warning, against the
     throughput step_target_throughput folded to, where the partition's body records one.
 
     ``hw_debug``: insert integrated logic analyzers on the ends' streams."""
@@ -446,7 +448,7 @@ def step_build_bitfile(
     for report in REPORTS.values():
         reported(Path(cfg.output_dir) / report)
     for finding in building.findings:
-        _LOG.warning("%s", finding)
+        note(finding)
     _LOG.info(f"Bitfile written into {building.bitfile.parent}")
     return model
 

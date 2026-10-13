@@ -4,7 +4,8 @@
 """FINN's layers, what each may import, and the one import walker that checks them.
 
 ```text
-finn.core.reporting  <-  finn.core.space, and every layer above it that states a finding
+finn.core.reporting  <-  finn.core.space, finn.toolchain, and every layer above them that
+                         states a finding or records a run
 finn.core.space <- finn.kernels <- finn.platform <- finn.core.graph <- finn.custom_op.kernels
 finn.dataflow   <-                                                  <- finn.transformation.kernels
                                                                        <- finn.shells
@@ -31,8 +32,9 @@ finn.platform.capabilities  <-  finn.kernels, and every row above them
 ```
 
 Each row imports every row to its left. What a run says (finn.core.reporting: its
-findings and the refusals that carry them) sits below the engine, the standard library
-only, and every row that states a finding imports it. The platform's capabilities
+findings and the refusals that carry them, its log and its manifest) sits below the
+engine, the standard library only, and every row that states a finding or records a run
+imports it: the toolchain logs its tool runs there. The platform's capabilities
 (finn.platform.capabilities: what a target gives kernels, plain data) sit beside the
 engine and the values, below the kernels; the rest of finn.platform, the registry with
 the build's target, sits above them. FINN's view of the ONNX model (finn.core.graph:
@@ -109,8 +111,8 @@ _KERNEL_STACK = (
 )
 
 LAYERS: tuple[Layer, ...] = (
-    # What a run says: its findings and the refusals that carry them. The standard
-    # library only, below the engine.
+    # What a run says: its findings and the refusals that carry them, its log and its
+    # manifest. The standard library only, below the engine.
     Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
     # The generic Space engine: the standard library and its native dependency.
     Layer("space", ("finn.core.space",), ("reporting",), ("greenlet",), "tests/core/space"),
@@ -135,7 +137,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The platform registry: parts, boards and shell rows, resolved to the build's target
     # (finn.platform.target), the capabilities kernels read with the part, shell and
-    # board. The shell root reads its shell's row. A refusal carries its finding
+    # board. A partition's network reads its shell's row. A refusal carries its finding
     # (finn.core.reporting).
     Layer(
         "platform",
@@ -178,12 +180,13 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # What FINN knows of the external tools it runs: the launcher, the host file, one
-    # module per tool. The standard library only, and one module of util: the resource
-    # store (standard library only), on whose primitives the HLS cache builds.
+    # module per tool. The standard library only, the records its tool runs are logged
+    # to (finn.core.reporting), and one module of util: the resource store (standard
+    # library only), on whose primitives the HLS cache builds.
     Layer(
         "toolchain",
         ("finn.toolchain",),
-        (),
+        ("reporting",),
         (),
         "tests/kernel_ops",
         also=("finn.resources",),

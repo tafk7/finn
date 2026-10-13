@@ -4,7 +4,7 @@
 """The build's manifest, ``report/build.json`` (finn.builder.build_dataflow_manifest):
 the index of a run, which a machine reads after the exit code, never the log. It is
 written from the build's start and rewritten as the build goes: each step with its
-status, seconds, reports and their findings, and tool runs and their transcripts; what
+status, seconds, reports, tool runs and their transcripts, and noted findings; what
 checking the configuration found; the outcome, by the failure's kind.
 The steps and the tool are fakes; no Vivado."""
 
@@ -21,15 +21,10 @@ from pathlib import Path
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
-from finn.builder.build_dataflow_manifest import (
-    MANIFEST_FILE,
-    findings_by_code,
-    finn_revision,
-    reported,
-)
+from finn.builder.build_dataflow_manifest import MANIFEST_FILE, finn_revision
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.manifest import RECORDS, note, reported
 from finn.platform.request import TargetRequest
-from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 
 pytestmark = pytest.mark.util
@@ -55,6 +50,10 @@ def blocker(code: str) -> Finding:
     return Finding(FindingKind.BLOCKER, code, "test", f"{code} found")
 
 
+def limitation(code: str) -> Finding:
+    return Finding(FindingKind.LIMITATION, code, "test", f"{code} found")
+
+
 def manifest_of(output: str) -> dict:
     with open(os.path.join(output, MANIFEST_FILE)) as f:
         return json.load(f)
@@ -76,12 +75,14 @@ def build_of(tmp_path: Path, steps, **fields) -> tuple[int, dict, DataflowBuildC
 
 
 def step_reports(model, cfg):
-    """Writes a report with two findings of one code, one of another, and says so."""
+    """Writes a report with two findings of one code, one of another, and says so; notes
+    a limitation."""
     path = Path(cfg.output_dir) / "report" / "checked.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     stated = [blocker(code).record() for code in ("odd", "odd", "even")]
     path.write_text(json.dumps({"section": {"findings": stated}}))
     reported(path)
+    note(limitation("short"))
     return model
 
 
@@ -128,9 +129,10 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
     assert list(steps) == ["step_reports", "step_tools", "step_looks"]
     assert all(step["status"] == "completed" for step in steps.values())
     assert all(step["seconds"] >= 0 for step in steps.values())
-    assert steps["step_reports"]["reports"] == [
-        {"path": "report/checked.json", "findings": {"even": 1, "odd": 2}}
-    ]
+    # A report is listed by path; its findings stay in it. A noted finding is listed.
+    assert steps["step_reports"]["reports"] == ["report/checked.json"]
+    assert steps["step_reports"]["findings"] == [limitation("short").record()]
+    assert steps["step_tools"]["findings"] == []
     assert "verifications" not in manifest
     runs = steps["step_tools"]["tools"]
     assert sorted(run["transcript"] for run in runs) == [
@@ -228,17 +230,9 @@ def test_a_caller_quieter_than_info_still_gets_its_manifest(tmp_path, capsys):
     finally:
         finn.setLevel(level)
     assert status == 0
-    assert manifest["steps"][0]["reports"][0]["path"] == "report/checked.json"
+    assert manifest["steps"][0]["reports"] == ["report/checked.json"]
     log = (Path(cfg.output_dir) / build.LOG_FILE).read_text()
     assert "wrote it" not in log and "Running step" not in log
-
-
-def test_findings_are_counted_at_any_depth_but_inside_a_finding():
-    cause = blocker("cause").record()
-    stated = blocker("top").record()
-    stated["causes"] = [cause]
-    report = {"a": [{"findings": [stated]}], "b": {"findings": [stated, stated]}, "c": 1}
-    assert findings_by_code(report) == {"top": 3}
 
 
 def test_a_module_logger_a_caller_quiets_drops_nothing_from_the_manifest(tmp_path):
@@ -246,7 +240,7 @@ def test_a_module_logger_a_caller_quiets_drops_nothing_from_the_manifest(tmp_pat
     level the build sets: a caller that quiets the toolchain's and the builder's loggers
     drops none of them, and gets its own level back after the build."""
     quieted = [logging.getLogger(name) for name in ("finn.toolchain", "finn.builder")]
-    records = logging.getLogger(launcher.RECORDS.name)
+    records = RECORDS
     levels = [logger.level for logger in quieted]
     for logger in quieted:
         logger.setLevel(logging.WARNING)
@@ -260,7 +254,5 @@ def test_a_module_logger_a_caller_quiets_drops_nothing_from_the_manifest(tmp_pat
             logger.setLevel(level)
     assert status == 0
     steps = {step["name"]: step for step in manifest["steps"]}
-    assert [report["path"] for report in steps["step_reports"]["reports"]] == [
-        "report/checked.json"
-    ]
+    assert steps["step_reports"]["reports"] == ["report/checked.json"]
     assert [run["status"] for run in steps["step_tools"]["tools"]] == ["completed"] * 2

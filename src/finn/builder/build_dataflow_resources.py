@@ -8,9 +8,10 @@ shell.
 each end by its boundary channel, each IP of the static region) and their total, in up
 to three columns:
 
-- ``model``: the shell root's own figures (``finn.custom_op.kernels.shell.shell_resources``):
-  the partition's kernels from their RTL's fitted models, each end and each static IP
-  from its out-of-context characterisation;
+- ``model``: the partition's network's own figures
+  (``finn.custom_op.kernels.shell.shell_resources``): the partition's kernels from their
+  RTL's fitted models, each end and each static IP from its out-of-context
+  characterisation;
 - ``out_of_context``: Vivado's synthesis of each IP alone. On a shell with an
   integration, these are the integration's per-IP runs (``<run>_utilization_synth.rpt``,
   read by ``finn.toolchain.vivado.utilization_synth``), matched to members by instance
@@ -33,10 +34,10 @@ column, because Vivado's hierarchical report can count children above their top 
 (TFC on Ultra96: the members' LUTs exceed it by 3).
 
 When the partition was synthesized out of context (``ooc_synth``), ``partition_members``
-splits it by member of the shell root (``package.ooc_member_resources``). Synthesis
-flattens small instances into the module's top and does not keep the hierarchy: what no
-reported instance holds is listed as ``unattributed`` there, and the instances without
-a row as ``unreported_instances``.
+splits it by member of the partition's network (``package.ooc_member_resources``).
+Synthesis flattens small instances into the module's top and does not keep the
+hierarchy: what no reported instance holds is listed as ``unattributed`` there, and the
+instances without a row as ``unreported_instances``.
 
 All counts are in ``finn.platform.capabilities.Resources`` units: LUTs, FFs, RAMB18
 halves (a RAMB36 counts two), URAMs and DSPs.
@@ -176,7 +177,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     totals: dict[str, Resources | None] = {}
     absent: dict[str, str] = {}
 
-    # The model column: the shell root's figures, by member.
+    # The model column: the partition's network's figures, by member.
     if isinstance(modelled, ShellResources):
         stated: dict[str, Resources | None] = {"partition": modelled.partition}
         stated.update({f"ends.{key}": value for key, value in modelled.ends})
@@ -258,7 +259,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         "part": target.part,
         "caveat": shell_row(target.shell, target.board).caveat,
         "columns": {
-            "model": "the shell root's statements (RESOURCES): the partition's kernels from "
+            "model": "the network's statements (RESOURCES): the partition's kernels from "
             f"their RTL's fits; each end and each static IP {SHELL_CHARACTERISED}, which "
             "overstate the placed shell",
             "out_of_context": "Vivado's synthesis of each IP alone",
