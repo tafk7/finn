@@ -232,11 +232,15 @@ class ChannelFifo(Space):
     platform: Platform = Param()
 
     @derived
-    def word_bits(self) -> int:
-        return self.arriving.form.lanes * self.tensor.element.bits
+    def carried(self) -> BeatSequence:
+        """What its FIFO carries: what arrives, its data words only (a marker closing every
+        beat, which it may carry, is tied high after it)."""
+        arriving = self.arriving
+        return BeatSequence(arriving.form, arriving.repetition)
 
     buffer = FifoKernel(
-        word_bits=word_bits,
+        input_tensor=tensor,
+        arriving=carried,
         # No depth is a safe baseline: a FIFO is chosen by sizing it (SizeFifos).
         depth=Decision(
             domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
@@ -261,8 +265,9 @@ class ChannelFifo(Space):
 
     @view
     def held_bits(self) -> int:
-        """Its depth of words."""
-        return self.buffer.depth * self.word_bits
+        """Its FIFO's own statement: its depth of words."""
+        held: int = self.buffer.held_bits
+        return held
 
     @view(semantics=RESOURCES_SEMANTICS)
     def resources(self) -> Resources:
@@ -272,19 +277,10 @@ class ChannelFifo(Space):
 
     @view
     def stages(self) -> tuple[Stage, ...]:
-        element, arriving, buffer = self.tensor.element, self.arriving, self.buffer
+        buffer = self.buffer
         module = buffer.module
         assert isinstance(module, Leaf)
-        return (
-            Stage(
-                module,
-                StreamContract(buffer.input.transport, element, arriving.form, arriving.repetition),
-                StreamContract(
-                    buffer.output.transport, element, arriving.form, arriving.repetition
-                ),
-                "fifo.buffer",
-            ),
-        )
+        return (Stage(module, buffer.input.contract, buffer.output.contract, "fifo.buffer"),)
 
 
 @dataclass(frozen=True)

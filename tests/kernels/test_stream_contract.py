@@ -40,7 +40,6 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel, wired
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.transport import (
@@ -58,6 +57,7 @@ from kernels.helpers import (
     built,
     choose,
     cycles_of,
+    fifo_node,
     with_direct_transports,
 )
 from kernels.xsim import requires_xsim
@@ -576,9 +576,7 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
             platform=FULL_DSP48E2, dtype=DataType["INT4"], form=produced, contents=values
         )
     )
-    fifo = design_space(FifoKernel(word_bits=16, depth=2, platform=FULL_DSP48E2)).with_choices(
-        ram_style="auto"
-    )
+    fifo = design_space(fifo_node(word_bits=16, depth=2)).with_choices(ram_style="auto")
     # The hop connects directly, and its link crosses the lanes: no adapter.
     sink = StreamContract(fifo.input.transport, INT4, wanted)
     assert compatibility(source.output.contract, sink, source_is_top=False, sink_is_top=False) == ()

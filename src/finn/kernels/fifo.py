@@ -1,9 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FinnLib's opaque-word FIFO, with its native unpadded ready/valid pins.
+"""FinnLib's FIFO, on its native unpadded ready/valid pins.
 
-Words have no numerical datatype. DEPTH is the requested capacity; the native
+It buffers the words of a tensor (``input_tensor``) and presents on both sides what
+arrives (``arriving``, a beat sequence it is given: a channel's transport gives it what
+reaches it), as memstream presents its given sequence; its words are opaque to the RTL.
+``DATA_WIDTH`` is its input port's word, the lanes a beat of the tensor's element. Its
+cycles are its ports' beats, as every leaf's, and its buffering its depth of words.
+DEPTH is the requested capacity; the native
 implementation may round its storage up and forces a shift FIFO for shallow
 depths. The RTL's ``auto`` selects by depth and word width: a shift register up
 to 64 words narrower than 12 bits, LUTRAM up to 257 words, block RAM up to 2028,
@@ -32,10 +37,12 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.dataflow.tensor import Tensor
+from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel
-from finn.kernels.port import WordPort
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
+from finn.kernels.port import native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_requirements
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -192,13 +199,41 @@ def least_depth_holding(words: int, bits: int, style: str, uram: bool) -> int:
 
 
 class FifoKernel(LeafKernel):
+    """FinnLib ``fifo``: what arrives of its tensor, presented again on its output; see the
+    module docstring."""
+
     id = "finnlib.fifo"
     version = 2
     rtl_module = "fifo"
 
-    word_bits: int = Param()
+    # The tensor whose words it buffers, a fact, and what arrives of it.
+    input_tensor: Tensor = Param(required=False)
+    arriving: BeatSequence = Param()
     depth: int = Param()
     platform: Platform = Param()
+
+    @derived
+    def output_tensor(self) -> Tensor:
+        """What it moves its input to: the same tensor."""
+        tensor: Tensor = self.input_tensor
+        return tensor
+
+    @derived
+    def leaving(self) -> BeatSequence:
+        """What it presents on its output: what arrives."""
+        sequence: BeatSequence = self.arriving
+        return sequence
+
+    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
+    output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
+    input_end = interface("input")
+    output_end = interface("output")
+
+    @derived
+    def word_bits(self) -> int:
+        """DATA_WIDTH: its input port's word."""
+        width: int = self.input.transport.data_width
+        return width
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -234,9 +269,6 @@ class FifoKernel(LeafKernel):
 
     admission = ConstraintGroup(geometry_supported, capacity_supported)
 
-    input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
-    output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits)
-
     @derived
     def clocking(self) -> Clocking:
         return NATIVE_CLOCKING
@@ -246,6 +278,11 @@ class FifoKernel(LeafKernel):
         return fifo_resources(
             self.depth, self.word_bits, self.rtl_ram_style, fabric=self.platform.fabric
         )
+
+    @derived
+    def held_bits(self) -> int:
+        """What it holds: its depth of words."""
+        return self.depth * self.word_bits
 
     @derived
     def parameters(self) -> dict[str, int | str]:

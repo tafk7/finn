@@ -1,7 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The width conversion (FinnLib ``vpc``): its domain, its refusals and its stream contract.
+"""The width conversion (FinnLib ``vpc``): its generics, from the sequences it is given, and
+its stream contract.
 
 On a channel it is a stage of the channel's adapter (``test_adapters.py`` plans it);
 here it is the kernel alone, and placed on two channels by its spec's case
@@ -15,7 +16,9 @@ from typing import Any
 import pytest
 
 from finn.core.space import design_space
-from finn.dataflow.traversal import vector_major
+from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
@@ -28,8 +31,16 @@ CONVERSIONS = vpc()["factors"]
 
 
 def _vpc(element_bits: int, lanes_in: int, lanes_out: int) -> VpcKernel:
+    """Alone, on one vector of INT``element_bits`` elements, ``lanes_in`` a beat in and
+    ``lanes_out`` out."""
+    shape = (lcm(lanes_in, lanes_out),)
+    tensor = Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(f"INT{element_bits}")))
     kernel: VpcKernel = design_space(
-        VpcKernel(element_bits=element_bits, lanes_in=lanes_in, lanes_out=lanes_out)
+        VpcKernel(
+            input_tensor=tensor,
+            arriving=BeatSequence(vector_major(shape, lanes_in)),
+            leaving=BeatSequence(vector_major(shape, lanes_out)),
+        )
     )
     return kernel
 
@@ -45,9 +56,10 @@ def _staged(conversion: dict[str, Any]) -> Any:
 def test_any_positive_geometry_converts_through_whole_common_vectors(
     element_bits: int, lanes_in: int, lanes_out: int
 ) -> None:
-    """Every positive element width and lane count, the same or coprime: no Decision, so
-    its domain is its facts'. N is the lanes' least common multiple, so no beat is
-    padded; its word ports carry whole beats."""
+    """Every element width and lane count its sequences present, the same or coprime: no
+    Decision, so its domain is its facts'. Its generics are its ports': PI and PO their
+    lanes, W the tensor's element. N is the lanes' least common multiple, so no beat is
+    padded; its ports carry whole beats."""
     kernel = _vpc(element_bits, lanes_in, lanes_out)
     assert not rejected(kernel)
     module = kernel.module
@@ -65,15 +77,6 @@ def test_any_positive_geometry_converts_through_whole_common_vectors(
     assert [source.path for source in module.sources if isinstance(source, CopiedSource)] == [
         "rtl/shape/vpc.sv"
     ]
-
-
-@pytest.mark.parametrize(
-    ("element_bits", "lanes_in", "lanes_out"), [(0, 2, 3), (4, 0, 3), (4, 2, 0), (-1, 2, 3)]
-)
-def test_a_geometry_that_is_not_positive_is_refused(
-    element_bits: int, lanes_in: int, lanes_out: int
-) -> None:
-    assert rejected(_vpc(element_bits, lanes_in, lanes_out)) == {"vpc-geometry"}
 
 
 @pytest.mark.parametrize(

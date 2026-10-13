@@ -16,7 +16,7 @@ from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
 from finn.platform.capabilities import Fabric
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, fifo_node
 
 T = TypeVar("T")
 
@@ -27,10 +27,11 @@ def decided(answer: QueryResult[T]) -> T:
 
 
 def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
-    base = design_space(FifoKernel(word_bits=13, depth=8, platform=FULL_DSP48E2))
+    base = design_space(fifo_node(word_bits=13, depth=8))
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
     with pytest.raises(ValueUnavailableError):
         _ = base.module
+    # Its word is its input port's: one lane of the tensor's INT13 a beat.
     assert base.field(FifoKernel.word_bits).get() == 13
     assert base.field(FifoKernel.word_bits).query() == Available(13)
     assert decided(base.field(FifoKernel.ram_style).state).status == "unassigned"
@@ -60,17 +61,13 @@ def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
 
 @pytest.mark.parametrize("style", ("auto", "shift", "distributed", "block", "ultra"))
 def test_fifo_passes_its_ram_style_to_its_native_parameter(style: str) -> None:
-    point = design_space(FifoKernel(word_bits=17, depth=64, platform=FULL_DSP48E2)).with_choices(
-        ram_style=style
-    )
+    point = design_space(fifo_node(word_bits=17, depth=64)).with_choices(ram_style=style)
     assert dict(point.module.parameters)["RAM_STYLE"] == f'"{style}"'
 
 
-@pytest.mark.parametrize(("bits", "depth"), ((0, 8), (13, 1), (1 << 32, 8), (13, 1 << 32)))
-def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(
-    bits: int, depth: int
-) -> None:
-    base = design_space(FifoKernel(word_bits=bits, depth=depth, platform=FULL_DSP48E2))
+@pytest.mark.parametrize("depth", (1, 1 << 32))
+def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(depth: int) -> None:
+    base = design_space(fifo_node(word_bits=13, depth=depth))
     assert base.inspect(FifoKernel.module).constraints.refused == ("geometry_supported",)
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
     chosen = base.with_choices(ram_style="auto")
@@ -93,7 +90,7 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
     uram: bool, depth: int, storage: FifoStorage, rtl_style: str
 ) -> None:
     platform = replace(FULL_DSP48E2, uram=uram)
-    point = design_space(FifoKernel(word_bits=8, depth=depth, platform=platform)).with_choices(
+    point = design_space(fifo_node(word_bits=8, depth=depth, platform=platform)).with_choices(
         ram_style="auto"
     )
     assert point.storage == storage

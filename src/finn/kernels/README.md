@@ -9,7 +9,7 @@ outside this repository until the package is final.
 
 | Module | Holds |
 |---|---|
-| `base.py`, `port.py`, `channels.py`, `adapters.py` | the kernel's two bases and what each must state (`LeafKernel`: one module, its cycles its ports' beats; `ComposedKernel`: a kernel with children; the clocking; the end each port presents, `PortEnd`), the ports (`AxiStreamPort`, `WordPort`), the `Channel` (one Space per edge, taking its two ends as facts: its plan, adapter, transport and source) and the adapters planned between its ends |
+| `base.py`, `port.py`, `channels.py`, `adapters.py` | the kernel's two bases and what each must state (`LeafKernel`: one module, its cycles its ports' beats; `ComposedKernel`: a kernel with children; the clocking; the end each port presents, `PortEnd`), the ports (`AxiStreamPort`; `native_stream`, a channel stage's on FinnLib's native pins, presenting a given sequence), the `Channel` (one Space per edge, taking its two ends as facts: its plan, adapter, transport and source) and the adapters planned between its ends |
 | `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `input_generator.py`, `transpose.py`, `vpc.py`, `pool.py` | the kernels (`pool.py`: the first HLS kernel, over `pooling_stream`) |
 | `configure.py` | committing choices by key, and naming the open and the committed ones |
 | `network.py` | the network: kernels and channels by name, each its own space bound from plain facts, wired by the ends each member presents (`Interface`) and what a kernel states for its parameter channel (`Fact`); a change (`trial`) atomic over the members it reaches, naming what replay drops; its composed module (`compose`, the one merge a kernel with children calls too) |

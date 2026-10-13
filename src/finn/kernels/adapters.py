@@ -24,20 +24,22 @@ each is keyed by its modules, joined (``input_gen_vpc``).
 ``realize`` maps a plan onto modules. A reorder becomes an ``input_gen`` whose
 frame, ``DIMS`` and ``COEFS`` are ``classify``'s; the marker step that follows
 it merges into the same module, whose ``olst[d]`` bits close the levels
-``DIMS[d:]``, split or grouped until every required level is one of them.
-Marker synthesis alone is an ``input_gen`` that passes its frames in order. A
-marker closing every beat is no step: the connection ties it high. A
-width conversion is a ``vpc`` over vectors of the two lane counts' least common
-multiple: its two sides carry the same elements in whole beats, a common multiple
-of both lane counts, so the vectors are whole. Each candidate places its modules
-as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage,
-and each becomes a ``Stage``: the child's module and the contracts of its two
-ports, which the channel checks like any other end. Its cost reads the
-realization alone, never a child's choices: ``beats``, the most beats any of its
-ports carries, and ``held_bits``, the buffers its ``input_gen`` stages allocate
-(``BUF_SIZE`` words each, read from the RTL: ``nest_geometry``). What it uses of
-the device, ``resources``, is its children's own statements summed, which read their
-memory styles.
+``DIMS[d:]``, split or grouped until every required level is one of them
+(``finn.kernels.input_generator.generated``). Marker synthesis alone is an
+``input_gen`` that passes its frames in order. A marker closing every beat is no
+step: the connection ties it high. A width conversion is a ``vpc`` over vectors of
+the two lane counts' least common multiple: its two sides carry the same elements in
+whole beats, a common multiple of both lane counts, so the vectors are whole.
+
+Each candidate is a kernel with children (``ComposedKernel``): it places its modules
+as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage, each given
+its tensor and the two sides of its step, the beat sequences its ports present, from
+which it derives its generics. Each becomes a ``Stage``: the child's module and its
+ports' contracts, which the channel checks like any other end, and which the channel
+wires hop by hop, so an adapter presents no interface of its own. Its netlist, cycles
+(the most beats any of its stages' ports carries), buffering (the buffers its
+``input_gen`` stages hold, ``BUF_SIZE`` words each, read from the RTL:
+``nest_geometry``) and resources are its stages' own, by the base.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
@@ -51,8 +53,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import prod
-from typing import Annotated, ClassVar
+from typing import ClassVar
 
 from finn.core.space import (
     ConstraintGroup,
@@ -67,12 +68,17 @@ from finn.core.space import (
 )
 from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
+from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.input_generator import GeometryError, InputGeneratorKernel, nest_geometry
+from finn.kernels.input_generator import (
+    Generate,
+    GeometryError,
+    InputGeneratorKernel,
+    generated,
+    nest_geometry,
+)
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
-from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Platform, Resources
 
@@ -96,20 +102,6 @@ class Stage:
 
 
 @dataclass(frozen=True)
-class Generate:
-    """One ``input_gen``: per ``frame`` input beats, the nest ``dims`` stepping ``coefs``."""
-
-    frame: int
-    dims: tuple[int, ...]
-    coefs: tuple[int, ...]
-
-    @property
-    def levels(self) -> tuple[LevelEnd, ...]:
-        """``olst[d]`` closes the levels ``dims[d:]``."""
-        return tuple(LevelEnd(prod(self.dims[depth:])) for depth in range(len(self.dims)))
-
-
-@dataclass(frozen=True)
 class Convert:
     """One ``vpc``: ``lanes_in`` elements a beat in, ``lanes_out`` out."""
 
@@ -119,7 +111,8 @@ class Convert:
 
 @dataclass(frozen=True)
 class RealizedStage:
-    """A module and the beat sequences of its two ports."""
+    """A module and the two sides of its step: what arrives (``source``) and what it must
+    present (``sink``: an ``input_gen``'s order and the markers it must close)."""
 
     module: Generate | Convert
     source: BeatSequence
@@ -130,53 +123,13 @@ class RealizedStage:
         return "input_gen" if isinstance(self.module, Generate) else "vpc"
 
 
-def _closing(generate: Generate, required: Sequence[LevelEnd], input_beats: int) -> Generate:
-    """``generate``'s nest split or grouped until it closes every ``required`` level."""
-    frame, dims, coefs = generate.frame, list(generate.dims), list(generate.coefs)
-    for level in sorted(required, key=lambda rule: rule.beats):
-        if level.beats == 1 and dims[-1] != 1:
-            # Every beat closes a level: an innermost loop of one.
-            dims, coefs = [*dims, 1], [*coefs, 1]
-            continue
-        span = prod(dims)
-        if level.beats > span:
-            # Group whole frames under an outer level of frames.
-            count = level.beats // span
-            if level.beats % span or input_beats % (frame * count):
-                raise Unrealizable(f"no input_gen frame closes {level.beats} beats")
-            dims, coefs, frame = [count, *dims], [frame, *coefs], frame * count
-            continue
-        inner = 1
-        for depth in range(len(dims) - 1, -1, -1):
-            if inner == level.beats:
-                break
-            if inner * dims[depth] > level.beats:
-                split = level.beats // inner
-                if level.beats % inner or dims[depth] % split:
-                    raise Unrealizable(f"no input_gen level closes every {level.beats} beats")
-                dims[depth : depth + 1] = [dims[depth] // split, split]
-                coefs[depth : depth + 1] = [coefs[depth] * split, coefs[depth]]
-                break
-            inner *= dims[depth]
-    return Generate(frame, tuple(dims), tuple(coefs))
-
-
 def _generated(hop: Hop, marked: Hop | None) -> RealizedStage:
-    """An ``input_gen`` for a reorder, a marker step, or a reorder and its markers."""
-    source = hop.source
-    if hop.step is Step.REORDER:
-        reorder = hop.reorder
-        assert isinstance(reorder, Reorder)
-        generate = Generate(reorder.frame_beats, reorder.dims, reorder.coefs)
-    else:
-        # Identity frames as long as the widest level it must close.
-        widest = max(rule.beats for rule in hop.sink.markers)
-        generate = Generate(widest, (widest,), (1,))
-    required = (marked or hop).sink.markers if marked or hop.step is Step.MARKERS else ()
-    generate = _closing(generate, required, source.form.beats)
-    form = hop.sink.form
-    offered = tuple(level for level in generate.levels if level.aligned(form))
-    return RealizedStage(generate, source, BeatSequence(form, markers=offered))
+    """An ``input_gen`` for a reorder, a marker step, or a reorder and its markers: what
+    arrives in the source's order, without its markers, and the order and markers of the
+    step's end."""
+    arriving = BeatSequence(hop.source.form)
+    leaving = (marked or hop).sink
+    return RealizedStage(generated(arriving, leaving), arriving, leaving)
 
 
 def realize(plan: Plan) -> tuple[RealizedStage, ...]:
@@ -188,7 +141,8 @@ def realize(plan: Plan) -> tuple[RealizedStage, ...]:
         hop = hops[index]
         index += 1
         if hop.step is Step.WIDTH:
-            source, sink = hop.source, hop.sink
+            # Its sides carry no marker: a width conversion drops what arrives with one.
+            source, sink = BeatSequence(hop.source.form), BeatSequence(hop.sink.form)
             stages.append(RealizedStage(Convert(source.form.lanes, sink.form.lanes), source, sink))
             continue
         marked = None
@@ -208,32 +162,28 @@ def _stage_name(kinds: Sequence[str], index: int) -> str:
 # -- the candidates of a channel's adapter Decision --------------------------------------
 
 
-@dataclass(frozen=True)
-class InputGenFacts:
-    """An ``input_gen`` stage's facts: its word, frame and nest."""
+def _side(name: str, side: str) -> BeatSequence:
+    """A derived member of an adapter: one side of its stage ``name``'s step, ``source``
+    (what arrives) or ``sink`` (what it presents), the beat sequence that stage's port is
+    given. Name it in the class body (``vpc_arriving = _side("vpc", "source")``)."""
 
-    word_bits: int
-    frame: int
-    dims: Annotated[IntegerVector, INTEGER_VECTOR]
-    coefs: Annotated[IntegerVector, INTEGER_VECTOR]
+    def read(self: StreamAdapter) -> BeatSequence | Rejected:
+        stage = self._named(name)
+        if isinstance(stage, Rejected):
+            return stage
+        sequence: BeatSequence = getattr(stage, side)
+        return sequence
 
-
-@dataclass(frozen=True)
-class VpcFacts:
-    """A ``vpc`` stage's facts: its element and the two lane counts."""
-
-    element_bits: int
-    lanes_in: int
-    lanes_out: int
+    return derived(read)
 
 
 class StreamAdapter(Space):
     """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
     Each candidate places its modules as kernel children named by stage
-    (``input_gen``, ``vpc``, then ``input_gen_1``), their facts
-    derived from the realization. An ``input_gen`` child owns its memory's
-    ``ram_style``, on the channel's ``platform``.
+    (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
+    the two sides of its step of the realization, which its ports present. An
+    ``input_gen`` child owns its memory's ``ram_style``, on the channel's ``platform``.
     """
 
     modules: ClassVar[tuple[str, ...]] = ()
@@ -271,23 +221,6 @@ class StreamAdapter(Space):
                 return stage
         return reject("adapter-plan", f"the plan's chain has no {name} stage")
 
-    def _generator(self, name: str) -> InputGenFacts | Rejected:
-        stage = self._named(name)
-        if isinstance(stage, Rejected):
-            return stage
-        module = stage.module
-        assert isinstance(module, Generate)
-        bits = stage.source.form.lanes * self.tensor.element.bits
-        return InputGenFacts(bits, module.frame, module.dims, module.coefs)
-
-    def _converter(self, name: str) -> VpcFacts | Rejected:
-        stage = self._named(name)
-        if isinstance(stage, Rejected):
-            return stage
-        module = stage.module
-        assert isinstance(module, Convert)
-        return VpcFacts(self.tensor.element.bits, module.lanes_in, module.lanes_out)
-
     # Cost, from the realization alone: a stage's memory style changes neither.
     @view
     def beats(self) -> int:
@@ -323,63 +256,46 @@ class StreamAdapter(Space):
             getattr(self, _stage_name(kinds, index)).resources for index in range(len(kinds))
         )
 
-    # The facts of every stage a chain can name; each chain reads its own.
-    @derived
-    def input_gen_facts(self) -> InputGenFacts | Rejected:
-        return self._generator("input_gen")
-
-    @derived
-    def input_gen_1_facts(self) -> InputGenFacts | Rejected:
-        return self._generator("input_gen_1")
-
-    @derived
-    def vpc_facts(self) -> VpcFacts | Rejected:
-        return self._converter("vpc")
+    # The sides of every stage a chain can name; each chain reads its own.
+    input_gen_arriving = _side("input_gen", "source")
+    input_gen_leaving = _side("input_gen", "sink")
+    input_gen_1_arriving = _side("input_gen_1", "source")
+    input_gen_1_leaving = _side("input_gen_1", "sink")
+    vpc_arriving = _side("vpc", "source")
+    vpc_leaving = _side("vpc", "sink")
 
     @view(requires=(realizes,))
     def stages(self) -> tuple[Stage, ...]:
-        """Each child's module and the contracts of its two ports."""
-        element = self.tensor.element
-        realization = self.realization
-        kinds = [stage.kind for stage in realization]
+        """Each child's module and its ports' contracts, labelled below the adapter
+        Decision: its candidate (the chain), then the stage."""
+        kinds = [stage.kind for stage in self.realization]
+        chain = "_".join(type(self).modules)
         found: list[Stage] = []
-        for index, stage in enumerate(realization):
+        for index in range(len(kinds)):
             name = _stage_name(kinds, index)
             kernel = getattr(self, name)
-            offered: tuple[tuple[str, LevelEnd], ...] = ()
-            if isinstance(stage.module, Generate):
-                offered = tuple(
-                    (f"olst[{depth}]", level)
-                    for depth, level in enumerate(stage.module.levels)
-                    if level in stage.sink.markers
-                )
             found.append(
                 Stage(
-                    kernel.module,
-                    StreamContract(kernel.input.transport, element, stage.source.form),
-                    StreamContract(
-                        kernel.output.transport, element, stage.sink.form, markers=offered
-                    ),
-                    # Below the adapter Decision: its candidate (the chain), then the stage.
-                    f"{'_'.join(type(self).modules)}.{name}",
+                    kernel.module, kernel.input.contract, kernel.output.contract, f"{chain}.{name}"
                 )
             )
         return tuple(found)
 
 
-def _input_gen(facts: InputGenFacts) -> InputGeneratorKernel:
+def _input_gen(name: str) -> InputGeneratorKernel:
     return InputGeneratorKernel(
-        word_bits=facts.word_bits,
-        frame_words=facts.frame,
-        dims=facts.dims,
-        strides=facts.coefs,
+        input_tensor=StreamAdapter.tensor,
+        arriving=getattr(StreamAdapter, f"{name}_arriving"),
+        leaving=getattr(StreamAdapter, f"{name}_leaving"),
         platform=StreamAdapter.platform,
     )
 
 
-def _vpc(facts: VpcFacts) -> VpcKernel:
+def _vpc(name: str) -> VpcKernel:
     return VpcKernel(
-        element_bits=facts.element_bits, lanes_in=facts.lanes_in, lanes_out=facts.lanes_out
+        input_tensor=StreamAdapter.tensor,
+        arriving=getattr(StreamAdapter, f"{name}_arriving"),
+        leaving=getattr(StreamAdapter, f"{name}_leaving"),
     )
 
 
@@ -399,8 +315,7 @@ def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
     members: dict[str, object] = {"modules": modules}
     for index, kind in enumerate(modules):
         name = _stage_name(modules, index)
-        facts = getattr(StreamAdapter, f"{name}_facts")
-        members[name] = _input_gen(facts) if kind == "input_gen" else _vpc(facts)
+        members[name] = _input_gen(name) if kind == "input_gen" else _vpc(name)
     return composite("_".join(modules), members, base=StreamAdapter)
 
 
@@ -421,11 +336,8 @@ __all__ = [
     "OUTPUT_ADAPTERS",
     "OUTPUT_CHAINS",
     "Convert",
-    "Generate",
-    "InputGenFacts",
     "RealizedStage",
     "Stage",
     "StreamAdapter",
-    "VpcFacts",
     "realize",
 ]

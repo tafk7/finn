@@ -58,12 +58,14 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES, ComposedKernel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
+from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
 from finn.kernels.network import Fact, Interface, Key, Network, Wire, dotted, wire
@@ -426,6 +428,62 @@ def threshold_base(
     )
 
 
+def stage_tensor(word_bits: int, words: int = 6, lanes: int = 1) -> Tensor:
+    """A channel stage's tensor alone: ``words`` words of ``lanes`` lanes, ``word_bits``
+    bits a word (an ``INT`` element of ``word_bits // lanes`` bits)."""
+    element = ScalarEncoding(resolve_qonnx_datatype_name(f"INT{word_bits // lanes}"))
+    return Tensor((words, lanes), element)
+
+
+def in_order(tensor: Tensor) -> BeatSequence:
+    """A stage tensor's words in order, a word a beat."""
+    return BeatSequence(vector_major(tensor.shape, tensor.shape[-1]))
+
+
+def fifo_node(
+    *, word_bits: int = 13, depth: int = 8, platform: Platform | None = None, words: int = 6
+) -> FifoKernel:
+    """A FIFO alone, of ``depth`` words of ``word_bits`` bits: its tensor ``words`` words
+    in order (``stage_tensor``), on ``platform`` (``FULL_DSP48E2``)."""
+    tensor = stage_tensor(word_bits, words)
+    return FifoKernel(
+        input_tensor=tensor,
+        arriving=in_order(tensor),
+        depth=depth,
+        platform=FULL_DSP48E2 if platform is None else platform,
+    )
+
+
+def nested(
+    frame: int, dims: IntegerVector, strides: IntegerVector, lanes: int = 1
+) -> tuple[BeatSequence, BeatSequence]:
+    """What an input generator that walks the nest ``dims``/``strides`` over frames of
+    ``frame`` words is given: one frame's words in order, and its order of them."""
+    shape = (frame, lanes)
+    loops = [Loop(extent, stride * lanes) for extent, stride in zip(dims, strides)]
+    leaving = Traversal(shape, loops, (Loop(lanes, 1),))
+    return BeatSequence(vector_major(shape, lanes)), BeatSequence(leaving)
+
+
+def generator_node(
+    *,
+    bits: int = 13,
+    frame: int = 6,
+    dims: IntegerVector = (3, 6),
+    strides: IntegerVector = (0, 1),
+    platform: Platform | None = None,
+) -> InputGeneratorKernel:
+    """An input generator alone, walking ``dims``/``strides`` over frames of ``frame``
+    words of ``bits`` bits (``nested``)."""
+    arriving, leaving = nested(frame, dims, strides)
+    return InputGeneratorKernel(
+        input_tensor=stage_tensor(bits, frame),
+        arriving=arriving,
+        leaving=leaving,
+        platform=FULL_DSP48E2 if platform is None else platform,
+    )
+
+
 def generator(
     *,
     bits: int = 13,
@@ -433,12 +491,9 @@ def generator(
     dims: IntegerVector = (3, 6),
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
-    """An input generator's design space, its memory Vivado's."""
-    return design_space(
-        InputGeneratorKernel(
-            word_bits=bits, frame_words=frame, dims=dims, strides=strides, platform=FULL_DSP48E2
-        )
-    ).with_choices(ram_style="auto")
+    """An input generator's design space (``generator_node``), its memory Vivado's."""
+    node = generator_node(bits=bits, frame=frame, dims=dims, strides=strides)
+    return design_space(node).with_choices(ram_style="auto")
 
 
 def eltwise(

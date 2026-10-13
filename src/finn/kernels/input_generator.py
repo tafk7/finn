@@ -12,8 +12,16 @@ rows of its image, not the frame. olst[i] marks completion
 of loop i and all inner loops, aligned with the output transfer. It is a native
 multi-bit marker, not AXI TLAST. Input and output words are opaque bits.
 
-On a channel, ``input_gen`` is a stage of the channel's adapter
-(``finn.kernels.adapters``), which derives these facts from the channel's plan.
+It presents the sequences it is given on its ports, as memstream presents its given
+sequence: ``arriving`` on its input, and on its output ``leaving``'s order with every
+level its nest closes there (``olst``'s bits, ``Generate.levels``). It derives its
+generics from them (``generated``): ``DATA_WIDTH`` its input's word, and the nest
+(``FM_SIZE``, ``DIMS``, ``COEFS``) the reorder between their orders (``classify``),
+or, for the same order, frames as long as the widest marker ``leaving`` requires,
+split or grouped until it closes each of ``leaving``'s markers. On a channel,
+``input_gen`` is a stage of the channel's adapter (``finn.kernels.adapters``), which
+gives it the two sides of its step of the channel's plan. Its cycles are its ports'
+beats, as every leaf's, and its buffering its buffer, ``BUF_SIZE`` input words.
 Its buffer's ``ram_style`` is its choice: the explicit styles, ordered by the most the
 buffer can hold (``frame_bits``, a frame), then ``auto``, which states no resources
 (``finn.kernels.utilization.memory_styles``); ``ultra`` requires the ``platform``'s
@@ -53,12 +61,14 @@ from finn.core.space import (
     reject,
     requiring,
 )
+from finn.dataflow.plan import Unrealizable
+from finn.dataflow.tensor import Tensor
+from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel
-from finn.kernels.port import WordPort
-from finn.kernels.transport import MarkerKind, StreamMarker
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
+from finn.kernels.port import LoopEnds, native_stream
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     Fit,
@@ -95,39 +105,158 @@ _INPUT_GEN_LUT = Fit(9.9, (3.07,))
 _INPUT_GEN_FF = Fit(12.7, (2.31,))
 
 
+# -- the nest, from the two sequences ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Generate:
+    """One ``input_gen``: per ``frame`` input beats, the nest ``dims`` stepping ``coefs``."""
+
+    frame: int
+    dims: tuple[int, ...]
+    coefs: tuple[int, ...]
+
+    @property
+    def levels(self) -> tuple[LevelEnd, ...]:
+        """``olst[d]`` closes the levels ``dims[d:]``."""
+        return tuple(LevelEnd(prod(self.dims[depth:])) for depth in range(len(self.dims)))
+
+
+def _closing(generate: Generate, required: Sequence[LevelEnd], input_beats: int) -> Generate:
+    """``generate``'s nest split or grouped until it closes every ``required`` level."""
+    frame, dims, coefs = generate.frame, list(generate.dims), list(generate.coefs)
+    for level in sorted(required, key=lambda rule: rule.beats):
+        if level.beats == 1 and dims[-1] != 1:
+            # Every beat closes a level: an innermost loop of one.
+            dims, coefs = [*dims, 1], [*coefs, 1]
+            continue
+        span = prod(dims)
+        if level.beats > span:
+            # Group whole frames under an outer level of frames.
+            count = level.beats // span
+            if level.beats % span or input_beats % (frame * count):
+                raise Unrealizable(f"no input_gen frame closes {level.beats} beats")
+            dims, coefs, frame = [count, *dims], [frame, *coefs], frame * count
+            continue
+        inner = 1
+        for depth in range(len(dims) - 1, -1, -1):
+            if inner == level.beats:
+                break
+            if inner * dims[depth] > level.beats:
+                split = level.beats // inner
+                if level.beats % inner or dims[depth] % split:
+                    raise Unrealizable(f"no input_gen level closes every {level.beats} beats")
+                dims[depth : depth + 1] = [dims[depth] // split, split]
+                coefs[depth : depth + 1] = [coefs[depth] * split, coefs[depth]]
+                break
+            inner *= dims[depth]
+    return Generate(frame, tuple(dims), tuple(coefs))
+
+
+def generated(arriving: BeatSequence, leaving: BeatSequence) -> Generate:
+    """The nest an ``input_gen`` walks to present ``leaving``'s order and markers from
+    ``arriving``: the reorder between their orders (``classify``: its frame, extents and
+    strides), or, for the same order, identity frames as long as the widest marker
+    ``leaving`` requires; split or grouped until it closes each of ``leaving``'s markers.
+    ``Unrealizable`` where no nest does."""
+    source, sink = arriving.form, leaving.form
+    if source != sink:
+        verdict = classify(source, sink)
+        reorder = verdict.reorder
+        if verdict.adaptation is not Adaptation.REORDER or reorder is None:
+            raise Unrealizable(f"no input_gen reorders them: {verdict.detail}")
+        generate = Generate(reorder.frame_beats, reorder.dims, reorder.coefs)
+    else:
+        if not leaving.markers:
+            raise Unrealizable("the same order and no marker: nothing for an input_gen to do")
+        widest = max(rule.beats for rule in leaving.markers)
+        generate = Generate(widest, (widest,), (1,))
+    return _closing(generate, leaving.markers, source.beats)
+
+
+def presented(generate: Generate, leaving: BeatSequence) -> BeatSequence:
+    """What an ``input_gen`` walking ``generate`` presents of ``leaving``: its order, with
+    every level its nest closes that the order aligns with."""
+    form = leaving.form
+    return BeatSequence(
+        form, markers=tuple(level for level in generate.levels if level.aligned(form))
+    )
+
+
 class InputGeneratorKernel(LeafKernel):
+    """FinnLib ``input_gen``: its tensor's words in another order, with its loop ends; see
+    the module docstring."""
+
     id = "finnlib.input_generator"
     version = 1
     rtl_module = "input_gen"
 
-    word_bits: int = Param()
-    frame_words: int = Param()
-    dims: IntegerVector = Param(semantics=INTEGER_VECTOR)
-    strides: IntegerVector = Param(semantics=INTEGER_VECTOR)
+    # The tensor whose words it reorders, a fact; what arrives of it, and the order and
+    # markers it presents (``leaving``: the markers it must close).
+    input_tensor: Tensor = Param(required=False)
+    arriving: BeatSequence = Param()
+    leaving: BeatSequence = Param()
     platform: Platform = Param()
+
+    @derived
+    def output_tensor(self) -> Tensor:
+        """What it moves its input to: the same tensor."""
+        tensor: Tensor = self.input_tensor
+        return tensor
+
+    @derived
+    def nest(self) -> Generate | Rejected:
+        """The nest it walks, from the two sequences (``generated``)."""
+        try:
+            return generated(self.arriving, self.leaving)
+        except Unrealizable as error:
+            return reject("input-generator-nest", str(error))
+
+    @derived
+    def presenting(self) -> BeatSequence:
+        """What its output presents: ``leaving``'s order, with every level its nest closes
+        there (``presented``)."""
+        return presented(self.nest, self.leaving)
+
+    @derived
+    def loop_ends(self) -> LoopEnds:
+        """``olst``: one bit per loop, closing that loop and every inner one."""
+        return LoopEnds("olst", self.nest.levels)
+
+    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
+    output = native_stream("output", Endpoint.INITIATOR, output_tensor, presenting, loop_ends)
+    input_end = interface("input")
+    output_end = interface("output")
+
+    @derived
+    def word_bits(self) -> int:
+        """DATA_WIDTH: its input port's word."""
+        width: int = self.input.transport.data_width
+        return width
+
+    @derived
+    def frame_words(self) -> int:
+        """FM_SIZE: the input words of a frame."""
+        return self.nest.frame
+
+    @derived(semantics=INTEGER_VECTOR)
+    def dims(self) -> IntegerVector:
+        """DIMS: the nest's loop extents, outer first."""
+        return self.nest.dims
+
+    @derived(semantics=INTEGER_VECTOR)
+    def strides(self) -> IntegerVector:
+        """COEFS: the input words each loop steps."""
+        return self.nest.coefs
 
     @constraint
     def traversal_supported(self) -> bool | Rejected:
-        bits = self.word_bits
-        frame = self.frame_words
-        extents = self.dims
-        strides = self.strides
-        if bits < 1 or frame < 1 or not extents or len(extents) != len(strides):
-            return reject(
-                "input-generator-shape",
-                "positive word/frame sizes and equally ranked nonempty vectors are required",
-            )
-        if any(extent < 1 for extent in extents) or any(stride < 0 for stride in strides):
-            return reject(
-                "input-generator-loop", "loop extents are positive and strides nonnegative"
-            )
-        if bits > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in (frame, *extents, *strides)):
+        """The nest's arithmetic fits the RTL's native widths (a nest from two sequences
+        is otherwise one it walks: positive extents and strides within its frame)."""
+        values = (self.frame_words, *self.dims, *self.strides)
+        if self.word_bits > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
             return reject(
                 "input-generator-range", "loop arithmetic must fit native signed 32-bit increments"
-            )
-        if sum((extent - 1) * stride for extent, stride in zip(extents, strides)) >= frame:
-            return reject(
-                "input-generator-address", "every selected word must lie within its input frame"
             )
         return True
 
@@ -144,15 +273,18 @@ class InputGeneratorKernel(LeafKernel):
     )
 
     @derived
-    def loop_ends(self) -> tuple[StreamMarker, ...] | Rejected:
-        """``olst``: one bit per loop, closing that loop and every inner one."""
-        rank = len(self.dims)
-        if rank < 1:
-            return reject("input-generator-interface", "a traversal has at least one loop")
-        return (StreamMarker("olst", MarkerKind.LOOP_END, rank),)
+    def buffer_words(self) -> int | Rejected:
+        """BUF_SIZE, as the RTL derives it (``nest_geometry``)."""
+        try:
+            return nest_geometry(self.frame_words, self.dims, self.strides).buffer_words
+        except GeometryError as error:
+            return reject("input-generator-geometry", str(error))
 
-    input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=word_bits)
-    output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=word_bits, markers=loop_ends)
+    @derived
+    def held_bits(self) -> int:
+        """What it holds: its buffer, ``BUF_SIZE`` input words, not one frame."""
+        words: int = self.buffer_words
+        return words * self.word_bits
 
     @derived
     def clocking(self) -> Clocking:
@@ -162,12 +294,8 @@ class InputGeneratorKernel(LeafKernel):
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the input_gen buffer")
-        try:
-            words = nest_geometry(self.frame_words, self.dims, self.strides).buffer_words
-        except GeometryError as error:
-            return reject("input-generator-geometry", str(error))
         return input_gen_resources(
-            buf_size=words,
+            buf_size=self.buffer_words,
             data_width=self.word_bits,
             d=len(self.dims),
             ram_style=self.ram_style,
@@ -303,11 +431,14 @@ def nest_buffer(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -
 
 __all__ = [
     "SOURCE",
+    "Generate",
     "GeometryError",
     "InputGeneratorKernel",
     "NestBuffer",
     "NestGeometry",
+    "generated",
     "input_gen_resources",
     "nest_buffer",
     "nest_geometry",
+    "presented",
 ]

@@ -6,18 +6,19 @@ import pytest
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import Available, Rejected, design_space
+from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.fifo import FifoKernel
+from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, eltwise, generator
+from kernels.helpers import FULL_DSP48E2, eltwise, fifo_node, in_order, nested, stage_tensor
 from kernels.xsim import requires_xsim
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
-    base = design_space(FifoKernel(word_bits=13, depth=8, platform=FULL_DSP48E2))
+    base = design_space(fifo_node(word_bits=13, depth=8))
     source, sink = base.input.transport, base.output.transport
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
@@ -27,9 +28,17 @@ def test_native_streams_are_inspectable_without_storage_choices():
 
 
 def test_loop_markers_remain_native_even_when_one_bit():
-    for dims, strides in (((6,), (1,)), ((3, 6), (0, 1))):
-        output = generator(bits=16, dims=dims, strides=strides).output.transport
-        assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, len(dims)),)
+    tensor = stage_tensor(16)
+    once = in_order(tensor)
+    # Each frame closed, in order: a nest of one loop; each row replayed: two.
+    framed = BeatSequence(once.form, markers=(LevelEnd(6),))
+    _, replayed = nested(6, (3, 6), (0, 1))
+    for leaving, loops in ((framed, 1), (replayed, 2)):
+        node = InputGeneratorKernel(
+            input_tensor=tensor, arriving=once, leaving=leaving, platform=FULL_DSP48E2
+        )
+        output = design_space(node).output.transport
+        assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, loops),)
         with pytest.raises(ValueError, match="single LAST"):
             output.axis_bus()
 
@@ -68,9 +77,7 @@ def test_fifo_capacity_and_effective_storage_agree_with_native_rtl(tmp_path):
     instances = []
     for index, (depth, style) in enumerate(cases):
         storage = (
-            design_space(FifoKernel(word_bits=9, depth=depth, platform=FULL_DSP48E2))
-            .with_choices(ram_style=style)
-            .storage
+            design_space(fifo_node(word_bits=9, depth=depth)).with_choices(ram_style=style).storage
         )
         instances.append(
             f'fifo_capacity_case #(.DEPTH({depth}), .STYLE("{style}"), '

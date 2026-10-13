@@ -37,7 +37,8 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.adapters import INPUT_CHAINS, OUTPUT_CHAINS, Convert, Generate, realize
+from finn.kernels.adapters import INPUT_CHAINS, OUTPUT_CHAINS, Convert, realize
+from finn.kernels.input_generator import Generate
 
 Beats = list[tuple[Position, ...]]
 

@@ -54,11 +54,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import ceil
 
-from finn.kernels.adapters import Convert, Generate
+from finn.kernels.adapters import Convert
 from finn.kernels.channels import Channel
 from finn.kernels.ends import EndContract
 from finn.kernels.fifo import least_depth_holding
-from finn.kernels.input_generator import NestBuffer, nest_buffer
+from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.transport import StreamContract
 
 
