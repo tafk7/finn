@@ -96,7 +96,8 @@ from finn.core.graph.annotations.choices import FIFOS_STALE, HELD, OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
-from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
+from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.space import Available
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.shell import (
     Partition,
@@ -237,15 +238,13 @@ def _resources_report(
             "static_region": {name: asdict(each) for name, each in stated.static_region},
         },
         "lower_bound": lower_bound,
-        "unstated": {
-            name: [finding_record(finding) for finding in why] for name, why in unstated.items()
-        },
+        "unstated": {name: [finding.record() for finding in why] for name, why in unstated.items()},
         "platform": None if totals is None else asdict(totals),
         "part": dict(part),
         "share": share,
         "binding": most,
         "over": exceeded,
-        "findings": [finding_record(finding) for finding in findings],
+        "findings": [finding.record() for finding in findings],
         "counted": RESOURCES_LOWER_BOUND if lower_bound else RESOURCES_COUNTED,
         "exact": exact if caveat is None else f"{exact}; {caveat}",
     }
@@ -450,16 +449,16 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     if refused:
         raise KernelOpError(
             "the explored point is refused: "
-            + "; ".join(
-                f"{name}: " + "; ".join(map(finding_text, why)) for name, why in refused.items()
+            + "; ".join(f"{name}: " + "; ".join(map(str, why)) for name, why in refused.items()),
+            findings=tuple(
+                network.located(name, finding) for name, why in refused.items() for finding in why
             ),
-            findings=tuple(finding for why in refused.values() for finding in why),
         )
     unadmitted = admission_refusal(network)
     if unadmitted:
         raise KernelOpError(
             f"the explored point is refused by the {network.row.shell!r} shell: "
-            + "; ".join(map(finding_text, unadmitted)),
+            + "; ".join(map(str, unadmitted)),
             findings=unadmitted,
         )
     persist(model, network)
@@ -526,7 +525,7 @@ def exploration_summary(explored: Explored, label: str) -> list[tuple[int, str]]
     report = explored.report
     changed = len(report["strategy"]["changed"])
     lines = [(logging.INFO, f"Kernel choices: {label} changed {changed}")]
-    lines += [(logging.WARNING, f"Kernel choices: {each.message}") for each in explored.findings]
+    lines += [(logging.WARNING, f"Kernel choices: {each}") for each in explored.findings]
     lines += [
         (logging.INFO, f"{entry['by']}: {node}.{attribute} = {entry['value']!r}")
         for node, held in report["choices"].items()

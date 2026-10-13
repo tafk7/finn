@@ -480,7 +480,8 @@ command exits 0 when the build completes, 255 when a step fails
 (`build_dataflow_directory` returns -1), and 1 with the traceback when the
 configuration is refused: before the first step, one `ConfigurationRefused` carries
 every rejection found, the target's, the plan's and the configuration checks', each a
-finding with its code and its place in the configuration. A setting a step cannot take
+finding with its code, owned by its place in the configuration
+(`configuration.target.board: unknown-board: ...`). A setting a step cannot take
 is refused when that step runs, as a `refusal` of the step. A caller that loads XSI in process supplies its
 loader environment before interpreter startup (`docker/finn-toolchain.sh` does for a
 shell). Concurrent in-process builds still share stdout and logger state; use

@@ -49,7 +49,7 @@ from finn.builder.build_dataflow_steps import (
     step_tidy_up,
 )
 from finn.core.onnx_exec import execute_onnx
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
 from finn.platform.request import TargetRequest
 from finn.transformation.kernels.convert import ToKernelOps

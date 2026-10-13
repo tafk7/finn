@@ -54,7 +54,6 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import design_digest, partition_body
-from finn.core.space import finding_text
 from finn.custom_op.kernels.shell import (
     ShellResources,
     configured_root,
@@ -186,7 +185,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
             columns[key]["model"] = stated.get(key)
         totals["model"] = modelled.total
     else:
-        absent["model"] = "; ".join(map(finding_text, modelled))
+        absent["model"] = "; ".join(map(str, modelled))
         totals["model"] = None
 
     # Out of context: the integration's per-IP runs, or the packaged partition's.

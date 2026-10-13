@@ -135,7 +135,10 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     # choices stand; the graph's y is stale, and the network refuses it by name until
     # inference, run again, states it.
     assert streamed.verify_node() == []
-    with pytest.raises(KernelOpError, match="y: tensor-stale: .*run InferKernelTensors"):
+    with pytest.raises(
+        KernelOpError,
+        match="stale_outputs: tensor-stale: the graph states y .*run InferKernelTensors",
+    ):
         network(model, model.graph.node)
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
@@ -152,7 +155,9 @@ def test_a_stale_output_is_refused_before_its_channel_reads_it() -> None:
     refusal of the producer's end."""
     model = matmul_model()
     model.set_tensor_datatype("y", INT3)
-    with pytest.raises(KernelOpError, match="y: tensor-stale: .* its producer first") as error:
+    with pytest.raises(
+        KernelOpError, match="stale_outputs: tensor-stale: the graph states y .* its producer first"
+    ) as error:
         network(model, model.graph.node)
     assert [finding.code for finding in error.value.findings] == ["tensor-stale"]
     # Another shape of the same elements and last axis is what the kernel requires.
@@ -271,9 +276,15 @@ def test_two_nodes_of_one_name_are_refused() -> None:
 
 
 FAN_OUT = {
-    "two KernelOps": (None, "hidden: tensor-fan-out: read by a, b"),
-    "a graph output listed last": ("last", "hidden: tensor-fan-out: read by a and leaves"),
-    "a graph output listed first": ("first", "hidden: tensor-fan-out: read by a and leaves"),
+    "two KernelOps": (None, "fan_out: tensor-fan-out: hidden is read by a, b"),
+    "a graph output listed last": (
+        "last",
+        "fan_out: tensor-fan-out: hidden is read by a and leaves",
+    ),
+    "a graph output listed first": (
+        "first",
+        "fan_out: tensor-fan-out: hidden is read by a and leaves",
+    ),
 }
 
 
@@ -307,7 +318,7 @@ def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
     a, b = model.graph.node
     assert b.input[1] != "w"
     b.input[1] = a.input[1]
-    with pytest.raises(KernelOpError, match="w: tensor-fan-out: read by a, b"):
+    with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: w is read by a, b"):
         network(model, model.graph.node)
 
 

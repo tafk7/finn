@@ -27,7 +27,7 @@ from finn.builder.build_dataflow_manifest import (
     finn_revision,
     reported,
 )
-from finn.core.space import Finding, FindingKind, finding_record
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
@@ -79,7 +79,7 @@ def step_reports(model, cfg):
     """Writes a report with two findings of one code, one of another, and says so."""
     path = Path(cfg.output_dir) / "report" / "checked.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    stated = [finding_record(blocker(code)) for code in ("odd", "odd", "even")]
+    stated = [blocker(code).record() for code in ("odd", "odd", "even")]
     path.write_text(json.dumps({"section": {"findings": stated}}))
     reported(path)
     return model
@@ -208,7 +208,7 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
     with pytest.raises(
         ConfigurationRefused,
-        match="step-unknown: steps\\[0\\]: 'step_none' is no step or named list",
+        match="configuration.steps\\[0\\]: step-unknown: 'step_none' is no step or named list",
     ):
         build_of(tmp_path, ["step_none"])
     manifest = manifest_of(str(tmp_path / "output"))
@@ -234,8 +234,8 @@ def test_a_caller_quieter_than_info_still_gets_its_manifest(tmp_path, capsys):
 
 
 def test_findings_are_counted_at_any_depth_but_inside_a_finding():
-    cause = finding_record(blocker("cause"))
-    stated = finding_record(blocker("top"))
+    cause = blocker("cause").record()
+    stated = blocker("top").record()
     stated["causes"] = [cause]
     report = {"a": [{"findings": [stated]}], "b": {"findings": [stated, stated]}, "c": 1}
     assert findings_by_code(report) == {"top": 3}

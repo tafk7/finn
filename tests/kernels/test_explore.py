@@ -20,13 +20,8 @@ from typing import Any
 import pytest
 
 import finn.kernels.explore as explore_module
-from finn.core.space import (
-    Finding,
-    FindingKind,
-    design_space,
-    finding_record,
-    finding_text,
-)
+from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
@@ -113,7 +108,7 @@ def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> N
 
 def said(why: Any) -> str:
     """Every finding of a refusal's ``why``, as text."""
-    return "; ".join(finding_text(finding) for found in why.values() for finding in found)
+    return "; ".join(str(finding) for found in why.values() for finding in found)
 
 
 def test_a_change_is_refused_for_a_forced_decision_or_a_case_that_is_not_viable() -> None:
@@ -748,7 +743,7 @@ def test_max_throughput_states_and_keeps_the_least_parallelism_where_nothing_fit
     assert "most of dsp: dsp 2 of 1" in found.message
     assert dict(found.details)["binding"] == "dsp"
     report = strategy.report()
-    assert report["findings"] == [finding_record(found)]
+    assert report["findings"] == [found.record()]
     assert report["fits"] is False and report["binding"] == "dsp"
     assert [tried.cycles for tried in strategy.tried] == [1, None]
 

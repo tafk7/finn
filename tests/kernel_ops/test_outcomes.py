@@ -18,7 +18,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.space import FindingKind, finding_record
+from finn.core.reporting.findings import FindingKind
 from finn.transformation.kernels import (
     Outcome,
     between_kernel_ops,
@@ -94,10 +94,16 @@ def test_a_host_node_between_kernel_ops_is_named_one_beside_them_is_not() -> Non
             "code": "no-kernel-op",
             "owner": "ToKernelOps",
             "message": "no KernelOp binds onnx.Transpose",
-            "details": {"domain": "", "op_type": "Transpose"},
+            "details": {"domain": "", "node": "flip", "op_type": "Transpose"},
             "causes": [],
         }
     ]
+    # Every finding of the report names the node it is about.
+    assert all(
+        finding["details"]["node"] in outcome["nodes"]
+        for outcome in report["outcomes"]
+        for finding in outcome["findings"]
+    )
     assert kernel_ops_summary(conversion.outcomes) == [
         "ToKernelOps: 2 converted (MatMul 2); 3 on the host; report/kernel_ops.json",
         "ToKernelOps:   no-kernel-op (limitation) 3: Relu 1, Neg 1, Transpose 1",
@@ -111,12 +117,12 @@ def test_a_host_node_between_kernel_ops_is_named_one_beside_them_is_not() -> Non
     # The refusal carries a finding for each node between, why it is on the host its causes.
     (found,) = refused.value.findings
     assert (found.kind, found.code, dict(found.details)) == (
-        FindingKind.BLOCKER,
+        FindingKind.REJECTION,
         "host-between",
         {"node": "flip"},
     )
     assert [cause.code for cause in found.causes] == ["no-kernel-op"]
-    assert finding_record(found)["causes"][0]["details"]["op_type"] == "Transpose"
+    assert found.record()["causes"][0]["details"]["op_type"] == "Transpose"
 
 
 def test_a_path_through_several_host_nodes_names_each() -> None:

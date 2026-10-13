@@ -11,6 +11,7 @@ differ in anything, their owner included, are all kept.
 
 from __future__ import annotations
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Decision,
     Param,
@@ -22,8 +23,6 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.results import (
-    Finding,
-    FindingKind,
     Rejected,
     Unresolved,
     ViewAssessment,

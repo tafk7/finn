@@ -8,24 +8,25 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
+from finn.core.reporting.findings import Finding, Refusal
+
 if TYPE_CHECKING:
     from .edits import ConfigurationResult
-    from .results import Finding, NonValue
+    from .results import NonValue
 
 
 class SpaceError(Exception):
     """Base class for failures at Space boundaries."""
 
 
-class DefinitionError(SpaceError, ValueError):
+class DefinitionError(SpaceError, Refusal):
     """An authored definition cannot be compiled into a valid model.
 
     It carries the findings that explain it.
     """
 
     def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
-        self.findings = tuple(findings)
-        super().__init__(detail)
+        super().__init__(findings, detail)
 
 
 class RequestError(SpaceError, ValueError):

@@ -26,7 +26,7 @@ decision key in its space (``("first", "compute.packed.pe")``, ``("y", "transpor
   (``Accepted.dropped``), so a drop is never silent, and settled again (its baseline,
   where it has one). A held choice is never dropped: the change is refused, naming it.
   Viable is not feasible: a refusal names why, so an explorer can recover: the engine's
-  findings (``finn.core.space.Finding``), or the seam's own (``SEAM_CODES``:
+  findings (``finn.core.reporting.findings.Finding``), or the seam's own (``SEAM_CODES``:
   ``not-a-decision``, ``held``, ``forced``, ``case-not-viable``, ``request-refused``,
   ``refused-together``, ``inapplicable``, ``decision-no-viable-case``), each owned by
   its key.
@@ -121,18 +121,15 @@ from math import floor
 from os import PathLike
 from typing import Any, Generic, Protocol, TypeVar
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Available,
-    Finding,
-    FindingKind,
     Inapplicable,
     QueryResult,
     Rejected,
     Space,
     Unresolved,
     ViewKey,
-    finding_record,
-    finding_text,
     inspection,
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
@@ -360,7 +357,7 @@ def _text(key: Key, findings: Iterable[Finding]) -> str:
     return "; ".join(
         finding.message
         if finding.owner == dotted(key) and finding.code in SEAM_CODES
-        else finding_text(finding)
+        else str(finding)
         for finding in findings
     )
 
@@ -378,8 +375,8 @@ def _findings_of(result: object) -> tuple[Finding, ...]:
 
 
 def _records(why: Mapping[str, Iterable[Finding]]) -> dict[str, list[dict[str, Any]]]:
-    """Each member's findings as JSON's values (``finding_record``), for a report."""
-    return {key: [finding_record(finding) for finding in found] for key, found in why.items()}
+    """Each member's findings as JSON's values (``Finding.record``), for a report."""
+    return {key: [finding.record() for finding in found] for key, found in why.items()}
 
 
 class Seam:
@@ -530,7 +527,7 @@ class Seam:
                 raise ExploreError(
                     "reopening is refused: "
                     + "; ".join(
-                        f"{dotted(key)}: " + "; ".join(map(finding_text, why))
+                        f"{dotted(key)}: " + "; ".join(map(str, why))
                         for key, why in trial.refused.items()
                     )
                 )
@@ -1297,7 +1294,7 @@ def _unknown(cost: Cost, waits: str = "") -> str:
     open choices, naming them (after ``waits``), or are refused, with why."""
     unknown = {
         **{name: waits + ", ".join(map(dotted, keys)) for name, keys in cost.waiting.items()},
-        **{name: "; ".join(map(finding_text, why)) for name, why in cost.refused.items()},
+        **{name: "; ".join(map(str, why)) for name, why in cost.refused.items()},
     }
     return "; ".join(f"{name}: {why}" for name, why in unknown.items())
 
@@ -1355,7 +1352,7 @@ def _resources_row(
     """A member's resources for a report, or why it states none, its findings' records."""
     if isinstance(used, Resources):
         return {name: getattr(used, name) for name in RESOURCE_NAMES}
-    return [finding_record(finding) for finding in used]
+    return [finding.record() for finding in used]
 
 
 class TargetThroughput(TargetCycles):
@@ -1547,11 +1544,10 @@ class MaxThroughput:
                     FindingKind.LIMITATION,
                     "resources-unstated",
                     self.strategy,
-                    "max_throughput: the budget is checked against a lower bound; these "
+                    "the budget is checked against a lower bound; these "
                     "members state no resources: "
                     + "; ".join(
-                        f"{name} ({'; '.join(map(finding_text, why))})"
-                        for name, why in unstated.items()
+                        f"{name} ({'; '.join(map(str, why))})" for name, why in unstated.items()
                     ),
                     (("members", tuple(unstated)),),
                     tuple(dict.fromkeys(cause for why in unstated.values() for cause in why)),
@@ -1592,7 +1588,7 @@ class MaxThroughput:
             FindingKind.LIMITATION,
             "resource-budget",
             self.strategy,
-            "max_throughput: even the least parallelism uses more than the budget, most "
+            "even the least parallelism uses more than the budget, most "
             f"of {self.binding()}: "
             + ", ".join(f"{name} {count} of {limit}" for name, (count, limit) in exceeded.items()),
             (("binding", self.binding()), ("over", tuple(exceeded))),
@@ -1625,7 +1621,7 @@ class MaxThroughput:
             "tried": [tried.row(self.budget) for tried in self.tried],
             "monotone": not self.departures,
             "departures": self.departures,
-            "findings": [finding_record(finding) for finding in self.findings],
+            "findings": [finding.record() for finding in self.findings],
         }
 
     def _try(
@@ -1658,8 +1654,7 @@ class MaxThroughput:
             raise ExploreError("max_throughput needs every member's cycles: " + _unknown(cost))
         if not isinstance(used, Stated):
             raise ExploreError(
-                "max_throughput needs the network's resources: "
-                + "; ".join(map(finding_text, used))
+                "max_throughput needs the network's resources: " + "; ".join(map(str, used))
             )
         return reached, used
 

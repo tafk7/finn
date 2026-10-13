@@ -62,15 +62,14 @@ import functools
 import weakref
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Generic, Self, TypeVar
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Available,
     ConfigurationError,
-    Finding,
-    FindingKind,
     Inapplicable,
     QueryResult,
     Rejected,
@@ -956,9 +955,7 @@ class Network:
             raise NetworkError(
                 "choices are not accepted: "
                 + "; ".join(
-                    f"{dotted(key)}: "
-                    + "; ".join(f"{item.owner}: {item.code}: {item.message}" for item in found)
-                    for key, found in why.items()
+                    f"{dotted(key)}: " + "; ".join(map(str, found)) for key, found in why.items()
                 )
             )
         return trial.network
@@ -969,8 +966,8 @@ class Network:
         """Its composed module (``compose``): each member's netlist under its name, in the
         order declared, with each boundary channel's AXIS bus and each control bus its
         kernels present (``CONTROL``, at the port each was given); or why not, every member's
-        refusal (or, where none refuses, what they wait on), each finding owned by its path
-        from the network (``first.well_formed``)."""
+        refusal (or, where none refuses, what they wait on), each finding naming its member
+        (``located``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
@@ -997,7 +994,7 @@ class Network:
             rejected = [(name, each) for name, each in failed if isinstance(each, Rejected)]
             findings = tuple(
                 dict.fromkeys(
-                    self._owned(name, finding)
+                    self.located(name, finding)
                     for name, each in (rejected or failed)
                     for finding in getattr(each, "findings", ())
                 )
@@ -1011,12 +1008,14 @@ class Network:
         built = compose(producer, stem, netlists, boundary, exported)
         return built if isinstance(built, Rejected) else Available(built)
 
-    def _owned(self, name: str, finding: Finding) -> Finding:
+    def located(self, name: str, finding: Finding) -> Finding:
         """A finding of member ``name``'s (or of the member an unbound channel's read
-        names), owned by its path from the network (``first.well_formed``)."""
+        names), its owner kept, a path in the member's space, with the member named in its
+        details: a channel as its ``tensor``, a kernel as its ``node``, as a graph's network
+        names them."""
         held = self._unbound.get(name)
         member = held.member if held is not None else name
-        return replace(finding, owner=dotted((member, finding.owner)))
+        return finding.about(**{"tensor" if member in self._wires else "node": member})
 
     def own_resources(self) -> QueryResult[Resources] | None:
         """What the network uses beside its members: nothing; a network that holds more

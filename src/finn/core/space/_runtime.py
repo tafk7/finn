@@ -11,6 +11,8 @@ from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeAlias, cast
 
+from finn.core.reporting.findings import Finding, FindingKind
+
 from . import _execution
 from .errors import EvaluationError
 from .graph import Located
@@ -19,8 +21,6 @@ from .results import (
     Available,
     ConstraintAssessment,
     DecisionState,
-    Finding,
-    FindingKind,
     Inapplicable,
     NonValue,
     QueryResult,

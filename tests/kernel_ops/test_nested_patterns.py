@@ -163,6 +163,7 @@ def test_a_set_a_path_leaves_and_reenters_is_refused_by_code(nested: None) -> No
         "op": "SplitMatMul",
         "covered": ("split", "mm"),
         "through": ("flip",),
+        "node": "split",
     }
     assert [outcome.nodes for outcome in conversion.outcomes] == [("split",), ("flip",), ("mm",)]
 
@@ -202,6 +203,7 @@ def test_an_interior_tensor_read_outside_the_set_is_refused_by_code(
         "op": "CopyMatMul",
         "tensor": "t",
         "readers": readers,
+        "node": "copy",
     }
     # The MatMul alone still converts, as itself.
     assert ("mm",) in {outcome.nodes for outcome in conversion.outcomes if outcome.op == "MatMul"}

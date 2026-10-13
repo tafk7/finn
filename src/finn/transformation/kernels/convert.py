@@ -44,7 +44,7 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import FactUnstated, KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.graph.walk import between, upstream
-from finn.core.space import Finding, FindingKind, by_code, finding_record, finding_text
+from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
@@ -109,7 +109,7 @@ class ToKernelOps(Transformation):
                     "no-kernel-op",
                     type(self).__name__,
                     f"no KernelOp binds {named}",
-                    (("op_type", node.op_type), ("domain", node.domain)),
+                    (("op_type", node.op_type), ("domain", node.domain), ("node", _label(node))),
                 )
                 outcomes.append(Outcome((_label(node),), None, (finding,)))
                 infer_node(model, node)
@@ -152,7 +152,10 @@ class ToKernelOps(Transformation):
                 continue
             if converted is None:
                 infer_node(model, node)
-            outcomes.append(Outcome(labels, converted, tuple(findings)))
+            about = _label(node)
+            outcomes.append(
+                Outcome(labels, converted, tuple(each.about(node=about) for each in findings))
+            )
             index += 1
         self.outcomes = tuple(outcomes)
         return model, False
@@ -336,7 +339,7 @@ def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dic
             {
                 "nodes": list(outcome.nodes),
                 "op": outcome.op,
-                "findings": [finding_record(finding) for finding in outcome.findings],
+                "findings": [finding.record() for finding in outcome.findings],
             }
             for outcome in outcomes
         ],
@@ -383,14 +386,14 @@ def refuse_host_between(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> N
         return
     findings = {node: outcome.findings for outcome in outcomes for node in outcome.nodes}
     named = "; ".join(
-        f"{node} (" + ", ".join(map(finding_text, findings.get(node, ()))) + ")" for node in between
+        f"{node} (" + ", ".join(map(str, findings.get(node, ()))) + ")" for node in between
     )
     raise KernelOpError(
         f"{len(between)} host nodes sit between KernelOps, so a partition of the KernelOps "
         f"would depend on itself: {named}",
         findings=tuple(
             Finding(
-                FindingKind.BLOCKER,
+                FindingKind.REJECTION,
                 "host-between",
                 ToKernelOps.__name__,
                 f"{node} sits on the host between KernelOps",

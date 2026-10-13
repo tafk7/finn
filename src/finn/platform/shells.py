@@ -221,11 +221,16 @@ def built_shell(shell: str) -> str:
     if shell in NOT_BUILT:
         raise TargetRefused(
             "unsupported-shell",
+            "configuration.target.shell",
             f"{shell!r} ({NOT_BUILT[shell]}) is named but not built: "
             f"FINN builds {IP!r} and {PYNQ!r}",
         )
     if shell not in SHELL_NAMES:
-        raise TargetRefused("unknown-shell", f"{shell!r} is not a shell (one of {SHELL_NAMES})")
+        raise TargetRefused(
+            "unknown-shell",
+            "configuration.target.shell",
+            f"{shell!r} is not a shell (one of {SHELL_NAMES})",
+        )
     return shell
 
 
@@ -238,6 +243,7 @@ def shell_row(shell: str, board: str | None) -> ShellRow:
     if board is None:
         raise TargetRefused(
             "board-required",
+            "configuration.target.board",
             f"the {shell!r} shell is built for a board: name one of {sorted(BOARDS)}",
         )
     if (shell, board) not in ROWS:
@@ -247,7 +253,9 @@ def shell_row(shell: str, board: str | None) -> ShellRow:
             else ""
         )
         raise TargetRefused(
-            "no-shell-row", f"the {shell!r} shell has no row for board {board!r}{why}"
+            "no-shell-row",
+            "configuration.target.board",
+            f"the {shell!r} shell has no row for board {board!r}{why}",
         )
     return ROWS[shell, board]
 

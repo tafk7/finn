@@ -46,7 +46,7 @@ from finn.builder.build_dataflow_config import (
     config_finding,
     undecoded,
 )
-from finn.core.space import Finding
+from finn.core.reporting.findings import Finding
 from finn.util.typed_json import decoded, encoded
 
 
@@ -104,7 +104,7 @@ _Declared = tuple[str, Callable[..., ModelWrapper], Mapping[str, tuple[Any, Any]
 NamedLists = Mapping[str, Sequence[StepFunction]]
 
 
-def _refusal(code: str, place: str | None, message: str) -> ConfigurationRefused:
+def _refusal(code: str, place: str, message: str) -> ConfigurationRefused:
     """A refusal of one rejection, at ``place`` in the configuration."""
     return ConfigurationRefused([config_finding(code, message, place)])
 
@@ -276,7 +276,7 @@ def resolve_plan(
     listed = [
         step
         for index, entry in enumerate(stated)
-        for step in _resolved(entry, f"steps[{index}]", lists, named)
+        for step in _resolved(entry, f"configuration.steps[{index}]", lists, named)
     ]
     settings, refused = _settings(cfg, listed)
     steps = tuple(
@@ -285,8 +285,8 @@ def resolve_plan(
     )
     bounds = []
     for place, name, end, bound in (
-        ("start_step", cfg.start_step, False, 0),
-        ("stop_step", cfg.stop_step, True, len(steps) - 1),
+        ("configuration.start_step", cfg.start_step, False, 0),
+        ("configuration.stop_step", cfg.stop_step, True, len(steps) - 1),
     ):
         try:
             bounds.append(bound if name is None else _index(steps, lists, name, end, place))
@@ -294,7 +294,7 @@ def resolve_plan(
             refused.extend(absent.findings)
     if len(bounds) == 2 and cfg.start_step is not None and bounds[0] == 0:
         message = "no step runs before it, so no model was saved to start from"
-        refused.append(config_finding("start-without-model", message, "start_step"))
+        refused.append(config_finding("start-without-model", message, "configuration.start_step"))
     if refused:
         raise ConfigurationRefused(refused)
     first, last = bounds

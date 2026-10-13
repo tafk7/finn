@@ -446,7 +446,7 @@ def step_build_bitfile(
     for report in REPORTS.values():
         reported(Path(cfg.output_dir) / report)
     for finding in building.findings:
-        _LOG.warning(finding.message)
+        _LOG.warning("%s", finding)
     _LOG.info(f"Bitfile written into {building.bitfile.parent}")
     return model
 

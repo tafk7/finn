@@ -2,16 +2,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-# Gate for finn.core.space and its tests.
+# Gate for finn.core.space and its tests, and for finn.core.reporting, the layer below it.
 
 # shellcheck source=scripts/_gate-common.sh
 source "$(dirname "$(readlink -f "$0")")/_gate-common.sh"
 
+gate_pytest tests/core/reporting
 gate_pytest tests/core/space
 # Documentation examples are checked separately in scratchpad/space/.
 # The layer table (tests/layering.py), which every layer's tests use, and the
 # pre-commit check every gate's gate_ruff runs, are checked with the lowest layer.
-gate_ruff src/finn/core/space tests/core/space tests/layering.py tests/value_classes.py \
-    scripts/_gate_precommit.py
-gate_mypy -p finn.core.space
-gate_mypy tests/core/space tests/layering.py tests/value_classes.py
+gate_ruff src/finn/core/reporting tests/core/reporting src/finn/core/space tests/core/space \
+    tests/layering.py tests/value_classes.py scripts/_gate_precommit.py
+gate_mypy -p finn.core.reporting -p finn.core.space
+gate_mypy tests/core/reporting tests/core/space tests/layering.py tests/value_classes.py

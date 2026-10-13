@@ -44,11 +44,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
 from finn.builder.build_dataflow_checks import configuration_findings
-from finn.builder.build_dataflow_config import (
-    ConfigurationRefused,
-    DataflowBuildConfig,
-    finding_line,
-)
+from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
     Manifest,
@@ -62,7 +58,7 @@ from finn.builder.build_dataflow_steps import (
     build_dataflow_step_lookup,
     default_steps,
 )
-from finn.core.space import Finding, FindingKind, by_code
+from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.platform.refusal import TargetRefused
 from finn.platform.target import Target
 from finn.toolchain.launcher import RECORDS, ToolFailed, ToolUnavailable, host_selection
@@ -216,7 +212,7 @@ def _configured(
     manifest.configured(found)
     for finding in found:
         if finding.kind is not FindingKind.REJECTION:
-            _LOG.warning("%s", finding_line(finding))
+            _LOG.warning("%s", finding)
     rejections = [finding for finding in found if finding.kind is FindingKind.REJECTION]
     if rejections:
         raise ConfigurationRefused(rejections)
@@ -230,7 +226,7 @@ def _log_refusal(error: BaseException) -> None:
     if isinstance(error, ConfigurationRefused):
         _LOG.error("Configuration refused: %d findings", len(error.findings))
         for finding in error.findings:
-            _LOG.error("  %s", finding_line(finding))
+            _LOG.error("  %s", finding)
         return
     _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
     _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)

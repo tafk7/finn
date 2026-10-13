@@ -72,7 +72,7 @@ from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.core.onnx_exec import execute_onnx
-from finn.core.space import Finding, FindingKind, finding_record
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.module import module_name
@@ -601,7 +601,7 @@ def test_a_shells_outputs_are_refused_at_their_steps_on_a_shell_without_one(
         "findings": {"shell-without-bitfile": 1},
     }
     assert outcome["error"]["message"] == (
-        "shell-without-bitfile: configuration.target.shell: the 'ip' shell has no bitfile "
+        "configuration.target.shell: shell-without-bitfile: the 'ip' shell has no bitfile "
         "build, which step_build_bitfile needs; state a shell that has one (pynq, for a "
         "board), or leave step_build_bitfile out of the steps"
     )
@@ -668,7 +668,8 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     with pytest.raises(PynqRefused) as refused:
         step_deployment_package(parent, cfg)
     assert str(refused.value) == (
-        f"deployment_package: the driver in this output directory ({output / 'driver'}) was "
+        f"deployment_package: driver-stale: the driver in this output directory "
+        f"({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
         f"{design_digest(body)}; make the driver again (step_make_driver)"
     )
@@ -1536,12 +1537,13 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
     report = Path(cfg.output_dir) / DELIVERED_CLOCK
-    with pytest.raises(PynqRefused, match=f"pynq_driver: no delivered clock \\({report}\\)"):
+    absent = f"pynq_driver: clock-absent: no delivered clock \\({report}\\)"
+    with pytest.raises(PynqRefused, match=absent):
         step_make_driver(parent, cfg)
     report.parent.mkdir(parents=True)
-    unknown = finding_record(
-        Finding(FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it")
-    )
+    unknown = Finding(
+        FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it"
+    ).record()
     report.write_text(json.dumps({"target_period_ns": 5.0, "clocks": [], "findings": [unknown]}))
     with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
         step_make_driver(parent, cfg)
@@ -1576,7 +1578,7 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     parent.set(OUTPUT_BITFILE, str(bitfile))
     (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
     with pytest.raises(
-        PynqRefused, match=rf"{output}: the model's bitfile \(.*\) states no design"
+        PynqRefused, match=rf"{output}: bitfile-unmade: the model's bitfile \(.*\) states no design"
     ) as refused:
         step(parent, cfg)
     assert [(each.code, each.owner) for each in refused.value.findings] == [
@@ -1594,7 +1596,8 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
         step(parent, cfg)
     assert [each.code for each in refused.value.findings] == ["bitfile-stale"]
     assert str(refused.value) == (
-        f"{output}: the model's bitfile ({bitfile}) is stale: it was built from the design "
+        f"{output}: bitfile-stale: the model's bitfile ({bitfile}) is stale: it was built from "
+        f"the design "
         f"{built_from}, and the partition {node.name}'s design is now {now}; build the "
         "bitfile again (step_build_bitfile)"
     )

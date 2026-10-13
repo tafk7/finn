@@ -37,7 +37,8 @@ from qonnx.analysis.tensor_value_summary import (
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import datatype, integer_tensor, known_shape, shape
-from finn.core.space import Finding, Rejected
+from finn.core.reporting.findings import Finding
+from finn.core.space import Rejected
 from finn.custom_op.kernels.base import (
     KernelOp,
     Match,

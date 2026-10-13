@@ -18,7 +18,7 @@ import warnings
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import (
     SELECTED_BY,
@@ -222,13 +222,13 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys)
         settings={"fifo_margin": 2},
     )
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": output})
-    refusal = "board-vivado: configuration.toolchain: AUP-ZU3_8GB requires Vivado 2024.1"
+    refusal = "configuration.toolchain: board-vivado: AUP-ZU3_8GB requires Vivado 2024.1"
     with pytest.raises(ConfigurationRefused, match=refusal):
         build.build_dataflow_cfg(model, cfg)
     err = capsys.readouterr().err
     with open(f"{output}/{build.LOG_FILE}") as f:
         log = f.read()
-    warning = "setting-unread: configuration.fifo_margin: only step_size_fifos read it"
+    warning = "configuration.fifo_margin: setting-unread: only step_size_fifos read it"
     lines = err.splitlines()
     assert lines[:2] == [
         f"WARNING: {warning}, and start_step/stop_step leave them out",

@@ -35,12 +35,11 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     StepEntry,
     StepFunction,
-    finding_line,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import Plan, Step, resolve_plan
 from finn.builder.build_dataflow_steps import default_steps, step_cleanup
-from finn.core.space import FindingKind
+from finn.core.reporting.findings import FindingKind
 from finn.platform.request import TargetRequest
 
 TARGET = TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e")
@@ -130,13 +129,13 @@ def ran(step: Step, model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapp
 
 
 def refused(cfg: DataflowBuildConfig) -> str:
-    """The one finding the plan of ``cfg`` is refused with, as a line: its code, its
-    place where it has one, and its message."""
+    """The one finding the plan of ``cfg`` is refused with, as its line: its place in the
+    configuration, its code and its message."""
     with pytest.raises(ConfigurationRefused) as refusal:
         build_plan(cfg)
     (finding,) = refusal.value.findings
     assert finding.kind is FindingKind.REJECTION
-    return finding_line(finding)
+    return str(finding)
 
 
 def identity_model() -> ModelWrapper:
@@ -178,8 +177,8 @@ def test_an_entry_is_a_named_list_a_step_an_import_path_or_in_python_a_function(
 
 #: A Transformation's refusal, with the step function to write instead.
 WRAP = (
-    "step-invalid: steps[1]: {0} is a Transformation, not a step function; wrap it in one: "
-    "def step_name(model, cfg): return model.transform({0}(...))"
+    "configuration.steps[1]: step-invalid: {0} is a Transformation, not a step function; "
+    "wrap it in one: def step_name(model, cfg): return model.transform({0}(...))"
 )
 
 
@@ -188,16 +187,17 @@ WRAP = (
     [
         (
             "step_size_fifo",
-            "step-unknown: steps[1]: 'step_size_fifo' is no step or named list; the steps: "
-            "step_cleanup, ",
+            "configuration.steps[1]: step-unknown: 'step_size_fifo' is no step or named list; "
+            "the steps: step_cleanup, ",
         ),
         (
             "finn.builder.nowhere.step_x",
-            "step-import: steps[1]: 'finn.builder.nowhere.step_x': no module",
+            "configuration.steps[1]: step-import: 'finn.builder.nowhere.step_x': no module",
         ),
         (
             "finn.builder.build_dataflow_steps.step_size_fifo",
-            "step-import: steps[1]: 'finn.builder.build_dataflow_steps.step_size_fifo': "
+            "configuration.steps[1]: step-import: "
+            "'finn.builder.build_dataflow_steps.step_size_fifo': "
             "finn.builder.build_dataflow_steps has no 'step_size_fifo'",
         ),
         ("qonnx.transformation.general.GiveUniqueNodeNames", WRAP.format("GiveUniqueNodeNames")),
@@ -205,14 +205,18 @@ WRAP = (
         (GiveReadableTensorNames(), WRAP.format("GiveReadableTensorNames")),
         (
             "pathlib.Path",
-            "step-invalid: steps[1]: <class 'pathlib.Path'> is no step: the name of a step or "
-            "named list, an import path of a step function, or a function",
+            "configuration.steps[1]: step-invalid: <class 'pathlib.Path'> is no step: the name "
+            "of a step or named list, an import path of a step function, or a function",
         ),
         (
             functools.partial(step_scaled, scale=2.0),
-            "step-invalid: steps[1]: functools.partial(<function step_scaled",
+            "configuration.steps[1]: step-invalid: functools.partial(<function step_scaled",
         ),
-        (3, "step-invalid: steps[1]: 3 is no step: the name of a step or named list, an"),
+        (
+            3,
+            "configuration.steps[1]: step-invalid: 3 is no step: the name of a step or named "
+            "list, an",
+        ),
     ],
 )
 def test_an_entry_that_names_no_step_is_refused_naming_its_place(entry: Any, message: str) -> None:
@@ -284,13 +288,13 @@ def test_a_phase_names_its_steps_in_the_list_and_at_start_and_stop() -> None:
 def test_start_and_stop_name_a_step_once() -> None:
     twice = config(steps=["step_tidy_up", "step_tidy_up"], start_step="step_tidy_up")
     assert refused(twice) == (
-        "step-ambiguous: start_step: 'step_tidy_up' is 2 steps of this build, not one"
+        "configuration.start_step: step-ambiguous: 'step_tidy_up' is 2 steps of this build, not one"
     )
     phases = config(
         steps=["phase_emit_hardware", "phase_emit_hardware"], stop_step="phase_emit_hardware"
     )
     assert refused(phases) == (
-        "step-ambiguous: stop_step: 'phase_emit_hardware' (its last step, "
+        "configuration.stop_step: step-ambiguous: 'phase_emit_hardware' (its last step, "
         "'step_package_partition') is 2 steps of this build, not one"
     )
 
@@ -350,13 +354,16 @@ def test_each_setting_is_decoded_by_its_steps_annotation_and_passed_to_it() -> N
 def test_a_setting_of_the_wrong_type_is_refused_naming_its_place(
     stated: dict[str, Any], message: str
 ) -> None:
-    assert refused(config(steps=[step_typed], settings=stated)) == f"setting-invalid: {message}"
+    place, _, text = message.partition(": ")
+    assert refused(config(steps=[step_typed], settings=stated)) == (
+        f"{place}: setting-invalid: {text}"
+    )
 
 
 def test_a_setting_no_step_declares_is_refused_naming_the_settings_the_steps_read() -> None:
     cfg = config(steps=[step_typed, step_cleanup], settings={"scael": 2.0})
     assert refused(cfg) == (
-        "setting-unknown: configuration.scael: no step of this build declares it; the "
+        "configuration.scael: setting-unknown: no step of this build declares it; the "
         "settings its steps read: count, flag, label, limit, mode, override_inpsize, scale, "
         "sizes, table, weights"
     )
@@ -370,11 +377,11 @@ def test_steps_that_declare_one_setting_share_its_value() -> None:
 
 def test_steps_that_declare_one_setting_differently_are_refused() -> None:
     assert refused(config(steps=[step_scaled, step_counted])) == (
-        "setting-conflict: configuration.scale: its readers declare different types "
+        "configuration.scale: setting-conflict: its readers declare different types "
         "(step_scaled: <class 'float'>; step_counted: <class 'int'>)"
     )
     assert refused(config(steps=[step_scaled, step_halved])) == (
-        "setting-conflict: configuration.scale: its readers declare different defaults "
+        "configuration.scale: setting-conflict: its readers declare different defaults "
         "(step_scaled: 1.0; step_halved: 0.5)"
     )
 
@@ -390,14 +397,14 @@ def test_a_step_parameter_named_like_a_field_is_refused() -> None:
     """No setting can give it (the configuration refuses a setting named like a field), so
     the plan refuses the step before the first one runs."""
     assert refused(config(steps=[step_verbose])) == (
-        "setting-is-field: configuration.verbose: step_verbose declare verbose, a field of "
+        "configuration.verbose: setting-is-field: step_verbose declare verbose, a field of "
         "the configuration, so no setting can give it; rename the parameter"
     )
 
 
 def test_a_setting_without_a_default_must_be_given() -> None:
     assert refused(config(steps=[step_needs])) == (
-        "setting-required: configuration.target_fps: step_needs require it, and it is not given"
+        "configuration.target_fps: setting-required: step_needs require it, and it is not given"
     )
     plan = build_plan(config(steps=[step_needs], settings={"target_fps": 1000}))
     ran(plan.steps[0], identity_model(), config())
@@ -416,8 +423,8 @@ def test_a_setting_whose_readers_the_run_leaves_out_is_a_warning() -> None:
     assert names(plan) == ["step_scaled"]
     (warning,) = configuration_findings(cfg, plan, cfg.resolved_target)
     assert warning.kind is FindingKind.LIMITATION
-    assert finding_line(warning) == (
-        "setting-unread: configuration.label: only step_typed read it, and "
+    assert str(warning) == (
+        "configuration.label: setting-unread: only step_typed read it, and "
         "start_step/stop_step leave them out"
     )
 
@@ -481,16 +488,17 @@ def test_a_refused_plan_is_the_builds_outcome_before_its_first_step(tmp_path: Pa
         output_dir=str(tmp_path / "output"), settings={"scael": 1}, enable_build_pdb_debug=False
     )
     with pytest.raises(
-        ConfigurationRefused, match=re.escape("setting-unknown: configuration.scael: ")
+        ConfigurationRefused, match=re.escape("configuration.scael: setting-unknown: ")
     ):
         build_dataflow_cfg(str(model), cfg)
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     assert manifest["outcome"]["status"] == "refused"
     assert manifest["outcome"]["error"]["type"] == "ConfigurationRefused"
     (finding,) = manifest["configuration_findings"]
-    assert (finding["code"], finding["details"]) == (
+    assert (finding["code"], finding["owner"], finding["details"]) == (
         "setting-unknown",
-        {"place": "configuration.scael"},
+        "configuration.scael",
+        {},
     )
     assert manifest["plan"] is None and manifest["steps"] == []
 
@@ -516,8 +524,8 @@ def test_the_plan_resolves_a_list_over_the_named_lists_and_steps_it_is_given() -
     assert names(resolve_plan(listed, lists, named, default)) == ["step_scaled", "step_typed"]
     with pytest.raises(ConfigurationRefused) as refusal:
         resolve_plan(config(steps=["step_cleanup"]), lists, named, default)
-    assert finding_line(refusal.value.findings[0]) == (
-        "step-unknown: steps[0]: 'step_cleanup' is no step or named list; the steps: "
+    assert str(refusal.value.findings[0]) == (
+        "configuration.steps[0]: step-unknown: 'step_cleanup' is no step or named list; the steps: "
         "step_scaled, step_typed, step_needs; the named lists: phase_scale"
     )
     imported = {
@@ -532,7 +540,7 @@ def test_a_target_throughput_without_its_target_is_refused_when_the_plan_resolve
     """step_target_throughput requires target_fps, its one reader."""
     cut = ["phase_create_accelerator", "step_target_throughput"]
     assert refused(config(steps=cut)) == (
-        "setting-required: configuration.target_fps: step_target_throughput require it, and "
+        "configuration.target_fps: setting-required: step_target_throughput require it, and "
         "it is not given"
     )
     plan = build_plan(config(steps=cut, settings={"target_fps": 1000}))
@@ -550,10 +558,10 @@ def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> Non
     )
     with pytest.raises(ConfigurationRefused) as refusal:
         build_plan(cfg)
-    assert [finding_line(finding).split(": ")[:2] for finding in refusal.value.findings] == [
-        ["setting-unknown", "configuration.scael"],
-        ["setting-conflict", "configuration.scale"],
-        ["setting-required", "configuration.target_fps"],
-        ["setting-invalid", "configuration.count"],
-        ["start-without-model", "start_step"],
+    assert [(finding.code, finding.owner) for finding in refusal.value.findings] == [
+        ("setting-unknown", "configuration.scael"),
+        ("setting-conflict", "configuration.scale"),
+        ("setting-required", "configuration.target_fps"),
+        ("setting-invalid", "configuration.count"),
+        ("start-without-model", "configuration.start_step"),
     ]

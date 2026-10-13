@@ -8,14 +8,13 @@ from typing import cast
 
 import pytest
 
+from finn.core.reporting.findings import Finding, FindingKind, ordered_findings
 from finn.core.space import Decision, Model, Param, Space, design_space, divisors_of
 from finn.core.space._runtime import Snapshot, decision_state, evaluate
 from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 from finn.core.space.ir import Argument, LinkedModel, Node
 from finn.core.space.results import (
     Available,
-    Finding,
-    FindingKind,
     Inapplicable,
     QueryResult,
     Rejected,
@@ -24,7 +23,6 @@ from finn.core.space.results import (
     assess_constraints,
     assess_view,
     constraint_result,
-    ordered_findings,
     owned_result,
     reject,
 )

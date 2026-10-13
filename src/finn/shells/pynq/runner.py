@@ -68,7 +68,7 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import design_digest, partition_body
-from finn.core.space import Finding, FindingKind, finding_record
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.pynq import iodma, templates
 from finn.shells.pynq.ipgen import (
@@ -413,13 +413,12 @@ def bitfile_directory(model: ModelWrapper) -> Path | None:
     return Path(bitfile).parents[len(BITFILE.parts) - 1]
 
 
-class PynqRefused(ValueError):
+class PynqRefused(Refusal):
     """An output the ``pynq`` shell refuses to make: its one finding (``findings``), owned
-    by the output asked; the message names the output and says what to change."""
+    by the output asked, its message saying what to change."""
 
     def __init__(self, output: str, code: str, message: str) -> None:
-        super().__init__(f"{output}: {message}")
-        self.findings = (Finding(FindingKind.REJECTION, code, output, message),)
+        super().__init__((Finding(FindingKind.REJECTION, code, output, message),))
 
 
 def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
@@ -566,7 +565,7 @@ class BuildPynqBitfile(Transformation):
             self.objective_fps if bottleneck is not None else None,
         )
         self.findings = delivered_clock_findings(self.clock, built.timing)
-        self.clock["findings"] = [finding_record(finding) for finding in self.findings]
+        self.clock["findings"] = [finding.record() for finding in self.findings]
         reports["delivered_clock"].write_text(json.dumps(self.clock, indent=2))
         model.set(OUTPUT_BITFILE, str(self.bitfile))
         model.set(OUTPUT_BITFILE_MADE_FROM, built.made_from)
