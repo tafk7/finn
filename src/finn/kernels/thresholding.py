@@ -3,8 +3,8 @@
 
 """Integer profile of FinnLib thresholding_axi, including resident parameter sets.
 
-thresholds[set][row][threshold] is an immutable, sorted table of numerical
-integers. Its shape owns SETS, C and N: C is the RTL's number of threshold rows,
+``thresholds`` is an integer tensor of shape (sets, rows, thresholds), each row
+sorted. Its shape owns SETS, C and N: C is the RTL's number of threshold rows,
 which it applies round-robin over the flat input stream. A table has one row for
 each channel, or one row shared by every channel (C = 1: each PE lane keeps one
 copy of it, and a runtime write reaches every lane). The input is sign/zero
@@ -106,9 +106,12 @@ from finn.kernels.utilization import (
 )
 from finn.kernels.values.domains import Integer, set_index_dtype
 from finn.kernels.values.semantics import (
+    INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
-    THRESHOLD_TABLE,
-    ThresholdTable,
+    IntegerTensor,
+    integer_range,
+    integer_shape,
+    integers,
 )
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -219,17 +222,17 @@ class ThresholdingAxiKernel(Kernel):
 
     input_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    thresholds: ThresholdTable = Param(semantics=THRESHOLD_TABLE)
+    thresholds: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     bias: int = Param()
 
     @derived
     def shape(self) -> tuple[int, int, int] | Rejected:
-        """SETS, C and N, as the table's first row states them (``table_supported``
-        refuses a table that is not rectangular)."""
-        table = self.thresholds
-        if not table or not table[0] or not table[0][0]:
-            return reject("threshold-shape", "nonempty sets/rows/thresholds are required")
-        return len(table), len(table[0]), len(table[0][0])
+        """SETS, C and N: the table's shape."""
+        found = integer_shape(self.thresholds)
+        if found is None or len(found) != 3:
+            return reject("threshold-shape", "thresholds must be a (sets, rows, thresholds) table")
+        sets, rows, count = found
+        return sets, rows, count
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType | Rejected:
@@ -345,23 +348,16 @@ class ThresholdingAxiKernel(Kernel):
 
     @constraint
     def table_supported(self) -> bool | Rejected:
-        table, (_, rows, count) = self.thresholds, self.shape
-        if any(len(group) != rows or any(len(row) != count for row in group) for group in table):
-            return reject(
-                "threshold-shape",
-                "thresholds must be a rectangular (sets, rows, thresholds) table",
-            )
+        count = self.shape[2]
         try:
             minimum, maximum = ordinary_integer_bounds(self.threshold_dtype)
         except DatatypeError as error:
             return reject("threshold-type", str(error))
-        if any(not minimum <= item <= maximum for group in table for row in group for item in row):
+        least, greatest = integer_range(self.thresholds)
+        if not minimum <= least <= greatest <= maximum:
             return reject("threshold-value", "every threshold must fit threshold_dtype")
-        if any(
-            any(left > right for left, right in zip(row, row[1:]))
-            for group in table
-            for row in group
-        ):
+        flat = integers(self.thresholds)
+        if any(flat[index - 1] > flat[index] for index in range(1, len(flat)) if index % count):
             return reject("threshold-order", "threshold rows must be sorted in nondecreasing order")
         return True
 
@@ -375,7 +371,7 @@ class ThresholdingAxiKernel(Kernel):
             floor = ordinary_integer_bounds(self.threshold_dtype)[0]
         except DatatypeError:
             return True  # not integers: types_supported refuses them
-        if least < floor and any(floor in row for group in self.thresholds for row in group):
+        if least < floor and integer_range(self.thresholds)[0] == floor:
             return reject(
                 "threshold-saturation",
                 f"a threshold at {self.threshold_dtype.name}'s minimum {floor} counts every "
@@ -490,9 +486,11 @@ class ThresholdingAxiKernel(Kernel):
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
-        table = self.thresholds
-        first = table[0][0]
-        shared_row = all(row == first for group in table for row in group)
+        flat, count = integers(self.thresholds), self.shape[2]
+        first = flat[:count]
+        shared_row = all(
+            flat[start : start + count] == first for start in range(count, len(flat), count)
+        )
         # A table folded to nothing (a shared row, never written) places no memory.
         if self.left and self.ram_style == "auto" and (self.use_axilite or not shared_row):
             return auto_unstated("the threshold stages left above the UltraRAM ones")
@@ -558,7 +556,7 @@ class ThresholdingAxiKernel(Kernel):
         of CPE (rounded up likewise), the row's N thresholds, rounded up likewise.
         Padding words are 0: the RTL masks every comparison beyond N.
         """
-        table, (sets, rows, count) = self.thresholds, self.shape
+        flat, (sets, rows, count) = integers(self.thresholds), self.shape
         pe, bits = self.pe, self.threshold_dtype.bitwidth()
         folds, lanes = max(1, rows // pe), min(rows, pe)
 
@@ -571,10 +569,10 @@ class ThresholdingAxiKernel(Kernel):
         for index in range(sets * group):
             chosen, fold = divmod(index, group)
             for lane in range(padded(lanes)):
-                row = fold * lanes + lane
+                start = (chosen * rows + fold * lanes + lane) * count  # the row's first
                 for position in range(padded(count)):
                     inside = fold < folds and lane < lanes and position < count
-                    words.append(table[chosen][row][position] & mask if inside else 0)
+                    words.append(flat[start + position] & mask if inside else 0)
         return hex_image("thresholds", words, bits)
 
     def parameters(self) -> Mapping[str, int | str]:
@@ -640,9 +638,10 @@ class ThresholdingAxiKernel(Kernel):
         word_bits = (words - 1).bit_length()
         mask = (1 << bits) - 1
         writes = []
-        for channel, row in enumerate(self.thresholds[0]):
+        flat = integers(self.thresholds)
+        for channel in range(rows):
             fold, lane = divmod(channel, lanes)
-            for index, value in enumerate(row):
+            for index, value in enumerate(flat[channel * count : (channel + 1) * count]):
                 address = (fold << (lane_bits + index_bits)) | (lane << index_bits) | index
                 for word in range(words):
                     writes.append(

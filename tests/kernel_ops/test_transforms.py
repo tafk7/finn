@@ -28,6 +28,7 @@ from finn.core.graph.errors import FactUnstated, KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import save_channels
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
 from kernel_ops.models import DOMAIN, TARGET, chain_source, lift
@@ -295,7 +296,7 @@ def test_the_graph_keeps_the_thresholds_and_the_kernel_holds_them_as_integers(
     assert np.array_equal(model.get_initializer("thresholds"), source.get_initializer("thresholds"))
     assert not model.has_tensor_datatype("thresholds")
     formals = kernel_op(model, model.graph.node[1]).facts().formals()
-    assert formals["thresholds"] == ((tuple(table),),)
+    assert formals["thresholds"] == IntegerTensorValue.of(((tuple(table),),))
     assert formals["threshold_dtype"] == DataType[threshold_dtype]
     # Exact: every value of the input type, in both graphs.
     low, high = int(DataType[dtype].min()), int(DataType[dtype].max())
@@ -321,5 +322,5 @@ def test_a_shared_table_is_held_against_each_readers_input_type() -> None:
         assert np.array_equal(stored, source.get_initializer("thresholds"))
         assert model.get_tensor_datatype(thresholds) == DataType["FLOAT32"]
         formals = kernel_op(model, nodes[name]).facts().formals()
-        assert formals["thresholds"] == ((table,),)
+        assert formals["thresholds"] == IntegerTensorValue.of(((table,),))
         assert formals["threshold_dtype"] == DataType[threshold_dtype]

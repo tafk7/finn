@@ -322,25 +322,6 @@ INTEGER_TENSOR: ValueSemantics[IntegerTensor] = ValueSemantics(
     _snapshot,
 )
 
-ThresholdTable = tuple[tuple[tuple[int, ...], ...], ...]
-
-
-def _is_table(value: object) -> bool:
-    return type(value) is tuple and all(
-        type(table) is tuple
-        and all(type(row) is tuple and all(type(item) is int for item in row) for row in table)
-        for table in value
-    )
-
-
-THRESHOLD_TABLE: ValueSemantics[ThresholdTable] = ValueSemantics(
-    ThresholdTable,
-    "integer threshold table",
-    _is_table,
-    lambda left, right: left == right,
-    lambda value: value,
-)
-
 
 __all__ = [
     "INTEGER_TENSOR",
@@ -349,8 +330,6 @@ __all__ = [
     "IntegerTensorValue",
     "IntegerVector",
     "QONNX_DATATYPE_VALUE_SEMANTICS",
-    "THRESHOLD_TABLE",
-    "ThresholdTable",
     "integer_bytes",
     "integer_columns",
     "integer_digest",

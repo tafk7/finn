@@ -30,11 +30,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.kernels.base import Kernel
 from finn.kernels.values.domains import Integer
-from finn.kernels.values.semantics import (
-    INTEGER_VECTOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    THRESHOLD_TABLE,
-)
+from finn.kernels.values.semantics import INTEGER_VECTOR, QONNX_DATATYPE_VALUE_SEMANTICS
 
 
 def views(point: object) -> list[str]:
@@ -115,19 +111,13 @@ def test_a_dtype_selection_restores_the_exact_datatype() -> None:
         base.with_choices(dtype=cast(QONNXDataType, "TERNARY"))
 
 
-def test_tuple_adapters_preserve_exact_integer_structure_without_geometry_validation() -> None:
+def test_the_integer_vector_adapter_preserves_exact_integers() -> None:
     assert INTEGER_VECTOR.accepts((1, 0, -2))
     assert INTEGER_VECTOR.accepts(())
     assert not INTEGER_VECTOR.accepts((True, 2))
     assert not INTEGER_VECTOR.accepts([1, 2])
     vector = (1, 2)
     assert INTEGER_VECTOR.freeze(vector) is vector
-    table = (((1, 2), (3,)), ((4,),))
-    assert THRESHOLD_TABLE.accepts(table)  # rectangularity belongs to kernel admission
-    assert THRESHOLD_TABLE.accepts(())
-    assert not THRESHOLD_TABLE.accepts((((True,),),))
-    assert not THRESHOLD_TABLE.accepts([[[1]]])
-    assert THRESHOLD_TABLE.freeze(table) is table
 
 
 def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_values() -> None:
