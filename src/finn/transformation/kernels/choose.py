@@ -475,7 +475,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     if isinstance(strategy, SizeFifos):
         model.delete(FIFOS_STALE)
     elif strategy is not None and not isinstance(strategy, _KEEPS_FOLDING):
-        if _placed(seam, point):
+        if _placed(seam, network):
             model.set(FIFOS_STALE, True)
     left = [
         dotted(choice.key) + (" (required)" if choice.required else "")
