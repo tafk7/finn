@@ -75,14 +75,8 @@ from finn.core.graph.annotations.channel import CHANNEL, value_type
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor
-from finn.core.space import (
-    Available,
-    Finding,
-    FindingKind,
-    Rejected,
-    Space,
-    inspection,
-)
+from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.space import Available, Rejected, Space, inspection
 from finn.custom_op.kernels.cache import BIND_CACHE, Facts
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import Tensor
@@ -170,7 +164,7 @@ def why(findings: Iterable[Finding]) -> str:
     found = tuple(findings)
     if found and all(finding.code == "inapplicable" for finding in found):
         return "inapplicable"
-    return "; ".join(f"{finding.owner}: {finding.code}: {finding.message}" for finding in found)
+    return "; ".join(map(str, found))
 
 
 def refusal(label: str, found: Mapping[str, str]) -> KernelOpError:
@@ -507,7 +501,10 @@ class KernelOp(CustomOp):
         for port, name in zip(self.outputs, self.onnx_node.output):
             answer = kernel.query(getattr(type(kernel), self.wiring[port].tensor))
             if not isinstance(answer, Available):
-                raise KernelOpError(f"{self.label}: {describe([answer])}", findings=answer.findings)
+                raise KernelOpError(
+                    f"{self.label}: {describe([answer])}",
+                    findings=tuple(finding.about(node=self.label) for finding in answer.findings),
+                )
             found[name] = answer.value
         return found
 
@@ -589,10 +586,7 @@ class KernelOp(CustomOp):
             point = self.point()
         except KernelOpError as error:
             return [str(error)]
-        return [
-            f"{self.label}: {finding.owner}: {finding.code}: {finding.message}"
-            for finding in self.refusals(point)
-        ]
+        return [f"{self.label}: {finding}" for finding in self.refusals(point)]
 
 
 def candidate_refusals(point: Space, key: str, cases: tuple[str, ...]) -> tuple[Finding, ...]:

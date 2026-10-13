@@ -13,7 +13,7 @@ step uses; the manifest indexes the run:
   the steps that read it;
 - ``configuration_findings``: what checking the configuration found before the first
   step (finn.builder.build_dataflow_checks), each a finding record
-  (``finn.core.space.finding_record``): the rejections that refused it, and the
+  (``Finding.record``): the rejections that refused it, and the
   limitations the build warned of;
 - ``steps``: each step run, in order, with its ``status`` (``running``, ``completed``,
   ``failed``), its ``seconds``, the ``reports`` it wrote (each with its findings by
@@ -46,7 +46,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from finn.core.space import Finding, finding_record
+from finn.core.reporting.findings import Finding
 from finn.toolchain import vivado
 from finn.toolchain.launcher import RECORDS, TOOL_RUN, transcript_files
 
@@ -198,7 +198,7 @@ class Manifest:
     def configured(self, findings: list[Finding]) -> None:
         """Record what checking the configuration found."""
         with self._lock:
-            self.state["configuration_findings"] = [finding_record(each) for each in findings]
+            self.state["configuration_findings"] = [each.record() for each in findings]
             self.write()
 
     def step_started(self, name: str) -> None:

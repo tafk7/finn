@@ -111,6 +111,6 @@ def test_a_tensor_read_more_than_once_is_refused_before_any_binding() -> None:
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
     BIND_CACHE.clear()
-    with pytest.raises(KernelOpError, match="hidden: tensor-fan-out: read by activate"):
+    with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: hidden is read by activate"):
         network(model, model.graph.node, name="chain")
     assert not BIND_CACHE.entries

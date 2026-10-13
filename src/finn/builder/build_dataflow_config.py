@@ -8,7 +8,8 @@ are what the build makes. Everything else is a setting: the value of a keyword-o
 declares, decoded by the step's annotation when the build's plan resolves. In JSON a
 setting is a top-level key beside the fields; in Python an entry of ``settings``.
 Reading JSON refuses what does not decode, and what the configuration does not
-declare, as a ``ConfigurationRefused`` naming its place (``configuration.target: ...``).
+declare, as a ``ConfigurationRefused`` whose finding is owned by its place
+(``configuration.target``).
 
 A build refuses a configuration before its first step with one ``ConfigurationRefused``
 carrying every rejection found; a step refuses a setting it cannot take when it runs,
@@ -20,7 +21,7 @@ from __future__ import annotations
 import functools
 import json
 import os
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from functools import cached_property
 from pathlib import Path
@@ -28,7 +29,7 @@ from typing import Any, Union
 
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.platform.request import TargetRequest
 from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
@@ -36,28 +37,20 @@ from finn.util.typed_json import decoded_fields, encoded
 
 
 def config_finding(
-    code: str, message: str, place: str | None = None, kind: FindingKind = FindingKind.REJECTION
+    code: str,
+    message: str,
+    place: str = "configuration",
+    kind: FindingKind = FindingKind.REJECTION,
 ) -> Finding:
-    """A finding about the configuration, a rejection by default, with its ``place`` in
-    the configuration where it has one."""
-    details = () if place is None else (("place", place),)
-    return Finding(kind, code, "finn.builder", message, details)
+    """A finding about the configuration, a rejection by default, owned by its ``place``
+    in the configuration (``configuration.target_fps``, ``configuration.steps[3]``), the
+    whole configuration where it has no narrower one."""
+    return Finding(kind, code, place, message)
 
 
-def finding_line(finding: Finding) -> str:
-    """A finding as one line: ``code: place: message``, without a place where it has none."""
-    place = dict(finding.details).get("place")
-    where = "" if place is None else f"{place}: "
-    return f"{finding.code}: {where}{finding.message}"
-
-
-class ConfigurationRefused(ValueError):
+class ConfigurationRefused(Refusal):
     """A configuration the build refuses, before its first step or at the step that
     reads the setting refused, with every rejection found (``findings``)."""
-
-    def __init__(self, findings: Iterable[Finding]) -> None:
-        self.findings = tuple(findings)
-        super().__init__("; ".join(map(finding_line, self.findings)))
 
 
 def undecoded(code: str, invalid: ValueError) -> Finding:
@@ -170,9 +163,7 @@ class DataflowBuildConfig:
             stated = json.loads(text)
         except ValueError as invalid:
             message = f"not JSON: {invalid}"
-            raise ConfigurationRefused(
-                [config_finding("configuration-invalid", message, "configuration")]
-            ) from None
+            raise ConfigurationRefused([config_finding("configuration-invalid", message)]) from None
         return cls.from_dict(stated, base_dir)
 
     def to_dict(self) -> dict[str, Any]:
@@ -226,6 +217,5 @@ __all__ = [
     "StepEntry",
     "StepFunction",
     "config_finding",
-    "finding_line",
     "undecoded",
 ]

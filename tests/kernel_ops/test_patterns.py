@@ -174,7 +174,10 @@ def test_a_positive_graph_converts_with_its_attributes(case: str) -> None:
 def test_a_refusal_naming_a_lowering_says_which() -> None:
     for case in ("threshold-scale", "threshold-bias"):
         (outcome,) = convert(NEGATIVE[case][0]())[1].outcomes
-        assert dict(outcome.findings[0].details) == {"hint": "ExtractMultiThresholdScaleBias"}
+        assert dict(outcome.findings[0].details) == {
+            "hint": "ExtractMultiThresholdScaleBias",
+            "node": outcome.nodes[0],
+        }
 
 
 def test_every_refusal_of_a_node_is_reported() -> None:

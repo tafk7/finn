@@ -10,7 +10,7 @@ step's, refused when it runs."""
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig, config_finding
 from finn.builder.build_dataflow_plan import Plan
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.platform.boards import BOARDS
 from finn.platform.target import Target
 from finn.toolchain import vivado

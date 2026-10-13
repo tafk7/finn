@@ -28,7 +28,7 @@ from qonnx.core.datatype import DataType
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.space import Finding, finding_text
+from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import budgets, bus_counts, configured_root, network
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -105,7 +105,7 @@ def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine()
     point = thresholdings(8, PYNQ_ROW)
     assert [end.control_buses for end in ends_of(point)] == [1, 1]
     (found,) = admission(point, PYNQ_ROW)
-    assert finding_text(found) == (
+    assert str(found) == (
         "budgets: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
         "the partition presents 8 and its ends 2"
     )

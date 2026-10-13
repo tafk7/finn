@@ -28,7 +28,7 @@ from finn.core.graph.annotations.choices import FIFOS_STALE, HELD
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
-from finn.core.space import FindingKind, finding_record
+from finn.core.reporting.findings import FindingKind
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import Partition, configured_root, network, save_channels
 from finn.kernels.explore import (
@@ -160,7 +160,7 @@ def test_a_point_over_the_part_s_resources_is_a_finding_naming_the_binding_resou
     resources = explored.report["resources"]
     assert resources["binding"] == "dsp"
     assert resources["over"] == {"dsp": {"used": 4, "platform": 3}}
-    assert resources["findings"] == [finding_record(found)]
+    assert resources["findings"] == [found.record()]
     assert found.message.startswith("the point uses more than the platform's part has")
     assert choices(model)["first"]["compute.packed.pe"] == 2
     # Within the part: the binding resource is named, and nothing is over.

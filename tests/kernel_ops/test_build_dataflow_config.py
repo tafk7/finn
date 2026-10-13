@@ -42,7 +42,7 @@ from finn.builder.build_dataflow_steps import (
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import Selection, Toolchain
@@ -62,10 +62,6 @@ def refusal(cfg: DataflowBuildConfig) -> ConfigurationRefused:
     with pytest.raises(ConfigurationRefused) as refused:
         build_plan(cfg)
     return refused.value
-
-
-def place(finding: Finding) -> object:
-    return dict(finding.details).get("place")
 
 
 def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
@@ -152,7 +148,7 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() 
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "board": None}))
     assert cfg.settings == {"board": None}
     (finding,) = refusal(cfg).findings
-    assert (finding.kind, finding.code, place(finding)) == (
+    assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
         "setting-unknown",
         "configuration.board",
@@ -194,7 +190,7 @@ def test_json_the_configuration_does_not_declare_is_refused_naming_its_place(
         DataflowBuildConfig.from_json(json.dumps({**STATED, **stated}))
     (finding,) = refusal.value.findings
     assert finding.code == "configuration-invalid"
-    assert f"{place(finding)}: {finding.message}".startswith(refused)
+    assert f"{finding.owner}: {finding.message}".startswith(refused)
 
 
 @pytest.mark.parametrize(
@@ -211,13 +207,14 @@ def test_json_without_a_required_field_or_not_an_object_is_refused(
     with pytest.raises(ConfigurationRefused) as refusal:
         DataflowBuildConfig.from_json(text)
     (finding,) = refusal.value.findings
-    assert (finding.code, place(finding)) == ("configuration-invalid", where)
+    assert (finding.code, finding.owner) == ("configuration-invalid", where)
     assert finding.message.startswith(refused)
 
 
 def test_a_setting_named_as_a_field_is_refused() -> None:
     with pytest.raises(
-        ConfigurationRefused, match=r"configuration.settings: \['verbose'\] are fields"
+        ConfigurationRefused,
+        match=r"configuration.settings: configuration-invalid: \['verbose'\] are fields",
     ):
         DataflowBuildConfig(
             output_dir="out", target=TargetRequest(period_ns=5.0), settings={"verbose": True}
@@ -257,9 +254,11 @@ def test_a_setting_of_the_wrong_type_is_refused_naming_it(
 ) -> None:
     """By the annotation of the step that declares it, when the plan resolves."""
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, **settings}))
-    with pytest.raises(ConfigurationRefused, match=re.escape(refused)) as refusal:
+    with pytest.raises(ConfigurationRefused) as refusal:
         build_plan(cfg)
-    assert [finding.code for finding in refusal.value.findings] == ["setting-invalid"]
+    (finding,) = refusal.value.findings
+    assert finding.code == "setting-invalid"
+    assert f"{finding.owner}: {finding.message}".startswith(refused)
 
 
 @pytest.mark.parametrize(
@@ -288,7 +287,7 @@ def test_a_value_preparation_cannot_take_is_refused_when_its_step_runs(
     with pytest.raises(ConfigurationRefused) as refusal:
         step_add_pre_post_processing(model, cfg, **settings)
     (finding,) = refusal.value.findings
-    assert (finding.code, finding.kind, place(finding)) == (
+    assert (finding.code, finding.kind, finding.owner) == (
         "setting-invalid",
         FindingKind.REJECTION,
         where,
@@ -311,7 +310,7 @@ def test_an_output_of_a_shell_without_a_bitfile_build_is_refused_at_its_step(
     with pytest.raises(ConfigurationRefused) as refusal:
         step(model, cfg)
     (finding,) = refusal.value.findings
-    assert (finding.code, finding.kind, place(finding)) == (
+    assert (finding.code, finding.kind, finding.owner) == (
         "shell-without-bitfile",
         FindingKind.REJECTION,
         "configuration.target.shell",
@@ -416,7 +415,7 @@ def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None
     stated = {**STATED, "generate_outputs": ["bitfile"]}
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
     (finding,) = refusal(cfg).findings
-    assert (finding.code, place(finding)) == ("setting-unknown", "configuration.generate_outputs")
+    assert (finding.code, finding.owner) == ("setting-unknown", "configuration.generate_outputs")
     with pytest.raises(TypeError, match="generate_outputs"):
         named: Any = {"generate_outputs": ["bitfile"]}
         DataflowBuildConfig(output_dir="out", target=TargetRequest(period_ns=5.0), **named)
@@ -536,18 +535,22 @@ def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_lists() 
         f"step_package_partition; the named lists: {lists}"
     )
     (finding,) = refusal(cfg).findings
-    assert (finding.code, place(finding), finding.message) == ("step-absent", "start_step", message)
-    assert str(refusal(cfg)) == f"step-absent: start_step: {message}"
+    assert (finding.code, finding.owner, finding.message) == (
+        "step-absent",
+        "configuration.start_step",
+        message,
+    )
+    assert str(refusal(cfg)) == f"configuration.start_step: step-absent: {message}"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
     (finding,) = refusal(cfg).findings
-    assert (finding.code, place(finding)) == ("step-absent", "stop_step")
+    assert (finding.code, finding.owner) == ("step-absent", "configuration.stop_step")
     assert finding.message.startswith("'phase_kernel' is not one of this build's steps")
     assert "step_resources_report" in finding.message
     assert "phase_generate_outputs" in finding.message
     assert "list_deployment" in finding.message
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "steps": ["phase_kernel"]}))
     (finding,) = refusal(cfg).findings
-    assert (finding.code, place(finding)) == ("step-unknown", "steps[0]")
+    assert (finding.code, finding.owner) == ("step-unknown", "configuration.steps[0]")
     assert finding.message.startswith("'phase_kernel' is no step or named list; the steps: ")
 
 
@@ -624,9 +627,9 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
     with pytest.raises(ConfigurationRefused) as refused:
         build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
-    codes = [(finding.code, place(finding)) for finding in refused.value.findings]
+    codes = [(finding.code, finding.owner) for finding in refused.value.findings]
     assert codes == [
-        ("unknown-board", None),
+        ("unknown-board", "configuration.target.board"),
         ("setting-unknown", "configuration.fifo_margins"),
         ("setting-required", "configuration.target_fps"),
     ]
@@ -645,7 +648,7 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     assert manifest["plan"] is None and manifest["steps"] == []
     log = (tmp_path / "output" / "build_dataflow.log").read_text()
     assert "Configuration refused: 3 findings" in log
-    assert log.count("setting-required: configuration.target_fps: ") == 1
+    assert log.count("configuration.target_fps: setting-required: ") == 1
     # The target resolves, the plan too: the checks' rejections, and their warnings once.
     # The board requires a Vivado release, and the toolchain's route has no Vivado.
     target = {"period_ns": 5.0, "board": "AUP-ZU3_8GB", "shell": "pynq"}
@@ -664,7 +667,7 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     ]
     assert manifest["plan"] is not None
     log = (tmp_path / "output" / "build_dataflow.log").read_text()
-    assert log.count("setting-unread: configuration.target_fps: ") == 1
+    assert log.count("configuration.target_fps: setting-unread: ") == 1
 
 
 def test_a_build_directory_states_its_configuration(tmp_path: Path) -> None:
@@ -681,7 +684,8 @@ def test_a_build_directorys_bad_list_is_refused_inside_its_build(tmp_path: Path)
     stated = {**STATED, "steps": ["phase_prepare_model", "step_streamlin"]}
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
     assert read_build_config(str(tmp_path)).steps == stated["steps"]
-    with pytest.raises(ConfigurationRefused, match=re.escape("step-unknown: steps[1]: ")):
+    match = re.escape("configuration.steps[1]: step-unknown: ")
+    with pytest.raises(ConfigurationRefused, match=match):
         build_dataflow_directory(str(tmp_path))
     manifest = json.loads((tmp_path / "out" / MANIFEST_FILE).read_text())
     assert manifest["outcome"]["status"] == "refused"
@@ -704,7 +708,7 @@ def test_a_build_directorys_configuration_that_does_not_decode_is_refused_in_its
     with pytest.raises(ConfigurationRefused) as refusal:
         build_dataflow_directory(str(tmp_path))
     (finding,) = refusal.value.findings
-    assert (finding.code, place(finding)) == ("configuration-invalid", "configuration.target")
+    assert (finding.code, finding.owner) == ("configuration-invalid", "configuration.target")
     assert finding.message == "keys TargetRequest does not declare: ['boards']"
     manifest = json.loads((output / MANIFEST_FILE).read_text())
     assert manifest["outcome"]["status"] == "refused"
@@ -716,7 +720,7 @@ def test_a_build_directorys_configuration_that_does_not_decode_is_refused_in_its
     assert manifest["plan"] is None and manifest["steps"] == []
     log = (output / "build_dataflow.log").read_text()
     assert "Configuration refused: 1 findings" in log
-    assert "configuration-invalid: configuration.target: keys TargetRequest" in log
+    assert "configuration.target: configuration-invalid: keys TargetRequest" in log
 
 
 def test_a_configuration_without_an_output_directory_is_refused_on_the_console_only(
@@ -724,7 +728,8 @@ def test_a_configuration_without_an_output_directory_is_refused_on_the_console_o
 ) -> None:
     onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "output_dir": 3}))
-    with pytest.raises(ConfigurationRefused, match=r"configuration.output_dir: a str, not 3"):
+    match = r"configuration.output_dir: configuration-invalid: a str, not 3"
+    with pytest.raises(ConfigurationRefused, match=match):
         build_dataflow_directory(str(tmp_path))
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "dataflow_build_config.json",
@@ -735,7 +740,8 @@ def test_a_configuration_without_an_output_directory_is_refused_on_the_console_o
 def test_reading_a_configuration_that_does_not_decode_writes_nothing(tmp_path: Path) -> None:
     stated = {**STATED, "target": {"period_ns": 5.0, "boards": "Ultra96"}}
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
-    with pytest.raises(ConfigurationRefused, match=r"configuration.target: keys TargetRequest"):
+    match = r"configuration.target: configuration-invalid: keys TargetRequest"
+    with pytest.raises(ConfigurationRefused, match=match):
         read_build_config(str(tmp_path))
     assert [path.name for path in tmp_path.iterdir()] == ["dataflow_build_config.json"]
 

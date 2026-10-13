@@ -32,7 +32,8 @@ from qonnx.custom_op.general.im2col import im2col_indices_nchw
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import known_shape, shape
-from finn.core.space import Finding, Rejected
+from finn.core.reporting.findings import Finding
+from finn.core.space import Rejected
 from finn.custom_op.kernels.base import Match, node_attributes, refused, unstated
 from finn.custom_op.kernels.matmul import MatMul
 from finn.dataflow.gemm import Window

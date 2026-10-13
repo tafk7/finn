@@ -7,8 +7,8 @@ An initializer's annotation is stated, not inferred again from its values, and t
 kernels sized from it would be wrong if it did not hold them.
 ``model.analysis(annotated_initializers)`` checks every initializer annotated with an
 integer type: each value must be one the type allows. It returns the initializers it
-checked and an ``annotation-unsound`` blocker for each whose annotation does not hold
-all its values.
+checked and an ``annotation-unsound`` rejection for each whose annotation does not
+hold all its values.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -49,9 +49,9 @@ def annotated_initializers(model: ModelWrapper) -> Initializers:
             example = int(first) if first.is_integer() else first
             found.append(
                 Finding(
-                    FindingKind.BLOCKER,
+                    FindingKind.REJECTION,
                     "annotation-unsound",
-                    "initializer annotations",
+                    "initializers",
                     f"{name} is annotated {datatype.name} and stores {unheld.size} of its "
                     f"{values.size} values outside it, {example} the first",
                     (

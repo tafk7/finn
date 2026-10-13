@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from finn.analysis.comparison import EMPTY, Comparison, Explanation, Run, compared_with
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.util.draws import drawn_inputs
 
 if TYPE_CHECKING:
@@ -77,9 +77,9 @@ def unsound(run: Run) -> list[Finding]:
             held = np.asarray(values)
             found.append(
                 Finding(
-                    FindingKind.BLOCKER,
+                    FindingKind.REJECTION,
                     "annotation-unsound",
-                    "preparation equivalence",
+                    "equivalence",
                     f"{name} is annotated {datatype.name} and holds values over "
                     f"[{held.min()}, {held.max()}] on a draw",
                     (("tensor", name), ("annotation", datatype.name)),

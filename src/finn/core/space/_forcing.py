@@ -47,11 +47,13 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import cast
 
+from finn.core.reporting.findings import Finding, FindingKind
+
 from . import _runtime
 from ._runtime import Snapshot
 from .declarations import Constraint, ConstraintGroup, View
 from .ir import Choice, LinkedModel
-from .results import Available, ConstraintAssessment, Finding, FindingKind, QueryResult, Rejected
+from .results import Available, ConstraintAssessment, QueryResult, Rejected
 from .semantics import equal
 
 
@@ -162,7 +164,7 @@ def admitted(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object] | None
 
 
 def _describe(result: Rejected) -> str:
-    return "; ".join(f"{item.owner}: {item.code}: {item.message}" for item in result.findings)
+    return "; ".join(map(str, result.findings))
 
 
 def _reads(snapshot: Snapshot, roots: Iterable[int], own: int) -> dict[int, object]:

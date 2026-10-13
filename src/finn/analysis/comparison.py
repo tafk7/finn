@@ -30,13 +30,10 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.core.onnx_exec import execute_onnx
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
-
-#: Who finds a difference.
-_OWNER = "graph comparison"
 
 
 @dataclass(frozen=True)
@@ -132,7 +129,7 @@ def differences(
 
 def _differs(message: str, tensor: str, **details: object) -> Finding:
     stated = (("tensor", tensor), *details.items())
-    return Finding(FindingKind.REJECTION, "values-differ", _OWNER, message, stated)
+    return Finding(FindingKind.REJECTION, "values-differ", "comparison", message, stated)
 
 
 class Comparison(TypedDict):

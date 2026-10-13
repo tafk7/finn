@@ -174,8 +174,11 @@ if package_name == "finn.core.space":
     assert api.design_space(Generic(value=3)).output == 4
 loaded = {name for name in sys.modules if name.startswith("finn.")}
 parents = {package_name.rsplit(".", 1)[0]}
+# The engine's findings are the layer below it.
+below = ("finn.core.reporting",) if package_name == "finn.core.space" else ()
+own = (package_name, *below)
 assert all(
-    name in parents or name == package_name or name.startswith(package_name + ".")
+    name in parents or any(name == each or name.startswith(each + ".") for each in own)
     for name in loaded
 ), loaded
 """

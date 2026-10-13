@@ -35,7 +35,7 @@ from finn.custom_op.kernels.base import KernelOp
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-    from finn.core.space import Finding
+    from finn.core.reporting.findings import Finding
 
 
 def _standard(model: ModelWrapper, node: NodeProto) -> None:

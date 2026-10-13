@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
+from finn.core.reporting.findings import Finding, FindingKind
+
 from .errors import DefinitionError
-from .results import Finding, FindingKind
 
 
 def dependency_order(

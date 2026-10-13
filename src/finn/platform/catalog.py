@@ -224,6 +224,7 @@ class Catalog:
         if found is None:
             raise TargetRefused(
                 "unknown-part",
+                "configuration.target.part",
                 f"{name!r} is not in the part catalog ({self.describe()})"
                 + _close(name, (self.by_name[each].name for each in self._sorted)),
             )
@@ -236,6 +237,7 @@ class Catalog:
         if found is None:
             raise TargetRefused(
                 "unknown-device",
+                "catalog",
                 f"{name!r} is not a device of the part catalog ({self.describe()})"
                 + _close(name, (each.name for each in self.devices.values())),
             )
@@ -454,7 +456,9 @@ def load(data: Path = DATA, overlay: Path | None = None) -> Catalog:
         )
         return _build(shipped, added, manifest, origin, Path(overlay))
     except (OSError, json.JSONDecodeError, _Invalid) as error:
-        raise TargetRefused("catalog-overlay-invalid", f"{overlay}: {error}") from error
+        raise TargetRefused(
+            "catalog-overlay-invalid", OVERLAY_SETTING, f"{overlay}: {error}"
+        ) from error
 
 
 def _build(

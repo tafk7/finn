@@ -36,7 +36,7 @@ S = TypeVar("S", bound=Space)
 def describe(results: Iterable[QueryResult[Any]]) -> str:
     """Owner, code and message of every finding in non-available results."""
     return "; ".join(
-        f"{finding.owner}: {finding.code}: {finding.message}"
+        str(finding)
         for result in results
         if not isinstance(result, Available)
         for finding in result.findings

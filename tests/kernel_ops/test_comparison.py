@@ -18,7 +18,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.analysis.comparison import Run, compared_with
-from finn.core.space import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind
 
 
 def adding(constant: float, output: str = "y", rows: int = 1) -> ModelWrapper:

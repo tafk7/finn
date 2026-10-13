@@ -51,6 +51,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
     ("name", "layer"),
     [
         ("finn.core.space.declarations", "space"),
+        ("finn.core.reporting.findings", "reporting"),
         ("finn.kernels.artifacts.module.Leaf", "kernels.artifacts"),
         ("finn.kernels.dotp", "kernels"),
         ("finn.core.graph.partition.partition_body", "graph.partition"),
@@ -98,6 +99,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("dataflow", "onnx"),
         ("space", "finn.dataflow.tensor"),
         ("space", "numpy"),
+        ("reporting", "finn.core.space.results.Rejected"),
         # util below the flow.
         ("util", "finn.builder.build_dataflow_steps.step_build_bitfile"),
         # The toolchain below util: of FINN, the resource store alone.
@@ -192,7 +194,8 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         # The graph comparison runs both graphs with FINN's execution.
         ("analysis", "finn.core.onnx_exec.execute_onnx"),
         ("analysis", "finn.util.draws.drawn_inputs"),
-        ("analysis", "finn.core.space.Finding"),
+        ("analysis", "finn.core.reporting.findings.Finding"),
+        ("space", "finn.core.reporting.findings.Finding"),
         ("harness", "finn.util.draws.boundary_inputs"),
         ("flow", "finn.analysis.initializers.annotated_initializers"),
         ("flow", "finn.core.rtlsim_bench.simulate"),

@@ -26,25 +26,35 @@ def resolve_target(
     ``TargetRefused``."""
     built_shell(shell)
     if not period_ns > 0:
-        raise TargetRefused("period-invalid", f"a clock period is > 0 ns, not {period_ns!r}")
+        raise TargetRefused(
+            "period-invalid",
+            "configuration.target.period_ns",
+            f"a clock period is > 0 ns, not {period_ns!r}",
+        )
     if board is not None:
         if board not in BOARDS:
             raise TargetRefused(
-                "unknown-board", f"{board!r} is not a board (one of {sorted(BOARDS)})"
+                "unknown-board",
+                "configuration.target.board",
+                f"{board!r} is not a board (one of {sorted(BOARDS)})",
             )
         if part is not None and catalog_part(part).name != BOARDS[board].part:
             raise TargetRefused(
                 "board-part-mismatch",
+                "configuration.target.part",
                 f"board {board!r} carries {BOARDS[board].part!r}, not {part!r}",
             )
         part = BOARDS[board].part
     if part is None:
-        raise TargetRefused("target-unstated", "a target names a part or a board")
+        raise TargetRefused(
+            "target-unstated", "configuration.target", "a target names a part or a board"
+        )
     found = catalog_part(part)
     device = found.device
     if device.fabric is None or device.dsp is None:
         raise TargetRefused(
             "unsupported-architecture",
+            "configuration.target.part",
             f"{found.name} ({device.name}, {device.architecture}/{device.family}): "
             f"{device.unsupported}",
         )
@@ -83,7 +93,9 @@ def refuse_drift(stated: Target, built: Target, build: str) -> None:
     ]
     if differing:
         raise TargetRefused(
-            "target-drift", f"the model's target is not the {build}'s: " + "; ".join(differing)
+            "target-drift",
+            "configuration.target",
+            f"the model's target is not the {build}'s: " + "; ".join(differing),
         )
 
 

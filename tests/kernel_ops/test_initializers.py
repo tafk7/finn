@@ -16,7 +16,7 @@ from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.analysis.initializers import annotated_initializers
-from finn.core.space import FindingKind
+from finn.core.reporting.findings import FindingKind
 from kernel_ops.test_preparation import graph
 
 
@@ -56,9 +56,9 @@ def test_weights_their_annotation_does_not_hold_are_named(
     held = weighted(np.asarray(weights), annotation).analysis(annotated_initializers)
     (found,) = held["findings"]
     assert (found.kind, found.code, found.owner) == (
-        FindingKind.BLOCKER,
+        FindingKind.REJECTION,
         "annotation-unsound",
-        "initializer annotations",
+        "initializers",
     )
     assert dict(found.details) == {
         "tensor": "w",

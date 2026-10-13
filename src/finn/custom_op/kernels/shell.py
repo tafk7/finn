@@ -90,17 +90,8 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
-from finn.core.space import (
-    Available,
-    Finding,
-    FindingKind,
-    Inapplicable,
-    QueryResult,
-    Rejected,
-    Space,
-    Unresolved,
-    finding_text,
-)
+from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.space import Available, Inapplicable, QueryResult, Rejected, Space, Unresolved
 from finn.custom_op.kernels.base import KernelOp, kernel_op, refusal, typed, why
 from finn.custom_op.kernels.cache import Facts
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
@@ -247,12 +238,13 @@ def _fan_out(
     for tensor, names in readers.items():
         port = ports.get(tensor, "")
         if port.startswith("m_axis_"):
-            message = f"read by {', '.join(names)} and leaves the partition at {port}"
+            message = f"{tensor} is read by {', '.join(names)} and leaves the partition at {port}"
         elif len(names) > 1:
-            message = f"read by {', '.join(names)}"
+            message = f"{tensor} is read by {', '.join(names)}"
         else:
             continue
-        found.append(Finding(FindingKind.LIMITATION, "tensor-fan-out", tensor, message))
+        details = (("tensor", tensor),)
+        found.append(Finding(FindingKind.LIMITATION, "tensor-fan-out", "fan_out", message, details))
     return found
 
 
@@ -344,17 +336,22 @@ def _stale(
                 Finding(
                     FindingKind.REJECTION,
                     "tensor-stale",
-                    tensor,
-                    f"the graph states {list(graph.shape)} {graph.element.dtype.name}, its "
-                    f"producer {node.name} {list(produced.shape)} "
+                    "stale_outputs",
+                    f"the graph states {tensor} {list(graph.shape)} "
+                    f"{graph.element.dtype.name}, its producer {node.name} {list(produced.shape)} "
                     f"{produced.element.dtype.name}: run InferKernelTensors",
                     (("tensor", tensor), ("node", node.name)),
                 )
             )
     if findings:
-        raise KernelOpError(
-            "stale outputs: " + "; ".join(map(finding_text, findings)), findings=tuple(findings)
-        )
+        raise KernelOpError("; ".join(map(str, findings)), findings=tuple(findings))
+
+
+def _about(finding: Finding) -> str:
+    """A finding as text after the node or tensor it is about, where it names one."""
+    details = dict(finding.details)
+    about = details.get("node", details.get("tensor"))
+    return str(finding) if about is None else f"{about}: {finding}"
 
 
 def network(model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = PARTITION) -> Partition:
@@ -381,7 +378,7 @@ def _network(
     if fanned:
         raise KernelOpError(
             f"{name}: a channel has one consumer, and fan-out is not designed yet (a channel "
-            "that forks): " + "; ".join(map(finding_text, fanned)),
+            "that forks): " + "; ".join(map(str, fanned)),
             findings=fanned,
         )
     tensors = _tensors(model, nodes, owned)
@@ -649,17 +646,20 @@ def configured_root(
     if unadmitted:
         raise KernelOpError(
             f"{label}: refused by the {bound.row.shell!r} shell: "
-            + "; ".join(map(finding_text, unadmitted)),
+            + "; ".join(map(str, unadmitted)),
             findings=unadmitted,
         )
     module = bound.module_of()
-    cycles = [bound.query(name, CYCLES) for name in bound.members]
-    refused = [each for each in (module, *cycles) if not isinstance(each, Available)]
-    if refused or not isinstance(module, Available):
-        found = tuple(dict.fromkeys(f for each in refused for f in getattr(each, "findings", ())))
+    cycles = {name: bound.query(name, CYCLES) for name in bound.members}
+    found = [] if isinstance(module, Available) else list(module.findings)
+    for name, each in cycles.items():
+        if not isinstance(each, Available):
+            found.extend(bound.located(name, finding) for finding in each.findings)
+    if found or not isinstance(module, Available):
+        refused = tuple(dict.fromkeys(found))
         raise KernelOpError(
-            f"{label}: refused by its members: " + "; ".join(map(finding_text, found)),
-            findings=found,
+            f"{label}: refused by its members: " + "; ".join(map(_about, refused)),
+            findings=refused,
         )
     ports = dict(bound.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}
@@ -671,7 +671,7 @@ def configured_root(
             f"{label}: the partition's ports {ports} are not its graph's inputs and"
             f" outputs in order {expected}"
         )
-    slowest = max(each.value for each in cycles if isinstance(each, Available))
+    slowest = max(each.value for each in cycles.values() if isinstance(each, Available))
     return Configured(bound, module.value, slowest), bound.boundary
 
 
@@ -731,7 +731,7 @@ def save_channels(model: ModelWrapper, choices: Mapping[str, Mapping[str, object
         if waiting is not None:
             raise KernelOpError(
                 f"{tensor}: its channel's ends wait on {waiting.member}'s open choices ("
-                + "; ".join(map(finding_text, waiting.result.findings))
+                + "; ".join(map(str, waiting.result.findings))
                 + f"), so its choices cannot be checked: save {waiting.member}'s first",
                 (tensor,),
             )

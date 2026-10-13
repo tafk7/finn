@@ -12,7 +12,8 @@ from dataclasses import replace
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import FindingKind, Rejected, design_space
+from finn.core.reporting.findings import FindingKind
+from finn.core.space import Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
@@ -148,8 +149,8 @@ def test_a_board_no_shell_builds_resolves_on_ip_and_is_refused_on_pynq(board: st
     (found,) = refused.value.findings
     assert found.code == "no-shell-row"
     assert str(refused.value) == (
-        f"no-shell-row: the 'pynq' shell has no row for board {board!r}: the Zynq template "
-        "has no branch for it (no board preset)"
+        f"configuration.target.board: no-shell-row: the 'pynq' shell has no row for board "
+        f"{board!r}: the Zynq template has no branch for it (no board preset)"
     )
 
 
@@ -361,16 +362,19 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
     other: Target = resolve_target(board="ZCU104", period_ns=4.0)
     with pytest.raises(TargetRefused) as refused:
         refuse_drift(stated, other, "build")
-    # The refusal carries its one finding, its code the message's first word.
+    # The refusal carries its one finding, owned by the configuration's target; the
+    # message is its line.
     (found,) = refused.value.findings
     assert (found.kind, found.code, found.owner) == (
         FindingKind.REJECTION,
         "target-drift",
-        "finn.platform",
+        "configuration.target",
     )
     message = str(refused.value)
-    assert message == f"target-drift: {found.message}"
-    assert message.startswith("target-drift: the model's target is not the build's: part: ")
+    assert message == str(found)
+    assert message.startswith(
+        "configuration.target: target-drift: the model's target is not the build's: part: "
+    )
     for name in ("part", "shell", "board", "period_ns", "uram", "resources"):
         assert f"{name}: the model states" in message
     assert "dsp:" not in message and "fabric:" not in message

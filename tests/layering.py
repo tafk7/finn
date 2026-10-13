@@ -4,6 +4,7 @@
 """FINN's layers, what each may import, and the one import walker that checks them.
 
 ```text
+finn.core.reporting  <-  finn.core.space, and every layer above it that states a finding
 finn.core.space <- finn.kernels <- finn.platform <- finn.core.graph <- finn.custom_op.kernels
 finn.dataflow   <-                                                  <- finn.transformation.kernels
                                                                        <- finn.shells
@@ -29,7 +30,9 @@ finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.genera
 finn.platform.capabilities  <-  finn.kernels, and every row above them
 ```
 
-Each row imports every row to its left. The platform's capabilities
+Each row imports every row to its left. What a run says (finn.core.reporting: its
+findings and the refusals that carry them) sits below the engine, the standard library
+only, and every row that states a finding imports it. The platform's capabilities
 (finn.platform.capabilities: what a target gives kernels, plain data) sit beside the
 engine and the values, below the kernels; the rest of finn.platform, the registry with
 the build's target, sits above them. FINN's view of the ONNX model (finn.core.graph:
@@ -96,11 +99,21 @@ class Layer:
 # The kernel stack: the engine, the values, the module build values, the platform's
 # capabilities, the kernels. The engine and the values are independent: the kernels are
 # the first layer to use both.
-_KERNEL_STACK = ("space", "dataflow", "kernels.artifacts", "platform.capabilities", "kernels")
+_KERNEL_STACK = (
+    "reporting",
+    "space",
+    "dataflow",
+    "kernels.artifacts",
+    "platform.capabilities",
+    "kernels",
+)
 
 LAYERS: tuple[Layer, ...] = (
+    # What a run says: its findings and the refusals that carry them. The standard
+    # library only, below the engine.
+    Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
     # The generic Space engine: the standard library and its native dependency.
-    Layer("space", ("finn.core.space",), (), ("greenlet",), "tests/core/space"),
+    Layer("space", ("finn.core.space",), ("reporting",), ("greenlet",), "tests/core/space"),
     # Canonical logical values: QONNX's datatypes and numpy, no engine.
     Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype", "numpy"), "tests/dataflow"),
     # Module build values and their emission, below every Space; pyslang checks
@@ -115,19 +128,19 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "kernels",
         ("finn.kernels",),
-        ("space", "dataflow", "kernels.artifacts", "platform.capabilities"),
+        ("reporting", "space", "dataflow", "kernels.artifacts", "platform.capabilities"),
         ("qonnx.core.datatype", "numpy", "pyslang"),
         "tests/kernels",
         also=("finn.resources",),
     ),
     # The platform registry: parts, boards and shell rows, resolved to the build's target
     # (finn.platform.target), the capabilities kernels read with the part, shell and
-    # board. The shell root reads its shell's row. A refusal carries its finding (the
-    # engine's reason type).
+    # board. The shell root reads its shell's row. A refusal carries its finding
+    # (finn.core.reporting).
     Layer(
         "platform",
         ("finn.platform",),
-        ("space", "platform.capabilities", "kernels"),
+        ("reporting", "space", "platform.capabilities", "kernels"),
         (),
         "tests/kernel_ops",
     ),
@@ -288,7 +301,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "analysis",
         ("finn.analysis",),
-        ("space", "draws", "executors"),
+        ("reporting", "space", "draws", "executors"),
         ("numpy", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -373,9 +386,16 @@ LAYERS: tuple[Layer, ...] = (
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
+        "tests.core.reporting",
+        ("core.reporting",),
+        ("reporting", "tests.layering"),
+        ("pytest",),
+        "tests/core/reporting",
+    ),
+    Layer(
         "tests.core.space",
         ("core.space",),
-        ("space", "tests.layering", "tests.value_classes"),
+        ("reporting", "space", "tests.layering", "tests.value_classes"),
         ("pytest", "_typeshed"),
         "tests/core/space",
     ),

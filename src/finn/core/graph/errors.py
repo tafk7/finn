@@ -7,22 +7,22 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from finn.core.space import Finding
+from finn.core.reporting.findings import Finding, Refusal
 
 
-class KernelOpError(ValueError):
+class KernelOpError(Refusal):
     """A node or channel the KernelOps cannot bind or configure: a wrong fact or a
     refused choice. ``keys`` names what is refused, if anything: a node's choice
     attributes (``compute.packed.pe``), a channel's keys (``transport``, or
     ``<tensor>.<key>``), or tensors whose channel choices are refused whole.
-    ``findings`` holds the coded reasons, which tests and the build's reports read."""
+    ``findings`` holds the coded reasons, which tests and the build's reports read, none
+    where a refusal names no coded reason."""
 
     def __init__(
         self, message: str, keys: tuple[str, ...] = (), findings: Iterable[Finding] = ()
     ) -> None:
-        super().__init__(message)
+        super().__init__(findings, message)
         self.keys = keys
-        self.findings = tuple(findings)
 
 
 class FactUnstated(KernelOpError):
