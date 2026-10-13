@@ -3,8 +3,8 @@
 
 """The configuration of a dataflow build (``DataflowBuildConfig``), and its JSON form.
 
-Its fields say how the build runs: the target, the toolchain, the outputs and the
-steps. Everything else is a setting: the value of a keyword-only parameter a step
+Its fields say how the build runs: the target, the toolchain and the steps, which
+are what the build makes. Everything else is a setting: the value of a keyword-only parameter a step
 declares, decoded by the step's annotation when the build's plan resolves. In JSON a
 setting is a top-level key beside the fields; in Python an entry of ``settings``.
 Reading JSON refuses what the configuration does not declare, naming its place
@@ -22,7 +22,6 @@ import json
 import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
-from enum import Enum
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Union
@@ -34,7 +33,7 @@ from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
-from finn.util.typed_json import decoded, decoded_fields, encoded
+from finn.util.typed_json import decoded_fields, encoded
 
 
 def config_finding(
@@ -72,41 +71,6 @@ StepFunction = Callable[..., ModelWrapper]
 StepEntry = Union[str, StepFunction, Transformation, type[Transformation]]
 
 
-class DataflowOutputType(str, Enum):
-    """What a build makes besides the partition and its reports. ``stitched_ip`` and
-    ``ooc_synth`` work on any shell; the rest need a shell that integrates the partition
-    (``SHELL_OUTPUTS``), so not ``ip``."""
-
-    #: the packaged IP, with its interface description and an XSim testbench
-    STITCHED_IP = "stitched_ip"
-    #: the IP synthesized out of context, with its resources per member of the shell
-    OOC_SYNTH = "ooc_synth"
-    #: the bitfile of the target's shell
-    BITFILE = "bitfile"
-    #: the driver the shell's host runtime runs
-    PYNQ_DRIVER = "pynq_driver"
-    #: the bitfile and the driver, packaged for deployment
-    DEPLOYMENT_PACKAGE = "deployment_package"
-
-
-#: The outputs only a shell that integrates the partition makes.
-SHELL_OUTPUTS = (
-    DataflowOutputType.BITFILE,
-    DataflowOutputType.PYNQ_DRIVER,
-    DataflowOutputType.DEPLOYMENT_PACKAGE,
-)
-
-#: The outputs each output is made from, which must be asked with it: the driver needs
-#: the bitfile's delivered clock, and the deployment ships both from the same build.
-OUTPUT_NEEDS = {
-    DataflowOutputType.PYNQ_DRIVER: (DataflowOutputType.BITFILE,),
-    DataflowOutputType.DEPLOYMENT_PACKAGE: (
-        DataflowOutputType.BITFILE,
-        DataflowOutputType.PYNQ_DRIVER,
-    ),
-}
-
-
 @dataclass
 class DataflowBuildConfig:
     """The configuration of a build: give it to build_dataflow_cfg, or write it as
@@ -125,11 +89,9 @@ class DataflowBuildConfig:
     #: given here taking precedence.
     toolchain: Selection | None = None
 
-    #: What the build makes besides the partition and its reports; nothing by default.
-    generate_outputs: list[DataflowOutputType] = field(default_factory=list)
-
     #: If given, the build runs these entries in order instead of the default list
-    #: (finn.builder.build_dataflow_steps.default_steps).
+    #: (finn.builder.build_dataflow_steps.default_steps). Each output is made by a step:
+    #: listing the step makes it.
     steps: Sequence[StepEntry] | None = None
 
     #: If given, start from this step, or a phase's first step, loading the
@@ -162,10 +124,6 @@ class DataflowBuildConfig:
         clashing = sorted(set(self.settings) & _FIELDS)
         if clashing:
             raise ValueError(f"configuration.settings: {clashing} are fields, not settings")
-        # Python may name the outputs as JSON does.
-        self.generate_outputs = decoded(
-            list[DataflowOutputType], self.generate_outputs, "configuration.generate_outputs"
-        )
         if self.base_dir is None:
             return
         # Absolute, so that joining again (dataclasses.replace) changes nothing.
@@ -245,11 +203,8 @@ _FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"setti
 
 
 __all__ = [
-    "OUTPUT_NEEDS",
-    "SHELL_OUTPUTS",
     "ConfigurationRefused",
     "DataflowBuildConfig",
-    "DataflowOutputType",
     "StepEntry",
     "StepFunction",
     "config_finding",

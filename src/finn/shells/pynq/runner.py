@@ -14,8 +14,8 @@ The runner (``build_pynq``):
   ``xilinx_finn:finn:<instance>:1.0`` with the pins ``IODMA_PINS`` names);
 - packages the partition (``PackagePartition``: its body states its IP in
   ``finn.outputs``), unless its body already states an IP made from the body's design
-  as it is now (``made_from`` equal to ``design_digest`` of the body: ``STITCHED_IP`` or
-  ``OOC_SYNTH`` packaged it earlier in the build, and the partition is packaged once);
+  as it is now (``made_from`` equal to ``design_digest`` of the body: the packaging step
+  packaged it earlier in the build, and the partition is packaged once);
   an IP made from another design (a choice, a fact or a weight changed since) is
   packaged again, and the build says so;
 - writes the block design (``block_design``) from the export's instances and
@@ -35,7 +35,8 @@ bitfile and its reports into the output directory it is given, and records the b
 and its hardware handoff in the parent graph (``finn.outputs``) with what the bitfile was
 made from; its reports are found beside it (``bitfile_directory``, ``REPORTS``).
 ``refuse_stale_bitfile`` refuses a bitfile made from another design than the partition's
-now. Both refusals, and the deployment's, are a ``PynqRefused``.
+now. Both refusals, the driver's of a missing bitfile, and the deployment's are a
+``PynqRefused``.
 
 The driver its host runtime runs is ``driver``'s.
 """
@@ -587,7 +588,7 @@ def refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
             "bitfile-unmade",
             f"the model's bitfile ({bitfile}) states no design "
             "it was built from (finn.outputs bitfile_made_from); build the bitfile again "
-            "(bitfile)",
+            "(step_build_bitfile)",
         )
     if stated != now:
         raise PynqRefused(
@@ -595,7 +596,7 @@ def refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
             "bitfile-stale",
             f"the model's bitfile ({bitfile}) is stale: it was "
             f"built from the design {stated}, and the partition {node.name}'s design is now "
-            f"{now}; build the bitfile again (bitfile)",
+            f"{now}; build the bitfile again (step_build_bitfile)",
         )
 
 

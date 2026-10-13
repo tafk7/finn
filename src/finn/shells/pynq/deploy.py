@@ -81,22 +81,24 @@ class MakePynqDeployment(Transformation):
                 _OUTPUT,
                 "bitfile-absent",
                 "the model states no bitfile (finn.outputs): the deployment ships the "
-                "bitfile and the driver its build made; ask bitfile and pynq_driver with it",
+                "bitfile and the driver its build made; list step_build_bitfile and "
+                "step_make_driver before it",
             )
         if Path(stated) != output / BITFILE:
             raise PynqRefused(
                 _OUTPUT,
                 "bitfile-foreign",
                 f"the model's bitfile is {stated}, not this output directory's "
-                f"({output / BITFILE}); build the bitfile into this output directory (bitfile)",
+                f"({output / BITFILE}); build the bitfile into this output directory "
+                "(step_build_bitfile)",
             )
         if not (output / DRIVER_REPORT).is_file():
             raise PynqRefused(
                 _OUTPUT,
                 "driver-absent",
                 f"no driver in this output directory ({output / DRIVER_REPORT}): the "
-                "deployment ships the bitfile and the driver its build made; ask "
-                "pynq_driver with it",
+                "deployment ships the bitfile and the driver its build made; list "
+                "step_make_driver before it",
             )
         refuse_stale_bitfile(model, _OUTPUT)
         _, body, _ = partition_body(model)
@@ -108,7 +110,7 @@ class MakePynqDeployment(Transformation):
                 "driver-stale",
                 f"the driver in this output directory ({output / DRIVER_DIR}) was made from "
                 f"the design {made_from}, and the partition's design is now {now}; make the "
-                "driver again (pynq_driver)",
+                "driver again (step_make_driver)",
             )
         deploy = output / DEPLOY_DIR
         shutil.rmtree(deploy, ignore_errors=True)

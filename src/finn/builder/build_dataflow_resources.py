@@ -15,7 +15,7 @@ to three columns:
   integration, these are the integration's per-IP runs (``<run>_utilization_synth.rpt``,
   read by ``finn.toolchain.vivado.utilization_synth``), matched to members by instance
   name (``_member_instances``). On ``ip``, it is the top row of the hierarchical report
-  of the partition packaged with OOC_SYNTH (``vivado.hierarchical_utilization``);
+  of the partition packaged with ``ooc_synth`` (``vivado.hierarchical_utilization``);
 - ``placed``: the routed design's hierarchical report (``vivado.placed_hierarchy``),
   each instance directly below the block design's top counted to its member. ``ip`` is
   not placed.
@@ -32,7 +32,7 @@ counts outside the members. It is not clipped, and can be negative in the placed
 column, because Vivado's hierarchical report can count children above their top row
 (TFC on Ultra96: the members' LUTs exceed it by 3).
 
-When the partition was synthesized out of context (OOC_SYNTH), ``partition_members``
+When the partition was synthesized out of context (``ooc_synth``), ``partition_members``
 splits it by member of the shell root (``package.ooc_member_resources``). Synthesis
 flattens small instances into the module's top and does not keep the hierarchy: what no
 reported instance holds is listed as ``unattributed`` there, and the instances without
@@ -51,8 +51,9 @@ from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.annotations.platform import read_target
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import design_digest, partition_body
 from finn.core.space import finding_text
 from finn.custom_op.kernels.shell import (
     ShellResources,
@@ -141,21 +142,23 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def built_reports(parent: ModelWrapper, packaged: Path | None) -> dict[str, Path]:
+def built_reports(parent: ModelWrapper) -> dict[str, Path]:
     """The reports the build made that ``shell_resources_report`` reads, by name: those
     collected beside the bitfile the parent graph ``parent`` states (``placed``,
-    ``out_of_context``; none without a bitfile), and the utilization report of the
-    partition packaged with OOC_SYNTH into ``packaged`` (``ooc_synth``; none when not
-    given, or not synthesized there)."""
+    ``out_of_context``; none without a bitfile), and the utilization report of the IP
+    its partition's body states, packaged with ``ooc_synth`` from the body's design as it
+    is (``ooc_synth``; none when the body states no such IP, or it was not synthesized)."""
     reports: dict[str, Path] = {}
     built = bitfile_directory(parent)
     if built is not None:
         reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
-    if packaged is not None:
+    _, body, _ = partition_body(parent)
+    ip = body.get(OUTPUT_IP)
+    if ip is not None and body.get(OUTPUT_MADE_FROM) == design_digest(body):
         try:
-            reports["ooc_synth"] = partition_utilization_report(packaged)
+            reports["ooc_synth"] = partition_utilization_report(Path(ip).parent)
         except ToolFailed:
-            pass  # not synthesized into this output directory: the column is absent
+            pass  # packaged without synthesis: the column is absent
     return reports
 
 
@@ -212,7 +215,8 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     else:
         totals["out_of_context"] = None
         absent["out_of_context"] = (
-            "no out-of-context synthesis: ask bitfile on a shell with an integration, or ooc_synth"
+            "no out-of-context synthesis: list step_build_bitfile on a shell with an "
+            "integration, or step_package_partition with ooc_synth"
         )
 
     # Placed: the routed design's hierarchy, each instance directly below the top.
@@ -229,7 +233,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         absent["placed"] = (
             f"the {target.shell!r} shell is not placed by the build"
             if shell_row(target.shell, target.board).integration is None
-            else "no placed design: bitfile not asked"
+            else "no placed design: step_build_bitfile not listed"
         )
 
     names = ("model", "out_of_context", "placed")

@@ -27,12 +27,13 @@ from kernels.xsim import requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.builder.build_dataflow import build_dataflow_cfg
-from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
+from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
+from finn.builder.build_dataflow_resources import built_reports
 from finn.builder.build_dataflow_steps import step_package_partition
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
 from finn.core.graph.annotations.choices import FIFOS_STALE
-from finn.core.graph.annotations.outputs import OUTPUT_IP
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.rtlsim_bench import SimulationFailed
@@ -183,15 +184,41 @@ def test_out_of_context_resources_are_stated_per_member_of_the_shell_root(
     assert found["unreported_instances"] == ["second.compute.packed"]
 
 
+def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
+    tmp_path: Path,
+) -> None:
+    """The out-of-context column of the packaged partition is the synthesis report beside
+    the IP its body states, made from the body's design as it is: none before packaging,
+    none packaged without synthesis, none once the design changed; packaging again
+    removes an earlier synthesis's report."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    assert "ooc_synth" not in built_reports(parent)
+    node, body, body_file = partition_body(parent)
+    project = tmp_path / "stitched_ip"
+    stub = cast(Toolchain, PackagedByStub())
+    packaged = body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
+    packaged.save(body_file)
+    assert "ooc_synth" not in built_reports(parent)
+    # What Vivado's synthesis would leave beside the IP.
+    report = project / "finn_partition_partition_util.rpt"
+    report.write_text(REPORT)
+    assert built_reports(parent)["ooc_synth"] == report
+    packaged.set(OUTPUT_MADE_FROM, "sha256:" + "0" * 64)
+    packaged.save(body_file)
+    assert "ooc_synth" not in built_reports(parent)
+    body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
+    assert not report.exists()
+
+
 def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> None:
-    """STITCHED_IP writes the testbench beside the IP and simulates nothing (PRINCIPLES
-    §8: no build re-verifies the computation): run_testbench runs it, a utility."""
+    """The packaging step writes the testbench beside the IP and simulates nothing
+    (PRINCIPLES §8: no build re-verifies the computation): run_testbench runs it, a
+    utility."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
     output = tmp_path / "output"
     cfg = DataflowBuildConfig(
         output_dir=str(output),
         target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
-        generate_outputs=[DataflowOutputType.STITCHED_IP],
     )
     cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
     step_package_partition(parent, cfg)
@@ -267,7 +294,6 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
     cfg = DataflowBuildConfig(
         output_dir=str(output),
         target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
-        generate_outputs=[DataflowOutputType.STITCHED_IP],
     )
     cfg.prepared_toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "p"))
@@ -327,7 +353,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     tmp_path: Path, tfc_streamlined: Path
 ) -> None:
     """TFC_W2A2 through the builder on ``ip`` (Ultra96's part at 5 ns, the Z0 baseline's
-    exploration), STITCHED_IP asked: the IP packages, its description reads back against
+    exploration), listed to its packaged IP: the IP packages, its description reads back against
     the module's pins, ``run_testbench`` runs the testbench written beside it, on a
     generated frame, in the machine's toolchain, and it prints PASS when run by its own
     script."""
@@ -337,7 +363,6 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     cfg = DataflowBuildConfig(
         output_dir=str(output),
         target=TargetRequest(board="Ultra96", period_ns=5.0),
-        generate_outputs=[DataflowOutputType.STITCHED_IP],
         settings={"target_fps": 1e6},
         steps=[
             "phase_prepare_model",
@@ -346,7 +371,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
             "step_target_throughput",
             "phase_optimize_hardware",
             "phase_emit_hardware",
-            "phase_generate_outputs",
+            "step_resources_report",
         ],
         enable_build_pdb_debug=False,
     )

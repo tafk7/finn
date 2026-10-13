@@ -362,14 +362,14 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
     assert os.getcwd() == cwd and dict(os.environ) == env
     # A step that fails on an empty model: no partition to explore.
     assert build_dataflow_directory(str(state("step_size_fifos"))) == -1
-    with pytest.raises(ConfigurationRefused, match="'not_a_step' is no step or phase"):
+    with pytest.raises(ConfigurationRefused, match="'not_a_step' is no step or named list"):
         build_dataflow_directory(str(state("not_a_step")))
     assert os.getcwd() == cwd
     assert command().returncode == 0
     assert command("step_size_fifos").returncode == 255
     refused = command("not_a_step")
     assert refused.returncode == 1
-    stated = b"ConfigurationRefused: step-unknown: steps[0]: 'not_a_step' is no step or phase"
+    stated = b"ConfigurationRefused: step-unknown: steps[0]: 'not_a_step' is no step or named list"
     assert stated in refused.stderr
     assert os.getcwd() == cwd and dict(os.environ) == env
 
