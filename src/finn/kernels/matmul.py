@@ -256,11 +256,11 @@ class MatMulKernel(Kernel):
         window = self.window
         if self.depthwise:
             return reject("matmul-window", "a window reads a dense form's activations")
-        if self.k % window.taps or self.m != window.output[0] * window.output[1]:
+        if self.k % window.tap_count or self.m != window.output[0] * window.output[1]:
             return reject(
                 "matmul-window",
-                f"a {window.kernel} window over {window.image} reads M = "
-                f"{window.output[0] * window.output[1]} pixels and a K of its {window.taps} "
+                f"a {window.size} window over {window.image} reads M = "
+                f"{window.output[0] * window.output[1]} pixels and a K of its {window.tap_count} "
                 f"taps times the channels, not M = {self.m}, K = {self.k}",
             )
         return True
@@ -287,7 +287,7 @@ class MatMulKernel(Kernel):
         the image's (H * W, C) rows."""
         shape: tuple[int, ...]
         if self.windowed:
-            (height, width), taps = self.window.image, self.window.taps
+            (height, width), taps = self.window.image, self.window.tap_count
             shape = (height * width, self.k // taps)
         else:
             shape = (self.m, self.k, self.n) if self.depthwise else (self.m, self.k)

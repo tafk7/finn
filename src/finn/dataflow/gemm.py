@@ -77,21 +77,21 @@ def _pair(name: str, value: object) -> tuple[int, int]:
 
 @dataclass(frozen=True)
 class Window:
-    """A 2-D sliding window of ``kernel`` taps at ``stride`` and ``dilation`` (each rows,
+    """A 2-D sliding window of ``size`` taps at ``stride`` and ``dilation`` (each rows,
     columns) over an ``image`` of (H, W) pixels: a dense form's rows and reduction (the
     module docstring). It reads the image only, no padding, so it fits the image; a
     malformed one raises ``ValueError``."""
 
     image: tuple[int, int]
-    kernel: tuple[int, int]
+    size: tuple[int, int]
     stride: tuple[int, int] = (1, 1)
     dilation: tuple[int, int] = (1, 1)
 
     def __post_init__(self) -> None:
-        for name in ("image", "kernel", "stride", "dilation"):
+        for name in ("image", "size", "stride", "dilation"):
             _pair(name, getattr(self, name))
         for axis, name in enumerate(("rows", "columns")):
-            span = self.dilation[axis] * (self.kernel[axis] - 1) + 1
+            span = self.dilation[axis] * (self.size[axis] - 1) + 1
             if span > self.image[axis]:
                 raise ValueError(
                     f"a window spanning {span} {name} does not fit an image of {self.image[axis]}"
@@ -101,19 +101,19 @@ class Window:
     def output(self) -> tuple[int, int]:
         """(OH, OW): the windows that fit whole, a row and a column."""
         return (
-            (self.image[0] - self.dilation[0] * (self.kernel[0] - 1) - 1) // self.stride[0] + 1,
-            (self.image[1] - self.dilation[1] * (self.kernel[1] - 1) - 1) // self.stride[1] + 1,
+            (self.image[0] - self.dilation[0] * (self.size[0] - 1) - 1) // self.stride[0] + 1,
+            (self.image[1] - self.dilation[1] * (self.size[1] - 1) - 1) // self.stride[1] + 1,
         )
 
     @property
-    def taps(self) -> int:
+    def tap_count(self) -> int:
         """KH * KW: the pixels one window reads."""
-        return self.kernel[0] * self.kernel[1]
+        return self.size[0] * self.size[1]
 
     @property
     def extents(self) -> dict[Index, int]:
         """The window's own indices' extents; ``c`` and ``n`` are the operands'."""
-        (rows, columns), (taps_h, taps_w) = self.output, self.kernel
+        (rows, columns), (taps_h, taps_w) = self.output, self.size
         return {oh: rows, ow: columns, kh: taps_h, kw: taps_w}
 
     @property
