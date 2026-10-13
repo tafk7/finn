@@ -104,8 +104,10 @@ class DataflowBuildConfig:
     #: Whether a failed build opens pdb's postmortem debugger, where stdin is a terminal.
     enable_build_pdb_debug: bool = True
 
-    #: Whether the console shows everything in the build log; otherwise only the
-    #: runner's lines, warnings and errors.
+    #: Whether the console shows everything the build log has, each Python warning
+    #: included, and the log has FINN's DEBUG records; otherwise the console shows the
+    #: build's own lines (finn.builder's), FINN's warnings and errors, and how many Python
+    #: warnings the log has.
     verbose: bool = False
 
     #: The settings, by name: each the value of the steps' keyword-only parameter of that

@@ -20,9 +20,9 @@ qonnx resolves this domain by importing it and reads its op classes from ``__all
 
 from __future__ import annotations
 
+import logging
 import math
 import os
-import warnings
 from typing import Any
 
 import numpy as np
@@ -38,6 +38,8 @@ from finn.toolchain.launcher import Toolchain
 from finn.toolchain.vivado import tcl_quote
 
 opset_version = 1
+
+_LOG = logging.getLogger(__name__)
 
 
 class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
@@ -90,12 +92,9 @@ class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
         node = self.onnx_node
         idt = model.get_tensor_datatype(node.input[0])
         if idt != self.get_input_datatype():
-            warn_str = "inputDataType changing for %s: %s -> %s " % (
-                node.name,
-                str(self.get_input_datatype()),
-                str(idt),
+            _LOG.warning(
+                "inputDataType changing for %s: %s -> %s", node.name, self.get_input_datatype(), idt
             )
-            warnings.warn(warn_str)
         self.set_nodeattr("dataType", idt.name)
         model.set_tensor_datatype(node.output[0], idt)
 

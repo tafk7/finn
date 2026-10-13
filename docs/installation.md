@@ -512,6 +512,20 @@ records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip
 `hwh`, `bitfile_made_from`, `bitfile_options`) on the parent graph; the bitfile's
 reports are beside it under `report/`.
 
+What a build logs, at which level, and what reaches the console
+(`finn.core.reporting.log`):
+
+| Level | When | Console |
+|---|---|---|
+| ERROR | the build stops: a refusal (one line per finding), a tool unavailable or failed, a bug (with its traceback) | yes; a traceback only for a bug |
+| WARNING | the build goes on, giving less than asked or than the user would assume: a noted limitation (a budget, the delivered clock, a setting no step reads, a choice stale at the cut) | yes |
+| INFO | what the build did: its paths and steps, each step's summary, the reports written, the tool runs | the build's own lines (the loggers under `finn.builder`: the runner's and each step's summary); the rest in the log only |
+| DEBUG | per-item detail | no; in the log only with `verbose` |
+
+Python's warnings (qonnx's, NumPy's, streamlining's) go to the log at WARNING; the
+console ends with one line, `N Python warnings, in <the log>`. With `verbose` the console
+shows everything the log has but DEBUG, each Python warning included.
+
 `finn.toolchain.launcher.Selection` supports explicit local settings scripts or
 an explicitly accepted configured environment, a site command directory, and a
 launcher argv prefix. `Selection.prepare()` snapshots the mapping. With local

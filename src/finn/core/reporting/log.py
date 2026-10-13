@@ -3,6 +3,21 @@
 
 """One run's log: FINN's records and Python's warnings, to a log file and the console.
 
+Each record's level, and what reaches the console, follow one rule:
+
+- ERROR: the run stops: a refusal (one line per finding), a tool unavailable or failed,
+  a bug (with its traceback). Console: yes; a traceback only for a bug.
+- WARNING: the run goes on, giving less than asked or than the user would assume: a
+  noted limitation (``finn.core.reporting.manifest.note``). Console: yes.
+- INFO: what the run did. Console: the run's own lines only, those of the logger
+  ``runner`` names and the loggers under it (a build's ``finn.builder``: the runner's and
+  each step's one-line summary); the rest in the file.
+- DEBUG: per-item detail; the file only, with ``verbose``.
+
+Python's warnings (``py.warnings``: qonnx's, NumPy's, streamlining's) go to the file at
+WARNING; the console shows how many there were at the run's end, and with ``verbose``
+each one. With ``verbose`` the console shows everything the file has but DEBUG.
+
 ``log_run`` sets it up for a ``with`` block (``finn.core.reporting.manifest.recorded_run``
 sets it up with the run's manifest), ``running_step`` names the step stamped on each
 record, and ``FILE_ONLY`` keeps a record off the console. The standard library only, so
@@ -47,10 +62,10 @@ class _StepStamp(logging.Filter):
 
 
 class _Console(logging.Filter):
-    """One console stream's share of the records: below WARNING for stdout, the rest for
-    stderr (``errors``). With ``verbose``, everything the log file has; otherwise the
-    INFO lines of the logger named ``runner`` and every logger's warnings and errors,
-    less the ``FILE_ONLY`` records."""
+    """One console stream's share of the records from INFO: below WARNING for stdout, the
+    rest for stderr (``errors``). With ``verbose``, everything the log file has;
+    otherwise the INFO lines of ``runner`` and the loggers under it and FINN's warnings
+    and errors, less Python's warnings and the ``FILE_ONLY`` records."""
 
     def __init__(self, runner: str, verbose: bool, errors: bool):
         super().__init__()
@@ -59,13 +74,25 @@ class _Console(logging.Filter):
         self.errors = errors
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if (record.levelno >= logging.WARNING) != self.errors:
+        if record.levelno < logging.INFO or (record.levelno >= logging.WARNING) != self.errors:
             return False
         if self.verbose:
             return True
-        if not getattr(record, "finn_console", True):
+        if record.name == "py.warnings" or not getattr(record, "finn_console", True):
             return False
-        return record.levelno >= logging.WARNING or record.name == self.runner
+        own = record.name == self.runner or record.name.startswith(self.runner + ".")
+        return record.levelno >= logging.WARNING or own
+
+
+class _Counted(logging.Handler):
+    """Counts the records it is given."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.count += 1
 
 
 class _ConsoleFormat(logging.Formatter):
@@ -82,10 +109,11 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
     restore the logging found.
 
     FINN's loggers and Python's warnings go to the file, each line with its level, step
-    and logger, and to the console: with ``verbose`` all of it, otherwise the INFO lines
-    of the logger named ``runner``, warnings and errors. ``finn`` logs from INFO unless
-    the caller set it higher. No stream is redirected, so a third party's print reaches
-    the console unchanged."""
+    and logger, and to the console as the module docstring states: the INFO lines of
+    ``runner`` and the loggers under it, FINN's warnings and errors, and at the end how
+    many Python warnings the file has; with ``verbose``, all of it. ``finn`` logs from
+    INFO, from DEBUG with ``verbose``, unless the caller set its level. No stream is
+    redirected, so a third party's print reaches the console unchanged."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     stamp = _StepStamp()
     file_handler = logging.FileHandler(path, mode="a")
@@ -98,22 +126,24 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
         console.addFilter(_Console(runner, verbose, errors))
         console.setFormatter(_ConsoleFormat("%(message)s"))
         handlers.append(console)
-    loggers = [logging.getLogger("finn"), logging.getLogger("py.warnings")]
-    saved = [(logger, logger.level, logger.propagate) for logger in loggers]
+    finn, python = logging.getLogger("finn"), logging.getLogger("py.warnings")
+    saved = [(logger, logger.level, logger.propagate) for logger in (finn, python)]
     for handler in handlers:
         handler.addFilter(stamp)
-        for logger in loggers:
+        for logger in (finn, python):
             logger.addHandler(handler)
-    for logger in loggers:
+    counted = _Counted()
+    python.addHandler(counted)
+    for logger in (finn, python):
         # The root's handlers (a notebook's) would print each line twice.
         logger.propagate = False
-    shown = loggers[0].level or logging.INFO
+    shown = finn.level or (logging.DEBUG if verbose else logging.INFO)
     if shown > logging.INFO:
         for handler in handlers:
             handler.addFilter(
                 lambda record: record.levelno >= shown or record.name == "py.warnings"
             )
-    loggers[0].setLevel(shown)
+    finn.setLevel(shown)
     # A caller that already captures warnings keeps its hook.
     capture = warnings.showwarning is not getattr(logging, "_showwarning", None)
     if capture:
@@ -121,8 +151,11 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
     try:
         yield
     finally:
+        if counted.count and not verbose:
+            logging.getLogger(runner).info("%d Python warnings, in %s", counted.count, path)
         if capture:
             logging.captureWarnings(False)
+        python.removeHandler(counted)
         for logger, level, propagate in saved:
             logger.setLevel(level)
             logger.propagate = propagate

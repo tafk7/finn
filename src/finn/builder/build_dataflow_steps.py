@@ -59,6 +59,7 @@ from finn.builder.build_dataflow_testbench import TESTBENCH_DIR, generated_frame
 from finn.core.graph.annotations.choices import OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.explore import (
@@ -346,11 +347,12 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     partition is named ``partition``: its node, its body (partition/partition.onnx), its
     IP and its block-design instance. Each channel's choices are created here, and each
     KernelOp's checked again in context: one made stale by an edit since conversion is
-    reset to its baseline, with a warning."""
+    reset to its baseline, noted as a limitation (``choice-stale``, owned by the choice)."""
     cut = CutKernelPartition(Path(cfg.output_dir) / "partition")
     model = model.transform(cut)
     for key, why in cut.dropped.items():
-        _LOG.warning(f"Kernel choices: {key} dropped as stale at the cut and re-baselined: {why}")
+        message = f"dropped as stale at the cut and re-baselined: {why}"
+        note(Finding(FindingKind.LIMITATION, "choice-stale", key, message))
     return model
 
 

@@ -174,17 +174,21 @@ def test_a_plain_value_error_is_a_bug_even_with_findings(capsys):
 def step_says(model, cfg):
     print("a third party's print")
     warnings.warn("a step's warning", UserWarning)
+    logging.getLogger("finn.builder.build_dataflow_steps").info("a step's summary")
     logging.getLogger("finn.transformation.kernels").info("a module's line")
     logging.getLogger("finn.transformation.kernels").warning("a module's warning")
     return model
 
 
 @pytest.mark.util
-def test_the_log_has_every_record_with_its_step_the_console_the_runner_and_warnings(capsys):
+def test_the_log_has_every_record_with_its_step_the_console_the_builds_lines_and_warnings(
+    capsys,
+):
     """No stream is swapped: a print reaches the console as printed and not the log.
     The log file has every FINN record and the captured warnings, each with its level,
-    step and logger; the console the runner's lines and the warnings. Afterwards the
-    warnings hook and FINN's logger are as they were."""
+    step and logger; the console the build's own lines (the runner's and the steps'),
+    FINN's warnings, and at the end how many Python warnings the log has. Afterwards
+    the warnings hook and FINN's logger are as they were."""
     shown, finn = warnings.showwarning, logging.getLogger("finn")
     level, handlers, propagate = finn.level, list(finn.handlers), finn.propagate
     output = make_build_dir("test_build_log_")
@@ -203,9 +207,11 @@ def test_the_log_has_every_record_with_its_step_the_console_the_runner_and_warni
         log = f.read()
     assert "a third party's print" in printed.out and "a third party's print" not in log
     assert "Running step: step_says [1/1]" in printed.out
+    assert "a step's summary" in printed.out
     assert "a module's line" not in printed.out + printed.err
     assert "WARNING: a module's warning" in printed.err
-    assert "UserWarning: a step's warning" in printed.err
+    assert "a step's warning" not in printed.out + printed.err
+    assert printed.out.splitlines()[-1] == f"1 Python warnings, in {output}/{build.LOG_FILE}"
     assert "INFO step_says finn.transformation.kernels: a module's line" in log
     assert "WARNING step_says finn.transformation.kernels: a module's warning" in log
     assert "WARNING step_says py.warnings: " in log and "UserWarning: a step's warning" in log

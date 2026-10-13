@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-import warnings
+import logging
 from qonnx.transformation.base import Transformation
 
 from finn.transformation.qonnx.qonnx_activation_handlers import (
@@ -36,10 +36,12 @@ from finn.transformation.qonnx.qonnx_activation_handlers import (
     refused,
 )
 
+_LOG = logging.getLogger(__name__)
+
 
 def default_filter_function_generator(max_multithreshold_bit_width=8):
     """ConvertQuantActToMultiThreshold's default filter function: it leaves a Quant node
-    wider than ``max_multithreshold_bit_width`` bits a Quant, with a warning."""
+    wider than ``max_multithreshold_bit_width`` bits a Quant."""
 
     def filter_function(model, q_node):
         if q_node.op_type == "Quant":
@@ -52,15 +54,7 @@ def default_filter_function_generator(max_multithreshold_bit_width=8):
             raise refused(
                 "quant-bitwidth-dynamic", q_node, "Quant nodes must have a static bit width."
             )
-        if bit_width > max_multithreshold_bit_width:
-            warnings.warn(
-                f'The Quant node with name: "{q_node.name}" was not converted to a '
-                f"MultiThreshold node, because its bit width of {bit_width} is "
-                f"higher than the configured maximum bit width of "
-                f"{max_multithreshold_bit_width}."
-            )
-            return False
-        return True
+        return bool(bit_width <= max_multithreshold_bit_width)
 
     return filter_function
 
@@ -71,8 +65,8 @@ class ConvertQuantActToMultiThreshold(Transformation):
     identity.
 
     :param filter_function: called with the model and each candidate node; a node it
-        returns False for stays a Quant, with a warning. By default, a Quant wider than
-        8 bits stays.
+        returns False for stays a Quant, warned of once, with its bit width, when no
+        other node is left to convert. By default, a Quant wider than 8 bits stays.
     """
 
     def __init__(
@@ -86,6 +80,7 @@ class ConvertQuantActToMultiThreshold(Transformation):
         graph = model.graph
         node_ind = 0
         graph_modified = False
+        left = []
 
         for n in graph.node:
             node_ind += 1
@@ -107,11 +102,7 @@ class ConvertQuantActToMultiThreshold(Transformation):
                     )
 
                 if not self._filter_function(model, n):
-                    warnings.warn(
-                        f'The Quant node with name: "{n.name}" was not converted to a '
-                        f"MultiThreshold node, because the filtering function "
-                        f"returned False for this node."
-                    )
+                    left.append(n)
                     continue
 
                 valid_predecessors = []
@@ -136,4 +127,11 @@ class ConvertQuantActToMultiThreshold(Transformation):
                 graph_modified = True
                 return (model, graph_modified)
 
+        # The pass that converts nothing more is the last: each Quant left is warned of once.
+        for n in left:
+            bit_width = 1.0 if n.op_type == "BipolarQuant" else model.get_initializer(n.input[3])
+            _LOG.warning(
+                f'The Quant node "{n.name}" (bit width {bit_width}) was not converted to a '
+                "MultiThreshold node: the filter function returned False for it."
+            )
         return (model, graph_modified)

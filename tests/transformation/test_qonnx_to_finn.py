@@ -30,6 +30,7 @@
 import pytest
 
 import importlib_resources as importlib
+import logging
 import numpy as np
 import onnx
 import onnx.numpy_helper as nph
@@ -49,6 +50,9 @@ import finn.core.onnx_exec as oxe
 from finn.core.reporting.findings import Refusal
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
+from finn.transformation.qonnx.quant_act_to_multithreshold import (
+    ConvertQuantActToMultiThreshold,
+)
 
 
 def get_brev_model_and_sample_inputs(model_name, wbits, abits):
@@ -239,6 +243,52 @@ def test_QONNX_to_FINN_threshold_precision():
         f"Quant={ref.ravel()[0]!r} vs MultiThreshold={conv.ravel()[0]!r} "
         "(threshold derivation precision regression)"
     )
+
+
+@pytest.mark.transform
+def test_a_quant_left_unconverted_is_warned_of_once(caplog):
+    """A Quant the filter leaves (wider than 8 bits) ahead of one it converts: the
+    transformation runs again after each conversion and visits the wide one each time,
+    but warns of it once, naming its bit width."""
+    ishape = [1, 4]
+    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, ishape)
+    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, ishape)
+    inits = [
+        nph.from_array(np.asarray(0.5, dtype=np.float32), "scale"),
+        nph.from_array(np.asarray(0.0, dtype=np.float32), "zeropt"),
+        nph.from_array(np.asarray(9.0, dtype=np.float32), "wide_bits"),
+        nph.from_array(np.asarray(4.0, dtype=np.float32), "narrow_bits"),
+    ]
+    quants = [
+        helper.make_node(
+            "Quant",
+            [tensor_in, "scale", "zeropt", bits],
+            [tensor_out],
+            name=name,
+            domain="qonnx.custom_op.general",
+            signed=1,
+            narrow=0,
+            rounding_mode="ROUND",
+        )
+        for name, tensor_in, bits, tensor_out in (
+            ("wide", "global_in", "wide_bits", "between"),
+            ("narrow", "between", "narrow_bits", "global_out"),
+        )
+    ]
+    graph = helper.make_graph(quants, "two_quants", [gi], [go], initializer=inits)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.opset_import.append(helper.make_opsetid("qonnx.custom_op.general", 1))
+    model = ModelWrapper(model).transform(InferShapes()).transform(InferDataTypes())
+    logger = "finn.transformation.qonnx.quant_act_to_multithreshold"
+    with caplog.at_level(logging.INFO, logger=logger):
+        model = model.transform(ConvertQuantActToMultiThreshold())
+    assert [node.op_type for node in model.graph.node].count("Quant") == 1
+    assert "MultiThreshold" in [node.op_type for node in model.graph.node]
+    warned = [record.getMessage() for record in caplog.records if record.name == logger]
+    assert warned == [
+        'The Quant node "wide" (bit width 9.0) was not converted to a MultiThreshold node: '
+        "the filter function returned False for it."
+    ]
 
 
 @pytest.mark.transform

@@ -49,6 +49,7 @@ from finn.builder.build_dataflow_steps import (
     step_baseline_choices,
     step_build_bitfile,
     step_convert_to_hw,
+    step_create_dataflow_partition,
     step_deployment_package,
     step_make_driver,
     step_max_throughput,
@@ -116,6 +117,7 @@ from kernel_ops.packaging import (
     bitfile_default,
     io_shape_dict,
 )
+from kernel_ops.test_choose import kernel_model as open_model
 from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -762,6 +764,33 @@ def test_the_bitfiles_clock_findings_are_noted(
     assert (noted.name, noted.levelno) == (REPORTS_LOG, logging.WARNING)
     assert noted.getMessage() == str(CLOCK_SHORT)
     assert getattr(noted, FINDING) is CLOCK_SHORT
+
+
+def test_a_choice_stale_at_the_cut_is_noted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A node's choice its facts refuse in context (written past ``save``) is reset at the
+    cut and noted once: a limitation owned by the choice, the finding attached for the
+    manifest."""
+    model = open_model()
+    first = kernel_op(model, model.graph.node[0])
+    first.set_nodeattr("compute.packed.simd", 2)
+    first.set_nodeattr("compute.packed.pe", 3)
+    with caplog.at_level(logging.INFO, logger=REPORTS_LOG):
+        step_create_dataflow_partition(model, config(tmp_path))
+    (noted,) = [record for record in caplog.records if record.levelno >= logging.WARNING]
+    finding = getattr(noted, FINDING)
+    assert (noted.name, noted.levelno, noted.getMessage()) == (
+        REPORTS_LOG,
+        logging.WARNING,
+        str(finding),
+    )
+    assert (finding.kind, finding.code, finding.owner) == (
+        FindingKind.LIMITATION,
+        "choice-stale",
+        "first.compute.packed.pe",
+    )
+    assert "domain-membership" in finding.message
 
 
 def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
