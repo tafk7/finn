@@ -41,7 +41,6 @@ def levels(values: Array) -> Array:
 
 
 FACTS = dict(
-    input_dtype=DataType["INT4"],
     threshold_dtype=DataType["INT4"],
     thresholds=THRESHOLDS,
     bias=0,
@@ -107,8 +106,9 @@ def shared_row(*, axilite: bool = False) -> dict[str, Any]:
 
 
 def alone(**facts: Any) -> Space:
-    """The kernel alone on ``FACTS`` but ``facts``."""
-    return design_space(ThresholdingAxiKernel(**{**FACTS, **facts}))
+    """The kernel alone on its case's input and ``FACTS``, but ``facts``."""
+    given = {"input_tensor": tensor((PIXELS, CHANNELS), "INT4"), **FACTS, **facts}
+    return design_space(ThresholdingAxiKernel(**given))
 
 
 SPEC = KernelSpec(
@@ -141,7 +141,9 @@ SPEC = KernelSpec(
         ),
         Probe(
             "a threshold at its type's minimum, which an input wider below it saturates to",
-            lambda: alone(input_dtype=DataType["INT8"], thresholds=(((-8, 0, 2),),)),
+            lambda: alone(
+                input_tensor=tensor((PIXELS, CHANNELS), "INT8"), thresholds=(((-8, 0, 2),),)
+            ),
             frozenset({"threshold-saturation"}),
         ),
         Probe(

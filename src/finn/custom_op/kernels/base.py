@@ -35,9 +35,11 @@ its baseline at conversion. A channel's choices are stored on its tensor instead
 only in a partition's body (``CHANNEL``).
 
 **Wiring.** Each ONNX input and output that carries a stream (a *port*: ``x``, ``w``,
-``y``) meets the kernel as a ``Wiring``: the kernel's Param its tensor is given as
-(``tensor``, ``x_tensor``) and the kernel's interface its channel takes as an end
-(``end``, ``x_end``, a view of a ``finn.kernels.base.PortEnd``). A parameter port,
+``y``) meets the kernel as a ``Wiring``: an input's the kernel's Param its tensor is
+given as, an output's the kernel's view of the tensor it writes (``tensor``,
+``x_tensor``, ``y_tensor``: an output's tensor is the kernel's statement, never given
+to it), and the kernel's interface its channel takes as an end (``end``, ``x_end``, a
+view of a ``finn.kernels.base.PortEnd``). A parameter port,
 whose initializer the node may hold (MatMul's weights), also names the kernel's Param
 the initializer's values are given as (``contents``, ``w_contents``) and the kernel's
 views of what its channel carries, downstream of the kernel: the tensor (``carried``,
@@ -94,7 +96,8 @@ Shapes = dict[str, tuple[tuple[int, ...], QONNXDataType]]
 @dataclass(frozen=True)
 class Wiring:
     """How one port of a KernelOp meets its kernel (the module docstring): the kernel's
-    Param of the port's tensor and the view of its interface's end; for a parameter port,
+    Param of an input's tensor, or its view of an output's, and the view of its
+    interface's end; for a parameter port,
     the kernel's Param of the held values and its views of the tensor and the values the
     port's channel carries."""
 
@@ -474,7 +477,7 @@ class KernelOp(CustomOp):
         ]
 
     def view(self, name: str) -> Any:
-        """A view of the kernel bound on the node's inputs only (``result_tensor``,
+        """A view of the kernel bound on the node's inputs only (``y_tensor``,
         ``result_dtype``): what output inference reads. It may read an input's value
         (MatMul's result range comes from its weights)."""
         kernel = getattr(BIND_CACHE.inputs(self.facts()), self.member)

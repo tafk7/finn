@@ -18,7 +18,6 @@ end presenting padded beats, which no beat sequence (``finn.dataflow``) states.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from math import lcm
 
 from finn.core.space import (
@@ -30,8 +29,8 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel
 from finn.kernels.port import WordPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.platform.capabilities import Resources
@@ -49,7 +48,7 @@ _VPC_LUT = Fit(9.9, (0.022,))
 _VPC_FF = Fit(6.8, (1.0,))
 
 
-class VpcKernel(Kernel):
+class VpcKernel(LeafKernel):
     id = "finnlib.vpc"
     version = 1
     rtl_module = "vpc"
@@ -77,7 +76,8 @@ class VpcKernel(Kernel):
     def resource_use(self) -> Resources:
         return vpc_resources(w=self.element_bits, pi=self.lanes_in, po=self.lanes_out)
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         return {
             "N": lcm(self.lanes_in, self.lanes_out),
             "PAD_ZEROS": 1,
@@ -87,7 +87,8 @@ class VpcKernel(Kernel):
             "W": self.element_bits,
         }
 
-    def sources(self) -> tuple[CopiedSource, ...]:
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
         return (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),)
 
 

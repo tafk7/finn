@@ -22,12 +22,13 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.rtlsim_bench import measure
-from finn.core.space import Available
+from finn.core.space import Available, Rejected
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import pack, unreplayed
 from finn.harness.hls import c_simulate
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import Leaf
+from finn.kernels.channels import Channel
 from finn.kernels.pool import PoolKernel, element_type
 from finn.toolchain import hls
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
@@ -93,10 +94,14 @@ def test_a_strided_window_counts_the_windows_that_fit_and_drops_the_rest() -> No
     assert reference.shape == (2, 3, 2)
 
 
-def test_an_output_shape_other_than_the_windows_is_refused() -> None:
+def test_its_output_is_the_windows_and_a_channel_of_another_shape_refuses_it() -> None:
+    windows = pool()["outputs"]["output_channel"]
     case = dict(pool(), outputs={"output_channel": (3, 3, 6)})
-    with pytest.raises(ValueError, match="oh is 2 \\(given\\) and 3 \\(output axis 0\\)"):
-        placed(case, 1)
+    point, _, _ = placed(case, 1)
+    assert design_member(point, KERNEL).output_tensor.shape == windows
+    refused = design_member(point, "output_channel").query(Channel.well_formed)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"channel-tensor"}
 
 
 def test_its_request_is_written_from_the_point() -> None:

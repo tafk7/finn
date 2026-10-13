@@ -172,6 +172,6 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
     assert w.source.value_range == (-1, 1)
     # The result's range read the columns (over INT3 activations: [-11, 11]), once.
     matmul = folded.member("matmul")
-    assert matmul.result_tensor.element == ScalarEncoding(DataType["INT5"], (-11, 11))
+    assert matmul.y_tensor.element == ScalarEncoding(DataType["INT5"], (-11, 11))
     assert loads == [1]
     assert w.source.image and loads == [1]

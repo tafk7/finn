@@ -116,14 +116,12 @@ def placed(
                 dtype=W,
                 form=tiled,
                 contents=weight_values(w),
-                output_tensor=w_tensor,
             ),
             "compute": core(
                 form=form,
                 result_range=ordinary_integer_bounds(R),
                 x_tensor=a_tensor,
                 w_tensor=w_tensor,
-                y_tensor=r_tensor,
                 platform=FULL_DSP58,
             ),
         }
@@ -284,13 +282,10 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
             "add": EltwiseKernel(
                 operation="ADD",
                 pe=2,
-                lhs_dtype=int4,
-                rhs_dtype=int4,
                 b_scale=1.0,
                 platform=FULL_DSP58,
                 lhs_tensor=lhs_tensor,
                 rhs_tensor=rhs_tensor,
-                result_tensor=out_tensor,
             ),
         }
     )
@@ -319,7 +314,10 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     assert {(finding.code, finding.message) for finding in refused.findings} == {
         ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
     }
-    # An operand channel of another element: the channel refuses the port's end.
-    other = eltwise_between((4,), rhs_dtype="INT3").member("rhs").query(Channel.netlist)
-    assert isinstance(other, Rejected)
-    assert "channel-tensor" in {finding.code for finding in other.findings}
+    # An operand of another element: its port carries its tensor's, and the kernel
+    # refuses the pair.
+    other = eltwise_between((4,), rhs_dtype="INT3").member("add")
+    assert other.rhs.element == ScalarEncoding(DataType["INT3"])
+    refused = other.query(EltwiseKernel.module)
+    assert isinstance(refused, Rejected)
+    assert "eltwise-integer-pair" in {finding.code for finding in refused.findings}

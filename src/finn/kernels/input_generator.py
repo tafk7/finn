@@ -36,7 +36,7 @@ constants are evaluated once per nest and source.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 from math import prod
@@ -54,9 +54,9 @@ from finn.core.space import (
     requiring,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel
 from finn.kernels.port import WordPort
 from finn.kernels.transport import MarkerKind, StreamMarker
 from finn.kernels.utilization import (
@@ -95,7 +95,7 @@ _INPUT_GEN_LUT = Fit(9.9, (3.07,))
 _INPUT_GEN_FF = Fit(12.7, (2.31,))
 
 
-class InputGeneratorKernel(Kernel):
+class InputGeneratorKernel(LeafKernel):
     id = "finnlib.input_generator"
     version = 1
     rtl_module = "input_gen"
@@ -174,7 +174,8 @@ class InputGeneratorKernel(Kernel):
             fabric=self.platform.fabric,
         )
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         return {
             "COEFS": _vector(self.strides),
             "D": len(self.dims),
@@ -184,7 +185,8 @@ class InputGeneratorKernel(Kernel):
             "RAM_STYLE": f'"{self.ram_style}"',
         }
 
-    def sources(self) -> tuple[CopiedSource, ...]:
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
         return (SOURCE,)
 
 

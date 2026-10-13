@@ -5,8 +5,8 @@
 
 It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and presents
 its ends on the network's channels; each channel takes its ends from its kernels
-(``Interface``), and the tensor of a MatMul's results is the MatMul's own view of it
-(``result_tensor``), read before it is placed. The weights are given to each MatMul
+(``Interface``), and the tensor of a MatMul's results is the MatMul's statement of them
+(``y_tensor``), read before it is placed. The weights are given to each MatMul
 (``w_contents``): each weight channel carries what its MatMul states for it, its
 contents (``w_stored``) and its tensor over their range (``w_carried``). ``chain()``
 is the Chain configured as the kernel tests, the KernelOp partition tests and the
@@ -54,11 +54,8 @@ MEMBERS = ("first", "activate", "second", "x", "w1", "hidden", "levels", "w2", "
 """The Chain's members, ranked: its kernels, then its channels."""
 
 
-def matmul(
-    k: int, n: int, dtype: Any, weights: Any, x_tensor: Any, y_tensor: Any = None
-) -> MatMulKernel:
+def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> MatMulKernel:
     """A MatMul of ``k`` by ``n`` known ``weights`` on activations of ``dtype``."""
-    tensors = {} if y_tensor is None else {"y_tensor": y_tensor}
     return MatMulKernel(
         m=ROWS,
         n=n,
@@ -68,13 +65,12 @@ def matmul(
         platform=FULL_DSP48E2,
         x_tensor=x_tensor,
         w_contents=weights,
-        **tensors,
     )
 
 
 def result(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> Tensor:
-    """The tensor of a MatMul's results: its own view, which reads its facts and weights."""
-    found: Tensor = design_space(matmul(k, n, dtype, weights, x_tensor)).result_tensor
+    """The tensor of a MatMul's results: its statement, which reads its facts and weights."""
+    found: Tensor = design_space(matmul(k, n, dtype, weights, x_tensor)).y_tensor
     return found
 
 
@@ -82,12 +78,12 @@ HIDDEN_TENSOR = result(INPUTS, HIDDEN, A, W1, X_TENSOR)
 Y_TENSOR = result(HIDDEN, OUTPUTS, T, W2, LEVELS)
 
 
-def network() -> Network:
-    """The Chain, nothing chosen. The input is the network's to state, and the
-    thresholding's output too: a leaf binds its extents from its own ports, so its output
-    tensor is not read from it. Each MatMul's results are its view, which reads only its
-    facts and its weights, and each weight channel carries what its MatMul states for
-    it."""
+def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
+    """The Chain, nothing chosen. The input is the network's to state, and the levels'
+    channel's tensor too, as a graph states the thresholding's output. Each MatMul's
+    results are its statement, which reads only its facts and its weights, and each
+    weight channel carries what its MatMul states for it. The hidden channel's tensor,
+    which the thresholding reads, is ``hidden``: the first MatMul's results by default."""
     platform = FULL_DSP48E2
     return Network(
         {
@@ -104,7 +100,7 @@ def network() -> Network:
                 platform=platform,
             ),
             "hidden": wire(
-                tensor=HIDDEN_TENSOR,
+                tensor=hidden,
                 producer=Interface("first", "y_end"),
                 consumer=Interface("activate", "input_end"),
                 platform=platform,
@@ -127,18 +123,16 @@ def network() -> Network:
                 producer=Interface("second", "y_end"),
                 platform=platform,
             ),
-            "first": matmul(INPUTS, HIDDEN, A, W1, X_TENSOR, HIDDEN_TENSOR),
+            "first": matmul(INPUTS, HIDDEN, A, W1, X_TENSOR),
             "activate": ThresholdingAxiKernel(
-                input_dtype=H,
                 threshold_dtype=THRESHOLD_DTYPE,
                 thresholds=THRESHOLDS,
                 bias=0,
                 pe=PE,
-                input_tensor=HIDDEN_TENSOR,
-                output_tensor=LEVELS,
+                input_tensor=hidden,
                 platform=platform,
             ),
-            "second": matmul(HIDDEN, OUTPUTS, T, W2, LEVELS, Y_TENSOR),
+            "second": matmul(HIDDEN, OUTPUTS, T, W2, LEVELS),
         }
     )
 

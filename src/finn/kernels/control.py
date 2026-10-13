@@ -19,7 +19,7 @@ to the root's ``BusExport``. One kernel is controlled through one bus node.
 A kernel whose control interface is not referenced, or that exposes none in
 its configuration (``Control(None)``), holds the bus inputs constant and
 leaves its outputs unconnected (``held_bus``), and presents it otherwise
-(``Kernel.controlled``): nothing about a bus is wired by name.
+(``LeafKernel.controlled``): nothing about a bus is wired by name.
 """
 
 from __future__ import annotations

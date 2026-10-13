@@ -278,9 +278,7 @@ def pages(rows: int, cols: int) -> Any:
                 producer=Interface("shuffle", "output_end"),
                 platform=FULL_DSP48E2,
             ),
-            "shuffle": TransposeKernel(
-                input_tensor=tensor, output_tensor=tensor, platform=FULL_DSP48E2
-            ),
+            "shuffle": TransposeKernel(input_tensor=tensor, platform=FULL_DSP48E2),
         }
     )
     return with_direct_transports(choose(network, {"shuffle.simd": 4}))

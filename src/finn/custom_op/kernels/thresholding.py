@@ -97,7 +97,7 @@ class Thresholding(KernelOp):
     op_version = ThresholdingAxiKernel.version
     kernel = ThresholdingAxiKernel
     member = "activate"
-    formals = ("input_dtype", "threshold_dtype", "thresholds", "bias", "platform")
+    formals = ("threshold_dtype", "thresholds", "bias", "platform")
     ports = ("x", None)
     wiring = {
         "x": Wiring("input_tensor", "input_end"),
@@ -175,7 +175,6 @@ class Thresholding(KernelOp):
         def formals() -> dict[str, object]:
             table, threshold_dtype = stored_thresholds(stored, input_dtype)
             return dict(
-                input_dtype=input_dtype,
                 threshold_dtype=threshold_dtype,
                 thresholds=table,
                 bias=bias,

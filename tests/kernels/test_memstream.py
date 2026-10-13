@@ -136,6 +136,12 @@ def test_several_weight_sets_take_a_set_index_per_row():
     memstream = dict(placed(built.module, "w.source.memstream").parameters)
     assert memstream["SETS"] == 2
     assert len(built.initializer) == 8  # both sets, set after set
+    # Its cycles are the beats its output carries a frame: one pass a row's index, where a
+    # memory of one set streams one pass.
+    source = built.network.member("w").source
+    assert source.output_sequence.form.beats == 3 * source.form.beats
+    assert source.cycles == 3 * source.form.beats
+    assert memory().cycles == memory().form.beats
     # The memory's choices are the weight channel's, keyed below it.
     keys = {dotted(key) for key in built.network.decisions()}
     assert {"w.source.memstream.ram_style", "w.source.memstream.pumped_memory"} <= keys

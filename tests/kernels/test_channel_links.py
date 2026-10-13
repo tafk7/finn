@@ -55,7 +55,6 @@ def placing(*, w_port: str | None = "in1_V") -> Network:
                 result_range=ordinary_integer_bounds(INT8),
                 x_tensor=X,
                 w_tensor=W,
-                y_tensor=Y,
                 platform=FULL_DSP48E2,
             ),
         }

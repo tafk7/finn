@@ -13,6 +13,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import FindingKind, Rejected, design_space
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
 from finn.kernels.memstream import MemStreamKernel
@@ -230,7 +231,7 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
     def thresholding(platform: Platform) -> ThresholdingAxiKernel:
         return design_space(
             ThresholdingAxiKernel(
-                input_dtype=DataType["INT8"],
+                input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT8"])),
                 threshold_dtype=DataType["INT8"],
                 thresholds=(((-2, 0, 3),),),
                 bias=0,

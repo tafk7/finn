@@ -533,18 +533,14 @@ def eltwise_with_constant(form=None):
                 dtype=int4,
                 form=form,
                 contents=PARAMETERS,
-                output_tensor=c_tensor,
             ),
             "add": EltwiseKernel(
                 operation="ADD",
                 pe=PE,
-                lhs_dtype=int4,
-                rhs_dtype=int4,
                 b_scale=1.0,
                 platform=FULL_DSP58,
                 lhs_tensor=x_tensor,
                 rhs_tensor=c_tensor,
-                result_tensor=y_tensor,
             ),
         }
     )

@@ -11,6 +11,7 @@ import pytest
 
 from finn.core.space import Available, Param, Rejected, Space, Unresolved, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.eltwise import EltwiseKernel
@@ -93,8 +94,8 @@ def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() ->
         arithmetic = EltwiseKernel(
             operation="ADD",
             pe=2,
-            lhs_dtype=resolve_qonnx_datatype_name("INT3"),
-            rhs_dtype=resolve_qonnx_datatype_name("INT3"),
+            lhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
+            rhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
             b_scale=1.0,
             platform=platform,
         )

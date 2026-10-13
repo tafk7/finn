@@ -16,7 +16,6 @@ from core.space._collapse_support import answers, counts, open_space
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Space, inspection
-from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
@@ -71,7 +70,7 @@ def _kernel(case: str, *, collapsed: bool, chosen: bool = True) -> Space:
     point = network.member("matmul")
     facts = {
         name: getattr(point, name)
-        for name in ("x_tensor", "y_tensor", "w_tensor", "w_contents")
+        for name in ("x_tensor", "w_tensor", "w_contents")
         if point.present(getattr(MatMulKernel, name))
     }
     declared = MatMulKernel(**{**FACTS, **facts})
@@ -108,7 +107,7 @@ def test_collapse_keeps_matmul_keys_and_evaluates_fewer_aliases() -> None:
     ]
 
     def read(point: object) -> object:
-        return point.query(Kernel.netlist)  # type: ignore[attr-defined]
+        return point.query(type(point).netlist)  # type: ignore[attr-defined]
 
     before = counts(_kernel("memstream-fifo", collapsed=False), read)
     after = counts(_kernel("memstream-fifo", collapsed=True), read)

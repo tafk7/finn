@@ -23,7 +23,7 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import NETLIST, PORT_END, Kernel, PortEnd
+from finn.kernels.base import NETLIST, PORT_END, LeafKernel, PortEnd
 from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
@@ -40,7 +40,6 @@ def source(contents: tuple[int, ...], tensor: Tensor) -> MemStreamKernel:
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=contents,
-        output_tensor=tensor,
         platform=FULL_DSP48E2,
     )
 
@@ -108,9 +107,10 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     channel = inspection.explain(point.member("first"), Channel.netlist)
     visited = {node.declaration.key for node in channel.nodes}
     assert {"netlist", "well_formed", "compatible", "ends"} <= visited
-    member = inspection.explain(point.member("first_source"), Kernel.netlist)
+    member = inspection.explain(point.member("first_source"), LeafKernel.netlist)
     visited = {node.declaration.key for node in member.nodes}
-    assert {"output.presented", "module", "netlists"} <= visited
+    # A leaf's netlist is its own module, its ``codegen``: no members' netlists.
+    assert {"output.presented", "module", "codegen"} <= visited
 
 
 def test_a_channel_waits_for_its_own_endpoints_only():

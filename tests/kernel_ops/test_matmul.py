@@ -76,7 +76,7 @@ def test_facts_come_from_the_model() -> None:
     assert facts.inputs()["w"].element.value_range == value.range
     # The output keeps the input's leading axes.
     assert op(model).output_tensors() == {
-        "y": ((1, 3, 4), op(model).view("result_tensor").element.dtype)
+        "y": ((1, 3, 4), op(model).view("y_tensor").element.dtype)
     }
     streamed = matmul_model(stored=False)
     assert op(streamed).facts().root is MatMul.root()

@@ -20,7 +20,6 @@ is stated by a model of Vivado's placement (``_hi_style``).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 from finn.core.space import (
@@ -34,8 +33,8 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel
 from finn.kernels.port import WordPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_requirements
 from finn.platform.capabilities import Fabric, Platform, Resources
@@ -192,7 +191,7 @@ def least_depth_holding(words: int, bits: int, style: str, uram: bool) -> int:
         depth += 1
 
 
-class FifoKernel(Kernel):
+class FifoKernel(LeafKernel):
     id = "finnlib.fifo"
     version = 2
     rtl_module = "fifo"
@@ -248,14 +247,16 @@ class FifoKernel(Kernel):
             self.depth, self.word_bits, self.rtl_ram_style, fabric=self.platform.fabric
         )
 
-    def parameters(self) -> Mapping[str, int | str]:
+    @derived
+    def parameters(self) -> dict[str, int | str]:
         return {
             "DATA_WIDTH": self.word_bits,
             "DEPTH": self.depth,
             "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }
 
-    def sources(self) -> tuple[CopiedSource, ...]:
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
         return (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
 
 

@@ -28,7 +28,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.base import Kernel
+from finn.kernels.base import ComposedKernel, Kernel
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import INTEGER_VECTOR, QONNX_DATATYPE_VALUE_SEMANTICS
 
@@ -51,11 +51,12 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         with pytest.raises(DefinitionError, match="version"):
             type("WrongVersion", (Kernel,), {"id": "test.wrong", "version": wrong})
 
-    class Empty(Kernel):
+    class Empty(ComposedKernel):
         id = "test.empty"
+        interfaces = ()
 
     assert Empty.version == 1
-    # The protocol's views; a kernel that declares no module builds none.
+    # The protocol's views; a kernel with children that places none builds no module.
     empty = design_space(Empty())
     assert views(empty) == ["buffering", "cycles", "module", "netlist", "resources"]
     refused = empty.query(Empty.module)
@@ -92,8 +93,9 @@ def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: s
 
 
 def test_a_dtype_selection_restores_the_exact_datatype() -> None:
-    class DtypeKernel(Kernel):
+    class DtypeKernel(ComposedKernel):
         id = "test.dtype"
+        interfaces = ()
         dtype: QONNXDataType = Decision(
             values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2")),
             semantics=QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -121,8 +123,9 @@ def test_the_integer_vector_adapter_preserves_exact_integers() -> None:
 
 
 def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_values() -> None:
-    class Typed(Kernel):
+    class Typed(ComposedKernel):
         id = "test.typed"
+        interfaces = ()
         dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
         @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -144,8 +147,9 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     # The declarations are built in plain Python and ``composite`` names them as a
     # Space class on the kernel base. ``dtype`` is a formal each placing node binds
     # by name; each node call is an independent scope.
-    class InterfaceKernel(Kernel):
+    class InterfaceKernel(ComposedKernel):
         id = "test.interface"
+        interfaces = ()
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
         return dtype.bitwidth() * lanes
@@ -176,8 +180,9 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     )
     assert issubclass(word, InterfaceKernel) and word.id == InterfaceKernel.id
 
-    class Pair(Kernel):
+    class Pair(ComposedKernel):
         id = "test.interface_pair"
+        interfaces = ()
         activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         activation = word(dtype=activation_dtype, lanes=2)  # type: ignore[call-arg]

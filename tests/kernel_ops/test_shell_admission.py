@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell root's admission (``Shell.interfaces``): what the module presents, within
+"""The shell root's admission (``Shell.budgets``): what the module presents, within
 what its shell's row takes.
 
 The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its ends'
@@ -80,12 +80,10 @@ def thresholdings(count: int, row: ShellRow) -> Any:
         bus = ControlBus(port=f"t{index}_s_axilite")
         members[f"bus{index}"] = bus
         members[f"t{index}"] = ThresholdingAxiKernel(
-            input_dtype=UINT2,
             threshold_dtype=UINT2,
             thresholds=TABLE,
             bias=0,
             input_tensor=TENSOR,
-            output_tensor=TENSOR,
             control=bus,
             platform=platform,
         )
@@ -104,7 +102,7 @@ def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine()
     assert [end.control_buses for end in point.x.placed_end + point.y.placed_end] == [1, 1]
     (found,) = admission_refusal(point)
     assert finding_text(found) == (
-        "interfaces: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
+        "budgets: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
         "the partition presents 8 and its ends 2"
     )
     # Its module is refused by the same admission.

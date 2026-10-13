@@ -8,10 +8,12 @@ each sample it
 
 1. places the kernel (``kernel``) in a network between boundary channels, one
    per stream interface: a channel named ``<interface>_channel`` carries the
-   tensor given to the kernel as ``<interface>_tensor`` and takes the end it
-   presents, ``<interface>_end``. It commits the sample's factors and the pinned
-   ``choices``, then the channels' transports and the memories of the adapter
-   chains (each chain forced). The module is named ``finn_<kernel>conformance``;
+   tensor of that interface, an input's given to the kernel as
+   ``<interface>_tensor`` and an output's the kernel's own (``<interface>_tensor``,
+   its statement), and takes the end it presents, ``<interface>_end``. It commits
+   the sample's factors and the pinned ``choices``, then the channels' transports
+   and the memories of the adapter chains (each chain forced). The module is named
+   ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources
    under the declared parameter binding (``artifacts.rtl.extract``, then the
@@ -24,9 +26,7 @@ each sample it
 3. checks the model: every port's traversal covers its tensor, a scheduled
    port presents the schedule's beats less the ones it drops, each boundary
    presents its port's traversal (an input's ``unreplayed``), and
-   ``parameters()`` names exactly the module's parameters, and with its
-   outputs unplaced the kernel still states every output element (a
-   producer's element never reads its own output tensor);
+   ``parameters`` names exactly the module's parameters;
 4. given an ``xsim`` directory, streams random integers in each input's range
    through the design, free and stalled (``finn.core.rtlsim_pacing``'s ``FREE`` and
    ``STALLED``; the watchdog counts the root's ``cycles`` too), every pin driven
@@ -56,11 +56,10 @@ is committed, a Param is given (a folding factor that is still a Param). A
 Decision below a child is named by its key below the kernel
 (``compute.packed.pe``). The adapter sample reuses the middle configuration.
 
-An output given as a shape takes its element from the kernel: its port's
-element with that output unplaced, which only a leaf kernel's own port states
-before placement (a kernel with children gives its outputs as ``Tensor``s). An
-output given as a ``Tensor`` (a test that means to fix it) is checked against
-that element all the same.
+An output given as a shape takes its element from the kernel: the element of the
+tensor it states at that interface (``<interface>_tensor``), read before any output
+is placed. An output given as a ``Tensor`` (a test that means to fix it) is the
+channel's tensor, which the channel holds the kernel's output to.
 
 ``reference`` maps named input arrays to named output arrays.
 
@@ -95,7 +94,6 @@ from finn.core.rtlsim_bench import WordsDiffer, materialize, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import (
     Available,
-    DefinitionError,
     Param,
     QueryResult,
     RequestError,
@@ -126,7 +124,6 @@ from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, dotted, wire
-from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import StreamContract
 from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import (
@@ -206,7 +203,6 @@ def conformance(
             for label, leaf in _kernel_leaves(module):
                 _check_rtl(space_type, sample, label, leaf, Path(scratch) / label, xsim is not None)
         _check_model(point, space_type, sample, inputs, outputs)
-        _check_unplaced_outputs(point, space_type, sample, inputs, outputs, choices, facts)
         if xsim is not None:
             directory = xsim / f"{index}-{re.sub(r'[^A-Za-z0-9_.=-]+', '_', sample.label)}"
             failures += _simulate(
@@ -358,23 +354,6 @@ def _interface(name: str) -> str:
     return name.removesuffix("_channel")
 
 
-def _ports(space_type: type[Kernel]) -> dict[str, str]:
-    """Each tensor Param's port among the kernel's own members: the member whose
-    ``tensor`` it binds, by the Param's name. A kernel with children has none; its
-    children's ports are found placed (``_user``)."""
-    found: dict[str, str] = {}
-    for owner in reversed(space_type.__mro__):
-        for name, member in vars(owner).items():
-            try:
-                declared = inspection.declaration(member)
-            except RequestError:
-                continue
-            tensor = declared.bindings.get("tensor")
-            if issubclass(declared.space_type, AxiStreamPort) and isinstance(tensor, Param):
-                found[str(tensor.name)] = name
-    return found
-
-
 def _stem(space_type: type[Kernel]) -> str:
     """A sample's module's stem: ``<kernel>conformance``, lower case."""
     return f"{space_type.__name__}Conformance".lower()
@@ -402,7 +381,7 @@ def _design(
         else:
             settings["port"] = name
         members[name] = wire(tensor=tensor, platform=FULL_DSP48E2, **settings)
-    given = {f"{_interface(name)}_tensor": tensor for name, tensor in tensors.items()}
+    given = {f"{_interface(name)}_tensor": tensor for name, tensor in inputs.items()}
     members[KERNEL] = space_type(**facts, **given)
     if fed is not None:
         name, form, contents = fed
@@ -416,7 +395,6 @@ def _source(tensor: Tensor, form: Traversal, contents: object) -> MemStreamKerne
         dtype=tensor.element.dtype,
         form=form,
         contents=contents,
-        output_tensor=tensor,
         platform=FULL_DSP48E2,
     )
 
@@ -448,7 +426,7 @@ def _rooted(
         if fed is None or fed[0] != name:
             settings["port"] = name
         namespace[name] = Channel(tensor=tensor, platform=FULL_DSP48E2, **settings)
-    given = {f"{_interface(name)}_tensor": tensor for name, tensor in tensors.items()}
+    given = {f"{_interface(name)}_tensor": tensor for name, tensor in inputs.items()}
     namespace[KERNEL] = space_type(**facts, **given)
     if fed is not None:
         name, form, contents = fed
@@ -526,20 +504,15 @@ def _node(kernel: Any, path: str) -> Any:
 def _stated(
     space_type: type[Kernel], name: str, inputs: Mapping[str, Tensor], facts: Mapping[str, object]
 ) -> ScalarEncoding:
-    """The element the kernel states on output ``name`` with that output unplaced."""
-    port, hint = _ports(space_type)[f"{_interface(name)}_tensor"], f"give {name} a Tensor"
-    try:
-        probe = _design(space_type, inputs, {}, facts)
-    except DefinitionError as error:
-        raise ValueError(f"{space_type.__name__} is not built without {name}; {hint}") from error
-    node = getattr(design_member(probe, KERNEL), port)
-    found = node.query(type(node).element)
+    """The element of the tensor the kernel states on output ``name``, its outputs
+    unplaced."""
+    hint = f"give {name} a Tensor"
+    probe = design_member(_design(space_type, inputs, {}, facts), KERNEL)
+    found = probe.query(getattr(type(probe), f"{_interface(name)}_tensor"))
     if not isinstance(found, Available):
-        raise ValueError(
-            f"{space_type.__name__}.{port} states no element unplaced; {hint}: {found}"
-        )
-    assert isinstance(found.value, ScalarEncoding)
-    return found.value
+        raise ValueError(f"{space_type.__name__} states no tensor at {name}; {hint}: {found}")
+    assert isinstance(found.value, Tensor)
+    return found.value.element
 
 
 def _tensors(
@@ -762,40 +735,6 @@ def _check_model(
             assert boundary.form == presented, (
                 f"{where}: {name}'s boundary presents {boundary.form}"
             )
-
-
-def _check_unplaced_outputs(
-    point: Any,
-    space_type: type[Kernel],
-    sample: Sample,
-    inputs: Mapping[str, Tensor],
-    outputs: Outputs,
-    choices: Mapping[str, object],
-    facts: Mapping[str, object],
-) -> None:
-    """With its outputs unplaced, the kernel still states every output element, the same.
-
-    A producer's element reads its kernel's facts, choices and input elements,
-    never its own output channel: a compiler infers output types node by node.
-    """
-    where = _where(space_type, sample)
-    probe = design_member(
-        _committed(space_type, sample.factors, inputs, EMPTY, choices, facts), KERNEL
-    )
-    placed = _ends(point, space_type, sample, list(outputs))
-    for name in outputs:
-        path = _user(point, name)
-        port = _node(probe, path)
-        stated = port.query(type(port).element)
-        assert isinstance(stated, Available), (
-            f"{where}: {path} states no element with {name} unplaced: {describe((stated,))}"
-        )
-        assert stated.value == placed[name].element, (
-            f"{where}: {path} states {stated.value} unplaced, {placed[name].element} placed"
-        )
-
-
-# -- simulation ----------------------------------------------------------------------------
 
 
 def _values(

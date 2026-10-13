@@ -24,18 +24,17 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the
-tensors its parent gives, ``x_tensor`` (the activations), ``w_tensor`` (the
-weights) and ``y_tensor`` (the results), and present its interfaces: ``x_end``,
-``w_end`` and ``y_end`` are the selected core's ports' ends, labelled
-``compute.<core>.x`` (``finn.kernels.base.PortEnd``). Each channel, its adapter,
-its FIFO and its source are its parent's: the parent (a test harness, a
-KernelOp's node root, or a shell root) declares each channel, gives it the tensor
-MatMul's port reads or writes, and gives it MatMul's ends. MatMul's own view of
-each tensor (``activation_tensor``, ``weight_tensor``, ``result_tensor``) reads
-only its facts and ``realization``, never a port; ``carried`` refuses a given
-tensor of another shape, or whose values do not fit (``matmul-tensor``): MatMul's
-results must fit their tensor, and an input tensor's values must fit what MatMul
-reads. A boundary channel there presents its ``port`` name (``in0_V``).
+tensors its parent gives, ``x_tensor`` (the activations) and ``w_tensor`` (the
+weights), and present its interfaces (``x``, ``w``, ``y``): ``x_end``, ``w_end`` and
+``y_end`` are the selected core's ports' ends, labelled ``compute.<core>.x``
+(``finn.kernels.base.PortEnd``). Each channel, its adapter, its FIFO and its source
+are its parent's: the parent (a test harness, a KernelOp's node root, or a shell
+root) declares each channel, gives it the tensor MatMul's port reads or writes, and
+gives it MatMul's ends. MatMul's own view of each tensor (``activation_tensor``,
+``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
+``realization``, never a port; ``carried`` refuses a given input tensor of another
+shape, or whose values do not fit what MatMul reads (``matmul-tensor``). A boundary
+channel there presents its ``port`` name (``in0_V``).
 
 MatMul consumes its weights; it never holds them. Known weights are a fact
 (``w_contents``, given by the value's owner), and its weight channel's value:
@@ -56,8 +55,9 @@ output column's dot products over the activation datatype (``column_range``),
 unioned over the columns; otherwise, every dot product of the two datatypes'
 values. The result's type is the range's smallest encoding, ``UINT`` when no
 value is negative (``range_dtype``, ``result_type``), whatever core computes it;
-the result element states the range (``result_tensor``). Each core derives its
-accumulator from the range (the core's ``result_range``).
+the result element states the range (``y_tensor``). Each core derives its
+accumulator from the range (the core's ``result_range``) and states its results'
+tensor over it, which its ``y`` port writes.
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and tensors. Each core owns its folding factors (``compute.<core>.pe``,
@@ -67,8 +67,7 @@ accumulator from the range (the core's ``result_range``).
 - The activation channel's plan replays each dense row and frames each
   reduction; the channel's adapter carries that out.
 
-Its ``module`` (``finn.kernels.base``) merges its children's netlists; placed
-alone, without its tensors, its interfaces are idle.
+Its ``module`` (``finn.kernels.base``) merges its children's netlists.
 """
 
 from __future__ import annotations
@@ -95,7 +94,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
-from finn.kernels.base import PORT_END, Kernel, PortEnd
+from finn.kernels.base import PORT_END, ComposedKernel, PortEnd
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.values.domains import (
     admit_element,
@@ -165,11 +164,12 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
     return IntegerTensorValue.flat((*shape[:-2], shape[-2] * channels, channels), dense)
 
 
-class MatMulKernel(Kernel):
+class MatMulKernel(ComposedKernel):
     """Operation facts, and the kernels and Decisions over kernels on its tensors."""
 
     id = "finn.matmul"
     version = 1
+    interfaces = ("x", "w", "y")
 
     m: int = Param()
     n: int = Param()
@@ -306,14 +306,13 @@ class MatMulKernel(Kernel):
         return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
     @view
-    def result_tensor(self) -> Tensor | Rejected:
-        """(M, N), the result type over the result range."""
+    def y_tensor(self) -> Tensor | Rejected:
+        """Its results: (M, N), the result type over the result range."""
         return self._tensor((self.m, self.n), self.result_type, self.result_range)
 
-    # The tensors its ports read and write, and the known weights: facts its parent gives.
+    # The tensors its ports read, and the known weights: facts its parent gives.
     x_tensor: Tensor = Param(required=False)
     w_tensor: Tensor = Param(required=False)
-    y_tensor: Tensor = Param(required=False)
     w_contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     # Whether the weights are known, which the weight channel's source stores.
     stored = supplied(w_contents)
@@ -351,34 +350,25 @@ class MatMulKernel(Kernel):
 
     @constraint
     def carried(self) -> bool | Rejected:
-        """Each given tensor is of the shape MatMul derives for it.
-
-        Its results fit the results' tensor; the activations and the weights the
-        cores read are values of MatMul's, in any integer encoding
-        (``values_within``): the owner of known weights states them narrowed to
-        their values.
-        """
+        """Each given tensor is of the shape MatMul derives for it, and its values are
+        values of MatMul's, in any integer encoding (``values_within``): the owner of
+        known weights states them narrowed to their values."""
         given: list[tuple[str, Tensor, str]] = []
         if self.present(MatMulKernel.x_tensor):
             given.append(("x_tensor", self.x_tensor, "activation_tensor"))
         if self.weighted:
             weights = "w_carried" if self.stored else "w_tensor"
             given.append((weights, self.w_carried, "weight_tensor"))
-        if self.present(MatMulKernel.y_tensor):
-            given.append(("y_tensor", self.y_tensor, "result_tensor"))
         for name, supplied_, tensor in given:
             derived_ = getattr(self, tensor)
-            produced = name == "y_tensor"
-            if produced:
-                fits = derived_.element.fits(supplied_.element)
-            else:
-                fits = values_within(supplied_.element, derived_.element)
-            if supplied_.shape != derived_.shape or not fits:
+            if supplied_.shape != derived_.shape or not values_within(
+                supplied_.element, derived_.element
+            ):
                 return reject(
                     "matmul-tensor",
                     f"{name} is {supplied_.shape} {supplied_.element}; "
                     f"MatMul's {tensor} is {derived_.shape} {derived_.element}, "
-                    f"which {'must fit it' if produced else 'it must fit'}",
+                    "which it must fit",
                 )
         return True
 
@@ -394,7 +384,6 @@ class MatMulKernel(Kernel):
         platform=platform,
         x_tensor=x_tensor,
         w_tensor=w_carried,
-        y_tensor=y_tensor,
     )
     compute_case = selected(compute)
 

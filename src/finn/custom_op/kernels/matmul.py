@@ -157,7 +157,7 @@ class MatMul(KernelOp):
         return Facts(root, (*key, digest), lambda: common, *edges, values, ("w",))
 
     def output_tensors(self) -> Shapes:
-        result = self.view("result_tensor")
+        result = self.view("y_tensor")
         leading = shape(self.model(), self.onnx_node.input[0], self.label)[:-1]
         return {self.onnx_node.output[0]: ((*leading, result.shape[-1]), result.element.dtype)}
 

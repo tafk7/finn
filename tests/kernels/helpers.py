@@ -15,7 +15,7 @@ network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product
 between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on
 ``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``) and, with several
 weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own views of them
-(``activation_tensor``, ``weight_tensor``, ``result_tensor``), read from its facts
+(``activation_tensor``, ``weight_tensor``, and its results, ``y_tensor``), read from its facts
 before it is placed: they read only its facts and its ``realization``, and the
 result's range is the same in either realization, so one network serves every
 realization, a depthwise MatMul's left open until committed. Known weights are a fact
@@ -43,6 +43,7 @@ from typing import Any, TypeVar, cast
 
 from finn.core.space import (
     Constraint,
+    Decision,
     Rejected,
     Space,
     design_space,
@@ -58,7 +59,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
-from finn.kernels.base import CYCLES, Kernel
+from finn.kernels.base import CYCLES, ComposedKernel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
@@ -72,6 +73,7 @@ from finn.kernels.values.semantics import (
     IntegerTensor,
     IntegerTensorValue,
     IntegerVector,
+    integer_shape,
 )
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 
@@ -168,6 +170,12 @@ def cycles_of(network: Network) -> QueryResult[int]:
     return Available(max(cast(Available[int], answer).value for answer in found))
 
 
+def is_decision(space_type: object, name: str) -> bool:
+    """Whether ``space_type``'s member ``name`` is a Decision (the packed core's
+    ``reducer``; the INT8 core states its own)."""
+    return isinstance(getattr(space_type, name, None), Decision)
+
+
 def placed_dotp(
     space_type: Callable[..., S],
     *,
@@ -204,6 +212,7 @@ def placed_dotp(
 
     x_tensor = Tensor(x_shape, ScalarEncoding(activation_dtype))
     w_tensor = Tensor((k, n), ScalarEncoding(weights_dtype, weights_range))
+    # The results' channel's tensor: the graph's statement of what the core produces.
     y_tensor = Tensor((rows, n), ScalarEncoding(result_dtype, result_range))
     network = Network(
         {
@@ -228,7 +237,6 @@ def placed_dotp(
             "compute": space_type(
                 x_tensor=x_tensor,
                 w_tensor=w_tensor,
-                y_tensor=y_tensor,
                 result_range=result_range or ordinary_integer_bounds(result_dtype),
                 **facts,
             ),
@@ -240,7 +248,7 @@ def placed_dotp(
             ("compute.pe", pe),
             ("compute.simd", simd),
             ("compute.compute_pumping", compute_pumping),
-            ("compute.reducer", reducer if hasattr(space_type, "reducer") else None),
+            ("compute.reducer", reducer if is_decision(space_type, "reducer") else None),
         )
         if value is not None
     }
@@ -248,13 +256,14 @@ def placed_dotp(
     return placed
 
 
-class Root(Kernel):
+class Root(ComposedKernel):
     """One Space of channels, kernels and the ``ControlBus`` a kernel presents its
     configuration bus through: the top of what a test emits where a network cannot place
-    it yet."""
+    it yet. A root presents no interface: its boundary channels are its pins."""
 
     id = "test.root"
     version = 1
+    interfaces = ()
 
 
 def _views(
@@ -318,7 +327,7 @@ def matmul_network(
     views = _views(space_type, facts, realization)
     tensors: dict[str, Any] = {
         "x_tensor": _view(views, "activation_tensor"),
-        "y_tensor": _view(views, "result_tensor"),
+        "y_tensor": _view(views, "y_tensor"),
     }
     if weights is None:
         # Unknown weights are MatMul's view of them at the realization committed; with
@@ -363,7 +372,9 @@ def matmul_network(
         producer=Interface("matmul", "y_end"),
         platform=platform,
     )
-    members["matmul"] = space_type(**facts, **tensors)
+    members["matmul"] = space_type(
+        **facts, **{name: tensor for name, tensor in tensors.items() if name != "y_tensor"}
+    )
     network = Network(members)
     return choose(network, {"matmul.realization": realization}) if realization else network
 
@@ -396,11 +407,17 @@ def threshold_base(
     bias: int = -1,
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
+    channels: int | None = None,
 ) -> ThresholdingAxiKernel:
-    """A thresholding's design space, its choices open."""
+    """A thresholding's design space on one row of ``channels`` inputs of ``input_dtype``
+    (the table's rows by default), its choices open."""
+    shape = integer_shape(table)
+    count = channels if channels is not None else (shape[1] if shape and len(shape) == 3 else 1)
     return design_space(
         ThresholdingAxiKernel(
-            input_dtype=resolve_qonnx_datatype_name(input_dtype),
+            input_tensor=Tensor(
+                (1, count), ScalarEncoding(resolve_qonnx_datatype_name(input_dtype))
+            ),
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
             thresholds=table,
             bias=bias,
@@ -432,14 +449,16 @@ def eltwise(
     rhs: str = "INT3",
     scale: float = 1.0,
     target: DspBlock = DspBlock.DSP58,
+    shape: tuple[int, ...] = (2, 6),
 ) -> EltwiseKernel:
-    """An elementwise kernel's design space, on a platform of ``target``."""
+    """An elementwise kernel's design space on two ``shape`` operands, on a platform of
+    ``target``."""
     return design_space(
         EltwiseKernel(
             operation=operation,
             pe=pe,
-            lhs_dtype=resolve_qonnx_datatype_name(lhs),
-            rhs_dtype=resolve_qonnx_datatype_name(rhs),
+            lhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(lhs))),
+            rhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(rhs))),
             b_scale=scale,
             platform=full_platform(target),
         )
