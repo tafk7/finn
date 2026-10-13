@@ -7,11 +7,8 @@ the names its steps and its named lists (phases and premade lists) go by, and it
 default list, which the build gives.
 
 **The list.** A build runs ``steps``, else its default list. An entry is the name of a
-named list (its steps) or of a step; an import path of a step function or a qonnx
-Transformation class; or in Python the object itself, a function (a
-``functools.partial`` too), a Transformation instance or class. A Transformation runs
-as ``model.transform(transformation)``, a class constructed with its defaults, and is
-named by its class.
+named list (its steps) or of a step, an import path of a step function, or in Python a
+step function. A step is named by its function's name.
 
 **Settings.** A step's keyword-only parameters are its settings, none named like a field
 of the configuration. Each setting given must be declared by a step of the list, and is
@@ -31,7 +28,6 @@ when it runs.
 
 from __future__ import annotations
 
-import functools
 import importlib
 import inspect
 import typing
@@ -48,6 +44,7 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     StepFunction,
     config_finding,
+    undecoded,
 )
 from finn.core.space import Finding
 from finn.util.typed_json import decoded, encoded
@@ -146,57 +143,35 @@ def _imported(path: str, place: str) -> object:
     return getattr(found, name)
 
 
-def _applying(transformation: Transformation) -> Callable[..., ModelWrapper]:
-    def apply(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-        transformed: ModelWrapper = model.transform(transformation)
-        return transformed
-
-    return apply
-
-
 def _step(entry: object, place: str) -> _Declared:
-    """The step an object is: a Transformation class or instance, or a function (a
-    partial too) with the settings it declares."""
-    if isinstance(entry, type):
-        if not issubclass(entry, Transformation):
-            raise _refusal(
-                "step-invalid", place, f"{entry.__name__} is a class, not a Transformation"
-            )
-        try:
-            instance = entry()
-        except TypeError as refused:
-            message = f"{entry.__name__} cannot be constructed with its defaults: {refused}"
-            raise _refusal("step-invalid", place, message) from None
-        return entry.__name__, _applying(instance), {}
-    if isinstance(entry, Transformation):
-        return type(entry).__name__, _applying(entry), {}
-    if not callable(entry):
+    """The step a function is, with the settings it declares."""
+    if isinstance(entry, Transformation) or (
+        isinstance(entry, type) and issubclass(entry, Transformation)
+    ):
+        kind = entry if isinstance(entry, type) else type(entry)
         message = (
-            f"{entry!r} is no step: the name of a step or named list, an import path, a "
-            "function or a Transformation"
+            f"{kind.__name__} is a Transformation, not a step function; wrap it in one: "
+            f"def step_name(model, cfg): return model.transform({kind.__name__}(...))"
         )
         raise _refusal("step-invalid", place, message)
-    function = _origin(entry)
-    bound = entry.keywords if isinstance(entry, functools.partial) else {}
-    name = getattr(function, "__name__", None)
-    if not isinstance(name, str):
-        raise _refusal("step-invalid", place, f"{entry!r} has no name")
+    name = getattr(entry, "__name__", None)
+    if isinstance(entry, type) or not callable(entry) or not isinstance(name, str):
+        message = (
+            f"{entry!r} is no step: the name of a step or named list, an import path of a "
+            "step function, or a function"
+        )
+        raise _refusal("step-invalid", place, message)
     try:
-        hints = typing.get_type_hints(function)
+        hints = typing.get_type_hints(entry)
     except (NameError, TypeError) as unresolved:
         message = f"{name}'s annotations do not resolve: {unresolved}"
         raise _refusal("step-invalid", place, message) from None
     declared = {
         parameter.name: (hints.get(parameter.name, Any), parameter.default)
         for parameter in inspect.signature(entry).parameters.values()
-        if parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.name not in bound
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY
     }
     return name, typing.cast(Callable[..., ModelWrapper], entry), declared
-
-
-def _origin(function: object) -> object:
-    """The function a step runs: a partial's own."""
-    return function.func if isinstance(function, functools.partial) else function
 
 
 def _resolved(
@@ -262,9 +237,7 @@ def _settings(
             try:
                 value = decoded(kind, cfg.settings[name], place)
             except ValueError as invalid:
-                # The refusal names its place: this setting's, or one inside it.
-                where, _, message = str(invalid).partition(": ")
-                refused.append(config_finding("setting-invalid", message, where))
+                refused.append(undecoded("setting-invalid", invalid))
                 continue
         elif default is inspect.Parameter.empty:
             message = f"{', '.join(names)} require it, and it is not given"

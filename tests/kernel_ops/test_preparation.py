@@ -41,7 +41,7 @@ from finn.analysis.comparison import Explanation, Run
 from finn.analysis.equivalence import DEVIATIONS, equivalence_with
 from finn.analysis.initializers import annotated_initializers
 from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
-from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import (
     build_dataflow_phases,
@@ -520,20 +520,33 @@ def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(
     assert not [outcome for outcome in conversion.outcomes if outcome.op]
 
 
-def test_a_list_can_insert_the_transform_thresholdings_hint_names(tmp_path: Path) -> None:
+def step_lower_thresholds(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """The transform Thresholding's hint names, as a step."""
+    lowered: ModelWrapper = model.transform(ExtractMultiThresholdScaleBias())  # type: ignore[no-untyped-call]
+    return lowered
+
+
+def test_a_list_can_run_the_transform_thresholdings_hint_names(tmp_path: Path) -> None:
     """Thresholding refuses a scaled or fractionally biased MultiThreshold with
-    ``LOWERING`` as its hint; a list that follows the hint names that transform after the
-    streamlining by its import path, and the build runs it by that name."""
-    path = f"{ExtractMultiThresholdScaleBias.__module__}.{LOWERING}"
+    ``LOWERING`` as its hint; a list that follows the hint runs that transform after the
+    streamlining in a step function. The transform's own import path is refused, naming
+    the step function to write."""
     steps = [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
-    steps.insert(steps.index("step_streamline") + 1, path)
-    cfg = DataflowBuildConfig(
-        output_dir=str(tmp_path),
-        target=TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e"),
-        steps=steps,
-    )
+    after = steps.index("step_streamline") + 1
+    target = TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e")
+    stepped = [*steps[:after], f"{__name__}.step_lower_thresholds", *steps[after:]]
+    cfg = DataflowBuildConfig(output_dir=str(tmp_path), target=target, steps=stepped)
     names = [step.name for step in build_plan(cfg).steps]
-    assert names[names.index("step_streamline") + 1] == LOWERING
+    assert names[after] == "step_lower_thresholds"
+    path = f"{ExtractMultiThresholdScaleBias.__module__}.{LOWERING}"
+    listed = DataflowBuildConfig(
+        output_dir=str(tmp_path), target=target, steps=[*steps[:after], path, *steps[after:]]
+    )
+    with pytest.raises(ConfigurationRefused) as refusal:
+        build_plan(listed)
+    (finding,) = refusal.value.findings
+    assert finding.code == "step-invalid"
+    assert finding.message.startswith(f"{LOWERING} is a Transformation, not a step function")
 
 
 # -- the equivalence analysis and the deviations' predicates -------------------------------

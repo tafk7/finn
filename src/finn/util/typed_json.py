@@ -46,8 +46,8 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
     """``stated`` (as JSON states it, or as Python gives it) as a value of the type
     ``kind``: a bool, an int, a float (an int accepted), a str, a path (from a str), an
     enum (from its value), a list, tuple or sequence, a dict or mapping with str keys, a
-    dataclass (from an object of its fields), a union (``X | None``), a callable, a
-    class, ``Any``, or an instance of any other class. Refuses, naming ``place``, a null
+    dataclass (from an object of its fields), a union (``X | None``), a callable,
+    ``Any``, or an instance of any other class. Refuses, naming ``place``, a null
     where ``kind`` is not optional, a value of another type, an unknown enum value and a
     key a dataclass does not declare."""
     origin, args = typing.get_origin(kind), typing.get_args(kind)
@@ -72,10 +72,6 @@ def decoded(kind: Any, stated: Any, place: str) -> Any:
     if origin is collections.abc.Callable or kind is collections.abc.Callable:
         if not callable(stated):
             raise ValueError(f"{place}: a function, not {stated!r}")
-        return stated
-    if origin is type:
-        if not (isinstance(stated, type) and issubclass(stated, args[0])):
-            raise ValueError(f"{place}: a {_text(args[0])} class, not {stated!r}")
         return stated
     if isinstance(kind, type) and is_dataclass(kind):
         if isinstance(stated, kind):

@@ -7,8 +7,8 @@ Its fields say how the build runs: the target, the toolchain and the steps, whic
 are what the build makes. Everything else is a setting: the value of a keyword-only parameter a step
 declares, decoded by the step's annotation when the build's plan resolves. In JSON a
 setting is a top-level key beside the fields; in Python an entry of ``settings``.
-Reading JSON refuses what the configuration does not declare, naming its place
-(``configuration.target: ...``).
+Reading JSON refuses what does not decode, and what the configuration does not
+declare, as a ``ConfigurationRefused`` naming its place (``configuration.target: ...``).
 
 A build refuses a configuration before its first step with one ``ConfigurationRefused``
 carrying every rejection found; a step refuses a setting it cannot take when it runs,
@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any, Union
 
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.transformation.base import Transformation
 
 from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
@@ -61,14 +60,19 @@ class ConfigurationRefused(ValueError):
         super().__init__("; ".join(map(finding_line, self.findings)))
 
 
+def undecoded(code: str, invalid: ValueError) -> Finding:
+    """The rejection of a value that does not decode, at the place ``invalid``'s message
+    names first (``place: message``)."""
+    place, _, message = str(invalid).partition(": ")
+    return config_finding(code, message, place)
+
+
 #: A step: a function ``(model, cfg, *, settings...) -> model``.
 StepFunction = Callable[..., ModelWrapper]
 
-#: An entry of ``steps``: the name of a phase or of one of the build's steps, an import
-#: path (``package.module.name``) of a step function or a qonnx Transformation class, or
-#: in Python the object itself: a function (a ``functools.partial`` too), a
-#: Transformation instance or class.
-StepEntry = Union[str, StepFunction, Transformation, type[Transformation]]
+#: An entry of ``steps``: the name of a named list or of one of the build's steps, an
+#: import path (``package.module.name``) of a step function, or in Python a step function.
+StepEntry = Union[str, StepFunction]
 
 
 @dataclass
@@ -123,7 +127,9 @@ class DataflowBuildConfig:
     def __post_init__(self) -> None:
         clashing = sorted(set(self.settings) & _FIELDS)
         if clashing:
-            raise ValueError(f"configuration.settings: {clashing} are fields, not settings")
+            message = f"{clashing} are fields, not settings"
+            place = "configuration.settings"
+            raise ConfigurationRefused([config_finding("configuration-invalid", message, place)])
         if self.base_dir is None:
             return
         # Absolute, so that joining again (dataclasses.replace) changes nothing.
@@ -142,27 +148,39 @@ class DataflowBuildConfig:
     @classmethod
     def from_dict(cls, stated: object, base_dir: str | None = None) -> DataflowBuildConfig:
         """The configuration a JSON object states, its relative paths naming files in
-        ``base_dir``: each field decoded by its annotation, every other key a setting."""
-        if not isinstance(stated, Mapping):
-            raise ValueError(f"configuration: a JSON object, not {stated!r}")
-        if "settings" in stated:
-            raise ValueError("configuration.settings: JSON states each setting as a top-level key")
-        known = {name: value for name, value in stated.items() if name in _FIELDS}
+        ``base_dir``: each field decoded by its annotation, every other key a setting.
+        Refuses what does not decode, naming its place."""
+        try:
+            if not isinstance(stated, Mapping):
+                raise ValueError(f"configuration: a JSON object, not {stated!r}")
+            if "settings" in stated:
+                raise ValueError(
+                    "configuration.settings: JSON states each setting as a top-level key"
+                )
+            known = {name: value for name, value in stated.items() if name in _FIELDS}
+            values = decoded_fields(cls, known, "configuration")
+        except ValueError as invalid:
+            raise ConfigurationRefused([undecoded("configuration-invalid", invalid)]) from None
         settings = {name: value for name, value in stated.items() if name not in _FIELDS}
-        return cls(
-            **decoded_fields(cls, known, "configuration"), settings=settings, base_dir=base_dir
-        )
+        return cls(**values, settings=settings, base_dir=base_dir)
 
     @classmethod
     def from_json(cls, text: str, base_dir: str | None = None) -> DataflowBuildConfig:
-        return cls.from_dict(json.loads(text), base_dir)
+        try:
+            stated = json.loads(text)
+        except ValueError as invalid:
+            message = f"not JSON: {invalid}"
+            raise ConfigurationRefused(
+                [config_finding("configuration-invalid", message, "configuration")]
+            ) from None
+        return cls.from_dict(stated, base_dir)
 
     def to_dict(self) -> dict[str, Any]:
         """The configuration as JSON states it: the fields, then the settings beside
         them. JSON names a step by its name or import path, so a Python object in
         ``steps`` is refused."""
         for index, entry in enumerate(self.steps or ()):
-            if callable(entry) or isinstance(entry, Transformation):
+            if callable(entry):
                 name = getattr(entry, "__name__", type(entry).__name__)
                 raise ValueError(
                     f"configuration.steps[{index}]: {name} is a Python object; JSON names a "
@@ -209,4 +227,5 @@ __all__ = [
     "StepFunction",
     "config_finding",
     "finding_line",
+    "undecoded",
 ]
