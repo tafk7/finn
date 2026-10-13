@@ -16,7 +16,7 @@ preserve sorted rows. With multiple sets, each input beat requires a matching
 set-selector beat.
 
 PE, the channels a beat, is a Decision over the divisors of the input's
-channels; flat, with no channel to bind them, it is any PE the RTL takes with
+channels; flat, with no input tensor to bind them, it is any PE the RTL takes with
 the table's C (``lane_counts``), committed as a choice. Placed, the input and
 output walk one schedule row-major, ``c`` split by PE innermost; their tensors
 bind the extents, and the table has one row or one row a channel
