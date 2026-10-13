@@ -90,13 +90,14 @@ def _failure_kind(error: BaseException) -> str:
 
 
 def _log_failure(step: str, error: BaseException) -> str:
-    """Log a failed step's error by its kind, and return the kind. The traceback goes to
+    """Log a failed step's error by its kind, and return the kind. A refusal's findings
+    are logged once, by code, without its message (their lines). The traceback goes to
     the log file, and for a bug to the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
     if isinstance(error, Refusal):
         findings = error.findings
-        _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), name, error)
+        _LOG.error("%s refused: %d findings (%s)", step, len(findings), name)
         for line in by_code(findings):
             _LOG.error("  %s", line)
     elif kind != "bug":
