@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """FINN's typed graph metadata (qonnx's ``qonnx.core.metadata``): the build target in
-``finn.platform``, as ``finn.platform.resolve_target`` resolves it, and what a build
+``finn.platform``, as ``finn.platform.resolve.resolve_target`` resolves it, and what a build
 made of a partition in ``finn.outputs``."""
 
 from __future__ import annotations
@@ -38,8 +38,8 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import save_channels
-from finn.kernels.target import Target
-from finn.platform import resolve_target
+from finn.platform.resolve import resolve_target
+from finn.platform.target import Target
 from finn.transformation.kernels import ToKernelOps
 from kernel_ops.models import TARGET, chain_source, configure_partition, kernel_model
 

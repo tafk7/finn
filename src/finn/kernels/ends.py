@@ -78,7 +78,8 @@ from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import passes, period
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.transport import StreamContract
-from finn.kernels.utilization import Fit, Resources
+from finn.kernels.utilization import Fit
+from finn.platform.capabilities import Resources
 
 IODMA_HLS = "iodma_hls"
 """The kind of the ``IODMA_hls`` end."""

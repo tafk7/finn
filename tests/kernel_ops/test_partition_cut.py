@@ -34,7 +34,7 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partitio
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.explore import Seam
-from finn.platform import resolve_target
+from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
     PackagePartition,

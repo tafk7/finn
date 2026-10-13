@@ -68,9 +68,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from finn.kernels.target import DspBlock
-from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
 from finn.platform.architectures import CAP_EVIDENCE, RULES, SERIES, CapEvidence, Rule, rules_digest
+from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
 from finn.platform.catalog import DATA, FILES, Record
 from finn.toolchain.launcher import Toolchain, host_toolchain
 

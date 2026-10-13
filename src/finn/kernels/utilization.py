@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Fabric resources, in the device's own units: what a platform's part has
-(``finn.kernels.target.Platform.resources``) and what a configuration uses of it
+"""The kernels' cost model, in the platform's resource units
+(``finn.platform.capabilities.Resources``): what a configuration uses of the part
 (``finn.kernels.base.RESOURCES``).
 
 A leaf states its own use from its RTL's parameters: the counts its RTL fixes
@@ -14,7 +14,7 @@ Vivado's utilisation report (``Resources``).
 
 ``memory`` maps one ``words x bits`` array in one memory style to the primitives of
 the platform's fabric, as Vivado infers them (``PRIMITIVES``, a ``Primitives`` record a
-fabric, each field with its evidence): block RAM by the RAMB18 simple dual port
+fabric): block RAM by the RAMB18 simple dual port
 aspects, the word split over them; UltraRAM by the URAM288 aspects, a word never split;
 LUTRAM by the fabric's LUTRAM primitives, with a read multiplexer over its banks and,
 where it is written, a write decode. Each style is exact up to Vivado's packing.
@@ -29,13 +29,22 @@ FinnLib's own selection, which its kernel states (``finn.kernels.fifo``).
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, fields
-from enum import Enum
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from math import ceil, inf
 
-from finn.core.space import Domain, Rejected, ValueSemantics, default_semantics, domain, reject
+from finn.core.space import (
+    Domain,
+    Rejected,
+    Requirement,
+    ValueSemantics,
+    default_semantics,
+    domain,
+    reject,
+    requires,
+)
+from finn.platform.capabilities import Fabric, Platform, Resources
 
 CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
 """Where every leaf kernel's ``Fit`` was characterised: the part, the tool and the clock."""
@@ -43,46 +52,6 @@ CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
 SHELL_CHARACTERISED = "out of context, Vivado 2025.2, xczu3eg/xczu7ev"
 """Where the shell's statements (its ends' and its static region's) were characterised:
 each IP synthesized on its own, which overstates what the placed shell uses."""
-
-
-@dataclass(frozen=True, kw_only=True)
-class Resources:
-    """Counts of the fabric's resources, each in the unit Vivado's utilization report
-    uses:
-
-    - ``lut``: CLB LUTs (logic, LUTRAM and shift registers alike);
-    - ``ff``: CLB registers;
-    - ``bram18``: block RAM in RAMB18 halves (a RAMB36 tile is two);
-    - ``uram``: URAM288 blocks;
-    - ``dsp``: DSP slices (DSP48E1, DSP48E2 or DSP58).
-
-    They add, and ``times`` repeats them (an array of identical instances).
-    """
-
-    lut: int = 0
-    ff: int = 0
-    bram18: int = 0
-    uram: int = 0
-    dsp: int = 0
-
-    def __post_init__(self) -> None:
-        for field in fields(self):
-            count = getattr(self, field.name)
-            if type(count) is not int or count < 0:
-                raise ValueError(f"resources: {field.name} is a count, not {count!r}")
-
-    def __add__(self, other: Resources) -> Resources:
-        return Resources(
-            **{
-                field.name: getattr(self, field.name) + getattr(other, field.name)
-                for field in fields(self)
-            }
-        )
-
-    def times(self, count: int) -> Resources:
-        return Resources(
-            **{field.name: getattr(self, field.name) * count for field in fields(self)}
-        )
 
 
 RESOURCES_SEMANTICS: ValueSemantics[Resources] = default_semantics(Resources)
@@ -95,11 +64,6 @@ def total(items: Iterable[Resources]) -> Resources:
     for item in items:
         found = found + item
     return found
-
-
-RESOURCE_NAMES = tuple(field.name for field in fields(Resources))
-"""The resources by name, as ``Resources`` counts them: ``lut``, ``ff``, ``bram18``,
-``uram``, ``dsp``."""
 
 
 def ratio(used: Resources, limits: Mapping[str, int], name: str) -> float:
@@ -146,15 +110,6 @@ class Fit:
         return max(0, round(self.constant + sum(s * f for s, f in zip(self.slopes, features))))
 
 
-class Fabric(str, Enum):
-    """The programmable fabric's architecture generation, independent of its DSP block:
-    7 series, UltraScale (and UltraScale+), Versal."""
-
-    SERIES7 = "series7"
-    ULTRASCALE = "ultrascale"
-    VERSAL = "versal"
-
-
 @dataclass(frozen=True, kw_only=True)
 class Primitives:
     """The memory primitives of one fabric as Vivado maps an array to them, and the
@@ -174,9 +129,7 @@ class Primitives:
     - ``wide_mux``: the LUT outputs the slice's F7 and F8 multiplexers combine without a
       LUT in a read multiplexer over banks (1: none);
     - ``write_decode``: the LUTs a bank's write enable takes where a written memory has
-      two or more banks;
-    - ``evidence``: for each field, in their order, the self-contained sentence it
-      rests on, as (field, sentence) pairs.
+      two or more banks.
     """
 
     bram18_sdp: tuple[tuple[int, int], ...]
@@ -185,24 +138,13 @@ class Primitives:
     lutram_single_port: tuple[int, int]
     wide_mux: int
     write_decode: int
-    evidence: tuple[tuple[str, str], ...]
-
-    def __post_init__(self) -> None:
-        stated = [field.name for field in fields(self) if field.name != "evidence"]
-        if [name for name, _ in self.evidence] != stated:
-            raise ValueError(f"primitives: evidence for each of {stated}, in that order")
-
-
-def _evidence(**sentences: str) -> tuple[tuple[str, str], ...]:
-    """A ``Primitives``' evidence: (field, sentence) pairs, a frozen value's own."""
-    return tuple(sentences.items())
 
 
 _RAMB18 = ((36, 512), (18, 1024), (9, 2048), (4, 4096), (2, 8192), (1, 16384))
 _LUTRAM = ((32, ((14, 8), (6, 4))), (64, ((7, 8), (3, 4), (1, 2))))
-_SYNTH = "Vivado 2025.2 out-of-context synthesis"
 
 PRIMITIVES: dict[Fabric, Primitives] = {
+    # Measured: Vivado 2025.2 OOC synthesis on xc7z020clg400-1; wide_mux, write_decode not measured.
     Fabric.SERIES7: Primitives(
         bram18_sdp=_RAMB18,
         uram_sdp=(),
@@ -210,28 +152,8 @@ PRIMITIVES: dict[Fabric, Primitives] = {
         lutram_single_port=(64, 256),
         wide_mux=4,
         write_decode=1,
-        evidence=_evidence(
-            bram18_sdp=f"{_SYNTH} on xc7z020clg400-1 of a 62-design kernel grid built "
-            "every explicit block RAM memory in the RAMB18 count these aspects give, as on "
-            "xczu3eg.",
-            uram_sdp="The 7 series has no UltraRAM: Vivado 2025.2's site probe of an "
-            "empty design on xc7z020clg400-1 reads no URAM site.",
-            lutram_sdp=f"{_SYNTH} on xc7z020clg400-1 of a 62-design kernel grid built "
-            "each of its 42 leaf memories left in LUTRAM, the 4 one-port ones too, in the "
-            "LUTs RAM32M (32 x 6 in four), RAM64M (64 x 3 in four) and RAM64X1D (64 x 1 in "
-            "two) give.",
-            lutram_single_port=f"{_SYNTH} on xc7z020clg400-1 built each unpumped "
-            "one-port memstream table, 4,096 x 64, 1,024 x 256 and 256 x 1,024, in 4,096 "
-            "LUTs, 64 x 1 a LUT, with the logic of a read multiplexer over banks of 256 "
-            "rows (266, 275 and 36 LUTs), four LUTs a slice under F7AMUX, F7BMUX and F8MUX "
-            "(RAM256X1S); its primitives were not reported.",
-            wide_mux="Not measured on the 7 series: its SLICEM's F7AMUX, F7BMUX and "
-            "F8MUX (Vivado 2025.2's site probe of xc7z020clg400-1) combine four LUT outputs "
-            "as UltraScale's F7 and F8 do, whose read multiplexer is taken.",
-            write_decode="Not measured on the 7 series: a LUT a bank, as Vivado 2025.2 "
-            "out-of-context synthesis built it on xczu7ev and xcvc1902.",
-        ),
     ),
+    # Measured: Vivado 2025.2 out-of-context synthesis on xczu3eg-sbva484-1-i, xczu7ev, xcku040.
     Fabric.ULTRASCALE: Primitives(
         bram18_sdp=_RAMB18,
         uram_sdp=((72, 4096),),
@@ -239,33 +161,8 @@ PRIMITIVES: dict[Fabric, Primitives] = {
         lutram_single_port=(64, 512),
         wide_mux=4,
         write_decode=1,
-        evidence=_evidence(
-            bram18_sdp=f"{_SYNTH} on xczu3eg-sbva484-1-i, xczu7ev-ffvc1156-2-e and "
-            "xcku040-ffva1156-2-e built every explicit block RAM memory of their kernel "
-            "grids in the RAMB18 count these aspects give, the word split over them.",
-            uram_sdp=f"{_SYNTH} on xczu7ev-ffvc1156-2-e built explicit UltraRAM FIFOs "
-            "and an explicit UltraRAM transpose in the URAM288 count of 72 x 4,096 each; an "
-            "UltraScale part without UltraRAM has a count of none, which refuses it.",
-            lutram_sdp=f"{_SYNTH} on xczu3eg-sbva484-1-i, xczu7ev-ffvc1156-2-e and "
-            "xcku040-ffva1156-2-e built each simple dual port memory left in LUTRAM in the "
-            "LUTs RAM32M16 (32 x 14 in eight) and RAM32M (32 x 6 in four) to 32 rows, and "
-            "RAM64M8 (64 x 7 in eight), RAM64M (64 x 3 in four) and RAM64X1D (64 x 1 in "
-            "two) a bank of 64 rows give (71 of 71 kernel memories on xczu3eg, 18 of 18 "
-            "grid memories on xczu7ev, xcku040's 256 x 64 FIFO); remainders of 1 and 3 "
-            "bits to 32 rows and of 3, 5 and 6 bits a bank are not measured.",
-            lutram_single_port=f"{_SYNTH} on xczu7ev-ffvc1156-2-e built one-port "
-            "memstream tables in 64 x 1 a LUT, eight LUTs a slice under MUXF7, MUXF8 and "
-            "MUXF9 as a 512-row bank (4,096 x 64: 4,096 RAMS64E1, 512 MUXF9 and two LUT6s "
-            "a bit selecting among the eight banks), as on xczu3eg-sbva484-1-i.",
-            wide_mux=f"{_SYNTH} on xczu7ev-ffvc1156-2-e of 18 simple dual port LUTRAMs, "
-            "2 to 64 banks of 8, 32 and 64 bits, built the read multiplexer as four-input "
-            "LUT6s with MUXF7 and MUXF8 combining up to four of them: the table exact in "
-            "15, and 5 LUTs under at 64 banks.",
-            write_decode=f"{_SYNTH} on xczu7ev-ffvc1156-2-e and xcvc1902-vsva2197-2MP-e-S "
-            "of simple dual port LUTRAMs of 2 to 64 banks took a LUT a bank for the write "
-            "enables; a written one-port memory of several banks is not measured here.",
-        ),
     ),
+    # Measured: Vivado 2025.2 out-of-context synthesis on xcvc1902-vsva2197-2MP-e-S.
     Fabric.VERSAL: Primitives(
         bram18_sdp=_RAMB18[:3],
         uram_sdp=((72, 4096), (36, 8192), (18, 16384), (9, 32768)),
@@ -273,28 +170,6 @@ PRIMITIVES: dict[Fabric, Primitives] = {
         lutram_single_port=(64, 64),
         wide_mux=1,
         write_decode=1,
-        evidence=_evidence(
-            bram18_sdp=f"{_SYNTH} on xcvc1902-vsva2197-2MP-e-S built every explicit "
-            "block RAM and UltraRAM memory of a kernel grid, 19 of 19, in the count these "
-            "RAMB18E5 aspects and the URAM288E5 aspects give; RAMB18E5 has none narrower "
-            "than 9 bits.",
-            uram_sdp=f"{_SYNTH} on xcvc1902-vsva2197-2MP-e-S built every explicit "
-            "block RAM and UltraRAM memory of a kernel grid, 19 of 19, in the count these "
-            "URAM288E5 aspects give, a word never split across them.",
-            lutram_sdp=f"{_SYNTH} on xcvc1902-vsva2197-2MP-e-S built 18 simple dual "
-            "port LUTRAMs, 2 to 64 banks of 8, 32 and 64 bits, in the LUTRAMs it built on "
-            "xczu7ev-ffvc1156-2-e, the LUTs these primitives give.",
-            lutram_single_port=f"{_SYNTH} on xcvc1902-vsva2197-2MP-e-S built six "
-            "one-port LUTRAMs, 128 to 4,096 x 32, in 64 x 1 a LUT, with the logic of the "
-            "simple dual port ones of their depth: a bank of 64 rows.",
-            wide_mux="Versal's SLICEM has no F7, F8 or F9 multiplexer (Vivado 2025.2's "
-            f"site probe of xcvc1902); {_SYNTH} there of 24 LUTRAMs, 2 to 64 banks of 8, "
-            "32 and 64 bits, simple dual port and one port, built the read multiplexer of "
-            "four-input LUT6s alone: the table exact in 20, and 4 LUTs under at 64 banks.",
-            write_decode=f"{_SYNTH} on xcvc1902-vsva2197-2MP-e-S of LUTRAMs of 2 to 64 "
-            "banks took a LUT a bank for the write enables, simple dual port and one port "
-            "alike.",
-        ),
     ),
 }
 """Each fabric's memory primitives (``Primitives``), read by ``memory``: UltraScale and
@@ -456,18 +331,37 @@ def auto_unstated(memory: str) -> Rejected:
     return reject("memory-auto", f"{memory}: ram_style auto, {AUTO_UNSTATED}")
 
 
+def uram_requirements(
+    platform: Platform,
+    cases: tuple[object, ...] | Callable[[object], bool],
+    *,
+    init: bool = False,
+) -> tuple[Requirement, ...]:
+    """What the ``cases`` of a value Decision that store in UltraRAM require of
+    ``platform`` (a kernel's ``Platform`` parameter): its UltraRAM, and, for a memory
+    with initial contents (``init``), an UltraRAM that takes them."""
+    absent = requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=cases)
+    if not init:
+        return (absent,)
+    return (
+        absent,
+        requires(
+            platform.uram_init,
+            "uram-init: the platform's UltraRAM takes no initial contents",
+            cases=cases,
+        ),
+    )
+
+
 __all__ = [
     "AUTO_UNSTATED",
     "BLOCK_FIRST_BITS",
     "MEMORY_STYLES",
     "PRIMITIVES",
     "RESOURCES_SEMANTICS",
-    "RESOURCE_NAMES",
     "SHELL_CHARACTERISED",
-    "Fabric",
     "Fit",
     "Primitives",
-    "Resources",
     "auto_unstated",
     "binding",
     "bram18",
@@ -480,4 +374,5 @@ __all__ = [
     "read_mux",
     "total",
     "uram",
+    "uram_requirements",
 ]

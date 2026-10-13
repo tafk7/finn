@@ -52,8 +52,8 @@ from finn.builder.build_dataflow_manifest import (
 )
 from finn.builder.build_dataflow_plan import Plan, resolve_plan
 from finn.core.space import Finding, FindingKind, by_code
-from finn.kernels.target import Target
-from finn.platform import TargetRefused
+from finn.platform.refusal import TargetRefused
+from finn.platform.target import Target
 from finn.toolchain.launcher import RECORDS, ToolFailed, ToolUnavailable, host_selection
 from finn.util.run_log import FILE_ONLY, log_run, running_step
 

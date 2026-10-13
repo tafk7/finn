@@ -61,9 +61,7 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, block_diagonal, datatype_range
-from finn.kernels.target import DspBlock, Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.utilization import Fabric
 from finn.kernels.values.domains import range_dtype, set_index_dtype, stored_element
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
@@ -73,6 +71,7 @@ from finn.kernels.values.semantics import (
     ThresholdTable,
     integer_range,
 )
+from finn.platform.capabilities import DspBlock, Fabric, Platform
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)

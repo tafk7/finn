@@ -23,7 +23,7 @@ to three columns:
 A column the build did not produce is ``null`` for every member, and ``absent`` says
 why. A member a column has no row for (the placed design has none for the processor and
 its reset) is ``null`` there. ``caveat`` is the shell row's note for the board
-(``finn.platform.ShellRow.caveat``), or ``null``: on a board the shell was not built and
+(``finn.platform.shells.ShellRow.caveat``), or ``null``: on a board the shell was not built and
 timed on, the ``model`` figures of the ends and static region are carried over from
 where they were characterised.
 
@@ -38,7 +38,7 @@ flattens small instances into the module's top and does not keep the hierarchy: 
 reported instance holds is listed as ``unattributed`` there, and the instances without
 a row as ``unreported_instances``.
 
-All counts are in ``finn.kernels.utilization.Resources`` units: LUTs, FFs, RAMB18
+All counts are in ``finn.platform.capabilities.Resources`` units: LUTs, FFs, RAMB18
 halves (a RAMB36 counts two), URAMs and DSPs.
 """
 
@@ -60,8 +60,9 @@ from finn.custom_op.kernels.shell import (
     member,
     shell_resources,
 )
-from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
-from finn.platform import shell_row
+from finn.kernels.utilization import SHELL_CHARACTERISED
+from finn.platform.capabilities import Resources
+from finn.platform.shells import shell_row
 from finn.shells.pynq.runner import REPORTS, STATIC_INSTANCES, bitfile_directory
 from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolFailed

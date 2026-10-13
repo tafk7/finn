@@ -43,7 +43,7 @@ from finn.builder.build_dataflow_steps import build_dataflow_phases, step_stream
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
-from finn.platform import TargetRequest
+from finn.platform.request import TargetRequest
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.streamline.extract_multithreshold_scale_bias import (
     ExtractMultiThresholdScaleBias,

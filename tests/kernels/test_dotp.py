@@ -31,7 +31,7 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import Kernel
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import DspBlock
+from finn.platform.capabilities import DspBlock
 from kernels import helpers
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
 

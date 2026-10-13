@@ -53,8 +53,8 @@ from finn.kernels.artifacts.module import Held, RegisterMap, declared_registers
 from finn.kernels.artifacts.sources import include_directories
 from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.matmul import datatype_range
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.platform.capabilities import DspBlock
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
     Selection,

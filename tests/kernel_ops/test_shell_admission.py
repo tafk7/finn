@@ -37,7 +37,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import commit, describe
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.platform import IP_ROW, ShellRow, shell_row
+from finn.platform.shells import IP_ROW, ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from kernel_ops.models import MATMUL, configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96

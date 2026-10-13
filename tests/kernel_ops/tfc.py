@@ -38,7 +38,8 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_plan import resolve_plan
 from finn.kernels.explore import Ranked
-from finn.platform import TargetRequest, resolve_target
+from finn.platform.request import TargetRequest
+from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,

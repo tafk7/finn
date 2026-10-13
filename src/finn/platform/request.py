@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from finn.kernels.target import Target
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import IP
+from finn.platform.target import Target
 
 
 @dataclass(frozen=True, kw_only=True)

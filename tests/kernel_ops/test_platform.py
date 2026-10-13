@@ -26,8 +26,9 @@ from finn.custom_op.kernels.shell import save_channels, shell_root
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Platform, Target
-from finn.platform import resolve_target
+from finn.platform.capabilities import DspBlock, Platform
+from finn.platform.resolve import resolve_target
+from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import TARGET, matmul_model, thresholding_model
 

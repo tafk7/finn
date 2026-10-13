@@ -40,8 +40,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.base import Transformation
 
 from finn.core.space import Finding, FindingKind
-from finn.kernels.target import Target
-from finn.platform import TargetRequest
+from finn.platform.request import TargetRequest
+from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
 
 #: The owner of the findings about a build's configuration.
@@ -234,7 +234,7 @@ class DataflowBuildConfig:
 
     @cached_property
     def resolved_target(self) -> Target:
-        """The build's target (finn.platform.resolve_target), resolved on first use; a
+        """The build's target (finn.platform.resolve.resolve_target), resolved on first use; a
         build resolves it before anything else, and its ``TargetRefused`` refuses the
         configuration."""
         return self.target.resolve()

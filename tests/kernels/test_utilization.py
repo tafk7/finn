@@ -13,7 +13,6 @@ fitted LUT and FF coefficients are not pinned here; the counts the RTL fixes are
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -34,7 +33,6 @@ from finn.kernels.dotp import (
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import (
     ThresholdingAxiKernel,
     stage_style,
@@ -44,9 +42,7 @@ from finn.kernels.transpose import TransposeKernel
 from finn.kernels.utilization import (
     BLOCK_FIRST_BITS,
     PRIMITIVES,
-    Fabric,
     Fit,
-    Resources,
     bram18,
     lutram,
     lutram_storage,
@@ -55,6 +51,7 @@ from finn.kernels.utilization import (
     total,
     uram,
 )
+from finn.platform.capabilities import DspBlock, Fabric, Resources
 from kernels.adapted import ELEMENT, transposed
 from kernels.helpers import (
     FULL_DSP48E2,
@@ -316,12 +313,8 @@ def test_a_memory_in_auto_states_no_resources(memory_point: Any) -> None:
     assert answer.findings[0].message.endswith("ram_style auto, placed by Vivado, not stated")
 
 
-def test_every_fabric_s_primitives_state_their_evidence() -> None:
+def test_every_fabric_has_its_primitives() -> None:
     assert set(PRIMITIVES) == set(Fabric)
-    for primitives in PRIMITIVES.values():
-        assert all(sentence.endswith(".") for _, sentence in primitives.evidence)
-    with pytest.raises(ValueError, match="evidence for each"):
-        replace(PRIMITIVES[US], evidence=(("bram18_sdp", "measured."),))
 
 
 @pytest.mark.parametrize(

@@ -18,8 +18,8 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.space import Inapplicable, Rejected, design_space, inspection
-from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.platform.capabilities import Platform
 from kernels.helpers import FULL_DSP48E2
 
 INT8 = DataType["INT8"]

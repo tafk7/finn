@@ -34,16 +34,15 @@ from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
-    Fabric,
-    Resources,
     auto_unstated,
     memory,
     memory_styles,
+    uram_requirements,
 )
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.platform.capabilities import Fabric, Platform, Resources
 
 i, j = Index("i"), Index("j")
 

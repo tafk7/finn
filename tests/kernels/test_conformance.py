@@ -61,8 +61,8 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import DspBlock
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.platform.capabilities import DspBlock
 from kernels.conformance import (
     MODES,
     NonConformance,

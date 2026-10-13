@@ -23,7 +23,7 @@ from finn.core.rtlsim_pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.target import DspBlock
+from finn.platform.capabilities import DspBlock
 from kernels.helpers import full_platform, placed_dotp
 from kernels.sweeps.dotp_support import (
     Case,

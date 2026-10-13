@@ -65,9 +65,12 @@ from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.harness.ops import executed
-from finn.kernels.target import Target
-from finn.platform import BOARDS, IP, ROWS, part, resolve_target
 from finn.platform.architectures import RULES
+from finn.platform.boards import BOARDS
+from finn.platform.catalog import part
+from finn.platform.resolve import resolve_target
+from finn.platform.shells import IP, ROWS
+from finn.platform.target import Target
 from finn.transformation.kernels.convert import ToKernelOps
 from finn.util.draws import Integers, drawn_inputs
 
@@ -184,7 +187,7 @@ def platform_rows(period_ns: float) -> dict[Row, Target]:
     ``resolve_target`` makes it: each device family FINN builds for (each supported
     rule of ``finn.platform.architectures.RULES``, in its order) on the ``ip`` shell,
     for the part its rule was probed on (``Rule.sample``); and on each other shell,
-    each family a board of its rows carries (``finn.platform.ROWS``), for the first
+    each family a board of its rows carries (``finn.platform.shells.ROWS``), for the first
     such board."""
     rows: dict[Row, Target] = {}
     for rule in RULES.values():

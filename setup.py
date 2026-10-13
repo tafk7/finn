@@ -142,6 +142,6 @@ if __name__ == "__main__":
             "finn.core.space": ["py.typed"],
             "finn.dataflow": ["py.typed"],
             "finn.kernels": ["py.typed"],
-            "finn.platform": ["catalog.tcl", "data/*.jsonl", "data/manifest.json"],
+            "finn.platform": ["catalog.tcl", "data/*.jsonl", "data/manifest.json", "py.typed"],
         },
     )

@@ -32,7 +32,7 @@ other counts is refused, by name (``wire_one_bus_each``), as is a partition bus 
 no ``awaddr`` (no aperture).
 
 The names are the block design's: ends ``idma<i>`` and ``odma<j>`` by direction in port
-order, the static region's instances ``<ip>_0`` (``finn.platform.StaticRegion``), and an
+order, the static region's instances ``<ip>_0`` (``finn.platform.shells.StaticRegion``), and an
 end's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
 (``IODMA_PINS``).
 
@@ -54,7 +54,7 @@ from finn.custom_op.kernels.shell import configured_root, member
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
 from finn.kernels.ends import IODMA_HLS, EndContract
-from finn.platform import VIVADO_BLOCK_DESIGN
+from finn.platform.shells import VIVADO_BLOCK_DESIGN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

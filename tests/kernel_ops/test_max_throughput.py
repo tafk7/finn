@@ -44,9 +44,10 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
-from finn.kernels.target import Target
-from finn.kernels.utilization import Resources, total
-from finn.platform import resolve_target
+from finn.kernels.utilization import total
+from finn.platform.capabilities import Resources
+from finn.platform.resolve import resolve_target
+from finn.platform.target import Target
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from kernel_ops.models import TARGET, kernel_model
 from kernel_ops.tfc import ULTRA96

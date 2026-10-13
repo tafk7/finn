@@ -3,7 +3,7 @@
 
 """The ends a shell offers on its boundary channels (``finn.kernels.ends``).
 
-The shell root reads its target's shell row (``finn.platform``), whose offer places
+The shell root reads its target's shell row (``finn.platform.shells``), whose offer places
 an ``IODMA_hls`` end on each free side that meets the host: forced, so nothing is
 persisted; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
@@ -55,11 +55,12 @@ from finn.kernels.ends import (
 )
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, ends
-from finn.kernels.target import Target
 from finn.kernels.transport import AxisBeat, StreamContract
-from finn.kernels.utilization import Resources, total
-from finn.platform import IP_ROW, ShellRow, resolve_target, shell_row
-from finn.platform.shells import ZYNQ_STATIC_REGION
+from finn.kernels.utilization import total
+from finn.platform.capabilities import Resources
+from finn.platform.resolve import resolve_target
+from finn.platform.shells import IP_ROW, ZYNQ_STATIC_REGION, ShellRow, shell_row
+from finn.platform.target import Target
 from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,

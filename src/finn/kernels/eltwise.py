@@ -36,9 +36,9 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
 from finn.kernels.channels import Channel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import DspBlock, Platform
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.platform.capabilities import DspBlock, Platform
 
 c = Index("c")
 

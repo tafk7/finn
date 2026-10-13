@@ -116,9 +116,9 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.target import Platform
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
-from finn.platform import part_report
+from finn.platform.capabilities import Platform
+from finn.platform.catalog import part_report
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

@@ -57,9 +57,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from finn.kernels.target import DspBlock
-from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
 from finn.platform.architectures import CAP_EVIDENCE, CapEvidence, rule
+from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
 from finn.platform.refusal import TargetRefused
 
 DATA = Path(__file__).resolve().parent / "data"

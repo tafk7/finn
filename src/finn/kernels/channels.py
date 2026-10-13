@@ -150,7 +150,6 @@ from finn.kernels.base import (
 from finn.kernels.ends import END, ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import Platform
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -160,12 +159,13 @@ from finn.kernels.transport import (
     marker_bit,
     marker_pairs,
 )
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources
+from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
 )
+from finn.platform.capabilities import Platform, Resources
 
 SOURCES: dict[str, type[MemStreamKernel]] = {"memstream": MemStreamKernel}
 """The kernels that can drive a channel with its known value, by case: a memory."""

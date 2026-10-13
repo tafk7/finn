@@ -16,8 +16,9 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_plan import Plan
 from finn.core.space import Finding, FindingKind
-from finn.kernels.target import Target
-from finn.platform import BOARDS, VIVADO_BLOCK_DESIGN, shell_row
+from finn.platform.boards import BOARDS
+from finn.platform.shells import VIVADO_BLOCK_DESIGN, shell_row
+from finn.platform.target import Target
 from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
 

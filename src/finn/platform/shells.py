@@ -14,8 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.kernels.ends import ENDS, IODMA_HLS, EndOffer, iodma_hls
-from finn.kernels.utilization import SHELL_CHARACTERISED, Fit, Resources
+from finn.kernels.utilization import SHELL_CHARACTERISED, Fit
 from finn.platform.boards import BOARDS
+from finn.platform.capabilities import Resources
 from finn.platform.refusal import TargetRefused
 
 IP, PYNQ, XRT, SLASH = "ip", "pynq", "xrt", "slash"

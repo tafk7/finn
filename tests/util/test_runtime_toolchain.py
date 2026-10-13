@@ -400,7 +400,7 @@ def test_checkpoint_reuse_requires_original_intermediate_path(tmp_path):
 
     from finn.builder.build_dataflow import build_dataflow_cfg  # noqa: PLC0415
     from finn.builder.build_dataflow_config import DataflowBuildConfig  # noqa: PLC0415
-    from finn.platform import TargetRequest  # noqa: PLC0415
+    from finn.platform.request import TargetRequest  # noqa: PLC0415
 
     model = helper.make_model(
         helper.make_graph(

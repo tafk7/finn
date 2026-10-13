@@ -546,8 +546,8 @@ def kernel_fixtures(api):
     MatMulKernel = importlib.import_module("finn.kernels.matmul").MatMulKernel
     PackedDotpKernel = importlib.import_module("finn.kernels.dotp").PackedDotpKernel
     commit = importlib.import_module("finn.kernels.configure").commit
-    target = importlib.import_module("finn.kernels.target")
-    Fabric = importlib.import_module("finn.kernels.utilization").Fabric
+    target = importlib.import_module("finn.platform.capabilities")
+    Fabric = target.Fabric
     Channel = importlib.import_module("finn.kernels.channels").Channel
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding

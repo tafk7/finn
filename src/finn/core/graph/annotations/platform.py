@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, Any
 from qonnx.core.metadata import JSON, Key, MetadataError, Namespace
 
 from finn.core.graph.errors import KernelOpError
-from finn.kernels.target import DspBlock, Platform, Target
-from finn.kernels.utilization import Fabric, Resources
+from finn.platform.capabilities import DspBlock, Fabric, Platform, Resources
+from finn.platform.target import Target
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -92,7 +92,7 @@ def write_target(model: ModelWrapper, target: Target) -> None:
     """Store the build target in the model's ``finn.platform`` metadata, every key."""
     platform = target.platform
     if platform.dsp is None:
-        raise KernelOpError("a target states its DSP block (finn.platform.resolve_target)")
+        raise KernelOpError("a target states its DSP block (finn.platform.resolve.resolve_target)")
     values: dict[str, object] = dict(
         part=target.part,
         shell=target.shell,

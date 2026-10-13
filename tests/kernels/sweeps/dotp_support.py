@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 from qonnx.core.datatype import DataType
 
-from finn.kernels.target import DspBlock
+from finn.platform.capabilities import DspBlock
 
 
 @dataclass(frozen=True)

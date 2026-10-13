@@ -117,7 +117,8 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.control import EXPORTED, top_bus
 from finn.kernels.transport import STREAM_CONTRACT
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
+from finn.kernels.utilization import RESOURCES_SEMANTICS, total
+from finn.platform.capabilities import Resources
 
 
 def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
@@ -170,7 +171,7 @@ BUFFERING = ViewKey("buffering", default_semantics(int))
 buffers, a FIFO's depth); a kernel with children's is the sum over its members."""
 
 RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
-"""What a kernel or a channel uses of the device (``finn.kernels.utilization.Resources``):
+"""What a kernel or a channel uses of the device (``finn.platform.capabilities.Resources``):
 a leaf's own statement; a kernel with children's and a channel's the sum over its
 members and stages."""
 

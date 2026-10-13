@@ -76,7 +76,9 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.explore import Ranked
-from finn.platform import TargetRefused, TargetRequest, resolve_target
+from finn.platform.refusal import TargetRefused
+from finn.platform.request import TargetRequest
+from finn.platform.resolve import resolve_target
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.ipgen import prepare_ip
 from finn.shells.pynq.runner import (
@@ -695,7 +697,7 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
     assert refusal(config(tmp_path, target=unknown, generate_outputs=[])) == {
         "unknown-board": [
             "'U250' is not a board (one of ['AUP-ZU3_8GB', 'KV260_SOM', "
-            "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'ZCU102', 'ZCU104', 'ZCU111'])"
+            "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'V80', 'ZCU102', 'ZCU104', 'ZCU111'])"
         ]
     }
     # A board the Zynq template cannot build: refused before any step runs.

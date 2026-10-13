@@ -18,9 +18,10 @@ from finn.builder.build_dataflow_resources import shell_resources_report
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
-from finn.kernels.utilization import SHELL_CHARACTERISED, Resources
-from finn.platform import resolve_target, shell_row
-from finn.platform.shells import PYNQ_CHARACTERISED
+from finn.kernels.utilization import SHELL_CHARACTERISED
+from finn.platform.capabilities import Resources
+from finn.platform.resolve import resolve_target
+from finn.platform.shells import PYNQ_CHARACTERISED, shell_row
 from finn.toolchain.vivado import placed_hierarchy, utilization_synth
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import CutKernelPartition

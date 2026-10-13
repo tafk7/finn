@@ -38,7 +38,7 @@ from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import Plan, Step, default_steps, resolve_plan
 from finn.builder.build_dataflow_steps import VERIFYING_STEPS, step_cleanup, step_tidy_up
 from finn.core.space import FindingKind
-from finn.platform import TargetRequest
+from finn.platform.request import TargetRequest
 
 TARGET = TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e")
 

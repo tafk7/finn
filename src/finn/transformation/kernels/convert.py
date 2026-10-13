@@ -45,7 +45,7 @@ from finn.core.graph.walk import between, upstream
 from finn.core.space import Finding, FindingKind, by_code, finding_record, finding_text
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.kernels.explore import ExploreError, Seam
-from finn.kernels.target import Target
+from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
 
 if TYPE_CHECKING:

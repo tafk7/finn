@@ -37,7 +37,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import Platform
+from finn.platform.capabilities import Platform
 from kernels.helpers import (
     FULL_DSP48E2,
     Root,

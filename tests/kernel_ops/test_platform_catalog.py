@@ -18,10 +18,9 @@ from typing import Any
 import pytest
 from kernels.xsim import requires_vivado
 
-from finn.kernels.target import DspBlock
-from finn.kernels.utilization import RESOURCE_NAMES, Fabric, Resources
-from finn.platform import BOARDS, TargetRefused, device, part_report, parts, resolve_target
 from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
+from finn.platform.boards import BOARDS
+from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
 from finn.platform.catalog import (
     DATA,
     OVERLAY_SETTING,
@@ -29,7 +28,10 @@ from finn.platform.catalog import (
     Catalog,
     Record,
     catalog,
+    device,
     load,
+    part_report,
+    parts,
 )
 from finn.platform.generate import (
     DeviceProbe,
@@ -41,6 +43,8 @@ from finn.platform.generate import (
     parse_devices,
     slr_resources,
 )
+from finn.platform.refusal import TargetRefused
+from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import host_toolchain
 
 ZU3 = [Resources(lut=70_560, ff=141_120, bram18=432, uram=0, dsp=360)]
@@ -326,7 +330,7 @@ def test_the_guides_overlay_resolves_its_custom_part(machine_overlay: Path) -> N
 
 
 def test_device_and_parts_answer_from_the_process_catalog(machine_overlay: Path) -> None:
-    """``device`` and ``parts`` (``finn.platform``), the documented queries: the catalog
+    """``device`` and ``parts`` (``finn.platform.catalog``), the documented queries: the catalog
     the process resolves by, with the overlay the machine setting names."""
     loaded = catalog()
     (custom,) = parts("xczu3eg_es1-*")

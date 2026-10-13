@@ -48,7 +48,7 @@ from finn.kernels.configure import undecided
 from finn.kernels.explore import Pinned, Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
-from finn.platform import resolve_target
+from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     ExploreKernelChoices,

@@ -21,7 +21,7 @@ from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_plan import resolve_plan
-from finn.platform import TargetRequest
+from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
 from finn.toolchain.vivado import vivado_jobs
 
