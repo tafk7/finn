@@ -11,7 +11,6 @@ from __future__ import annotations
 import pytest
 
 import os
-import pickle
 import sys
 
 from finn.toolchain import hls, vivado
@@ -59,11 +58,6 @@ def test_the_two_kinds_and_what_they_carry():
     assert (
         str(failed) == "xelab failed with exit status 2: top; transcript /x/xelab.log\n  ERROR: one"
     )
-    # Each crosses a process boundary as it was raised.
-    for error in (missing, failed):
-        copied = pickle.loads(pickle.dumps(error))
-        assert type(copied) is type(error) and str(copied) == str(error)
-        assert vars(copied) == vars(error)
 
 
 def test_a_failure_quotes_its_first_error_lines_and_tells_a_missing_licence(tmp_path):

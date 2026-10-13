@@ -5,10 +5,9 @@
 ``Selection.prepare()`` captures its environment once as a ``Toolchain``, and every
 tool runs in that snapshot through ``run_process``.
 
-- ``Selection`` holds no environment, so it can be passed to worker processes. It
-  names settings scripts to source (or none, to accept the environment as
-  configured), a site command directory, or a launcher prefix (a site route that
-  activates the tools remotely).
+- ``Selection`` holds no environment. It names settings scripts to source (or none,
+  to accept the environment as configured), a site command directory, or a launcher
+  prefix (a site route that activates the tools remotely).
 - ``Toolchain.run`` launches a tool in the captured environment, never in this
   process's, and ``Toolchain.probe`` asks a tool its version through the same route.
 - ``run_process`` starts each process in a new process group and kills the whole
@@ -276,7 +275,7 @@ def run_process(
 
 @dataclass(frozen=True)
 class Selection:
-    """Serializable selection, safe to pass to workers; contains no environment.
+    """A selection of an installation; it holds no environment.
 
     Empty settings explicitly accepts an already-configured environment. A site
     route owns remote activation and remote paths; it must not use local settings.
@@ -405,9 +404,6 @@ class ToolUnavailable(LookupError):
         self.tool = tool
         self.reason = reason
 
-    def __reduce__(self) -> tuple[type[ToolUnavailable], tuple[str, str]]:
-        return (ToolUnavailable, (self.tool, self.reason))
-
 
 #: How many of a failed tool's error lines a ``ToolFailed`` quotes.
 ERROR_LINES = 5
@@ -449,13 +445,6 @@ class ToolFailed(RuntimeError):
         message += f" ({code})" if code != "tool-error" else ""
         message += f"; transcript {self.transcript}" if self.transcript is not None else ""
         super().__init__("\n  ".join((message, *self.errors)))
-
-    def __reduce__(self) -> tuple[type[ToolFailed], tuple[object, ...]]:
-        # Pickled whole, so it reaches the parent of a worker process as raised.
-        return (
-            ToolFailed,
-            (self.tool, self.status, self.transcript, self.errors, self.code, self.what),
-        )
 
     @classmethod
     def of(
@@ -529,13 +518,6 @@ class Toolchain:
         )
         if self.transcripts is not None:
             object.__setattr__(self, "transcripts", Path(self.transcripts))
-
-    def __reduce__(
-        self,
-    ) -> tuple[type[Toolchain], tuple[Selection, dict[str, str], Path | None]]:
-        # A read-only mapping does not pickle; a toolchain crosses into worker
-        # processes with the transformation that holds it (NodeLocalTransformation).
-        return (Toolchain, (self.selection, dict(self.environment), self.transcripts))
 
     def transcripts_in(self, directory: StrPath | None) -> Toolchain:
         """This toolchain with its runs' transcripts written in ``directory`` (a build
