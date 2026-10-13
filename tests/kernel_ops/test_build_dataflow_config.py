@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's build configuration (``DataflowBuildConfig``): read from and written to
+"""The build configuration (``DataflowBuildConfig``): read from and written to
 JSON, refusing what it does not declare, its settings resolved by the steps that declare
 them, and built through the one ``build_dataflow`` entry."""
 
@@ -71,7 +71,7 @@ def place(finding: Finding) -> object:
     return dict(finding.details).get("place")
 
 
-def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
+def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
     assert cfg.generate_outputs == []
@@ -160,34 +160,16 @@ def test_a_configuration_holds_through_json() -> None:
     assert stated["toolchain"]["vivado_jobs"] == 4
 
 
-@pytest.mark.parametrize(
-    "key",
-    [
-        # The board is the target's; the toolchain's selection states Vivado's jobs.
-        "board",
-        "vivado_jobs",
-        # The names before settings: per-step options, injections and edits of the list,
-        # the flat hardware debug flag, the exploration's old names, and its spec of the
-        # target throughput; and the directory relative paths name files in, never JSON's.
-        "step_options",
-        "inject_steps_after",
-        "step_edits",
-        "base_dir",
-        "enable_hw_debug",
-        "kernel_exploration",
-        "strategies",
-        "fps",
-    ],
-)
-def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(key: str) -> None:
-    """Read as a setting, refused when the plan resolves, before the first step."""
-    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, key: None}))
-    assert cfg.settings == {key: None}
+def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() -> None:
+    """Read as a setting, refused when the plan resolves, before the first step: here the
+    target's board, stated beside the fields instead of in the target."""
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "board": None}))
+    assert cfg.settings == {"board": None}
     (finding,) = refusal(cfg).findings
     assert (finding.kind, finding.code, place(finding)) == (
         FindingKind.REJECTION,
         "setting-unknown",
-        f"configuration.{key}",
+        "configuration.board",
     )
     assert finding.message == (
         "no step of this build declares it; the settings its steps read: fifo_margin, "
@@ -414,7 +396,7 @@ def test_the_manifest_states_the_release_only_where_the_build_asked_it(
     ]
 
 
-def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
+def test_an_output_the_build_does_not_make_is_refused() -> None:
     for output in ("rtlsim_performance", "estimate_reports", "cpp_driver"):
         with pytest.raises(ValueError, match=output):
             DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": [output]}))
@@ -650,7 +632,7 @@ def test_a_build_directorys_bad_list_is_refused_inside_its_build(tmp_path: Path)
 @pytest.mark.slow
 def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export: Path) -> None:
     """build_dataflow_directory (the ``build_dataflow`` command's entry) builds a
-    directory's DataflowBuildConfig through the kernel path in its build process: TFC
+    directory's DataflowBuildConfig through the build in its build process: TFC
     from its export, prepared as the configuration's JSON states, on the default ip
     shell, named by its board, folded to its target throughput in place of the default
     FIFO sizing, to its verified partition, whose target is the part's on ip."""

@@ -76,7 +76,7 @@ class CutKernelPartition(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         if model.get_nodes_by_op_type(PARTITION_OP):
-            raise KernelOpError("the model holds a partition already: the kernel path cuts once")
+            raise KernelOpError("the model holds a partition already: a build cuts once")
         host = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
         if len(host) == len(model.graph.node):
             raise KernelOpError("the model holds no KernelOps: there is nothing to cut")

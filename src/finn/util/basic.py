@@ -26,7 +26,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Support code the kernel path, graph preparation and the tests share: build
+"""Support code the build, graph preparation and the tests share: build
 directories (``make_build_dir``, ``robust_rmtree``) and the Resize input a streamlining
 transform reads."""
 

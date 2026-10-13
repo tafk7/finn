@@ -109,7 +109,7 @@ def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
     found = kernel_partition_nodes(model)
     if len(found) != 1:
         raise ValueError(
-            f"the model holds {len(found)} partitions of KernelOps; the kernel path's "
+            f"the model holds {len(found)} partitions of KernelOps; a build's "
             "parent graph holds one (step_create_dataflow_partition cuts once)"
         )
     (node,) = found

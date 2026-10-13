@@ -14,7 +14,7 @@ the op (``OpSpec``, in ``tests/``):
      digest before and after), and matches every node at the op's anchor;
   2. the kernels' admission on every platform row the repository declares
      (``platform_rows``: each architecture rule of the part catalog,
-     ``finn.platform.architectures``, with each shell the kernel path builds for it),
+     ``finn.platform.architectures``, with each shell FINN builds for it),
      by ``ToKernelOps`` on each row's target (``coverage``): the rows that convert
      the graph whole, and the kernels' refusals on the others, by
      owner and code. Where no row admits it, the graph is a **gap**, what the
@@ -43,7 +43,7 @@ inputs' annotations.
 
 A ``Coverage``'s ``record`` is its JSON form, for a report to collect. A nested
 pattern's positive graph (several nodes, Conv's Im2Col and MatMul) is
-compared whole. Not here: the generated network through the kernel path into XSim
+compared whole. Not here: the generated network through the build into XSim
 is the tests', since the harness does not import the flow's builder.
 """
 
@@ -107,7 +107,7 @@ class OpSpec:
 
 Row = tuple[str, str]
 """A platform row: a device family, Vivado's FAMILY of an architecture rule
-(``finn.platform.architectures.RULES``), and a shell the kernel path builds (``ip``: a
+(``finn.platform.architectures.RULES``), and a shell FINN builds (``ip``: a
 packaged IP)."""
 
 

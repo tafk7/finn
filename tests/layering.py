@@ -195,7 +195,7 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # Graph preparation's transforms: the front end that takes an export to the graph the
-    # kernel path converts (Quant lowering, streamlining); the builder's preparation steps
+    # build converts (Quant lowering, streamlining); the builder's preparation steps
     # run them. It reads no target: neither the platform registry nor the KernelOps.
     Layer(
         "preparation",

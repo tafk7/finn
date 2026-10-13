@@ -27,7 +27,7 @@ from finn.toolchain.vivado import vivado_jobs
 
 pytestmark = pytest.mark.util
 
-#: A kernel-path target that needs nothing but the registry.
+#: A build's target that needs nothing but the registry.
 TARGET = TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e")
 
 

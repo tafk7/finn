@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shells' builds: what builds the kernel path's partition into a shell, for each
+"""The shells' builds: what builds the partition into a shell, for each
 shell row of the platform registry that integrates the partition
 (``finn.platform.shells``; the ``ip`` shell has none: its user integrates the IP).
 

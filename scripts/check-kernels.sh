@@ -48,7 +48,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/graph \
 # finn.toolchain.xsim: XSim's driver, which the testbench and packaging's elaboration run.
 # finn.shells.pynq's runner, driver and deployment package; its IODMA and IP generation
 # are annotated, not strictly checked: frozen extractions of the HWCustomOp flow's.
-# finn.builder's kernel path: its configuration, its plan, its checks
+# finn.builder: its configuration, its plan, its checks
 # and steps, the ip shell's testbench, the partition's Python verification and the
 # resources per shell member.
 gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.kernels \

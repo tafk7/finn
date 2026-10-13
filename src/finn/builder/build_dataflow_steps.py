@@ -8,7 +8,7 @@ parameters are its settings: the build fills each from the configuration's setti
 that name, else it keeps its default (finn.builder.build_dataflow_plan). A phase is a
 name for a list of steps; a build without ``steps`` runs every phase's steps in order.
 
-The steps prepare a Brevitas export into the streamlined graph the kernel path converts;
+The steps prepare a Brevitas export into the streamlined graph the build converts;
 convert its nodes to KernelOps (finn.custom_op.kernels) and cut them into one partition;
 choose the partition's parameters, one strategy step at a time; and make the outputs the
 configuration asks for: the partition's packaged IP on any shell, and the bitfile,

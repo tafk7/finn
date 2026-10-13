@@ -5,7 +5,7 @@
 time, and saving them.
 
 ``explore_kernel_choices(model, strategy)`` explores a partition's body, the model of
-KernelOps the kernel path's cut made (``CutKernelPartition``; ``explore_partition``, which
+KernelOps the build's cut made (``CutKernelPartition``; ``explore_partition``, which
 the build's strategy steps run, opens it through the parent graph's node,
 ``partition_body``, and saves it in its file), so which KernelOps go together is the
 cut's alone: a model holding any other node is refused. It builds the body's shell root
@@ -498,7 +498,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
 
 
 def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
-    """The partition of the kernel path's parent graph ``parent`` explored by ``strategy``:
+    """The partition of the build's parent graph ``parent`` explored by ``strategy``:
     its body opened through the partition node (``partition_body``), explored
     (``explore_kernel_choices``) and saved in its file. The parent graph is unchanged;
     a later exploration of the body holds the pins this one recorded."""
