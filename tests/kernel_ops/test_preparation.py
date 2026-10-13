@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -41,7 +44,11 @@ from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
-from finn.builder.build_dataflow_steps import build_dataflow_phases, step_streamline
+from finn.builder.build_dataflow_steps import (
+    build_dataflow_phases,
+    step_streamline,
+    step_tidy_up,
+)
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
@@ -425,6 +432,64 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly(
     # The equivalence analysis on its draws: nothing found.
     checked = made.analysis(equivalence_with(export, EXPLAINS, seeds=1))
     assert checked == {"runs": 3, "findings": ()}
+
+
+# -- constant folding with exact integers ---------------------------------------------
+
+
+def _folded_constant(model: ModelWrapper) -> npt.NDArray[Any]:
+    """The constant the tidied graph's one node, ``x + c``, adds."""
+    (node,) = model.graph.node
+    return np.asarray(model.get_initializer(node.input[1]))
+
+
+def test_importing_finn_turns_exact_integers_on() -> None:
+    """Any FINN module, imported in a process whose environment lacks the setting, turns
+    qonnx's exact integers on."""
+    script = (
+        "import finn.dataflow\n"
+        "from qonnx.core.onnx_exec import get_exact_integers\n"
+        "raise SystemExit(0 if get_exact_integers() else 1)\n"
+    )
+    environment = {name: value for name, value in os.environ.items() if name != EXACT_INTEGERS}
+    completed = subprocess.run(
+        [sys.executable, "-c", script], env=environment, capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_preparation_folds_constants_exactly(tmp_path: Path) -> None:
+    """The builder's tidy-up folds constants with exact integers: a dot product of
+    constants whose partial sums pass 2**24, which float32 rounds, folds to its exact 1;
+    an INT32 sum of 16777216 and 1, which float32 cannot hold, raises naming the tensor
+    rather than folding to 16777216."""
+    cfg = preparation_config(tmp_path)
+    dot = graph(
+        [
+            helper.make_node("MatMul", ["a", "b"], ["c"], name="MatMul_0"),
+            helper.make_node("Add", ["x", "c"], ["y"], name="Add_0"),
+        ],
+        {"x": ([1, 1], "INT8")},
+        ["y"],
+        {"a": [[2.0**24, 1.0, -(2.0**24)]], "b": [[1.0], [1.0], [1.0]]},
+        {"a": "INT26", "b": "INT2"},
+    ).transform(InferDataTypes())  # type: ignore[no-untyped-call]
+    folded = _folded_constant(step_tidy_up(dot, cfg))
+    assert folded.dtype == np.float32 and folded.item() == 1
+    total = graph(
+        [
+            helper.make_node("Add", ["a", "b"], ["c"], name="Add_0"),
+            helper.make_node("Add", ["x", "c"], ["y"], name="Add_1"),
+        ],
+        {"x": ([1], "INT32")},
+        ["y"],
+        {"a": [2.0**24], "b": [1.0]},
+        {"a": "INT32", "b": "INT32", "c": "INT32", "y": "INT32"},
+    )
+    x = {"x": np.zeros(1, dtype=np.float32)}
+    assert execute_onnx(total, x)["y"].item() == 2**24 + 1
+    with pytest.raises(ArithmeticError, match=r"Add_0 \(Add\): c folds to 16777217"):
+        step_tidy_up(total, cfg)
 
 
 def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(
