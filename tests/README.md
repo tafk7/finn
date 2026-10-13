@@ -10,17 +10,19 @@ Never write scratch files into the repo root or CWD. Collisions are guaranteed w
 
 - Use `make_build_dir()` to allocate a unique directory in the build directory,
   `finn.resources.scratch()` (`FINN_BUILD_DIR`, by default `$FINN_HOME/build`).
-- Use `robust_rmtree()` to tear down the test.
+- Remove it with `shutil.rmtree()` at the end of the test.
 - If the test's outputs are useful for diagnosis, you may keep the outputs if the test failed.
 
 ```python
-from finn.util.basic import make_build_dir, robust_rmtree
+import shutil
+
+from finn.util.basic import make_build_dir
 
 test_dir = make_build_dir("test_my_feature_")
 
 # later on
 if not failed:
-    robust_rmtree(test_dir)
+    shutil.rmtree(test_dir)
 ```
 
 ### 2. Process state & environment
@@ -98,4 +100,5 @@ The gates put `tests` on `PYTHONPATH`, so its helpers import by bare name:
 - `rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §5).
 - `layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/core/space/test_layering.py` also tests the table and the walker.
 - `value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
+- `trained_networks.py`: the pretrained Brevitas example networks (`get_test_model_trained`), which the Brevitas, transformation and KernelOp tests export.
 - `oracle/`: the finn-dev oracle's captures, values only the HWCustomOp flow computed (it is deleted), which the kernel tests compare with; the gates never run the oracle.

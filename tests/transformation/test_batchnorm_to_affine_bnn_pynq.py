@@ -32,6 +32,7 @@ import importlib_resources as importlib
 import numpy as np
 import onnx
 import onnx.numpy_helper as nph
+import shutil
 import torch
 from brevitas.export import export_qonnx
 from pkgutil import get_data
@@ -40,11 +41,11 @@ from qonnx.transformation.batchnorm_to_affine import BatchNormToAffine
 from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
+from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir, robust_rmtree
-from finn.util.test import get_test_model_trained
+from finn.util.basic import make_build_dir
 
 
 @pytest.mark.transform
@@ -76,7 +77,7 @@ def test_batchnorm_to_affine_cnv_w1a1():
         assert np.isclose(expected, produced).all()
         assert np.argmax(produced) == 3
     finally:
-        robust_rmtree(build_dir)
+        shutil.rmtree(build_dir)
 
 
 @pytest.mark.transform
@@ -98,4 +99,4 @@ def test_batchnorm_to_affine_lfc_w1a1():
         input_dict = {model.get_first_global_in(): nph.to_array(input_tensor)}
         assert oxe.compare_execution(model, new_model, input_dict)
     finally:
-        robust_rmtree(build_dir)
+        shutil.rmtree(build_dir)

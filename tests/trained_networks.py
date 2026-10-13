@@ -27,11 +27,18 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""The pretrained Brevitas example networks the tests export."""
 
-def get_test_model_trained(netname, wbits, abits):
+import torch
+
+
+def get_test_model_trained(netname: str, wbits: int, abits: int) -> torch.nn.Module:
     """The Brevitas BNN-PYNQ test network ``netname`` (``TFC``, ``CNV``, ...) at ``wbits``
     weight and ``abits`` activation bits, its pretrained weights loaded, in eval mode."""
-    from brevitas_examples import bnn_pynq, imagenet_classification  # noqa: PLC0415
+    from brevitas_examples import (  # type: ignore[import-untyped]  # noqa: PLC0415
+        bnn_pynq,
+        imagenet_classification,
+    )
 
     example_map = {
         ("CNV", 1, 1): bnn_pynq.cnv_1w1a,
@@ -47,19 +54,5 @@ def get_test_model_trained(netname, wbits, abits):
         ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
         ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
     }
-    return example_map[(netname, wbits, abits)](True).eval()
-
-
-def resize_smaller_side(target_pixels, img):
-    """Resizes smallest side of image to target pixels and resizes larger side with
-    same ratio. Expects a PIL image."""
-    import torchvision.transforms.functional as torchvision_util  # noqa: PLC0415
-
-    return torchvision_util.resize(img, target_pixels)
-
-
-def crop_center(size, img):
-    """Crop central size*size window out of a PIL image."""
-    import torchvision.transforms.functional as torchvision_util  # noqa: PLC0415
-
-    return torchvision_util.center_crop(img, size)
+    network: torch.nn.Module = example_map[(netname, wbits, abits)](True)
+    return network.eval()

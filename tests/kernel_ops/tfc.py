@@ -65,9 +65,9 @@ def exported(directory: Path) -> ModelWrapper:
     # Imported here: torch and brevitas are only for exporting it.
     import torch  # noqa: PLC0415
     from brevitas.export import export_qonnx  # noqa: PLC0415
+    from trained_networks import get_test_model_trained  # noqa: PLC0415
 
     from finn.util.pytorch import ToTensor  # noqa: PLC0415
-    from finn.util.test import get_test_model_trained  # noqa: PLC0415
 
     network = directory / EXPORT
     directory.mkdir(parents=True, exist_ok=True)

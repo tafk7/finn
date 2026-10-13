@@ -28,6 +28,7 @@
 
 import pytest
 
+import shutil
 import torch
 from brevitas.export import export_qonnx
 from qonnx.core.datatype import DataType
@@ -37,10 +38,10 @@ from qonnx.transformation.general import GiveReadableTensorNames, GiveUniqueNode
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
+from trained_networks import get_test_model_trained
 
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir, robust_rmtree
-from finn.util.test import get_test_model_trained
+from finn.util.basic import make_build_dir
 
 
 @pytest.mark.transform
@@ -69,4 +70,4 @@ def test_infer_datatypes_lfc():
         assert model.get_tensor_datatype("MultiThreshold_2_out0") == DataType["BIPOLAR"]
         assert model.get_tensor_datatype("MultiThreshold_3_out0") == DataType["BIPOLAR"]
     finally:
-        robust_rmtree(build_dir)
+        shutil.rmtree(build_dir)

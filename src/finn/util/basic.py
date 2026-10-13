@@ -26,15 +26,11 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Support code the build, graph preparation and the tests share: build
-directories (``make_build_dir``, ``robust_rmtree``) and the Resize input a streamlining
-transform reads."""
+"""Support code the build, graph preparation and the tests share: build directories
+(``make_build_dir``) and the Resize input a streamlining transform reads."""
 
-import errno
 import os
-import shutil
 import tempfile
-import time
 
 from finn import resources
 
@@ -47,26 +43,6 @@ def make_build_dir(prefix=""):
     new_dir = tempfile.mkdtemp(prefix=prefix, dir=build_dir)
     os.chmod(new_dir, 0o755)
     return new_dir
-
-
-def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
-    """Remove a directory tree, retrying the transient ``ENOTEMPTY`` and ``EBUSY`` of
-    NFS cleanup races."""
-    if not path or not os.path.exists(path):
-        return
-    delay = initial_delay
-    for attempt in range(retries):
-        try:
-            shutil.rmtree(path)
-            return
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            transient = exc.errno in (errno.ENOTEMPTY, errno.EBUSY)
-            if not transient or attempt == retries - 1:
-                raise
-            time.sleep(delay)
-            delay *= backoff
 
 
 def resolve_resize_param_input(model, node):

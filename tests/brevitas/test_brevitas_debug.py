@@ -39,11 +39,11 @@ from brevitas.quant_tensor import _unpack_quant_tensor
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
+from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import make_build_dir
-from finn.util.test import get_test_model_trained
 
 
 @pytest.mark.brevitas_export

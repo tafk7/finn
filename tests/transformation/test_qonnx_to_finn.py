@@ -43,11 +43,11 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup
 from tempfile import TemporaryDirectory
+from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
-from finn.util.test import get_test_model_trained
 
 
 def get_brev_model_and_sample_inputs(model_name, wbits, abits):

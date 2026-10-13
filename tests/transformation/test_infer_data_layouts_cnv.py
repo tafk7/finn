@@ -30,6 +30,7 @@
 import pytest
 
 import qonnx.core.data_layout as DataLayout
+import shutil
 import torch
 from brevitas.export import export_qonnx
 from qonnx.core.modelwrapper import ModelWrapper
@@ -44,13 +45,13 @@ from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
+from trained_networks import get_test_model_trained
 
 import finn.transformation.streamline.absorb as absorb
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.streamline import Streamline
 from finn.transformation.streamline.reorder import MakeMaxPoolNHWC
-from finn.util.basic import make_build_dir, robust_rmtree
-from finn.util.test import get_test_model_trained
+from finn.util.basic import make_build_dir
 
 
 @pytest.mark.transform
@@ -116,4 +117,4 @@ def test_infer_data_layouts_cnv():
         assert model.get_tensor_layout("XnorPopcountMatMul_7_out0") == DataLayout.NC
         assert model.get_tensor_layout("global_out") == DataLayout.NC
     finally:
-        robust_rmtree(build_dir)
+        shutil.rmtree(build_dir)

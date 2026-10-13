@@ -11,6 +11,7 @@ import pytest
 
 import json
 import os
+import shutil
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -18,7 +19,7 @@ from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 
 from finn.transformation.general import ApplyConfig
-from finn.util.basic import make_build_dir, robust_rmtree
+from finn.util.basic import make_build_dir
 
 
 @pytest.mark.transform
@@ -40,4 +41,4 @@ def test_apply_config():
     # check model
     assert getCustomOp(model.graph.node[2]).get_nodeattr("kernel_size") == [7, 7]
     assert getCustomOp(model.graph.node[9]).get_nodeattr("kernel_size") == [3, 3]
-    robust_rmtree(test_dir)
+    shutil.rmtree(test_dir)

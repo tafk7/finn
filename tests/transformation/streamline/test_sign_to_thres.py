@@ -30,6 +30,7 @@ import pytest
 
 import onnx
 import onnx.numpy_helper as nph
+import shutil
 import torch
 from brevitas.export import export_qonnx
 from pkgutil import get_data
@@ -37,12 +38,12 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
+from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.streamline import ConvertSignToThres
-from finn.util.basic import make_build_dir, robust_rmtree
-from finn.util.test import get_test_model_trained
+from finn.util.basic import make_build_dir
 
 
 @pytest.mark.streamline
@@ -65,4 +66,4 @@ def test_sign_to_thres():
         input_dict = {model.get_first_global_in(): nph.to_array(input_tensor)}
         assert oxe.compare_execution(model, new_model, input_dict)
     finally:
-        robust_rmtree(build_dir)
+        shutil.rmtree(build_dir)
