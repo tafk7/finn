@@ -3,40 +3,23 @@
 
 """How FINN runs AMD's tools: a ``Selection`` names an installation,
 ``Selection.prepare()`` captures its environment once as a ``Toolchain``, and every
-tool runs in that snapshot through ``run_process``.
-
-- ``Selection`` holds no environment, so it can be passed to worker processes. It
-  names settings scripts to source (or none, to accept the environment as
-  configured), a site command directory, or a launcher prefix (a site route that
-  activates the tools remotely).
-- ``Toolchain.run`` launches a tool in the captured environment, never in this
-  process's, and ``Toolchain.probe`` asks a tool its version through the same route.
-- ``run_process`` starts each process in a new process group and kills the whole
-  group on timeout or cancellation.
+tool runs in that snapshot (``Toolchain.run``), never in this process's environment,
+through ``run_process``, which kills the tool's whole process group on a timeout or a
+cancellation. What one tool needs is in its own module: ``finn.toolchain.hls``,
+``xsim`` and ``vivado``.
 
 A tool run's transcript is two files the tool writes as it runs, ``<stem>.stdout.log``
-and ``<stem>.stderr.log`` (``transcript_files``). The stem is the one the caller names
-(``transcript=``); else, in a build, a fresh one in the step's log directory
-``output_dir/logs/<step>`` (``Toolchain.transcripts_in``); else the replay script's. A
-run with none of them (a version probe) is captured in memory.
+and ``<stem>.stderr.log``: the stem the caller names; else, in a build, a fresh one in
+the step's log directory; else the replay script's. A run with none (a version probe)
+is captured in memory.
 
-This module holds only the route. What one tool needs is in its own module:
-``finn.toolchain.hls``, ``xsim`` and ``vivado``.
-
-A function that runs a tool requires a prepared ``Toolchain`` (``toolchain=``), so that
-a build runs every tool through one route and nothing runs on another installation
-unnoticed. Only the entry points a user calls default to the machine's
-(``host_toolchain``), prepared once and passed down: ``PackagePartition``,
-``ElaboratePartition`` and the XSim executor when they are made, the pynq shell's
-``BuildPynqBitfile``, and the command lines (``python -m finn.platform.generate``,
-``python -m finn.xsi.setup``). Nothing is discovered or activated on import, and a
-tool's installation is read only through a toolchain, never from this process's
-environment.
+A function that runs a tool takes a prepared ``Toolchain``, so a build runs every tool
+through one route. Only the entry points a user calls default to the machine's
+(``host_toolchain``). Nothing is discovered or activated on import.
 
 Running a tool has two errors of its own: ``ToolUnavailable`` (a ``LookupError``) when
 the toolchain names no installation of it or the tool is not on its route, and
-``ToolFailed`` (a ``RuntimeError``) when it ran and failed. ``identity`` names an
-installation by its content: the key for what a tool built.
+``ToolFailed`` (a ``RuntimeError``) when it ran and failed.
 """
 
 from __future__ import annotations
@@ -64,24 +47,19 @@ StrPath = str | os.PathLike[str]
 
 _LOG = logging.getLogger(__name__)
 
-#: The logger of the records a build's manifest indexes (finn.builder.build_dataflow_manifest):
-#: the tool runs here, the reports and verdicts there. A build sets its level, so a caller
-#: that quiets another of FINN's loggers keeps them in the manifest.
+#: The logger of the records a build's manifest indexes: tool runs, reports and verdicts.
+#: A build sets its level, so quieting another of FINN's loggers keeps them.
 RECORDS = logging.getLogger("finn.records")
 
-# Vendor tools start slowly (a JVM behind vitis-run), and much more slowly when a
-# build launches many at once. Probe answers are cached per process, keyed by the
-# selection and the environment's PATH, so parallel HLS synthesis probes once.
+# Vendor tools start slowly (a JVM behind vitis-run), more so many at once: a probe's
+# answer is cached per process, by the selection and the environment's PATH.
 PROBE_TIMEOUT = 120
 _VERSIONS: dict[tuple[Hashable, ...], tuple[int, ...]] = {}
 
-#: The ``extra`` key of a tool run's log records (``run_process``): a mapping with the
-#: run's number in this process (``run``) and, when it starts, ``tool``, ``command``,
-#: ``cwd``, ``transcript`` (its standard output's file) and ``status`` ``running``;
-#: when it ends, ``status`` (``completed``, ``failed``, or ``stopped`` with the
-#: ``error``), ``seconds`` and ``exit``. A build's manifest indexes them
-#: (finn.builder.build_dataflow_manifest) through ``RECORDS``; the log shows the same
-#: records.
+#: The ``extra`` key of a tool run's log records: the run's number in this process
+#: (``run``) and, when it starts, ``tool``, ``command``, ``cwd``, ``transcript`` and
+#: ``status`` ``running``; when it ends, ``status`` (``completed``, ``failed``, or
+#: ``stopped`` with the ``error``), ``seconds`` and ``exit``.
 TOOL_RUN = "finn_tool_run"
 _RUNS = itertools.count(1)
 
@@ -138,22 +116,18 @@ def run_process(
     transcript: StrPath | None = None,
     tool: str | None = None,
 ) -> ToolRun:
-    """Run argv in a new local process group; reap it on timeout or cancellation.
+    """Run argv in a new local process group; kill the group on a timeout, a
+    cancellation (``InterruptedError``) or an interrupt, the exception carrying what the
+    process printed (``output``, ``stderr``).
 
     ``env`` is the child's whole environment (the parent's when None), less Bash's
-    startup hooks; it is copied, and neither cwd nor os.environ is changed. With a
-    ``transcript`` stem, the process writes its standard output and error straight into
-    the transcript's two files as it runs (``transcript_files``; their directory is
-    made), and what it printed is read back from them when it ends; without, output is
-    captured in memory. Either way the result holds it as bytes. On a timeout, a
-    cancellation (``InterruptedError``) or an interrupt, the group is killed and the
-    exception carries what the process printed (``output``, ``stderr``); with
-    ``check``, a non-zero exit raises ``CalledProcessError``. A remote wrapper is
-    responsible for cancelling its remote descendants.
+    startup hooks. With a ``transcript`` stem, the process writes its output straight
+    into the transcript's two files as it runs; without, output is captured in memory.
+    With ``check``, a non-zero exit raises ``CalledProcessError``. A remote wrapper
+    cancels its own remote descendants.
 
-    A run that keeps a transcript is a tool run a build indexes: its log records
-    (``RECORDS``), when it starts and when it finishes or is stopped, carry ``TOOL_RUN``'s
-    fields, with the run named ``tool`` (by default, its command's first word).
+    A run that keeps a transcript is a tool run a build indexes: its records carry
+    ``TOOL_RUN``'s fields, the run named ``tool`` (by default its command's first word).
     """
     command = [os.fspath(arg) for arg in argv]
     if not command:
@@ -165,8 +139,6 @@ def run_process(
     log = _LOG if files is None else RECORDS
 
     def indexed(**state: object) -> dict[str, dict[str, object]] | None:
-        # The structured fields of this run's records, for a build's manifest; None
-        # for a run with no transcript (a probe, a settings capture).
         if files is None:
             return None
         return {TOOL_RUN: {"run": run, **state}}
@@ -207,7 +179,6 @@ def run_process(
             )
 
     def printed() -> tuple[bytes, bytes]:
-        # What a run streaming into its transcript printed, read back once it ended.
         assert files is not None
         return files[0].read_bytes(), files[1].read_bytes()
 
@@ -216,7 +187,6 @@ def run_process(
         while True:
             if cancel is not None and cancel.is_set():
                 raise InterruptedError("Command cancelled: " + shlex.join(command))
-            # Wake every 0.1 s to look at the deadline and the cancellation flag.
             wait: float | None = 0.1 if cancel is not None else None
             if timeout is not None:
                 remaining = timeout - (time.monotonic() - started)
@@ -276,24 +246,22 @@ def run_process(
 
 @dataclass(frozen=True)
 class Selection:
-    """Serializable selection, safe to pass to workers; contains no environment.
+    """A selection of an installation; it holds no environment.
 
-    Empty settings explicitly accepts an already-configured environment. A site
-    route owns remote activation and remote paths; it must not use local settings.
-    Frontend is requested deliberately, never chosen from executable discovery.
+    Empty settings accept the environment as configured. A site route (``launcher``)
+    owns remote activation and paths, so it takes no local settings. The HLS frontend is
+    stated, never guessed from the executables found.
 
-    A field that is ``None`` is not set: a build's selection is laid over the machine's
-    (``over``, ``host_selection``), so an unset field takes the machine's value, never a
-    default. The machine sets the command directory, the HLS frontend and Vivado's jobs,
-    never settings or a launcher.
+    A field that is ``None`` is unset: a build's selection is laid over the machine's,
+    so an unset field takes the machine's value. The machine sets the command directory,
+    the HLS frontend and Vivado's jobs, never settings or a launcher.
     """
 
     settings: tuple[str, ...] = ()
     command_dir: str | None = None
     launcher: tuple[str, ...] = ()
     hls_frontend: str | None = None
-    #: How many runs Vivado launches at once (``launch_runs -jobs``). None means the
-    #: machine's default (``finn.toolchain.vivado.vivado_jobs``).
+    #: How many runs Vivado launches at once (``launch_runs -jobs``); None, the machine's.
     vivado_jobs: int | None = None
 
     def __post_init__(self) -> None:
@@ -323,11 +291,11 @@ class Selection:
     def prepare(self, base_env: Mapping[str, str] | None = None, timeout: float = 30) -> Toolchain:
         """The selected installation's environment, captured once.
 
-        With settings scripts, they are sourced in Bash over ``base_env`` (by default
-        a clean base: the system PATH and the user, locale, display, licence and
-        ``LD_PRELOAD`` variables) and the resulting environment is kept; without, ``base_env``
-        (by default os.environ) is taken as configured. A local route that names no
-        licence gets the host file's. Raises ``RuntimeError`` when a script fails.
+        Settings scripts are sourced in Bash over ``base_env`` (by default a clean base:
+        the system PATH and the user, locale, display, licence and ``LD_PRELOAD``
+        variables); without them ``base_env`` (by default os.environ) is taken as
+        configured. A local route that names no licence gets the host file's. Raises
+        ``RuntimeError`` when a script fails.
         """
         if base_env is None:
             if self.settings:
@@ -405,9 +373,6 @@ class ToolUnavailable(LookupError):
         self.tool = tool
         self.reason = reason
 
-    def __reduce__(self) -> tuple[type[ToolUnavailable], tuple[str, str]]:
-        return (ToolUnavailable, (self.tool, self.reason))
-
 
 #: How many of a failed tool's error lines a ``ToolFailed`` quotes.
 ERROR_LINES = 5
@@ -449,13 +414,6 @@ class ToolFailed(RuntimeError):
         message += f" ({code})" if code != "tool-error" else ""
         message += f"; transcript {self.transcript}" if self.transcript is not None else ""
         super().__init__("\n  ".join((message, *self.errors)))
-
-    def __reduce__(self) -> tuple[type[ToolFailed], tuple[object, ...]]:
-        # Pickled whole, so it reaches the parent of a worker process as raised.
-        return (
-            ToolFailed,
-            (self.tool, self.status, self.transcript, self.errors, self.code, self.what),
-        )
 
     @classmethod
     def of(
@@ -510,14 +468,9 @@ class ToolFailed(RuntimeError):
 
 @dataclass(frozen=True)
 class Toolchain:
-    """A selection with its prepared environment, a read-only snapshot in which every
-    tool this toolchain runs starts. Made by ``Selection.prepare``.
-
-    ``transcripts`` is the directory a build step writes its runs' transcripts in
-    (``output_dir/logs/<step>``), or None outside a build. The step takes its toolchain
-    from the build's configuration, which sets it (``transcripts_in``; the builder's
-    ``DataflowBuildConfig.step_toolchain``), and passes it down to every transformation
-    that runs a tool."""
+    """A selection with its prepared environment, a read-only snapshot every tool it runs
+    starts in. Made by ``Selection.prepare``. ``transcripts`` is the directory a build
+    step writes its runs' transcripts in, or None outside a build."""
 
     selection: Selection
     environment: Mapping[str, str] = field(repr=False)
@@ -530,17 +483,9 @@ class Toolchain:
         if self.transcripts is not None:
             object.__setattr__(self, "transcripts", Path(self.transcripts))
 
-    def __reduce__(
-        self,
-    ) -> tuple[type[Toolchain], tuple[Selection, dict[str, str], Path | None]]:
-        # A read-only mapping does not pickle; a toolchain crosses into worker
-        # processes with the transformation that holds it (NodeLocalTransformation).
-        return (Toolchain, (self.selection, dict(self.environment), self.transcripts))
-
     def transcripts_in(self, directory: StrPath | None) -> Toolchain:
-        """This toolchain with its runs' transcripts written in ``directory`` (a build
-        step's ``output_dir/logs/<step>``, made when a run first writes there). None
-        leaves them where each run's caller says (``run``)."""
+        """This toolchain with its runs' transcripts written in ``directory``; None leaves
+        them where each run's caller says."""
         return replace(self, transcripts=None if directory is None else Path(directory))
 
     def transcript(self, name: str) -> Path | None:
@@ -596,18 +541,12 @@ class Toolchain:
         replay: StrPath | None = None,
         transcript: StrPath | None = None,
     ) -> ToolRun:
-        """Run ``tool`` in the prepared environment, updated by ``env``
-        (``run_process``'s contract otherwise; with ``check``, a non-zero exit is
-        ``ToolFailed``, naming the transcript). ``replay`` names a script written before
-        the run that repeats the command by hand. A tool not on the route is
-        ``ToolUnavailable``.
-
-        The tool writes what it prints into its transcript as it runs
-        (``transcript_files``): the stem ``transcript`` when the caller names one; else,
-        when this toolchain files a build step's transcripts, a fresh stem there named
-        after the replay script, or the tool (``transcript``); else the replay's
-        (``<replay>.stdout.log``, ``.stderr.log``). With none, what it prints is
-        captured in memory. The result names the transcript (``ToolRun.transcript``)."""
+        """Run ``tool`` in the prepared environment, updated by ``env``, as
+        ``run_process`` does; with ``check``, a non-zero exit is ``ToolFailed``. ``replay``
+        names a script, written first, that repeats the command by hand. A tool not on
+        the route is ``ToolUnavailable``. The transcript is ``transcript``, else a fresh
+        one in this toolchain's ``transcripts``, else the replay's (the module
+        docstring)."""
         environment = {**self.environment, **(env or {})}
         command = self.command(tool, *args)
         if replay is not None:
@@ -646,16 +585,10 @@ class Toolchain:
         by the selection and the environment's PATH."""
         return (*what, self.selection, self.environment.get("PATH", ""))
 
-    def probed(self, tool: str) -> tuple[int, ...] | None:
-        """The release ``probe`` found for ``tool`` on this route in this process, or
-        None if it has not asked; never runs the tool."""
-        return _VERSIONS.get(self.probe_key("version", tool))
-
     def probe(self, tool: str, timeout: float = PROBE_TIMEOUT) -> tuple[int, ...]:
-        """The tool's AMD release, (year, minor), asked through exactly the execution
-        route; once per selection and PATH in a process. Not a licence test.
-        ``ToolUnavailable`` when the tool is not on the route, or does not answer
-        with a release."""
+        """The tool's AMD release, (year, minor), asked through the execution route, once
+        per selection and PATH in a process. Not a licence test. ``ToolUnavailable`` when
+        the tool is not on the route, or names no release."""
         key = self.probe_key("version", tool)
         if key in _VERSIONS:
             return _VERSIONS[key]
@@ -683,13 +616,10 @@ class Toolchain:
 
 def identity(toolchain: Toolchain, tool: str) -> str:
     """The installation ``tool`` runs from, by what it is, never where it is installed:
-    ``tool``, the release its ``data/version.sh`` states (``XILINX_VERSION_DEFAULT``,
-    ``unstated`` without one) and its ``data/version.dat``'s digest (``none`` without
-    one). An HLS frontend's installation is the HLS installation
-    (``finn.toolchain.hls.installation``), any other tool's Vivado's
-    (``finn.toolchain.vivado.installation``). The one key of what a tool built: the
-    HLS cache's, a compiled XSI design's and the XSI bridge's. Reads two files and
-    runs nothing; ``ToolUnavailable`` when the toolchain names no such installation."""
+    ``tool``, the release its ``data/version.sh`` states and its ``data/version.dat``'s
+    digest. The key of what a tool built (the HLS cache, a compiled XSI design, the XSI
+    bridge). Runs nothing; ``ToolUnavailable`` when the toolchain names no such
+    installation."""
     if tool in hls.FRONTENDS:
         installation = hls.installation(toolchain)
     else:
@@ -706,9 +636,8 @@ def identity(toolchain: Toolchain, tool: str) -> str:
     return f"{tool} {release} {stamp}"
 
 
-#: The machine setting that names a site command directory: wrappers for
-#: ``vivado``, ``xelab``, ``v++``, ``g++``, ... that may hand a tool to a compute
-#: farm (docs/environment.md, "Running tools on LSF").
+#: The machine setting that names a site command directory: wrappers for ``vivado``,
+#: ``xelab``, ``v++``, ``g++``, ... that may hand a tool to a compute farm.
 COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
 
 #: The machine setting that says how many runs Vivado launches at once
@@ -719,12 +648,11 @@ VIVADO_JOBS_SETTING = "FINN_VIVADO_JOBS"
 def host_selection(
     environ: Mapping[str, str] | None = None, *, stated: Selection | None = None
 ) -> Selection:
-    """The machine's selection: its environment as configured (``scripts/activate.sh``,
-    ``docker/run``, ``finn-toolchain.sh``; no settings script is sourced), with the site
-    command directory ``FINN_TOOL_DIR_OVERRIDE`` names, the HLS frontend for the host
-    file's ``FINN_XILINX_VERSION`` (``finn.toolchain.hls.host_frontend``) and the Vivado
-    jobs ``FINN_VIVADO_JOBS`` gives, each read on every call. A selection the caller
-    gives (a build configuration's ``toolchain``) is laid over it (``Selection.over``)."""
+    """The machine's selection: its environment as configured (no settings script is
+    sourced), with the site command directory ``FINN_TOOL_DIR_OVERRIDE`` names, the HLS
+    frontend for the host file's ``FINN_XILINX_VERSION`` and the Vivado jobs
+    ``FINN_VIVADO_JOBS`` gives. A ``stated`` selection (a build configuration's) is laid
+    over it."""
     environ = os.environ if environ is None else environ
     jobs = environ.get(VIVADO_JOBS_SETTING)
     if jobs is not None and not re.fullmatch(r"[0-9]+", jobs):
@@ -743,5 +671,5 @@ def host_selection(
 
 def host_toolchain() -> Toolchain:
     """``host_selection()`` prepared over this process's environment: the default
-    toolchain of the entry points a user calls (see the module docstring)."""
+    toolchain of the entry points a user calls."""
     return host_selection().prepare()

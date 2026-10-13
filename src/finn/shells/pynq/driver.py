@@ -7,7 +7,7 @@
 tensor and shape, the channel's element, and its beats and lanes); it sets PL0 to the
 clock it is given, the one the bitfile delivers, and runs the bitfile it is given
 (``write_driver``). ``driver_description`` states what it takes and returns.
-``MakePynqDriver`` writes both for the kernel path's parent graph, from its target, the
+``MakePynqDriver`` writes both for the build's parent graph, from its target, the
 bitfile it states and the clock that bitfile delivers (its build's report,
 ``runner.DELIVERED_CLOCK``).
 
@@ -15,7 +15,7 @@ The driver's text and the files it runs with are the HWCustomOp flow's PYNQ driv
 (finn.transformation.fpgadataflow.make_driver), copied as the shell's frozen extraction:
 the template (``templates.pynq_driver_template``), the base driver and validate.py
 (``data/pynq_driver``), and the trimmed qonnx and finn helpers the driver imports
-(``write_pynq_driver_support``). A kernel-path driver has no external weights and no
+(``write_pynq_driver_support``). The driver FINN writes has no external weights and no
 MLO configuration.
 """
 
@@ -310,7 +310,7 @@ def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
 
 
 class MakePynqDriver(Transformation):
-    """The PYNQ driver the kernel path's parent graph's shell's host runtime runs
+    """The PYNQ driver the build's parent graph's shell's host runtime runs
     (``write_driver``), into driver/ under the output ``directory``, written afresh:
     nothing an earlier build left there stays. Its shell is the target the partition's
     body states (``pynq_row``); its I/O the partition's integration export's ends, from

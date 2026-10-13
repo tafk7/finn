@@ -13,10 +13,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 import finn.core.onnx_exec as ox
-from finn.transformation.streamline.absorb import (
-    AbsorbScalarBiasIntoMultiThreshold,
-    AbsorbSignBiasIntoMultiThreshold,
-)
+from finn.transformation.streamline.absorb import AbsorbScalarBiasIntoMultiThreshold
 
 
 def make_mt_add_model(num_ch=64, num_steps=15, out_dtype="UINT4", bias_value=-8.0):
@@ -107,17 +104,3 @@ def test_absorb_scalar_bias_into_multithreshold(
         assert new_model.graph.node[1].op_type == "Add"
         assert mt_inst.get_nodeattr("out_bias") == 0.0
         assert mt_inst.get_nodeattr("out_dtype") == expected_odt
-
-
-@pytest.mark.streamline
-def test_absorb_sign_bias_alias_is_deprecated():
-    """The old name must still work but emit a DeprecationWarning."""
-    model = make_mt_add_model(bias_value=-8.0)
-    with pytest.warns(DeprecationWarning):
-        transform = AbsorbSignBiasIntoMultiThreshold()
-    new_model = model.transform(transform)
-    # behaves identically to the renamed transformation
-    assert len(new_model.graph.node) == 1
-    mt_inst = getCustomOp(new_model.graph.node[0])
-    assert mt_inst.get_nodeattr("out_bias") == -8.0
-    assert mt_inst.get_nodeattr("out_dtype") == "INT4"

@@ -6,29 +6,21 @@ on what it computes, sampled: an analysis pass.
 
 ``model.analysis(equivalence_with(reference, explains))`` checks ``model``, the prepared
 graph, against ``reference``, the export with its inputs and outputs as the build states
-them: the graph right after the build's step_add_pre_post_processing, its Quant nodes and
-float arithmetic as exported (the caller builds it; the tests by running the build's own
-steps), and returns an ``Equivalence``. Preparation may change the network's function only
-where it says so: its inputs and outputs (a preprocessing model merged ahead, a label
-select appended) and its declared deviations (``DEVIATIONS``). So both graphs are run
-by FINN's execution (``finn.core.onnx_exec``), the reference's Quant nodes and all, on
-draws from the prepared graph's input annotation (``finn.util.draws.drawn_inputs``:
-extremes, random, corners), and must compute the same outputs, element for element. An
-element that differs passes only where the predicate of a declared deviation explains it
-(``Explanation``, keyed by its code); the predicates are the caller's, and without them
-every difference is found (``equivalence-unexplained``, a rejection). What a finding stops
-is the caller's.
+them (the graph right after step_add_pre_post_processing), and returns an
+``Equivalence``. Preparation may change the network's function only where it declares a
+deviation (``DEVIATIONS``). So both graphs are executed on draws from the prepared
+graph's input annotation (``finn.util.draws.drawn_inputs``) and must compute the same
+outputs, element for element; an element that differs passes only where the predicate
+of a declared deviation explains it (``explains``, keyed by its code). Without
+predicates every difference is found (``equivalence-unexplained``).
 
-FINN's execution computes integers exactly in both graphs, as the hardware does: a
-standard node whose annotated integers pass what float32 holds exactly computes in
-float64. So the reference must be annotated (qonnx's ``InferDataTypes``) before it runs:
-its integer annotations are what make its integer arithmetic exact.
+FINN's execution computes integers exactly, as the hardware does, from their
+annotations: so the reference must be annotated (qonnx's ``InferDataTypes``) before it
+runs.
 
-Both graphs run with qonnx's sanitization off (``SANITIZE_QUANT_TENSORS=0``), so
-that rounding an integer-annotated tensor cannot hide a value that is not an integer;
-each integer annotation of the prepared graph must hold every value computed there
-(``annotation-unsound``). That is no difference from the export: the prepared graph's
-own annotation is wrong, and the kernels sized from it would be.
+Both graphs run with qonnx's sanitization off (``SANITIZE_QUANT_TENSORS=0``), so that
+rounding cannot hide a value that is not an integer; each integer annotation of the
+prepared graph must hold every value computed there (``annotation-unsound``).
 """
 
 from __future__ import annotations
@@ -50,13 +42,8 @@ from finn.util.draws import Integers, drawn_inputs
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-OWNER = "preparation equivalence"
-"""The owner of the equivalence check's findings."""
-
 #: Preparation's declared deviations, by code: where the prepared graph computes
-#: otherwise than the export, on purpose, each stating what differs and where it is
-#: exact. Every one may change an output's value; each one's predicate (where it
-#: explains a difference) is the caller's.
+#: otherwise than the export, on purpose, and where it is exact.
 DEVIATIONS: Mapping[str, str] = MappingProxyType(
     {
         "topk-affine": (
@@ -83,9 +70,8 @@ SEEDS = 4
 
 @dataclass(frozen=True)
 class Draw:
-    """One draw: the ``inputs`` (integers, by the prepared graph's input), and every
-    tensor's values as FINN's execution computes them in the ``reference`` (the export, its inputs
-    and outputs applied) and the ``prepared`` graph, each graph with its context."""
+    """One draw: the ``inputs``, by the prepared graph's input, and every tensor's values
+    in the ``reference`` (``expected``) and the ``prepared`` graph (``computed``)."""
 
     reference: ModelWrapper
     prepared: ModelWrapper
@@ -115,14 +101,14 @@ def _unsanitized() -> Iterator[None]:
 
 
 def _finding(kind: FindingKind, code: str, message: str, **details: object) -> Finding:
-    return Finding(kind, code, OWNER, message, tuple(details.items()))
+    return Finding(kind, code, "preparation equivalence", message, tuple(details.items()))
 
 
 def observe(
     reference: ModelWrapper, prepared: ModelWrapper, inputs: Mapping[str, Integers]
 ) -> Draw:
-    """Both graphs executed on ``inputs``, the integers as they are, the prepared graph's
-    inputs given to the reference's in order, sanitization off."""
+    """Both graphs executed on ``inputs``, the prepared graph's inputs given to the
+    reference's in order."""
     names = [item.name for item in reference.graph.input][: len(inputs)]
     given = dict(zip(names, inputs.values()))
     with _unsanitized():
@@ -209,10 +195,9 @@ def equivalence_with(
     explains: Mapping[str, Explanation] = EMPTY,
     seeds: int = SEEDS,
 ) -> Callable[[ModelWrapper], Equivalence]:
-    """The analysis of a prepared graph against ``reference`` (the export, its inputs and
-    outputs applied) on each of ``seeds`` seeds' three draws from the prepared graph's
-    input annotation, the differences ``explains`` explains passing. ``explains`` may
-    name declared deviations only (``DEVIATIONS``)."""
+    """The analysis of a prepared graph against ``reference`` on each of ``seeds`` seeds'
+    three draws, the differences ``explains`` explains passing. ``explains`` names
+    declared deviations only."""
     undeclared = sorted(set(explains) - set(DEVIATIONS))
     if undeclared:
         raise ValueError(f"preparation declares no deviation named {', '.join(undeclared)}")

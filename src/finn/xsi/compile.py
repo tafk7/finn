@@ -26,7 +26,6 @@ def compile_sim_obj(
     *,
     toolchain,
     timeout=None,
-    cancel=None,
 ):
     glbl = str(vivado.glbl(toolchain))
     tool = identity(toolchain, "xelab")
@@ -114,7 +113,6 @@ def compile_sim_obj(
         cmd_xelab,
         cwd=sim_out_dir,
         timeout=timeout,
-        cancel=cancel,
         replay=Path(sim_out_dir) / "compile_sim.sh",
     )
     out_so_relative_path = "xsim.dir/%s/xsimk.so" % top_module_name

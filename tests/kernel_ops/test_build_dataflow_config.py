@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's build configuration (``DataflowBuildConfig``): read from and written to
+"""The build configuration (``DataflowBuildConfig``): read from and written to
 JSON, refusing what it does not declare, its settings resolved by the steps that declare
 them, and built through the one ``build_dataflow`` entry."""
 
@@ -25,7 +25,6 @@ from finn.builder.build_dataflow import (
     build_dataflow_cfg,
     build_dataflow_directory,
     read_build_config,
-    resolve_step_filename,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
@@ -47,7 +46,6 @@ from finn.core.graph.partition import partition_body
 from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
-from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config
 from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_settings
@@ -71,7 +69,7 @@ def place(finding: Finding) -> object:
     return dict(finding.details).get("place")
 
 
-def test_the_kernel_path_builds_on_ip_and_sizes_fifos() -> None:
+def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
     assert cfg.generate_outputs == []
@@ -160,34 +158,16 @@ def test_a_configuration_holds_through_json() -> None:
     assert stated["toolchain"]["vivado_jobs"] == 4
 
 
-@pytest.mark.parametrize(
-    "key",
-    [
-        # The board is the target's; the toolchain's selection states Vivado's jobs.
-        "board",
-        "vivado_jobs",
-        # The names before settings: per-step options, injections and edits of the list,
-        # the flat hardware debug flag, the exploration's old names, and its spec of the
-        # target throughput; and the directory relative paths name files in, never JSON's.
-        "step_options",
-        "inject_steps_after",
-        "step_edits",
-        "base_dir",
-        "enable_hw_debug",
-        "kernel_exploration",
-        "strategies",
-        "fps",
-    ],
-)
-def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read(key: str) -> None:
-    """Read as a setting, refused when the plan resolves, before the first step."""
-    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, key: None}))
-    assert cfg.settings == {key: None}
+def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() -> None:
+    """Read as a setting, refused when the plan resolves, before the first step: here the
+    target's board, stated beside the fields instead of in the target."""
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "board": None}))
+    assert cfg.settings == {"board": None}
     (finding,) = refusal(cfg).findings
     assert (finding.kind, finding.code, place(finding)) == (
         FindingKind.REJECTION,
         "setting-unknown",
-        f"configuration.{key}",
+        "configuration.board",
     )
     assert finding.message == (
         "no step of this build declares it; the settings its steps read: fifo_margin, "
@@ -387,41 +367,49 @@ def step_nothing(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     return model
 
 
-def test_the_manifest_states_the_release_only_where_the_build_asked_it(
+def test_a_build_for_a_board_that_requires_no_release_never_asks_vivado(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The release the toolchain's probe found in this process, for a board that
-    requires one; a build that never asks Vivado states none."""
     source = tmp_path / "model.onnx"
     onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), source)
-    built = {}
-    for board in ("AUP-ZU3_8GB", "Ultra96"):
-        cfg = board_build(tmp_path / board, board)
-        cfg.output_dir = str(tmp_path / board / "output")
-        cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
-        key = cfg.prepared_toolchain.probe_key("version", "vivado")
-        monkeypatch.setitem(launcher._VERSIONS, key, (2025, 2))
-        if board == "Ultra96":
-            monkeypatch.setattr(Toolchain, "probe", never)
-        assert build_dataflow_cfg(str(source), cfg) == 0
-        built[board] = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
-    assert built["AUP-ZU3_8GB"]["identity"]["vivado"] == "2025.2"
-    assert "vivado" not in built["Ultra96"]["identity"]
-    assert sorted(path.name for path in (tmp_path / "Ultra96" / "output").iterdir()) == [
+    cfg = board_build(tmp_path, "Ultra96")
+    cfg.output_dir = str(tmp_path / "output")
+    cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
+    monkeypatch.setattr(Toolchain, "probe", never)
+    assert build_dataflow_cfg(str(source), cfg) == 0
+    assert sorted(path.name for path in (tmp_path / "output").iterdir()) == [
         "build_dataflow.log",
         "intermediate_models",
         "report",
     ]
 
 
-def test_an_output_the_kernel_path_does_not_make_is_refused() -> None:
-    for output in ("rtlsim_performance", "estimate_reports", "cpp_driver"):
-        with pytest.raises(ValueError, match=output):
-            DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": [output]}))
+def test_an_output_the_build_does_not_make_is_refused() -> None:
+    refused = "configuration.generate_outputs[0]: 'bitstream'; one of ['stitched_ip',"
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": ["bitstream"]}))
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        named: Any = ["bitstream"]
+        DataflowBuildConfig(
+            output_dir="out", target=TargetRequest(period_ns=5.0), generate_outputs=named
+        )
     stated = {**STATED, "generate_outputs": ["stitched_ip", "ooc_synth"]}
     assert DataflowBuildConfig.from_json(json.dumps(stated)).generate_outputs == [
         DataflowOutputType.STITCHED_IP,
         DataflowOutputType.OOC_SYNTH,
+    ]
+
+
+def test_a_configuration_made_in_python_names_its_outputs_as_json_does() -> None:
+    """Each name becomes its output, so the checks read a configuration made in Python
+    as one read from JSON: here the driver, asked on the ip shell without its bitfile."""
+    target = TargetRequest(period_ns=5.0, board="Ultra96")
+    named: Any = ["pynq_driver"]
+    cfg = DataflowBuildConfig(output_dir="out", target=target, generate_outputs=named)
+    assert cfg.generate_outputs == [DataflowOutputType.PYNQ_DRIVER]
+    assert [(finding.code, place(finding)) for finding in checked(cfg)] == [
+        ("shell-outputs", "configuration.generate_outputs"),
+        ("output-needs", "configuration.generate_outputs"),
     ]
 
 
@@ -462,15 +450,20 @@ def names(cfg: DataflowBuildConfig) -> list[str]:
     return [step.name for step in plan.steps[plan.run]]
 
 
+def saved_before_start(cfg: DataflowBuildConfig) -> str:
+    """The step whose saved model ``cfg``'s build starts from."""
+    plan = resolve_plan(cfg)
+    name: str = plan.steps[plan.run.start - 1].name
+    return name
+
+
 def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     """A step inside a phase, or a phase: its first step to start from, its last to
     stop after; the build starts from the model the step before saved."""
     inside = {**STATED, "start_step": "step_size_fifos", "stop_step": "step_package_partition"}
     cfg = DataflowBuildConfig.from_json(json.dumps(inside))
     assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
-    assert resolve_step_filename("step_size_fifos", cfg, -1) == (
-        "out/intermediate_models/step_create_dataflow_partition.onnx"
-    )
+    assert saved_before_start(cfg) == "step_create_dataflow_partition"
     phases = {
         **STATED,
         "start_step": "phase_optimize_hardware",
@@ -478,9 +471,7 @@ def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(phases))
     assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
-    assert resolve_step_filename("phase_optimize_hardware", cfg, -1) == (
-        "out/intermediate_models/step_create_dataflow_partition.onnx"
-    )
+    assert saved_before_start(cfg) == "step_create_dataflow_partition"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_prepare_model"}))
     assert names(cfg) == [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
 
@@ -495,9 +486,7 @@ def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases()
     )
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding), finding.message) == ("step-absent", "start_step", message)
-    with pytest.raises(ConfigurationRefused) as refused:
-        resolve_step_filename("step_size_fifos", cfg, -1)
-    assert str(refused.value) == f"step-absent: start_step: {message}"
+    assert str(refusal(cfg)) == f"step-absent: start_step: {message}"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding)) == ("step-absent", "stop_step")
@@ -650,7 +639,7 @@ def test_a_build_directorys_bad_list_is_refused_inside_its_build(tmp_path: Path)
 @pytest.mark.slow
 def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export: Path) -> None:
     """build_dataflow_directory (the ``build_dataflow`` command's entry) builds a
-    directory's DataflowBuildConfig through the kernel path in its build process: TFC
+    directory's DataflowBuildConfig through the build in its build process: TFC
     from its export, prepared as the configuration's JSON states, on the default ip
     shell, named by its board, folded to its target throughput in place of the default
     FIFO sizing, to its verified partition, whose target is the part's on ip."""

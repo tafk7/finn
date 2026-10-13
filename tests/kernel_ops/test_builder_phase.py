@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The builder's kernel-path phases (``KERNEL_PATH``) on TFC_W2A2, up to its partition.
+"""The builder's phases from conversion on TFC_W2A2, up to its partition.
 
 ``build_dataflow_cfg`` runs a DataflowBuildConfig's default steps from the exported
 network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
@@ -116,10 +116,8 @@ STEPS_LOG = "finn.builder.build_dataflow_steps"
 #: The logger of the reports a step writes (finn.builder.build_dataflow_manifest.reported).
 REPORTS_LOG = RECORDS.name
 
-#: The builder's phases from the prepared graph to the verified partition.
-KERNEL_PATH = ["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"]
-
-#: Their steps, in the order they run.
+#: The steps of the builder's phases from the prepared graph to the verified partition,
+#: in the order they run.
 STEPS = (
     "step_convert_to_hw",
     "step_create_dataflow_partition",
@@ -133,7 +131,7 @@ def explore(
     cfg: DataflowBuildConfig,
     strategies: tuple[str, ...] = ("step_size_fifos",),
 ) -> ModelWrapper:
-    """``source`` through the kernel path's steps to its exploration by the strategy steps
+    """``source`` through the build's steps to its exploration by the strategy steps
     ``strategies``, with ``cfg``'s settings, and its verification: the parent graph, cut
     once, its body's choices explored and saved, and kernel_choices.json written."""
     steps = [
@@ -234,6 +232,10 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # Each strategy step's report is its own, listed under it.
     assert [report["path"] for report in indexed["step_size_fifos"]["reports"]] == [
         "report/step_size_fifos.json"
+    ]
+    # The partition's choices, by graph name, listed under the step that wrote them.
+    assert indexed["step_verify_partition"]["reports"] == [
+        {"path": "kernel_choices.json", "findings": {}}
     ]
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
@@ -485,7 +487,7 @@ def test_the_verification_refuses_a_partition_for_another_target(
         step_verify_partition(parent, cfg)
 
 
-def test_the_kernel_paths_target_is_the_one_its_configuration_states(tmp_path: Path) -> None:
+def test_the_builds_target_is_the_one_its_configuration_states(tmp_path: Path) -> None:
     """The configuration's target, resolved, is the one step_convert_to_hw states in the
     model: the shell it names, ``ip`` unless one is; on ``ip`` a board names its part
     and the target states none, so naming the board or its part is the same target."""
@@ -741,8 +743,8 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     ]
 
 
-def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None:
-    """A build's steps are the kernel path's: another name is refused, naming its steps
+def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
+    """A build's steps are its own: another name is refused, naming its steps
     (the strategy steps no phase runs by default among them) and phases, and the default
     steps are its six phases' steps, in order."""
     with pytest.raises(ValueError, match="'step_hw_codegen' is no step or phase") as refused:
@@ -771,7 +773,7 @@ def test_a_step_the_kernel_path_does_not_know_is_refused(tmp_path: Path) -> None
 def set_folding() -> dict[str, dict[str, int]]:
     """FINN's SetFolding on TFC_W2A2 at 1,000,000 frames a second and 5 ns (200 cycles a
     frame), as the finn-dev oracle captured it (``tfc_set_folding``): each layer's folding,
-    by the kernel path's node (the oracle's i-th Thresholding is MultiThreshold_i, its i-th
+    by the build's node (the oracle's i-th Thresholding is MultiThreshold_i, its i-th
     MVAU MatMul_i; its label select is on the host here)."""
     captured = capture("tfc_set_folding")
     assert captured["target_cycles"] == 200
@@ -1016,7 +1018,7 @@ Z0_SETTINGS = {"target_fps": 1_000_000}
 #: stubbed (``tfc_zynq_build``): SetFolding's folding, the label select on the host.
 ZYNQ_BUILD = capture("tfc_zynq_build")
 
-#: The oracle's partition names, by the kernel path's instance names: its ends' instances,
+#: The oracle's partition names, by the build's instance names: its ends' instances,
 #: and ``partition`` for the partition between them.
 INSTANCES = {
     partition["name"]: (
@@ -1027,7 +1029,7 @@ INSTANCES = {
 
 
 def renamed(text: str) -> str:
-    """``text`` with the oracle's partition names as the kernel path's instances."""
+    """``text`` with the oracle's partition names as the build's instances."""
     return re.sub(r"StreamingDataflowPartition_\d+", lambda name: INSTANCES[name[0]], text)
 
 
@@ -1147,7 +1149,7 @@ def test_z0s_block_design_is_the_oracles_but_for_the_partitions_ip() -> None:
     """The oracle's block design for TFC, its partitions renamed, is Z0's line for line,
     the HWCustomOp flow's paths unquoted, except the partition's IP repositories: the
     flow's partition is its layers' IPs stitched, so it lists each layer's IP and
-    memstream beside the stitched one; the kernel path's partition is one packaged IP."""
+    memstream beside the stitched one; the build's partition is one packaged IP."""
     z0 = Z0_BLOCK_DESIGN.replace('"', "").splitlines()
     oracle = [renamed(line) for line in ZYNQ_BUILD["block_design"]]
     assert len(oracle) == len(z0)
@@ -1216,7 +1218,7 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
 #: read its slowest layer's 196).
 TFC_BOTTLENECK = 200
 
-#: The generated driver's io_shape_dict for TFC at Z0's choices, as the kernel path's
+#: The generated driver's io_shape_dict for TFC at Z0's choices, as the build's
 #: driver wrote it before the runner (from ZynqBuild's link graph), the logits INT8.
 TFC_IO_SHAPES = {
     "idt": [DataType["UINT8"]],
@@ -1277,10 +1279,10 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
 
 
 @pytest.mark.slow
-def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
+def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     source: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """TFC on pynq through the kernel path and its shell's outputs, the runner's tools
+    """TFC on pynq through the build and its shell's outputs, the runner's tools
     faked (its tool steps state what they would make; Vivado makes its project's files,
     the timing summary a PS that gives 187.512 MHz for the 200 asked).
 
@@ -1288,7 +1290,7 @@ def test_the_kernel_path_builds_tfc_on_pynq_to_its_driver_and_deployment(
       typed, and no flat key: the bitfile and its handoff, no report; the reports are
       collected beside them, the delivered clock's with the shell root's bottleneck,
       ends included.
-    - The driver's io_shape_dict is the kernel path's before the runner, the logits
+    - The driver's io_shape_dict is the build's before the runner, the logits
       INT8, and it sets PL0 to the delivered clock; report/driver.json states what it
       takes and returns.
     - report/resources.json states each member of the shell by the model, out of

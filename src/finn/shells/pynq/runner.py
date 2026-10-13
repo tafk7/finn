@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The ``pynq`` shell's build of the kernel path's partition: the Vivado runner of the
+"""The ``pynq`` shell's build of the partition: the Vivado runner of the
 Zynq block design, from the partition's integration export
 (``finn.transformation.kernels.integration``).
 
@@ -28,7 +28,7 @@ The runner (``build_pynq``):
   utilization report and each IP's out-of-context synthesis report, with the digest of
   the partition's design its IP was made from.
 
-``BuildPynqBitfile`` is the build as a transformation of the kernel path's parent graph:
+``BuildPynqBitfile`` is the build as a transformation of the parent graph:
 it reads the shell, board, part and clock from the target its partition's body states
 (``pynq_row`` refuses a shell without this build), runs ``build_pynq``, collects the
 bitfile and its reports into the output directory it is given, and records the bitfile
@@ -341,7 +341,7 @@ def build_pynq(
     jobs: int | None = None,
     options: PynqOptions = PynqOptions(),
 ) -> PynqBuilt:
-    """Build the kernel path's parent graph ``model`` in the Zynq block design of its
+    """Build the parent graph ``model`` in the Zynq block design of its
     integration export ``export`` (see the module docstring): the ends' IPs (their
     scratch models saved in ``directory``) and the partition's (its body saved with
     its IP stated, or the IP the body states already when it was made from the body's
@@ -476,7 +476,7 @@ def delivered_clock_findings(clock: dict[str, Any], timing_report: str) -> tuple
 
 
 class BuildPynqBitfile(Transformation):
-    """The Zynq block design's bitfile around the kernel path's parent graph's partition
+    """The Zynq block design's bitfile around the parent graph's partition
     (``build_pynq``), from the partition's integration export, written as
     report/integration.json, into the output ``directory``: the bitfile and its
     hardware handoff (bitfile/), the routed timing report (report/post_route_timing.rpt),

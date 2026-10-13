@@ -171,7 +171,7 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
 
 def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
     parent = chain().transform(CutKernelPartition(tmp_path / "once"))
-    with pytest.raises(KernelOpError, match="holds a partition already: the kernel path cuts once"):
+    with pytest.raises(KernelOpError, match="holds a partition already: a build cuts once"):
         parent.transform(CutKernelPartition(tmp_path / "twice"))
     with pytest.raises(ValueError, match="holds 0 partitions of KernelOps"):
         partition_body(chain())

@@ -39,19 +39,14 @@ from qonnx.util.basic import get_by_name
 
 
 def _get_signed_from_upstream(model, trunc_node):
-    """
-    Find out what the sign of the input to the trunc node is,
-    by looking at the upstream nodes.
-    """
+    """Whether the input of ``trunc_node`` is signed: its datatype's, else the first
+    known datatype up the graph through sign-preserving nodes."""
     node = trunc_node
-    # Check if the input of this node already has a FINN datatype
     signed = None
     inp_dt = model.get_tensor_datatype(node.input[0])
     if inp_dt is not None and inp_dt != DataType["FLOAT32"]:
         signed = inp_dt.signed()
-    # Go further up the graph, since the datatype inference works top down
-    # these nodes should either be sign preserving ops or they already have a
-    # datatype defined for the output tensor.
+    # Datatype inference works top down, so the sign is looked for up the graph.
     curr_node = node
     if signed is None:
         while curr_node is not None:
@@ -88,7 +83,6 @@ def _get_signed_from_upstream(model, trunc_node):
                     signed = out_dt.signed()
                     break
 
-            # Check if we are allowed to move on to the next op
             sign_preserving_ops = ["Add", "Mul", "AveragePool", "Pad"]
             if next_node.op_type not in sign_preserving_ops:
                 raise RuntimeError(
@@ -112,11 +106,8 @@ def _get_signed_from_upstream(model, trunc_node):
 
 
 class AvgPoolAndTruncToQuantAvgPool(Transformation):
-    """
-    Convert a section of nodes of the pattern:
-    AveragePool -> Mul (scalar) -> Trunc
-    To the FINN op: QuantAvgPool2d
-    """
+    """Converts AveragePool -> Mul (scalar) -> Trunc, or AveragePool -> Trunc, to
+    Div -> QuantAvgPool2d -> Mul."""
 
     def apply(self, model):
         opset_imports = model.get_opset_imports()
@@ -140,11 +131,7 @@ class AvgPoolAndTruncToQuantAvgPool(Transformation):
 
 
 class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
-    """
-    Convert a section of nodes of the pattern:
-    AveragePool -> Mul (scalar) -> Trunc (v1)
-    To the FINN op: Div -> QuantAvgPool2d -> Mul
-    """
+    """Converts AveragePool -> Mul (scalar) -> Trunc (v1) to Div -> QuantAvgPool2d -> Mul."""
 
     def apply(self, model):
         graph = model.graph
@@ -159,8 +146,6 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                     if t_node is not None and len(t_node) == 1 and t_node[0].op_type == "Trunc":
                         t_node = t_node[0]
                         running_node_index = node_ind
-                        # Check node for compatibility
-                        # Avg pooling node
                         k_s = get_by_name(n.attribute, "kernel_shape")
                         if k_s is None or len(k_s.ints) != 2 or len(set(k_s.ints)) != 1:
                             raise ValueError(
@@ -180,7 +165,6 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                             )
                         stride = stride.ints[0]
 
-                        # Mul node
                         mul_val = model.get_initializer(mul_node.input[1])
                         if mul_val is None or len(mul_val.shape) != 0 or mul_val != k_s * k_s:
                             raise ValueError(
@@ -192,7 +176,6 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                                 f"in this case {k_s * k_s}."
                             )
 
-                        # Trunc node
                         rounding_mode = get_by_name(t_node.attribute, "rounding_mode")
                         normalized_mode_string = rounding_mode.s.upper()
                         if rounding_mode is None or normalized_mode_string != b"FLOOR":
@@ -224,19 +207,11 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                         trunc_in_bits = int(trunc_in_bits[0])
                         trunc_out_bits = int(trunc_out_bits[0])
 
-                        # Calculate parameters for the QuantAvgPool2d node,
-                        # Calculate input bit width. Basically this backwards:
-                        # https://github.com/Xilinx/finn-base/blob/
-                        # 7c2603a95e90e4de2575020e575c24eab6a15889/src/finn/custom_op/
-                        # general/quantavgpool2d.py#L94
+                        # The input width whose sum over the window the Trunc narrows.
                         ibits = math.floor(math.log(2**trunc_in_bits / (k_s * k_s), 2))
-                        # Get sign
                         signed = _get_signed_from_upstream(model, t_node)
-                        # ToDo: Change this to NHWC,
-                        #  when the channels last layout comes around.
                         data_layout = "NCHW"
 
-                        # Insert scale nodes, QuantAvgPool2d node and required tensors
                         scale = model.get_initializer(t_node.input[1])
                         scale_div_tensor = helper.make_tensor_value_info(
                             model.make_new_valueinfo_name(),
@@ -299,12 +274,10 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                         graph.node.insert(running_node_index, scale_mul_node)
                         running_node_index += 1
 
-                        # Remove old nodes
                         graph.node.remove(n)
                         graph.node.remove(mul_node)
                         graph.node.remove(t_node)
 
-                        # Recompute shapes and datatypes
                         model = model.transform(InferShapes())
                         model = model.transform(InferDataTypes())
 
@@ -314,11 +287,7 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
 
 
 class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
-    """
-    Convert a section of nodes of the pattern:
-    AveragePool -> Trunc (v2)
-    To the FINN op: Div -> QuantAvgPool2d -> Mul
-    """
+    """Converts AveragePool -> Trunc (v2) to Div -> QuantAvgPool2d -> Mul."""
 
     def apply(self, model):
         graph = model.graph
@@ -330,8 +299,6 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                 if t_node is not None and len(t_node) == 1 and t_node[0].op_type == "Trunc":
                     t_node = t_node[0]
                     running_node_index = node_ind
-                    # Check node for compatibility
-                    # Avg pooling node
                     k_s = get_by_name(node.attribute, "kernel_shape")
                     if k_s is None or len(k_s.ints) != 2 or len(set(k_s.ints)) != 1:
                         raise ValueError(
@@ -350,7 +317,6 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                         )
                     stride = stride.ints[0]
 
-                    # Trunc node
                     rounding_mode = get_by_name(t_node.attribute, "rounding_mode")
                     normalized_mode_string = rounding_mode.s.upper()
                     if rounding_mode is None or normalized_mode_string != b"FLOOR":
@@ -392,21 +358,13 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                             f"input bits: {trunc_in_bits}, output bits: {trunc_out_bits}."
                         )
 
-                    # Calculate parameters for the QuantAvgPool2d node,
-                    # Calculate input bit width. Basically this backwards:
-                    # https://github.com/Xilinx/finn-base/blob/
-                    # 7c2603a95e90e4de2575020e575c24eab6a15889/src/finn/custom_op/
-                    # general/quantavgpool2d.py#L94
+                    # The input width whose sum over the window the Trunc narrows.
                     ibits = math.floor(math.log(2**trunc_in_bits / (k_s * k_s), 2))
-                    # Get sign
                     signed = _get_signed_from_upstream(model, t_node)
-                    # ToDo: Change this to NHWC,
-                    #  when the channels last layout comes around.
                     data_layout = "NCHW"
 
-                    # Insert scale nodes, QuantAvgPool2d node and required tensors
                     scale = model.get_initializer(t_node.input[1])
-                    # for Trunc v2 update input scale by receptive field
+                    # Trunc v2's scale is per element of the window.
                     scale = (scale * k_s * k_s).astype(scale.dtype)
                     scale_div_tensor = helper.make_tensor_value_info(
                         model.make_new_valueinfo_name(),
@@ -468,11 +426,9 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                     graph.node.insert(running_node_index, scale_mul_node)
                     running_node_index += 1
 
-                    # Remove old nodes
                     graph.node.remove(node)
                     graph.node.remove(t_node)
 
-                    # Recompute shapes and datatypes
                     model = model.transform(InferShapes())
                     model = model.transform(InferDataTypes())
 

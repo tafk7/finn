@@ -140,7 +140,7 @@ In containers:
 
 ## Parts and custom devices
 
-A kernel-path build names its part (or a board, which names one), and FINN reads
+A build names its part (or a board, which names one), and FINN reads
 the part's facts from its part catalog, `finn.platform.catalog`: every part of
 Zynq-7000, UltraScale, UltraScale+ and Versal that Vivado 2025.2 installs, its
 device, and the device's LUTs, flip-flops, RAMB18s, UltraRAMs and DSPs per SLR.
@@ -492,8 +492,7 @@ transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as t
 tool runs), the intermediate models, and the outputs asked. `report/build.json` is
 the build's manifest, the index of the run a program reads after the exit code, and
 never the log: the build's identity (FINN's revision where it is known, the
-toolchain's selection, the target, the model, and the Vivado release where the build
-probed it: for a board that requires a release, or in a tool step), what checking the
+toolchain's selection, the target and the model), what checking the
 configuration found (its rejections and the limitations warned of), the plan (the steps
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
@@ -530,7 +529,7 @@ made, the pynq shell's `BuildPynqBitfile`, and the command lines
 machine's once and passes it down,
 `finn.toolchain.launcher.host_toolchain()`: the environment as configured (no
 settings script is sourced), under the site command directory
-`FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the machine
+`FINN_TOOL_DIR_OVERRIDE` names, if any, with the HLS frontend of the host
 file's `FINN_XILINX_VERSION` (`vitis-run` from 2025.1, else `vitis_hls`). A
 build prepares one toolchain (the selection its configuration names,
 `DataflowBuildConfig.toolchain`, or the machine's when it names none, on the
@@ -540,16 +539,16 @@ machine's (`host_selection(stated=...)`): each field it states wins, and a field
 it leaves `null` (`command_dir`, `hls_frontend`, `vivado_jobs`) is the machine's, so
 stating one field drops none of the others. How many runs Vivado launches at once is
 the machine setting `FINN_VIVADO_JOBS` (unset: the machine's cores, at most 16), which
-a kernel-path build may state over as `toolchain.vivado_jobs`. Launcher prefixes
+a build may state over as `toolchain.vivado_jobs`. Launcher prefixes
 preserve tool names and do not substitute local absolute vendor executables. The
 site owns remote activation, path visibility and remote cancellation.
 
 A build configuration may name its toolchain, the HLS frontend included; the
 frontend is never guessed from the executables found: it is the one stated, or the
-host file's release's, and `vitis_hls` is refused on 2025.x. A kernel-path build has a configuration of its own,
+host file's release's, and `vitis_hls` is refused on 2025.x. A build's configuration is a
 `finn.builder.build_dataflow_config.DataflowBuildConfig`, written as
 `dataflow_build_config.json` beside `model.onnx`, which `build_dataflow` builds. A
-kernel-path build of TFC for Ultra96 in the
+build of TFC for Ultra96 in the
 Zynq shell, its preprocessing beside the export (the tool environment as configured, so
 the configuration states no `toolchain`):
 
@@ -583,7 +582,7 @@ description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
 AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
 bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
 of `verify_input_npy` or a generated one, checked against the partition in
-Python; `step_run_testbench` runs it); `ooc_synth` synthesizes the IP out of context. Every kernel-path build
+Python; `step_run_testbench` runs it); `ooc_synth` synthesizes the IP out of context. Every build
 writes `report/resources.json`: each member of the shell (the partition, each end,
 each IP of the static region) and their total, as the model states them, as Vivado
 synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
@@ -613,7 +612,8 @@ value of the keyword-only parameter of that name of the steps that declare it
 (`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its
 annotation; a path setting is relative to the build directory. A setting no step of
 the build declares is refused, naming the settings its steps read; steps that declare
-the same name share its value. The preparation steps declare `override_inpsize`
+the same name share its value, and a step that names a parameter like a field is
+refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
 the strategy steps theirs (below); `step_package_partition` and

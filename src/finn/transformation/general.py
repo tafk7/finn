@@ -7,33 +7,27 @@
 #
 ############################################################################
 
-# Note: This transformation is migrated and extended from qonnx.transformation.general
-# For more information on the git history of the file see here:
-# https://github.com/fastmachinelearning/qonnx/blob/
-# abb9eb12e0248014a805f505aacfaeb14d42409a/src/qonnx/transformation/general.py
-
 import json
 import warnings
-
-# Protobuf onnx graph node type
 from onnx import AttributeProto
 from qonnx.custom_op.registry import getCustomOp, is_custom_op
 from qonnx.transformation.base import Transformation
 
 
 class ApplyConfig(Transformation):
-    """Applies node properties (attributes) from either a config dict or its JSON
-    representation given as a filename.
-    The JSON file can specify default values for particular op_types, as well
-    as values for nodes with particular names. Example dict::
+    """Sets custom nodes' attributes from a config dict, or a JSON file of one, by node
+    name; ``Defaults`` sets an attribute on every node of the op types it lists::
 
         {
-        # set kernel_size = 3 for all nodes with op_type=Im2Col
+        # kernel_size = 3 on every Im2Col node
         "Defaults" : {"kernel_size" : [3, ["Im2Col"]]},
-        # set kernel_size = 7 for the particular node with name Im2Col_0
+        # kernel_size = 7 on the node Im2Col_0
         "Im2Col_0" : {"kernel_size" : 7}
         }
 
+    A node in a subgraph is named by its parents and their graph attributes, joined
+    by ``_``. Nodes without an entry, entries for standard nodes and entries no node
+    used are warned of.
     """
 
     def __init__(self, config, node_filter=lambda x: True):
@@ -45,8 +39,6 @@ class ApplyConfig(Transformation):
         self.ignored_non_custom_configurations = []
 
     def configure_network(self, graph_proto, model_config, subgraph_hier):
-        # Configure network - graph_proto can be a GraphProto or ModelWrapper
-        # If it's a ModelWrapper, get the graph
         if hasattr(graph_proto, "graph"):
             graph = graph_proto.graph
         else:
@@ -56,7 +48,6 @@ class ApplyConfig(Transformation):
             if not self.node_filter(node):
                 continue
 
-            # Build the config key by prepending hierarchy
             config_key = (
                 node.name if subgraph_hier is None else str(subgraph_hier) + "_" + node.name
             )
@@ -71,7 +62,6 @@ class ApplyConfig(Transformation):
                 inst = getCustomOp(node)
 
                 if "Defaults" in model_config.keys():
-                    # set specified defaults
                     default_values = []
                     for key, value in model_config["Defaults"].items():
                         assert len(value) % 2 == 0
@@ -87,17 +77,7 @@ class ApplyConfig(Transformation):
                     for attr_name, value in default_configs.items():
                         inst.set_nodeattr(attr_name, value)
 
-                # set node attributes from specified configuration
                 for attr_name, value in node_config.items():
-                    if attr_name == "impl_style" and node.op_type.startswith("StreamingFIFO"):
-                        # impl_style was retired for FIFOs (fifo.sv is the only backend).
-                        # Tolerate it in old configs for now, but flag it as a no-op.
-                        warnings.warn(
-                            "Setting 'impl_style' on %s is meaningless and will raise an "
-                            "error in a future release; remove it from your config." % node.name,
-                            DeprecationWarning,
-                        )
-                        continue
                     inst.set_nodeattr(attr_name, value)
 
                 if node_config:
@@ -105,15 +85,12 @@ class ApplyConfig(Transformation):
             elif node_config:
                 self.ignored_non_custom_configurations += [(config_key, node.op_type)]
 
-            # Recursively handle nested subgraphs
             for attr in node.attribute:
                 if attr.type == AttributeProto.GRAPH:
-                    # Build the subgraph hierarchy including the attribute name
                     if subgraph_hier is None:
                         new_hier = node.name
                     else:
                         new_hier = str(subgraph_hier) + "_" + node.name
-                    # Include the subgraph attribute name in the hierarchy
                     new_hier = new_hier + "_" + attr.name
                     self.configure_network(attr.g, model_config, subgraph_hier=new_hier)
 
@@ -124,18 +101,13 @@ class ApplyConfig(Transformation):
             with open(self.config, "r") as f:
                 model_config = json.load(f)
 
-        # apply configuration on upper level
         self.configure_network(model.model.graph, model_config, subgraph_hier=None)
 
-        # Configuration verification
-        # Remove duplicates from missing_configurations
-        # (can happen with shared subgraphs in If nodes)
+        # Shared subgraphs (an If node's) report a node more than once.
         unique_missing = list(dict.fromkeys(self.missing_configurations))
         if len(unique_missing) > 0:
             warnings.warn("\nNo HW configuration for nodes: " + ", ".join(unique_missing))
 
-        # Check for matched configs that couldn't be applied because they were
-        # specified for standard ONNX nodes instead of custom ops.
         unique_non_custom = list(dict.fromkeys(self.ignored_non_custom_configurations))
         if len(unique_non_custom) > 0:
             formatted_non_custom = [
@@ -147,7 +119,6 @@ class ApplyConfig(Transformation):
                 + ". Configs can only be applied to custom ops."
             )
 
-        # Check for unused configs (top-level configs that weren't applied)
         ignored_configurations = [
             config_key for config_key, _ in self.ignored_non_custom_configurations
         ]
@@ -161,5 +132,4 @@ class ApplyConfig(Transformation):
         if len(unused_configs) > 0:
             warnings.warn("\nUnused HW configurations: " + ", ".join(unused_configs))
 
-        # one iteration is enough
         return (model, False)

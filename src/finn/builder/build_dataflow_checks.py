@@ -11,7 +11,6 @@ from finn.builder.build_dataflow_config import (
     OUTPUT_NEEDS,
     SHELL_OUTPUTS,
     DataflowBuildConfig,
-    DataflowOutputType,
     config_finding,
 )
 from finn.builder.build_dataflow_plan import Plan
@@ -23,21 +22,11 @@ from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
 
 
-def _warning(code: str, message: str, place: str) -> Finding:
-    """A limitation: logged as a warning, and the build runs."""
-    return config_finding(code, message, place, FindingKind.LIMITATION)
-
-
-def required_vivado(target: Target) -> tuple[int, int] | None:
-    """The Vivado release the target's board requires (``Board.vivado``), if any."""
-    return None if target.board is None else BOARDS[target.board].vivado
-
-
 def _board_vivado(cfg: DataflowBuildConfig, target: Target) -> list[Finding]:
     """The rejection of a toolchain whose Vivado is older than the release the target's
     board requires, or that has none. Vivado is asked its release only for such a
     board."""
-    required = required_vivado(target)
+    required = None if target.board is None else BOARDS[target.board].vivado
     if required is None:
         return []
     needed = "%d.%d" % required
@@ -67,7 +56,7 @@ def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target)
             "its outputs are the packaged IP's (stitched_ip, ooc_synth)"
         )
         findings.append(config_finding("shell-outputs", message, "configuration.generate_outputs"))
-    asked = {DataflowOutputType(output) for output in cfg.generate_outputs}
+    asked = set(cfg.generate_outputs)
     for output, needs in OUTPUT_NEEDS.items():
         missing = [need.value for need in needs if output in asked and need not in asked]
         if missing:
@@ -86,5 +75,6 @@ def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target)
     for name in sorted(name for name in cfg.settings if name not in read):
         readers = ", ".join(plan.settings[name].readers)
         message = f"only {readers} read it, and start_step/stop_step leave them out"
-        findings.append(_warning("setting-unread", message, f"configuration.{name}"))
+        place = f"configuration.{name}"
+        findings.append(config_finding("setting-unread", message, place, FindingKind.LIMITATION))
     return findings

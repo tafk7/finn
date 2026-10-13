@@ -195,7 +195,7 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # Graph preparation's transforms: the front end that takes an export to the graph the
-    # kernel path converts (Quant lowering, streamlining); the builder's preparation steps
+    # build converts (Quant lowering, streamlining); the builder's preparation steps
     # run them. It reads no target: neither the platform registry nor the KernelOps.
     Layer(
         "preparation",
@@ -271,7 +271,7 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),
-    # The kernel path's partition node, its ONNX domain (finn.custom_op.partition): it
+    # The build's partition node, its ONNX domain (finn.custom_op.partition): it
     # runs its body with the executors of the run that reached it
     # (finn.core.onnx_exec.running), imported when it runs.
     Layer(

@@ -3,15 +3,11 @@
 
 """The build's manifest, ``report/build.json``: the index of one run of
 ``build_dataflow_cfg``. A program reads the exit code, then the manifest, then the
-reports it lists, and never the build's log.
-
-The model and the manifest index different things: the model indexes the design and
-the artifacts a later step uses (``finn.outputs``); the manifest indexes the run:
+reports it lists, never the build's log. The model indexes the design and what a later
+step uses; the manifest indexes the run:
 
 - ``identity``: what ran it: FINN's revision where it is known (``finn_revision``), the
-  toolchain's selection, the target, the model read, the output directory, and, where
-  the build ran a tool or checked the release its board requires, the Vivado release
-  the toolchain's probe found;
+  toolchain's selection, the target, the model read and the output directory;
 - ``plan``: the steps the build runs (finn.builder.build_dataflow_plan), by name, and
   each setting with its value, whether the configuration gave it (else its default), and
   the steps that read it;
@@ -32,13 +28,12 @@ the artifacts a later step uses (``finn.outputs``); the manifest indexes the run
   ``refused`` before the first step, with the error (a refused configuration's findings
   are its ``configuration_findings``).
 
-The file is rewritten atomically (a temporary file renamed over it) whenever it
-changes, so a build stopped at any point leaves the last state it reached; a killed
-build's step stays ``running``. Steps report what they did in log records of one logger,
-``finn.toolchain.launcher.RECORDS``, which the build's ``ManifestHandler`` collects: a
-report written (``REPORT``: ``reported``, ``write_report``), a verdict (``VERIFICATION``:
-``verdict``), a tool run (``finn.toolchain.launcher.TOOL_RUN``). Of a report, only its
-findings' counts are copied. Paths inside the output directory are written relative to
+The file is replaced whole whenever it changes, so a build stopped at any point leaves
+the last state it reached; a killed build's step stays ``running``. Steps report what
+they did in log records of one logger, ``finn.toolchain.launcher.RECORDS``, which the
+build's ``ManifestHandler`` collects: a report written (``reported``, ``write_report``),
+a verdict (``verdict``), a tool run (``finn.toolchain.launcher.TOOL_RUN``). Of a report,
+only its findings' counts are copied. Paths inside the output directory are relative to
 it.
 """
 
@@ -64,30 +59,27 @@ MANIFEST_FILE = "report/build.json"
 
 #: The ``extra`` key of a log record for a report a step wrote: its path.
 REPORT = "finn_report"
-#: The ``extra`` key of a log record for a verification's verdict: ``{"name",
-#: "passed"}``.
+#: The ``extra`` key of a log record for a check's verdict: ``{"name", "passed"}``.
 VERIFICATION = "finn_verification"
 
 PASS, FAIL = "pass", "fail"
 
 
 def reported(path: str | os.PathLike[str]) -> None:
-    """Log ``wrote <path>`` for a report the running step wrote: the manifest lists it
-    under that step, with its findings (``REPORT``)."""
+    """Log a report the running step wrote, which the manifest lists under the step."""
     RECORDS.info(f"wrote {path}", extra={REPORT: os.fspath(path)})
 
 
 def write_report(path: Path, stated: Any) -> None:
-    """Write ``stated`` as JSON into the report ``path``, its directory made, and log it
-    (``reported``)."""
+    """Write ``stated`` as JSON into the report ``path`` and log it (``reported``)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(stated, indent=2))
     reported(path)
 
 
 def verdict(name: str, passed: bool) -> None:
-    """Log the verdict of the verifying step ``name``, ``Verification for <name> :
-    SUCCESS`` or ``FAIL`` (a warning); the manifest records it (``VERIFICATION``)."""
+    """Log the verdict of the check ``name``, a failure as a warning; the manifest
+    records it."""
     stated = {VERIFICATION: {"name": name, "passed": passed}}
     if passed:
         RECORDS.info(f"Verification for {name} : SUCCESS", extra=stated)
@@ -98,8 +90,8 @@ def verdict(name: str, passed: bool) -> None:
 @functools.cache
 def finn_revision() -> dict[str, Any] | None:
     """The FINN revision running: the one an installed FINN recorded when it was built
-    (``finn/_build_info.json``), else its git checkout's (``revision``, and ``dirty``:
-    whether a tracked file differs); None if neither is known. Read once per process."""
+    (``finn/_build_info.json``), else its git checkout's, with whether a tracked file
+    differs (``dirty``); None if neither is known."""
     package = Path(__file__).resolve().parents[1]
     recorded = package / "_build_info.json"
     if recorded.is_file():
@@ -125,9 +117,8 @@ def finn_revision() -> dict[str, Any] | None:
 
 
 def findings_by_code(value: Any) -> dict[str, int]:
-    """A report's findings counted by code: each finding record
-    (``finn.core.space.finding_record``) in a list under a ``findings`` key, at any depth
-    of the report except inside another finding."""
+    """A report's findings counted by code: each finding record in a list under a
+    ``findings`` key, at any depth of the report except inside another finding."""
     counts: Counter[str] = Counter()
 
     def walk(node: Any) -> None:
@@ -160,8 +151,8 @@ def _report_findings(path: Path) -> dict[str, int]:
 
 
 def _messages(transcript: Path) -> dict[str, int]:
-    """A tool run's messages by severity (``finn.toolchain.vivado.messages``), from both
-    files of its transcript, whose standard output's file is ``transcript``."""
+    """A tool run's messages by severity, from both files of the transcript whose
+    standard output is ``transcript``."""
     stem = str(transcript).removesuffix(".stdout.log")
     counts: Counter[str] = Counter()
     for each in transcript_files(stem):
@@ -173,8 +164,8 @@ def _messages(transcript: Path) -> dict[str, int]:
 
 
 class Manifest:
-    """The ``report/build.json`` of the build into ``output_dir``, written whenever it
-    changes (see the module docstring). ``identity`` is the build's identity so far."""
+    """The manifest of the build into ``output_dir``, written whenever it changes;
+    ``identity`` is the build's identity so far."""
 
     def __init__(self, output_dir: str | os.PathLike[str], identity: Mapping[str, Any]) -> None:
         self.directory = Path(output_dir)
@@ -193,8 +184,7 @@ class Manifest:
         self.write()
 
     def relative(self, path: str | os.PathLike[str]) -> str:
-        """``path`` relative to the output directory when it is inside it, else as
-        given."""
+        """``path`` relative to the output directory when it is inside it."""
         given = Path(path)
         try:
             return str(given.resolve().relative_to(self.directory.resolve()))
@@ -205,7 +195,7 @@ class Manifest:
         """Write the manifest as it is now: a temporary file beside it, renamed over it."""
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            # One writer per process (the lock); the file gets the process's umask mode.
+            # The pid keeps processes' temporary files apart; the lock, a process's threads.
             temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}")
             with open(temporary, "w") as f:
                 json.dump(self.state, f, indent=2)
@@ -269,8 +259,8 @@ class Manifest:
             self.write()
 
     def tool_run(self, fields: Mapping[str, Any]) -> None:
-        """Record a tool run's start or end (``finn.toolchain.launcher.TOOL_RUN``) in the
-        running step; at its end, add its messages by severity."""
+        """Record a tool run's start or end in the running step; at its end, with its
+        messages by severity."""
         with self._lock:
             run = fields["run"]
             if fields.get("status") == "running":
@@ -299,14 +289,14 @@ class Manifest:
     def failed(self, step: str, kind: str, error: BaseException) -> None:
         """Record that the build failed in ``step`` with ``error`` of ``kind``, with a
         refusal's findings by code."""
-        findings = [finding_record(each) for each in getattr(error, "findings", ())]
+        codes = Counter(each.code for each in getattr(error, "findings", ()))
         with self._lock:
             self.state["outcome"] = {
                 "status": "failed",
                 "step": step,
                 "kind": kind,
                 "error": {"type": type(error).__name__, "message": str(error)},
-                "findings": findings_by_code({"findings": findings}),
+                "findings": dict(sorted(codes.items())),
             }
             self.write()
 
@@ -321,9 +311,8 @@ class Manifest:
 
 
 class ManifestHandler(logging.Handler):
-    """Collects into ``manifest`` what the records of ``finn.toolchain.launcher.RECORDS``
-    carry: the reports written (``REPORT``), the verdicts (``VERIFICATION``) and the tool
-    runs (``finn.toolchain.launcher.TOOL_RUN``)."""
+    """Collects into ``manifest`` the reports, verdicts and tool runs the records of
+    ``finn.toolchain.launcher.RECORDS`` carry."""
 
     def __init__(self, manifest: Manifest) -> None:
         super().__init__(logging.NOTSET)

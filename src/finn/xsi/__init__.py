@@ -11,8 +11,8 @@
 This module provides utilities for RTL simulation support via finn_xsi. The
 finn_xsi C++ extension is built against the Vivado of the toolchain it is given on
 first use; ``python -m finn.xsi.setup`` builds it ahead of time, against the
-machine's. The kernel path simulates through ``finn.core.rtlsim_bench`` and does not
-use this package.
+machine's. A build and the kernel tests simulate through ``finn.core.rtlsim_bench``,
+which does not use this package.
 
 Usage:
     from finn import xsi

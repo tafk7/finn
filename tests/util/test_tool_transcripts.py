@@ -11,7 +11,6 @@ from __future__ import annotations
 import pytest
 
 import os
-import pickle
 import subprocess
 import sys
 import threading
@@ -123,8 +122,6 @@ def test_where_a_runs_transcript_goes(tmp_path):
     assert (logs / "make.sh.2.stderr.log").read_text() == ""
     # The replay is still written where the caller says.
     assert (tmp_path / "make.sh").read_text().endswith("vivado\n")
-    # The directory crosses into a worker process with the toolchain.
-    assert pickle.loads(pickle.dumps(step)).transcripts == logs
 
 
 def test_a_probe_keeps_no_transcript(tmp_path):

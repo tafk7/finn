@@ -55,7 +55,7 @@ def host_model(model: ModelWrapper, directory: Path) -> Path:
 
 
 class MakePynqDeployment(Transformation):
-    """The deployment package of the kernel path's parent graph, into ``deploy/`` under
+    """The deployment package of the build's parent graph, into ``deploy/`` under
     the output ``directory``, written afresh: the bitfile, the driver, the host's model
     (``deploy/model/``, ``host_model``) and the driver's description
     (``deploy/driver.json``). Its shell is the target the partition's body states

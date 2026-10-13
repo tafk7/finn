@@ -24,7 +24,7 @@ SHELL_NAMES = (IP, PYNQ, XRT, SLASH)
 """Every shell a build may name."""
 
 NOT_BUILT = {XRT: "the Vitis (XRT) shell", SLASH: "the SLASH shell"}
-"""Shells a build may name that the kernel path does not build, so they are refused."""
+"""Shells a build may name that FINN does not build, so they are refused."""
 
 VIVADO_BLOCK_DESIGN = "vivado-block-design"
 """The integration of the Zynq shell (``ShellRow.integration``)."""
@@ -217,12 +217,12 @@ ROWS: dict[tuple[str, str | None], ShellRow] = {
 
 
 def built_shell(shell: str) -> str:
-    """Return ``shell`` if the kernel path builds it; refuse it otherwise."""
+    """Return ``shell`` if FINN builds it; refuse it otherwise."""
     if shell in NOT_BUILT:
         raise TargetRefused(
             "unsupported-shell",
             f"{shell!r} ({NOT_BUILT[shell]}) is named but not built: "
-            f"the kernel path builds {IP!r} and {PYNQ!r}",
+            f"FINN builds {IP!r} and {PYNQ!r}",
         )
     if shell not in SHELL_NAMES:
         raise TargetRefused("unknown-shell", f"{shell!r} is not a shell (one of {SHELL_NAMES})")

@@ -77,7 +77,7 @@ kept and re-baselined.
 The strategies, each an objective and its constraints searched through the seam:
 
 - ``Pinned(path)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
-  a kernel's under its node, a channel's under its tensor, the form the kernel path's
+  a kernel's under its node, a channel's under its tensor, the form the build's
   ``kernel_choices.json`` takes), set as one batch and held;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),

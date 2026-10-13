@@ -48,9 +48,9 @@ def _drop_tensor_layout(model, tensor_name):
 
 
 class FoldQuantWeights(Transformation):
-    """Merges Quant nodes, which are used as weights into the initializer
-    of the weight tensor.
-    """
+    """Folds each Quant node of a weight into the weight's initializer: as it is, at
+    unit scale; else as integers, the scale moved behind the weight's consumer (and,
+    for an Add or Sub, ahead of its other input)."""
 
     def apply(self, model):
         graph = model.graph
@@ -68,7 +68,6 @@ class FoldQuantWeights(Transformation):
                 ishape = model.get_tensor_shape(n.input[0])
                 is_const_shape = (n.op_type == "Shape") and (ishape is not None)
                 if is_all_constant_inputs or is_const_shape:
-                    # Check node validity
                     if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
                         raise ValueError(
                             "Only Quant nodes with zero-point == 0 " "are currently supported."
@@ -85,34 +84,24 @@ class FoldQuantWeights(Transformation):
                         )
                     else:
                         target_node = target_node[0]
-                    # If there is a DebugMarker in the weight path,
-                    # then the DebugMarker needs to be removed before any further
-                    # action is taken. Because this node interferes
-                    # with how the constant folding tries to determine how to
-                    # apply scale factors and in any case the DebugMarker would not
-                    # return useful information after folding.
+                    # A DebugMarker on the weight's path would hide its consumer from the
+                    # folding, and would mark nothing after it.
                     if target_node.op_type == "DebugMarker":
                         remove_node_and_rewire(model, target_node)
                         model = model.transform(FoldTransposeIntoQuantInit())
                         return model, True
 
-                    # Continue with constant folding the quant node
                     scale = model.get_initializer(n.input[1])
                     unity_scale = (scale.flatten() == 1.0).all()
-                    # this node has no dynamic inputs, only constant ones -- so we can
-                    # do constant folding.
                     if n.domain in opset_imports:
                         opset_version = opset_imports[n.domain]
                     else:
                         opset_version = get_preferred_qonnx_opset()
                     oxe.execute_node(n, execution_context, graph, opset_version)
                     q_node_output = execution_context[node_out]
-                    # Check we can directly constant fold
                     if unity_scale:
-                        # use the execution result as an initializer
                         model.set_initializer(node_out, q_node_output)
                     else:
-                        # Check next operator type
                         mul_like_nodes = [
                             "Mul",
                             "Div",
@@ -132,8 +121,6 @@ class FoldQuantWeights(Transformation):
                                 f"at node: {target_node}."
                             )
 
-                        # if quant node from bias,
-                        # throw error because only weights can be folded for Conv and ConvTranspose
                         if (
                             target_node.op_type in ["Conv", "ConvTranspose"]
                             and len(target_node.input) > 2
@@ -143,41 +130,31 @@ class FoldQuantWeights(Transformation):
                             ), f"""Can't fold {target_node.op_type} bias,
                             please run ExtractBiasFromConv first."""
 
-                        # For both mul and Add:
-                        # Move the scale factor behind the next operator
                         scale = model.get_initializer(n.input[1])
                         new_initializer = q_node_output / scale
-                        # Round, to correct for floating point errors
+                        # Rounding corrects the floating point error of the division.
                         new_initializer = np.round(new_initializer)
                         model.set_initializer(node_out, new_initializer)
                         q_inst = getCustomOp(n)
                         new_dtype = q_inst.get_integer_datatype(model)
                         model.set_tensor_datatype(node_out, new_dtype)
 
-                        # Reshape scale for Conv if required
                         target_output_shape = model.get_tensor_shape(target_node.output[0])
                         if target_node.op_type == "Conv" and len(scale.shape) > 0:
                             conv_out_shape = [1] * len(target_output_shape)
-                            # only support per-output channel scaling
-                            # (i.e. all scale shape elems besides 0th must be 1s)
                             if len(scale.shape) > 1:
                                 assert (
                                     np.prod(scale.shape[1:]) == 1
                                 ), "Can't fold scale beyond per-out-channel granularity"
-                            # collect all scaling in channels dim (since we constrain)
                             conv_out_shape[1] = -1
                             scale = scale.reshape(conv_out_shape)
 
-                        # Reshape scale for ConvTranpose if required
                         if target_node.op_type == "ConvTranspose" and len(scale.shape) > 0:
                             conv_out_shape = [1] * len(target_output_shape)
-                            # only support per-output channel scaling
-                            # (i.e. all scale shape elems besides 1st must be 1s)
                             if len(scale.shape) > 1:
                                 assert (
                                     np.prod(scale.shape[2:]) == 1 and scale.shape[0] == 1
                                 ), "Can't fold scale beyond per-out-channel granularity"
-                            # collect all scaling in channels dim (since we constrain)
                             conv_out_shape[1] = -1
                             scale = scale.reshape(conv_out_shape)
 
@@ -189,8 +166,7 @@ class FoldQuantWeights(Transformation):
                         mul_tensor = helper.make_tensor_value_info(
                             model.make_new_valueinfo_name(),
                             TensorProto.FLOAT,
-                            mul_shape,  # Note: This shape is known exactly as
-                            # it is an initializer with known shape
+                            mul_shape,
                         )
                         graph.value_info.append(mul_tensor)
                         model.set_initializer(mul_tensor.name, scale)
@@ -208,9 +184,7 @@ class FoldQuantWeights(Transformation):
                         act_mul_tensor = helper.make_tensor_value_info(
                             model.make_new_valueinfo_name(),
                             TensorProto.FLOAT,
-                            None,  # Note: Explicitly delete the shape
-                            # annotation to be redone by the next shape
-                            # inference
+                            None,
                         )
                         graph.value_info.append(act_mul_tensor)
                         successor.output[0] = act_mul_tensor.name
@@ -223,21 +197,15 @@ class FoldQuantWeights(Transformation):
                         graph.node.insert(node_ind, mul_node)
 
                         if target_node.op_type in add_like_nodes:
-                            # Move the scale factor behind also in-front of
-                            # the next operator
+                            # The other input is divided by the scale too.
                             div_tensor = helper.make_tensor_value_info(
                                 model.make_new_valueinfo_name(),
                                 TensorProto.FLOAT,
-                                None,  # Note: Explicitly delete the shape
-                                # annotation to be redone by the next shape
-                                # inference
+                                None,
                             )
                             graph.value_info.append(div_tensor)
                             model.set_initializer(div_tensor.name, scale)
 
-                            # Detect which input of the add-like successor is
-                            # fed by the quantizer node to select the other
-                            # branch to insert the scale factor
                             if successor.input[0] == node_out:
                                 succ_input_name = successor.input[1]
                             else:
@@ -246,15 +214,10 @@ class FoldQuantWeights(Transformation):
                             act_mul_tensor = helper.make_tensor_value_info(
                                 model.make_new_valueinfo_name(),
                                 TensorProto.FLOAT,
-                                None,  # Note: Explicitly delete the shape
-                                # annotation to be redone by the next shape
-                                # inference
+                                None,
                             )
                             graph.value_info.append(act_mul_tensor)
 
-                            # Detect which input of the add-like successor is
-                            # fed by the quantizer node to select the other
-                            # branch to insert the scale factor
                             if successor.input[0] == node_out:
                                 successor.input[1] = act_mul_tensor.name
                             else:
@@ -267,14 +230,12 @@ class FoldQuantWeights(Transformation):
                             )
                             graph.node.insert(node_ind, div_node)
 
-                    # The folded weight is a constant, not the Quant's dynamic output:
-                    # a data layout inferred for that output does not describe it.
+                    # A data layout inferred for the Quant's output does not describe the
+                    # folded constant.
                     _drop_tensor_layout(model, node_out)
-                    # remove old node
                     graph.node.remove(n)
                     graph_modified = True
-                    # Note: Running shape inference is necessary as shape
-                    # annotations have been deleted above
+                    # The new tensors' shapes are left to shape inference.
                     model = model.transform(InferShapes())
                     return (model, graph_modified)
         return (model, graph_modified)

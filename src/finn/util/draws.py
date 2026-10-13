@@ -46,14 +46,6 @@ def _bounds(model: ModelWrapper, tensor: str) -> tuple[int, int]:
     return ordinary_integer_bounds(model.get_tensor_datatype(tensor))
 
 
-def _shape(model: ModelWrapper, tensor: str) -> tuple[int, ...]:
-    """``tensor``'s shape; one the graph does not state in full is refused."""
-    found = model.get_tensor_shape(tensor)
-    if not found or any(type(dim) is not int or dim < 1 for dim in found):
-        raise ValueError(f"{tensor} states no shape")
-    return tuple(found)
-
-
 def boundary_inputs(model: ModelWrapper, seed: int) -> dict[str, Integers]:
     """Each graph input's values: random integers of its annotation, seeded, with its
     extremes in its first two rows."""
@@ -61,7 +53,9 @@ def boundary_inputs(model: ModelWrapper, seed: int) -> dict[str, Integers]:
     found = {}
     for name in graph_inputs(model):
         low, high = _bounds(model, name)
-        shape = _shape(model, name)
+        shape = model.get_tensor_shape(name)
+        if not shape or any(type(dim) is not int or dim < 1 for dim in shape):
+            raise ValueError(f"{name} states no shape")
         values = rng.integers(low, high + 1, size=shape, dtype=np.int64)
         rows = values.reshape(prod(shape[:-1]), shape[-1])
         if rows.shape[0] >= 2:

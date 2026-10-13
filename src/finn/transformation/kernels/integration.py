@@ -1,10 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The integration export: what a shell's integration builds around the kernel path's
+"""The integration export: what a shell's integration builds around the build's
 partition, read from its shell root's ends.
 
-``integration(model)`` takes the kernel path's parent graph (its one partition node,
+``integration(model)`` takes the build's parent graph (its one partition node,
 ``finn.core.graph.partition.partition_body``), configures the partition's shell root as hardware
 generation does (``configured_root``) and reads the ends its boundary channels place
 (``Channel.end_contract``) and its shell's row. For the Zynq block design
@@ -230,7 +230,7 @@ def _aperture(bus: Bus, least: int) -> int:
 
 
 def integration(model: ModelWrapper) -> Integration:
-    """The integration export of the kernel path's parent graph ``model``: its partition's
+    """The integration export of the build's parent graph ``model``: its partition's
     shell root, as emission builds it (``configured_root``), in its shell's integration
     (see the module docstring)."""
     node, body, _ = partition_body(model)
