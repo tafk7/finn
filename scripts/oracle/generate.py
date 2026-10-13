@@ -46,8 +46,8 @@ import sys
 from pathlib import Path
 
 PIN = "b507fec5865f07013d590fc798ec9f73127354de"
-"""finn-dev's ``dev`` at the line's merge-base with upstream (2026-09-25, "Merge pull
-request #1707 from Xilinx/feature/requantf"): the project's ``finn-oracle`` pin."""
+"""finn-dev at upstream's dev at 2026-09-25 (PR #1707), the line's merge base until the
+upstream sync merge of 2026-10: the project's ``finn-oracle`` pin."""
 SHORT = PIN[:9]
 PYTHON = "3.12"
 """The pin's Docker image is Ubuntu noble, whose Python is 3.12."""
