@@ -1,13 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Replay: persisted choices committed on a kernel point.
+"""Replay: a node's stored choices applied to its point, all together or none.
 
-A node's choices and its owned channels' are committed atomically on the node's cached
-base point (``committed``), each typed as its Decision takes it (``typed_choices``: an
-ONNX ``i`` attribute of a ``bool`` Decision becomes a bool). A refusal names every
-refused key with why (``refusal``), an inapplicable one too, which carries no finding
-of its own.
+A stored choice under a selector that no stored choice sets (``compute.packed.pe`` with
+``compute`` open) applies once the selector has a single viable case, which the Space
+then forces; forced cases are never stored.
 """
 
 from __future__ import annotations
@@ -44,8 +42,8 @@ def refusal(label: str, found: Mapping[str, str]) -> KernelOpError:
 
 
 def committed(point: S, choices: Mapping[str, object]) -> S | dict[str, str]:
-    """``choices`` committed on ``point`` atomically, or each refused key with why. An
-    inapplicable key carries no finding of its own, so it is named here."""
+    """``point`` with all of ``choices`` committed, or each refused key with why. An
+    inapplicable key has no finding of its own, so it is named here."""
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     found = {key: "not a choice here" for key in choices if key not in handles}
     if found:

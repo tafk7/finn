@@ -1,12 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A channel's choices in graph metadata: the ``finn.channel`` namespace, on the tensor
-the channel carries.
+"""A channel's choices, stored as metadata on the tensor the channel carries (the
+``finn.channel`` namespace).
 
-The keys are generated from the Decisions ``Channel`` declares, each typed by its
-value semantics (``value_type``) and a selector's values its cases. The choices are
-stated in a partition's body only: a graph with nodes on the host states none.
+A channel belongs to its tensor, not to the nodes at its ends, so its choices are
+stored there, and only in a partition's body.
 """
 
 from __future__ import annotations
@@ -25,17 +24,12 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 CHANNEL = Namespace("finn.channel", version=1, follow=True)
-"""A channel's stated choices, typed metadata of the tensor it carries (qonnx's
-``qonnx.core.metadata``; entries ``finn.channel/transport``), each at its baseline from
-the cut on (``BaselineChoices``) until a strategy replaces it; absent only on a body no
-cut created or for a required choice (a FIFO's depth) no strategy has set. One key per
-Decision ``Channel`` declares (``CHANNEL_KEYS``), generated from them
-as a KernelOp's schema is from its node root, its type the Decision's value semantics'
-and a selector's values its cases. Stated in a partition's body only
-(``channel_choices``). It follows its tensor into the body the cut makes, and the cut
-clears the parent's copy, so a channel has one home. A tensor stating another shape of
-it (a key ``Channel`` does not declare, or another version) is refused, by name: the
-partition is explored again."""
+"""Where a channel's choices are stored: metadata on the tensor the channel carries
+(``finn.channel/<key>``), one key per decision of ``Channel`` (``CHANNEL_KEYS``). Only a
+partition's body holds them: the cut moves them there and clears the parent's copy.
+Each is set to its baseline at the cut; a required one (a FIFO's depth) stays unset
+until a strategy sets it. A tensor with a key ``Channel`` does not declare, or another
+version of the namespace, is refused by name."""
 
 CHANNEL_TYPES: dict[str, type] = {"int": int, "bool": bool, "str": str}
 
@@ -66,10 +60,8 @@ CHANNEL_KEYS: dict[str, Key[Any]] = {
 
 
 def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
-    """Refuse the channel choices ``tensors`` state, by name, unless ``model`` is a
-    partition's body (its nodes all KernelOps): a graph with nodes on the host (the
-    whole graph, before the cut) states none; the build's choices come in through
-    ``kernel_choices.json`` (``Pinned``), which exploration applies to the body."""
+    """Refuse channel choices on ``tensors``, by name, unless ``model`` is a partition's
+    body. A build sets them through ``kernel_choices.json`` instead."""
     named = list(tensors)
     if not named or is_kernel_partition(model):
         return
@@ -86,9 +78,8 @@ def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
 
 
 def channel_choices(model: ModelWrapper, tensor: str) -> dict[str, object]:
-    """The choices ``tensor``'s channel states (``CHANNEL``), by key: only those present.
-    Stated outside a partition's body (``refuse_outside_body``), or in a shape
-    ``CHANNEL`` does not declare, they are refused, by name."""
+    """The choices stored on ``tensor``'s channel, by key: only those present. Refused
+    outside a partition's body, or under keys ``CHANNEL`` does not declare."""
     try:
         stated: dict[str, object] = model.namespace(CHANNEL, tensor=tensor)
     except MetadataError as error:
@@ -103,7 +94,7 @@ def channel_choices(model: ModelWrapper, tensor: str) -> dict[str, object]:
 
 
 def clear_channel_choices(model: ModelWrapper) -> None:
-    """Clear the choices every tensor's channel states (``CHANNEL``)."""
+    """Clear the channel choices stored on every tensor."""
     for tensor in model.tensors_stating(CHANNEL):
         model.clear(CHANNEL, tensor=tensor)
 

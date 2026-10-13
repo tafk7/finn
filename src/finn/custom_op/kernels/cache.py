@@ -1,31 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The bind cache: node-root points keyed by the facts they were bound from, by value.
+"""The bind cache: bound node roots, keyed by the facts they were bound from.
 
-qonnx builds a fresh op instance for every query, and a point answers each query
-from what it has evaluated (its views, its forced Decisions), which a fresh
-binding would derive again. So an op binds through one process-wide cache,
-three kinds of point, all of its node root:
-
-- **on its inputs**, from the kernel's formals, the tensor of each input channel
-  the graph states (``x_tensor``, ``w_tensor``) and the value of each
-  initializer the node owns (``w_contents``), its outputs absent: what
-  inference reads (``result_tensor``, which may derive from an input channel's
-  value), before any output of the node is known;
-- **whole**, nothing chosen: the same and each output's tensor (``y_tensor``);
-- whole with **choices** replayed, because replay evaluates a new
-  configuration from its facts again.
-
-A key is the facts by value, an initializer by its value summary's
-``content_digest``, beside the class it binds, and the tensors bound.
-
-Points are immutable (replay returns successors), so sharing one across op
-instances and models is sound, and keys are values, so nothing is ever
-invalidated: changed facts are another key. The bound is memory: a
-least-recently-used cache of entries, base and replayed points alike
-(``LeastRecentlyUsed``, which also keeps the shell roots' composite classes,
-``finn.custom_op.kernels.shell``).
+qonnx creates a new op instance for every call, so without a cache a KernelOp would
+bind its kernel again each time, and evaluate again what the bound point had already
+evaluated. Bound points never change and are keyed by value (an initializer by its
+content digest), so one can be shared between instances and models, and a cached point
+never goes stale: changed facts make a new key. The cache is a bounded LRU
+(``LeastRecentlyUsed``, which the shell roots use too).
 """
 
 from __future__ import annotations
@@ -45,12 +28,11 @@ V = TypeVar("V")
 
 @dataclass(frozen=True)
 class Facts:
-    """What binding a node reads: its op's node root class; the key that identifies the
-    kernel's formals and the node's values by value; the formals (a thunk, called only
-    on a miss); the tensor of each input channel and of each output channel, by port, as
-    the graph states them (thunks: an output's is known only once inference wrote it);
-    the value of each parameter port the node owns (an initializer's), by port (a thunk);
-    and those ports."""
+    """What binding a node reads: the node root class, a key that identifies the facts
+    by value, and functions that give the kernel arguments and the held initializers'
+    values (called only on a cache miss) and the channels' tensors by port (an output's
+    is known only once inference has written it). ``owned`` lists the ports whose
+    initializer the node holds."""
 
     root: type[Kernel]
     key: tuple[Hashable, ...]
@@ -124,8 +106,9 @@ class BindCache(LeastRecentlyUsed[Kernel]):
     def configured(
         self, facts: Facts, choices: Mapping[str, object], build: Callable[[Kernel], Kernel]
     ) -> Kernel:
-        """The point ``build`` replays ``choices`` onto from the base point; a refusal
-        raises out of ``build`` and caches nothing."""
+        """The point with ``choices`` applied, made by ``build`` from the base point and
+        cached by facts and choices. A refusal raises out of ``build`` and caches
+        nothing."""
         chosen = tuple(sorted((key, type(value).__name__, value) for key, value in choices.items()))
         key, _ = self._bound(facts, outputs=True)
         return self.get((*key, chosen), lambda: build(self.point(facts)))

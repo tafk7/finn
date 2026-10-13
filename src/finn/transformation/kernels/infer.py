@@ -1,35 +1,22 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The ordered inference: every tensor's shape and datatype, node by node, in graph order.
+"""Shape and datatype inference in graph order (``InferKernelTensors``).
 
-A KernelOp binds from its inputs' shapes and annotations, so qonnx's
-whole-graph passes cannot run on a graph whose KernelOps' inputs are not known
-yet: they ask every node at once. ``InferKernelTensors`` visits the nodes in
-graph order instead:
+qonnx's inference passes ask every node at once, but a KernelOp can answer only once
+its inputs are known. This pass visits the nodes in order instead (``infer_node``):
 
-- a KernelOp answers its outputs from its kernel's fact-level views, in its node
-  root bound on its inputs (the facts, the input channels' tensors and an owned
-  initializer's value: MatMul's result range is its weights' columns'; the whole
-  root reads the outputs this pass states), and the pass writes them. An output's annotation is
-  its producer's statement: every run states it again from the node's facts and
-  replaces what was there, narrower or wider, so a change of the facts (weights
-  replaced or lifted to a graph input) reaches the nodes that follow on the next
-  run. An input that conflicts with the node (unannotated, or an initializer whose
-  values its annotation does not hold) is refused by the node's facts;
-- another custom op runs its shape stand-in through ONNX's per-node inference,
-  then its own datatype hook;
-- a standard op goes through ONNX's per-node inference, its initializers given
-  with their values (a Reshape's target shape), and qonnx's datatype rule; an
-  output whose shape the inference leaves unknown keeps the one it had.
+- a KernelOp computes its outputs' shapes and datatypes from its kernel. It overwrites
+  what was there, so a change upstream (weights replaced, or made a graph input) reaches
+  the nodes after it on the next run;
+- another custom op uses its shape stand-in and its own datatype rule;
+- a standard op uses ONNX's per-node shape inference, given its initializers' values (a
+  Reshape's target shape), and qonnx's datatype rule. An output whose shape ONNX cannot
+  infer keeps the one it had.
 
-The KernelOps' own qonnx hooks answer from the same views, so qonnx's passes
-agree once this one has run.
-
-The step on one node is ``infer_node``, which ``ToKernelOps`` shares: it infers as
-it converts, so a candidate's admission reads its inputs as the nodes before it
-state them. After ``ToKernelOps`` every tensor is already inferred; this pass
-re-runs the step where a later change of the facts needs it.
+The KernelOps' qonnx hooks answer from their kernels too, so qonnx's passes agree once
+this one has run. ``ToKernelOps`` runs the same step on each node as it converts; this
+pass re-runs it after a later change.
 """
 
 from __future__ import annotations
@@ -52,11 +39,10 @@ if TYPE_CHECKING:
 
 
 def _standard(model: ModelWrapper, node: NodeProto) -> None:
-    """ONNX's inference for one standard node, its outputs' shapes written.
+    """ONNX's shape inference for one standard node, its outputs' shapes written.
 
-    An initializer input is given with its value (a Reshape's target shape is
-    one), as stored; an output whose inferred shape is not fully known keeps
-    the shape it had.
+    An initializer input is given with its value (a Reshape's target shape); an output
+    whose inferred shape is not fully known keeps the shape it had.
     """
     opsets = model.get_opset_imports()
     schema = defs.get_schema(node.op_type, opsets.get(node.domain, 13), node.domain)
@@ -82,13 +68,10 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
 
 
 def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tuple[Finding, ...]:
-    """The per-node step (module docstring): ``node``'s outputs stated from its inputs.
+    """Infer ``node``'s outputs from its inputs (see the module docstring).
 
-    With ``admit``, a KernelOp is asked the kernels'
-    admission on its inputs (``KernelOp.admission``): when they refuse it, its outputs
-    are not stated and the refusals are returned. ``ToKernelOps`` tries a candidate
-    so, as it converts. Without ``admit`` (``InferKernelTensors``, re-running the step
-    on a converted graph) its outputs are stated.
+    With ``admit``, as conversion calls it, a KernelOp the kernels refuse
+    (``KernelOp.admission``) returns their refusals instead, its outputs left unset.
     """
     if not is_custom_op(node.domain):
         _standard(model, node)

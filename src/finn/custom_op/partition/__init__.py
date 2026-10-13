@@ -1,17 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The ONNX domain ``finn.custom_op.partition``: the kernel path's partition node.
+"""The ONNX domain ``finn.custom_op.partition``: the parent graph's node for the
+partition of KernelOps.
 
-The kernel path cuts its KernelOps once (``finn.transformation.kernels.cut``): the parent
-graph holds one ``StreamingDataflowPartition`` of this domain, whose ``model``
-attribute names its body, a model of KernelOps. The node runs its body, nothing more:
-no placement, no estimates. What the flow reads of a partition is ``finn.core.graph.partition``'s,
-and what a build made of it ``finn.core.graph.annotations.outputs``'s.
-
-qonnx resolves this domain by importing it and reads its op classes from ``__all__``, so
-this module exports op classes only. It imports qonnx and ``finn.core.graph.partition`` only;
-the executors it runs its body with (``finn.core.onnx_exec``), when it runs.
+qonnx loads a domain by importing it and takes its op classes from ``__all__``, so this
+module exports only op classes.
 """
 
 from typing import Any
@@ -25,19 +19,14 @@ opset_version = 1
 
 
 class StreamingDataflowPartition(GenericPartition):
-    """The parent graph's node of a partition of KernelOps: ``model``, the body's file,
-    which the node executes on its inputs (qonnx's ``GenericPartition``, the inputs and
-    outputs renamed to the body's) as the run that reached it asks
-    (``finn.core.onnx_exec.running``): under its executors, so the caller's choice
-    reaches the body's nodes; from or up to the node of the body the run starts or ends
-    at; and, when the run returns its full context, with the body's tensors in it under
-    the node's name, ``<node>_<tensor>`` (its outputs under the parent's names).
+    """The parent graph's node for the partition of KernelOps; ``model`` is the body's
+    file. Executing it runs the body with the caller's executors and start and end nodes
+    (``finn.core.onnx_exec.running``), and writes the body's outputs the run reached.
 
-    A body's tensor the context holds under that name (a caller's, from a full context)
-    is given to the body's run as an input, so a run starts inside the body from it. Of
-    the body's outputs, those its run reached are written to the context. Whether a run
-    returns its full context is the run's, never the graph's: the node has no
-    ``return_full_exec_context`` attribute."""
+    Body tensors the context already holds as ``<node>_<tensor>`` are fed to the body,
+    so a run can start inside it. When the run returns its full context, the body's
+    tensors are added to it under those names. The run decides that, not the node: it
+    has no ``return_full_exec_context`` attribute."""
 
     def get_nodeattr_types(self) -> dict[str, tuple[str, bool, Any]]:
         return {"model": ("s", True, "")}

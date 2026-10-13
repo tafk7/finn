@@ -1,56 +1,29 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Conversion: ONNX operators to KernelOps (``finn.custom_op.kernels``).
+"""Conversion: ONNX nodes to KernelOps.
 
-``ToKernelOps`` states the build target it is given (``finn.platform.resolve_target``
-resolves it) once, in the one place ``read_target(model)`` reads it, the model's
-``finn.platform`` metadata, imports the domain at its ``opset_version`` when the
-model does not import it yet (inserting a node never raises a model's import), and
-visits the nodes in graph order, inferring as it converts (``infer_node``, the step
-``InferKernelTensors`` runs on each node). A node a KernelOp's pattern matches is
-tried as that KernelOp: the kernels are asked whether they admit it on its inputs
-as the nodes before it state them (``KernelOp.admission``: the
-kernel's admission and each Decision with no viable case). An admitted node is
-rewritten, keeping its name, inputs and outputs, and its outputs are stated as its
-kernel derives them for the nodes that follow; its own choices are created then, each
-at its baseline, stored as its attributes (``baseline_kernel_op``; its channels' wait
-for the cut, where a channel first has both its ends). A refused node stays on the
-host, as it was, and is inferred like any host node. The KernelOps are the domain's
-(``finn.custom_op.kernels.__all__``), each found by its ``anchor``, the domain
-and op type of the node its pattern starts from; its ``match`` says what it
-covers, or why not (``finn.custom_op.kernels.base``). Matches are tried largest
-first, and the first the kernels admit wins. Two KernelOps matching one node
-alike is an authoring error (one computation is one KernelOp, its alternatives a
-Decision). A contradiction in the graph's facts stops the conversion
-(``KernelOpError``).
+``ToKernelOps`` records the build target in the model, then walks the nodes in graph
+order, inferring shapes and datatypes as it goes (``infer_node``), so each node sees its
+inputs as the nodes before it left them.
 
-A match may cover several nodes (a nested pattern): its anchor is the first of them
-in graph order, and the others are consumers forward of it, each reading a tensor a
-covered node writes (otherwise an authoring error, ``KernelOpError``). Conversion
-checks the covered set before it tries it: a set a path leaves and re-enters
-(``match-not-convex``), or whose interior tensors (those a covered node writes and
-another reads) are read outside it or are graph outputs (``match-interior-exposed``),
-is refused, and the next match is tried. The new node, named as the anchor, takes
-the set's boundary tensors by their names: the covered nodes' inputs no covered node
-writes, then their outputs no covered node reads, each in graph order; the covered
-nodes and their interior tensors are removed. A node the set depends on that sits
-after the anchor in graph order moves before it, in order, and the walk visits it
-first. The walk then goes on past the new node: the covered nodes are gone. Its
-``execute_node`` is the reference for the whole set.
+The KernelOps anchored at a node's op type each try to match it. The matches are tried
+on a copy of the model, largest first, and the kernels are asked to admit each
+(``KernelOp.admission``). The first match admitted replaces the nodes it covers with one
+KernelOp, which keeps the anchor's name and the covered nodes' outside tensors, and its
+choices are set to their baselines (``baseline_kernel_op``). A node that no match
+converts stays on the host, unchanged. Two KernelOps matching the same nodes is an
+authoring error: one computation is one KernelOp, its alternatives a decision of its
+kernel.
 
-No outcome is silent: ``ToKernelOps.outcomes`` holds one ``Outcome`` for each node
-it visits, the KernelOp it became or, for a node left on the host, the findings
-(``finn.core.space.Finding``) that say why: ``no-kernel-op`` where no KernelOp
-anchors on the op, a pattern's findings where its match refuses the node,
-``fact-unstated`` where binding
-reads a fact the graph does not state, and the kernels' findings, by their codes,
-where they refuse it (a refused Decision by why each of its cases is refused). A
-conversion covering several nodes is one outcome naming each of them.
-``kernel_ops_report`` is their record, ``kernel_ops_summary`` its lines for a
-build's log. ``between_kernel_ops`` names the host nodes on a path that leaves
-the KernelOps and re-enters them, the nodes no partition of the KernelOps can
-leave out (``refuse_host_between`` refuses them).
+A match of several nodes must be convex and must not hide a tensor that something
+outside it reads (``match-not-convex``, ``match-interior-exposed``). Nodes it depends on
+that come later in graph order are moved before it first.
+
+Every node gets an ``Outcome``: what it became, or the findings that say why it stayed
+on the host. ``kernel_ops_report`` and ``kernel_ops_summary`` turn them into the report
+and the log lines. Host nodes between KernelOps stop the build (``refuse_host_between``):
+no partition could hold all the KernelOps.
 """
 
 from __future__ import annotations
@@ -84,8 +57,9 @@ class Outcome:
     """What ``ToKernelOps`` made of the nodes it visited, and why.
 
     ``op`` is the KernelOp the nodes became, None for nodes left on the host. For a
-    node left, ``findings`` say why; for a conversion, why the other KernelOps
-    anchored on the node did not match it.
+    node left, ``findings`` say why. For a conversion, they say why nothing else
+    converted the node: the other patterns' findings, and the refusals of the matches
+    tried before the one that won.
     """
 
     nodes: tuple[str, ...]
@@ -107,9 +81,9 @@ def kernel_ops_by_anchor() -> dict[tuple[str, str], tuple[type[KernelOp], ...]]:
 
 
 class ToKernelOps(Transformation):
-    """Each node a KernelOp's pattern matches and the kernels admit rewritten as that
-    KernelOp, every tensor inferred as it goes, the target stated in the model;
-    ``outcomes`` says what became of each node, in graph order."""
+    """Convert each node a KernelOp's pattern matches and the kernels admit into that
+    KernelOp (see the module docstring). ``outcomes`` says what became of each node, in
+    graph order."""
 
     def __init__(self, target: Target) -> None:
         super().__init__()
@@ -197,10 +171,9 @@ class _Subgraph:
 
 
 def _covered(model: ModelWrapper, index: int, op: type[KernelOp], match: Match) -> _Subgraph:
-    """What ``match`` of the node at ``index`` covers (``_Subgraph``). A match listing
-    other than its anchor first and nodes of the graph once each, or covering a node
-    that is not a consumer forward of the anchor (one before it in graph order, or one
-    reading no tensor a covered node writes), is an authoring error."""
+    """What ``match`` of the node at ``index`` covers. A match must list its anchor
+    first and each node once, and every other node it covers must come after the anchor
+    and read a tensor a covered node writes; anything else is an authoring error."""
     nodes = list(model.graph.node)
     where = {id(each): position for position, each in enumerate(nodes)}
     anchor = nodes[index]
@@ -275,10 +248,9 @@ def _structure(
 
 
 def _move_upstream(model: ModelWrapper, subgraph: _Subgraph) -> bool:
-    """Move the nodes the covered set depends on that sit after its anchor in graph
-    order before the anchor, in order (still a topological order, the set being
-    convex), so that the walk states their outputs before it tries the set; whether
-    any moved."""
+    """Move the nodes the match depends on that come after its anchor to just before
+    it, in order (still a topological order, since the match is convex), so the walk
+    infers them before it tries the match. Returns whether any moved."""
     nodes = list(model.graph.node)
     anchor = subgraph.indices[0]
     inside = {id(nodes[i]) for i in subgraph.indices}
@@ -298,12 +270,11 @@ def _move_upstream(model: ModelWrapper, subgraph: _Subgraph) -> bool:
 def _trial(
     model: ModelWrapper, op: type[KernelOp], match: Match, subgraph: _Subgraph
 ) -> tuple[ModelWrapper, tuple[Finding, ...]]:
-    """A copy of the model with the nodes ``match`` covers converted by it, one node at
-    the anchor's place, named as the anchor, on the set's boundary tensors, its
-    interior tensors removed, and why it is refused: nothing when the kernels admit it,
-    its outputs then stated; else the kernels' findings, a refused Decision by its
-    cases' (an unstated fact is ``fact-unstated``). A copy, so that a refused trial
-    leaves ``model`` as it was. A contradiction raises."""
+    """Try ``match`` on a copy of the model: replace the covered nodes with one
+    KernelOp, named as the anchor, on their outside tensors, and ask the kernels to
+    admit it. Returns the copy and the refusals: none if admitted (its outputs then
+    inferred), a missing shape or datatype as ``fact-unstated``. A copy, so a refused
+    trial leaves ``model`` as it was. Any other wrong fact raises."""
     trial = copy.deepcopy(model)
     index = subgraph.indices[0]
     new = helper.make_node(
@@ -335,13 +306,9 @@ def _trial(
 
 
 def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object]:
-    """The KernelOp ``node``'s own choices at their baselines, stored as its attributes:
-    its node root with the choices it states replayed, every open choice with cases that
-    is not required at its first viable case the seam accepts, in rank order
-    (``Seam.baseline``, its members the kernel and the node's channels), and the
-    kernel's values saved (``KernelOp.save``). Its channels' choices are not stored
-    here: a channel has both its ends only in a partition's shell root, where the cut
-    gives them their baselines (``baseline_choices``). Returns the node's choices."""
+    """Set the KernelOp ``node``'s own choices to their baselines (``Seam.baseline``)
+    and store them as its attributes. Channel choices wait for the cut, where each
+    channel has both its ends (``baseline_choices``). Returns the node's choices."""
     op = kernel_op(model, node)
     ports = tuple(port for port in (*op.ports, *op.outputs) if port is not None)
     seam = Seam((op.member, *ports), {op.member: node.name})
@@ -359,9 +326,8 @@ def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object
 
 
 def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:
-    """The host nodes on a path that leaves the KernelOps and re-enters them, in graph
-    order: a partition of every KernelOp would depend on itself through them. Graph
-    convexity, not node order (``finn.core.graph.walk.between``)."""
+    """The host nodes on a path that leaves the KernelOps and comes back, in graph
+    order. A partition of all the KernelOps would depend on itself through them."""
     return tuple(_label(node) for node in between(model, lambda n: n.domain == KERNEL_OPS_DOMAIN))
 
 
@@ -385,9 +351,9 @@ def kernel_ops_report(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> dic
 
 
 def kernel_ops_summary(outcomes: tuple[Outcome, ...]) -> list[str]:
-    """A conversion's lines for a build's log: what converted, by op, and how many nodes
-    stay on the host; then one line per finding code (``by_code``), counted by node, its
-    nodes counted by op type for ``no-kernel-op``, named otherwise."""
+    """The conversion's log lines: what converted, by op, how many nodes stay on the
+    host, and one line per finding code (``no-kernel-op`` counted by op type, the others
+    naming their nodes)."""
     converted = Counter(outcome.op for outcome in outcomes if outcome.op is not None)
     on_host = sum(len(outcome.nodes) for outcome in outcomes if outcome.op is None)
     lines = [
@@ -416,10 +382,9 @@ def kernel_ops_summary(outcomes: tuple[Outcome, ...]) -> list[str]:
 
 
 def refuse_host_between(model: ModelWrapper, outcomes: tuple[Outcome, ...]) -> None:
-    """Refuse KernelOps with host nodes between them (``between_kernel_ops``), each
-    named with its findings: the partition the build makes next would depend on
-    itself. The refusal's findings are one ``host-between`` for each such node, its
-    outcome's findings its causes."""
+    """Refuse the model if host nodes sit between KernelOps, naming each with why it
+    stayed on the host (one ``host-between`` finding per node, its outcome's findings
+    as causes)."""
     between = between_kernel_ops(model)
     if not between:
         return

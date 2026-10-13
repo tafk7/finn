@@ -1,44 +1,27 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Thresholding KernelOp: Y = count(X >= T[c]) + bias, bound to ``ThresholdingAxiKernel``.
+"""The Thresholding KernelOp: qonnx ``MultiThreshold`` as count plus bias,
+Y = count(X >= T[c]) + bias, on ``ThresholdingAxiKernel``.
 
-Integer ``MultiThreshold`` with ``out_scale`` 1, channels on the input's last
-axis. The thresholds are an initializer the kernel holds (its value owner): one
-set, a row for each channel (C, N) or one row for every channel (1, N), which
-the kernel binds as the graph states it (a shared row is ``ThresholdingAxiKernel``'s
-C = 1). ``bias`` is a semantic attribute, part of the operation. The output keeps
-the input's shape and takes the kernel's result type, a fact-level derived of the
-table and the bias.
+The thresholds must be an initializer: one row per channel (C, N), or one row for all
+channels (1, N). Channels are on the input's last axis. ``bias`` is a semantic
+attribute. ``out_dtype`` is not read: the output's datatype is the kernel's result type,
+which holds every count plus the bias.
 
-The table the kernel holds: the graph keeps the thresholds as streamlining wrote
-them (floats; their annotation is not read), and the facts derive the kernel's
-integer table from them and the input's exact type (``stored_thresholds``):
-the values rounded up and clipped to ``[min, max + 1]`` of the input type, typed
-by the smallest type of the input's signedness that holds them and, unless the
-least is the input's minimum, one value below it. Every count is the graph's: for
-an integer input ``x >= t`` and ``x >= ceil(t)`` agree, and a threshold outside the
-input's range counts the same at its bound, so ``execute_node`` counts on the
-stored floats. The value below: thresholding_axi saturates an input wider than its
-thresholds to their type, so an input below the type's minimum compares as that
-minimum, which a threshold there would count (``ThresholdingAxiKernel``'s
-``threshold-saturation``; found by the harness's parity check,
-``tests/kernel_ops/test_parity.py``). The binding is keyed by the stored table's
-digest and the input's type, and the table is derived on a miss only, as MatMul's
-weights' stored element is derived from their values (``edge_tensor``).
+The graph keeps the thresholds as they are (floats; their annotation is not read). For
+an integer input, the kernel's table is derived from them without changing any count
+(``stored_thresholds``): rounded up, clipped to [min, max + 1] of the input type, and
+given the narrowest type that holds them. For a signed input, that type also holds one
+value below the smallest threshold, unless the smallest is the input type's minimum: the
+RTL clamps an input wider than the thresholds to their type, and a clamped input must
+not reach the smallest threshold (``threshold-saturation``).
 
-Its typing rule: ``out_dtype`` is not read. The output's annotation is the kernel's
-result type, a fact-level derived of the thresholds and the bias, which holds every
-count plus the bias; ``out_dtype`` changes no value ``MultiThreshold`` computes.
-
-Its pattern: a qonnx ``MultiThreshold`` that is count + bias, with its thresholds a
-fact and its channels on the input's last axis. Each condition it fails is a
-finding: ``threshold-scale`` (``out_scale`` not 1) and ``threshold-bias``
-(``out_bias`` not an integer), each naming streamlining's
-``ExtractMultiThresholdScaleBias`` as a hint; ``threshold-dynamic`` (the thresholds
-not an initializer); ``layout-unproven`` (channels on axis 1 of an input of rank
-above 2, ``data_layout`` not NHWC: no Transpose is inserted, the layout is parked);
-and ``fact-unstated`` when the input's shape, so its channel axis, is not known.
+The pattern refuses ``out_scale`` other than 1 (``threshold-scale``) and a non-integer
+``out_bias`` (``threshold-bias``), both with ``ExtractMultiThresholdScaleBias`` as a
+hint; thresholds that are not an initializer (``threshold-dynamic``); and, when the
+layout is not NHWC, channels on axis 1 of an input of rank above 2 (``layout-unproven``)
+or an input whose shape is not known (``fact-unstated``).
 """
 
 from __future__ import annotations
@@ -69,18 +52,17 @@ if TYPE_CHECKING:
     from onnx import NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
-# A Thresholding is count + bias; streamlining's ExtractMultiThresholdScaleBias moves a
-# scale and a bias out of a MultiThreshold.
+# The transform that moves a scale and a bias out of a MultiThreshold, named as a hint
+# in refusals.
 LOWERING = "ExtractMultiThresholdScaleBias"
 
 
 def stored_thresholds(
     stored: npt.NDArray[Any], input_dtype: QONNXDataType
 ) -> tuple[tuple[tuple[int, ...], ...], QONNXDataType]:
-    """The table the kernel holds for the thresholds ``stored`` on an input of
-    ``input_dtype``, and its type (the module docstring). The thresholds of an input
-    that is not an integer type are taken as they are, in the input's type, which the
-    kernel refuses."""
+    """The kernel's table for the thresholds ``stored`` on an input of ``input_dtype``,
+    and its type (see the module docstring). For an input that is not an integer type,
+    the thresholds as they are, in the input's type, which the kernel refuses."""
     try:
         low, high = ordinary_integer_bounds(input_dtype)
     except DatatypeError:
@@ -90,7 +72,7 @@ def stored_thresholds(
     table = np.clip(np.ceil(np.asarray(stored, dtype=np.float64)), low, high + 1)
     least, most = int(table.min()), int(table.max())
     if low < 0:
-        floor = max(low, least - 1)  # a value below every threshold an input can fall short of
+        floor = max(low, least - 1)  # one value below the smallest (module docstring)
         bits = max(max((-floor - 1).bit_length() if floor < 0 else 0, most.bit_length()) + 1, 2)
         dtype = resolve_qonnx_datatype_name(f"INT{bits}")
     else:
@@ -202,6 +184,7 @@ class Thresholding(KernelOp):
         return {self.onnx_node.output[0]: (dims, self.view("result_dtype"))}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
+        """The reference: count(X >= T[c]) + bias, in X's element type."""
         x, thresholds = self.onnx_node.input
         values, table = context[x], context[thresholds]
         counts = (values[..., :, None] >= table).sum(axis=-1)

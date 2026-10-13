@@ -1,40 +1,25 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Conv KernelOp: a lowered convolution, qonnx ``Im2Col`` then ONNX
-``MatMul``, bound to ``MatMulKernel`` read through a window.
+"""The Conv KernelOp: a lowered convolution, qonnx ``Im2Col`` followed by the ONNX
+``MatMul`` that reads its patches, on ``MatMulKernel`` read through a sliding window.
 
-A convolution reaches graph preparation's output as ``Im2Col`` (qonnx's: NHWC by
-definition, the patches' K ordered ``(kh, kw, c)``, ``c`` innermost) and the
-``MatMul`` reading its patches as A against the (K, N) weights
-``LowerConvsToMatMul`` stores in that order. This op covers the pair (a nested
-pattern, anchored at the ``Im2Col``): the patches are never a tensor of the graph or
-of the hardware. The node reads the image ``(1, H, W, C)`` and the weights, and
-writes ``(1, OH, OW, N)``; its kernel is MatMul's on a dense form read through a
-``Window`` (``finn.dataflow.gemm``), so the image's channel carries the window as
-its reorder (an ``input_gen`` adapter), as FINN's sliding-window generator fed its
-matrix-vector unit, with no kernel of its own.
+The build lowers each ONNX ``Conv`` to this pair before conversion
+(``LowerConvsToMatMul``, in ``step_streamline``). qonnx's ``Im2Col`` is NHWC and orders
+a patch ``(kh, kw, c)``, ``c`` innermost, and ``LowerConvsToMatMul`` stores the (K, N)
+weights in that order. The op covers both nodes, anchored at the ``Im2Col``, so the
+patches never become a tensor in the graph or in hardware: the node reads the image
+``(1, H, W, C)`` and the weights, and writes ``(1, OH, OW, N)``. The window is a reorder
+on the image's input channel (``finn.dataflow.gemm.Window``), not a kernel of its own.
 
-Its op type is ONNX's name, ``Conv``, in the KernelOps' domain
-(``finn.custom_op.kernels``): qonnx resolves a node's op by its domain first, so an
-ONNX ``Conv`` (the default domain) is never this op, and this op never ONNX's. It
-anchors at ``Im2Col``, not at a ``Conv``: graph preparation lowers each ONNX ``Conv``
-before conversion.
+The op type is ``Conv``, in the KernelOps' domain. qonnx looks an op up by its domain
+first, so it never collides with ONNX's ``Conv``.
 
-Its pattern: an ``Im2Col`` whose patches a ``MatMul`` reads as A, the weights a
-matrix (``matmul-batched`` otherwise). Refused by code: padding
-(``window-pads``; a pad is a constant the window does not read, its own stage),
-a depthwise ``Im2Col`` (``window-depthwise``: its MatMul is per channel, which the
-window does not read), a geometry that is not two positive integers a field
-(``window-geometry``), and patches no MatMul reads as A (``window-unread``). Patches
-another node reads too are conversion's to refuse (``match-interior-exposed``).
-Whether the kernels take a stride or a dilation is theirs to say (any the channel's
-reorder carries). Its semantic attributes are ``kernel``, ``stride`` and
-``dilation`` (rows, columns), as the ``Im2Col`` states them (``kernel_size``,
-``stride``, ``dilations``).
-
-Its reference, ``execute_node``: qonnx's ``Im2Col`` of the image, then MatMul's
-(exact integer arithmetic for integer operands), the ONNX the pattern covers.
+The pattern refuses padding (``window-pads``), a depthwise ``Im2Col``
+(``window-depthwise``), a kernel, stride or dilation that is not two positive integers
+(``window-geometry``), patches that no ``MatMul`` reads as A (``window-unread``), and
+weights that are not 2-D (``matmul-batched``). Conversion also refuses patches that
+another node reads (``match-interior-exposed``).
 """
 
 from __future__ import annotations
@@ -122,7 +107,7 @@ class Conv(MatMul):
         return Match((node, readers[0]), geometry)
 
     def window(self) -> Window:
-        """The window its semantic attributes state over its image's (H, W)."""
+        """The window its semantic attributes give over its image's (H, W)."""
         label, image = self.label, self.image()
         found: dict[str, tuple[int, int]] = {}
         for name in GEOMETRY:
@@ -165,8 +150,8 @@ class Conv(MatMul):
         }
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
-        """qonnx's Im2Col of the image, then MatMul's product with the weights (module
-        docstring)."""
+        """The reference: qonnx's Im2Col of the image, then MatMul's product with the
+        weights."""
         x, w = self.onnx_node.input
         window, image = self.window(), np.asarray(context[x])
         batch, height, width, channels = image.shape

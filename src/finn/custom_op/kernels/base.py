@@ -1,72 +1,36 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""KernelOp: a qonnx ``CustomOp`` that binds one kernel point.
+"""KernelOp: an ONNX node tied to a design space of kernels.
 
-An op reads its facts from the attached model only: input shapes and datatype
-annotations, initializers admitted by their value summary, and the build target
-from the model's ``finn.platform`` metadata. An initializer the node owns is a
-value its channel carries (``Facts.values``), and the channel's tensor states
-its range. It states its placement once, as data (``kernel``, ``formals``,
-``references``, ``parameters``; ``finn.custom_op.kernels.roots``): its node
-root is generated from it, and a shell root places the same kernel. It
-binds its node root through the bind cache, on its inputs for inference and
-whole for its choices, replays the choices its node holds and those its owned
-parameter channels' tensors state, and answers the compiler's queries from the
-result.
+A KernelOp is a qonnx ``CustomOp`` whose node stands for a kernel of ``finn.kernels``
+with its choices still open. It does not own the hardware of the graph: the channels
+between nodes belong to the tensors they carry, and a partition's shell root (``shell``)
+places the same kernels on channels the nodes share.
 
-Each node is asked two questions, each with one owner:
+Three terms, used throughout the package:
 
-- **identity**, the op's pattern: the node it starts from (``anchor``: a domain and
-  an op type) and ``match``, which reads the graph around that node by its structure
-  only (the op types and connectivity, which inputs are facts, the semantic
-  attributes, what fixes the axes; never a datatype, a value or the platform) and
-  answers with the nodes the op covers and its semantic attributes (``Match``), or
-  the Space's ``Rejected`` with the pattern's findings: a refusal by its code, or a
-  structural fact it needs that the graph does not state (``fact-unstated``).
-  ``match`` never changes the model; ``ToKernelOps`` applies a match;
-- **realizability**, the kernels': ``admission`` asks them on the node's inputs
-  (``refusals``: the kernel's admission and each Decision with no viable case, by
-  why each of its cases is refused), which ``verify_node`` also reports on the
-  node's point.
+- the node's *facts*: what it reads from the model it is attached to, which are its
+  tensors' shapes and datatypes, the values of the initializers it holds (weights,
+  thresholds) and the build target (``read_target``);
+- its *node root*: its kernel with a channel on each input and output (``roots``);
+- its *point*: the node root bound to its facts (cached by facts, ``cache``), with the
+  node's stored choices applied (``replay``).
 
-A fact binding reads that the graph does not state raises ``FactUnstated``, which
-conversion reports; any other refusal of the facts is a contradiction
-(``KernelOpError``).
+Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
+only the graph's structure (op types, connections, attributes), never a datatype or a
+value, and never changes the model. Will a kernel build it? ``admission`` asks the
+kernels. A missing shape or datatype raises ``FactUnstated``, and the node stays on the
+host; anything else wrong with the facts is an error (``KernelOpError``).
 
-An op's ``execute_node`` is the computational reference for what its pattern covers
-(PRINCIPLES 8), defined for every input domain the ONNX it covers is, and equal to the
-ONNX semantics of the covered nodes on every node the op converts. Integers are exact on
-both sides: FINN executes ONNX with exact integers (``finn.core.onnx_exec``), as the
-hardware computes them. The harness checks the
-reference against ONNX, every value equal (``finn.harness.reference``); no build
-re-checks it.
+``execute_node`` is the reference for what the op covers, and must equal ONNX on every
+node the op converts (FINN executes ONNX with exact integers, ``finn.core.onnx_exec``).
+The test harness checks this (``finn.harness.reference``); builds do not.
 
-Two kinds of attribute:
-
-- **semantic**: part of the operation, stated by the graph (Thresholding's
-  ``bias``); required, never a choice;
-- **choice**: one per decision key of the op's kernel in its node root,
-  unprefixed (``compute.packed.pe``), each at its baseline from conversion on
-  (``ToKernelOps``) until a strategy replaces it; absent only on a node no conversion
-  created (made by hand) or for a required choice no strategy has set. The ONNX type
-  is the key's value semantics' (``int`` and ``bool``: ``i``, ``str``: ``s``),
-  and a selector lists its cases. The node's attributes are the persisted form.
-
-A channel's choices are not its nodes': they are stated on the tensor it carries
-(``CHANNEL``, the ``finn.channel`` namespace of the tensor's typed metadata), and
-only in a partition's body, a model whose nodes are all KernelOps
-(``channel_choices``; a shell root replays them, and only a shell root, which holds
-both of a channel's ends, checks them: ``shell.save_channels``). A graph with nodes on
-the host (the whole graph, before the cut) states none.
-
-Replay commits the node's choices atomically on its cached base point, with the
-choices of each parameter channel the node owns, as the initializer's tensor states
-them. A choice nested under a selector nobody committed (``compute.packed.pe`` with
-``compute`` open) applies when the selector is forced (its one viable case),
-and forced cases are never committed, so nothing else happens at replay and
-nothing forced reaches a node. A refusal names every refused key, an
-inapplicable one too (it carries no finding of its own).
+A node's attributes are its semantic attributes, which are part of the operation
+(Thresholding's ``bias``), and its kernel's choices (``compute.packed.pe``), each set to
+its baseline at conversion. A channel's choices are stored on its tensor instead, and
+only in a partition's body (``CHANNEL``).
 """
 
 from __future__ import annotations
@@ -116,8 +80,7 @@ Shapes = dict[str, tuple[tuple[int, ...], QONNXDataType]]
 @dataclass(frozen=True)
 class Match:
     """What a KernelOp's pattern covers: the ONNX ``nodes``, its anchor first, and the
-    op's semantic ``attributes`` (``KernelOp.semantic``) as the covered nodes state
-    them."""
+    values of the op's semantic ``attributes`` (``KernelOp.semantic``) read from them."""
 
     nodes: tuple[NodeProto, ...]
     attributes: Mapping[str, object]
@@ -129,7 +92,7 @@ def node_attributes(node: NodeProto) -> dict[str, Any]:
 
 
 def unstated(owner: str, message: str, **details: object) -> Finding:
-    """A pattern's finding for a fact it needs that the graph does not state."""
+    """A finding for a shape or datatype the graph lacks (``fact-unstated``)."""
     return Finding(FindingKind.LIMITATION, "fact-unstated", owner, message, tuple(details.items()))
 
 
@@ -149,23 +112,22 @@ def _is_choice_value(value: object, kind: str, cases: tuple[str, ...]) -> TypeGu
 
 
 class KernelOp(CustomOp):
-    """One ONNX node's binding of one kernel point; see the module docstring.
+    """Base class of the KernelOps (see the module docstring). A subclass sets, in its
+    own body:
 
-    An op class states ``op_version`` (its kernel's ``version``) in its own body; its
-    ``op_type`` is qonnx's (stated in its own body, or the name its domain exports
-    it under). It states its placement, from which its node root is generated
-    (``root()``) and by which a partition places it (``place``):
+    - ``op_type``, and ``op_version``, its kernel's version;
+    - ``kernel``, the kernel class, and ``member``, its name in the node root;
+    - ``formals``, the kernel arguments read from the graph (``facts``);
+    - ``ports``, the channel name of each ONNX input (None for an input read as an
+      argument, such as Thresholding's thresholds), and ``outputs``, of each output;
+    - ``references``, the kernel argument each port's channel is passed as;
+    - ``parameters``, the ports whose value may be an initializer the node holds
+      (MatMul's weights);
+    - ``semantic``, its semantic attributes;
+    - ``anchor``, the ``(domain, op_type)`` its pattern starts from, and ``match``.
 
-    - ``kernel``, the kernel class it binds, and ``member``, its name in the root;
-    - ``formals``, the kernel's formals the op reads from the graph (``facts``);
-    - ``ports``, each ONNX input's channel (``None``: an input that is a fact, never
-      a channel), and ``outputs``, each ONNX output's;
-    - ``references``, the kernel's reference input each port's channel binds;
-    - ``parameters``, the ports whose channel may carry a value the node owns (an
-      initializer): the channel's ``contents``, which its source stores.
-
-    And its pattern (the module docstring): ``anchor``, the ``(domain, op_type)`` of the
-    ONNX node it starts from, and ``match``.
+    The node root is generated from these (``root``), and a partition's shell root
+    places the kernel by them (``place``).
     """
 
     wants_model = True
@@ -200,6 +162,7 @@ class KernelOp(CustomOp):
 
     @property
     def label(self) -> str:
+        """The node's name, or its op type if it has none."""
         name: str = self.onnx_node.name or self.onnx_node.op_type
         return name
 
@@ -207,17 +170,17 @@ class KernelOp(CustomOp):
 
     @classmethod
     def match(cls, model: ModelWrapper, node: NodeProto) -> Match | Rejected:
-        """What this op covers from ``node``, a node at its ``anchor``, or the pattern's
-        findings; by the graph's structure only, never a datatype or a value, ``model``
-        unchanged (module docstring)."""
+        """What this op covers starting from ``node``, a node at its ``anchor``, or the
+        pattern's findings. Reads structure only; never changes ``model``."""
         raise NotImplementedError
 
     # -- schema ---------------------------------------------------------------------------
 
     @classmethod
     def attribute(cls, key: str) -> str | None:
-        """A node-root key's attribute: the kernel's, unprefixed; none for a channel's,
-        which its tensor states (``CHANNEL``)."""
+        """The node attribute that stores a node-root key: the key without the kernel's
+        member name. None for a channel's key, which is stored on its tensor
+        (``CHANNEL``)."""
         head, _, rest = key.partition(".")
         return rest if head == cls.member else None
 
@@ -257,12 +220,14 @@ class KernelOp(CustomOp):
     # -- facts and binding ----------------------------------------------------------------
 
     def model(self) -> ModelWrapper:
+        """The model this op is attached to."""
         model = self._model
         if model is None:
             raise KernelOpError(f"{self.label}: no model attached (use get_customop_wrapper)")
         return model
 
     def target(self) -> Target:
+        """The build target stored in the attached model."""
         try:
             return read_target(self.model())
         except KernelOpError as error:
@@ -273,8 +238,7 @@ class KernelOp(CustomOp):
         raise NotImplementedError
 
     def input_edges(self) -> dict[str, Tensor]:
-        """The tensor of each input channel of the node root, by port, as the graph states
-        it (an initializer's over its values' range)."""
+        """The tensor each input channel carries, by port (``edge_tensor``)."""
         model, node = self.model(), self.onnx_node
         return {
             port: edge_tensor(model, tensor, self.label)
@@ -283,8 +247,8 @@ class KernelOp(CustomOp):
         }
 
     def output_edges(self) -> dict[str, Tensor]:
-        """The tensor of each output channel of the node root, by port, as the graph
-        states it: known once inference has written it."""
+        """The tensor each output channel carries, by port; known once inference has
+        written it."""
         model, node = self.model(), self.onnx_node
         return {
             port: edge_tensor(model, tensor, self.label)
@@ -292,12 +256,12 @@ class KernelOp(CustomOp):
         }
 
     def base(self) -> Kernel:
-        """The node root bound from this node's facts, nothing chosen."""
+        """The node root bound to this node's facts, with nothing chosen."""
         return BIND_CACHE.point(self.facts())
 
     def _channel_hint(self, names: Iterable[str]) -> str:
-        """Where ``names`` are stated, if they are a channel's (one named under a port):
-        on its tensor."""
+        """A hint for an error that names ``names``: if one is a channel's key (named
+        under a port), channel choices are stored on the tensor."""
         ports = {port for port in (*self.ports, *self.outputs) if port}
         if any(name.partition(".")[0] in ports for name in names):
             return f"; a channel's choices are its tensor's ({CHANNEL.name}, save_channels)"
@@ -322,14 +286,13 @@ class KernelOp(CustomOp):
         return found
 
     def point(self, extra: Mapping[str, object] | None = None) -> Kernel:
-        """The node root with the node's choices (and ``extra``, by attribute) replayed,
-        and those of each parameter channel the node owns, which the initializer's
-        tensor states (``channel_choices``)."""
+        """The node's point: its node root bound to its facts, with its stored choices
+        (and ``extra``, by attribute) applied, and those stored on the tensors of the
+        initializers it holds (``channel_choices``)."""
         return self._replayed({**self.choices(), **(extra or {})})
 
     def _replayed(self, choices: Mapping[str, object]) -> Kernel:
-        """The node root with ``choices`` (by attribute, in place of the node's) replayed,
-        and those of each parameter channel the node owns."""
+        """``point``, with ``choices`` (by attribute) in place of the node's."""
         facts = self.facts()
         wanted = {self.node_key(name): value for name, value in choices.items()}
         names = {key: key.partition(".")[2] for key in wanted}
@@ -352,9 +315,9 @@ class KernelOp(CustomOp):
         return BIND_CACHE.configured(facts, typed, build)
 
     def save(self, choices: Mapping[str, object | None]) -> None:
-        """Commit ``choices`` (made on purpose, the kernel's) over the node's persisted
-        ones: every one replayed on a fresh base and written only if accepted; ``None``
-        clears a choice. A channel's are its tensor's (``shell.save_channels``)."""
+        """Store ``choices`` as the node's attributes, over its stored ones, after
+        checking them all together on a fresh point; ``None`` clears one. Channel
+        choices go through ``shell.save_channels``."""
         schema = self.schema()
         unknown = sorted(set(choices) - set(schema))
         if unknown:
@@ -390,14 +353,13 @@ class KernelOp(CustomOp):
         return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
 
     def owned(self, facts: Facts) -> dict[str, str]:
-        """The tensor of each parameter port whose value this node owns (``facts``, the
-        node's), by port: its channel is this node's to declare, from the graph, with the
-        value (``Facts.values``) as its contents."""
+        """The tensor of each parameter port whose initializer this node holds
+        (``facts``, the node's), by port."""
         return {port: self.onnx_node.input[self.ports.index(port)] for port in facts.owned}
 
     def place(self, facts: Facts, channels: Mapping[str, Channel]) -> Kernel:
-        """This node's kernel, from its ``facts``, on a shell root's ``channels`` (by
-        tensor), its formals literals: the placement its node root is generated from."""
+        """This node's kernel on a shell root's ``channels`` (by tensor), its arguments
+        the values in ``facts``: the placement its node root is generated from."""
         tensors = self.inputs() | dict(zip(self.outputs, self.onnx_node.output))
         on = {port: channels[tensor] for port, tensor in tensors.items()}
         return placed(type(self), facts.formals(), on)
@@ -405,8 +367,7 @@ class KernelOp(CustomOp):
     # -- inference ------------------------------------------------------------------------
 
     def output_tensors(self) -> Shapes:
-        """Each output's ONNX shape and datatype, from the kernel's fact-level views
-        (``view``)."""
+        """Each output's ONNX shape and datatype, from the kernel's views (``view``)."""
         raise NotImplementedError
 
     def infer_output_tensors(self, model: ModelWrapper) -> Shapes:
@@ -422,11 +383,10 @@ class KernelOp(CustomOp):
             model.set_tensor_datatype(name, dtype)
 
     def refusals(self, point: Kernel) -> tuple[Finding, ...]:
-        """What refuses ``point``, a binding of this node's root, whatever its open choices
-        are: the kernel's ``admission`` as far as it is decided (a constraint that refuses
-        on the facts alone, while another waits on a choice), and each open Decision of the
-        root with no viable case (``decision-no-viable-case``), the refusal of each of its
-        candidates as the finding's causes. Empty when nothing refuses it."""
+        """What stops a kernel from building ``point``, whatever its open choices: the
+        kernel's admission as far as it is decided, and each open decision with no
+        viable case (``decision-no-viable-case``, why each case was refused as its
+        causes). Empty when nothing does."""
         found: list[Finding] = []
         admitted = inspection.admission(getattr(point, self.member))
         if isinstance(admitted, Rejected):
@@ -446,15 +406,13 @@ class KernelOp(CustomOp):
         return tuple(found)
 
     def admission(self) -> tuple[Finding, ...]:
-        """The kernels' refusals of this node on its inputs (``refusals`` of its root bound
-        on them), before any output is known: what conversion asks of a candidate. A fact
-        the graph does not state raises ``FactUnstated``, a contradiction
-        ``KernelOpError``."""
+        """The kernels' refusals of this node, bound on its inputs only: what conversion
+        asks before it converts a node."""
         return self.refusals(BIND_CACHE.inputs(self.facts()))
 
     def verify_node(self) -> list[str]:
-        """Replay's refusal, or each of ``refusals`` of the node's point, with its owner
-        and code. None when accepted."""
+        """Why the node's stored choices are refused, or each of ``refusals`` of its
+        point, as lines with owner and code. Empty when accepted."""
         try:
             point = self.point()
         except KernelOpError as error:
@@ -465,10 +423,9 @@ class KernelOp(CustomOp):
         ]
 
     def view(self, name: str) -> Any:
-        """A fact-level view of the op's kernel in its node root bound on its inputs
-        (``result_tensor``, ``result_dtype``): what inference reads, before any output of
-        the node is known. It reads the kernel's facts and its input channels' tensors and
-        values (MatMul's result range, its weight channel's value)."""
+        """A view of the kernel bound on the node's inputs only (``result_tensor``,
+        ``result_dtype``): what output inference reads. It may read an input's value
+        (MatMul's result range comes from its weights)."""
         kernel = getattr(BIND_CACHE.inputs(self.facts()), self.member)
         answer = kernel.query(getattr(type(kernel), name))
         if not isinstance(answer, Available):
@@ -477,10 +434,9 @@ class KernelOp(CustomOp):
 
 
 def candidate_refusals(point: Space, key: str, cases: tuple[str, ...]) -> tuple[Finding, ...]:
-    """Why each of ``cases`` of the Decision over nodes ``key`` is refused on ``point``:
-    its candidate's admission once the case is committed, each finding once. A Decision
-    over values (its cases are values, not candidates) gives none: its own finding says
-    why."""
+    """Why each of ``cases`` of the selector ``key`` is refused on ``point``: the
+    admission of the case's candidate once the case is committed, each finding once. A
+    decision over values gives none: its own finding says why."""
     decisions = {item.key: item for item in inspection.decisions(point)}
     if not decisions[key].selector:
         return ()

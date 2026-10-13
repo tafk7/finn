@@ -1,40 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The kernel path's one cut: its KernelOps as one partition, the parent graph kept.
+"""The cut: all KernelOps into one partition, the other nodes left on the host.
 
-Partitioning is a graph operation, and the kernel path's first after inference: it
-decides which nodes run in the fabric and which on the host. ``CutKernelPartition``
-cuts a model of KernelOps and host nodes once, by one rule of which KernelOps go
-together (all of them, contiguous): the KernelOps become one StreamingDataflowPartition
-(``finn.custom_op.partition``) and the nodes before and after it stay on the host. The
-result is the parent graph, which the build keeps as its model.
-The partition has one name, ``PARTITION`` (``partition``), for its node, its body's file
-(``<directory>/partition.onnx``), the IP it is packaged as (the shell root's module,
-``finn_partition``) and the block design's instance; its body carries the parent's
-target. Everything after the cut, exploration first, opens the body through the node
-(``finn.core.graph.partition.partition_body``).
+``CutKernelPartition`` puts every KernelOp in one ``StreamingDataflowPartition`` and
+returns the parent graph, which the build keeps as its model. The partition is named
+``partition`` (``PARTITION``) for its node, its body's file
+(``<directory>/partition.onnx``), its IP (``finn_partition``) and its block-design
+instance. The body carries the parent's target. Everything after the cut opens the body
+through the node (``finn.core.graph.partition.partition_body``).
 
-The cut creates the accelerator's design space, so it gives its body's choices their
-baselines (``BaselineChoices``, ``shell.baseline_choices``): the body's shell root is
-built, its nodes' choices (stored at conversion, ``ToKernelOps``) replayed in context,
-and every choice still open with cases that is not required takes its baseline: the
-channels' own, created here, where a channel first has both its ends, and a node's
-choice replay drops as stale (``CutKernelPartition.dropped``, with why). Every value is
-then persisted, a kernel's on its node, a channel's on its tensor (``finn.channel``). A
-required choice (a FIFO's depth) stays open for a strategy.
+The cut is where each channel first has both its ends, so it sets the channel choices
+to their baselines, and checks the nodes' choices again in context: a node choice that
+does not fit there is reset to its baseline and reported (``dropped``). A required choice (a
+FIFO's depth) stays open for a strategy.
 
-A channel's stated choices (``finn.channel``, its tensor's metadata) are a partition
-body's only. A model with nodes on the host that states some is refused, by name: the
-build's choices come in through ``kernel_choices.json`` (``Pinned``), which exploration
-applies to the body. A model of KernelOps only is a body already, and the cut moves
-its channels' choices into the body it makes: each follows its tensor there, and the
-parent's copy of a boundary tensor's is cleared, so a channel has one home.
-
-A second partition of KernelOps cannot arise here: the cut puts every KernelOp in its
-one partition, and a model that holds a partition already is refused (the shell root
-refuses KernelOps outside its partition too). Several partitions are to be designed as
-one shell root, when CNV or Alveo needs them, not as neighbouring roots.
+Channel choices may be stored only in a partition's body. A model with host nodes that
+stores some is refused (a build's choices come in through ``kernel_choices.json``
+instead); a model of KernelOps only keeps them, moved into the body, and the parent's
+copy is cleared.
 """
 
 from __future__ import annotations
@@ -64,11 +48,10 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
 
 
 class BaselineChoices(Transformation):
-    """Every choice of a partition's body at its baseline where the body leaves it open,
-    persisted, and its nodes' stored choices re-checked in context, a stale one
-    re-baselined (``shell.baseline_choices``): what the cut does to the body it makes,
-    for a body made by hand (a test's, or one ``save_channels`` states choices on).
-    ``dropped`` holds the choices replay dropped as stale, by root key, with why."""
+    """What the cut does to the body it makes, for a body made by hand: every open
+    choice at its baseline, and the nodes' stored choices checked in context
+    (``shell.baseline_choices``). ``dropped`` lists those reset, by root key, with
+    why."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -80,13 +63,11 @@ class BaselineChoices(Transformation):
 
 
 class CutKernelPartition(Transformation):
-    """Cut the model's KernelOps once into the partition ``PARTITION``, its body saved in
-    ``directory`` with every choice at its baseline; see the module docstring. Refused
-    (``KernelOpError``): a model that holds a partition already, one without KernelOps,
-    one where host nodes stand between KernelOps (named: the partition would depend on
-    itself), one whose host nodes state channel choices, and one with a host node named
-    ``PARTITION``. ``dropped`` holds the nodes' choices the cut found stale in context
-    and re-baselined, by root key, with why."""
+    """Cut the model's KernelOps into the partition ``PARTITION``, its body saved in
+    ``directory`` at its baselines (see the module docstring). Refuses a model that
+    holds a partition already or no KernelOps, one with host nodes between KernelOps or
+    storing channel choices, and one with a host node named ``PARTITION``. ``dropped``
+    lists the node choices reset at the cut, by root key, with why."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()

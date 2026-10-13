@@ -243,10 +243,11 @@ def step_convert_to_channels_last(model: ModelWrapper, cfg: DataflowBuildConfig)
 
 
 def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Record the build's target in the model, and convert each node a KernelOp
-    supports (MatMul, MultiThreshold) into that KernelOp. Writes report/kernel_ops.json:
-    what each node became, or why it stayed on the host. Refuses a host node between
-    KernelOps, since they must form one partition."""
+    """Record the build's target in the model, and convert the nodes the KernelOps
+    cover (MatMul, MultiThreshold, and Im2Col with the MatMul that reads its patches)
+    into KernelOps. Writes report/kernel_ops.json: what each node became, or why it
+    stayed on the host. Refuses a host node between KernelOps, since they must form one
+    partition."""
     conversion = ToKernelOps(cfg.resolved_target)
     model = model.transform(conversion)
     report = kernel_ops_report(model, conversion.outcomes)

@@ -1,40 +1,21 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""An op's placement, and the node root generated from it: the Space a KernelOp binds.
+"""Node roots: the Space a KernelOp binds.
 
-A KernelOp states how its kernel sits in a graph once, as data
-(``finn.custom_op.kernels.base.KernelOp``): the ``kernel`` class, the
-``formals`` it reads from the graph (the kernel's own: facts stay facts), the
-reference input each port's channel binds (``references``), and the ports
-whose channel may carry a value the node owns (``parameters``: MatMul's
-``w``). ``placed`` is that placement: the kernel on channels by port, from
-formals that are Params or literals. The channels are declared from the graph
-before any kernel is placed, and the kernel binds nothing into them. Two
-things are built with it:
+``node_root`` builds one Space class per op from the op's class attributes: its kernel,
+with a channel on each ONNX input and output, and Params for the kernel arguments read
+from the graph, each channel's tensor, and the values of an initializer the node holds.
+Binding those Params to a node's facts gives the node's point.
 
-- the **node root** (``node_root``), one class per op, compiled once: the
-  formals are its Params, declared as the kernel declares them; each port's
-  channel, an input's or an output's, carries the tensor the graph states, a
-  Param of its own (``x_tensor``, ``w_tensor``, ``y_tensor``); a parameter
-  port's channel also carries its ``contents``, a Param supplied only when the
-  node owns the value (an initializer, which the channel's ``source`` then
-  stores; weights on a graph tensor arrive like any edge, with no source).
-  An output's channel is present once its tensor is supplied: bound on its
-  inputs alone, the root answers inference (a result derived from an input
-  channel's value), and inference states the outputs it is then bound with.
-  Every channel is a boundary, ``in<i>_V`` and ``out<j>_V`` by ONNX position:
-  a kernel's cores bind their extents from the ports on its channels
-  (``kernel-extents``), so a node alone can commit its own choices only on
-  channels;
-- the **shell root** (``finn.custom_op.kernels.shell``): the same placement with
-  literal formals, on channels the root declares once per ONNX tensor and shares
-  between nodes.
+Every channel is a boundary port (``in<i>_V``, ``out<j>_V`` by ONNX position): a kernel's
+cores take their extents from the ports on its channels, so a node's choices can be
+checked on the node alone. The output channels are optional: bound on its inputs only,
+the root answers output inference. The platform is bound to the kernel and to every
+channel, so the requirements of their cases read the device the model is built for.
 
-What the graph decides is a declaration here, never a choice. The platform is a
-fact too: the target's capabilities and its clock period (``read_target``),
-bound to the kernel and to every channel, so the requirements of their value
-cases (``requires``) read the device the model is built for.
+A partition's shell root (``shell``) places the same kernels (``placed``), with fixed
+arguments, on channels shared between nodes.
 """
 
 from __future__ import annotations
@@ -89,8 +70,8 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
             if port is None:
                 continue
             output = side == "out"
-            # An output's tensor is optional; its semantics stated, since its guard reads it
-            # before the class is collected.
+            # An output's tensor is optional. Its semantics are given here, because its
+            # guard reads them before the class is collected.
             tensor: Tensor = (
                 Param(required=False, semantics=default_semantics(Tensor)) if output else Param()
             )
