@@ -38,7 +38,7 @@ from datetime import datetime
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn import resources
-from finn.builder.build_dataflow_checks import configuration_findings, required_vivado
+from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
@@ -152,8 +152,7 @@ def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Mani
 def _identity(cfg: DataflowBuildConfig, target: Target | None) -> dict:
     """The build's identity for its manifest: FINN's revision, the toolchain's selection
     (the configuration's over the machine's) and the resolved ``target``, each None where
-    it is not known. The model is added as the build reads it, and the Vivado release
-    where a probe found it (_indexed)."""
+    it is not known. The model is added as the build reads it."""
     try:
         selection = asdict(host_selection(stated=cfg.toolchain))
     except ValueError:
@@ -176,26 +175,11 @@ def _identity(cfg: DataflowBuildConfig, target: Target | None) -> dict:
     }
 
 
-def _vivado_release(
-    cfg: DataflowBuildConfig, target: Target | None, manifest: Manifest
-) -> str | None:
-    """The Vivado release of the build's toolchain where the build ran a tool or checked
-    the release its board requires, as the toolchain's probe found it; None where it
-    did neither, or nothing probed it. Never asks Vivado."""
-    ran = any(step["tools"] for step in manifest.state["steps"])
-    if not ran and (target is None or required_vivado(target) is None):
-        return None
-    toolchain = vars(cfg).get("prepared_toolchain")
-    found = None if toolchain is None else toolchain.probed("vivado")
-    return None if found is None else "%d.%d" % tuple(found[:2])
-
-
 @contextlib.contextmanager
 def _indexed(cfg: DataflowBuildConfig, target: Target | None):
     """The build's manifest (``MANIFEST_FILE`` in the output directory) for the ``with``
     block, written at once and filled from the records of RECORDS (ManifestHandler), whose
-    level is INFO meanwhile; at its end, the Vivado release in its identity where the
-    build asked it (_vivado_release)."""
+    level is INFO meanwhile."""
     manifest = Manifest(cfg.output_dir, _identity(cfg, target))
     handler = ManifestHandler(manifest)
     level = RECORDS.level
@@ -204,9 +188,6 @@ def _indexed(cfg: DataflowBuildConfig, target: Target | None):
     try:
         yield manifest
     finally:
-        release = _vivado_release(cfg, target, manifest)
-        if release is not None:
-            manifest.identify(vivado=release)
         RECORDS.removeHandler(handler)
         RECORDS.setLevel(level)
         handler.close()

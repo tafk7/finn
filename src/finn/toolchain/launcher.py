@@ -646,11 +646,6 @@ class Toolchain:
         by the selection and the environment's PATH."""
         return (*what, self.selection, self.environment.get("PATH", ""))
 
-    def probed(self, tool: str) -> tuple[int, ...] | None:
-        """The release ``probe`` found for ``tool`` on this route in this process, or
-        None if it has not asked; never runs the tool."""
-        return _VERSIONS.get(self.probe_key("version", tool))
-
     def probe(self, tool: str, timeout: float = PROBE_TIMEOUT) -> tuple[int, ...]:
         """The tool's AMD release, (year, minor), asked through exactly the execution
         route; once per selection and PATH in a process. Not a licence test.

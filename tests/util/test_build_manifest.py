@@ -134,7 +134,6 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
         "vivado_jobs",
     }
     assert identity["finn"] == finn_revision()
-    assert "vivado" not in identity  # nothing asked the fake toolchain's Vivado
     assert manifest["configuration_findings"] == []
     steps = {step["name"]: step for step in manifest["steps"]}
     assert list(steps) == ["step_reports", "step_tools", "step_looks"]
@@ -159,17 +158,6 @@ def test_a_completed_build_is_indexed_step_by_step(tmp_path):
         "build.json",
         "checked.json",
     ]
-
-
-def test_the_release_is_the_probes_where_the_build_ran_a_tool(tmp_path, monkeypatch):
-    """Where a step ran a tool, the Vivado release a probe of the build's toolchain found
-    in this process; a build that ran none states none, though a probe found it."""
-    key = fake_toolchain(tmp_path / "tools").probe_key("version", "vivado")
-    monkeypatch.setitem(launcher._VERSIONS, key, (2025, 2))
-    _, manifest, _ = build_of(tmp_path, [step_tools])
-    assert manifest["identity"]["vivado"] == "2025.2"
-    _, manifest, _ = build_of(tmp_path, [step_reports])
-    assert "vivado" not in manifest["identity"]
 
 
 def raising(error):

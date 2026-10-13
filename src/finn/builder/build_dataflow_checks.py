@@ -23,16 +23,11 @@ from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
 
 
-def required_vivado(target: Target) -> tuple[int, int] | None:
-    """The Vivado release the target's board requires (``Board.vivado``), if any."""
-    return None if target.board is None else BOARDS[target.board].vivado
-
-
 def _board_vivado(cfg: DataflowBuildConfig, target: Target) -> list[Finding]:
     """The rejection of a toolchain whose Vivado is older than the release the target's
     board requires, or that has none. Vivado is asked its release only for such a
     board."""
-    required = required_vivado(target)
+    required = None if target.board is None else BOARDS[target.board].vivado
     if required is None:
         return []
     needed = "%d.%d" % required

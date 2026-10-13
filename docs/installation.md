@@ -492,8 +492,7 @@ transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as t
 tool runs), the intermediate models, and the outputs asked. `report/build.json` is
 the build's manifest, the index of the run a program reads after the exit code, and
 never the log: the build's identity (FINN's revision where it is known, the
-toolchain's selection, the target, the model, and the Vivado release where the build
-probed it: for a board that requires a release, or in a tool step), what checking the
+toolchain's selection, the target and the model), what checking the
 configuration found (its rejections and the limitations warned of), the plan (the steps
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then

@@ -9,9 +9,7 @@ The model and the manifest index different things: the model indexes the design 
 the artifacts a later step uses (``finn.outputs``); the manifest indexes the run:
 
 - ``identity``: what ran it: FINN's revision where it is known (``finn_revision``), the
-  toolchain's selection, the target, the model read, the output directory, and, where
-  the build ran a tool or checked the release its board requires, the Vivado release
-  the toolchain's probe found;
+  toolchain's selection, the target, the model read and the output directory;
 - ``plan``: the steps the build runs (finn.builder.build_dataflow_plan), by name, and
   each setting with its value, whether the configuration gave it (else its default), and
   the steps that read it;

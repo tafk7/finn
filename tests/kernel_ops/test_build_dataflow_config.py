@@ -46,7 +46,6 @@ from finn.core.graph.partition import partition_body
 from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
-from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config
 from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_settings
@@ -368,27 +367,17 @@ def step_nothing(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     return model
 
 
-def test_the_manifest_states_the_release_only_where_the_build_asked_it(
+def test_a_build_for_a_board_that_requires_no_release_never_asks_vivado(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The release the toolchain's probe found in this process, for a board that
-    requires one; a build that never asks Vivado states none."""
     source = tmp_path / "model.onnx"
     onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), source)
-    built = {}
-    for board in ("AUP-ZU3_8GB", "Ultra96"):
-        cfg = board_build(tmp_path / board, board)
-        cfg.output_dir = str(tmp_path / board / "output")
-        cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
-        key = cfg.prepared_toolchain.probe_key("version", "vivado")
-        monkeypatch.setitem(launcher._VERSIONS, key, (2025, 2))
-        if board == "Ultra96":
-            monkeypatch.setattr(Toolchain, "probe", never)
-        assert build_dataflow_cfg(str(source), cfg) == 0
-        built[board] = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
-    assert built["AUP-ZU3_8GB"]["identity"]["vivado"] == "2025.2"
-    assert "vivado" not in built["Ultra96"]["identity"]
-    assert sorted(path.name for path in (tmp_path / "Ultra96" / "output").iterdir()) == [
+    cfg = board_build(tmp_path, "Ultra96")
+    cfg.output_dir = str(tmp_path / "output")
+    cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
+    monkeypatch.setattr(Toolchain, "probe", never)
+    assert build_dataflow_cfg(str(source), cfg) == 0
+    assert sorted(path.name for path in (tmp_path / "output").iterdir()) == [
         "build_dataflow.log",
         "intermediate_models",
         "report",
