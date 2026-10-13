@@ -15,7 +15,7 @@ from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.eltwise import EltwiseKernel
 from finn.platform.capabilities import DspBlock, Platform
-from kernels.helpers import eltwise
+from kernels.helpers import eltwise, module_of
 from kernels.specs.eltwise import computed
 from kernels.sweeps import eltwise_numeric
 
@@ -140,4 +140,4 @@ def test_the_numeric_sweep_covers_each_operation_a_broadcast_and_float_arithmeti
     assert {1, 8} <= {case.pe for case in cases if case.lhs_shape[-1] == 8}
     for case in cases:
         point = eltwise_numeric.placed(case)
-        assert not isinstance(point.query(type(point).module), Rejected), case.label
+        assert not isinstance(module_of(point, eltwise_numeric.stem(case)), Rejected), case.label

@@ -38,11 +38,11 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.channels import Channel, end_of, wired
-from finn.kernels.configure import commit
+from finn.kernels.channels import Channel, wired
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.transport import (
     MarkerKind,
     ReadyValidStream,
@@ -52,7 +52,14 @@ from finn.kernels.transport import (
     marker_pairs,
 )
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Root, with_direct_transports
+from kernels.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    built,
+    choose,
+    cycles_of,
+    with_direct_transports,
+)
 from kernels.xsim import requires_xsim
 
 INT3 = ScalarEncoding(DataType["INT3"])
@@ -500,54 +507,60 @@ def eltwise_with_constant(form=None):
     c_tensor = Tensor((CHANNELS,), INT4)
     y_tensor = Tensor((PIXELS, CHANNELS), ScalarEncoding(int5))
 
-    class Constant(Root):
-        x_end = end_of("add", "lhs_end")
-        c_producer = end_of("rhs", "output_end")
-        c_consumer = end_of("add", "rhs_end")
-        y_end = end_of("add", "result_end")
-        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
-        c = Channel(
-            tensor=c_tensor,
-            adaptable=False,
-            producer=c_producer,
-            consumer=c_consumer,
-            platform=FULL_DSP48E2,
-        )
-        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=FULL_DSP48E2)
-        rhs = MemStreamKernel(
-            platform=FULL_DSP48E2,
-            dtype=int4,
-            form=form,
-            contents=PARAMETERS,
-            output_tensor=c_tensor,
-        )
-        add = EltwiseKernel(
-            operation="ADD",
-            pe=PE,
-            lhs_dtype=int4,
-            rhs_dtype=int4,
-            b_scale=1.0,
-            platform=FULL_DSP58,
-            lhs_tensor=x_tensor,
-            rhs_tensor=c_tensor,
-            result_tensor=y_tensor,
-        )
-
-    return commit(
-        with_direct_transports(design_space(Constant())),
-        {"rhs.ram_style": "distributed", "rhs.pumped_memory": False},
+    network = Network(
+        {
+            "x": wire(
+                tensor=x_tensor,
+                port="in0_V",
+                consumer=Interface("add", "lhs_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "c": wire(
+                tensor=c_tensor,
+                adaptable=False,
+                producer=Interface("rhs", "output_end"),
+                consumer=Interface("add", "rhs_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "y": wire(
+                tensor=y_tensor,
+                port="out0_V",
+                producer=Interface("add", "result_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "rhs": MemStreamKernel(
+                platform=FULL_DSP48E2,
+                dtype=int4,
+                form=form,
+                contents=PARAMETERS,
+                output_tensor=c_tensor,
+            ),
+            "add": EltwiseKernel(
+                operation="ADD",
+                pe=PE,
+                lhs_dtype=int4,
+                rhs_dtype=int4,
+                b_scale=1.0,
+                platform=FULL_DSP58,
+                lhs_tensor=x_tensor,
+                rhs_tensor=c_tensor,
+                result_tensor=y_tensor,
+            ),
+        }
     )
+    chosen = choose(network, {"rhs.ram_style": "distributed", "rhs.pumped_memory": False})
+    return with_direct_transports(chosen)
 
 
 def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract():
-    module = eltwise_with_constant().module
+    module = built(eltwise_with_constant(), "constant")
     (into,) = [link for link in module.fragment.links if link.sink.data == "bdat"]
     # Lane for lane: the memory's channels are the ones eltwise reads.
     assert (into.source.instance, into.sink.instance) == ("rhs", "add")
     assert (into.lanes, into.lane_bits) == ((0, 1), 4)
     # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup.
     strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
-    refused = eltwise_with_constant(strided).c.query(Channel.netlist)
+    refused = eltwise_with_constant(strided).member("c").query(Channel.netlist)
     assert isinstance(refused, Rejected)
     (plan,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert "another lane axis" in plan.message
@@ -586,10 +599,10 @@ def test_eltwise_with_cyclic_constant_computes_the_broadcast_sum(tmp_path):
     words_out = [pack_lanes(expected[i : i + PE], 5) for i in range(0, len(expected), PE)]
     design = eltwise_with_constant()
     stream_through(
-        design.module,
+        built(design, "constant"),
         tmp_path,
         inputs={"in0_V": (words_in, 4 * PE)},
         outputs={"out0_V": (words_out, 5 * PE)},
-        cycles=design.cycles,
+        cycles=cycles_of(design).value,
         toolchain=host_toolchain(),
     )

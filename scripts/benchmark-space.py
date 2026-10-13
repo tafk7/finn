@@ -8,7 +8,7 @@ Example after installing the checkout or setting PYTHONPATH=src:
     python scripts/benchmark-space.py --output /tmp/space-performance.json
 
 Space classes are called to declare nodes, and their design spaces opened with
-``design_space(Root(...))``.
+``design_space(Root(...))``; a kernel is its own root, as a network binds it.
 Compilation itself is measured through ``finn.core.space.compiler.compile_model``.
 Native self-read and real-kernel workloads run in fresh subprocesses; the kernels
 are built and configured through ``finn.kernels``' public construction path.
@@ -538,9 +538,10 @@ def kernel_fixtures(api):
     """Each kernel workload by name: its root node, the step that configures a point of
     it, and the member path of the module view measured.
 
-    A leaf (the FIFO) is its own root; a kernel on streams (the packed Dotp core,
-    MatMul) sits in a root that declares them beside it. Choices are committed as a
-    flow commits them, by their stable decision keys (``finn.kernels.configure.commit``).
+    Each kernel is its own root, bound as a network binds it (``finn.kernels.network``):
+    the FIFO; the packed Dotp core and MatMul on the tensors their channels carry.
+    Choices are committed as a flow commits them, by their stable decision keys
+    (``finn.kernels.configure.commit``).
     """
     FifoKernel = importlib.import_module("finn.kernels.fifo").FifoKernel
     MatMulKernel = importlib.import_module("finn.kernels.matmul").MatMulKernel
@@ -548,8 +549,6 @@ def kernel_fixtures(api):
     commit = importlib.import_module("finn.kernels.configure").commit
     target = importlib.import_module("finn.platform.capabilities")
     Fabric = target.Fabric
-    channels = importlib.import_module("finn.kernels.channels")
-    Channel, end_of = channels.Channel, channels.end_of
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
@@ -563,41 +562,14 @@ def kernel_fixtures(api):
     )
     int3, int8 = dtype("INT3"), dtype("INT8")
 
-    def streams(kernel, x, w, y):
-        """The three boundary streams of ``kernel``'s tensors, each taking its end."""
-        ends = {
-            "x_end": end_of(kernel, "x_end"),
-            "w_end": end_of(kernel, "w_end"),
-            "y_end": end_of(kernel, "y_end"),
-        }
-        return {
-            **ends,
-            "x": Channel(tensor=x, port="in0_V", consumer=ends["x_end"], platform=platform),
-            "w": Channel(tensor=w, port="in1_V", consumer=ends["w_end"], platform=platform),
-            "y": Channel(tensor=y, port="out0_V", producer=ends["y_end"], platform=platform),
-        }
-
-    # A dot-product core between three boundary streams.
+    # A dot-product core on three tensors.
     dotp_tensors = (
         Tensor((1, 4), ScalarEncoding(int3)),
         Tensor((4, 4), ScalarEncoding(int3)),
         Tensor((1, 4), ScalarEncoding(int8)),
     )
-    dotp_root = api.composite(
-        "PlacedDotp",
-        {
-            **streams("compute", *dotp_tensors),
-            "compute": PackedDotpKernel(
-                x_tensor=dotp_tensors[0],
-                w_tensor=dotp_tensors[1],
-                y_tensor=dotp_tensors[2],
-                result_range=(-128, 127),  # int8's: the core's accumulator is INT8
-                platform=platform,
-            ),
-        },
-    )
 
-    # A MatMul (M=2, K=4, N=4) on streams that carry the tensors it derives.
+    # A MatMul (M=2, K=4, N=4) on the tensors it derives.
     datatype_range = importlib.import_module("finn.kernels.matmul").datatype_range
     range_dtype = importlib.import_module("finn.kernels.values.domains").range_dtype
     matmul_tensors = (
@@ -605,11 +577,35 @@ def kernel_fixtures(api):
         Tensor((4, 4), ScalarEncoding(int3)),
         Tensor((2, 4), ScalarEncoding(range_dtype(*datatype_range(4, int3, int3)))),
     )
-    matmul_root = api.composite(
-        "PlacedMatMul",
-        {
-            **streams("matmul", *matmul_tensors),
-            "matmul": MatMulKernel(
+
+    return {
+        "fifo": (
+            FifoKernel(word_bits=16, depth=32, platform=platform),
+            lambda point, index: point.with_choices(ram_style=("block", "distributed")[index % 2]),
+            "module",
+        ),
+        "dotp": (
+            PackedDotpKernel(
+                x_tensor=dotp_tensors[0],
+                w_tensor=dotp_tensors[1],
+                y_tensor=dotp_tensors[2],
+                result_range=(-128, 127),  # int8's: the core's accumulator is INT8
+                platform=platform,
+            ),
+            lambda point, index: commit(
+                point,
+                {
+                    "pe": 2,
+                    "simd": 2,
+                    "reducer": "tree",
+                    "compute_pumping": bool(index % 2),
+                },
+            ),
+            "module",
+        ),
+        # The compute core is a Decision over kernels; ``packed`` is its entry.
+        "matmul": (
+            MatMulKernel(
                 m=2,
                 n=4,
                 k=4,
@@ -620,42 +616,17 @@ def kernel_fixtures(api):
                 w_tensor=matmul_tensors[1],
                 y_tensor=matmul_tensors[2],
             ),
-        },
-    )
-
-    return {
-        "fifo": (
-            FifoKernel(word_bits=16, depth=32, platform=platform),
-            lambda point, index: point.with_choices(ram_style=("block", "distributed")[index % 2]),
-            "module",
-        ),
-        "dotp": (
-            dotp_root(),
             lambda point, index: commit(
                 point,
                 {
-                    "compute.pe": 2,
-                    "compute.simd": 2,
-                    "compute.reducer": "tree",
-                    "compute.compute_pumping": bool(index % 2),
+                    "compute": "packed",
+                    "compute.packed.pe": (1, 2)[index % 2],
+                    "compute.packed.simd": 2,
+                    "compute.packed.compute_pumping": False,
+                    "compute.packed.reducer": "tree",
                 },
             ),
             "compute.module",
-        ),
-        # The compute core is a Decision over kernels; ``packed`` is its entry.
-        "matmul": (
-            matmul_root(),
-            lambda point, index: commit(
-                point,
-                {
-                    "matmul.compute": "packed",
-                    "matmul.compute.packed.pe": (1, 2)[index % 2],
-                    "matmul.compute.packed.simd": 2,
-                    "matmul.compute.packed.compute_pumping": False,
-                    "matmul.compute.packed.reducer": "tree",
-                },
-            ),
-            "matmul.compute.module",
         ),
     }
 

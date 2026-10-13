@@ -28,6 +28,7 @@ from finn.dataflow.traversal import Traversal, vector_major
 from finn.harness.toolchain import print_identity
 from finn.toolchain.launcher import host_toolchain
 from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
+from kernels.helpers import built
 from kernels.sweeps.rtl_transport import drive
 
 BITS = ELEMENT.bits
@@ -40,8 +41,8 @@ def _padded(words, bits):
     return [word | padding for word in words]
 
 
-def _build(point, directory):
-    return materialize(point.module, directory, toolchain=host_toolchain())
+def _build(point, stem, directory):
+    return materialize(built(point, stem), directory, toolchain=host_toolchain())
 
 
 ROWS, CHANNELS = 3, 12
@@ -67,12 +68,12 @@ def run_adapted(label, source, pe, modules, evidence):
     point = adapted(source, pe)
     kinds = tuple(
         "vpc" if stage.label.rsplit(".", 1)[-1].startswith("vpc") else "input_gen"
-        for stage in point.x.stages
+        for stage in point.member("x").stages
     )
     assert kinds == modules, (label, kinds)
     levels = [value + 8 for row in values(*source.shape) for value in row]
     expected = [pack_lanes(levels[start : start + pe], 4) for start in range(0, len(levels), pe)]
-    top, sources, data = _build(point, evidence / f"adapted_{label}")
+    top, sources, data = _build(point, "adapted", evidence / f"adapted_{label}")
     mask = (1 << (4 * pe)) - 1
     for stalls in (False, True):
         out = drive(
@@ -104,7 +105,7 @@ def run_transpose(rows, cols, simd, evidence):
         for start in range(0, rows, simd)
     ]
     top, sources, data = _build(
-        transposed(rows, cols, simd), evidence / f"shuffle_{rows}_{cols}_{simd}"
+        transposed(rows, cols, simd), "transposed", evidence / f"shuffle_{rows}_{cols}_{simd}"
     )
     mask = (1 << (simd * BITS)) - 1
     for stalls in (False, True):

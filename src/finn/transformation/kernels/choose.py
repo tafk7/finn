@@ -12,7 +12,9 @@ cut's alone: a model holding any other node is refused. It builds the body's she
 (``shell_root``: their kernels, the channels between them and the channels on its
 boundary; the nodes' and the channels' saved
 choices replayed, a stale one dropped with why; members named as the graph,
-``MatMul_0``) and its ``Seam`` (``finn.kernels.explore``), holds the pins the body
+``MatMul_0``), presents it to its ``Seam`` (``finn.kernels.explore``) as a network
+(``ShellRoot.network``: each choice keyed by its owner, a node or a tensor, and the key
+there), holds the pins the body
 records (``HELD``), gives every choice the body leaves open its baseline
 (``Seam.baseline``: what ``BaselineChoices`` does, a no-op on a body the cut created; on
 a body made by hand, or for a choice replay dropped as stale, the report names what it

@@ -146,10 +146,12 @@ T = TypeVar("T")
 
 
 class Composition(Protocol):
-    """What the seam explores: a ``finn.kernels.network.Network``. Its members by name,
-    ranked, its channels among them, and per member its point, its exports, its
-    Decisions, what of them is viable, open, forced and stored, its admission, and a
-    change (``trial``); what it uses beside its members (``own_resources``)."""
+    """What the seam explores: a ``finn.kernels.network.Network`` (or, until the graph
+    binds one, a root of the graph's presented as one, ``finn.custom_op.kernels.rooted``).
+    Its members by name, ranked, its channels among them, and per member its point, its
+    exports, its Decisions, what of them is viable, open, forced and stored, its
+    admission, and a change (``trial``); what it uses beside its members
+    (``own_resources``)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...
@@ -556,6 +558,8 @@ class Seam:
         baselined: dict[Key, object] = {}
         passed: set[Key] = set()
         names = None if members is None else tuple(members)
+        if keys is not None:
+            names = tuple(dict.fromkeys(key[0] for key in keys if names is None or key[0] in names))
         while True:
             choice = next(
                 (
@@ -1405,7 +1409,7 @@ class _Asked:
 class _Tried:
     """One budget ``MaxThroughput`` tried (``None``: no budget, the least parallelism),
     what ``TargetCycles`` relaxed it to, the bottleneck its settled network reached,
-    the root's resources there as far as they are stated (``Seam.resources``), and
+    the network's resources there as far as they are stated (``Seam.resources``), and
     whether they fit."""
 
     cycles: int | None
@@ -1439,10 +1443,10 @@ class MaxThroughput:
     (the least parallelism); then the least budget between their bottlenecks whose
     network fits. Its scope is ``TargetCycles``' (``Seam.run``), reopened once; each
     budget's network is costed settled (``Seam.settle``: what the fold does not decide at
-    its earlier value or its baseline), by the root's resources as far as they are
-    stated (``Seam.resources``: on a shell root its partition's, its ends' and its
-    static region's). Of every network tried, it keeps the one that fits with the fewest
-    cycles, ties to the least resources (the highest use-to-budget ratio first, then
+    its earlier value or its baseline), by the network's resources as far as they are
+    stated (``Seam.resources``: a shell's adds its ends' and its static region's). Of
+    every network tried, it keeps the one that fits with the fewest cycles, ties to the
+    least resources (the highest use-to-budget ratio first, then
     the next; then the first tried), and returns it, settled. Fewer cycles, more
     resources is the assumption, as ``TargetCycles``' is; where a budget's network
     departs from it (a larger budget reaching fewer cycles or using more, or a budget
@@ -1639,7 +1643,7 @@ class MaxThroughput:
     def _cost(
         self, seam: Seam, folded: Composition, prior: Mapping[Key, object]
     ) -> tuple[Bottleneck, Stated]:
-        """The bottleneck and the root's resources, as far as they are stated, of
+        """The bottleneck and the network's resources, as far as they are stated, of
         ``folded`` settled from ``prior``."""
         settled = seam.settle(folded, prior)
         cost = seam.cost(settled)
@@ -1648,7 +1652,8 @@ class MaxThroughput:
             raise ExploreError("max_throughput needs every member's cycles: " + _unknown(cost))
         if not isinstance(used, Stated):
             raise ExploreError(
-                "max_throughput needs the root's resources: " + "; ".join(map(finding_text, used))
+                "max_throughput needs the network's resources: "
+                + "; ".join(map(finding_text, used))
             )
         return reached, used
 

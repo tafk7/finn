@@ -49,12 +49,13 @@ and budgets.
   initializer beside its value), each under the root key below the member;
 - **paths**: a key of the root is a member and the key below it
   (``MatMul_0.compute.packed.pe``, ``Reshape_0_out0.transport``): the owners, the
-  replayed choices, the dropped ones and the members whose cost a design space
-  exploration reads (``members``: channels in node order, then kernels) are all named
-  so, and a key's member is the longest member path that prefixes it
-  (``finn.kernels.configure.member_of``); its owner states the key below it
-  (``compute.packed.pe`` on the node ``MatMul_0``, ``transport`` on the tensor
-  ``Reshape_0_out0``);
+  replayed choices, the dropped ones and the members (``members``: channels in node
+  order, then kernels) are all named so, and a key's member is the longest member path
+  that prefixes it (``finn.kernels.configure.member_of``); its owner states the key below
+  it (``compute.packed.pe`` on the node ``MatMul_0``, ``transport`` on the tensor
+  ``Reshape_0_out0``). A design space exploration reads the root as a network
+  (``ShellRoot.network``, ``finn.custom_op.kernels.rooted``): its members by owner,
+  kernels first, each key a pair, the owner and the key there;
 - **replay**: every node's choices and every channel's, from its tensor, together; a
   choice the current facts refuse or make inapplicable (a key nested under a
   selector a fact change un-forced: ``compute.packed.pe`` once ``compute`` is open)

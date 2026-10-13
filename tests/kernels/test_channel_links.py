@@ -11,18 +11,18 @@ the root's own pins (``None``).
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Rejected, Space, design_space, view
+from finn.core.space import Rejected, Space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.base import PORT_END, PortEnd
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
+from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.transport import AxisBeat, StreamContract
-from kernels.helpers import FULL_DSP48E2, with_adapter_memories, with_direct_transports
+from kernels.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 X = Tensor((3, 4), ScalarEncoding(INT3))
@@ -30,38 +30,54 @@ W = Tensor((4, 4), ScalarEncoding(INT3))
 Y = Tensor((3, 4), ScalarEncoding(INT8))
 
 
-class Placed(Space):
-    """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2."""
-
-    x_end = end_of("compute", "x_end")
-    w_end = end_of("compute", "w_end")
-    y_end = end_of("compute", "y_end")
-    x = Channel(tensor=X, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
-    w = Channel(platform=FULL_DSP48E2, tensor=W, port="in1_V", consumer=w_end)
-    y = Channel(tensor=Y, port="out0_V", producer=y_end, platform=FULL_DSP48E2)
-    compute = PackedDotpKernel(
-        result_range=ordinary_integer_bounds(INT8),
-        x_tensor=X,
-        w_tensor=W,
-        y_tensor=Y,
-        platform=FULL_DSP48E2,
+def placing(*, w_port: str | None = "in1_V") -> Network:
+    """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2
+    (the weight channel's port ``w_port``)."""
+    named = {} if w_port is None else {"port": w_port}
+    return Network(
+        {
+            "x": wire(
+                tensor=X,
+                port="in0_V",
+                consumer=Interface("compute", "x_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "w": wire(
+                platform=FULL_DSP48E2, tensor=W, consumer=Interface("compute", "w_end"), **named
+            ),
+            "y": wire(
+                tensor=Y,
+                port="out0_V",
+                producer=Interface("compute", "y_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "compute": PackedDotpKernel(
+                result_range=ordinary_integer_bounds(INT8),
+                x_tensor=X,
+                w_tensor=W,
+                y_tensor=Y,
+                platform=FULL_DSP48E2,
+            ),
+        }
     )
 
 
-def placed(**transport: object) -> Placed:
-    choices = {
-        "compute.pe": 2,
-        "compute.simd": 2,
-        "compute.compute_pumping": False,
-        "compute.reducer": "tree",
-        **transport,
-    }
-    return with_adapter_memories(commit(with_direct_transports(design_space(Placed())), choices))
+FOLDING = {
+    "compute.pe": 2,
+    "compute.simd": 2,
+    "compute.compute_pumping": False,
+    "compute.reducer": "tree",
+}
+
+
+def placed(**transport: object) -> Network:
+    folded = choose(placing(), FOLDING)
+    return with_adapter_memories(with_direct_transports(choose(folded, transport)))
 
 
 def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     point = placed(**{"w.transport": "direct"})
-    fragment = point.x.netlist
+    fragment = point.member("x").netlist
     ((label, leaf),) = fragment.instances
     assert label == "adapter.input_gen.input_gen"
     assert isinstance(leaf, Leaf) and leaf.name == "input_gen"
@@ -73,9 +89,9 @@ def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     # The frame marker: the input_gen's olst bit closing each reduction drives TLAST.
     assert out.markers == (("olst", 1, "s_axis_input_tlast", None),)
     # A direct channel is one hop, and only a boundary channel presents a bus.
-    (direct,) = point.y.netlist.links
+    (direct,) = point.member("y").netlist.links
     assert (direct.source.instance, direct.sink.instance) == ("^compute", None)
-    assert [bus.name for bus in point.y.boundary_bus] == ["out0_V"]
+    assert [bus.name for bus in point.member("y").boundary_bus] == ["out0_V"]
 
 
 def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
@@ -86,7 +102,7 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
             "w.transport.fifo.buffer.ram_style": "auto",
         }
     )
-    fragment = point.w.netlist
+    fragment = point.member("w").netlist
     assert [label for label, _ in fragment.instances] == ["transport.fifo.buffer"]
     assert [(item.source.instance, item.sink.instance) for item in fragment.links] == [
         (None, "transport.fifo.buffer"),
@@ -98,22 +114,13 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     """A weight channel with one end and no port is a boundary nothing may cross: only an
     ONNX input or output of a partition is one."""
 
-    class Unnamed(Placed):
-        w = Channel(tensor=W, consumer=Placed.w_end, platform=FULL_DSP48E2)
-
-    folding = {
-        "compute.pe": 2,
-        "compute.simd": 2,
-        "compute.compute_pumping": False,
-        "compute.reducer": "tree",
-    }
-    refused = commit(design_space(Unnamed()), folding).w.query(Channel.endpoints)
+    refused = choose(placing(w_port=None), FOLDING).member("w").query(Channel.endpoints)
     assert isinstance(refused, Rejected)
     assert {(item.code, item.owner) for item in refused.findings} == {
-        ("channel-boundary", "w.endpoints")
+        ("channel-boundary", "endpoints")
     }
-    # The same root with the port named is accepted.
-    assert not isinstance(commit(design_space(Placed()), folding).w.endpoints, Rejected)
+    # The same network with the port named is accepted.
+    assert not isinstance(choose(placing(), FOLDING).member("w").endpoints, Rejected)
 
 
 class Reader(Space):
@@ -128,13 +135,16 @@ class Reader(Space):
 
 
 def test_an_end_that_is_no_kernels_port_has_no_netlist() -> None:
-    class Bare(Space):
-        reader_end = end_of("reader", "end")
-        edge = Channel(platform=FULL_DSP48E2, tensor=X, port="in0_V", consumer=reader_end)
-        reader = Reader()
-
-    point = with_direct_transports(design_space(Bare()))
-    assert point.edge.consumer.label == "reader"
-    refused = point.edge.query(Channel.netlist)
+    bare = Network(
+        {
+            "edge": wire(
+                platform=FULL_DSP48E2, tensor=X, port="in0_V", consumer=Interface("reader", "end")
+            ),
+            "reader": Reader(),
+        }
+    )
+    edge = with_direct_transports(bare).member("edge")
+    assert edge.consumer.label == "reader"
+    refused = edge.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"channel-port"}

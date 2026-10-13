@@ -52,7 +52,10 @@ children that read them, and the channels between its children are its own.
 Placed alone, as the root of what is emitted, it is one ``Composed`` module
 whose pins are ``ap_clk``, ``ap_clk2x`` when an instance takes a doubled clock,
 ``ap_rst_n``, the AXIS bus of each boundary channel it declares (inputs, then
-outputs) and each presented bus.
+outputs) and each presented bus. The merge is one plain function, which a network
+of kernels and channels (``finn.kernels.network``) composes its module with too:
+``composed_fragment``, ``composed_abi`` and ``built`` call its steps (``merged``,
+``module_abi``, ``assembled``).
 
 Every kernel exports its netlist (``NETLIST``) and its ``module`` (``MODULE``):
 the ``Leaf``, or the ``Composed`` module, accepted under ``admission``,

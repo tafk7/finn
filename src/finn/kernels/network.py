@@ -99,8 +99,9 @@ Key = tuple[str, str]
 
 
 def dotted(key: Key) -> str:
-    """A key as text, its owner and key joined (``first.compute.packed.pe``); a member's
-    own refusal (``(name, "")``) is its name."""
+    """A key as text, its owner and key joined (``first.compute.packed.pe``), as a report
+    names a value; a member's own refusal (``(name, "")``) is its name. Text only: a
+    member's name, a graph name, may hold a dot itself."""
     owner, name = key
     return f"{owner}.{name}" if name else owner
 
@@ -376,7 +377,7 @@ FactsKey = tuple[tuple[str, object], ...]
 _CHANNEL: Any = Channel
 
 
-@functools.lru_cache(maxsize=4096)
+@functools.lru_cache(maxsize=1024)
 def _bound(facts: FactsKey) -> Space:
     """A channel's design space, bound from ``facts``: one binding per set of facts."""
     point: Space = design_space(_CHANNEL(**dict(facts)))
@@ -390,7 +391,7 @@ def _items(values: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
     return tuple(sorted(values.items(), key=lambda item: item[0]))
 
 
-@functools.lru_cache(maxsize=16384)
+@functools.lru_cache(maxsize=4096)
 def _replay(
     facts: FactsKey,
     stored: tuple[tuple[str, object], ...],
@@ -505,8 +506,8 @@ class Network:
         kernels: dict[str, Space] = {}
         wires: dict[str, Wire] = {}
         for name, member in members.items():
-            if not name or "." in name:
-                raise NetworkError(f"{name!r} is no member name: a name, without a dot")
+            if not isinstance(name, str) or not name:
+                raise NetworkError(f"{name!r} is no member name")
             if isinstance(member, Wire):
                 wires[name] = member
             else:

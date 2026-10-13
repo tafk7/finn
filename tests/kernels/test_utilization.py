@@ -22,8 +22,6 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.base import RESOURCES
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
     PackedDotpKernel,
@@ -33,6 +31,7 @@ from finn.kernels.dotp import (
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import (
     ThresholdingAxiKernel,
     stage_style,
@@ -56,7 +55,7 @@ from kernels.adapted import ELEMENT, transposed
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
-    Root,
+    choose,
     eltwise,
     placed_dotp,
     threshold_base,
@@ -265,14 +264,26 @@ def pages(rows: int, cols: int) -> Any:
 
     tensor = Tensor(shape, ELEMENT)
 
-    class Transposed(Root):
-        a_end = end_of("shuffle", "input_end")
-        b_end = end_of("shuffle", "output_end")
-        a = Channel(tensor=tensor, port="in0_V", consumer=a_end, platform=FULL_DSP48E2)
-        b = Channel(tensor=tensor, port="out0_V", producer=b_end, platform=FULL_DSP48E2)
-        shuffle = TransposeKernel(input_tensor=tensor, output_tensor=tensor, platform=FULL_DSP48E2)
-
-    return commit(with_direct_transports(design_space(Transposed())), {"shuffle.simd": 4})
+    network = Network(
+        {
+            "a": wire(
+                tensor=tensor,
+                port="in0_V",
+                consumer=Interface("shuffle", "input_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "b": wire(
+                tensor=tensor,
+                port="out0_V",
+                producer=Interface("shuffle", "output_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "shuffle": TransposeKernel(
+                input_tensor=tensor, output_tensor=tensor, platform=FULL_DSP48E2
+            ),
+        }
+    )
+    return with_direct_transports(choose(network, {"shuffle.simd": 4}))
 
 
 def cases(point: Any, decision: Any) -> tuple[str, ...]:
@@ -290,8 +301,8 @@ def test_each_memory_offers_its_explicit_styles_by_size_then_auto() -> None:
     assert cases(table(2048), MemStreamKernel.ram_style) == BLOCK_FIRST
     assert cases(buffer(255), InputGeneratorKernel.ram_style) == LUTRAM_FIRST
     assert cases(buffer(256), InputGeneratorKernel.ram_style) == BLOCK_FIRST
-    assert cases(pages(32, 32).shuffle, TransposeKernel.ram_style) == BLOCK_FIRST
-    assert cases(pages(16, 32).shuffle, TransposeKernel.ram_style) == LUTRAM_FIRST
+    assert cases(pages(32, 32).member("shuffle"), TransposeKernel.ram_style) == BLOCK_FIRST
+    assert cases(pages(16, 32).member("shuffle"), TransposeKernel.ram_style) == LUTRAM_FIRST
     # The thresholds' stages left above the UltraRAM ones: distributed first.
     assert threshold_base().with_choices(ultra_stages=0).field(
         ThresholdingAxiKernel.ram_style
@@ -303,7 +314,7 @@ def test_each_memory_offers_its_explicit_styles_by_size_then_auto() -> None:
     [
         lambda: table(16).with_choices(ram_style="auto", pumped_memory=False),
         lambda: buffer(16).with_choices(ram_style="auto"),
-        lambda: transposed(16, 32, 4, ram_style="auto"),
+        lambda: transposed(16, 32, 4, ram_style="auto").member("shuffle"),
     ],
     ids=("memstream", "input_gen", "transpose"),
 )
