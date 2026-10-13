@@ -480,7 +480,8 @@ command exits 0 when the build completes, 255 when a step fails
 (`build_dataflow_directory` returns -1), and 1 with the traceback when the
 configuration is refused: before the first step, one `ConfigurationRefused` carries
 every rejection found, the target's, the plan's and the configuration checks', each a
-finding with its code and its place in the configuration. A caller that loads XSI in process supplies its
+finding with its code and its place in the configuration. A setting a step cannot take
+is refused when that step runs, as a `refusal` of the step. A caller that loads XSI in process supplies its
 loader environment before interpreter startup (`docker/finn-toolchain.sh` does for a
 shell). Concurrent in-process builds still share stdout and logger state; use
 separate build processes. See [the machine settings and remaining obligations](legacy-build-env-ledger.md).
@@ -601,7 +602,7 @@ runs in place of the default one: phase names (each its steps), step names, impo
 (`package.module.name`) of a step function or of a qonnx `Transformation` class, run with
 its defaults, or in Python the function, `functools.partial` or `Transformation` itself.
 A list names a phase for the steps it does not change, as above; in Python,
-`finn.builder.build_dataflow_plan.default_steps()` is the default list by step name, to
+`finn.builder.build_dataflow_steps.default_steps()` is the default list by step name, to
 change and give as `steps`. `start_step` and `stop_step` name a step once in the list,
 or a phase: its first step to start from, its last to stop after.
 
@@ -617,7 +618,8 @@ refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
 the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
-logic analyzers on the ends' streams, refused on `ip`); its clock report's objective
+logic analyzers on the ends' streams, refused by that step on a shell without a bitfile
+build, such as `ip`); its clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
 (a pin, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
@@ -657,12 +659,13 @@ channel from both ends' beat patterns at the bottleneck (`direct` where none is
 needed), `fifo_margin` words added to a FIFO it places. The default phase is
 `[step_size_fifos, step_verify_partition]`: the baseline folding, its FIFOs sized; a
 target throughput is `step_target_throughput` listed before it, with `target_fps` (the
-example above). FIFO depths are sized at the folding before them, so the plan
-refuses, before the first step, a step that may change the folding (pinning, a target
-or maximum throughput, going back to the baselines) after the last `step_size_fifos`,
-and one with no sizing after it in a build that does not cut the partition before it.
-A required choice left open (a FIFO's depth) is refused by name when the partition is
-built.
+example above). FIFO depths are sized at the folding before them: a step that may
+change the folding (any strategy step but the FIFO sizing and the debug placeholder, a
+step of your own included) marks a partition that holds a FIFO as sized at another
+folding (`finn.choices/fifos_stale`), `step_size_fifos` clears the mark, and packaging
+refuses a partition still marked: run `step_size_fifos` after the last step that may
+change the folding. A required choice left open (a FIFO's depth) is refused by name
+when the partition is built.
 
 Each strategy step writes its report, `report/<step>.json`, listed under it in the
 build's manifest: its strategy with the values it changed, reopened, kept and

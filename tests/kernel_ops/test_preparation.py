@@ -40,10 +40,9 @@ from qonnx.util.basic import qonnx_make_model
 from finn.analysis.comparison import Explanation, Run
 from finn.analysis.equivalence import DEVIATIONS, equivalence_with
 from finn.analysis.initializers import annotated_initializers
-from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
     build_dataflow_phases,
     step_streamline,
@@ -533,7 +532,7 @@ def test_a_list_can_insert_the_transform_thresholdings_hint_names(tmp_path: Path
         target=TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e"),
         steps=steps,
     )
-    names = [step.name for step in resolve_plan(cfg).steps]
+    names = [step.name for step in build_plan(cfg).steps]
     assert names[names.index("step_streamline") + 1] == LOWERING
 
 

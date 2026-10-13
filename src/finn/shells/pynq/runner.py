@@ -35,7 +35,7 @@ bitfile and its reports into the output directory it is given, and records the b
 and its hardware handoff in the parent graph (``finn.outputs``) with what the bitfile was
 made from; its reports are found beside it (``bitfile_directory``, ``REPORTS``).
 ``refuse_stale_bitfile`` refuses a bitfile made from another design than the partition's
-now.
+now. Both refusals, and the deployment's, are a ``PynqRefused``.
 
 The driver its host runtime runs is ``driver``'s.
 """
@@ -412,6 +412,15 @@ def bitfile_directory(model: ModelWrapper) -> Path | None:
     return Path(bitfile).parents[len(BITFILE.parts) - 1]
 
 
+class PynqRefused(ValueError):
+    """An output the ``pynq`` shell refuses to make: its one finding (``findings``), owned
+    by the output asked; the message names the output and says what to change."""
+
+    def __init__(self, output: str, code: str, message: str) -> None:
+        super().__init__(f"{output}: {message}")
+        self.findings = (Finding(FindingKind.REJECTION, code, output, message),)
+
+
 def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
     """The shell row of the target the parent graph ``model``'s partition body states,
     refused for ``output`` (the output asked, by name) unless the shell builds the Zynq
@@ -421,12 +430,16 @@ def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
     target = read_target(body)
     row = shell_row(target.shell, target.board)
     if row.integration is None:
-        raise ValueError(
-            f"{output}: the {target.shell!r} shell does not integrate the partition; "
-            "state a shell that does (pynq, for a board)"
+        raise PynqRefused(
+            output,
+            "shell-integrates-nothing",
+            f"the {target.shell!r} shell does not integrate the partition; "
+            "state a shell that does (pynq, for a board)",
         )
     if row.integration != VIVADO_BLOCK_DESIGN:
-        raise ValueError(f"{output}: no build for the {row.integration!r} integration")
+        raise PynqRefused(
+            output, "integration-unbuilt", f"no build for the {row.integration!r} integration"
+        )
     return row
 
 
@@ -569,16 +582,20 @@ def refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
     bitfile: str | None = model.get(OUTPUT_BITFILE)
     stated, now = model.get(OUTPUT_BITFILE_MADE_FROM), design_digest(body)
     if stated is None:
-        raise ValueError(
-            f"{output}: the model's bitfile ({bitfile}) states no design "
+        raise PynqRefused(
+            output,
+            "bitfile-unmade",
+            f"the model's bitfile ({bitfile}) states no design "
             "it was built from (finn.outputs bitfile_made_from); build the bitfile again "
-            "(bitfile)"
+            "(bitfile)",
         )
     if stated != now:
-        raise ValueError(
-            f"{output}: the model's bitfile ({bitfile}) is stale: it was "
+        raise PynqRefused(
+            output,
+            "bitfile-stale",
+            f"the model's bitfile ({bitfile}) is stale: it was "
             f"built from the design {stated}, and the partition {node.name}'s design is now "
-            f"{now}; build the bitfile again (bitfile)"
+            f"{now}; build the bitfile again (bitfile)",
         )
 
 
@@ -591,6 +608,7 @@ __all__ = [
     "InstanceIP",
     "PynqBuilt",
     "PynqOptions",
+    "PynqRefused",
     "bitfile_directory",
     "block_design",
     "build_pynq",

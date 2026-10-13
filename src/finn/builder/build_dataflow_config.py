@@ -11,7 +11,8 @@ Reading JSON refuses what the configuration does not declare, naming its place
 (``configuration.target: ...``).
 
 A build refuses a configuration before its first step with one ``ConfigurationRefused``
-carrying every rejection found.
+carrying every rejection found; a step refuses a setting it cannot take when it runs,
+with a ``ConfigurationRefused`` of its own.
 """
 
 from __future__ import annotations
@@ -53,8 +54,8 @@ def finding_line(finding: Finding) -> str:
 
 
 class ConfigurationRefused(ValueError):
-    """A configuration the build refuses before its first step, with every rejection
-    found (``findings``)."""
+    """A configuration the build refuses, before its first step or at the step that
+    reads the setting refused, with every rejection found (``findings``)."""
 
     def __init__(self, findings: Iterable[Finding]) -> None:
         self.findings = tuple(findings)
@@ -128,7 +129,7 @@ class DataflowBuildConfig:
     generate_outputs: list[DataflowOutputType] = field(default_factory=list)
 
     #: If given, the build runs these entries in order instead of the default list
-    #: (finn.builder.build_dataflow_plan.default_steps).
+    #: (finn.builder.build_dataflow_steps.default_steps).
     steps: Sequence[StepEntry] | None = None
 
     #: If given, start from this step, or a phase's first step, loading the

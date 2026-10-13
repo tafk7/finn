@@ -5,7 +5,9 @@
 
 A step is a function ``(model, cfg, *, settings...) -> model``; its keyword-only
 parameters are its settings. A phase names a list of steps; a build without ``steps``
-runs every phase's steps in order.
+runs every phase's steps in order (``default_steps``). A step refuses a setting it cannot
+take, or a model it cannot work on, when it runs, saying what to change: a setting's
+refusal is a ``ConfigurationRefused`` naming the setting.
 
 The steps prepare a Brevitas export into a streamlined graph; convert its nodes to
 KernelOps and cut them into one partition; choose the partition's parameters, one
@@ -38,9 +40,11 @@ from qonnx.util.cleanup import cleanup_model
 import finn.transformation.streamline.absorb as absorb
 import finn.transformation.streamline.reorder as reorder
 from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
     StepFunction,
+    config_finding,
 )
 from finn.builder.build_dataflow_manifest import reported, write_report
 from finn.builder.build_dataflow_resources import (
@@ -63,6 +67,7 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.platform.resolve import refuse_drift
+from finn.platform.shells import VIVADO_BLOCK_DESIGN, shell_row
 from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
@@ -133,9 +138,16 @@ def step_add_pre_post_processing(
         try:
             DataType[input_datatype]
         except KeyError:
-            raise ValueError(f"input_datatype: {input_datatype!r} is no qonnx datatype") from None
+            message = f"{input_datatype!r} is no qonnx datatype; name one, such as UINT8 or INT4"
+            place = "configuration.input_datatype"
+            raise ConfigurationRefused(
+                [config_finding("setting-invalid", message, place)]
+            ) from None
     if topk is not None and topk < 1:
-        raise ValueError(f"topk: {topk}; at least 1")
+        message = f"{topk}; give at least 1, or no topk for the network's own outputs"
+        raise ConfigurationRefused(
+            [config_finding("setting-invalid", message, "configuration.topk")]
+        )
     if preprocessing is not None:
         model = model.transform(
             MergeONNXModels(_cleaned(ModelWrapper(str(preprocessing))))  # type: ignore[no-untyped-call]
@@ -408,7 +420,17 @@ def step_build_bitfile(
     logged as a warning, against the throughput step_target_throughput folded to, where
     the partition's body records one.
 
-    ``hw_debug``: insert integrated logic analyzers on the ends' streams."""
+    ``hw_debug``: insert integrated logic analyzers on the ends' streams; refused where
+    the target's shell has no bitfile build, whether or not BITFILE is asked."""
+    target = cfg.resolved_target
+    if hw_debug and shell_row(target.shell, target.board).integration != VIVADO_BLOCK_DESIGN:
+        message = (
+            f"the {target.shell!r} shell has no build to take it; state a shell with a "
+            "bitfile build (pynq, for a board), or leave hw_debug out"
+        )
+        raise ConfigurationRefused(
+            [config_finding("hw-debug-shell", message, "configuration.hw_debug")]
+        )
     if DataflowOutputType.BITFILE not in cfg.generate_outputs:
         _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
         return model
@@ -517,16 +539,6 @@ KERNEL_STRATEGY_STEPS: list[StepFunction] = [
     step_placeholder_choices,
 ]
 
-#: The strategy steps that may change the kernels' folding, and those that size the FIFOs
-#: at the folding they find: the plan refuses a folding step after the last sizing step.
-FOLDING_STEPS: tuple[StepFunction, ...] = (
-    step_pin_choices,
-    step_target_throughput,
-    step_max_throughput,
-    step_baseline_choices,
-)
-FIFO_SIZING_STEPS: tuple[StepFunction, ...] = (step_size_fifos,)
-
 #: The build's steps by name.
 build_dataflow_step_lookup: dict[str, StepFunction] = {
     step.__name__: step
@@ -535,3 +547,8 @@ build_dataflow_step_lookup: dict[str, StepFunction] = {
         *KERNEL_STRATEGY_STEPS,
     ]
 }
+
+
+def default_steps() -> list[str]:
+    """The list a build runs without ``steps``: every phase's steps, by name."""
+    return [step.__name__ for steps in build_dataflow_phases.values() for step in steps]

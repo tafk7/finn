@@ -34,25 +34,27 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
 from finn.builder import build_dataflow_steps
-from finn.builder.build_dataflow import build_dataflow_cfg
+from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
 from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
     SHELL_OUTPUTS,
     ConfigurationRefused,
     DataflowBuildConfig,
     DataflowOutputType,
+    StepFunction,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_plan import resolve_plan
 from finn.builder.build_dataflow_steps import (
-    FOLDING_STEPS,
     KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
+    step_baseline_choices,
     step_build_bitfile,
     step_convert_to_hw,
     step_deployment_package,
     step_make_driver,
+    step_max_throughput,
+    step_pin_choices,
     step_size_fifos,
     step_target_throughput,
     step_verify_partition,
@@ -76,7 +78,7 @@ from finn.core.space import Finding, FindingKind, finding_record
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.explore import Ranked
+from finn.kernels.explore import Ranked, TargetThroughput
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -85,6 +87,7 @@ from finn.shells.pynq.ipgen import prepare_ip
 from finn.shells.pynq.runner import (
     DELIVERED_CLOCK,
     InstanceIP,
+    PynqRefused,
     block_design,
     delivered_clock_findings,
     iodma_model,
@@ -94,6 +97,7 @@ from finn.toolchain.launcher import RECORDS, Selection, Toolchain
 from finn.toolchain.vivado import delivered_clock
 from finn.transformation.kernels import (
     explore_kernel_choices,
+    explore_partition,
     kernel_choices_config,
     shell_bottleneck,
 )
@@ -106,7 +110,13 @@ from kernel_ops.models import (
     host_between_source,
     kernel_model,
 )
-from kernel_ops.packaging import PLACED_HIERARCHY, FakeVivado, bitfile_default, io_shape_dict
+from kernel_ops.packaging import (
+    PLACED_HIERARCHY,
+    FakeVivado,
+    PackagedByStub,
+    bitfile_default,
+    io_shape_dict,
+)
 from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
@@ -399,6 +409,56 @@ def test_a_pin_holds_across_a_later_folding_step(tmp_path: Path) -> None:
         assert strategy_report(pinned, step)["held"] == CHAIN_PINS
 
 
+#: A FIFO pinned on the Chain's activations, so that its partition holds one.
+CHAIN_FIFO = {"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}}
+
+
+def step_fold_my_way(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """A user's own folding step: a target throughput no step of the build names."""
+    explore_partition(model, TargetThroughput(CHAIN_FPS))
+    return model
+
+
+def test_a_users_folding_step_after_the_fifo_sizing_is_refused_at_packaging(
+    tmp_path: Path,
+) -> None:
+    """A folding step of the user's own after the last FIFO sizing leaves the partition's
+    FIFO sized at another folding: packaging refuses it, saying where to size them, and
+    the manifest records a refusal. Sized after it, the partition is packaged."""
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps(CHAIN_FIFO))
+    model_file = tmp_path / "chain.onnx"
+    kernel_model().save(str(model_file))
+    for name, strategies, status in (
+        ("stale", ["step_pin_choices", "step_size_fifos", step_fold_my_way], -1),
+        ("sized", ["step_pin_choices", step_fold_my_way, "step_size_fifos"], 0),
+    ):
+        cfg = config(
+            tmp_path / name,
+            target=CHAIN_TARGET,
+            generate_outputs=[DataflowOutputType.STITCHED_IP],
+            steps=["step_create_dataflow_partition", *strategies, "step_package_partition"],
+            settings={"kernel_choices_file": str(pins)},
+        )
+        cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
+        assert build_dataflow_cfg(str(model_file), cfg) == status, name
+        outcome = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())["outcome"]
+        if status == 0:
+            assert outcome["status"] == "completed"
+            continue
+        assert {key: outcome[key] for key in ("status", "step", "kind", "findings")} == {
+            "status": "failed",
+            "step": "step_package_partition",
+            "kind": "refusal",
+            "findings": {"fifos-stale": 1},
+        }
+        assert outcome["error"] == {
+            "type": "KernelOpError",
+            "message": "partition: its FIFOs were sized at another folding than its own; size "
+            "them again after the last step that may change the folding (step_size_fifos)",
+        }
+
+
 def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Path) -> None:
     """Each strategy step writes its own report (report/<step>.json, its strategy's entry
     and the partition after it), listed under it in the build's manifest, whose order
@@ -497,7 +557,7 @@ def test_the_builds_target_is_the_one_its_configuration_states(tmp_path: Path) -
 
 def checks_of(cfg: DataflowBuildConfig) -> list[Finding]:
     """The configuration checks' findings of ``cfg``, its plan and its target."""
-    return configuration_findings(cfg, resolve_plan(cfg), cfg.resolved_target)
+    return configuration_findings(cfg, build_plan(cfg), cfg.resolved_target)
 
 
 def failed_checks(cfg: Any) -> dict[str, list[str]]:
@@ -571,7 +631,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     graph stating no bitfile, or another directory's, an output directory with no
     driver's description (its driver step never ran), and a driver made from another
     design are refused by name before anything is copied, whatever an earlier build left
-    in driver/."""
+    in driver/, each a refusal of the deployment with its code."""
     model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
@@ -580,27 +640,38 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     output = Path(cfg.output_dir)
     (output / "driver").mkdir(parents=True)
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
-    with pytest.raises(ValueError, match="the model states no bitfile"):
+    found = []
+    with pytest.raises(PynqRefused, match="the model states no bitfile") as refused:
         step_deployment_package(parent, cfg)
+    found.append(refused.value.findings)
     elsewhere = tmp_path / "elsewhere" / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(elsewhere))
-    with pytest.raises(ValueError, match="the model's bitfile is .*elsewhere.*, not this "):
+    with pytest.raises(
+        PynqRefused, match="the model's bitfile is .*elsewhere.*, not this "
+    ) as refused:
         step_deployment_package(parent, cfg)
+    found.append(refused.value.findings)
     parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
-    with pytest.raises(ValueError, match="no driver in this output directory"):
+    with pytest.raises(PynqRefused, match="no driver in this output directory") as refused:
         step_deployment_package(parent, cfg)
+    found.append(refused.value.findings)
     _, body, _ = partition_body(parent)
     parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
     earlier = "sha256:" + "0" * 64
     (output / "report").mkdir()
     (output / "report" / "driver.json").write_text(json.dumps({"made_from": earlier}))
-    with pytest.raises(ValueError) as refused:
+    with pytest.raises(PynqRefused) as refused:
         step_deployment_package(parent, cfg)
     assert str(refused.value) == (
         f"deployment_package: the driver in this output directory ({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
         f"{design_digest(body)}; make the driver again (pynq_driver)"
     )
+    found.append(refused.value.findings)
+    assert [(each.code, each.owner, each.kind) for (each,) in found] == [
+        (code, "deployment_package", FindingKind.REJECTION)
+        for code in ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
+    ]
     assert not (output / "deploy").exists()
 
 
@@ -654,9 +725,9 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
 def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every step that may change the folding (FOLDING_STEPS) other than the target
-    throughput removes the body's objective: the bitfile states no target its final
-    folding was not explored for."""
+    """Every step that may change the folding other than the target throughput (a pin, a
+    maximum throughput, going back to the baselines) removes the body's objective: the
+    bitfile states no target its final folding was not explored for."""
     monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
@@ -672,8 +743,7 @@ def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
     }
     cfg = config(tmp_path)
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
-    others = [step for step in FOLDING_STEPS if step is not step_target_throughput]
-    assert [step.__name__ for step in others] == list(settings)
+    others: list[StepFunction] = [step_pin_choices, step_max_throughput, step_baseline_choices]
     for folding in others:
         parent = step_target_throughput(parent, cfg, target_fps=1000.0)
         parent = folding(parent, cfg, **settings[folding.__name__])
@@ -737,10 +807,10 @@ def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
     (the strategy steps no phase runs by default among them) and phases, and the default
     steps are its six phases' steps, in order."""
     with pytest.raises(ValueError, match="'step_hw_codegen' is no step or phase") as refused:
-        resolve_plan(config(tmp_path, steps=["step_hw_codegen"]))
+        build_plan(config(tmp_path, steps=["step_hw_codegen"]))
     assert "step_target_throughput" in str(refused.value)
     assert "phase_optimize_hardware" in str(refused.value)
-    assert [step.name for step in resolve_plan(config(tmp_path)).steps] == [
+    assert [step.name for step in build_plan(config(tmp_path)).steps] == [
         "step_cleanup",
         "step_add_pre_post_processing",
         "step_qonnx_to_finn",
@@ -1311,7 +1381,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # toolchain, the fake, by cfg): the bitfile's build reads its objective from the
     # partition's body, where the target throughput recorded it.
     outputs = replace(cfg, steps=["phase_generate_outputs"], settings={})
-    for step in resolve_plan(outputs).steps:
+    for step in build_plan(outputs).steps:
         parent = step.function(parent, cfg, **step.settings)
     assert [node.name for node in parent.graph.node] == ["Reshape_0", "partition", "TopK_0"]
     ((_, _, script),) = vivado.runs
@@ -1511,8 +1581,13 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     bitfile = output_dir / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(bitfile))
     (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
-    with pytest.raises(ValueError, match=rf"{output}: the model's bitfile \(.*\) states no design"):
+    with pytest.raises(
+        PynqRefused, match=rf"{output}: the model's bitfile \(.*\) states no design"
+    ) as refused:
         step(parent, cfg)
+    assert [(each.code, each.owner) for each in refused.value.findings] == [
+        ("bitfile-unmade", output)
+    ]
     node, body, body_file = partition_body(parent)
     built_from = design_digest(body)
     parent.set(OUTPUT_BITFILE_MADE_FROM, built_from)
@@ -1521,8 +1596,9 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     body.save(body_file)
     now = design_digest(body)
     assert now != built_from
-    with pytest.raises(ValueError) as refused:
+    with pytest.raises(PynqRefused) as refused:
         step(parent, cfg)
+    assert [each.code for each in refused.value.findings] == ["bitfile-stale"]
     assert str(refused.value) == (
         f"{output}: the model's bitfile ({bitfile}) is stale: it was built from the design "
         f"{built_from}, and the partition {node.name}'s design is now {now}; build the "

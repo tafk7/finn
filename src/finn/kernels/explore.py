@@ -99,8 +99,9 @@ The strategies, each an objective and its constraints searched through the seam:
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
 A strategy that changes folding after the last ``SizeFifos`` leaves its depths stale:
-the engine keeps a stored depth valid when its ends' folding changes, so the order is
-the build plan's to check (``finn.builder.build_dataflow_plan``).
+the engine keeps a stored depth valid when its ends' folding changes, so a partition's
+body records it, and packaging refuses the body
+(``finn.transformation.kernels.choose``).
 """
 
 from __future__ import annotations

@@ -30,7 +30,9 @@ settles, and then:
   body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
   the body holds them: a pin holds for the build, and re-baselining keeps it; and a
   target throughput's frames a second (``OBJECTIVE_FPS``), which another strategy that
-  may change the folding removes (``FOLDING``);
+  may change the folding removes (``FOLDING``); and whether its FIFOs are stale
+  (``FIFOS_STALE``): set by any strategy but FIFO sizing and the debug placeholder where
+  the body holds a FIFO, removed by FIFO sizing;
 - keeps what it found (``explored``): the point, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
@@ -48,9 +50,9 @@ settles, and then:
 
 ``exploration_summary`` gives an exploration's lines for a build's log.
 
-The order of strategies is the build plan's: pins first, and FIFO sizing after the last
-strategy that changes the folding (``finn.builder.build_dataflow_plan``), since the
-engine keeps a stored FIFO depth valid when its ends' folding changes.
+Pins go first, and FIFO sizing after the last strategy that changes the folding: the
+engine keeps a stored FIFO depth valid when its ends' folding changes, so a FIFO sized
+before it is marked stale (``FIFOS_STALE``), and packaging refuses the body.
 
 The resources are the shell root's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
@@ -90,7 +92,7 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_choices
+from finn.core.graph.annotations.choices import FIFOS_STALE, HELD, OBJECTIVE_FPS, held_choices
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
@@ -107,6 +109,7 @@ from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     Bottleneck,
     Cost,
+    DebugPlaceholder,
     Explorer,
     MaxThroughput,
     Pinned,
@@ -123,10 +126,14 @@ from finn.platform.catalog import part_report
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-#: The strategies other than a target throughput that may change the kernels' folding
-#: (the build's FOLDING_STEPS run them): each removes the body's ``OBJECTIVE_FPS``, which
-#: no longer names the throughput its folding was explored for.
+#: The strategies other than a target throughput that may change the kernels' folding:
+#: each removes the body's ``OBJECTIVE_FPS``, which no longer names the throughput its
+#: folding was explored for.
 FOLDING = (Pinned, MaxThroughput, Rebaseline)
+
+#: The strategies that keep the kernels' folding; any other, a user's own included, may
+#: change it.
+_KEEPS_FOLDING = (SizeFifos, DebugPlaceholder)
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
@@ -461,6 +468,11 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         model.set(OBJECTIVE_FPS, strategy.fps)
     elif isinstance(strategy, FOLDING):
         model.delete(OBJECTIVE_FPS)
+    if isinstance(strategy, SizeFifos):
+        model.delete(FIFOS_STALE)
+    elif strategy is not None and not isinstance(strategy, _KEEPS_FOLDING):
+        if _placed(seam, point):
+            model.set(FIFOS_STALE, True)
     left = [
         _owned(seam, choice.key) + (" (required)" if choice.required else "")
         for choice in seam.choices(point)

@@ -9,7 +9,7 @@ the bitfile (``runner.BITFILE``'s directory), the driver (``driver.DRIVER_DIR``)
 description (``driver.json``, from ``driver.DRIVER_REPORT``), and the host's model
 (``model/``, ``host_model``). It ships only what that output directory's own builds
 made, from the partition's design as it is now, and refuses anything else by name
-before it copies.
+before it copies (``PynqRefused``).
 """
 
 from __future__ import annotations
@@ -26,13 +26,16 @@ from qonnx.transformation.base import Transformation
 from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_HWH, OUTPUT_IP
 from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT
-from finn.shells.pynq.runner import BITFILE, pynq_row, refuse_stale_bitfile
+from finn.shells.pynq.runner import BITFILE, PynqRefused, pynq_row, refuse_stale_bitfile
 
 #: The deployment package's directory, under the output directory.
 DEPLOY_DIR = Path("deploy")
 
 #: The finn.outputs keys a deployed model drops: they hold paths on the build machine.
 MACHINE_PATHS = (OUTPUT_IP, OUTPUT_BITFILE, OUTPUT_HWH)
+
+#: The output the deployment makes, which owns its refusals.
+_OUTPUT = "deployment_package"
 
 
 def host_model(model: ModelWrapper, directory: Path) -> Path:
@@ -70,35 +73,42 @@ class MakePynqDeployment(Transformation):
         self.directory = Path(directory)
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        pynq_row(model, "deployment_package")
+        pynq_row(model, _OUTPUT)
         output = self.directory
         stated = model.get(OUTPUT_BITFILE)
         if stated is None:
-            raise ValueError(
-                "deployment_package: the model states no bitfile (finn.outputs): the "
-                "deployment ships the bitfile and the driver its build made; ask bitfile "
-                "and pynq_driver with it"
+            raise PynqRefused(
+                _OUTPUT,
+                "bitfile-absent",
+                "the model states no bitfile (finn.outputs): the deployment ships the "
+                "bitfile and the driver its build made; ask bitfile and pynq_driver with it",
             )
         if Path(stated) != output / BITFILE:
-            raise ValueError(
-                f"deployment_package: the model's bitfile is {stated}, not this output "
-                f"directory's ({output / BITFILE})"
+            raise PynqRefused(
+                _OUTPUT,
+                "bitfile-foreign",
+                f"the model's bitfile is {stated}, not this output directory's "
+                f"({output / BITFILE}); build the bitfile into this output directory (bitfile)",
             )
         if not (output / DRIVER_REPORT).is_file():
-            raise ValueError(
-                "deployment_package: no driver in this output directory "
-                f"({output / DRIVER_REPORT}): the deployment ships the bitfile and the "
-                "driver its build made; ask pynq_driver with it"
+            raise PynqRefused(
+                _OUTPUT,
+                "driver-absent",
+                f"no driver in this output directory ({output / DRIVER_REPORT}): the "
+                "deployment ships the bitfile and the driver its build made; ask "
+                "pynq_driver with it",
             )
-        refuse_stale_bitfile(model, "deployment_package")
+        refuse_stale_bitfile(model, _OUTPUT)
         _, body, _ = partition_body(model)
         made_from = json.loads((output / DRIVER_REPORT).read_text()).get("made_from")
         now = design_digest(body)
         if made_from != now:
-            raise ValueError(
-                "deployment_package: the driver in this output directory "
-                f"({output / DRIVER_DIR}) was made from the design {made_from}, and the "
-                f"partition's design is now {now}; make the driver again (pynq_driver)"
+            raise PynqRefused(
+                _OUTPUT,
+                "driver-stale",
+                f"the driver in this output directory ({output / DRIVER_DIR}) was made from "
+                f"the design {made_from}, and the partition's design is now {now}; make the "
+                "driver again (pynq_driver)",
             )
         deploy = output / DEPLOY_DIR
         shutil.rmtree(deploy, ignore_errors=True)
