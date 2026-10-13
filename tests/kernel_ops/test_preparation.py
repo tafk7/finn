@@ -33,6 +33,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
+from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
@@ -199,7 +200,9 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     assert checked == {"runs": 12, "findings": ()}
     # The streamlined TFC: the input flatten, four MultiThreshold and MatMul layers, the
     # label select; INT2 activations, and each MatMul's exact range as qonnx's interval
-    # rule states it (G3a, qonnx b7bc357): INT10 for the 784-wide first layer, INT8 after.
+    # rule states it (G3a, qonnx b7bc357): INT10 for the 784-wide first layer, INT7 after.
+    # Each MultiThreshold states the range it computes with its datatype, [-1, 1] (two
+    # thresholds, out_bias -1), and the MatMul after it reads that range, not INT2's [-2, 1].
     assert [node.op_type for node in made.graph.node] == [
         "Reshape",
         *["MultiThreshold", "MatMul"] * 4,
@@ -209,11 +212,12 @@ def test_tfc_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     matmuls = [node for node in made.graph.node if node.op_type == "MatMul"]
     assert [made.get_tensor_datatype(node.output[0]) for node in matmuls] == [
         DataType["INT10"],
-        *[DataType["INT8"]] * 3,
+        *[DataType["INT7"]] * 3,
     ]
     for node in made.graph.node:
         if node.op_type == "MultiThreshold":
             assert made.get_tensor_datatype(node.output[0]) == DataType["INT2"]
+            assert made.get_tensor_range(node.output[0]) == TensorRange(-1, 1)
     # The export's float32 throughout, but ONNX's INT64 shapes and indices and the
     # thresholds, which streamlining computes and stores in float64 (ONNX gives them no
     # type).
