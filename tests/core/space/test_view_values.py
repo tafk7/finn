@@ -5,7 +5,7 @@
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
 result). On a declaration ``kitchen.cost`` is a reference to that value: it
-supplies a formal, feeds ``Present`` and joins ``requires=``. Assessment and
+supplies a formal and joins ``requires=``. Assessment and
 query are explicit calls on the configuration: ``point.inspect(Hall.total)``
 and ``point.query(Hall.total)``.
 """
@@ -24,7 +24,6 @@ from finn.core.space import (
     DefinitionError,
     Inapplicable,
     Param,
-    Present,
     Rejected,
     RequestError,
     Space,
@@ -60,7 +59,6 @@ class Hall(Space):
     hall = Room()
     hall.area = kitchen.cost  # a view's accepted value supplies a formal
     annex = Room(area=dining.cost)  # at the call, too
-    porch = Room(area=Present(garage.cost))  # whichever is present
     doubled = View(kitchen.cost * 2)  # an expression over a view reference
     checked = View(dining.area, requires=(kitchen.cost, dining.small_enough))
 
@@ -151,10 +149,6 @@ def test_a_view_reference_supplies_a_formal_by_assignment_and_at_the_call() -> N
     # A formal supplied by a refused view is refused with the view's refusal.
     big = chosen(kitchen=3).with_choices({Hall.hall.finish: 2})
     assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
-    # Present over a guarded view: absent until the garage is wanted.
-    assert isinstance(point.with_choices(want_garage=False).query(Hall.porch.area), Unresolved)
-    garage = point.with_choices({Hall.want_garage: True, Hall.garage.finish: 1})
-    assert garage.porch.area == 30
 
 
 def test_view_references_are_obligations_in_both_view_forms() -> None:

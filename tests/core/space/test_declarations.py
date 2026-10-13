@@ -18,21 +18,25 @@ from finn.core.space import (
     QueryResult,
     RequestError,
     Space,
-    ValueRef,
     ValueSemantics,
     View,
     ViewKey,
     constraint,
     derived,
     design_space,
-    inspection,
     view,
 )
-from finn.core.space._nodes import NodeDecision, NodeDecl, node_record, unwrap
+from finn.core.space._nodes import (
+    NodeDecision,
+    NodeDecl,
+    node_record,
+    unsupplied_formals,
+    unwrap,
+)
 from finn.core.space._signatures import BoundArgument, validate_argument
 from finn.core.space.collection import collect_space
 from finn.core.space.compiler import compile_model
-from finn.core.space.declarations import Declaration
+from finn.core.space.declarations import Declaration, MemberRef, ValueRef
 
 
 def decl(value: object) -> Declaration:
@@ -162,7 +166,7 @@ def test_node_member_alias_and_typed_view_exports() -> None:
     assert dependency.semantics is not None and dependency.semantics.type_token is int
     # The child's member, by reference (statically a reference is typed as its value).
     assert dependency == cast(object, Parent.child.extent)
-    assert inspection.reference(dependency).path == ("child",)
+    assert tuple(item.name for item in cast(MemberRef[object], dependency).path) == ("child",)
     assert set(vars(Parent)) >= {"extent", "child", "total"}
     assert design_space(Parent(extent=4)).total == 8
 
@@ -353,33 +357,25 @@ def test_inferred_derived_override_cannot_change_value_type() -> None:
 
 
 def test_binding_forms_and_local_edit_ownership() -> None:
-    # A reference input is supplied by a node, and a root keeps its values as
-    # runtime parameters.
+    # A root keeps its values as runtime parameters.
     class Child(Space):
         size: int = Param()
         internal: str = Decision(values=("auto", "block"))
-
-    class Holder(Space):
-        held: Child = Param()
 
     class Parent(Space):
         supplied: int = Decision(values=(1, 2))
         literal = Child(size=4)
         alias = Child(size=supplied)
         local = Child(size=Decision(values=(4, 8)))
-        holder = Holder(held=Child(size=2))
 
     # How each supply links: a literal is a constant, a reference an alias, a
-    # fresh Decision a decision, a node at a reference input its placement.
+    # fresh Decision a decision.
     linked = compile_model(Parent).linked
     kinds = [
         linked.nodes[compile_model(Parent).resolve(0, node.size)].kind
         for node in (Parent.literal, Parent.alias, Parent.local)
     ]
     assert kinds == ["const", "alias", "decision"]
-    assert linked.scopes[0].named_children["holder"] in {
-        scope.parent for scope in linked.scopes if scope.name == "holder.held"
-    }
     root = compile_model(Child).linked
     assert root.nodes[root.keys["size"]].kind == "param"
     model = compile_model(Parent)
@@ -416,8 +412,8 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
         optional_width: int = Param(required=False)
 
     # An optional formal may stay unsupplied: it is not implicitly exposed.
-    assert inspection.declaration(Child(width=8)).unsupplied == ()
-    assert inspection.declaration(Child()).unsupplied == ("width",)
+    assert unsupplied_formals(record_of(Child(width=8))) == []
+    assert unsupplied_formals(record_of(Child())) == ["width"]
 
     class Holder(Space):
         child = Child(width=8)
@@ -484,7 +480,7 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
     )
     assert [arg.name for arg in effective.functions["result"].dependencies] == ["selected"]
     assert "when" not in cast("Derived[object]", Guarded.result).aliases
-    assert "when" not in inspection.declaration(Guarded.child).bindings
+    assert "when" not in record_of(Guarded.child).bindings
 
 
 def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope() -> None:
@@ -497,7 +493,7 @@ def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope(
         choice: Child = Decision({"one": Child(value=1, when=enabled)})
 
     effective = collect_space(Parent)
-    decision = inspection.declaration(Parent.child).bindings["value"]
+    decision = record_of(Parent.child).bindings["value"]
     assert isinstance(decision, Decision)
     assert effective.guards[decision] is decl(Parent.enabled)
     candidate = decision_record(Parent.choice).candidates["one"]

@@ -5,9 +5,8 @@
 Calling a Space class declares a node; ``node.member`` is a reference to one of its
 members. Edges are bindings at the call, or assignments to a formal after the
 node is declared (``adder.back = register.q``: forward, around a cycle, or
-built as data), and ``Present`` for whichever source is present. A
-``Param(Located)`` formal receives a reference with its node and member names,
-and ``Members(key)`` ranges over the present children that export ``key``. A
+built as data). A relation between siblings is their parent's constraint, and
+``Members(key)`` ranges over the present children that export ``key``. A
 Decision over nodes is the structural choice. None of these cases is about
 hardware.
 """
@@ -18,6 +17,7 @@ from typing import cast
 
 import pytest
 
+from core.space._choices_support import committed, replay
 from core.space._results_support import codes
 from finn.core.space import (
     Available,
@@ -26,10 +26,8 @@ from finn.core.space import (
     EvaluationError,
     Inapplicable,
     Located,
-    LocatedParam,
     Members,
     Param,
-    Present,
     Rejected,
     Space,
     Unresolved,
@@ -42,9 +40,9 @@ from finn.core.space import (
     divisors_of,
     inspection,
     reject,
-    selections,
     view,
 )
+from finn.core.space._nodes import NodeDecl, node_record, unsupplied_formals
 
 COST = ViewKey("cost", int)
 AGREED = ViewKey("agreed", int)
@@ -67,62 +65,41 @@ class Tiles(Space):
     exports = {COST: cost}
 
 
-# -- 1. a relation between siblings is an ordinary node ---------------------------------
-
-
-class Same(Space):
-    """A relation: two located values must be equal; its output is the agreed value."""
-
-    left: LocatedParam[int] = LocatedParam()
-    right: LocatedParam[int] = LocatedParam()
-
-    @constraint
-    def equal(self) -> bool | Rejected:
-        left, right = self.left, self.right
-        if left.value != right.value:
-            return reject(
-                "not-same",
-                f"{left.node}.{left.member}={left.value}, "
-                f"{right.node}.{right.member}={right.value}",
-            )
-        return True
-
-    @view(requires=(equal,))
-    def agreed(self) -> int:
-        return self.left.value
-
-    exports = {AGREED: agreed}
+# -- 1. a relation between siblings is their parent's -----------------------------------
 
 
 class Aligned(Space):
     extent: int = Param()
     first = Tiles(extent=extent)
     second = Tiles(extent=extent)
-    # A plain reference supplies a located formal: node and member come from the graph.
-    aligned = Same(left=first.factor, right=second.factor)
-    relations = Members(AGREED)
 
-    @view(requires=(relations,))
+    @constraint
+    def aligned(self) -> bool | Rejected:
+        """A relation of two children, the parent's: their factors agree."""
+        first, second = self.first.factor, self.second.factor
+        if first != second:
+            return reject("not-same", f"first.factor={first}, second.factor={second}")
+        return True
+
+    @view(requires=(aligned,))
     def factor(self) -> int:
-        return self.aligned.agreed
+        return self.first.factor
 
 
 def choose(point: Aligned, first: int, second: int) -> Aligned:
     return point.with_choices({Aligned.first.factor: first, Aligned.second.factor: second})
 
 
-def test_a_relation_node_reads_located_siblings_and_owns_its_refusal() -> None:
+def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
     point = design_space(Aligned(extent=12))
     assert isinstance(point.query(Aligned.factor), Unresolved)
     assert choose(point, 3, 3).factor == 3
     refused = choose(point, 3, 4).inspect(Aligned.factor)
     assert isinstance(refused.accepted_result, Rejected)
-    # Identity comes from the graph, not from literals: node and member names.
-    # A refusal reached by both the output and the obligation is reported once.
     assert [(f.owner, f.message) for f in refused.accepted_result.findings] == [
-        ("aligned.equal", "first.factor=3, second.factor=4")
+        ("aligned", "first.factor=3, second.factor=4")
     ]
-    assert set(refused.constraints.results) == {"aligned.agreed"}
+    assert set(refused.constraints.results) == {"aligned"}
 
 
 # -- 2. quantification: a budget over whichever members are present -------------------
@@ -211,7 +188,7 @@ def test_a_pipeline_is_built_as_data_and_its_edges_are_declarations() -> None:
     assert "s4.width_in" in {alias.key for n in evidence.nodes for alias in n.via}
 
 
-# -- 4. a formal supplied by whichever source is present --------------------------------
+# -- 4. a formal nobody supplies --------------------------------------------------------
 
 
 class Source(Space):
@@ -227,40 +204,13 @@ class Sink(Space):
     limit: int = Param(required=False)
 
 
-class Either(Space):
-    mode: str = Decision(values=("a", "b"))
+def test_an_optional_formal_nobody_supplies_is_unsupplied() -> None:
+    class Holder(Space):
+        sink = Sink(width=3)
 
-    @derived
-    def is_a(self) -> bool:
-        return self.mode == "a"
-
-    @derived
-    def is_b(self) -> bool:
-        return self.mode == "b"
-
-    a = Source(width=3, when=is_a)
-    b = Source(width=5, when=is_b)
-    sink = Sink(width=Present(a.out, b.out))
-
-
-def test_present_supplies_a_formal_from_whichever_node_is_present() -> None:
-    point = design_space(Either())
-    assert isinstance(point.sink.query(Sink.width), Unresolved)  # not yet known which
-    assert point.with_choices(mode="a").sink.width == 3
-    assert point.with_choices(mode="b").sink.width == 5
-    # An optional formal nobody supplies is unsupplied, not an error.
-    assert codes(point.sink.query(Sink.limit)) == {"input-unsupplied"}
-
-
-def test_two_present_sources_are_refused_where_the_value_is_read() -> None:
-    class Both(Space):
-        a = Source(width=3)
-        b = Source(width=3)
-        sink = Sink()
-        sink.width = Present(a.out, b.out)  # alternative suppliers, assigned
-
-    answer = design_space(Both()).sink.query(Sink.width)
-    assert codes(answer) == {"multiple-suppliers"} and owners(answer) == {"sink.width"}
+    point = design_space(Holder()).sink
+    assert point.width == 3
+    assert codes(point.query(Sink.limit)) == {"input-unsupplied"}
 
 
 # -- 5. a cycle in the graph, anchored; and an unanchored value cycle ------------------
@@ -398,7 +348,10 @@ class WithPrimitives(Space):
 
     fixed = Fixed(width=8, when=is_fixed)
     tuned = Tuned(base=base, when=is_tuned)
-    physical = View(Present(fixed.physical, tuned.physical))
+
+    @view
+    def physical(self) -> int:
+        return self.fixed.physical if self.choice == "fixed" else self.tuned.physical
 
 
 @pytest.mark.parametrize("space_type", (WithChoice, WithPrimitives))
@@ -416,8 +369,8 @@ def test_a_structural_choice_reduces_to_primitives(
     fixed = tuned.with_choices({space_type.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)
-    replayed = selections.restore(design_space(space_type(base=4)), selections.capture(tuned))
-    assert replayed.accepted and replayed.instance.query(physical) == Available(6)
+    replayed = replay(design_space(space_type(base=4)), committed(tuned))
+    assert replayed.query(physical) == Available(6)
 
 
 def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
@@ -430,14 +383,6 @@ def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
     assert isinstance(selected, Tuned) and selected.extra == 1
     fixed = inspection.candidate(point, WithChoice.choice, "fixed")
     assert isinstance(fixed, Fixed) and isinstance(fixed.query(Fixed.physical), Inapplicable)
-
-
-def test_a_formal_of_the_enclosing_space_locates_at_the_space_itself() -> None:
-    class Own(Space):
-        width: int = Param()
-        here = Same(left=width, right=width)
-
-    assert design_space(Own(width=3)).here.left == Located(None, "width", 3)
 
 
 def test_assigning_a_formal_twice_in_one_body_is_a_definition_error() -> None:
@@ -456,7 +401,7 @@ def test_assigning_a_formal_twice_in_one_body_is_a_definition_error() -> None:
 
 def test_a_required_formal_left_unsupplied_is_reported_when_prepared() -> None:
     sink = Sink()  # legal: an assignment may still supply the width
-    assert inspection.declaration(sink).unsupplied == ("width",)
+    assert unsupplied_formals(cast(NodeDecl, node_record(sink))) == ["width"]
 
     class Dangling(Space):
         sink = Sink()

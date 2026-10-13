@@ -40,7 +40,7 @@ from typing import (
 
 from .domains import Domain, Requirement, finite, requiring
 from .errors import DefinitionError, ReferenceUseError
-from .graph import LOCATED, Located
+from .graph import Located
 from .results import NonValue, QueryResult, marked_value_type
 from .semantics import (
     BOOL,
@@ -382,20 +382,19 @@ class Param(ValueDecl[T], Generic[T]):
     Annotate it with its value type: ``area: int = Param()``. The annotation is
     the single source of the value type; ``semantics=`` gives custom value
     semantics for it. Supply a formal at the call (``Room(area=12)``) or by
-    assignment (``hall.area = kitchen.area``); an enclosing body may override
-    what an inner one supplied, and the outermost assignment wins.
+    assignment (``hall.area = kitchen.area``), once, in the body that declares
+    the node.
 
     ``Param()`` is required: preparing a Space class in which nothing supplies it is
     a definition error. ``default=`` makes it optional, and ``required=False``
-    leaves it unsupplied when nobody binds it. A formal annotated with a Space class
-    (``output: Channel = Param()``) is a reference input: the caller supplies a
-    node, placed there if it is fresh and referenced if it is placed elsewhere.
+    leaves it unsupplied when nobody binds it. A formal takes a value, never a node:
+    a formal annotated with a Space class is refused (a node is placed in a class
+    body, and reads what it needs as values).
     """
 
     default: object
     required: bool
     explicit: ValueSemantics[T] | None
-    space_type: type[Space] | None
     resolved: bool
 
     @overload
@@ -421,7 +420,6 @@ class Param(ValueDecl[T], Generic[T]):
         object.__setattr__(instance, "_body", class_body())
         instance.explicit = cast("ValueSemantics[object] | None", semantics)
         instance.semantics = instance.explicit
-        instance.space_type = None
         instance.resolved = False
         instance.required = default is MISSING and required is not False
         instance.default = default if default is not MISSING or instance.required else UNSUPPLIED
@@ -435,7 +433,7 @@ class Param(ValueDecl[T], Generic[T]):
             pass  # a forward reference: resolved again when the Space class is collected
 
     def resolve(self) -> Param[T]:
-        """Read the annotation: a value type (with its semantics) or a Space class (a reference)."""
+        """Read the annotation: a value type, with its semantics."""
         if self.resolved:
             return self
         annotation = declared_annotation(self, "Param")
@@ -444,29 +442,18 @@ class Param(ValueDecl[T], Generic[T]):
         label = describe_formal(self, "Param")
         space_type = _annotated_space_type(annotation)
         if space_type is not None:
-            if self.explicit is not None or self.default not in (MISSING, UNSUPPLIED):
-                raise DefinitionError(
-                    f"{label}: a reference input has no value default or semantics; "
-                    "required=False makes it optional"
-                )
-            self.space_type, self.semantics = space_type, None
-        else:
-            semantics = _annotation_semantics(annotation, self.explicit, label)
-            if self.default not in (MISSING, UNSUPPLIED):
-                if not recognize(semantics, self.default, owner=label, role="default recognition"):
-                    raise DefinitionError(
-                        f"{label}: invalid formal default: {unrecognized(semantics)}"
-                    )
-                self.default = snapshot(
-                    semantics, self.default, owner=label, role="default snapshot"
-                )
-            self.semantics = semantics
+            raise DefinitionError(
+                f"{label}: a formal takes a value, not a {space_type.__qualname__} node; "
+                "place the node in a class body, and give the formal the values it reads"
+            )
+        semantics = _annotation_semantics(annotation, self.explicit, label)
+        if self.default not in (MISSING, UNSUPPLIED):
+            if not recognize(semantics, self.default, owner=label, role="default recognition"):
+                raise DefinitionError(f"{label}: invalid formal default: {unrecognized(semantics)}")
+            self.default = snapshot(semantics, self.default, owner=label, role="default snapshot")
+        self.semantics = semantics
         self.resolved = True
         return self
-
-    def reference_space_type(self) -> type[Space] | None:
-        """The Space class of a reference input, or None for a value formal."""
-        return self.resolve().space_type
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
@@ -477,79 +464,20 @@ class Param(ValueDecl[T], Generic[T]):
     def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Any:
         if instance is None:
             return self
-        space_type = self.reference_space_type()
-        if space_type is None:
-            return ValueDecl.__get__(self, instance, owner)
-        path = declared_path(instance)
-        if path is not None:
-            from ._nodes import path_proxy
-
-            return path_proxy(space_type, (*path, self))
-        from .occurrence import child
-
-        return child(instance, self)
+        return ValueDecl.__get__(self, instance, owner)
 
     if not TYPE_CHECKING:
 
         def __getattr__(self, name: str) -> Any:
-            # ``output.spec`` in the class body that declares ``output: Channel``:
-            # a member of the node the reference input will name. A value formal
-            # projects an attribute of its value (``platform.uram``), as a derived
-            # value does.
+            # A formal projects an attribute of its value (``platform.uram``), as a
+            # derived value does.
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
-                space_type = self.reference_space_type()
-            except PendingAnnotation:
-                raise AttributeError(
-                    f"{name}: the reference's annotation does not resolve yet (its Space class is "
-                    "still being defined); read the member in a method"
-                ) from None
+                self.resolve()
             except DefinitionError:
                 raise AttributeError(name) from None
-            if space_type is None:
-                return project(self, name)
-            if not _has_member(space_type, name):
-                raise AttributeError(name)
-            from ._nodes import path_proxy
-
-            return getattr(path_proxy(space_type, (self,)), name)
-
-
-def _has_member(space_type: type[Space], name: str) -> bool:
-    from ._nodes import slot_declaration
-
-    return any(slot_declaration(vars(base).get(name)) is not None for base in space_type.__mro__)
-
-
-class LocatedParam(Param[Located[T]], Generic[T]):
-    """A formal holding a ``Located`` value: ``a: LocatedParam[int] = LocatedParam()``.
-
-    Binding a plain reference supplies its located form: node name, member
-    name and value. Its suppliers are typed as ``T`` and its value as
-    ``Located[T]``, so the annotation names this descriptor rather than the
-    value type (the one exception to annotating a formal with its value type).
-    """
-
-    def __new__(cls, *, required: bool = True) -> LocatedParam[T]:
-        instance = Declaration.__new__(cls)
-        object.__setattr__(instance, "_body", None)
-        instance.explicit = cast("ValueSemantics[Located[T]]", LOCATED)
-        instance.semantics = instance.explicit
-        instance.space_type = None
-        instance.resolved = True
-        instance.required = required
-        instance.default = MISSING if required else UNSUPPLIED
-        return instance
-
-    def __set__(
-        self,
-        instance: object,
-        value: T | Located[T] | ValueRef[T] | ValueRef[Located[T]] | View[T] | View[Located[T]],
-    ) -> None:
-        from ._nodes import assign
-
-        assign(instance, cast(str, self.name), value)
+            return project(self, name)
 
 
 class Const(ValueDecl[T], Generic[T]):
@@ -590,9 +518,7 @@ class Decision(ValueDecl[T], Generic[T]):
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
-    another is selected. An enclosing body pins the choice with a key
-    (``house.heating = "pump"``) or narrows it with a Decision over keys
-    (``Decision(values=("boiler",))``), keeping the declared candidates.
+    another is selected.
 
     A Decision that is not a class attribute takes its value type from the
     formal it supplies. It may supply exactly one formal
@@ -601,9 +527,9 @@ class Decision(ValueDecl[T], Generic[T]):
     class attribute, or ``Decision(..., name="depth")``, which is owned by the
     lowest scope containing every node it supplies.
 
-    An enclosing body may override a Decision of a node it contains: a value
-    pins the coordinate (its key disappears), another Decision replaces it
-    under the same key. Either is checked against this Decision's domain.
+    A Decision belongs to its Space class: no body supplies it a value, a key or
+    another Decision. A choice is committed on a configuration
+    (``with_choices``); a narrower one is a subclass's.
     """
 
     domain: Domain[T]
@@ -988,7 +914,7 @@ class View(Declaration, Generic[T]):
     that is not accepted raises ``ValueUnavailableError`` carrying its result,
     and inside a method the read blocks like any other); on a node declaration
     ``kitchen.cost`` is a reference to that accepted value, typed ``T``, which
-    supplies a formal, feeds ``Present`` or joins ``requires=`` (where it
+    supplies a formal or joins ``requires=`` (where it
     contributes only its acceptance). Class access, ``House.total``, is the
     declaration itself: pass it to ``point.inspect`` for the assessment and to
     ``point.query`` for the accepted result.
@@ -1467,43 +1393,9 @@ def supplied(formal: object) -> bool:
     evaluation: where the declaration never supplies the input, a Decision over
     nodes it guards can never apply, and its candidates are not compiled.
     """
-    if not isinstance(formal, Param) or formal.reference_space_type() is not None:
+    if not isinstance(formal, Param):
         raise DefinitionError("supplied() takes a value input (a Param) of this Space class")
     return cast(bool, Supplied(cast("Param[object]", formal)))
-
-
-class Present(ValueDecl[T], Generic[T]):
-    """The value of whichever one of ``sources`` is present (applicable).
-
-    Unresolved while any source is unresolved; refused if two are present;
-    unsupplied (unresolved) if none is. Typed as its value, so it may supply a
-    formal (``sink.width = Present(a.out, b.out)``).
-    """
-
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls,
-        *sources: ValueRef[T] | View[T],
-        semantics: ValueSemantics[T] | None = None,
-    ) -> T: ...
-
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls, *sources: T, semantics: ValueSemantics[T] | None = None
-    ) -> T: ...
-
-    def __new__(cls, *sources: object, semantics: object = None) -> Any:
-        if not sources or any(not isinstance(source, (ValueRef, View)) for source in sources):
-            raise DefinitionError("Present requires one or more value references")
-        instance = cast("Present[object]", super().__new__(cls))
-        instance.sources = cast(tuple[ValueRef[object], ...], sources)
-        instance.semantics = cast(
-            "ValueSemantics[object] | None",
-            semantics if semantics is not None else getattr(sources[0], "semantics", None),
-        )
-        return instance
-
-    sources: tuple[ValueRef[T], ...]
 
 
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
@@ -1511,8 +1403,6 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     declaration order; as an obligation, each member's acceptance counts.
 
     Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
-    A child exporting ``key`` per input (``exports = {key: {input: view}}``)
-    contributes one entry per input, with ``member=<input name>``.
     """
 
     def __init__(self, key: ViewKey[T]) -> None:
@@ -1520,21 +1410,6 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
             raise DefinitionError(f"{type(self).__name__} requires a ViewKey")
         self.key = key
         self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
-
-
-class Users(Members[T], Generic[T]):
-    """The mirror of ``Members``: every present node whose input references this one.
-
-    In declaration order, each entry is ``Located(node=<user's name beside this
-    node>, member=<the user's input name>, value=<the user's export of key>)``.
-    A user reached through a Decision candidate or a guard is present only when
-    that candidate is selected or that guard holds; a user that does not export
-    ``key`` is omitted. As an obligation, each user's acceptance counts.
-
-    A user may export ``key`` per input, ``exports = {key: {input: view, ...}}``:
-    each node it references then sees only the view presented through the
-    input that references it, and an input without an entry is omitted.
-    """
 
 
 __all__ = [
@@ -1546,16 +1421,13 @@ __all__ = [
     "Decision",
     "Declaration",
     "Derived",
-    "LocatedParam",
     "Members",
     "MemberRef",
     "Param",
-    "Present",
     "Projection",
     "Required",
     "Supplied",
     "UNSUPPLIED",
-    "Users",
     "ValueDecl",
     "ValueRef",
     "View",

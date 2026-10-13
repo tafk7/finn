@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Public metadata, conservative dependencies, and demanded query evidence.
+"""Public metadata and demanded query evidence.
 
 Metadata inspection does not invoke evaluators or candidate providers. Explain
 evaluates one query and follows only cached demanded edges for that snapshot.
@@ -9,35 +9,25 @@ evaluates one query and follows only cached demanded edges for that snapshot.
 
 from __future__ import annotations
 
-import copy
-from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from . import _execution, _forcing, _runtime
 from ._configuration import Space
 from ._forcing import Forced, Open, Viable
-from ._nodes import NodeChoice, NodeDecision, NodeDecl, node_record, unsupplied_formals
-from .collection import collect_space
 from .compiler import Model, compile_model
 from .declarations import (
-    CaseRef,
-    ChoiceMemberRef,
     Constraint,
     ConstraintGroup,
     Decision,
-    Declaration,
-    MemberRef,
     ValueRef,
     View,
-    declared_path,
 )
 from .errors import RequestError
-from .ir import Layer, LinkedModel, NodeKind, Provenance
+from .ir import LinkedModel, NodeKind
 from .occurrence import candidate as _candidate
 from .occurrence import state
-from .references import DecisionHandle, ValueHandle, decision_key, descend
+from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
     Available,
     ConstraintAssessment,
@@ -62,8 +52,6 @@ class NodeInfo:
     generated: bool
     guard: ValueHandle[bool] | None
     origin: str | None = None
-    # Who set this member's value, for a member some body supplied or overrode.
-    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +90,7 @@ class ChoiceInfo:
     key: str
     scope: str
     cases: tuple[CaseInfo, ...]
-    # None when an enclosing body pinned the choice: its key is then listed as pinned.
+    # None when its guard can never hold here: it has no key.
     selector: DecisionHandle[str] | None
     guard: ValueHandle[bool] | None
 
@@ -215,7 +203,6 @@ def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](linked, node.guard),
         node.origin,
-        linked.provenance.get(index),
     )
 
 
@@ -255,34 +242,6 @@ def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[obj
 
 
 @overload
-def decision_info(
-    subject: Space | Model[S] | type[Space], reference: Decision[T]
-) -> DecisionInfo[T]: ...
-
-
-@overload
-def decision_info(
-    subject: Space | Model[S] | type[Space], reference: DecisionHandle[T] | ValueRef[T]
-) -> DecisionInfo[T]: ...
-
-
-@overload
-def decision_info(
-    subject: Space | Model[S] | type[Space], reference: Space | None
-) -> DecisionInfo[str]: ...
-
-
-@overload
-def decision_info(subject: Space | Model[S] | type[Space], reference: T) -> DecisionInfo[T]: ...
-
-
-def decision_info(subject: Space | Model[S] | type[Space], reference: object) -> object:
-    compiled, scope = _context(subject)
-    index = compiled.decision(scope, reference)
-    return _decision_info(compiled.linked, index)
-
-
-@overload
 def decision_handle(
     subject: Space | Model[S] | type[Space], reference: Decision[T]
 ) -> DecisionHandle[T]: ...
@@ -307,7 +266,8 @@ def decision_handle(subject: Space | Model[S] | type[Space], reference: T) -> De
 def decision_handle(subject: Space | Model[S] | type[Space], reference: object) -> object:
     """Bind a typed owning decision while retaining its candidate value type."""
 
-    return decision_info(subject, reference).reference
+    compiled, scope = _context(subject)
+    return _decision_info(compiled.linked, compiled.decision(scope, reference)).reference
 
 
 @overload
@@ -381,22 +341,6 @@ def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
         _node_info(compiled.linked, index)
         for index in sorted(indices, key=lambda item: compiled.linked.nodes[item].key)
     )
-
-
-def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Provenance | None:
-    """Who set a member's effective value, and what it overrides; None if nothing set it.
-
-    ``reference`` is a member (``House.kitchen.area``), a child node
-    (``House.kitchen.sub``, replaced by an enclosing body) or a handle. The
-    text form reads ``kitchen.area = 16 (set by House at house.py:42; declared
-    12 at room.py:10)``.
-    """
-    compiled, scope = _context(subject)
-    linked = compiled.linked
-    record = declared_path(reference) if isinstance(reference, Space) else None
-    if record is not None:
-        return linked.scope_provenance.get(descend(linked.scopes, scope, record))
-    return linked.provenance.get(compiled.resolve(scope, reference))
 
 
 def admission(candidate: Space) -> QueryResult[object] | None:
@@ -492,28 +436,6 @@ def open(point: Space) -> tuple[Open, ...]:  # noqa: A001 - the inspection's nam
     )
 
 
-def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
-    """Every decision key an override removed by pinning its coordinate, with who pinned it."""
-    compiled, scope = _context(subject)
-    prefix = compiled.linked.scopes[scope].name
-    return tuple(
-        item
-        for key, item in sorted(compiled.linked.pinned.items())
-        if not prefix or key.startswith(prefix + ".")
-    )
-
-
-def dependencies(
-    subject: Space | Model[S] | type[Space],
-    reference: object,
-) -> tuple[NodeInfo, ...]:
-    """Return known structural inputs; self-method reads are discovered at runtime."""
-
-    compiled, scope = _context(subject)
-    node = compiled.linked.nodes[compiled.resolve(scope, reference)]
-    return tuple(_node_info(compiled.linked, index) for index in node.dependencies)
-
-
 @overload
 def explain(point: Space, reference: ValueRef[T] | View[T]) -> QueryEvidence[T]: ...
 
@@ -589,89 +511,6 @@ def explain(point: Space, reference: object) -> object:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class NodeDeclaration:
-    """A node declaration read without compiling it.
-
-    ``bindings`` maps each member this node's own body set (at the call or by
-    direct assignment) to its supplier: a value, a reference, a fresh Decision,
-    or a node. ``nested`` maps the members of descendants assigned through a
-    path (``"port.dtype"``), which override what the bodies inside set.
-    ``unsupplied`` names the required formals nothing supplies yet, and
-    ``frozen`` says why assignment is closed.
-    """
-
-    space_type: type[Space]
-    name: str | None
-    placement: str | None
-    members: tuple[str, ...]
-    bindings: Mapping[str, object]
-    nested: Mapping[str, object]
-    unsupplied: tuple[str, ...]
-    frozen: str | None
-    when: object
-    origin: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceInfo:
-    """A symbolic reference read without compiling: its node path and member."""
-
-    path: tuple[str | None, ...]
-    member: str
-    origin: str | None
-
-
-def declaration(node: object) -> NodeDeclaration:
-    """Inspect a node declaration (or a Decision over nodes' candidate) before compilation."""
-
-    record = node_record(node)
-    if record is None and isinstance(node, NodeDecl):
-        record = node
-    if record is None:
-        raise RequestError(
-            "declaration() takes a node declaration, as returned by calling a Space class"
-        )
-
-    def public(value: object) -> object:
-        if isinstance(value, NodeDecl):
-            return value.instance
-        if isinstance(value, NodeDecision):
-            return value.proxy
-        if not isinstance(value, (ValueRef, View)):
-            # A detached copy: the declaration keeps its own frozen literal.
-            return copy.deepcopy(value)
-        return value
-
-    bindings = {name: public(value) for name, value in record.bindings.items()}
-    nested = {path: public(value) for path, value in record.nested.items()}
-    return NodeDeclaration(
-        record.space_type,
-        record.name,
-        record.placement,
-        tuple(collect_space(record.space_type).members),
-        MappingProxyType(bindings),
-        MappingProxyType(nested),
-        tuple(sorted(unsupplied_formals(record))),
-        record.frozen,
-        record.when,
-        record.origin,
-    )
-
-
-def reference(value: object) -> ReferenceInfo:
-    """Inspect a symbolic reference (``kitchen.finish``, ``heating.kw``) before compilation."""
-
-    if isinstance(value, NodeChoice):
-        path: tuple[Declaration, ...] = value._space_path
-        return ReferenceInfo(tuple(item.name for item in path), "", path[-1].origin)
-    if isinstance(value, (MemberRef, ChoiceMemberRef, CaseRef)):
-        member = value.member if isinstance(value, (MemberRef, ChoiceMemberRef)) else "$case"
-        name = member if isinstance(member, str) else member.name
-        return ReferenceInfo(tuple(item.name for item in value.path), str(name), value.origin)
-    raise RequestError("reference() takes a symbolic reference such as node.member")
-
-
 def candidate(point: Space, decision: object, case: str) -> Space | None:
     """A candidate's configuration, selected or not; None for a None candidate."""
 
@@ -684,31 +523,21 @@ __all__ = [
     "DecisionInfo",
     "EvidenceNode",
     "Forced",
-    "Layer",
     "NodeInfo",
-    "Provenance",
     "ModelStatistics",
     "Open",
     "QueryEvidence",
-    "NodeDeclaration",
-    "ReferenceInfo",
     "Viable",
     "admission",
     "candidate",
     "choices",
-    "declaration",
     "decision_handle",
-    "decision_info",
     "decisions",
-    "dependencies",
     "explain",
     "forced",
     "members",
     "model",
     "open",
-    "pinned",
-    "provenance",
-    "reference",
     "statistics",
     "value_handle",
     "viable",

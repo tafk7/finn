@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+from core.space._results_support import dependency_nodes
 from finn.core.space import (
     Available,
     BoundDecision,
@@ -301,10 +302,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
     )
     # The linked selection reads each case's view: one exact target per case.
     selection = Root.implementation.physical
-    assert (
-        len([node for node in inspection.dependencies(model, selection) if node.kind == "view"])
-        == 128
-    )
+    assert len([node for node in dependency_nodes(model, selection) if node.kind == "view"]) == 128
     assert calls == []
     with pytest.raises(AttributeError, match="immutable"):
         setattr(Root.implementation, "candidates", {"changed": Leaf(value=-1)})

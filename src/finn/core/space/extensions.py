@@ -1,13 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Graphs as data: name nodes built in plain Python as one composite Space class.
+"""A Space class built from data: ``composite`` names generated members as one class.
 
-Nodes are ordinary values: build them in loops, keep them in lists, and join
-them by assigning their formals (``current.width_in = previous.width_out``).
-``composite`` names them as the members of a new Space class, exactly as a class
-body would; Python's class construction places each node (``__set_name__``)
-and the Space class is collected once to report definition errors early. There is
-no builder state to seal: the nodes stay assignable until the Space class is prepared.
+Where a family of Space classes is generated from data rather than written (the
+candidates of a Decision over nodes built from a table, as ``finn.kernels.adapters``
+builds its adapter chains), its members are ordinary values: nodes built in loops
+and joined by assigning their formals (``current.width_in = previous.width_out``),
+and declarations. ``composite`` names them as the members of a new Space class,
+exactly as a class body would; Python's class construction places each node
+(``__set_name__``) and the Space class is collected once to report definition
+errors early. It is also the way to a root with structure: ``design_space`` takes
+a root of plain values, so a structure built at run time is a class built here.
 """
 
 from __future__ import annotations
@@ -55,8 +58,9 @@ def composite(
 ) -> type[Space]:
     """A new Space class whose members are ``members``: nodes and declarations.
 
-    Equivalent to a class statement with those attributes, so every rule of
-    a class body applies: each node is placed once, and names are one segment.
+    For a Space class generated from data. Equivalent to a class statement with
+    those attributes, so every rule of a class body applies: each node is placed
+    once, and names are one segment.
     ``annotations`` are the class body's annotations: the value type of each
     Param and Decision member (``{"choice": int}``).
     """

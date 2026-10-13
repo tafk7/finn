@@ -10,6 +10,7 @@ from typing import assert_type
 
 import pytest
 
+from core.space._results_support import dependency_nodes
 from finn.core.space import (
     Available,
     BoundDecision,
@@ -61,7 +62,7 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
     assert [item.key for item in decisions] == ["lanes"]
     assert {item.key for item in inspection.members(model)} == {"lanes", "cost", "physical"}
     assert inspection.choices(model) == ()
-    assert inspection.dependencies(model, Example.physical)[0].key == "cost"
+    assert dependency_nodes(model, Example.physical)[0].key == "cost"
     assert calls == []
 
     # The policy is ordinary external code. Discovery and queries never adopt
@@ -106,7 +107,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
     assert selectors[0].key == "implementation"
     assert selectors[0].cases == ("a", "b")
     choice = inspection.choices(point)[0]
-    # None only when an enclosing body pinned the choice.
+    # None only when its guard can never hold here.
     assert_type(choice.selector, DecisionHandle[str] | None)
     assert choice.selector is not None and choice.selector == selectors[0].reference
     chosen = point.with_choices({choice.selector: "b"})
@@ -140,7 +141,7 @@ def test_typed_handles_preserve_types_and_match_repeated_discovery() -> None:
     trial = point.with_choices({decision: 2})
     assert trial.query(value) == Available(2)
     assert trial.query(decision) == Available(2)
-    assert decision == inspection.decision_info(point, Example.lanes).reference
+    assert decision == inspection.decision_handle(point, Example.lanes)
     assert hash(decision) == hash(inspection.decisions(point)[0].reference)
     with pytest.raises(FrozenInstanceError):
         setattr(decision, "_node", 9)
@@ -204,7 +205,7 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         implementation: Child = Decision({"only": Child()})
         optional: Child | None = Decision({"some": Child()}, optional=True)
 
-    info = inspection.decision_info(Root, Root.implementation)
+    info = {item.key: item for item in inspection.decisions(Root)}["implementation"]
     assert (info.key, info.selector, info.cases) == ("implementation", True, ("only",))
     assert [item.key for item in inspection.decisions(Root)] == ["implementation", "optional"]
     implementation, optional = inspection.choices(Root)

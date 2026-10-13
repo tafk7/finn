@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from finn.core.space import Decision, Param, Space, View, constraint, derived, view, ValueSemantics, QueryResult, Available, design_space
 
 class Child(Space):
@@ -16,26 +17,23 @@ class HeatPump(Space):
     kw: int = Param()
     cop: int = Decision(values=(3, 4))
 
-class Stream(Space):
-    spec: int = Param()
+@dataclass(frozen=True)
+class Spec:
+    lanes: int
 
 class Producer(Space):
-    output: Stream = Param()
+    spec: Spec = Param()
 
     @derived
     def wrong_spec(self) -> str:
-        return self.output.spec  # E
+        return self.spec.lanes  # E
 
 class Parent(Space):
     child = Child(width=4)
     bare = Child()  # not an error: an assignment may supply the width
     bare.width = "four"  # E
     bare.depth = 2  # E
-    edge = Stream(spec=1)
-    producer = Producer(output=child)  # E
-    later = Producer()
-    later.output = child  # E
-    later.output = edge
+    producer = Producer(spec=child)  # E
     wrong_literal = Child(width="four")  # E
     unknown = Child(width=1, depth=2)  # E
     wrong_reference = Child(width=child.label)  # E
@@ -78,7 +76,7 @@ def bad(point: Child, parent: Parent) -> None:
     point.inspect(Child.width)  # not an error: a key typed as its value (refused at runtime)
     point.try_with_choices('not a change')  # E
     point.present(3)  # not an error: a value input types as its value (refused at runtime)
-    wrong_query: QueryResult[int] = parent.producer.query(Producer.output)  # E
+    wrong_query: QueryResult[int] = parent.producer.query(Producer.spec)  # E
 
 @constraint  # E
 def wrong_constraint() -> str:
@@ -100,16 +98,9 @@ class Holder(Space):
     part = Child(width=1)
 
 class Kernel(Space):
-    output: Stream = Param()
-    spec_typo = Child(width=output.spek)  # E
-    spec_wrong = Child(width=output)  # E
+    spec: Spec = Param()
+    spec_typo = Child(width=spec.lanez)  # E
+    spec_wrong = Child(width=spec)  # E
 
 class Overrides(Space):
-    holder = Holder()
-    holder.part.lanes = "two"  # E
-    holder.part.width = 2
-    holder.part = Boiler(kw=1)  # E
-    holder.part = Child(width=3)
-    pinned_wrong = Child(width=1, lanes="two")  # E
-    narrowed_wrong = Child(width=1, lanes=Decision(values=("a", "b")))  # E
     unannotated_ok = Child(width=Param())  # not a mypy error: refused at runtime (inline Param)

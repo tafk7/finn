@@ -5,10 +5,8 @@
 
 Every declared node becomes a scope; every member a node of the evaluation
 graph. A Decision over nodes becomes a selector decision, one guarded scope
-per candidate, and a ``select`` node per member read through it. A reference
-input becomes a presence node plus a scope reference (or, for a fresh node, a
-placement there); ``Users`` becomes a ``members`` node over the exports of
-the nodes whose inputs reference this one.
+per candidate, and a ``select`` node per member read through it; ``Members``
+becomes a ``members`` node over its children's exports.
 
 The phases pass one table (``_table``): ``_allocate`` places the scopes and
 reserves every member's node, ``_lower`` gives each node its payload
@@ -24,14 +22,13 @@ from ._check import check
 from ._collapse import collapse
 from ._configuration import Space
 from ._lower import lower
-from ._nodes import NodeDecl
 from ._ordering import dependency_order
 from .errors import DefinitionError
 from .ir import LinkedModel
 
 
-def link_space(space_type: type[Space], root: NodeDecl | None = None) -> LinkedModel:
-    table = allocate(space_type, root)
+def link_space(space_type: type[Space]) -> LinkedModel:
+    table = allocate(space_type)
     lower(table)
     order = dependency_order(
         tuple(node.dependencies for node in table.nodes),
@@ -53,8 +50,5 @@ def link_space(space_type: type[Space], root: NodeDecl | None = None) -> LinkedM
         keys,
         choices,
         frozenset(table.editable_aliases),
-        table.provenance,
-        table.scope_provenance,
-        table.pinned,
         forward,
     )

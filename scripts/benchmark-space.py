@@ -230,10 +230,6 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     assert len(report.outcomes) == count
     assert work["membership"] == count
     assert work["prerequisite"] == count
-    started = time.perf_counter()
-    selection = api.selections.capture(report.instance)
-    capture_seconds = time.perf_counter() - started
-    assert len(selection.entries) == count
     return {
         "fixture": "dependent" if dependent else "independent",
         "changes": count,
@@ -242,8 +238,6 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
         "update_seconds": seconds,
         "membership_calls": work["membership"],
         "prerequisite_calls": work["prerequisite"],
-        "captured_choices": len(selection.entries),
-        "capture_seconds": capture_seconds,
     }
 
 
@@ -773,14 +767,13 @@ def markdown(report: dict[str, object]) -> str:
             "",
             "Both explicit-input batches use reverse declaration order.",
             "",
-            "| Batch | Changes | Membership calls | Prerequisite calls | Commit s | Capture s |",
-            "|---|---:|---:|---:|---:|---:|",
+            "| Batch | Changes | Membership calls | Prerequisite calls | Commit s |",
+            "|---|---:|---:|---:|---:|",
         ]
         for item in report["batch_updates"]:
             lines.append(
                 f"| {item['fixture']} | {item['changes']} | {item['membership_calls']} | "
-                f"{item['prerequisite_calls']} | {item['update_seconds']:.6f} | "
-                f"{item['capture_seconds']:.6f} |"
+                f"{item['prerequisite_calls']} | {item['update_seconds']:.6f} |"
             )
         replacement = report["replacement_validation"]
         lines += [

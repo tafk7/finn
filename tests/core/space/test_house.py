@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.space._choices_support import committed, replay
 from core.space._results_support import codes
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
@@ -21,11 +22,9 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Located,
-    Space,
     Unresolved,
     design_space,
     inspection,
-    selections,
 )
 
 
@@ -85,7 +84,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
     )
     refused = point.inspect(House.total)
     results = refused.constraints.results
-    assert codes(results["matched.agreed"]) == {"mismatch"}
+    assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
         finding.message
         for finding in refused.accepted_result.findings  # type: ignore[union-attr]
@@ -104,7 +103,7 @@ def test_the_garage_is_present_only_when_wanted() -> None:
     assert wanted.with_choices({House.garage.finish: 2}).garage.cost == 40
 
 
-def test_keys_selections_and_inspection_use_declaration_paths() -> None:
+def test_keys_commitments_and_inspection_use_declaration_paths() -> None:
     house = design_space(House(budget=200))
     keys = {item.key for item in inspection.decisions(house)}
     assert keys == {
@@ -117,41 +116,41 @@ def test_keys_selections_and_inspection_use_declaration_paths() -> None:
         "garage.finish",
     }
     point = house.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
-    captured = selections.capture(point)
-    assert captured.keys == ("heating", "heating.heat_pump.cop")
-    replayed = selections.restore(design_space(House(budget=999)), captured)
-    assert replayed.accepted and replayed.instance.thermostat.kw == 8
+    chosen = committed(point)
+    assert chosen == {"heating": "heat_pump", "heating.heat_pump.cop": 4}
+    replayed = replay(design_space(House(budget=999)), chosen)
+    assert replayed.thermostat.kw == 8
     (choice,) = inspection.choices(house)
     assert [case.name for case in choice.cases] == ["boiler", "heat_pump"]
 
 
-class Estate(Space):
-    """An enclosing body customizes the house it contains: data, never behaviour."""
-
-    home = House(budget=300)
-    home.kitchen.area = 14  # overrides House's 12
-    home.kitchen.finish = 2  # pins a Decision: its key disappears
-    home.heating = Decision({"heat_pump": HeatPump(kw=6)})  # narrows the choice
-    home.garage = Room(area=24, finish=1)  # replaces a child node (same Space class)
+class FixedRoom(Room):
+    finish: int = Decision(values=(2,))
 
 
-def test_an_estate_overrides_the_house_it_contains() -> None:
-    estate = design_space(Estate())
+class Estate(House):
+    """A subclass customizes the house it inherits: data and structure, redeclared."""
+
+    kitchen = FixedRoom(area=14)  # a larger kitchen of one finish
+    heat_pump = HeatPump(kw=6)
+    heating: HeatPump = Decision({"heat_pump": heat_pump})  # the heat pump alone
+
+
+def test_an_estate_customizes_the_house_it_inherits() -> None:
+    estate = design_space(Estate(budget=300))
     keys = {item.key for item in inspection.decisions(estate)}
-    assert "home.kitchen.finish" not in keys and "home.garage.finish" not in keys
-    assert {"home.heating", "home.heating.heat_pump.cop"} <= keys
+    assert {"kitchen.finish", "heating", "heating.heat_pump.cop"} <= keys
     point = estate.with_choices(
         {
-            Estate.home.want_garage: True,
-            Estate.home.heating: "heat_pump",
-            Estate.home.heat_pump.cop: 3,
-            Estate.home.hall.finish: 1,
-            Estate.home.dining.finish: 2,
+            Estate.want_garage: True,
+            Estate.heating: "heat_pump",
+            Estate.heat_pump.cop: 3,
+            Estate.hall.finish: 1,
+            Estate.dining.finish: 2,
+            Estate.garage.finish: 1,
         }
     )
-    assert point.home.hall.area == 14  # hall.area = kitchen.area follows the override
-    assert point.home.thermostat.kw == 6
-    assert point.home.total == 14 + 28 + 32 + 24 + 36 + 2
-    provenance = inspection.provenance(point, Estate.home.kitchen.area)
-    assert provenance is not None
-    assert provenance.text().startswith("home.kitchen.area = 14 (set by Estate at test_house.py:")
+    assert point.hall.area == 14  # hall.area = kitchen.area reads the subclass's kitchen
+    assert point.kitchen.finish == 2  # its one case: forced
+    assert point.thermostat.kw == 6
+    assert point.total == 14 + 28 + 32 + 20 + 36 + 2

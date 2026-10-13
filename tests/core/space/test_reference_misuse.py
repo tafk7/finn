@@ -21,7 +21,6 @@ from finn.core.space import (
     Space,
     ViewKey,
     design_space,
-    inspection,
     view,
 )
 from finn.core.space.expressions import Expr
@@ -141,8 +140,6 @@ def test_references_are_keys_integer_arithmetic_builds_expressions() -> None:
     assert isinstance(House.kitchen.finish == House.kitchen.finish, bool)
     assert isinstance(vars(House)["doubled"], Expr)
     assert design_space(House()).doubled == 24
-    info = inspection.reference(House.kitchen.finish)
-    assert (info.path, info.member) == (("kitchen",), "finish")
 
 
 def test_a_view_reference_is_not_callable_in_a_class_body() -> None:

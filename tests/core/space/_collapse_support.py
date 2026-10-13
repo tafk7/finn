@@ -17,7 +17,6 @@ from typing import TypeVar, cast
 from unittest import mock
 
 from finn.core.space import EvaluationError, Model, Space, _linker, _runtime
-from finn.core.space._nodes import is_structural
 from finn.core.space.compiler import root_parameters, root_record
 from finn.core.space.ir import LinkedModel, Node
 from finn.core.space.occurrence import bind, state
@@ -37,12 +36,11 @@ def uncollapsed() -> Iterator[None]:
 def open_space(node: S, *, collapsed: bool) -> S:
     """A design space compiled afresh (no model cache), collapsed or not."""
     record = root_record(node)
-    root = record if is_structural(record) else None
     if collapsed:
-        linked = _linker.link_space(record.space_type, root)
+        linked = _linker.link_space(record.space_type)
     else:
         with uncollapsed():
-            linked = _linker.link_space(record.space_type, root)
+            linked = _linker.link_space(record.space_type)
     model = Model(record.space_type, linked)
     return cast(S, bind(model, root_parameters(model, record)))
 

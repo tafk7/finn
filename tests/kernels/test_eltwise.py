@@ -72,8 +72,9 @@ def test_eltwise_refuses_a_nonfinite_or_unrepresentable_native_scale(
 
 
 def test_eltwise_refuses_unsupported_profiles() -> None:
+    with pytest.raises(ValueError, match="domain-membership"):
+        eltwise(pe=0)
     refused = (
-        eltwise(pe=0),
         eltwise(operation="DIV"),
         eltwise(lhs="INT4"),
         eltwise(lhs="BIPOLAR"),
@@ -93,14 +94,13 @@ def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() ->
         platform: Platform = Param(required=False)
         arithmetic = EltwiseKernel(
             operation="ADD",
-            pe=2,
             lhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
             rhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
             b_scale=1.0,
             platform=platform,
         )
 
-    point = design_space(OptionalPlatform())
+    point = design_space(OptionalPlatform()).with_choices({OptionalPlatform.arithmetic.pe: 2})
     assert point.arithmetic.result_dtype.name == "INT4"
     assessment = point.arithmetic.inspect(EltwiseKernel.module)
     assert isinstance(assessment.output_result, Available)

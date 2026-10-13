@@ -38,17 +38,17 @@ not depths, the choices do not move with PE; ``parameters`` maps them to the
 triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage requires the
 ``platform``'s UltraRAM that takes initial contents (the table is the
 memories' initial contents, a data file the RTL reads: ``thresholds_file``), and
-runtime-writable thresholds a ``control`` bus to be placed on, each a named
-refusal of the case.
+runtime-writable thresholds a port named for their control bus (``control``), each
+a named refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Placed in a kernel with children, it reads
 an input tensor and (with several sets) a tensor of set indices, facts its parent
 gives, and writes its output tensor; it states the end of each of its ports
 (``input_end``, ``output_end``, ``set_end``), which the channels on them take; its
-AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
-runtime-writable (``controlled``), and otherwise held idle by its module, as
-is the set selector of a single set. Presented, the bus carries the writes that
+AXI-Lite bus is presented, at the port its placement names (``control``), when
+thresholds are runtime-writable (``controlled``), and otherwise held idle by its
+module, as is the set selector of a single set. Presented, the bus carries the writes that
 put the kernel's table into the memories (``register_map``), at the addresses
 thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
@@ -96,7 +96,7 @@ from finn.kernels.artifacts.contributions import (
 )
 from finn.kernels.artifacts.module import Held, RegisterMap
 from finn.kernels.base import CLOCK, RESET, LeafKernel, extent_of, interface
-from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
+from finn.kernels.control import CONTROL, Control, held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
@@ -229,16 +229,17 @@ class ThresholdingAxiKernel(LeafKernel):
 
     channels = extent_of(c)  # the input's channels, bound by its tensor
     pe: int = Decision(domain=divisors_of(channels))  # channels a beat
-    # Where a parent places it: the tensors its input ports read, and the control bus
-    # that exports its AXI-Lite interface when thresholds are runtime-writable.
+    # Where a parent places it: the tensors its input ports read, and the port its
+    # AXI-Lite interface is presented at when thresholds are runtime-writable.
     input_tensor: Tensor = Param(required=False)
     set_tensor: Tensor = Param(required=False)
-    control: ControlBus = Param(required=False)
+    control: str = Param(required=False)
     platform: Platform = Param()
 
     @derived
     def controllable(self) -> bool:
-        """Whether a parent placed it on a control bus, which runtime writes reach it by."""
+        """Whether a parent named a port for its control bus, which runtime writes reach it
+        by."""
         return self.present(ThresholdingAxiKernel.control)
 
     # Runtime-writable thresholds need a control bus to export their AXI-Lite
@@ -641,9 +642,9 @@ class ThresholdingAxiKernel(LeafKernel):
     def control_bus(self) -> Control:
         if not self.controlled:
             return Control(None)
-        return Control(self.config_bus, self.register_map)
+        return Control(self.config_bus, self.control, self.register_map)
 
-    exports = {**LeafKernel.exports, CONTROL: {control: control_bus}}
+    exports = {**LeafKernel.exports, CONTROL: control_bus}
 
 
 __all__ = ["ThresholdingAxiKernel", "stage_style", "thresholding_resources"]

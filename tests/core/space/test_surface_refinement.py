@@ -23,7 +23,6 @@ from finn.core.space import (
     design_space,
     divisors_of,
     domain,
-    require_value,
 )
 from finn.core.space.compiler import compile_model
 from finn.core.space.errors import (
@@ -250,7 +249,7 @@ def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() ->
     assert isinstance(cleared.query(Example.lanes), Unresolved)
 
 
-def test_require_value_preserves_result_and_view_context() -> None:
+def test_value_reads_preserve_result_and_view_context() -> None:
     class Example(Space):
         choice: int = Decision(values=(0, 1))
         result = View(choice)
@@ -258,8 +257,8 @@ def test_require_value_preserves_result_and_view_context() -> None:
     base = design_space(Example())
     unresolved = base.query(Example.choice)
     with pytest.raises(ValueUnavailableError) as caught:
-        require_value(unresolved)
-    assert caught.value.result is unresolved
+        _ = base.choice
+    assert caught.value.result == unresolved
     with pytest.raises(ValueUnavailableError) as call_error:
         _ = base.result
     assert call_error.value.result == base.query(Example.result)
@@ -271,7 +270,6 @@ def test_require_value_preserves_result_and_view_context() -> None:
         assessment.require_value()
     assert view_error.value.context is assessment
     configured = base.with_choices(choice=0)
-    assert require_value(configured.query(Example.choice)) == 0
     assert configured.result == 0
     assert configured.inspect(Example.result).require_value() == 0
     assert configured.field(Example.choice).get() == 0

@@ -3,8 +3,8 @@
 """Forced Decisions: an open Decision with exactly one viable case reads as that case.
 
 A forced Decision is derived at read time and never stored. It stays
-unassigned (``DecisionState`` has no other status), ``selections.capture``
-holds only commitments, and each snapshot finds its own. The public reads are
+unassigned (``DecisionState`` has no other status), it is not among a
+configuration's commitments, and each snapshot finds its own. The public reads are
 in ``inspection``: ``forced`` and ``viable`` report the verdicts, ``admission``
 a candidate's own refusal.
 

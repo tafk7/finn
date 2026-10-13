@@ -2,13 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import inspection, selections
+from . import inspection
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
-    CleanupFailure,
-    NativeCancellationDetails,
     NativeEvaluationError,
-    cancellation_details,
 )
 from .compiler import Model, design_space
 from .declarations import (
@@ -18,12 +15,8 @@ from .declarations import (
     ConstraintGroup,
     Decision,
     Derived,
-    LocatedParam,
     Members,
     Param,
-    Present,
-    Users,
-    ValueRef,
     View,
     ViewKey,
     constraint,
@@ -33,7 +26,7 @@ from .declarations import (
     supplied,
     view,
 )
-from .domains import Domain, Requirement, divisors_of, domain, finite, requires, requiring
+from .domains import Domain, Requirement, divisors_of, domain, requires, requiring
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
@@ -43,7 +36,6 @@ from .errors import (
     RequestError,
     ValueUnavailableError,
 )
-from .expressions import Expr
 from .extensions import composite
 from .graph import Located
 from .references import DecisionHandle, ValueHandle
@@ -63,9 +55,7 @@ from .results import (
     finding_record,
     finding_text,
     reject,
-    require_value,
 )
-from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
 
 __all__ = [
@@ -76,7 +66,6 @@ __all__ = [
     "composite",
     "Param",
     "UNSUPPLIED",
-    "LocatedParam",
     "Const",
     "Decision",
     "required",
@@ -87,25 +76,20 @@ __all__ = [
     "ConstraintGroup",
     "View",
     # Graph primitives
-    "Present",
     "Members",
-    "Users",
     "Located",
     "derived",
     "constraint",
     "view",
     # Typed references and bound accessors
-    "ValueRef",
     "ViewKey",
     "ValueHandle",
     "DecisionHandle",
     "BoundValue",
     "BoundDecision",
-    "Expr",
     # Domains and value semantics
     "Domain",
     "domain",
-    "finite",
     "divisors_of",
     "Requirement",
     "requires",
@@ -128,14 +112,11 @@ __all__ = [
     "finding_record",
     "finding_text",
     "reject",
-    "require_value",
-    # Configuration revisions and selections
+    # Configuration revisions
     "Change",
     "ChangeRequest",
     "ChangeOutcome",
     "ConfigurationResult",
-    "Selection",
-    "SelectionEntry",
     # Errors and native cleanup diagnostics
     "DefinitionError",
     "RequestError",
@@ -143,11 +124,7 @@ __all__ = [
     "ReferenceUseError",
     "ConfigurationError",
     "ValueUnavailableError",
-    "CleanupFailure",
     "NativeEvaluationError",
-    "NativeCancellationDetails",
-    "cancellation_details",
     # Public services
     "inspection",
-    "selections",
 ]

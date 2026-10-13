@@ -46,13 +46,6 @@ def describe(results: Iterable[QueryResult[Any]]) -> str:
 def commit(point: S, choices: Mapping[str, object]) -> S:
     """Commit choices named by their stable decision keys, atomically."""
     owned = {item.key: item.reference for item in inspection.decisions(point)}
-    pinned = {item.key: item for item in inspection.pinned(point)}
-    stale = sorted(choices.keys() & pinned.keys())
-    if stale:
-        raise ValueError(
-            f"{type(point).__name__}: stale choices {stale}: "
-            + "; ".join(pinned[key].text() for key in stale)
-        )
     unknown = sorted(choices.keys() - owned.keys())
     if unknown:
         raise ValueError(f"{type(point).__name__}: unknown choices {unknown}")

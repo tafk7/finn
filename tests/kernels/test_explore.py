@@ -54,8 +54,14 @@ from kernels import chain
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, keyed
 
 
+def held(explorer: Seam) -> Seam:
+    """``explorer`` holding the Chain's fixed PE."""
+    explorer.held.update(chain.HELD)
+    return explorer
+
+
 def seam() -> tuple[Seam, Network]:
-    return Seam(FULL_DSP48E2), chain.network()
+    return held(Seam(FULL_DSP48E2)), chain.network()
 
 
 def chosen(explorer: Seam, network: Network) -> dict[str, object]:
@@ -64,8 +70,13 @@ def chosen(explorer: Seam, network: Network) -> dict[str, object]:
 
 
 def folding(explorer: Seam, network: Network) -> dict[str, object]:
-    """``network``'s stored folding: each PE and SIMD."""
-    return {k: v for k, v in chosen(explorer, network).items() if k.endswith((".pe", ".simd"))}
+    """``network``'s stored folding: each MatMul's PE and SIMD (the thresholding's PE is
+    the Chain's, held)."""
+    return {
+        k: v
+        for k, v in chosen(explorer, network).items()
+        if k.endswith((".pe", ".simd")) and not k.startswith("activate.")
+    }
 
 
 def offered(explorer: Seam, network: Network) -> dict[str, Any]:
@@ -513,9 +524,9 @@ def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest()
     assert values["first.compute.packed.reducer"] == "compressor"
     assert values["second.compute.packed.pe"] == 1  # its baseline
     assert explorer.choices(settled) == ()
-    # Only the members named, where named.
+    # Only the members named, where named (and the Chain's fixed PE, committed).
     first = explorer.settle(network, prior, ("first",))
-    assert {key[0] for key in explorer.chosen(first)} == {"first"}
+    assert {key[0] for key in explorer.chosen(first)} == {"first", "activate"}
 
 
 def test_set_drops_a_stored_choice_the_change_makes_invalid_then_settles() -> None:
@@ -648,7 +659,7 @@ PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, u
 
 
 def within_part() -> tuple[Seam, Network]:
-    return Seam(PART), chain.network()
+    return held(Seam(PART)), chain.network()
 
 
 def test_the_seam_states_the_network_s_resources_once_its_members_do() -> None:
@@ -699,7 +710,7 @@ def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_poi
     strategy = MaxThroughput({"dsp": 0.5})
     strategy.explore(explorer, network)
     searched = explorer.attempts
-    alone = Seam(PART)
+    alone = held(Seam(PART))
     for tried in strategy.tried:
         budget = explore_module._UNBOUNDED if tried.cycles is None else tried.cycles
         folder = TargetCycles(budget)

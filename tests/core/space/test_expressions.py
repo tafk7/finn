@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+from core.space._results_support import dependency_nodes
 from finn.core.space import (
     Available,
     Const,
@@ -73,7 +74,7 @@ def test_an_inferred_derived_integer_remains_an_ordinary_callback() -> None:
     assert calls == ["doubled"]
     assert point.result == 11
     assert calls == ["doubled"]
-    dependencies = inspection.dependencies(model, Example.result)
+    dependencies = dependency_nodes(model, Example.result)
     assert any(item.key == "doubled" for item in dependencies)
 
 
@@ -89,7 +90,7 @@ def test_literal_expressions_evaluate_lazily_and_preserve_owned_dependencies() -
     assert metadata["anonymous"].kind == "derived"
     point = design_space(Example())
     assert (point.folded, point.anonymous) == (14, 4)
-    assert inspection.dependencies(model, Example.folded)
+    assert dependency_nodes(model, Example.folded)
     evidence = inspection.explain(point, Example.folded)
     assert evidence.result == Available(14)
     assert {node.declaration.owner for node in evidence.nodes} == {"base", "folded"}

@@ -89,11 +89,6 @@ def _check_exports(table: Table) -> None:
             (export, draft.members[declaration])
             for export, declaration in draft.effective.exports.items()
         ]
-        exported += [
-            (export, target)
-            for export, entries in draft.input_exports.items()
-            for _, target in entries
-        ]
         for export, target in exported:
             semantics = table.nodes[target].semantics
             if semantics is None or not export.semantics.is_compatible_with(semantics):

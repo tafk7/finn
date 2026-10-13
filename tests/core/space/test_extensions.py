@@ -201,10 +201,9 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
         first = template(value=3)
         second = template(value=3)
 
-    first, second = inspection.declaration(Parent.first), inspection.declaration(Parent.second)
-    assert first.space_type is second.space_type is template
-    assert first.bindings == second.bindings == {"value": 3}
     point = design_space(Parent())
+    assert type(point.first) is type(point.second) is template
+    assert point.first.value == point.second.value == 3
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     assert set(handles) == {"first.choice", "second.choice"}
     selected = point.with_choices({handles["first.choice"]: 2})
@@ -299,10 +298,6 @@ def test_literal_bindings_snapshot_at_the_node_call() -> None:
     source = [1, 2]
     node = Vector(values=source)
     source.append(9)
-    exposed = inspection.declaration(node).bindings["values"]
-    assert exposed == [1, 2]
-    assert isinstance(exposed, list)
-    exposed.append(8)
 
     class Parent(Space):
         vector = node

@@ -192,10 +192,8 @@ class Space(metaclass=SpaceMeta):
     when: _When = _when_field(default=None, kw_only=True)
     _state: ClassVar[object]
     _scope: ClassVar[int]
-    # A key maps to one view, or per input to one view for each reference input.
-    exports: ClassVar[Mapping[ViewKey[object], Declaration | Mapping[Any, Declaration]]] = (
-        MappingProxyType({})
-    )
+    # A key maps to one view.
+    exports: ClassVar[Mapping[ViewKey[object], Declaration]] = MappingProxyType({})
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         path = declared_path(self)
@@ -271,21 +269,18 @@ class Space(metaclass=SpaceMeta):
 
         The answer is what reading it would give, as a result rather than a
         raise: a view (``House.total``) answers its accepted result. A node (a
-        child, a candidate handle, or a reference input such as ``K.output``)
-        answers its configuration: inapplicable when the node is absent,
-        unresolved while its presence is undecided or it is unsupplied.
+        child or a candidate handle) answers its configuration: inapplicable when
+        the node is absent, unresolved while its presence is undecided.
         """
         from .occurrence import query
 
         return query(self, value)
 
     def present(self, node: object) -> bool:
-        """Whether a node (a child, a candidate, or the node a reference input names) is
-        present, or a value input is supplied.
+        """Whether a node (a child or a candidate) is present, or a value input is supplied.
 
         Read like a value: undecided presence raises ``ValueUnavailableError``
-        (inside a method it halts the method as unresolved). An unsupplied
-        optional reference input is not present. A value input (a ``Param``) is
+        (inside a method it halts the method as unresolved). A value input (a ``Param``) is
         present when it is supplied: given a literal, or bound to a source that
         applies (its guards hold and the choices it is read through select it);
         an optional input omitted at start, or one that no present source

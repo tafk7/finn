@@ -194,6 +194,7 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
 
 def _folded() -> tuple[Seam, Network]:
     explorer = Seam(FULL_DSP48E2)
+    explorer.held.update(chain.HELD)
     return explorer, TargetCycles(12).explore(explorer, chain.network())
 
 
@@ -261,6 +262,7 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
     point at its baselines); where a member's cycles wait on an open choice, it refuses,
     naming it."""
     explorer = Seam(FULL_DSP48E2)
+    explorer.held.update(chain.HELD)
     point = chain.network()
     base = explorer.baseline(point)
     strategy = SizeFifos()

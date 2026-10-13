@@ -42,7 +42,6 @@ def _reads_any(node: Node, targets: set[int]) -> bool:
         node.output in targets
         or any(argument.node in targets for argument in node.arguments)
         or any(argument.node in targets for argument in node.domain_arguments)
-        or any(argument.node in targets for argument in node.contract_arguments)
         or any(target in targets for _, target in node.alternatives)
     )
 
@@ -86,7 +85,7 @@ def collapse(nodes: list[Node], order: tuple[int, ...]) -> tuple[int, ...]:
             continue
         via: list[tuple[int, int]] = []
         changes: dict[str, Any] = {}
-        for name in ("arguments", "domain_arguments", "contract_arguments"):
+        for name in ("arguments", "domain_arguments"):
             arguments = cast(tuple[Argument, ...], getattr(node, name))
             rewritten = tuple(
                 Argument(argument.name, bypass(node, argument.node, via)) for argument in arguments
