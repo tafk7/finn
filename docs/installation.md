@@ -644,7 +644,10 @@ it (`finn.choices/objective_fps`), and none where a later step that may change t
 (a pin, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
 each setting with its value or default and its readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
-their place (`configuration.target: ...`).
+their place (`configuration.target: ...`), as a `ConfigurationRefused`. A build
+directory's configuration that does not decode is refused in the output directory it
+states, when it states one as a string: logged there and recorded in a new manifest, as
+`refused`; otherwise on the console only.
 
 The strategy steps choose the KernelOps' choices through the DSE seam, one strategy
 each; a build lists them like any step, in `steps`. Each opens the

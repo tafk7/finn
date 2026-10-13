@@ -190,19 +190,35 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() 
 def test_json_the_configuration_does_not_declare_is_refused_naming_its_place(
     stated: dict[str, Any], refused: str
 ) -> None:
-    with pytest.raises(ValueError, match=re.escape(refused)):
+    with pytest.raises(ConfigurationRefused) as refusal:
         DataflowBuildConfig.from_json(json.dumps({**STATED, **stated}))
+    (finding,) = refusal.value.findings
+    assert finding.code == "configuration-invalid"
+    assert f"{place(finding)}: {finding.message}".startswith(refused)
 
 
-def test_json_without_a_required_field_is_refused_naming_it() -> None:
-    with pytest.raises(ValueError, match="configuration: no output_dir, which"):
-        DataflowBuildConfig.from_json(json.dumps({"target": {"period_ns": 5.0}}))
-    with pytest.raises(ValueError, match="configuration: a JSON object, not"):
-        DataflowBuildConfig.from_json("[]")
+@pytest.mark.parametrize(
+    "text, where, refused",
+    [
+        (json.dumps({"target": {"period_ns": 5.0}}), "configuration", "no output_dir, which"),
+        ("[]", "configuration", "a JSON object, not []"),
+        ("{", "configuration", "not JSON: Expecting property name"),
+    ],
+)
+def test_json_without_a_required_field_or_not_an_object_is_refused(
+    text: str, where: str, refused: str
+) -> None:
+    with pytest.raises(ConfigurationRefused) as refusal:
+        DataflowBuildConfig.from_json(text)
+    (finding,) = refusal.value.findings
+    assert (finding.code, place(finding)) == ("configuration-invalid", where)
+    assert finding.message.startswith(refused)
 
 
 def test_a_setting_named_as_a_field_is_refused() -> None:
-    with pytest.raises(ValueError, match=r"configuration.settings: \['verbose'\] are fields"):
+    with pytest.raises(
+        ConfigurationRefused, match=r"configuration.settings: \['verbose'\] are fields"
+    ):
         DataflowBuildConfig(
             output_dir="out", target=TargetRequest(period_ns=5.0), settings={"verbose": True}
         )
@@ -672,6 +688,44 @@ def test_a_build_directorys_bad_list_is_refused_inside_its_build(tmp_path: Path)
     assert [each["code"] for each in manifest["configuration_findings"]] == ["step-unknown"]
     log = (tmp_path / "out" / "build_dataflow.log").read_text()
     assert "Configuration refused: 1 findings" in log
+
+
+def test_a_build_directorys_configuration_that_does_not_decode_is_refused_in_its_log(
+    tmp_path: Path,
+) -> None:
+    """Its output directory read from the JSON as stated, the refusal is logged and
+    recorded there, and an earlier build's manifest is replaced."""
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
+    output = tmp_path / "out"
+    (output / "report").mkdir(parents=True)
+    (output / MANIFEST_FILE).write_text(json.dumps({"outcome": {"status": "completed"}}))
+    stated = {**STATED, "target": {"period_ns": 5.0, "boards": "Ultra96"}}
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
+    with pytest.raises(ConfigurationRefused) as refusal:
+        build_dataflow_directory(str(tmp_path))
+    (finding,) = refusal.value.findings
+    assert (finding.code, place(finding)) == ("configuration-invalid", "configuration.target")
+    assert finding.message == "keys TargetRequest does not declare: ['boards']"
+    manifest = json.loads((output / MANIFEST_FILE).read_text())
+    assert manifest["outcome"]["status"] == "refused"
+    assert manifest["outcome"]["error"]["type"] == "ConfigurationRefused"
+    assert [each["code"] for each in manifest["configuration_findings"]] == [
+        "configuration-invalid"
+    ]
+    assert manifest["identity"]["output_dir"] == str(output)
+    assert manifest["plan"] is None and manifest["steps"] == []
+    log = (output / "build_dataflow.log").read_text()
+    assert "Configuration refused: 1 findings" in log
+    assert "configuration-invalid: configuration.target: keys TargetRequest" in log
+
+
+def test_a_configuration_without_an_output_directory_is_refused_on_the_console_only(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "output_dir": 3}))
+    with pytest.raises(ConfigurationRefused, match=r"configuration.output_dir: a str, not 3"):
+        read_build_config(str(tmp_path))
+    assert [path.name for path in tmp_path.iterdir()] == ["dataflow_build_config.json"]
 
 
 @pytest.mark.slow

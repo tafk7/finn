@@ -32,6 +32,7 @@ checks the configuration, then runs the plan's steps, logging and recording each
 
 import clize
 import contextlib
+import json
 import logging
 import os
 import pdb  # NOQA
@@ -146,14 +147,10 @@ def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Mani
     return 0
 
 
-def _identity(cfg: DataflowBuildConfig, target: Target | None) -> dict:
-    """The build's identity for its manifest: FINN's revision, the toolchain's selection
-    and the resolved ``target``, each None where it is not known. The model is added
-    once the build reads it."""
-    try:
-        selection = asdict(host_selection(stated=cfg.toolchain))
-    except ValueError:
-        selection = None
+def _identity(output_dir: str, selection: dict | None, target: Target | None) -> dict:
+    """The build's identity for its manifest: FINN's revision, the toolchain's
+    ``selection`` and the resolved ``target``, each None where it is not known. The model
+    is added once the build reads it."""
     stated = None
     if target is not None:
         stated = {
@@ -165,7 +162,7 @@ def _identity(cfg: DataflowBuildConfig, target: Target | None) -> dict:
     return {
         "finn": finn_revision(),
         "model": None,
-        "output_dir": os.path.abspath(cfg.output_dir),
+        "output_dir": os.path.abspath(output_dir),
         "started": datetime.now().isoformat(timespec="seconds"),
         "toolchain": selection,
         "target": stated,
@@ -176,7 +173,11 @@ def _identity(cfg: DataflowBuildConfig, target: Target | None) -> dict:
 def _indexed(cfg: DataflowBuildConfig, target: Target | None):
     """The build's manifest for the ``with`` block, filled from the records of
     ``RECORDS``."""
-    manifest = Manifest(cfg.output_dir, _identity(cfg, target))
+    try:
+        selection = asdict(host_selection(stated=cfg.toolchain))
+    except ValueError:
+        selection = None
+    manifest = Manifest(cfg.output_dir, _identity(cfg.output_dir, selection, target))
     handler = ManifestHandler(manifest)
     level = RECORDS.level
     RECORDS.setLevel(logging.INFO)
@@ -271,14 +272,38 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
             return _run_build_steps(model, cfg, plan, manifest)
 
 
+def _refused_in(output_dir: str, refused: ConfigurationRefused) -> None:
+    """Log and record in ``output_dir`` a build refused before its configuration
+    decoded, replacing the manifest an earlier build left there."""
+    with log_run(os.path.join(output_dir, LOG_FILE), runner=_LOG.name):
+        manifest = Manifest(output_dir, _identity(output_dir, None, None))
+        _log_refusal(refused)
+        manifest.configured(list(refused.findings))
+        manifest.refused(refused)
+
+
 def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
     """A build directory's configuration (``CONFIG_FILE``), its relative paths naming
-    files in the directory."""
-    path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
+    files in the directory. A configuration that does not decode is refused; where it
+    states its output directory as a string, the refusal is logged and recorded there
+    first, as the build's."""
+    directory = os.path.abspath(path_to_cfg_dir)
+    path = os.path.join(directory, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
     with open(path) as f:
-        return DataflowBuildConfig.from_json(f.read(), os.path.abspath(path_to_cfg_dir))
+        text = f.read()
+    try:
+        stated = json.loads(text)
+    except ValueError:
+        stated = None
+    output_dir = stated.get("output_dir") if isinstance(stated, dict) else None
+    try:
+        return DataflowBuildConfig.from_json(text, directory)
+    except ConfigurationRefused as refused:
+        if isinstance(output_dir, str):
+            _refused_in(os.path.join(directory, output_dir), refused)
+        raise
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):

@@ -44,6 +44,7 @@ from finn.builder.build_dataflow_config import (
     DataflowBuildConfig,
     StepFunction,
     config_finding,
+    undecoded,
 )
 from finn.core.space import Finding
 from finn.util.typed_json import decoded, encoded
@@ -236,9 +237,7 @@ def _settings(
             try:
                 value = decoded(kind, cfg.settings[name], place)
             except ValueError as invalid:
-                # The refusal names its place: this setting's, or one inside it.
-                where, _, message = str(invalid).partition(": ")
-                refused.append(config_finding("setting-invalid", message, where))
+                refused.append(undecoded("setting-invalid", invalid))
                 continue
         elif default is inspect.Parameter.empty:
             message = f"{', '.join(names)} require it, and it is not given"
