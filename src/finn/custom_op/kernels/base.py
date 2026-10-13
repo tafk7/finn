@@ -24,7 +24,8 @@ kernels. A missing shape or datatype raises ``FactUnstated``, and the node stays
 host; anything else wrong with the facts is an error (``KernelOpError``).
 
 ``execute_node`` is the reference for what the op covers, and must equal ONNX on every
-node the op converts (FINN executes ONNX with exact integers, ``finn.core.onnx_exec``).
+node the op converts (FINN executes ONNX with exact integers, which importing ``finn``
+turns on).
 The test harness checks this (``finn.harness.reference``); builds do not.
 
 A node's attributes are its semantic attributes, which are part of the operation

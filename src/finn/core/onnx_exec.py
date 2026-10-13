@@ -117,9 +117,10 @@ def execute_onnx(
     executors (finn.core.executor) run the nodes: for each node, the first
     executor that claims it runs it, and qonnx's execute_node runs a node none
     claims. A partition node's body runs under the same executors.
-    qonnx's execute_node always runs with exact_integers: integers are computed
-    exactly, as the hardware computes them, where float32 would round them (a
-    standard node whose annotated integers pass 2**24 computes in float64).
+    qonnx's execute_node computes integers exactly, as the hardware computes them,
+    where float32 would round them (a standard node whose annotated integers pass
+    2**24 computes in float64): importing FINN turns qonnx's exact integers on
+    (``finn``).
 
     require_hardware: every hardware node (a KernelOp, a partition node) must be run
     by a hardware executor (``Executor.hardware``, such as XSim); one that no hardware
@@ -280,7 +281,7 @@ def _execute_nodes(
                 opset_version = opset_imports.get(node.domain, get_preferred_qonnx_opset())
                 # qonnx/legacy untyped
                 execute_node(  # type: ignore[no-untyped-call]
-                    node, execution_context, graph, opset_version, model=model, exact_integers=True
+                    node, execution_context, graph, opset_version, model=model
                 )
         finally:
             _running.reset(token)

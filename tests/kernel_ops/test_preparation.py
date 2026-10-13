@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -28,6 +31,7 @@ import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
@@ -40,7 +44,11 @@ from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import resolve_plan
-from finn.builder.build_dataflow_steps import build_dataflow_phases, step_streamline
+from finn.builder.build_dataflow_steps import (
+    build_dataflow_phases,
+    step_streamline,
+    step_tidy_up,
+)
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.thresholding import LOWERING
@@ -385,7 +393,9 @@ def _wide_layer(thresholds: npt.NDArray[np.float64], exported: bool) -> ModelWra
     return model.transform(InferDataTypes())  # type: ignore[no-untyped-call]
 
 
-def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
+def test_a_wide_layer_converts_and_its_graphs_agree_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """INT8 times INT8 over k 2304: one sum is odd and past 2**24, where float32 rounds it
     down, and channel 0's top threshold sits at it, so float32 would change the
     thresholded output. FINN's execution computes the sums exactly, so the layer converts
@@ -407,8 +417,10 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
     kernel_ops = copy.deepcopy(made).transform(conversion)
     ops = {outcome.nodes[0]: outcome.op for outcome in conversion.outcomes}
     assert (ops["MatMul_a"], ops["MultiThreshold_a"]) == ("MatMul", "Thresholding")
-    # qonnx's default execution rounds the odd sum, and the output with it.
-    rounded = qonnx_execute(made, {"x": x.astype(np.float32)}, True)
+    # qonnx's execution without exact integers rounds the odd sum, and the output with it.
+    with monkeypatch.context() as patch:
+        patch.setenv(EXACT_INTEGERS, "0")
+        rounded = qonnx_execute(made, {"x": x.astype(np.float32)}, True)
     assert not np.array_equal(np.asarray(rounded["ya"]), ya)
     scaled = None
     for model in (export, made, kernel_ops):
@@ -420,6 +432,67 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
     # The equivalence analysis on its draws: nothing found.
     checked = made.analysis(equivalence_with(export, EXPLAINS, seeds=1))
     assert checked == {"runs": 3, "findings": ()}
+
+
+# -- constant folding with exact integers ---------------------------------------------
+
+
+def _folded_constant(model: ModelWrapper) -> npt.NDArray[Any]:
+    """The constant the tidied graph's one node, ``x + c``, adds."""
+    (node,) = model.graph.node
+    return np.asarray(model.get_initializer(node.input[1]))
+
+
+def test_importing_finn_turns_exact_integers_on() -> None:
+    """Any FINN module, imported in a process whose environment lacks the setting, turns
+    qonnx's exact integers on."""
+    script = (
+        "import finn.dataflow\n"
+        "from qonnx.core.onnx_exec import get_exact_integers\n"
+        "raise SystemExit(0 if get_exact_integers() else 1)\n"
+    )
+    environment = {name: value for name, value in os.environ.items() if name != EXACT_INTEGERS}
+    completed = subprocess.run(
+        [sys.executable, "-c", script], env=environment, capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_preparation_folds_constants_exactly(tmp_path: Path) -> None:
+    """The builder's tidy-up folds constants with exact integers: a dot product of
+    constants whose partial sums pass 2**24, which float32 rounds, folds to its exact 1;
+    an INT32 sum of 16777216 and 1, which float32 cannot hold, stays unfolded and the
+    tidied graph computes 16777217."""
+    cfg = preparation_config(tmp_path)
+    dot = graph(
+        [
+            helper.make_node("MatMul", ["a", "b"], ["c"], name="MatMul_0"),
+            helper.make_node("Add", ["x", "c"], ["y"], name="Add_0"),
+        ],
+        {"x": ([1, 1], "INT8")},
+        ["y"],
+        {"a": [[2.0**24, 1.0, -(2.0**24)]], "b": [[1.0], [1.0], [1.0]]},
+        {"a": "INT26", "b": "INT2"},
+    ).transform(InferDataTypes())  # type: ignore[no-untyped-call]
+    folded = _folded_constant(step_tidy_up(dot, cfg))
+    assert folded.dtype == np.float32 and folded.item() == 1
+    total = graph(
+        [
+            helper.make_node("Add", ["a", "b"], ["c"], name="Add_0"),
+            helper.make_node("Add", ["x", "c"], ["y"], name="Add_1"),
+        ],
+        {"x": ([1], "INT32")},
+        ["y"],
+        {"a": [2.0**24], "b": [1.0]},
+        {"a": "INT32", "b": "INT32", "c": "INT32", "y": "INT32"},
+    )
+    x = {"x": np.zeros(1, dtype=np.float32)}
+    assert execute_onnx(total, x)["y"].item() == 2**24 + 1
+    tidied = step_tidy_up(total, cfg)
+    kept, _ = tidied.graph.node
+    assert kept.op_type == "Add" and tidied.get_initializer(kept.output[0]) is None
+    (inp,), (out,) = tidied.graph.input, tidied.graph.output
+    assert execute_onnx(tidied, {inp.name: x["x"]})[out.name].item() == 2**24 + 1
 
 
 def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(

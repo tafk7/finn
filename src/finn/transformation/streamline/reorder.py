@@ -254,7 +254,7 @@ class MoveAddPastConv(Transformation):
                         exec_ctx[conv_in_name] = conv_in_const
                         opset_imports = model.get_opset_imports()
                         opset_version = opset_imports[conv_node.domain]
-                        execute_node(conv_node, exec_ctx, model.graph, opset_version)
+                        execute_node(conv_node, exec_ctx, model.graph, opset_version, model=model)
                         Anew = exec_ctx[end_name]
 
                         # Without padding, every pixel of it is the same.
