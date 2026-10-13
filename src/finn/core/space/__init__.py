@@ -9,7 +9,6 @@ from ._execution import (
 )
 from .compiler import Model, design_space
 from .declarations import (
-    UNSUPPLIED,
     Const,
     Constraint,
     ConstraintGroup,
@@ -60,7 +59,6 @@ __all__ = [
     "Model",
     "composite",
     "Param",
-    "UNSUPPLIED",
     "Const",
     "Decision",
     "required",
