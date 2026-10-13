@@ -40,9 +40,8 @@ from finn import resources
 
 
 def make_build_dir(prefix=""):
-    """Creates a folder with given prefix to be used as a build dir.
-    Use this function instead of tempfile.mkdtemp to ensure any generated files
-    will survive on the host after the FINN Docker container exits."""
+    """A new directory under FINN's build directory (``finn.resources.scratch``), its
+    name starting with ``prefix``."""
     build_dir = resources.scratch()
     os.makedirs(build_dir, exist_ok=True)
     new_dir = tempfile.mkdtemp(prefix=prefix, dir=build_dir)
@@ -51,9 +50,8 @@ def make_build_dir(prefix=""):
 
 
 def robust_rmtree(path, retries=6, initial_delay=0.1, backoff=2.0):
-    """Remove a directory tree with retries for transient NFS cleanup races.
-    Retries ``ENOTEMPTY``/``EBUSY``. Other errors propagate immediately.
-    """
+    """Remove a directory tree, retrying the transient ``ENOTEMPTY`` and ``EBUSY`` of
+    NFS cleanup races."""
     if not path or not os.path.exists(path):
         return
     delay = initial_delay
@@ -86,13 +84,10 @@ def resolve_resize_param_input(model, node):
     """
     num_inputs = len(node.input)
     if num_inputs == 2:
-        # Resize-10: (X, scales)
         return 1, False
     elif num_inputs == 3:
-        # Resize-11+: (X, roi, scales), no sizes input
         return 2, False
     elif num_inputs == 4:
-        # Resize-11+: (X, roi, scales, sizes); exactly one of scales/sizes is set
         scales_init = model.get_initializer(node.input[2])
         sizes_init = model.get_initializer(node.input[3])
         scales_exists = scales_init is not None and len(scales_init) != 0

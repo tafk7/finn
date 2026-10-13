@@ -1,11 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The partition's Python check, step_verify_partition_python: the parent graph, its
-partition node running the KernelOps, against the model before conversion, which the
-build saved (``intermediate_models/``). ``verify_partition_python`` executes both with
-FINN's execution (``finn.core.onnx_exec``) on each input of the inputs file and compares
-the partition's outputs with the reference's, value for value.
+"""The partition's Python check (step_verify_partition_python): the parent graph, its
+partition node running the KernelOps, against the model before conversion, both executed
+by FINN's execution on each input of an inputs file, value for value.
 """
 
 from __future__ import annotations
@@ -31,10 +29,9 @@ def verify_partition_python(
     inputs_file: Path,
     output_dir: Path,
 ) -> bool:
-    """Execute the parent graph ``parent``, its partition node running the KernelOps, on
-    each input in ``inputs_file`` (an .npy file, one input a row), and compare the
-    partition's outputs value for value with those of the model in ``reference_file``.
-    Saves each input's partition outputs as
+    """Execute the parent graph ``parent`` and the model in ``reference_file`` on each
+    input in ``inputs_file`` (an .npy file, one input a row), and compare the partition's
+    outputs value for value. Saves each input's outputs as
     verification_output/verify_partition_python_<index>_<SUCCESS|FAIL>.npz under
     ``output_dir``, logs each output that differs as a warning, and returns whether all
     matched."""

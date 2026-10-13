@@ -73,20 +73,16 @@ class CollapseRepeatedOp(Transformation):
                     op1 is not set."""
                     start_name = n.input[0]
                     end_name = consumer.output[0]
-                    # compute the new parameter
                     new_param = self.make_collapsed_param_fxn(op0_param, op1_param)
-                    # make and insert new node
                     new_node_param_name = op0_param_name
                     new_node = oh.make_node(
                         self.op_name, [start_name, new_node_param_name], [end_name]
                     )
                     graph.node.insert(node_ind, new_node)
-                    # replace parameter value
                     model.set_initializer(new_node_param_name, new_param)
-                    # be conservative with param/output DataTypes
+                    # The collapsed parameter and output are annotated FLOAT32, conservatively.
                     model.set_tensor_datatype(new_node_param_name, DataType["FLOAT32"])
                     model.set_tensor_datatype(end_name, DataType["FLOAT32"])
-                    # remove old nodes
                     graph.node.remove(n)
                     graph.node.remove(consumer)
                     graph_modified = True

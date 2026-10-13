@@ -48,7 +48,7 @@ def resolve_target(
             f"{found.name} ({device.name}, {device.architecture}/{device.family}): "
             f"{device.unsupported}",
         )
-    shell_row(shell, board)  # a shell with no row for the board is refused (no-shell-row)
+    shell_row(shell, board)  # refuses a board the shell has no row for
     resources = device.resources
     platform = Platform(
         period_ns=float(period_ns),

@@ -3,15 +3,12 @@
 
 """Each integer-annotated initializer's values against its annotation: an analysis pass.
 
-An initializer's annotation is stated, not inferred: no inference derives it again from
-the values (a folded weight's, a threshold's, a constant's). The kernels sized from it
-would be wrong if it did not hold them. ``model.analysis(annotated_initializers)``
-checks every initializer annotated with an integer type (``DataType.is_integer``:
-INT<n>, UINT<n>, BIPOLAR, ...): each value must be one the type allows
-(``DataType.allowed``), an integer within its range. It returns the initializers it
-checked and one ``annotation-unsound`` blocker for each whose annotation does not hold
-all its values, naming the initializer, its annotation, how many values it does not hold
-and the first of them. What a finding stops is the caller's.
+An initializer's annotation is stated, not inferred again from its values, and the
+kernels sized from it would be wrong if it did not hold them.
+``model.analysis(annotated_initializers)`` checks every initializer annotated with an
+integer type: each value must be one the type allows. It returns the initializers it
+checked and an ``annotation-unsound`` blocker for each whose annotation does not hold
+all its values.
 """
 
 from __future__ import annotations
@@ -27,9 +24,8 @@ if TYPE_CHECKING:
 
 
 class Initializers(TypedDict):
-    """The analysis's result: the integer-annotated initializers, by name, in graph order
-    (``checked``), and a finding for each whose annotation does not hold its values
-    (``findings``)."""
+    """The analysis's result: the integer-annotated initializers in graph order
+    (``checked``), and a finding for each whose annotation does not hold its values."""
 
     checked: tuple[str, ...]
     findings: tuple[Finding, ...]

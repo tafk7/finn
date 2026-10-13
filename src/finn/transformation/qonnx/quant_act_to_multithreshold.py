@@ -37,14 +37,8 @@ from finn.transformation.qonnx.qonnx_activation_handlers import (
 
 
 def default_filter_function_generator(max_multithreshold_bit_width=8):
-    """
-    This function generates the default filter function for the
-    ConvertQuantActToMultiThreshold transformation. Per default the returned
-    function disables the conversion of Quant nodes which have a bit width above 8 bit.
-
-    This function generator can be used as a template to write custom
-    filter functions.
-    """
+    """ConvertQuantActToMultiThreshold's default filter function: it leaves a Quant node
+    wider than ``max_multithreshold_bit_width`` bits a Quant, with a warning."""
 
     def filter_function(model, q_node):
         if q_node.op_type == "Quant":
@@ -69,20 +63,13 @@ def default_filter_function_generator(max_multithreshold_bit_width=8):
 
 
 class ConvertQuantActToMultiThreshold(Transformation):
-    """Converts Quant nodes in the activation path to MultiThreshold nodes.
+    """Converts the Quant and BipolarQuant nodes of the activation path to
+    MultiThresholds, each by the handler of its predecessor's op type, else as an
+    identity.
 
-    The optional keyword argument `filter_function`
-    presents a way to control which Quant and BipolarQuant nodes in the activation path
-    are converted to MultiThreshold nodes. A warning will be emitted when a Quant node
-    is not converted to a MultiThreshold node.
-
-    :param filter_function: Each candidate Quant and BinaryQant node is first evaluated
-        by this function. If the function returns False,
-        then the node is not converted to a MultiTrheshold node.
-        The function is given the model and candidate node as parameters.
-        Per default a filter function is inserted, which disables the conversion of
-        Quant nodes, which have a bit width of larger than 8.
-        Defaults to: default_filter_function_generator(max_multithreshold_bit_width=8)
+    :param filter_function: called with the model and each candidate node; a node it
+        returns False for stays a Quant, with a warning. By default, a Quant wider than
+        8 bits stays.
     """
 
     def __init__(
@@ -100,7 +87,6 @@ class ConvertQuantActToMultiThreshold(Transformation):
         for n in graph.node:
             node_ind += 1
             if n.op_type == "Quant" or n.op_type == "BipolarQuant":
-                # Check that the node is in the activation path
                 inp = model.get_initializer(n.input[0])
                 out = model.get_initializer(n.output[0])
                 if not (inp is None and out is None):
@@ -115,7 +101,6 @@ class ConvertQuantActToMultiThreshold(Transformation):
                         "Only Quant nodes with zero-point == 0 are currently supported."
                     )
 
-                # Check that this node passes the user filter
                 if not self._filter_function(model, n):
                     warnings.warn(
                         f'The Quant node with name: "{n.name}" was not converted to a '
@@ -124,7 +109,6 @@ class ConvertQuantActToMultiThreshold(Transformation):
                     )
                     continue
 
-                # Check for possible ambiguity in handler selection
                 valid_predecessors = []
                 for cls in QuantActBaseHandler.__subclasses__():
                     valid_predecessors.extend(cls.valid_predecessor_op_types())
@@ -136,15 +120,11 @@ class ConvertQuantActToMultiThreshold(Transformation):
                         "and must thus be avoided."
                     )
 
-                # Try to find a fitting handler for this Quant activation node
                 for handler_cls in QuantActBaseHandler.__subclasses__():
                     if predecessor_op_type in handler_cls.valid_predecessor_op_types():
                         handler = handler_cls(model, n, node_ind)
                         break
                 else:
-                    # fall back to QuantIdentityHandler here
-                    # it may still not work due to its particular restrictions,
-                    # but better than just erroring out without trying
                     handler = QuantIdentityHandler(model, n, node_ind)
 
                 model = handler.replace_quant_node()

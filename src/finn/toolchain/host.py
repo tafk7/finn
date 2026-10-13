@@ -107,11 +107,8 @@ def settings(environ: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def license_for(environment: Mapping[str, str], values: Mapping[str, str]) -> str | None:
-    """The XILINXD_LICENSE_FILE that ``environment`` lacks, from ``values``, or None.
-
-    None when the environment already names a licence (it wins) or the values
-    name no licence server.
-    """
+    """The ``XILINXD_LICENSE_FILE`` (``port@host``) of the host file's ``values``, or
+    None where ``environment`` already names a licence or the values name no server."""
     if any(environment.get(name) for name in LICENSE_VARIABLES):
         return None
     host, port = values.get("FINN_LICENSE_HOST"), values.get("FINN_LICENSE_PORT")

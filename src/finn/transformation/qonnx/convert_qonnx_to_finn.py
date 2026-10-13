@@ -45,24 +45,14 @@ from finn.transformation.qonnx.quant_act_to_multithreshold import (
 
 
 class ConvertQONNXtoFINN(Transformation):
-    """Converts QONNX dialect to FINN ONNX dialect.
-    First the weights are converted using the FoldQuantWeights transformation,
-    then the ConvertQuantActToMultiThreshold transformation is used to convert
-    the activations.
-    If incompatibilities are found a ValueError or RuntimeError is raised.
+    """Converts the QONNX dialect to FINN's: the weights' Quant nodes folded into
+    integer weights (FoldQuantWeights), the activations' lowered to MultiThresholds
+    (ConvertQuantActToMultiThreshold). Raises ValueError or RuntimeError where the graph
+    has no FINN form.
 
-    The optional keyword argument `filter_function`
-    presents a way to control which Quant and BipolarQuant nodes in the activation path
-    are converted to MultiThreshold nodes. A warning will be emitted when a Quant node
-    is not converted to a MultiThreshold node.
-
-    :param filter_function: Each candidate Quant and BinaryQant node is first evaluated
-        by this function. If the function returns False,
-        then the node is not converted to a MultiTrheshold node.
-        The function is given the model and candidate node as parameters.
-        Per default a filter function is inserted, which disables the conversion of
-        Quant nodes, which have a bit width of larger than 8.
-        Defaults to: default_filter_function_generator(max_multithreshold_bit_width=8)
+    :param filter_function: called with the model and each candidate Quant or
+        BipolarQuant activation node; a node it returns False for stays a Quant, with a
+        warning. By default, a Quant wider than 8 bits stays.
     """
 
     def __init__(
@@ -73,35 +63,24 @@ class ConvertQONNXtoFINN(Transformation):
         self._filter_function = filter_function
 
     def apply(self, model):
-        # Extract the bias from Conv node
         model = model.transform(ExtractBiasFromConv())
-        # Gemm operations are not supported by FINN, so we convert them to MatMul
         model = model.transform(GemmToMatMul())
         model = model.transform(FoldTransposeIntoQuantInit())
-        # Make sure the datatypes exist, these are required for folding the weights
+        # FoldQuantWeights reads the datatypes.
         model = model.transform(InferDataTypes())
-        # Fold weights
         model = model.transform(FoldQuantWeights())
-        # Annotate tensor layouts so the activation handler can set the
-        # MultiThreshold data_layout from its input tensor. Required since
-        # qonnx no longer defaults MultiThreshold.data_layout to "NCHW";
-        # without an explicit layout, InferDataLayouts yields UNKNOWN and
-        # downstream transpose absorption/streamlining breaks (e.g. cnv).
+        # The activation handlers set each MultiThreshold's data_layout from its input
+        # tensor's.
         model = model.transform(InferDataLayouts())
-        # Convert activations
         model = model.transform(
             ConvertQuantActToMultiThreshold(
                 filter_function=self._filter_function,
             )
         )
-        # Recompute datatypes
         model = model.transform(InferDataTypes())
-        # Re-run layout inference now that MultiThreshold nodes carry an
-        # explicit data_layout, propagating layouts to the new tensors.
+        # The MultiThresholds' layouts reach the tensors after them.
         model = model.transform(InferDataLayouts())
-        # Convert AvgPool -> Mul -> Trunc structure to QuantAvgPool2d
         model = model.transform(AvgPoolAndTruncToQuantAvgPool())
-        # Remove empty padding if it exists
         model = model.transform(RemoveIdentityOps())
 
         return model, False

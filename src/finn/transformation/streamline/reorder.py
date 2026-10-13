@@ -66,8 +66,7 @@ class MoveAddPastMul(Transformation):
                 ):
                     # have: (x) -> add(,B) -> (x+B) -> mul(,A) -> (xA+BA)
                     # want: (x) -> mul(,A) -> (xA) -> add(,BA) -> (xA+BA)
-                    # assume input 0 is from the previous layer, input 1 is the
-                    # trained (constant) parameter
+                    # Input 1 holds each op's constant parameter.
                     mul_weight_name = consumer.input[1]
                     add_weight_name = n.input[1]
                     A = model.get_initializer(mul_weight_name)
@@ -78,10 +77,8 @@ class MoveAddPastMul(Transformation):
                     start_name = n.input[0]
                     middle_name = n.output[0]
                     end_name = consumer.output[0]
-                    # compute new param value for add
                     BA = B * A
 
-                    # make and insert new nodes
                     new_mul = oh.make_node(
                         "Mul",
                         [start_name, mul_weight_name],
@@ -93,15 +90,11 @@ class MoveAddPastMul(Transformation):
                     )
                     graph.node.insert(node_ind, new_mul)
                     graph.node.insert(node_ind + 1, new_add)
-                    # replace add value and update datatype annotation
                     model.set_initializer(add_weight_name, BA)
                     model.set_tensor_datatype(add_weight_name, DataType["FLOAT32"])
-                    # remove old nodes
                     graph.node.remove(n)
                     graph.node.remove(consumer)
                     graph_modified = True
-        # Running shape and data type inference is necessary as annotations
-        # might be outdated after moving around tensors
         model = model.transform(InferShapes())
         model = model.transform(InferDataTypes())
         return model, graph_modified
@@ -111,13 +104,9 @@ class MoveScalarMulPastMatMul(Transformation):
     """Move scalar mul operations past matmul operations. We want to have muls
     next to each other such that they can be collapsed into a single mul."""
 
-    # Applies the transform to a whole model graph
     def apply(self, model):
-        # Get the model graph out of the model wrapper object
         graph = model.graph
-        # Keep track of whether the graph has been modified
         graph_modified = False
-        # Iterate all nodes in the graph keeping track of the index
         for node_ind, n in enumerate(graph.node):
             if n.op_type == "Mul" and not model.is_fork_node(n) and not model.is_join_node(n):
                 consumer = model.find_consumer(n.output[0])
@@ -128,7 +117,6 @@ class MoveScalarMulPastMatMul(Transformation):
                     middle_name = n.output[0]
                     end_name = consumer.output[0]
                     mm_out_shape = model.get_tensor_shape(end_name)
-                    # check which input mul node is connected to build the right node connectivity
                     if n.output[0] == consumer.input[0]:
                         new_matmul_inps = [start_name, consumer.input[1]]
                     elif n.output[0] == consumer.input[1]:
@@ -140,8 +128,6 @@ class MoveScalarMulPastMatMul(Transformation):
                         )
 
                     if all(x == 1 for x in A.shape):
-                        # if the mul is scalar, we can simply swap the order of ops
-                        # make and insert new nodes
                         new_matmul = oh.make_node(
                             "MatMul",
                             new_matmul_inps,
@@ -157,7 +143,6 @@ class MoveScalarMulPastMatMul(Transformation):
                         graph.node.insert(node_ind, new_matmul)
                         graph.node.insert(node_ind + 1, new_mul)
                         model.set_tensor_shape(middle_name, mm_out_shape)
-                        # remove old nodes
                         graph.node.remove(n)
                         graph.node.remove(consumer)
                         graph_modified = True
@@ -194,10 +179,8 @@ class MoveScalarAddPastMatMul(Transformation):
                     end_name = consumer.output[0]
                     mm_out_shape = model.get_tensor_shape(end_name)
                     if all(x == 1 for x in A.shape):
-                        # if the add is scalar, we can move it past the matmul
-                        # by taking it past the matmul with a dot product
+                        # A scalar add moves past the MatMul as its product with the weights.
                         Anew = np.dot(A * np.ones(W.shape[0], dtype=np.float32), W)
-                        # update the add weight
                         model.set_initializer(add_weight_name, Anew)
                         new_matmul = oh.make_node(
                             "MatMul",
@@ -214,7 +197,6 @@ class MoveScalarAddPastMatMul(Transformation):
                         graph.node.insert(node_ind, new_matmul)
                         graph.node.insert(node_ind + 1, new_add)
                         model.set_tensor_shape(middle_name, mm_out_shape)
-                        # remove old nodes
                         graph.node.remove(n)
                         graph.node.remove(consumer)
                         graph_modified = True
@@ -244,7 +226,7 @@ class MoveAddPastConv(Transformation):
                     add_weight_name = n.input[1]
                     conv_in_name = consumer.input[0]
                     conv_in_shape = model.get_tensor_shape(conv_in_name)
-                    # assume datalayout to be NCHW
+                    # The layout is assumed NCHW.
                     channels = conv_in_shape[1]
                     A = model.get_initializer(add_weight_name)
                     if A is None:
@@ -261,39 +243,29 @@ class MoveAddPastConv(Transformation):
                     if (
                         all(x == 1 for x in A.shape) or A.shape == (1, channels, 1, 1)
                     ) and not using_padding:
-                        # create a tensor filled with the add constant, in
-                        # the shape expected by the convolution
+                        # The add's effect past the Conv: the Conv executed on the constant.
                         conv_in_const = np.zeros(conv_in_shape, dtype=np.float32)
                         if A.shape == (1, channels, 1, 1):
                             for ch in range(channels):
                                 conv_in_const[0][ch].fill(A[0][ch].item())
                         else:
                             conv_in_const.fill(A.item())
-                        # create an execution context and put in const input
                         exec_ctx = model.make_empty_exec_context()
                         exec_ctx[conv_in_name] = conv_in_const
-                        # execute the conv node only
                         opset_imports = model.get_opset_imports()
                         opset_version = opset_imports[conv_node.domain]
                         execute_node(conv_node, exec_ctx, model.graph, opset_version)
-                        # retrieve the conv output
                         Anew = exec_ctx[end_name]
 
-                        # strip out repetition if no padding
+                        # Without padding, every pixel of it is the same.
                         Anew = Anew[0, :, 0, 0].reshape(1, -1, 1, 1)
-                        # update the add weight
                         model.set_initializer(add_weight_name, Anew)
-                        # rewire add input to be conv input
                         conv_node.input[0] = start_name
                         model.set_tensor_shape(start_name, conv_in_shape)
-                        # use old conv input tensor as conv output
                         conv_node.output[0] = conv_in_name
                         model.set_tensor_shape(conv_in_name, conv_out_shape)
-                        # use new conv output as new add node input
                         add_node.input[0] = conv_in_name
-                        # use old conv output as new add node output
                         add_node.output[0] = end_name
-                        # move add node past conv node
                         graph.node.remove(add_node)
                         graph.node.insert(node_ind, add_node)
                         graph_modified = True
@@ -332,18 +304,12 @@ class MoveScalarMulPastConv(Transformation):
                     conv_out_name = conv_node.output[0]
                     conv_out_shape = model.get_tensor_shape(conv_out_name)
                     if all(x == 1 for x in A.shape):
-                        # if the mul is scalar, we can simply swap the order of ops
-                        # rewire mul input to be conv input
                         conv_node.input[0] = start_name
                         model.set_tensor_shape(start_name, conv_in_shape)
-                        # use old conv input tensor as conv output
                         conv_node.output[0] = conv_in_name
                         model.set_tensor_shape(conv_in_name, conv_out_shape)
-                        # use new conv output as new mul node input
                         mul_node.input[0] = conv_in_name
-                        # use old conv output as new mul node output
                         mul_node.output[0] = conv_out_name
-                        # move add node past conv node
                         graph.node.remove(mul_node)
                         graph.node.insert(node_ind, mul_node)
                         graph_modified = True
@@ -381,18 +347,12 @@ class MoveScalarMulPastConvTranspose(Transformation):
                     conv_out_name = conv_node.output[0]
                     conv_out_shape = model.get_tensor_shape(conv_out_name)
                     if all(x == 1 for x in A.shape):
-                        # if the mul is scalar, we can simply swap the order of ops
-                        # rewire mul input to be conv input
                         conv_node.input[0] = start_name
                         model.set_tensor_shape(start_name, conv_in_shape)
-                        # use old conv input tensor as conv output
                         conv_node.output[0] = conv_in_name
                         model.set_tensor_shape(conv_in_name, conv_out_shape)
-                        # use new conv output as new mul node input
                         mul_node.input[0] = conv_in_name
-                        # use old conv output as new mul node output
                         mul_node.output[0] = conv_out_name
-                        # move add node past conv node
                         graph.node.remove(mul_node)
                         graph.node.insert(node_ind, mul_node)
                         graph_modified = True
@@ -438,22 +398,15 @@ class MoveMulPastDWConv(Transformation):
                     conv_out_name = conv_node.output[0]
                     conv_out_shape = model.get_tensor_shape(conv_out_name)
                     if A.shape == (1, ifm_ch, 1, 1) and ifm_ch == group_attribute:
-                        # if the mul is channelwise and conv is depthwise,
-                        # we can simply swap the order of ops
-                        # rewire mul input to be conv input
                         conv_node.input[0] = start_name
                         model.set_tensor_shape(start_name, conv_in_shape)
                         model.set_tensor_datatype(start_name, DataType["FLOAT32"])
-                        # use old conv input tensor as conv output
                         conv_node.output[0] = conv_in_name
                         model.set_tensor_shape(conv_in_name, conv_out_shape)
                         model.set_tensor_datatype(conv_in_name, DataType["FLOAT32"])
-                        # use new conv output as new mul node input
                         mul_node.input[0] = conv_in_name
-                        # use old conv output as new mul node output
                         mul_node.output[0] = conv_out_name
                         model.set_tensor_datatype(conv_out_name, DataType["FLOAT32"])
-                        # move mul node past conv node
                         graph.node.remove(mul_node)
                         graph.node.insert(node_ind, mul_node)
                         graph_modified = True
@@ -496,32 +449,24 @@ class MoveMulPastMaxPool(Transformation):
                     maxpool_out_name = maxpool_node.output[0]
                     maxpool_out_shape = model.get_tensor_shape(maxpool_out_name)
 
-                    # do not support non-2D MaxPool
                     kernel_shape = list(get_by_name(maxpool_node.attribute, "kernel_shape").ints)
                     if len(kernel_shape) != 2:
                         continue
 
-                    # do not move negative multiplication factor(s)
+                    # A negative factor does not commute with max.
                     if (A < 0).any():
                         continue
 
                     if all(x == 1 for x in A.shape) or A.shape == (1, ifm_ch, 1, 1):
-                        # if the mul is scalar or channelwise,
-                        # we can simply swap the order of ops
-                        # rewire mul input to be maxpool input
                         maxpool_node.input[0] = start_name
                         model.set_tensor_shape(start_name, maxpool_in_shape)
                         model.set_tensor_datatype(start_name, DataType["FLOAT32"])
-                        # use old maxpool input tensor as maxpool output
                         maxpool_node.output[0] = maxpool_in_name
                         model.set_tensor_shape(maxpool_in_name, maxpool_out_shape)
                         model.set_tensor_datatype(maxpool_in_name, DataType["FLOAT32"])
-                        # use new maxpool output as new mul node input
                         mul_node.input[0] = maxpool_in_name
-                        # use old maxpool output as new mul node output
                         mul_node.output[0] = maxpool_out_name
                         model.set_tensor_datatype(maxpool_out_name, DataType["FLOAT32"])
-                        # move mul node past maxpool node
                         graph.node.remove(mul_node)
                         graph.node.insert(node_ind, mul_node)
                         graph_modified = True
@@ -539,7 +484,6 @@ class MoveScalarLinearPastInvariants(Transformation):
     GlobalAveragePool
     """
 
-    # Op-types of currently supported invariants
     SUPPORTED_INVARIANTS = {
         "GlobalAveragePool",
         "Reshape",
@@ -559,46 +503,35 @@ class MoveScalarLinearPastInvariants(Transformation):
             node_ind += 1
             is_nearest_neighbor_resample = False
             if n.op_type == "Upsample" or n.op_type == "Resize":
-                # Extract mode and scales and input shape
                 mode = get_by_name(n.attribute, "mode").s.decode("ascii")
                 is_nearest_neighbor_resample = mode == "nearest"
             if n.op_type in self.SUPPORTED_INVARIANTS or is_nearest_neighbor_resample:
                 in0 = n.input[0]
                 if in0 is None:
                     continue
-                # find and check producer on our input
                 prod0 = model.find_producer(in0)
                 if prod0 is None:
                     continue
 
                 if prod0.op_type in ["Mul", "Add", "Div"]:
-                    # Cannot handle fork-nodes, try MoveLinearPastFork first
                     if model.is_fork_node(prod0):
                         warnings.warn(
                             f"{self.__class__.__name__}:"
                             f" Skipping near match: {prod0.name} is a fork-node,"
                             f" try MoveLinearPastFork first"
                         )
-                        # Skip transforming this node as moving this would lead
-                        # to messed up or detached graph
                         continue
-                    # check if second input of producer is an initializer
                     init0 = model.get_initializer(prod0.input[1])
-                    # if either initializer is None, skip
                     if init0 is None:
                         continue
-                    # if initializer is not scalar, skip
                     if np.prod(init0.shape) != 1:
                         continue
                     if model.is_fork_node(prod0):
                         model = model.transform(MoveOpPastFork(prod0.op_type))
-                        # topology modified, "ask" ModelWrapper to apply this transform again
                         return (model, True)
-                    # Flatten input if required
                     if len(init0.shape) > 0:
                         init0 = init0.flatten()[0]
                         model.set_initializer(prod0.input[1], init0)
-                    # move prod0 from input to output,
                     old_prod0_in = prod0.input[0]
                     old_prod0_out = prod0.output[0]
                     scalar_op_odt = model.get_tensor_datatype(old_prod0_out)
@@ -666,11 +599,8 @@ class MakeMaxPoolNHWC(Transformation):
                 elif producer is not None and producer.op_type == "Transpose":
                     perms = list(get_by_name(producer.attribute, "perm").ints)
                     if perms == [0, 3, 1, 2]:
-                        # check if the producer is a fork node
-                        # (need to move it past the fork before this transform)
                         if model.is_fork_node(producer):
                             model = model.transform(MoveTransposePastFork())
-                            # topology modified, "ask" ModelWrapper to apply this transform again
                             return (model, True)
                         ceil_mode = get_by_name(n.attribute, "ceil_mode")
                         if ceil_mode is not None:
@@ -721,17 +651,13 @@ class MakeScaleResizeNHWC(Transformation):
                     param_dtype = "float32"
                 else:
                     param_ind, is_sizes = resolve_resize_param_input(model, n)
-                    # sizes are int64, scales are float32; preserve the dtype so
-                    # the NCHW->NHWC permutation below doesn't corrupt sizes
+                    # Sizes are int64 and scales float32; each keeps its type.
                     param_dtype = "int64" if is_sizes else "float32"
                 if producer is not None and producer.op_type == "Transpose":
                     perms = list(get_by_name(producer.attribute, "perm").ints)
                     if perms == [0, 3, 1, 2]:
-                        # check if the producer is a fork node
-                        # (need to move it past the fork before this transform)
                         if model.is_fork_node(producer):
                             model = model.transform(MoveTransposePastFork())
-                            # topology modified, "ask" ModelWrapper to apply this transform again
                             return (model, True)
                         old_value = model.get_initializer(n.input[param_ind])
                         new_value = np.array(
@@ -798,15 +724,13 @@ class MoveOpPastFork(Transformation):
                 and model.is_fork_node(n)
                 and not model.is_join_node(n)
             ):
-                # Restrict this transform to operations with constant parameters
-                # Assuming parameters is in input 1
+                # An op's constant parameter, if any, is its input 1.
                 if len(n.input) > 1:
                     op_init_param = model.get_initializer(n.input[1])
                 else:
                     op_init_param = None
 
-                # Check case when branches are empty and go
-                # to the same node
+                # A fork whose branches all reach one node has nothing to move.
                 consumers = model.find_consumers(n.output[0])
                 assert len(consumers) > 1, "Must have >1 consumer"
                 unique_consumer = True
@@ -819,7 +743,6 @@ class MoveOpPastFork(Transformation):
                     continue
 
                 for consumer_node in consumers[1:]:
-                    # create new node
                     new_output_tensor_name = model.make_new_valueinfo_name()
                     if op_init_param is None:
                         new_inp_list = [n.input[0]]
@@ -833,7 +756,6 @@ class MoveOpPastFork(Transformation):
                     graph.node.insert(node_ind, new_node)
                     node_ind += 1
 
-                    # change consumer input tensor
                     graph.node.remove(consumer_node)
                     for idx, consumer_input in enumerate(consumer_node.input):
                         if consumer_input == n.output[0]:
@@ -897,10 +819,8 @@ class MoveScalarLinearPastSplit(Transformation):
                 producer = model.find_producer(n.input[0])
                 if producer is not None and producer.op_type in self.ops_to_move:
                     linear_param = model.get_initializer(producer.input[1])
-                    # Check if single input
                     if len(producer.input) != 2 or linear_param is None:
                         continue
-                    # Check if scalar
                     if np.prod(linear_param.shape) != 1:
                         continue
                     split_outputs = n.output
@@ -922,7 +842,6 @@ class MoveScalarLinearPastSplit(Transformation):
                         graph.node.insert(node_ind, new_mul_node)
                         node_ind += 1
 
-                    # remove the mul node
                     n.input[0] = producer.input[0]
                     graph.node.remove(producer)
                     graph_modified = True
@@ -970,7 +889,6 @@ class MoveTransposePastSplit(Transformation):
                         graph.node.insert(node_ind, new_trans_node)
                         node_ind += 1
 
-                    # remove the transpose node and change the split axis
                     old_split_axis = get_by_name(n.attribute, "axis").i
                     get_by_name(n.attribute, "axis").i = initial_perm[old_split_axis]
                     n.input[0] = producer.input[0]
@@ -1006,9 +924,8 @@ class MoveMaxPoolPastMultiThreshold(Transformation):
                     if mt_odt.signed() and has_padding:
                         warnings.warn("Skipping padded MaxPool + signed-output MultiThreshold")
                         continue
-                    # check for non-decreasing thresholds and nonnegative
-                    # scale factor in MultiThreshold
-                    # otherwise we cannot do the reordering
+                    # Max commutes only with a monotonic MultiThreshold: thresholds
+                    # non-decreasing, scale non-negative.
                     T = model.get_initializer(consumer.input[1])
                     T_sorted = np.sort(T, axis=1)
                     assert (
@@ -1019,13 +936,10 @@ class MoveMaxPoolPastMultiThreshold(Transformation):
                         warnings.warn("Skipping MultiThreshold with negative out_scale")
                         continue
 
-                    # remove old nodes
                     graph.node.remove(n)
                     graph.node.remove(consumer)
 
-                    # swap conections
                     group_in = n.input[0]
-                    # new tensor because dims change
                     group_middle = model.make_new_valueinfo_name()
                     group_out = consumer.output[0]
 
@@ -1035,7 +949,6 @@ class MoveMaxPoolPastMultiThreshold(Transformation):
                     n.input[0] = group_middle
                     n.output[0] = group_out
 
-                    # insert them back in
                     graph.node.insert(node_ind - 1, consumer)
                     graph.node.insert(node_ind, n)
 
@@ -1072,11 +985,8 @@ class MoveFlattenPastTopK(Transformation):
                     (b, h, w, c) = model.get_tensor_shape(start_name)
                     if h != 1 or w != 1:
                         continue
-                    # get parameter k from topk
                     k = model.get_tensor_shape(consumer.output[1])[-1]
 
-                    # swap conections
-                    # new tensor because dims change
                     middle_name = model.make_new_valueinfo_name()
                     topk_indices = oh.make_tensor_value_info(
                         middle_name, TensorProto.INT64, [b, h, w, k]
@@ -1084,11 +994,9 @@ class MoveFlattenPastTopK(Transformation):
                     end_name = consumer.output[1]
                     graph.value_info.append(topk_indices)
 
-                    # remove old nodes
                     graph.node.remove(n)
                     graph.node.remove(consumer)
 
-                    # set inputs and outputs correctly
                     consumer.input[0] = start_name
                     consumer.output[1] = middle_name
                     model.set_tensor_shape(consumer.output[0], (b, h, w, k))
@@ -1096,7 +1004,6 @@ class MoveFlattenPastTopK(Transformation):
                     n.input[0] = middle_name
                     n.output[0] = end_name
 
-                    # insert them back in
                     graph.node.insert(node_ind - 1, consumer)
                     graph.node.insert(node_ind, n)
 
@@ -1126,9 +1033,7 @@ class MoveFlattenPastAffine(Transformation):
                     )
                     and not model.is_join_node(consumer)
                 ):
-                    # move flatten past operation and rewire tensors
                     start_name = n.input[0]
-                    # check if datalyout is set to NHWC and H=W=1
                     datalayout = model.get_tensor_layout(start_name)
                     if datalayout == DataLayout.NHWC:
                         (b, h, w, c) = model.get_tensor_shape(start_name)
@@ -1173,15 +1078,12 @@ class MoveFlattenPastAffine(Transformation):
                     graph.node.insert(node_ind, new_op)
                     graph.node.insert(node_ind + 1, new_flatten)
                     model.set_tensor_shape(middle_name, dummy_out.shape)
-                    # because a flatten node doesn't change the datatype we need
-                    # only the datatype of the op node
+                    # Flatten keeps the datatype.
                     model.set_tensor_datatype(start_name, op_in_dt)
                     model.set_tensor_datatype(middle_name, op_out_dt)
                     model.set_tensor_datatype(end_name, op_out_dt)
-                    # set datalayout
                     model.set_tensor_layout(start_name, DataLayout.NHWC)
                     model.set_tensor_layout(middle_name, DataLayout.NHWC)
-                    # remove old nodes
                     graph.node.remove(n)
                     graph.node.remove(consumer)
                     graph_modified = True
@@ -1229,8 +1131,6 @@ class MoveTransposePastScalarMul(Transformation):
                         )
                         continue
                     if all(x == 1 for x in A.shape):
-                        # if the mul is scalar, we can simply swap the order of ops
-                        # rewire transpose input to be mul input
                         mul_node.input[0] = start_name
                         model.set_tensor_shape(start_name, transp_in_shape)
                         model.set_tensor_layout(start_name, transp_in_layout)
@@ -1270,17 +1170,13 @@ class MoveIdenticalOpPastJoinOp(Transformation):
             bool: whether moving the node was successful
         """
         identical_ops_inputs = [p.input[0] for p in producers]
-        # join_in0 = n.input[0]
         join_out = n.output[0]
 
-        # Rewire join op inputs
         for i in range(len(n.input)):
             n.input[i] = identical_ops_inputs[i]
 
-        # Infer shape of this tensor later
         new_join_output = model.make_new_valueinfo_name()
 
-        # Rewire join op outputs (reuse the first join input tensor)
         n.output[0] = new_join_output
         producers[0].input[0] = new_join_output
         producers[0].output[0] = join_out
@@ -1318,16 +1214,15 @@ class MoveIdenticalOpPastJoinOp(Transformation):
                     warnings.warn("Producers not identical, skipping")
                     continue
 
-                # check for producers that are fork nodes (need to fork them before our transform)
+                # A forking producer is moved past its fork first.
                 for prod in producers:
                     if model.is_fork_node(prod) and not model.is_join_node(prod):
                         model = model.transform(MoveOpPastFork(self.ops_to_move))
-                        # topology modified, "ask" ModelWrapper to apply this transform again
                         return (model, True)
                 graph_modified = self.move_node(model, n, producers)
 
         if graph_modified:
-            # Run shape inference as shapes were cleared in move_node
+            # move_node left the new tensors' shapes to inference.
             model = model.transform(InferDataLayouts())
             model = model.transform(InferShapes())
             model = model.transform(InferDataTypes())
@@ -1438,25 +1333,20 @@ class MoveTransposePastJoinConcat(MoveIdenticalOpPastJoinOp):
     def move_node(self, model, n, producers):
         trans_inputs = [prod.input[0] for prod in producers]
         concat_out = n.output[0]
-        # Rewire concat inputs
         for i in range(len(n.input)):
             n.input[i] = trans_inputs[i]
 
         new_concat_out = model.make_new_valueinfo_name()  # reuse tensor
-        # reverse the permutation of the concat output
         transpose_perm = get_by_name(producers[0].attribute, "perm").ints
         reverse_perm = np.argsort(transpose_perm)
         new_concat_out_shape = permute_shape(model.get_tensor_shape(concat_out), reverse_perm)
         new_concat_out_layout = model.get_tensor_layout(trans_inputs[0])
-        # Set tensor layout and shape of the new concatenation output
         model.set_tensor_shape(new_concat_out, new_concat_out_shape)
         if new_concat_out_layout:
             model.set_tensor_layout(new_concat_out, new_concat_out_layout)
-        # Change concatenation axis
         old_concat_axis = get_by_name(n.attribute, "axis").i
         get_by_name(n.attribute, "axis").i = transpose_perm[old_concat_axis]
 
-        # Rewire concat output
         n.output[0] = new_concat_out
         producers[0].input[0] = new_concat_out
         producers[0].output[0] = concat_out
@@ -1498,14 +1388,12 @@ class MoveAffinePastJoinConcat(MoveIdenticalOpPastJoinOp):
         return True
 
     def move_node(self, model, n, producers):
-        # check if single input
         for producer in producers:
             producer_init = model.get_initializer(producer.input[1])
             if len(producer.input) != 2 or producer_init is None:
                 warnings.warn("Producer found that is not single-input, skipping")
                 return False
 
-        # decide if producers are identical scalar ops or channelwise ops
         channelwise_op = False
         identical_scalar_op = self.are_producers_identical_scalar_ops(model, producers)
         if not identical_scalar_op:
@@ -1517,12 +1405,10 @@ class MoveAffinePastJoinConcat(MoveIdenticalOpPastJoinOp):
                 )
                 return False
 
-        # Rewire concat inputs
         producers_inputs = [prod.input[0] for prod in producers]
         concat_out = n.output[0]
         for i in range(len(n.input)):
             n.input[i] = producers_inputs[i]
-        # Set tensor layout and shape of the new concatenation output
         new_concat_out = model.make_new_valueinfo_name()
         new_concat_out_layout = model.get_tensor_layout(producers_inputs[0])
         model.set_tensor_shape(new_concat_out, model.get_tensor_shape(concat_out))
@@ -1531,12 +1417,10 @@ class MoveAffinePastJoinConcat(MoveIdenticalOpPastJoinOp):
         model.set_tensor_datatype(new_concat_out, model.get_tensor_datatype(producers_inputs[0]))
 
         if channelwise_op:
-            # concatenate op params of producers into one mul tensor
             producers_params = [model.get_initializer(prod.input[1]) for prod in producers]
             new_mul_tensor = np.concatenate(producers_params, axis=channel_dim)
             model.set_initializer(producers[0].input[1], new_mul_tensor)
 
-        # Rewire concat output
         n.output[0] = new_concat_out
         producers[0].input[0] = new_concat_out
         producers[0].output[0] = concat_out

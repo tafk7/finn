@@ -1,25 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The configuration of a build of KernelOps (finn.custom_op.kernels) from a Brevitas
-export, which ``build_dataflow`` runs.
+"""The configuration of a dataflow build (``DataflowBuildConfig``), and its JSON form.
 
 Its fields say how the build runs: the target, the toolchain, the outputs and the
-steps. Everything else it states is a setting: a value a step of the build
-declares as one of its keyword-only parameters (finn.builder.build_dataflow_plan). In
-JSON a setting is a top-level key beside the fields; in Python an entry of ``settings``.
+steps. Everything else is a setting: the value of a keyword-only parameter a step
+declares, decoded by the step's annotation when the build's plan resolves. In JSON a
+setting is a top-level key beside the fields; in Python an entry of ``settings``.
+Reading JSON refuses what the configuration does not declare, naming its place
+(``configuration.target: ...``).
 
-This module reads and writes the JSON (``from_json``, ``to_json``), each field by its
-annotation (finn.util.typed_json). Reading refuses, naming its place
-(``configuration.target: ...``), a key a nested type does not declare, a null where a
-field is not optional, a value of the wrong type and an unknown enum value. The
-settings are decoded when the build's plan resolves, by the annotations of the steps
-that declare them. The relative paths of a configuration read from a build directory
-name files in it (``base_dir``).
-
-A build refuses a configuration before its first step with one error,
-``ConfigurationRefused``, carrying every rejection found: the target's, the plan's and the
-configuration checks'.
+A build refuses a configuration before its first step with one ``ConfigurationRefused``
+carrying every rejection found.
 """
 
 from __future__ import annotations
@@ -47,8 +39,8 @@ from finn.util.typed_json import decoded, decoded_fields, encoded
 def config_finding(
     code: str, message: str, place: str | None = None, kind: FindingKind = FindingKind.REJECTION
 ) -> Finding:
-    """A finding about the configuration, a rejection unless ``kind`` says otherwise; its
-    ``place`` in the configuration, where it has one, is its detail of that name."""
+    """A finding about the configuration, a rejection by default, with its ``place`` in
+    the configuration where it has one."""
     details = () if place is None else (("place", place),)
     return Finding(kind, code, "finn.builder", message, details)
 
@@ -61,8 +53,8 @@ def finding_line(finding: Finding) -> str:
 
 
 class ConfigurationRefused(ValueError):
-    """A configuration the build refuses before its first step: every rejection found
-    (``findings``), the target's, the plan's and the configuration checks'."""
+    """A configuration the build refuses before its first step, with every rejection
+    found (``findings``)."""
 
     def __init__(self, findings: Iterable[Finding]) -> None:
         self.findings = tuple(findings)
@@ -80,14 +72,12 @@ StepEntry = Union[str, StepFunction, Transformation, type[Transformation]]
 
 
 class DataflowOutputType(str, Enum):
-    """What a build makes besides the partition and its reports. The model records what
-    a later step uses (``finn.outputs``: the packaged IP, the bitfile); the build's
-    manifest indexes the run (``report/build.json``). stitched_ip and ooc_synth work on
-    any shell; the rest need a shell that integrates the partition (SHELL_OUTPUTS), so
-    not ``ip``."""
+    """What a build makes besides the partition and its reports. ``stitched_ip`` and
+    ``ooc_synth`` work on any shell; the rest need a shell that integrates the partition
+    (``SHELL_OUTPUTS``), so not ``ip``."""
 
-    #: the packaged IP, with its interface description and an XSim testbench (written,
-    #: not run: step_run_testbench runs it)
+    #: the packaged IP, with its interface description and an XSim testbench, which
+    #: step_run_testbench runs
     STITCHED_IP = "stitched_ip"
     #: the IP synthesized out of context, with its resources per member of the shell
     OOC_SYNTH = "ooc_synth"
@@ -106,9 +96,8 @@ SHELL_OUTPUTS = (
     DataflowOutputType.DEPLOYMENT_PACKAGE,
 )
 
-#: The outputs each output is made from, which must be asked for with it: the driver
-#: needs the bitfile's delivered clock, and the deployment ships the bitfile and the
-#: driver of the same build.
+#: The outputs each output is made from, which must be asked with it: the driver needs
+#: the bitfile's delivered clock, and the deployment ships both from the same build.
 OUTPUT_NEEDS = {
     DataflowOutputType.PYNQ_DRIVER: (DataflowOutputType.BITFILE,),
     DataflowOutputType.DEPLOYMENT_PACKAGE: (
@@ -120,36 +109,31 @@ OUTPUT_NEEDS = {
 
 @dataclass
 class DataflowBuildConfig:
-    """The configuration of a build. Pass it to build_dataflow_cfg, or write it as
-    ``dataflow_build_config.json`` beside ``model.onnx`` for build_dataflow_directory and
-    the ``build_dataflow`` command; there, relative paths name files in that directory
-    (``base_dir``)."""
+    """The configuration of a build: give it to build_dataflow_cfg, or write it as
+    ``dataflow_build_config.json`` beside ``model.onnx`` for build_dataflow_directory,
+    where its relative paths name files in that directory."""
 
-    #: Directory where the build's outputs and reports are written
+    #: The directory the build writes its outputs and reports in.
     output_dir: str
 
-    #: The target: a clock period, a board or a part (a board implies its part; a part
-    #: given with it must match), and a shell, ``ip`` unless given. ``ip`` is the
-    #: packaged IP for its user to integrate; ``pynq`` the Zynq block design for a
-    #: board (finn.platform.shells). In JSON:
+    #: The target: a clock period, a board or a part (a board implies its part), and a
+    #: shell, ``ip`` unless given. In JSON:
     #: {"period_ns": 5.0, "board": "Ultra96", "part": null, "shell": "pynq"}.
     target: TargetRequest
 
-    #: The AMD tool installation the build's tools run in: the machine's
-    #: (finn.toolchain.launcher.host_selection), with any field given here taking
-    #: precedence.
+    #: The AMD tool installation the build's tools run in: the machine's, with any field
+    #: given here taking precedence.
     toolchain: Selection | None = None
 
-    #: What the build makes besides the partition and its reports (DataflowOutputType).
-    #: None by default.
+    #: What the build makes besides the partition and its reports; nothing by default.
     generate_outputs: list[DataflowOutputType] = field(default_factory=list)
 
-    #: If given, the build runs these entries (StepEntry) in order instead of the
-    #: default list (finn.builder.build_dataflow_plan.default_steps).
+    #: If given, the build runs these entries in order instead of the default list
+    #: (finn.builder.build_dataflow_plan.default_steps).
     steps: Sequence[StepEntry] | None = None
 
     #: If given, start from this step, or a phase's first step, loading the
-    #: intermediate model saved before it (save_intermediate_models must be enabled).
+    #: intermediate model an earlier run saved before it.
     start_step: str | None = None
 
     #: If given, stop after this step, or a phase's last step.
@@ -158,22 +142,20 @@ class DataflowBuildConfig:
     #: Whether each step's model is saved under intermediate_models.
     save_intermediate_models: bool = True
 
-    #: Whether pdb postmortem debugging is launched when the build fails and stdin is
-    #: a terminal.
+    #: Whether a failed build opens pdb's postmortem debugger, where stdin is a terminal.
     enable_build_pdb_debug: bool = True
 
     #: Whether the console shows everything in the build log; otherwise only the
-    #: runner's lines (each step it runs, the outcome), warnings and errors.
+    #: runner's lines, warnings and errors.
     verbose: bool = False
 
-    #: The settings, by name: each the value of the keyword-only parameter of that name
-    #: of the steps that declare it. In JSON, top-level keys.
+    #: The settings, by name: each the value of the steps' keyword-only parameter of that
+    #: name. In JSON, top-level keys.
     settings: dict[str, Any] = field(default_factory=dict)
 
-    #: The directory the relative paths name files in (read_build_config: the build
-    #: directory), else the working directory: ``output_dir`` and the toolchain's
-    #: settings scripts and command directory are joined to it here, and each path in a
-    #: setting's value, given or default, when the plan resolves it. Not in JSON.
+    #: The directory relative paths name files in (the build directory, for
+    #: read_build_config), else the working directory. The path fields are joined to it
+    #: here, and each path in a setting's value when the plan resolves it. Not in JSON.
     base_dir: str | None = None
 
     def __post_init__(self) -> None:
@@ -202,7 +184,7 @@ class DataflowBuildConfig:
     @classmethod
     def from_dict(cls, stated: object, base_dir: str | None = None) -> DataflowBuildConfig:
         """The configuration a JSON object states, its relative paths naming files in
-        ``base_dir``: each field decoded by its type, every other key a setting."""
+        ``base_dir``: each field decoded by its annotation, every other key a setting."""
         if not isinstance(stated, Mapping):
             raise ValueError(f"configuration: a JSON object, not {stated!r}")
         if "settings" in stated:
@@ -219,8 +201,8 @@ class DataflowBuildConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """The configuration as JSON states it: the fields, then the settings beside
-        them. Refuses a function, a partial or a Transformation in a list of steps:
-        JSON names a step by its name or import path."""
+        them. JSON names a step by its name or import path, so a Python object in
+        ``steps`` is refused."""
         for index, entry in enumerate(self.steps or ()):
             if callable(entry) or isinstance(entry, Transformation):
                 name = getattr(entry, "__name__", type(entry).__name__)
@@ -242,22 +224,19 @@ class DataflowBuildConfig:
 
     @cached_property
     def resolved_target(self) -> Target:
-        """The build's target (finn.platform.resolve.resolve_target), resolved on first use; a
-        build resolves it before anything else, and its ``TargetRefused`` refuses the
+        """The build's target, resolved on first use; its ``TargetRefused`` refuses the
         configuration."""
         return self.target.resolve()
 
     @cached_property
     def prepared_toolchain(self) -> Toolchain:
         """The toolchain every tool step of this build runs in: ``toolchain`` laid over
-        the machine's selection (``host_selection``), prepared on first use. It is not
-        serialized: it is prepared, not configured."""
+        the machine's selection, prepared on first use."""
         return host_selection(stated=self.toolchain).prepare()
 
     def step_toolchain(self, step: str) -> Toolchain:
-        """The build's toolchain for the step ``step``, writing every tool's transcript
-        into ``output_dir/logs/<step>``, where the manifest finds them. The step passes
-        it to each transformation that runs a tool."""
+        """The build's toolchain for the step ``step``, writing each tool's transcript
+        into ``output_dir/logs/<step>``, where the manifest finds it."""
         return self.prepared_toolchain.transcripts_in(Path(self.output_dir) / "logs" / step)
 
 

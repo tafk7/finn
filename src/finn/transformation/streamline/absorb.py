@@ -42,134 +42,76 @@ from finn.util.basic import resolve_resize_param_input
 
 
 class AbsorbScalarBiasIntoMultiThreshold(Transformation):
-    """Absorb a scalar bias following a MultiThreshold (as a downstream Add)
-    back into the MultiThreshold's out_bias and re-evaluate the output
-    datatype.
-
-    Unlike the historical sign-bias-only version, this absorbs any scalar
-    bias irrespective of signedness. Because the hardware carries out_bias as
-    an additive term, absorbing a (large positive) bias can widen the output
-    datatype. To keep this from inflating the downstream datapath, absorption
-    is only performed when the resulting output bitwidth does not grow by more
-    than ``max_bitwidth_increase`` bits (default 0, i.e. only absorb when the
-    output width stays the same or shrinks). Set a larger value to explicitly
-    allow trading a wider output type for one fewer elementwise Add node."""
+    """Absorb a scalar bias that follows a MultiThreshold (an Add) into its out_bias,
+    and derive the output datatype again. A bias can widen the output datatype: it is
+    absorbed only where the output grows by at most ``max_bitwidth_increase`` bits
+    (by default none), trading a wider output for one Add fewer."""
 
     def __init__(self, max_bitwidth_increase=0):
         super().__init__()
-        # Maximum allowed increase of the output datatype bitwidth (in bits)
-        # for an absorption to be performed. 0 means the output width must not
-        # grow at all.
         self.max_bitwidth_increase = max_bitwidth_increase
 
     def apply(self, model: ModelWrapper):
-        # Get the model graph out of the model wrapper object
         graph = model.graph
-        # Keep track of whether the graph has been modified
         graph_modified = False
-        # Iterate all nodes in the graph keeping track of the index
         for node in graph.node:
-            # Only non-branching threshold operations are supported
             if (
                 node.op_type == "MultiThreshold"
                 and not model.is_fork_node(node)
                 and not model.is_join_node(node)
             ):
-                # We now we are not forking, so there is at most one consumer
                 consumer = model.find_consumer(node.output[0])
-                # At the end of the graph we might have no consumer. If we have
-                # one, only handle Adds, turn Sub into Add first...
+                # A Sub must be made an Add first.
                 if consumer is not None and consumer.op_type == "Add":
-                    # Try to get the parameter tensor for the addition: Sanity
-                    # check whether this is present, even though we already
-                    # tested for non-joining
                     bias = model.get_initializer(consumer.input[1])
 
-                    # Warn and skip if there is no constant bias present
                     if bias is None:
                         warnings.warn(
                             f"{self.__class__.__name__}: Bias not constant for"
                             f" {consumer.name}, skipping."
                         )
-                        # Skip to next node, nothing changed so far, no need to
-                        # break here
                         continue
 
-                    # Try to get the parameter tensor for the thresholds: Sanity
-                    # check whether this is present, even though we already
-                    # tested for non-joining
                     thresholds = model.get_initializer(node.input[1])
 
-                    # Warn and skip if there is no constant bias present
                     if thresholds is None:
                         warnings.warn(
                             f"{self.__class__.__name__}: Thresholds not"
                             f" constant for {node.name}, skipping."
                         )
-                        # Skip to next node, nothing changed so far, no need to
-                        # break here
                         continue
 
-                    # Check whether the bias is as scalar as we cannot absorb
-                    # full tensors into node attributes
+                    # An attribute holds a scalar only.
                     if not (bias.ndim == 0 or all(x == 1 for x in bias.shape)):
                         warnings.warn(
                             f"{self.__class__.__name__}: Bias not scalar"
                             f" for {consumer.name}, skipping."
                         )
-                        # Skip to next node, nothing changed so far, no need to
-                        # break here
                         continue
 
-                    # CustomOp instance of the thresholding node required for
-                    # convenient attribute manipulation
                     threshold_op = getCustomOp(node)
-                    # Remember the old datatype for some further checks and info
                     old_odt = threshold_op.get_nodeattr("out_dtype")
-                    # Get the number of bits currently used to represent the
-                    # output values (used below to bound the allowed width
-                    # increase of the output datatype)
                     bits = DataType[old_odt].bitwidth()
 
-                    # Flatten effectively scalar bias tensors and extract to
-                    # have "plain" scalar
                     bias = bias.flatten()[0]
-                    # Shift the output bias of the thresholding operator
                     out_bias = threshold_op.get_nodeattr("out_bias") + bias
-                    # Derive the new output range due to shifting the bias. The
-                    # MultiThreshold step count is in [0, num_steps], so after
-                    # shifting the output range is
-                    # [out_bias, out_bias + num_steps].
+                    # The step count is in [0, num_steps]: the output range, shifted.
                     new_min = out_bias
                     new_max = out_bias + thresholds.shape[-1]
 
-                    # Derive the smallest datatype that represents the full
-                    # shifted output range [new_min, new_max]. Use an unsigned
-                    # type when the range is non-negative, otherwise a signed
-                    # type wide enough to cover both endpoints. Note a signed
-                    # type reaching -(new_max + 1) also represents +new_max, so
-                    # the negative magnitude that must fit is the more negative
-                    # of new_min and -(new_max + 1).
+                    # A signed type that holds -(new_max + 1) holds new_max too.
                     if new_min >= 0:
                         odt = DataType.get_smallest_possible(new_max)
                     else:
                         odt = DataType.get_smallest_possible(min(new_min, -(new_max + 1)))
 
-                    # Check whether the new range can be represented with the
-                    # derived integer datatype
                     if not (odt.allowed(new_max) and odt.allowed(new_min)):
-                        # Cannot be represented, warn and skip transforming
                         warnings.warn(
                             f"{self.__class__.__name__}: Cannot absorb bias"
                             f" from {consumer.name} into {node.name}: {bias}"
                         )
-                        # Skip to the next candidate node
                         continue
 
-                    # Absorbing a bias can widen the output datatype (e.g. a
-                    # large positive bias). Skip the absorption if the output
-                    # bitwidth would grow by more than the allowed tolerance, to
-                    # avoid inflating the downstream datapath/FIFO widths.
                     bitwidth_increase = odt.bitwidth() - bits
                     if bitwidth_increase > self.max_bitwidth_increase:
                         warnings.warn(
@@ -181,44 +123,24 @@ class AbsorbScalarBiasIntoMultiThreshold(Transformation):
                             f" Increase max_bitwidth_increase to allow this"
                             f" absorption if the wider output type is acceptable."
                         )
-                        # Skip to the next candidate node
                         continue
 
-                    # Check whether the datatype changes as this is something
-                    # the "user" should be aware of
                     if odt.name != old_odt:
                         warnings.warn(
                             f"{self.__class__.__name__}: Output datatype for"
                             f" {node.name} changing from {old_odt} to {odt}"
                         )
 
-                    # Up until now we did not modify the nodes/grap, just did
-                    # some checks and derive the new bias and datatype. Start
-                    # inserting this back into the graph now...
-
-                    # Set new bias and datatype attributes into the threshold
-                    # operator
                     threshold_op.set_nodeattr("out_bias", out_bias)
                     threshold_op.set_nodeattr("out_dtype", odt.name)
-                    # Remove the bias operator and rewire the graph to skip the
-                    # now-missing node
                     node.output[0] = consumer.output[0]
                     graph.node.remove(consumer)
-                    # Update the datatype at the output of the threshold
-                    # operation
                     model.set_tensor_datatype(node.output[0], odt)
 
-                    # Graph modified so we need to apply this transformation
-                    # again
                     graph_modified = True
-                    # Better break now to clean up and recover annotations first
                     break
-        # As we might have changes types and removed nodes better redo some
-        # annotations
         model = model.transform(InferDataTypes())
         model = model.transform(InferShapes())
-        # Transformed model and indication whether the transformation should be
-        # applied again
         return model, graph_modified
 
 
@@ -244,47 +166,28 @@ class AbsorbAddIntoMultiThreshold(Transformation):
                     start_name = n.input[0]
                     is_scalar = A.ndim == 0 or all(x == 1 for x in A.shape)
 
-                    # Get the shape of the parameter tensor of the add
                     shape = A.shape
-                    # First try to consider the tensor layout of the input for
-                    # determining the number of output channels
                     layout = model.get_tensor_layout(add_weight_name)
-                    # If there is no layout annotation, guess based on rank of
-                    # the parameter tensor
-                    # TODO: No support for Rank >= 5
+                    # Without a layout annotation, the layout is guessed from the rank.
                     if layout is None and len(shape) < 5:
-                        # Maps tensor rank to layout annotation
                         rank_to_layout = {0: None, 1: "C", 2: "NC", 3: "NWC", 4: "NCHW"}
-                        # Lookup the layout required by this input shape
                         layout = rank_to_layout[len(shape)]
-                    # If there is a layout annotation, use this to determine the
-                    # index of the channel dimension
                     if layout is not None and "C" in layout:
-                        # Lookup the index in list
                         cdim = layout.index("C")
-                    # If no layout has been annotated or there is no channel
-                    # dimension, fall back to the previous default assumption
                     else:
-                        # Assume the channels to be in axis 1
                         cdim = 1
-                        # Issue a warning to the user, so they are aware of this
                         warnings.warn(
                             f"No layout annotations for {add_weight_name}:"
                             f" Assuming channel dimension at index {cdim}"
                         )
 
-                    # We can only absorb up to per-channel (last dimension)
-                    # granularity
+                    # At most per channel.
                     if is_scalar or A.shape[cdim] == A.size:
-                        # Reshape addition parameters to have the elements/PE
-                        # dimension first, aligned with the thresholds. In float64:
-                        # ONNX gives thresholds no type, and float32 would round them.
+                        # In float64: ONNX gives thresholds no type, and float32 would
+                        # round them.
                         Tnew = T.astype(np.float64) - A.reshape(-1, 1).astype(np.float64)
-                        # compute new thresholds and set initializer
                         model.set_initializer(threshold_name, Tnew)
-                        # wire add input directly to MultiThreshold
                         consumer.input[0] = start_name
-                        # remove the add node
                         graph.node.remove(n)
                         graph_modified = True
         return model, graph_modified
@@ -315,15 +218,11 @@ class AbsorbMulIntoMultiThreshold(Transformation):
                         T = model.get_initializer(threshold_name)
                         assert T is not None, "Initializer for thresholds is not set."
                         start_name = n.input[0]
-                        # compute new thresholds and set initializer, in float64:
-                        # ONNX gives thresholds no type, and float32 would round them
+                        # In float64: ONNX gives thresholds no type, and float32 would
+                        # round them.
                         Tnew = T.astype(np.float64) / A.reshape(-1, 1).astype(np.float64)
-                        # TODO: need to handle negative A values correctly; produce
-                        # mul sign mask and merge into preceding matmul?
                         model.set_initializer(threshold_name, Tnew)
-                        # wire add input directly to MultiThreshold
                         consumer.input[0] = start_name
-                        # remove the mul node
                         graph.node.remove(n)
                         graph_modified = True
         return (model, graph_modified)
@@ -355,11 +254,9 @@ class FactorOutMulSignMagnitude(Transformation):
                     middle_name = model.make_new_valueinfo_name()
                     model.set_tensor_shape(middle_name, in_shape)
                     sign_mul_param_name = model.make_new_valueinfo_name()
-                    # create new mul node with sign(A) as the operand
                     sgn = np.sign(A)
                     model.set_initializer(sign_mul_param_name, sgn)
                     model.set_tensor_datatype(sign_mul_param_name, DataType["BIPOLAR"])
-                    # replace original mul weight by magnitudes
                     model.set_initializer(mul_weight_name, np.abs(A))
                     new_mul = oh.make_node("Mul", [start_name, sign_mul_param_name], [middle_name])
                     n.input[0] = middle_name
@@ -378,20 +275,16 @@ class Absorb1BitMulIntoMatMul(Transformation):
         graph_modified = False
         for n in graph.node:
             node_ind += 1
-            # TODO: Fork-nodes could be handled if the muls are the same in all
-            #  branches, but this is not checked nor rewired at all right now.
             if n.op_type == "MatMul" and not model.is_fork_node(n):
                 matmul_weight_name = n.input[1]
                 W = model.get_initializer(matmul_weight_name)
                 Wdt = model.get_tensor_datatype(matmul_weight_name)
-                # Skip matmuls with no initializers
                 if W is None:
                     continue
                 consumer = model.find_consumer(n.output[0])
                 if consumer is not None and consumer.op_type == "Mul":
                     mul_weight_name = consumer.input[1]
                     A = model.get_initializer(mul_weight_name)
-                    # Skip muls with no initializers
                     if A is None:
                         continue
                     is_1bit = model.get_tensor_datatype(mul_weight_name).bitwidth() == 1
@@ -402,7 +295,6 @@ class Absorb1BitMulIntoMatMul(Transformation):
                         ), """Shape of new weights is not
                         the same as the shape of the weight matrix before."""
                         check_fxn = np.vectorize(lambda x: Wdt.allowed(x))
-                        # only absorb if permitted by W datatype
                         if check_fxn(Wnew).all():
                             model.set_initializer(matmul_weight_name, Wnew)
                             n.output[0] = consumer.output[0]
@@ -424,14 +316,12 @@ class Absorb1BitMulIntoConv(Transformation):
                 conv_weight_name = n.input[1]
                 W = model.get_initializer(conv_weight_name)
                 Wdt = model.get_tensor_datatype(conv_weight_name)
-                # Skip convs with no initializers
                 if W is None:
                     continue
                 consumer = model.find_consumer(n.output[0])
                 if consumer is not None and consumer.op_type == "Mul":
                     mul_weight_name = consumer.input[1]
                     A = model.get_initializer(mul_weight_name)
-                    # Skip muls with no initializers
                     if A is None:
                         continue
                     is_1bit = model.get_tensor_datatype(mul_weight_name).bitwidth() == 1
@@ -439,15 +329,13 @@ class Absorb1BitMulIntoConv(Transformation):
                     actual_ndims = len(tuple(filter(lambda x: x > 1, A.shape)))
                     is_1d = actual_ndims == 1
                     if is_1bit and (is_1d or is_scalar):
-                        # move the mul to the OFM position, since the mul is
-                        # applied on the outputs channelwise or as scalar
+                        # The Mul scales each output channel.
                         Wnew = A.reshape(-1, 1, 1, 1) * W
                         assert (
                             Wnew.shape == W.shape
                         ), """Shape of new weights is not
                         the same as the shape of the conv weights before."""
                         check_fxn = np.vectorize(lambda x: Wdt.allowed(x))
-                        # only absorb if permitted by W datatype
                         if check_fxn(Wnew).all():
                             model.set_initializer(conv_weight_name, Wnew)
                             n.output[0] = consumer.output[0]
@@ -471,35 +359,23 @@ class AbsorbTransposeIntoMultiThreshold(Transformation):
                 perms = list(get_by_name(n.attribute, "perm").ints)
                 if perms == [0, 3, 1, 2]:
                     mt_cand = model.find_consumer(n.output[0])
-                    if (
-                        mt_cand is not None
-                        and mt_cand.op_type == "MultiThreshold"
-                        # and not model.is_fork_node(mt_cand)
-                    ):
+                    if mt_cand is not None and mt_cand.op_type == "MultiThreshold":
                         mt_cand_orig_output = mt_cand.output[0]
                         mt = getCustomOp(mt_cand)
                         mt.set_nodeattr("data_layout", "NHWC")
-                        # Rewire input of MultiThreshold node
                         mt_cand.input[0] = n.input[0]
-                        # Make new intermediate tensor
                         intermediate_tensor_name = model.make_new_valueinfo_name()
                         intermediate_tensor_shape = model.get_tensor_shape(n.input[0])
                         intermediate_tensor_finn_dtype = model.get_tensor_datatype(
                             mt_cand.output[0]
                         )
-                        # Create a new ValueInfoProto and set the shape
                         model.set_tensor_shape(intermediate_tensor_name, intermediate_tensor_shape)
-                        # Set the tensor layout
                         model.set_tensor_layout(intermediate_tensor_name, DataLayout.NHWC)
-                        # Set the tensor FINN datatype
                         model.set_tensor_datatype(
                             intermediate_tensor_name, intermediate_tensor_finn_dtype
                         )
-                        # Rewire output of MT node
                         mt_cand.output[0] = intermediate_tensor_name
-                        # Get rid of first transpose node
                         graph.node.remove(n)
-                        # Create new Transpose node
                         new_transpose = oh.make_node(
                             "Transpose",
                             [intermediate_tensor_name],
@@ -531,12 +407,9 @@ class AbsorbTransposeIntoFlatten(Transformation):
                 if (
                     prod is not None
                     and prod.op_type == "Transpose"
-                    # we ensure that the first dimension is not changed from the
-                    # transpose operation
                     and get_by_name(prod.attribute, "perm").ints[0] == 0
                 ):
                     data_layout = model.get_tensor_layout(prod.input[0])
-                    # check for the data layout to interpret input shape correctly
                     if data_layout is None:
                         warnings.warn(
                             """Data layout for input tensor of Transpose node is not set.
@@ -546,16 +419,11 @@ class AbsorbTransposeIntoFlatten(Transformation):
                         continue
                     elif data_layout == DataLayout.NCHW:
                         (b, c, h, w) = model.get_tensor_shape(prod.input[0])
-                        # if h=w=1 the transposition can be absorbed, otherwise
-                        # the absorption would lead to an error in the behavior
+                        # Only a transpose of a 1x1 image is a reshape.
                         if h != 1 or w != 1:
                             continue
-                        # the flatten node from onnx keeps by default the first
-                        # dim and flattens the rest, that is why this transformation
-                        # can only work with b != 1 if the model contains already a
-                        # flatten node and not a reshape node with shape = [1, -1].
-                        # If the first  dim of the input tensor is not 1, flatten and
-                        # reshape (with shape = [1, -1]) would lead to different results
+                        # Flatten keeps the first axis and Reshape [1, -1] does not:
+                        # they agree only for a batch of one.
                         if n.op_type == "Reshape" and b != 1:
                             continue
                     elif data_layout == DataLayout.NHWC:
@@ -564,7 +432,6 @@ class AbsorbTransposeIntoFlatten(Transformation):
                             continue
                         if n.op_type == "Reshape" and b != 1:
                             continue
-                    # create single flatten node and remove obsolete nodes
                     node = oh.make_node("Flatten", [prod.input[0]], [n.output[0]])
                     graph.node.remove(n)
                     graph.node.remove(prod)
@@ -598,14 +465,9 @@ class AbsorbScalarMulAddIntoTopK(Transformation):
                     is_scalar_pos_mul = is_scalar and (prod.op_type == "Mul") and A > 0
                     is_scalar_add = is_scalar and (prod.op_type == "Add")
                     if is_scalar_pos_mul or is_scalar_add:
-                        # if the mul is scalar and positive, we can just delete the
-                        # mul node and rewire the top k node. Because the top k node
-                        # works with probabilities and their relation to each other
-                        # the relation doesn't change if every value is multiplied
-                        # with a scalar
+                        # A positive scale or any shift keeps the order TopK selects by.
                         graph.node.remove(prod)
                         n.input[0] = prod_input
-                        # to avoid error the dataype is set to float32
                         model.set_tensor_datatype(n.input[0], DataType["FLOAT32"])
                         graph_modified = True
         if graph_modified:
@@ -639,7 +501,6 @@ class AbsorbConsecutiveTransposes(Transformation):
                 perms1 = list(get_by_name(node.attribute, "perm").ints)
                 if len(next_nodes) == 0:
                     continue
-                # check if all nodes after fork are opposite transposes
                 all_opposite_transposes = True
                 for next_node in next_nodes:
                     if next_node is not None and next_node.op_type == "Transpose":
@@ -654,8 +515,6 @@ class AbsorbConsecutiveTransposes(Transformation):
                     continue
                 source_tensor = node.input[0]
                 for next_node in next_nodes:
-                    # connect next_node's consumers' appropriate input to n's input
-                    # TODO how to handle top-level outputs if any?
                     nextnode_out = next_node.output[0]
                     assert nextnode_out not in [x.name for x in model.graph.output]
                     consumers = model.find_consumers(nextnode_out)
@@ -663,9 +522,7 @@ class AbsorbConsecutiveTransposes(Transformation):
                         for i, iname in enumerate(cons.input):
                             if iname == nextnode_out:
                                 cons.input[i] = source_tensor
-                    # remove consumer transpose
                     graph.node.remove(next_node)
-                # remove producer transpose
                 graph.node.remove(node)
                 graph_modified = True
 
@@ -690,28 +547,23 @@ class AbsorbTransposeIntoResize(Transformation):
                     mt_cand = model.find_consumer(node.output[0])
                     if mt_cand is not None and mt_cand.op_type == "Resize":
                         mode = get_by_name(mt_cand.attribute, "mode").s.decode("ascii")
-                        # skip if mode is not nearest
                         if mode != "nearest":
                             continue
-                        # locate the resampling parameter across opset signatures
                         param_ind, is_sizes = resolve_resize_param_input(model, mt_cand)
                         if is_sizes:
-                            # turn sizes into scales, write them into the scales
-                            # input (index 2) and drop the sizes input
+                            # Sizes become scales, in the scales input (index 2).
                             sizes = model.get_initializer(mt_cand.input[param_ind])
                             ishape = model.get_tensor_shape(mt_cand.input[0])
                             ns, cs, hs, ws = sizes / np.asarray(ishape)
                             model.set_initializer(mt_cand.input[2], np.asarray([ns, cs, hs, ws]))
                             mt_cand.input.remove(mt_cand.input[param_ind])
                             param_ind = 2
-                        # scales already specified, transpose indices to NHWC
                         scales = model.get_initializer(mt_cand.input[param_ind])
                         assert scales is not None
                         ns, cs, hs, ws = scales
                         model.set_initializer(
                             mt_cand.input[param_ind], np.asarray([ns, hs, ws, cs])
                         )
-                        # get rid of first tranpose node
                         mt_cand.input[0] = node.input[0]
                         graph.node.remove(node)
                         is_last_node = mt_cand.output[0] in [x.name for x in model.graph.output]
@@ -723,20 +575,16 @@ class AbsorbTransposeIntoResize(Transformation):
                         else:
                             trans_input = mt_cand.output[0]
                             trans_output = new_tensor_name
-                        # fix tensor shapes for Resize and Transpose
                         n, c, hx, wx = model.get_tensor_shape(mt_cand.output[0])
                         model.set_tensor_shape(trans_input, (n, hx, wx, c))
                         model.set_tensor_shape(trans_output, (n, c, hx, wx))
-                        # re-insert Transpose behind Resize
                         new_transpose = oh.make_node(
                             "Transpose",
                             [trans_input],
                             [trans_output],
                             perm=[0, 3, 1, 2],
                         )
-                        # rewire nodes
                         final_t_cands = model.find_consumers(mt_cand.output[0])
-                        # rewire next nodes' inputs
                         for final_t_cand in final_t_cands:
                             final_t_cand.input[0] = trans_output
                         mt_cand.output[0] = trans_input

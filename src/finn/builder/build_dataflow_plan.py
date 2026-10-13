@@ -1,51 +1,39 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build's plan: the steps a configuration runs, in order, each with its settings
-(``resolve_plan``). build_dataflow resolves it before the first step; the configuration
-checks and the build's manifest read it.
+"""The build's plan (``resolve_plan``): the steps a configuration runs, in order, each
+with its settings. The build resolves it before its first step.
 
-**The list.** A build runs ``steps``, else the default list (``default_steps``: every
-phase's steps, in order). Its entries are: the name of a phase
-(finn.builder.build_dataflow_steps.build_dataflow_phases), which stands for its steps;
-the name of one of the build's steps; an import path (``package.module.name``) of a step
-function or of a qonnx Transformation class; or in Python the object itself, a function
-(a ``functools.partial`` too), a Transformation instance or class. A Transformation runs
-as ``model.transform(transformation)``, a class constructed with its defaults, and is
-named by its class name in the log, the manifest and the intermediate models.
+**The list.** A build runs ``steps``, else every phase's steps (``default_steps``). An
+entry is the name of a phase (its steps) or of a step; an import path of a step
+function or a qonnx Transformation class; or in Python the object itself, a function
+(a ``functools.partial`` too), a Transformation instance or class. A Transformation
+runs as ``model.transform(transformation)``, a class constructed with its defaults,
+and is named by its class.
 
 **Settings.** A step's keyword-only parameters are its settings, none named like a field
-of the configuration. Each setting the configuration gives must be declared by a step of
-the list (before ``start_step`` and
-``stop_step`` trim it), and is decoded by that step's annotation; a ``Path``, given or
-by default, is joined to the configuration's ``base_dir``. Steps that declare the same
-name share its value, so they must declare the same annotation and default. A setting
-a step requires (no default) must be given. A setting given whose every reader
-``start_step`` or ``stop_step`` leaves out is reported by the configuration checks as a
-warning.
+of the configuration. Each setting given must be declared by a step of the list, and is
+decoded by that step's annotation; each path in it, given or by default, is joined to
+the configuration's ``base_dir``. Steps that declare one name share its value, so they
+must agree on its annotation and default. A setting without a default must be given.
 
 **Start and stop.** ``start_step`` and ``stop_step`` name a step once in the list, or a
-phase: its first step, or its last. ``start_step`` names a step after the list's first:
-the build starts from the model the step before it saved.
+phase: its first step, or its last. The build starts from the model the step before
+``start_step`` saved.
 
-**The kernel strategy steps' order.** The engine keeps a stored FIFO depth valid when
-its ends' folding changes, so the run's order must keep the depths current
-(finn.builder.build_dataflow_steps.FOLDING_STEPS, FIFO_SIZING_STEPS): a step that may
-change the folding after the run's last step that sizes FIFOs is refused; so is one
-with no sizing step after it in a run that does not cut the partition before it, whose
-partition an earlier run made and may have sized at another folding.
+**FIFO depths.** A FIFO's depth is sized at the folding of its ends, so a step that may
+change the folding (``FOLDING_STEPS``) is refused after the run's last step that sizes
+FIFOs, and so is one with no sizing step after it where no cut before it made the
+partition.
 
-**The verifying steps' inputs.** A verifying step in the run reads what an earlier step
-of the list made: step_verify_partition_python the model saved before
-step_convert_to_hw, which the list has once, after another step, before the check, with
-``save_intermediate_models`` on; step_run_testbench the testbench a
+**The checks' inputs.** step_verify_partition_python reads the model saved before
+step_convert_to_hw, which the list has once, after another step and before the check,
+with ``save_intermediate_models`` on; step_run_testbench runs the testbench a
 step_package_partition before it writes, with ``stitched_ip`` asked.
 
-**Refusals.** ``resolve_plan`` refuses a configuration with ``ConfigurationRefused``
-(finn.builder.build_dataflow_config), each finding's place in the configuration its
-``place`` detail: at the first entry that does not resolve, since the rest of the list
-depends on it; otherwise with every rejection of the settings, of ``start_step`` and
-``stop_step`` and of the run's order together.
+``resolve_plan`` refuses at the first entry that does not resolve; otherwise it refuses
+every rejection of the settings, the bounds and the order together, as one
+``ConfigurationRefused``.
 """
 
 from __future__ import annotations
@@ -84,7 +72,7 @@ from finn.util.typed_json import decoded, encoded
 @dataclass(frozen=True)
 class Step:
     """A step of the plan: its ``name``, the ``function`` the build calls as
-    ``function(model, cfg, **settings)``, and the value of each setting it declares."""
+    ``function(model, cfg, **settings)``, and its settings' values."""
 
     name: str
     function: Callable[..., ModelWrapper]
@@ -93,9 +81,8 @@ class Step:
 
 @dataclass(frozen=True)
 class Setting:
-    """A setting of the plan: its ``value`` (as given, decoded, else its readers'
-    default), whether the configuration ``given`` it, and the steps that read it
-    (``readers``), in the order they run."""
+    """A setting of the plan: its ``value`` (given and decoded, else its readers'
+    default), whether it was ``given``, and the steps that read it, in order."""
 
     value: Any
     given: bool
@@ -104,9 +91,8 @@ class Setting:
 
 @dataclass(frozen=True)
 class Plan:
-    """The build's list of steps, phases expanded (``steps``); the steps it runs, from
-    ``start_step`` to ``stop_step`` (``steps[run]``); and each setting a step of the list
-    declares (``settings``)."""
+    """The build's list of steps, phases expanded (``steps``); the slice of it the build
+    runs (``run``); and each setting a step of the list declares."""
 
     steps: tuple[Step, ...]
     run: slice
@@ -114,7 +100,7 @@ class Plan:
 
     def index(self, name: str, *, last: bool = False, place: str | None = None) -> int:
         """The index in ``steps`` of the step ``name`` names: a step once in the list, or
-        a phase's first step (its last if ``last``). Refuses, at ``place``, any other."""
+        a phase's first step (its last if ``last``). Refuses any other, at ``place``."""
         named, stated = name, repr(name)
         if name in build_dataflow_phases:
             named = build_dataflow_phases[name][-1 if last else 0].__name__
@@ -133,8 +119,7 @@ class Plan:
         raise _refusal("step-absent", place, message)
 
     def record(self) -> dict[str, Any]:
-        """The plan as the build's manifest records it: the steps it runs, by name, and
-        each setting with its value, whether it was given, and its readers."""
+        """The plan as the build's manifest records it."""
         return {
             "steps": [step.name for step in self.steps[self.run]],
             "settings": {
@@ -149,13 +134,12 @@ class Plan:
 
 
 def default_steps() -> list[str]:
-    """The list a build runs without ``steps``: every phase's steps, in order, by name; a
-    list to change for a configuration's ``steps``."""
+    """The list a build runs without ``steps``: every phase's steps, by name."""
     return [step.__name__ for steps in build_dataflow_phases.values() for step in steps]
 
 
-#: A resolved entry's step before its settings: its name, how it runs, and each setting
-#: it declares with its annotation and default.
+#: A step before its settings: its name, its function, and each setting it declares
+#: with its annotation and default.
 _Declared = tuple[str, Callable[..., ModelWrapper], Mapping[str, tuple[Any, Any]]]
 
 
@@ -188,7 +172,7 @@ def _applying(transformation: Transformation) -> Callable[..., ModelWrapper]:
 
 def _step(entry: object, place: str) -> _Declared:
     """The step an object is: a Transformation class or instance, or a function (a
-    partial too) and the settings it declares."""
+    partial too) with the settings it declares."""
     if isinstance(entry, type):
         if not issubclass(entry, Transformation):
             raise _refusal(
@@ -251,10 +235,8 @@ def _resolved(entry: object, place: str) -> list[_Declared]:
 def _settings(
     cfg: DataflowBuildConfig, listed: list[_Declared]
 ) -> tuple[dict[str, Setting], list[Finding]]:
-    """Each setting a step of ``listed`` declares: its value, the configuration's decoded,
-    else the default its readers declare; and the rejections: each setting no step
-    declares, readers that disagree on a setting's annotation or default, a value that
-    does not decode, and a required setting not given."""
+    """Each setting a step of ``listed`` declares, with its value, and the rejections of
+    the settings (the module docstring)."""
     declared: dict[str, list[tuple[str, Any, Any]]] = {}
     for step, _, parameters in listed:
         for name, (kind, default) in parameters.items():
@@ -294,7 +276,7 @@ def _settings(
             try:
                 value = decoded(kind, cfg.settings[name], place)
             except ValueError as invalid:
-                # decoded names the place it refuses, this setting's or one inside it.
+                # The refusal names its place: this setting's, or one inside it.
                 where, _, message = str(invalid).partition(": ")
                 refused.append(config_finding("setting-invalid", message, where))
                 continue
@@ -311,7 +293,7 @@ def _settings(
 
 
 def _in_directory(value: Any, directory: str) -> Any:
-    """``value`` with each path in it, in its lists, tuples and dicts too, joined to
+    """``value`` with each path in it, in lists, tuples and dicts too, joined to
     ``directory``."""
     if isinstance(value, PurePath):
         return type(value)(directory, value)
@@ -323,9 +305,7 @@ def _in_directory(value: Any, directory: str) -> Any:
 
 
 def resolve_plan(cfg: DataflowBuildConfig) -> Plan:
-    """The configuration's plan: its list resolved, its settings decoded and given to the
-    steps that declare them, the run from ``start_step`` to ``stop_step``. Refuses what
-    the module docstring says it refuses."""
+    """The configuration's plan, or its refusal (the module docstring)."""
     stated = default_steps() if cfg.steps is None else cfg.steps
     listed = [
         step for index, entry in enumerate(stated) for step in _resolved(entry, f"steps[{index}]")
@@ -359,10 +339,8 @@ def resolve_plan(cfg: DataflowBuildConfig) -> Plan:
 
 
 def _stale_fifos(run: tuple[Step, ...]) -> list[Finding]:
-    """The rejections of a run whose order would build FIFO depths sized at another folding
-    than the one built (the module docstring): each step that may change the folding
-    after the last step that sizes FIFOs, or with no sizing step after it and no cut
-    before it."""
+    """The rejections of a run whose FIFO depths would be sized at another folding than
+    the one built (the module docstring)."""
     refused = []
     origins = [_origin(step.function) for step in run]
     sizing = [index for index, origin in enumerate(origins) if origin in FIFO_SIZING_STEPS]
@@ -391,8 +369,8 @@ def _stale_fifos(run: tuple[Step, ...]) -> list[Finding]:
 
 
 def _unmade_inputs(cfg: DataflowBuildConfig, plan: Plan) -> list[Finding]:
-    """The rejections of a verifying step in the run whose input no earlier step of the
-    list makes (the module docstring)."""
+    """The rejections of a check in the run whose input no earlier step of the list
+    makes (the module docstring)."""
     refused = []
     names = [step.name for step in plan.steps]
     for index in range(plan.run.start, plan.run.stop):

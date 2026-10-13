@@ -35,7 +35,7 @@ class ExtractNormScaleBias(Transformation):
                 ln_node = node
                 input_ln = node.input[0]
                 scale_tensor = node.input[1]
-                # bias input is optional input
+                # The bias input is optional.
                 if len(node.input) > 2:
                     bias_tensor = node.input[2]
                     bias = model.get_initializer(bias_tensor)
@@ -54,8 +54,6 @@ class ExtractNormScaleBias(Transformation):
                 last_node = ln_node
                 final_output = ln_node.output[0]
                 if extract_scale:
-                    # create new Mul node that applies the scale
-                    # Create new tensor
                     scale_act_in_name = model.make_new_valueinfo_name()
                     scale_act_in = oh.make_tensor_value_info(
                         scale_act_in_name, TensorProto.FLOAT, act_shape
@@ -66,19 +64,12 @@ class ExtractNormScaleBias(Transformation):
                         "Mul", [scale_act_in_name, scale_tensor], [final_output]
                     )
                     graph.node.append(scale_node)
-                    # important: when tracking a pointer to newly added nodes,
-                    # ensure the item from the container is used, and not the
-                    # make_node result -- those are different objects
-                    # e.g. if we use last_node = scale_node below,
-                    # this will point to the wrong object and cause bugs later
+                    # The graph holds a copy of the node make_node returned: keep the copy.
                     last_node = graph.node[-1]
-                    # remove scale from LayerNorm node
                     new_scale_name = model.make_new_valueinfo_name()
                     model.set_initializer(new_scale_name, np.ones(act_shape[-1], dtype=np.float32))
                     ln_node.input[1] = new_scale_name
                 if extract_bias:
-                    # create new Add node that applies bias
-                    # create new tensor
                     bias_act_in_name = model.make_new_valueinfo_name()
                     bias_act_in = oh.make_tensor_value_info(
                         bias_act_in_name, TensorProto.FLOAT, act_shape
@@ -87,18 +78,14 @@ class ExtractNormScaleBias(Transformation):
                     bias_node = oh.make_node("Add", [bias_act_in_name, bias_tensor], [final_output])
                     last_node.output[0] = bias_act_in_name
                     graph.node.append(bias_node)
-                    # remove bias from LayerNorm node
                     new_bias_name = model.make_new_valueinfo_name()
                     model.set_initializer(new_bias_name, np.zeros(act_shape[-1], dtype=np.float32))
                     ln_node.input[2] = new_bias_name
 
                 if extract_scale or extract_bias:
-                    # since we used append() for new nodes, need to call
-                    # SortGraph to ensure correct (topological) order
+                    # The new nodes were appended: sort the graph again.
                     model = model.transform(SortGraph())
-                    # Remove potential unity multiplications from alpha and beta attributes
                     model = model.transform(RemoveIdentityOps())
-                    # Ensure unique parameter tensors
                     model = model.transform(GiveUniqueParameterTensors())
                     return model, True
 
