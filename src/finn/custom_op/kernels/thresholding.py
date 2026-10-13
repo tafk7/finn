@@ -36,7 +36,7 @@ from qonnx.analysis.tensor_value_summary import (
 )
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import datatype, known_shape, rows, shape
+from finn.core.graph.facts import datatype, integer_tensor, known_shape, rows, shape
 from finn.core.space import Finding, Rejected
 from finn.custom_op.kernels.base import KernelOp, Match, Shapes, node_attributes, refused, unstated
 from finn.custom_op.kernels.cache import Facts
@@ -47,6 +47,7 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 
 if TYPE_CHECKING:
     from onnx import NodeProto
@@ -59,14 +60,15 @@ LOWERING = "ExtractMultiThresholdScaleBias"
 
 def stored_thresholds(
     stored: npt.NDArray[Any], input_dtype: QONNXDataType
-) -> tuple[tuple[tuple[int, ...], ...], QONNXDataType]:
+) -> tuple[IntegerTensorValue, QONNXDataType]:
     """The kernel's table for the thresholds ``stored`` on an input of ``input_dtype``,
-    and its type (see the module docstring). For an input that is not an integer type,
-    the thresholds as they are, in the input's type, which the kernel refuses."""
+    one set of them, and its type (see the module docstring). For an input that is not
+    an integer type, the thresholds as they are (truncated to integers), in the input's
+    type, which the kernel refuses."""
     try:
         low, high = ordinary_integer_bounds(input_dtype)
     except DatatypeError:
-        return tuple(tuple(int(value) for value in row) for row in stored), input_dtype
+        return integer_tensor(np.trunc(stored)[None]), input_dtype
     # float64 holds every integer threshold of an input up to 2**53, where float32
     # rounds past 2**24.
     table = np.clip(np.ceil(np.asarray(stored, dtype=np.float64)), low, high + 1)
@@ -77,7 +79,7 @@ def stored_thresholds(
         dtype = resolve_qonnx_datatype_name(f"INT{bits}")
     else:
         dtype = resolve_qonnx_datatype_name(f"UINT{max(most.bit_length(), 1)}")
-    return tuple(tuple(int(value) for value in row) for row in table), dtype
+    return integer_tensor(table[None]), dtype
 
 
 class Thresholding(KernelOp):
@@ -164,7 +166,7 @@ class Thresholding(KernelOp):
             return dict(
                 input_dtype=input_dtype,
                 threshold_dtype=threshold_dtype,
-                thresholds=(table,),
+                thresholds=table,
                 bias=bias,
                 platform=platform,
             )

@@ -16,15 +16,15 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.channels import Channel
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.values.semantics import ThresholdTable
-from kernels.helpers import FULL_DSP48E2, THRESHOLD_TABLE, Root, controlled, threshold_base
+from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue
+from kernels.helpers import FULL_DSP48E2, THRESHOLDS, Root, controlled, threshold_base
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
 
 
 def threshold(
     *,
-    table: ThresholdTable = THRESHOLD_TABLE,
+    table: IntegerTensor = THRESHOLDS,
     pe: int | None = 1,
     bias: int = -1,
     input_dtype: str = "INT8",
@@ -33,7 +33,7 @@ def threshold(
     axilite: bool = False,
     deep: bool = False,
 ) -> ThresholdingAxiKernel:
-    """PE is committed as a choice; ``None`` leaves it open (a table without rows has none)."""
+    """PE is committed as a choice; ``None`` leaves it open."""
     base = threshold_base(
         table=table,
         bias=bias,
@@ -93,7 +93,7 @@ def test_threshold_states_its_result_type_initial_table_and_configuration() -> N
 
 
 def test_threshold_sets_present_a_selector_bus_and_refuse_axilite_addressing() -> None:
-    table: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
+    table = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
     point = threshold(table=table)
     requirements = point.module
     assert dict(requirements.parameters)["SETS"] == 2
@@ -118,10 +118,9 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
 
 def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     profiles = (
-        threshold(table=(), pe=None),
+        threshold(table=((-2, 0, 3),), pe=None),  # no sets axis
         threshold(table=(((2, 1),),)),
         threshold(table=(((0, 20),),)),
-        threshold(table=(((0,), (0, 1)),)),
         threshold(threshold_dtype="UINT5"),
         threshold(bias=1 << 31),
         threshold(bias=-10),
@@ -131,8 +130,10 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         isinstance(point.inspect(ThresholdingAxiKernel.module).accepted_result, Rejected)
         for point in profiles
     )
-    with pytest.raises(DefinitionError, match="threshold table"):
-        threshold(table=cast(ThresholdTable, (([-2, 0, 3],),)))
+    # The table is an integer tensor: nothing else is one.
+    for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
+        with pytest.raises(DefinitionError, match="integer tensor"):
+            threshold(table=cast(IntegerTensor, malformed), pe=None)
     # Flat, PE is any the RTL takes with the table's two rows (one a multiple of the
     # other); another is refused where it is committed.
     for pe in (0, 3, 5):
@@ -140,7 +141,7 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     assert threshold_base().try_with_choices(pe=4).accepted
 
 
-def placed_on(channels: int, table: ThresholdTable) -> ThresholdingAxiKernel:
+def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
     """The kernel between two boundary channels of three rows of ``channels``, PE open."""
     shape = (3, channels)
 
@@ -168,7 +169,7 @@ def placed_on(channels: int, table: ThresholdTable) -> ThresholdingAxiKernel:
 def test_a_placed_table_has_one_row_or_a_row_a_channel() -> None:
     """Placed, PE ranges over the input's channels, whatever the table's rows; a table of
     another number of rows is refused by name."""
-    row = THRESHOLD_TABLE[0][0]
+    row = (-2, 0, 3)
     for table in (((row,),), (tuple(row for _ in range(6)),)):
         point = placed_on(6, table)
         assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2, 3, 6))
@@ -269,3 +270,24 @@ def test_a_table_over_a_million_bits_is_no_parameter() -> None:
     parameters = dict(point.module.parameters)
     assert max(len(str(value)) for value in parameters.values()) < 40
     assert len(point.thresholds_file.data.split()) == (rows // 8) * 8 * 256
+
+
+@pytest.mark.parametrize("bits", [64, 70])
+def test_thresholds_past_64_bits_reach_the_file_and_the_writes_exactly(bits: int) -> None:
+    """The table's integers are read as Python ints: a threshold of 64 bits or more is
+    masked and written exactly, in the file and in the AXI-Lite writes."""
+    least, greatest = -(1 << (bits - 1)) + 1, (1 << (bits - 2)) + 5
+    table = IntegerTensorValue.of((((least, greatest),),))
+    dtype = f"INT{bits}"
+    point = threshold(table=table, pe=1, threshold_dtype=dtype)
+    mask, digits = (1 << bits) - 1, (bits + 3) // 4
+    assert point.thresholds_file.data == (
+        f"{least & mask:0{digits}x}\n{greatest:0{digits}x}\n".encode()
+    )
+    words = (bits + 31) // 32
+    writes = threshold(table=table, pe=1, threshold_dtype=dtype, axilite=True).register_map.writes
+    assert [value for _, value in writes] == [
+        ((threshold & mask) >> (32 * word)) & 0xFFFFFFFF
+        for threshold in (least, greatest)
+        for word in range(words)
+    ]

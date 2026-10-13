@@ -16,6 +16,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import THRESHOLDS, schema_digest, thresholding_model
 
@@ -33,7 +34,9 @@ def test_facts_and_the_output() -> None:
     facts = op(model).facts()
     assert facts.root is Thresholding.root() and facts.owned == ()
     formals = facts.formals()
-    assert formals["thresholds"] == (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
+    assert formals["thresholds"] == IntegerTensorValue.of(
+        (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
+    )
     assert formals["bias"] == -1
     ((dims, dtype),) = op(model).output_tensors().values()
     assert dims == (3, 4) and dtype.name == "INT3"  # [-1, 2], in the RTL's output width
@@ -52,7 +55,8 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     channels and PE's domain from the input."""
     model = thresholding_model(thresholds=THRESHOLDS[:1], bias=-1)
     assert model.get_initializer("t").shape == (1, 3)
-    assert op(model).facts().formals()["thresholds"] == ((tuple(int(v) for v in THRESHOLDS[0]),),)
+    stated = IntegerTensorValue.of(((tuple(int(v) for v in THRESHOLDS[0]),),))
+    assert op(model).facts().formals()["thresholds"] == stated
     op(model).save({"pe": 4, "use_axilite": False, "deep_pipeline": False, **MEMORY})
     activate = op(model).point().activate
     parameters = dict(activate.module.parameters)
@@ -91,7 +95,9 @@ def test_the_table_is_derived_from_the_stored_thresholds_and_the_input_type() ->
     table = np.array([[-300.0, -2.5, 0.25], [-9.0, 1.0, 130.0], [-1.5, 3.0, 4.0], [0, 1, 2]])
     model = thresholding_model(thresholds=table, bias=-1, annotate=("x",))
     formals = op(model).facts().formals()
-    assert formals["thresholds"] == (((-128, -2, 1), (-9, 1, 128), (-1, 3, 4), (0, 1, 2)),)
+    assert formals["thresholds"] == IntegerTensorValue.of(
+        (((-128, -2, 1), (-9, 1, 128), (-1, 3, 4), (0, 1, 2)),)
+    )
     assert formals["threshold_dtype"] == DataType["INT9"]
     assert np.array_equal(model.get_initializer("t"), table.astype(np.float32))
     assert not model.has_tensor_datatype("t")

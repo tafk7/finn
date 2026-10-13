@@ -83,8 +83,8 @@ def eltwise(pe=2, **changes):
 
 def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, **changes):
     """Flat, its PE is any the RTL takes with its table's rows; ``pe=None`` leaves it open
-    with the memories (a table without rows has no PE to commit, and one without
-    thresholds no stages)."""
+    with the memories (a table of no (sets, rows, thresholds) shape has no rows to commit
+    a PE against, nor stages)."""
     facts = dict(
         input_dtype=DataType["INT8"],
         threshold_dtype=DataType["INT5"],
@@ -201,10 +201,9 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: eltwise(b_scale=0.5),
         lambda: eltwise(operation="MUL", lhs_dtype=DataType["FLOAT32"], b_scale=0.5),
         lambda: eltwise(lhs_dtype=DataType["FLOAT32"], platform=FULL_DSP48E2),
-        lambda: threshold(thresholds=(), pe=None),
+        lambda: threshold(thresholds=((-2, 0, 3),), pe=None),  # no sets axis
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),
-        lambda: threshold(thresholds=(((0,), (0, 1)),)),
         lambda: threshold(threshold_dtype=DataType["UINT5"]),
         lambda: threshold(bias=1 << 31),
         lambda: threshold(bias=-10),
@@ -240,8 +239,10 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     for bad in ([3, 6], (3, True), (3, [6])):
         with pytest.raises(DefinitionError):
             generator(dims=bad)
-    with pytest.raises(DefinitionError):
-        threshold(thresholds=(([-2, 0, 3],),))
+    # A table is an integer tensor: a nonempty rectangular nest of int tuples.
+    for bad in ((([-2, 0, 3],),), (), (((0,), (0, 1)),)):
+        with pytest.raises(DefinitionError):
+            threshold(thresholds=bad, pe=None)
 
 
 @pytest.mark.parametrize(

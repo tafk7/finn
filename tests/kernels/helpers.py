@@ -67,8 +67,8 @@ from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
+    IntegerTensorValue,
     IntegerVector,
-    ThresholdTable,
     integer_range,
 )
 from finn.platform.capabilities import DspBlock, Fabric, Platform
@@ -326,13 +326,13 @@ def controlled(space_type: Callable[..., S], facts: Mapping[str, object], **choi
     return kernel
 
 
-THRESHOLD_TABLE: ThresholdTable = (((-2, 0, 3), (-1, 1, 4)),)
-"""One threshold table: two channels of three thresholds."""
+THRESHOLDS = IntegerTensorValue.of((((-2, 0, 3), (-1, 1, 4)),))
+"""One threshold table, one set of two channels of three thresholds."""
 
 
 def threshold_base(
     *,
-    table: ThresholdTable = THRESHOLD_TABLE,
+    table: IntegerTensor = THRESHOLDS,
     bias: int = -1,
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
