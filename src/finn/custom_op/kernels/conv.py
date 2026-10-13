@@ -16,7 +16,7 @@ The op type is ``Conv``, in the KernelOps' domain. qonnx looks an op up by its d
 first, so it never collides with ONNX's ``Conv``.
 
 The pattern refuses padding (``window-pads``), a depthwise ``Im2Col``
-(``window-depthwise``), a kernel, stride or dilation that is not two positive integers
+(``window-depthwise``), a window, stride or dilation that is not two positive integers
 (``window-geometry``), patches that no ``MatMul`` reads as A (``window-unread``), and
 weights that are not 2-D (``matmul-batched``). Conversion also refuses patches that
 another node reads (``match-interior-exposed``).
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 IM2COL = ("qonnx.custom_op.general", "Im2Col")
 
 #: The semantic attributes and the ``Im2Col`` attribute each is read from.
-GEOMETRY = {"kernel": "kernel_size", "stride": "stride", "dilation": "dilations"}
+GEOMETRY = {"window": "kernel_size", "stride": "stride", "dilation": "dilations"}
 
 
 def _pair(value: object) -> tuple[int, int] | None:
@@ -116,7 +116,7 @@ class Conv(MatMul):
                 raise KernelOpError(f"{label}: {name} is not two positive integers")
             found[name] = pair
         try:
-            return Window((image[1], image[2]), **found)
+            return Window((image[1], image[2]), found["window"], found["stride"], found["dilation"])
         except ValueError as error:
             raise KernelOpError(f"{label}: {error}") from error
 
@@ -134,10 +134,10 @@ class Conv(MatMul):
         label, (x, w) = self.label, self.onnx_node.input
         channels, window = self.image()[3], self.window()
         k, n = self.weights()
-        if k != window.taps * channels:
+        if k != window.tap_count * channels:
             raise KernelOpError(
-                f"{label}: the weights {w} have {k} rows, not the {window.kernel} window's "
-                f"{window.taps} taps of the {channels} channels of {x}"
+                f"{label}: the weights {w} have {k} rows, not the {window.size} window's "
+                f"{window.tap_count} taps of the {channels} channels of {x}"
             )
         rows, columns = window.output
         return rows * columns, n, k, {"window": window}
@@ -155,7 +155,7 @@ class Conv(MatMul):
         x, w = self.onnx_node.input
         window, image = self.window(), np.asarray(context[x])
         batch, height, width, channels = image.shape
-        (taps_h, taps_w), (rows, columns) = window.kernel, window.output
+        (taps_h, taps_w), (rows, columns) = window.size, window.output
         cols = im2col_indices_nchw(  # type: ignore[no-untyped-call]
             image.transpose(0, 3, 1, 2),
             height,

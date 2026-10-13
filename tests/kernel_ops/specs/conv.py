@@ -35,7 +35,7 @@ def weights(rows: int, columns: int, low: int, high: int, seed: int = 0) -> Any:
 
 def im2col(
     image: tuple[int, int, int, int],
-    kernel: tuple[int, int],
+    window: tuple[int, int],
     stride: tuple[int, int] = (1, 1),
     dilation: tuple[int, int] = (1, 1),
     pads: tuple[int, int, int, int] = (0, 0, 0, 0),
@@ -50,7 +50,7 @@ def im2col(
         name=name,
         domain=GENERAL,
         stride=list(stride),
-        kernel_size=list(kernel),
+        kernel_size=list(window),
         dilations=list(dilation),
         input_shape=str(tuple(image)),
         pad_amount=list(pads),
@@ -60,7 +60,7 @@ def im2col(
 
 def lowered(
     image: tuple[int, int, int, int] = (1, 6, 6, 4),
-    kernel: tuple[int, int] = (3, 3),
+    window: tuple[int, int] = (3, 3),
     outputs: int = 8,
     x: str | None = "INT4",
     w: str | None = "INT4",
@@ -72,11 +72,11 @@ def lowered(
 ) -> ModelWrapper:
     """x ``image`` -> Im2Col ``im2col`` -> p -> MatMul ``mm`` with w (stored, its rows the
     window's taps times the channels) -> y."""
-    rows = kernel[0] * kernel[1] * image[3]
+    rows = window[0] * window[1] * image[3]
     low, high = (-8, 7) if w == "INT4" else (-1, 1)
     stored = weights(rows, outputs, low, high) if w_shape is None else np.ones(w_shape)
     nodes = [
-        im2col(image, kernel, stride, dilation, pads, depthwise),
+        im2col(image, window, stride, dilation, pads, depthwise),
         helper.make_node("MatMul", ["p", "w"], ["y"], name="mm"),
     ]
     return source(nodes, {"x": (list(image), x)}, {"w": (stored, w)})

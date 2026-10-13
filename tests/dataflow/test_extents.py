@@ -275,7 +275,7 @@ ROSTER = {
         (oh, ow, kh, kw, c),
         uncovered=("x",),
     ),
-    # FINN's layout, (1, OH, OW, KH * KW * C): the kernel size is its author's fact.
+    # FINN's layout, (1, OH, OW, KH * KW * C): the window size is its author's fact.
     "swg, finn layout": Member(
         (
             Port(Access("x", (1, H, W, C), (b, *WINDOW))),
