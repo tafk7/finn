@@ -30,10 +30,8 @@ from finn.core.space import (
     Decision,
     DecisionHandle,
     Located,
-    LocatedParam,
     Members,
     Param,
-    Present,
     QueryResult,
     Space,
     ValueHandle,
@@ -85,16 +83,6 @@ class Thermostat(Space):
     kw: int = Param()
 
 
-class Match(Space):
-    a: LocatedParam[int] = LocatedParam()
-    b: LocatedParam[int] = LocatedParam()
-
-    @constraint
-    def same(self) -> bool:
-        assert_type(self.a, Located[int])
-        return self.a.value == self.b.value
-
-
 class House(Space):
     budget: int = Param()
     want_garage: bool = Decision(values=(False, True))
@@ -107,8 +95,6 @@ class House(Space):
     maybe: Boiler | None = Decision({"boiler": Boiler(kw=3)}, optional=True)
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # typed by the annotation: an int reference
-    matched = Match(a=kitchen.finish, b=dining.finish)
-    either = Room(area=Present(kitchen.area, dining.area))
     costs = Members(COST)
     which = selected(heating)
 
@@ -121,7 +107,12 @@ class House(Space):
     assert_type(maybe, Boiler | None)
     assert_type(heat_pump.cop, int)
 
-    @view(requires=(costs, matched.same, kitchen.cost))
+    @constraint
+    def matched(self) -> bool:
+        assert_type(self.kitchen.finish, int)
+        return self.kitchen.finish == self.dining.finish
+
+    @view(requires=(costs, matched, kitchen.cost))
     def total(self) -> int:
         assert_type(self.kitchen, Room)
         assert_type(self.kitchen.finish, int)
@@ -288,9 +279,7 @@ class Wing(Space):
     hall = Room()
     hall.area = kitchen.cost  # a view reference supplies a formal, typed int
     study = Room(area=dining.cost)
-    either = Room(area=Present(kitchen.cost, dining.cost))
     assert_type(kitchen.cost, int)
-    assert_type(Present(kitchen.cost, dining.cost), int)
 
     @view(requires=(kitchen.cost, dining.cost))  # view references as obligations
     def total(self) -> int:

@@ -193,7 +193,7 @@ def _source_applies(point: Space, index: int) -> bool | int:
             return holds
     if node.kind == "param":
         return isinstance(_read_result(point, index), Available)  # given at start
-    if node.kind in ("alias", "guard", "locate", "view"):
+    if node.kind in ("alias", "guard", "view"):
         return _source_applies(point, cast(int, node.output))
     if node.kind == "select":
         selector = cast(int, node.selector)

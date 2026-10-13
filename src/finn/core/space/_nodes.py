@@ -26,7 +26,6 @@ from .declarations import (
     Const,
     Decision,
     Declaration,
-    LocatedParam,
     Param,
     PendingAnnotation,
     ValueRef,
@@ -291,11 +290,7 @@ def check_supplier(
     Only formals are supplied: a Decision, a Decision over nodes, a child node and
     behaviour belong to the Space class, and a subclass changes them.
     """
-    if (
-        isinstance(member, Param)
-        and not isinstance(member, LocatedParam)
-        and not _annotated_yet(member)
-    ):
+    if isinstance(member, Param) and not _annotated_yet(member):
         return _pending_supplier(member, value, label)
     kind = slot_kind(member)
     if kind != "param":
@@ -308,10 +303,6 @@ def check_supplier(
         )
     cast(Param[object], member).resolve()
     semantics = cast("ValueSemantics[object] | None", getattr(member, "semantics", None))
-    if isinstance(member, LocatedParam):
-        if isinstance(value, (ValueRef, View)):
-            return value
-        return _freeze_literal(semantics, name, label, value)
     return _value_supplier(semantics, name, value, label)
 
 
@@ -346,8 +337,7 @@ def _record(record: NodeDecl, name: str, supplier: object, origin: str | None, l
     earlier = record.settings.get(name)
     if earlier is not None:
         raise DefinitionError(
-            f"{label}: {name} is already assigned at {earlier[1]}; a body supplies a formal "
-            "once (write alternatives as Present(a, b))"
+            f"{label}: {name} is already assigned at {earlier[1]}; a body supplies a formal once"
         )
     record.settings[name] = (supplier, origin)
 

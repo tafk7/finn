@@ -4,9 +4,8 @@
 """What an authored reference names in a placed scope, as a node of the table.
 
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
-member (``heating.kw``), a projection (``spec.payload_bits``), a presence
-(``Present``), a location (``LocatedParam``) and an integer expression each
-resolve to one node; those that need one get it reserved here, once per scope
+member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
+expression each resolve to one node; those that need one get it reserved here, once per scope
 and source. ``members_candidates`` lists the views ``Members`` reads, named as
 the reading scope sees them.
 """
@@ -24,14 +23,12 @@ from .declarations import (
     ChoiceMemberRef,
     Declaration,
     MemberRef,
-    Present,
     Projection,
     ViewKey,
     at,
 )
 from .errors import DefinitionError, RequestError
 from .expressions import INTEGER_SEMANTICS, Expr
-from .graph import LOCATED, Located
 from .ir import Argument
 from .references import resolve_reference
 from .semantics import ValueSemantics
@@ -44,10 +41,6 @@ def _attribute(name: str) -> Callable[..., object]:
     return attribute
 
 
-def _is_located(semantics: ValueSemantics[object] | None) -> bool:
-    return semantics is not None and semantics.type_token is Located
-
-
 class Names:
     """Resolve references against one table, reserving each derived node once."""
 
@@ -55,25 +48,9 @@ class Names:
         self.table = table
         self.expression_nodes: dict[tuple[int, Expr], int] = {}
         self.expression_counts: dict[str, int] = {}
-        self.present_nodes: dict[tuple[int, Present[object], bool], int] = {}
         self.projections: dict[tuple[int, Projection[object]], int] = {}
-        self.choice_member_nodes: dict[tuple[int, str, bool], int] = {}
+        self.choice_member_nodes: dict[tuple[int, str], int] = {}
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
-
-    def located_name(self, scope: int, path: tuple[Declaration, ...]) -> str:
-        """The node name of a path, relative to the scope that reads it."""
-        names: list[str] = []
-        current = scope
-        for record in path:
-            draft = self.table.drafts[current]
-            if record is draft.record:
-                continue
-            child = draft.children.get(record)
-            if child is None:
-                raise DefinitionError(f"{record.name}: node is not placed in this scope")
-            names.append(self.table.local_name(current, child))
-            current = child
-        return ".".join(names)
 
     def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
         """Each child node's export of ``key``: (its name, the key's name, view)."""
@@ -114,75 +91,7 @@ class Names:
         self.expression_counts[owner] = number + 1
         return number
 
-    def locate(
-        self,
-        scope: int,
-        source: object,
-        *,
-        owner: str,
-        where: str | None = None,
-        member: str | None = None,
-    ) -> int:
-        """Supply a located formal: the member's value with its node and member names."""
-
-        source = unwrap(source)
-        declared = cast("ValueSemantics[object] | None", getattr(source, "semantics", None))
-        if _is_located(declared):
-            return self.reference(scope, source, owner=owner)
-        if isinstance(source, Present) and source.owner is None:
-            return self.present(scope, cast(Present[object], source), owner=owner, locate=True)
-        if isinstance(source, ChoiceMemberRef):
-            return self.choice_member(scope, source, owner=owner, locate=True)
-        if isinstance(source, Expr) and source.owner is None:
-            raise DefinitionError(f"{owner}: an expression has no location to supply")
-        target = self.reference(scope, source, owner=owner)
-        if where is None and member is None:
-            if isinstance(source, MemberRef):
-                where = self.located_name(scope, source.path) or None
-                member = cast(Declaration, unwrap(source.member)).name
-            else:
-                member = self.table.drafts[scope].effective.aliases.get(
-                    cast(Declaration, source), getattr(source, "name", None)
-                )
-        index = self.table.reserve(
-            scope,
-            f"{owner}.$located.{self.fresh_number(owner)}",
-            "locate",
-            cast(ValueSemantics[object], LOCATED),
-            guard=self.table.drafts[scope].guard,
-            source_owner=owner,
-        )
-        self.table.nodes[index] = replace(
-            self.table.nodes[index], output=target, value=(where, member)
-        )
-        return index
-
-    def present(
-        self, scope: int, source: Present[object], *, owner: str, locate: bool = False
-    ) -> int:
-        identity = (scope, source, locate)
-        if identity not in self.present_nodes:
-            index = self.table.reserve(
-                scope,
-                f"{owner}.$present.{self.fresh_number(owner)}",
-                "present",
-                cast(ValueSemantics[object], LOCATED) if locate else source.semantics,
-                guard=self.table.drafts[scope].guard,
-                source_owner=owner,
-            )
-            self.present_nodes[identity] = index
-            self.table.nodes[index] = replace(
-                self.table.nodes[index],
-                alternatives=tuple(
-                    (f"{owner}.{position}", self.supply(scope, item, owner=owner, locate=locate))
-                    for position, item in enumerate(source.sources)
-                ),
-            )
-        return self.present_nodes[identity]
-
-    def choice_member(
-        self, scope: int, source: ChoiceMemberRef, *, owner: str, locate: bool = False
-    ) -> int:
+    def choice_member(self, scope: int, source: ChoiceMemberRef, *, owner: str) -> int:
         """``decision.member``: select the selected candidate's member, by name."""
 
         target = self.descend(scope, source.path[:-1], owner=owner)
@@ -191,9 +100,9 @@ class Names:
         if index is None:
             raise DefinitionError(f"{owner}: the Decision over nodes is not placed here")
         choice = self.table.choice_drafts[index]
-        if not locate and source.member in choice.members:
+        if source.member in choice.members:
             return choice.members[source.member]
-        identity = (choice.index, source.member, locate)
+        identity = (choice.index, source.member)
         cached = self.choice_member_nodes.get(identity)
         if cached is not None:
             return cached
@@ -204,18 +113,8 @@ class Names:
             member = self.table.drafts[child].named_members.get(source.member)
             if member is None:
                 continue
-            if locate:
-                prefix = self.located_name(scope, source.path[:-1])
-                where = self.table.local_name(target, child)
-                member = self.locate(
-                    child,
-                    self.table.drafts[child].effective.members[source.member],
-                    owner=owner,
-                    where=f"{prefix}.{where}" if prefix else where,
-                    member=source.member,
-                )
             alternatives.append((case, member))
-        semantics = cast(ValueSemantics[object], LOCATED) if locate else None
+        semantics: ValueSemantics[object] | None = None
         if not alternatives:
             declared = [
                 effective.semantics.get(effective.members[source.member])
@@ -230,7 +129,7 @@ class Names:
             semantics = semantics or declared[0]
         node = self.table.reserve(
             target,
-            f"{choice.key}.${'located' if locate else 'member'}.{source.member}",
+            f"{choice.key}.$member.{source.member}",
             "select",
             semantics,
             guard=choice.guard,
@@ -240,8 +139,7 @@ class Names:
             self.table.nodes[node], selector=choice.selector, alternatives=tuple(alternatives)
         )
         self.choice_member_nodes[identity] = node
-        if not locate:
-            choice.members[source.member] = node
+        choice.members[source.member] = node
         return node
 
     def descend(self, scope: int, path: Iterable[Declaration], *, owner: str) -> int:
@@ -258,19 +156,10 @@ class Names:
             scope = child
         return scope
 
-    def supply(self, scope: int, source: object, *, owner: str, locate: bool) -> int:
-        return (
-            self.locate(scope, source, owner=owner)
-            if locate
-            else self.reference(scope, source, owner=owner)
-        )
-
     def reference(self, scope: int, source: object, *, owner: str) -> int:
         source = unwrap(source)
         if isinstance(source, Expr) and source.owner is None:
             return self.expression(scope, source, owner=owner)
-        if isinstance(source, Present) and source.owner is None:
-            return self.present(scope, cast(Present[object], source), owner=owner)
         if isinstance(source, Projection):
             return self.projection(scope, source, owner=owner)
         if isinstance(source, ChoiceMemberRef) and source.owner is None:

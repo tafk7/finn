@@ -6,9 +6,9 @@
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a constant, a Decision's domain and its arguments, a callback with
-its arguments, a view's output and obligations, ``Members`` and ``Present``
-alternatives. Guards and integer expressions are linked after every
-member, references resolving through ``_names``.
+its arguments, a view's output and obligations, and ``Members`` entries. Guards
+and integer expressions are linked after every member, references resolving
+through ``_names``.
 """
 
 from __future__ import annotations
@@ -32,11 +32,9 @@ from .declarations import (
     Decision,
     Declaration,
     Derived,
-    LocatedParam,
     MemberRef,
     Members,
     Param,
-    Present,
     Supplied,
     ValueRef,
     View,
@@ -281,10 +279,7 @@ class _Lowering:
         elif type(binding.supplier) is int and task.index in self.table.editable_aliases:
             changes["output"] = binding.supplier
         else:
-            located = isinstance(task.declaration, LocatedParam)
-            changes["output"] = self.names.supply(
-                written, binding.supplier, owner=node.key, locate=located
-            )
+            changes["output"] = self.names.reference(written, binding.supplier, owner=node.key)
         return changes
 
     def declared(
@@ -360,16 +355,6 @@ class _Lowering:
                     (Constraint, ConstraintGroup, View, ValueRef, Members),
                     owner=node.key,
                 ),
-            }
-        if isinstance(declaration, Present):
-            return {
-                "alternatives": tuple(
-                    (
-                        f"{node.key}.{position}",
-                        self.names.reference(scope.index, item, owner=node.key),
-                    )
-                    for position, item in enumerate(declaration.sources)
-                )
             }
         if isinstance(declaration, Members):
             entries = self.names.members_candidates(

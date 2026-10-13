@@ -16,9 +16,9 @@ from finn.core.space import (
     design_space,
     divisors_of,
     domain,
-    finite,
     inspection,
 )
+from finn.core.space.domains import finite
 
 
 class Buffer(Space):

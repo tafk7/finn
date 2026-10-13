@@ -384,13 +384,6 @@ def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         for _, target in node.alternatives:
             answers.append(cast(QueryResult[object], (yield target)))
         return Evaluation(_present(node, answers))
-    if node.kind == "locate":
-        assert node.output is not None
-        answer = cast(QueryResult[object], (yield node.output))
-        if not isinstance(answer, Available):
-            return Evaluation(answer)
-        where, member = cast(tuple[str | None, str], node.value)
-        return Evaluation(Available(Located(where, member, answer.value)))
     assert node.kind == "members"
     # Members: one (node name, export) alternative per entry, with the member
     # name of each entry (the key's name).
@@ -551,7 +544,6 @@ _FRAMES: Mapping[NodeKind, Callable[[Snapshot, Node], _execution.Frame]] = {
     "param": _param_frame,
     "const": _const_frame,
     "present": _graph_frame,
-    "locate": _graph_frame,
     "members": _graph_frame,
     "decision": _decision_frame,
     "alias": _forward_frame,

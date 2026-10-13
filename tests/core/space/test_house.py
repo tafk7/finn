@@ -84,7 +84,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
     )
     refused = point.inspect(House.total)
     results = refused.constraints.results
-    assert codes(results["matched.agreed"]) == {"mismatch"}
+    assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
         finding.message
         for finding in refused.accepted_result.findings  # type: ignore[union-attr]

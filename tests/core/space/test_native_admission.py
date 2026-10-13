@@ -22,7 +22,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    ValueRef,
     ValueSemantics,
     _execution,
     _runtime,
@@ -33,6 +32,7 @@ from finn.core.space import (
     domain,
     inspection,
 )
+from finn.core.space.declarations import ValueRef
 from finn.core.space.occurrence import state
 
 
@@ -267,7 +267,6 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
     starts = state(point).work.callback_starts
     assert inspection.explain(point, Pair.output) == evidence
     assert state(point).work.callback_starts == starts
-    assert inspection.dependencies(point, Pair.output) == ()  # bodies are discovered when read
 
 
 def declare(space_type: type[Space], bindings: Mapping[str, object]) -> Space:

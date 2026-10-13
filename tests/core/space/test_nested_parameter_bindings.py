@@ -253,9 +253,6 @@ def test_assignment_after_freezing_is_refused() -> None:
     assert "assigned at test_nested_parameter_bindings.py:" in str(caught.value)
     point = design_space(Parent(first="INT3", second="INT7"))
     assert old.query(reference) == point.query(reference) == Available("INT3")
-    assert inspection.declaration(Parent.kernel).frozen == "Parent was prepared"
-    with pytest.raises(TypeError):
-        inspection.declaration(Parent.kernel).bindings["count"] = 2  # type: ignore[index]
 
 
 def test_configure_freezes_its_root() -> None:
@@ -273,9 +270,6 @@ def test_a_graph_built_as_data_binds_formals_and_keeps_their_types() -> None:
     child = Reusable(count=1)
     child.dtype = "INT8"
     child.lanes = 2
-    declaration = inspection.declaration(child)
-    assert dict(declaration.bindings) == {"count": 1, "dtype": "INT8", "lanes": 2}
-    assert declaration.unsupplied == () and declaration.frozen is None
     space_type = composite("Parent", {"child": child})
     point = design_space(space_type())
     placed = getattr(point, "child")

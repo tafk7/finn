@@ -48,7 +48,6 @@ from .declarations import (
     MemberRef,
     Members,
     Param,
-    Present,
     Supplied,
     ValueRef,
     View,
@@ -97,8 +96,6 @@ def _declared_kind(declaration: Declaration) -> NodeKind | None:
         return "group"
     if isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
         return "alias"
-    if isinstance(declaration, Present):
-        return "present"
     if isinstance(declaration, Members):
         return "members"
     return None

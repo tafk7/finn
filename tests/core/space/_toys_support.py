@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The space tests' house toy, shared by its own tests and the collapse tests.
 
-The house (``test_house``): rooms, a structural heating choice, a relation node
+The house (``test_house``): rooms, a structural heating choice, a relation of two rooms
 and a budget over every member's cost. Nothing here is about hardware.
 """
 
@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from finn.core.space import (
     Decision,
-    LocatedParam,
     Members,
     Param,
     Rejected,
@@ -66,26 +65,6 @@ class Thermostat(Space):
     exports = {COST: cost}
 
 
-class Match(Space):
-    """A relation node: two located values must agree."""
-
-    a: LocatedParam[int] = LocatedParam()
-    b: LocatedParam[int] = LocatedParam()
-
-    @constraint
-    def same(self) -> bool | Rejected:
-        a, b = self.a, self.b
-        if a.value != b.value:
-            return reject(
-                "mismatch", f"{a.node}.{a.member}={a.value}, {b.node}.{b.member}={b.value}"
-            )
-        return True
-
-    @view(requires=(same,))
-    def agreed(self) -> int:
-        return self.a.value
-
-
 class House(Space):
     budget: int = Param()
     want_garage: bool = Decision(values=(False, True))
@@ -98,8 +77,15 @@ class House(Space):
     heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=24), "heat_pump": heat_pump})
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # an edge declared after its nodes
-    matched = Match(a=kitchen.finish, b=dining.finish)
     costs = Members(COST)
+
+    @constraint
+    def matched(self) -> bool | Rejected:
+        """A relation of two children, the parent's: their finishes agree."""
+        kitchen, dining = self.kitchen.finish, self.dining.finish
+        if kitchen != dining:
+            return reject("mismatch", f"kitchen.finish={kitchen}, dining.finish={dining}")
+        return True
 
     @constraint
     def within_budget(self) -> bool | Rejected:
@@ -108,6 +94,6 @@ class House(Space):
             return reject("over-budget", f"{sum(spent.values())} exceeds {self.budget}")
         return True
 
-    @view(requires=(costs, within_budget, matched.agreed))
+    @view(requires=(costs, within_budget, matched))
     def total(self) -> int:
         return sum(member.value for member in self.costs)

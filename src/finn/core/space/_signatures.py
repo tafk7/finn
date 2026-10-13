@@ -17,7 +17,6 @@ from .declarations import (
     Constraint,
     Derived,
     MemberRef,
-    Present,
     Projection,
     Supplied,
     ValueRef,
@@ -123,7 +122,7 @@ def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> Val
         return cast(ValueRef[object], replacement)
     if isinstance(source, (MemberRef, ChoiceMemberRef)):
         return source
-    if isinstance(source, (Expr, Present, Supplied, CaseRef, Projection)) and source.owner is None:
+    if isinstance(source, (Expr, Supplied, CaseRef, Projection)) and source.owner is None:
         return cast(ValueRef[object], source)
     raise DefinitionError(f"{owner}: dependency is not declared in this effective scope")
 

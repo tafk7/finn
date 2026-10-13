@@ -40,7 +40,7 @@ from typing import (
 
 from .domains import Domain, Requirement, finite, requiring
 from .errors import DefinitionError, ReferenceUseError
-from .graph import LOCATED, Located
+from .graph import Located
 from .results import NonValue, QueryResult, marked_value_type
 from .semantics import (
     BOOL,
@@ -480,35 +480,6 @@ class Param(ValueDecl[T], Generic[T]):
             return project(self, name)
 
 
-class LocatedParam(Param[Located[T]], Generic[T]):
-    """A formal holding a ``Located`` value: ``a: LocatedParam[int] = LocatedParam()``.
-
-    Binding a plain reference supplies its located form: node name, member
-    name and value. Its suppliers are typed as ``T`` and its value as
-    ``Located[T]``, so the annotation names this descriptor rather than the
-    value type (the one exception to annotating a formal with its value type).
-    """
-
-    def __new__(cls, *, required: bool = True) -> LocatedParam[T]:
-        instance = Declaration.__new__(cls)
-        object.__setattr__(instance, "_body", None)
-        instance.explicit = cast("ValueSemantics[Located[T]]", LOCATED)
-        instance.semantics = instance.explicit
-        instance.resolved = True
-        instance.required = required
-        instance.default = MISSING if required else UNSUPPLIED
-        return instance
-
-    def __set__(
-        self,
-        instance: object,
-        value: T | Located[T] | ValueRef[T] | ValueRef[Located[T]] | View[T] | View[Located[T]],
-    ) -> None:
-        from ._nodes import assign
-
-        assign(instance, cast(str, self.name), value)
-
-
 class Const(ValueDecl[T], Generic[T]):
     """A definition-owned frozen value."""
 
@@ -943,7 +914,7 @@ class View(Declaration, Generic[T]):
     that is not accepted raises ``ValueUnavailableError`` carrying its result,
     and inside a method the read blocks like any other); on a node declaration
     ``kitchen.cost`` is a reference to that accepted value, typed ``T``, which
-    supplies a formal, feeds ``Present`` or joins ``requires=`` (where it
+    supplies a formal or joins ``requires=`` (where it
     contributes only its acceptance). Class access, ``House.total``, is the
     declaration itself: pass it to ``point.inspect`` for the assessment and to
     ``point.query`` for the accepted result.
@@ -1427,40 +1398,6 @@ def supplied(formal: object) -> bool:
     return cast(bool, Supplied(cast("Param[object]", formal)))
 
 
-class Present(ValueDecl[T], Generic[T]):
-    """The value of whichever one of ``sources`` is present (applicable).
-
-    Unresolved while any source is unresolved; refused if two are present;
-    unsupplied (unresolved) if none is. Typed as its value, so it may supply a
-    formal (``sink.width = Present(a.out, b.out)``).
-    """
-
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls,
-        *sources: ValueRef[T] | View[T],
-        semantics: ValueSemantics[T] | None = None,
-    ) -> T: ...
-
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls, *sources: T, semantics: ValueSemantics[T] | None = None
-    ) -> T: ...
-
-    def __new__(cls, *sources: object, semantics: object = None) -> Any:
-        if not sources or any(not isinstance(source, (ValueRef, View)) for source in sources):
-            raise DefinitionError("Present requires one or more value references")
-        instance = cast("Present[object]", super().__new__(cls))
-        instance.sources = cast(tuple[ValueRef[object], ...], sources)
-        instance.semantics = cast(
-            "ValueSemantics[object] | None",
-            semantics if semantics is not None else getattr(sources[0], "semantics", None),
-        )
-        return instance
-
-    sources: tuple[ValueRef[T], ...]
-
-
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     """Every present child node exporting ``key``, as ``Located`` values in
     declaration order; as an obligation, each member's acceptance counts.
@@ -1484,11 +1421,9 @@ __all__ = [
     "Decision",
     "Declaration",
     "Derived",
-    "LocatedParam",
     "Members",
     "MemberRef",
     "Param",
-    "Present",
     "Projection",
     "Required",
     "Supplied",
