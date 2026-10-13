@@ -377,4 +377,4 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     assert {held["transport"] for held in channels.values()} == {"direct"}
     root = shell_root(body, body.graph.node)
     assert root.dropped == {}
-    assert Seam(root.members, root.owners).choices(root.point) == ()
+    assert Seam().choices(root.network()) == ()

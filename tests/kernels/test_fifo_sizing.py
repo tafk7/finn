@@ -20,7 +20,7 @@ import pytest
 import finn.kernels.explore as explore_module
 from finn import resources
 from finn.core.rtlsim_bench import simulate as simulate_rtl
-from finn.core.space import Finding, FindingKind, design_space
+from finn.core.space import Finding, FindingKind
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
@@ -46,12 +46,13 @@ from finn.kernels.fifo_sizing import (
     simulate,
 )
 from finn.kernels.input_generator import nest_buffer, nest_geometry
+from finn.kernels.network import Network, dotted
 from finn.toolchain.launcher import host_toolchain
 from kernels import chain
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, keyed
 from kernels.xsim import requires_xsim
 
-MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "second")
+MEMBERS = chain.MEMBERS
 
 
 # -- input_gen's buffer --------------------------------------------------------------------
@@ -191,9 +192,14 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
 # -- a channel's ends, from the paces its ports state -----------------------------------------
 
 
-def _folded() -> tuple[Seam, Any]:
-    explorer = Seam(MEMBERS, platform=FULL_DSP48E2)
-    return explorer, TargetCycles(12).explore(explorer, design_space(chain.Chain()))
+def _folded() -> tuple[Seam, Network]:
+    explorer = Seam(FULL_DSP48E2)
+    return explorer, TargetCycles(12).explore(explorer, chain.network())
+
+
+def chosen(explorer: Seam, network: Network) -> dict[str, object]:
+    """``network``'s stored choices, each by ``member.key``."""
+    return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
 
 def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
@@ -201,12 +207,12 @@ def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
     # cycle after its second lane. activate reads every beat.
-    supply, accept = ends(point.hidden)
+    supply, accept = ends(point.member("hidden"))
     assert supply == Pattern((2, 4, 6, 8, 10, 12), 12)
     assert accept == Pattern(tuple(range(6)), 6)
     # levels: activate's six beats, four lanes a word after its vpc, into second's
     # input_gen, which second reads every beat.
-    supply, accept = ends(point.levels)
+    supply, accept = ends(point.member("levels"))
     assert supply == Pattern((2, 4, 6), 6)
     assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
@@ -215,9 +221,9 @@ def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
 def test_a_boundary_and_a_memory_are_not_modelled() -> None:
     _, point = _folded()
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        ends(point.x)
+        ends(point.member("x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
-        ends(point.w1)
+        ends(point.member("w1"))
 
 
 # -- the strategy ---------------------------------------------------------------------------
@@ -229,16 +235,14 @@ def test_size_fifos_proposes_every_transport_in_one_batch_and_says_why() -> None
     attempts = explorer.attempts
     sized = strategy.explore(explorer, point)
     assert explorer.attempts == attempts + 1
-    transports = {
-        name: getattr(sized, name) for name in MEMBERS if isinstance(getattr(sized, name), Channel)
-    }
+    transports = sized.channels
     assert {
-        key: value for key, value in explorer.chosen(sized).items() if key.endswith(".transport")
+        key: value for key, value in chosen(explorer, sized).items() if key.endswith(".transport")
     } == {f"{name}.transport": "direct" for name in transports}
     # It reopened every transport (each stored direct by the fold's settling) and
     # settled nothing else.
     (_, run) = explorer.runs
-    assert set(run.reopened) == {f"{name}.transport" for name in transports}
+    assert set(run.reopened) == {(name, "transport") for name in transports}
     assert run.kept == run.baselined == {}
     report = strategy.report()
     assert report["period"] == 12 and report["fifo_bits"] == 0
@@ -256,14 +260,14 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
     """No ``before folding`` path: it reads the stored folding (the baseline folding, on a
     point at its baselines); where a member's cycles wait on an open choice, it refuses,
     naming it."""
-    explorer = Seam(MEMBERS, platform=FULL_DSP48E2)
-    point = design_space(chain.Chain())
+    explorer = Seam(FULL_DSP48E2)
+    point = chain.network()
     base = explorer.baseline(point)
     strategy = SizeFifos()
     sized = strategy.explore(explorer, base)
     assert strategy.report()["period"] == explorer.cost(base).bottleneck.cycles  # type: ignore[union-attr]
-    assert {k: v for k, v in explorer.chosen(sized).items() if not k.endswith(".transport")} == {
-        k: v for k, v in explorer.chosen(base).items() if not k.endswith(".transport")
+    assert {k: v for k, v in chosen(explorer, sized).items() if not k.endswith(".transport")} == {
+        k: v for k, v in chosen(explorer, base).items() if not k.endswith(".transport")
     }
     with pytest.raises(
         ExploreError, match="needs every member's cycles: .*first.compute.packed.pe"
@@ -277,18 +281,19 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
     """Every transport not held is reopened, its FIFO's depth and style with it, and
     sized again; a transport held by a pin is not reopened."""
     explorer, point = _folded()
-    placed = explorer.attempt(
-        point, {"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64}
+    placed = explorer.set(
+        point, keyed({"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64})
     )
     assert isinstance(placed, Accepted)
-    sized = SizeFifos().explore(explorer, placed.point)
-    assert explorer.chosen(sized)["levels.transport"] == "direct"
-    assert "levels.transport.fifo.buffer.depth" in explorer.runs[-1].reopened
-    explorer.held["levels.transport"] = "fifo"
-    explorer.held["levels.transport.fifo.buffer.depth"] = 64
-    kept = SizeFifos().explore(explorer, placed.point)
-    assert explorer.chosen(kept)["levels.transport.fifo.buffer.depth"] == 64
-    assert not any(key.startswith("levels.") for key in explorer.runs[-1].reopened)
+    sized = SizeFifos().explore(explorer, placed.network)
+    assert chosen(explorer, sized)["levels.transport"] == "direct"
+    assert ("levels", "transport.fifo.buffer.depth") in explorer.runs[-1].reopened
+    explorer.held.update(
+        keyed({"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64})
+    )
+    kept = SizeFifos().explore(explorer, placed.network)
+    assert chosen(explorer, kept)["levels.transport.fifo.buffer.depth"] == 64
+    assert not any(key[0] == "levels" for key in explorer.runs[-1].reopened)
 
 
 def _hidden_needs_eight(channel: Channel, period: int, **options: Any) -> Sized:
@@ -306,12 +311,12 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
     strategy = SizeFifos()
     found = strategy.explore(explorer, point)
-    chosen = explorer.chosen(found)
-    assert chosen["hidden.transport"] == "fifo"
-    assert chosen["hidden.transport.fifo.buffer.depth"] == 8
+    values = chosen(explorer, found)
+    assert values["hidden.transport"] == "fifo"
+    assert values["hidden.transport.fifo.buffer.depth"] == 8
     # Its style is not proposed: settling gives it its baseline, FinnLib's ``auto``.
-    assert chosen["hidden.transport.fifo.buffer.ram_style"] == "auto"
-    assert explorer.runs[-1].baselined == {"hidden.transport.fifo.buffer.ram_style": "auto"}
+    assert values["hidden.transport.fifo.buffer.ram_style"] == "auto"
+    assert explorer.runs[-1].baselined == {("hidden", "transport.fifo.buffer.ram_style"): "auto"}
     assert strategy.report()["ram_style"] is None
     assert strategy.channels()["hidden"]["bits"] == 8 * 24
     assert strategy.report()["fifo_bits"] == 8 * 24
@@ -319,16 +324,16 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     # refuses itself.
     done = explore(explorer, found, [TargetCycles(12)])
     assert explorer.refusals(done) == {}
-    assert explorer.chosen(done)["hidden.transport.fifo.buffer.depth"] == 8
+    assert chosen(explorer, done)["hidden.transport.fifo.buffer.depth"] == 8
 
 
 def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     explorer, point = _folded()
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
     for style in ("auto", "distributed"):
-        chosen = explorer.chosen(SizeFifos(ram_style=style).explore(explorer, point))
-        assert chosen["hidden.transport.fifo.buffer.depth"] == 8
-        assert chosen["hidden.transport.fifo.buffer.ram_style"] == style
+        values = chosen(explorer, SizeFifos(ram_style=style).explore(explorer, point))
+        assert values["hidden.transport.fifo.buffer.depth"] == 8
+        assert values["hidden.transport.fifo.buffer.ram_style"] == style
 
 
 MARKERS = Finding(
@@ -340,17 +345,17 @@ def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.Mo
     _, point = _folded()
 
     class Refusing(Seam):
-        def attempt(self, point: Any, batch: Any) -> Any:
-            if batch.get("hidden.transport") == "fifo":
+        def set(self, network: Any, changes: Any) -> Any:
+            if changes.get(("hidden", "transport")) == "fifo":
                 self.attempts += 1
-                return Refused({"hidden": (MARKERS,)})
-            return super().attempt(point, batch)
+                return Refused({("hidden", ""): (MARKERS,)})
+            return super().set(network, changes)
 
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
-    refusing = Refusing(MEMBERS, platform=FULL_DSP48E2)
+    refusing = Refusing(FULL_DSP48E2)
     strategy = SizeFifos()
     found = strategy.explore(refusing, point)
-    assert refusing.chosen(found)["hidden.transport"] == "direct"
+    assert chosen(refusing, found)["hidden.transport"] == "direct"
     row = strategy.channels()["hidden"]
     assert row["transport"] == "direct" and row["bits"] == 0
     assert row["why"] == (

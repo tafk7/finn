@@ -940,10 +940,10 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
     members = {name: row["cycles"] for name, row in report["members"].items()}
     assert [name for name, cycles in members.items() if cycles == 196] == [
-        "MultiThreshold_0_out0",
-        "MatMul_0_param0",
         "MultiThreshold_0",
         "MatMul_0",
+        "MultiThreshold_0_out0",
+        "MatMul_0_param0",
     ]
     assert set(report["ends"]) == {"Reshape_0_out0", "MatMul_3_out0"}
 

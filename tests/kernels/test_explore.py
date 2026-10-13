@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The DSE seam over a root: choices, attempts, cost, the operations that keep a point
-complete (baseline, reopen, settle, set), and the strategies that search it.
+"""The DSE seam over a network: choices, changes, cost, the operations that keep a
+network complete (baseline, reopen, settle), and the strategies that search it.
 
 On the Chain (``kernels.chain``: MatMul ``first``, Thresholding ``activate`` at a
 fixed PE, MatMul ``second``; three rows of four), nothing chosen, its platform at
-5 ns. No ONNX: the seam reads a root and its members; owners are the KernelOps'
-(``tests/kernel_ops/test_explore.py``).
+5 ns. No ONNX: the seam reads a network and its members, each key a member and the key
+in its space; owners are the KernelOps' (``tests/kernel_ops/test_explore.py``). A test
+names a key ``member.key`` (``helpers.keyed``).
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from finn.core.space import (
     finding_text,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.channels import Channel, end_of
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
     Accepted,
@@ -46,23 +46,31 @@ from finn.kernels.explore import (
     explore,
 )
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.network import Fact, Interface, Network, dotted, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
-from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
 from kernels import chain
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, Root, view_of
-
-MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "second")
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, keyed
 
 
-def seam() -> tuple[Seam, Any]:
-    return Seam(MEMBERS, platform=FULL_DSP48E2), design_space(chain.Chain())
+def seam() -> tuple[Seam, Network]:
+    return Seam(FULL_DSP48E2), chain.network()
 
 
-def folding(explorer: Seam, point: Any) -> dict[str, object]:
-    """``point``'s stored folding: each PE and SIMD."""
-    return {k: v for k, v in explorer.chosen(point).items() if k.endswith((".pe", ".simd"))}
+def chosen(explorer: Seam, network: Network) -> dict[str, object]:
+    """``network``'s stored choices, each by ``member.key``."""
+    return {dotted(key): value for key, value in explorer.chosen(network).items()}
+
+
+def folding(explorer: Seam, network: Network) -> dict[str, object]:
+    """``network``'s stored folding: each PE and SIMD."""
+    return {k: v for k, v in chosen(explorer, network).items() if k.endswith((".pe", ".simd"))}
+
+
+def offered(explorer: Seam, network: Network) -> dict[str, Any]:
+    """``network``'s open choices, each by ``member.key``."""
+    return {dotted(choice.key): choice for choice in explorer.choices(network)}
 
 
 #: The Chain's foldings at a budget of 12 cycles a frame: PE x SIMD = 4, the earlier axis
@@ -76,15 +84,20 @@ FOLDED_12 = {
 
 
 def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> None:
-    explorer, point = seam()
-    offered = {choice.key: choice for choice in explorer.choices(point)}
-    pe = offered["first.compute.packed.pe"]
+    explorer, network = seam()
+    found = offered(explorer, explorer.baseline(network))
+    first = offered(explorer, network)
+    pe = first["first.compute.packed.pe"]
+    assert pe.key == ("first", "compute.packed.pe")
     assert pe.space_type is PackedDotpKernel and pe.ordered and pe.cases == (1, 2, 4)
-    assert offered["activate.ultra_stages"].space_type is ThresholdingAxiKernel
-    # A list of values states no order; a forced Decision is never a choice.
-    assert not offered["levels.transport"].ordered
-    assert not offered["first.compute.packed.reducer"].ordered
-    assert "first.compute" not in offered and "w1.source" not in offered
+    assert first["activate.ultra_stages"].space_type is ThresholdingAxiKernel
+    assert not first["first.compute.packed.reducer"].ordered
+    # A channel's choices are offered once its ends are known (its kernels folded); a
+    # list of values states no order; a forced Decision is never a choice.
+    assert "levels.transport" not in first
+    level = explorer.reopen(explorer.baseline(network), [("levels", "transport")])[0]
+    assert not offered(explorer, level)["levels.transport"].ordered
+    assert "first.compute" not in found and "w1.source" not in found
 
 
 def said(why: Any) -> str:
@@ -92,39 +105,38 @@ def said(why: Any) -> str:
     return "; ".join(finding_text(finding) for found in why.values() for finding in found)
 
 
-def test_an_attempt_is_refused_for_a_forced_decision_or_a_case_that_is_not_viable() -> None:
+def test_a_change_is_refused_for_a_forced_decision_or_a_case_that_is_not_viable() -> None:
     """The seam's own refusals are findings too, each owned by the key it refuses."""
-    explorer, point = seam()
-    forced = explorer.attempt(point, {"first.compute": "int8_dsp58"})
+    explorer, network = seam()
+    forced = explorer.set(network, keyed({"first.compute": "int8_dsp58"}))
     assert isinstance(forced, Refused)
-    (found,) = forced.why["first.compute"]
+    (found,) = forced.why[("first", "compute")]
     assert (found.kind, found.code, found.owner) == (
         FindingKind.REJECTION,
         "forced",
         "first.compute",
     )
     assert "forced to 'packed'" in found.message
-    three = explorer.attempt(point, {"first.compute.packed.pe": 3})
+    three = explorer.set(network, keyed({"first.compute.packed.pe": 3}))
     assert isinstance(three, Refused)
-    (found,) = three.why["first.compute.packed.pe"]
+    (found,) = three.why[("first", "compute.packed.pe")]
     assert found.code == "case-not-viable" and "3 is not viable" in found.message
-    nowhere = explorer.attempt(point, {"nowhere.pe": 1})
+    nowhere = explorer.set(network, keyed({"nowhere.pe": 1}))
     assert isinstance(nowhere, Refused)
-    assert [f.code for f in nowhere.why["nowhere.pe"]] == ["not-a-decision"]
+    assert [f.code for f in nowhere.why[("nowhere", "pe")]] == ["not-a-decision"]
 
 
-def test_an_attempt_replaces_a_stored_value_but_never_a_held_one() -> None:
-    explorer, point = seam()
-    direct = explorer.attempt(point, {"y.transport": "direct"})
-    assert isinstance(direct, Accepted)
-    fifo = explorer.attempt(direct.point, {"y.transport": "fifo"})
-    assert isinstance(fifo, Accepted) and explorer.chosen(fifo.point) == {"y.transport": "fifo"}
+def test_a_change_replaces_a_stored_value_but_never_a_held_one() -> None:
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    fifo = explorer.set(base, keyed({"y.transport": "fifo"}))
+    assert isinstance(fifo, Accepted) and chosen(explorer, fifo.network)["y.transport"] == "fifo"
     # A key held for the run (a pin) takes no other value.
-    explorer.held["y.transport"] = "direct"
-    held = explorer.attempt(direct.point, {"y.transport": "fifo"})
+    explorer.held[("y", "transport")] = "direct"
+    held = explorer.set(base, keyed({"y.transport": "fifo"}))
     assert isinstance(held, Refused)
     assert held.why == {
-        "y.transport": (
+        ("y", "transport"): (
             Finding(
                 FindingKind.REJECTION,
                 "held",
@@ -133,100 +145,137 @@ def test_an_attempt_replaces_a_stored_value_but_never_a_held_one() -> None:
             ),
         )
     }
-    assert isinstance(explorer.attempt(direct.point, {"y.transport": "direct"}), Accepted)
+    assert isinstance(explorer.set(base, keyed({"y.transport": "direct"})), Accepted)
 
 
-def test_an_attempt_replacing_what_forces_a_choice_may_set_it_in_the_same_batch() -> None:
+def test_a_change_replacing_what_forces_a_choice_may_set_it_in_the_same_batch() -> None:
     """At SIMD 1 pumping is forced off; a batch replacing SIMD by 2 may set it on, and a
     batch that leaves it forced may not."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
-    pumped = {"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True}
-    outcome = explorer.attempt(base, pumped)
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    pumped = keyed({"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True})
+    outcome = explorer.set(base, pumped)
     assert isinstance(outcome, Accepted)
-    assert explorer.chosen(outcome.point)["first.compute.packed.compute_pumping"] is True
-    alone = explorer.attempt(base, {"first.compute.packed.compute_pumping": True})
+    assert chosen(explorer, outcome.network)["first.compute.packed.compute_pumping"] is True
+    alone = explorer.set(base, keyed({"first.compute.packed.compute_pumping": True}))
     assert isinstance(alone, Refused) and "forced to False" in said(alone.why)
 
 
-def test_an_attempt_that_leaves_a_decision_without_a_viable_case_is_refused() -> None:
+def test_a_change_that_leaves_a_decision_without_a_viable_case_is_refused() -> None:
     """Viable is not feasible: a batch can dead-end another Decision, and the seam says
     which and why."""
-    explorer, point = seam()
-    batch = {"first.compute.packed.simd": 1, "first.compute.packed.compute_pumping": True}
-    outcome = explorer.attempt(point, batch)
+    explorer, network = seam()
+    batch = keyed({"first.compute.packed.simd": 1, "first.compute.packed.compute_pumping": True})
+    outcome = explorer.set(network, batch)
     assert isinstance(outcome, Refused)
     assert "dotp-pumping" in said(outcome.why)
-    assert isinstance(explorer.attempt(point, {**batch, "first.compute.packed.simd": 2}), Accepted)
+    simd = keyed({"first.compute.packed.simd": 2})
+    assert isinstance(explorer.set(network, {**batch, **simd}), Accepted)
 
 
 def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> None:
-    explorer, point = seam()
-    batch = {"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16}
-    outcome = explorer.attempt(point, batch)
-    assert isinstance(outcome, Accepted)
-    assert explorer.chosen(outcome.point) == batch
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    batch = keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+    outcome = explorer.set(base, batch)
+    assert isinstance(outcome, Accepted) and not outcome.dropped
+    assert {
+        k: v for k, v in chosen(explorer, outcome.network).items() if k.startswith("hidden.")
+    } == {
+        "hidden.transport": "fifo",
+        "hidden.transport.fifo.buffer.depth": 16,
+    }
     # Alone, the nested choice does not apply: the engine refuses it.
-    alone = explorer.attempt(point, {"hidden.transport.fifo.buffer.depth": 16})
-    assert isinstance(alone, Refused) and list(alone.why) == ["hidden.transport.fifo.buffer.depth"]
+    alone = explorer.set(base, keyed({"hidden.transport.fifo.buffer.depth": 16}))
+    assert isinstance(alone, Refused)
+    assert list(alone.why) == [("hidden", "transport.fifo.buffer.depth")]
 
 
-def test_a_fifo_depth_is_known_by_membership_and_proposed_through_an_attempt() -> None:
-    explorer, point = seam()
-    fifo = explorer.attempt(point, {"levels.transport": "fifo"})
+def test_a_change_drops_what_it_makes_stale_names_it_and_settles_it() -> None:
+    """A FIFO on ``hidden`` with its depth, then ``hidden`` direct: the depth no longer
+    applies, so the change drops it, named with why, and nothing is left open. A held
+    choice is never dropped: the change is refused, naming it."""
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    fifo = explorer.set(
+        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+    )
     assert isinstance(fifo, Accepted)
-    offered = {choice.key: choice for choice in explorer.choices(fifo.point)}
-    depth = offered["levels.transport.fifo.buffer.depth"]
+    direct = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
+    assert isinstance(direct, Accepted)
+    assert set(direct.dropped) == {
+        ("hidden", "transport.fifo.buffer.depth"),
+        ("hidden", "transport.fifo.buffer.ram_style"),
+    } or set(direct.dropped) == {("hidden", "transport.fifo.buffer.depth")}
+    assert "hidden.transport.fifo.buffer.depth" not in chosen(explorer, direct.network)
+    assert explorer.choices(direct.network) == ()
+    explorer.held[("hidden", "transport.fifo.buffer.depth")] = 16
+    refused = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
+    assert isinstance(refused, Refused)
+    (found,) = refused.why[("hidden", "transport.fifo.buffer.depth")]
+    assert found.code == "held" and "dropped by the change" in found.message
+
+
+def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> None:
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
+    assert isinstance(fifo, Accepted)
+    depth = offered(explorer, fifo.network)["levels.transport.fifo.buffer.depth"]
     assert depth.cases is None and depth.ordered and depth.required
-    small = explorer.attempt(fifo.point, {depth.key: 1})
+    small = explorer.set(fifo.network, {depth.key: 1})
     assert isinstance(small, Refused)
     assert "domain-membership" in [finding.code for finding in small.why[depth.key]]
-    sized = explorer.attempt(fifo.point, {depth.key: 16})
+    sized = explorer.set(fifo.network, {depth.key: 16})
     assert isinstance(sized, Accepted)
     # The FIFO sits before the input adapter that makes second's markers, so the
     # channel carries it: folded and settled around it (no transport is a folding
     # strategy's), nothing refuses itself.
-    explored = TargetCycles(12).explore(explorer, sized.point)
+    explored = TargetCycles(12).explore(explorer, sized.network)
     assert explorer.refusals(explored) == {}
     assert explorer.chosen(explored)[depth.key] == 16
-    labels = [stage.label for stage in explored.levels.stages]
+    levels = explored.member("levels")
+    labels = [stage.label for stage in levels.stages]
     assert labels.index("transport.fifo.buffer") < labels.index("adapter.input_gen.input_gen")
-    word = explored.levels.transport.word_bits
+    word = levels.transport.word_bits
     assert explorer.cost(explored).buffering["levels"] >= 16 * word
 
 
 def test_cost_names_what_a_member_waits_on_then_its_cycles_and_the_bottleneck_ties() -> None:
-    explorer, point = seam()
-    cost = explorer.cost(point)
-    assert cost.waiting["first"] == ("first.compute.packed.pe",)
+    explorer, network = seam()
+    cost = explorer.cost(network)
+    assert cost.waiting["first"] == (("first", "compute.packed.pe"),)
+    # A channel whose end waits on its kernel's folding waits on it too.
+    assert cost.waiting["x"] == (("first", "compute.packed.pe"),)
     assert cost.cycles["activate"] == 6  # its PE is the Chain's
     assert cost.bottleneck is None
-    explored = Ranked(Lanes(2)).explore(explorer, point)
+    explored = Ranked(Lanes(2)).explore(explorer, network)
     cost = explorer.cost(explored)
-    assert cost.cycles["first"] == explored.first.compute.schedule.beat_count == 3 * 2 * 2
-    # Every member at the most cycles is named: the activation replays feed the MatMuls
-    # at their pace.
-    assert cost.bottleneck == Bottleneck(("x", "levels", "first", "second"), 12)
+    first = explored.member("first")
+    assert cost.cycles["first"] == first.compute.schedule.beat_count == 3 * 2 * 2
+    # Every member at the most cycles is named, kernels first: the activation replays
+    # feed the MatMuls at their pace.
+    assert cost.bottleneck == Bottleneck(("first", "second", "x", "levels"), 12)
 
 
 def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> None:
-    explorer, point = seam()
+    explorer, network = seam()
     strategy = TargetCycles(12)
-    folded = strategy.explore(explorer, point)
+    folded = strategy.explore(explorer, network)
     # 3 rows x 4 x 4 at 12 cycles: PE x SIMD = 4, the earlier axis least.
     assert folding(explorer, folded) == FOLDED_12
-    # The point is settled: every other choice at its baseline, none open.
+    # The network is settled: every other choice at its baseline, none open.
     assert explorer.choices(folded) == ()
     # At SIMD 4, each MatMul's pumping is a choice: its baseline, off.
-    assert explorer.chosen(folded) == {
-        **explorer.chosen(explorer.baseline(point)),
+    assert chosen(explorer, folded) == {
+        **chosen(explorer, explorer.baseline(network)),
         **FOLDED_12,
         "first.compute.packed.compute_pumping": False,
         "second.compute.packed.compute_pumping": False,
     }
     report = strategy.report()
     assert report["bottleneck"] == {
-        "members": ["x", "hidden", "levels", "first", "second"],
+        "members": ["first", "second", "x", "hidden", "levels"],
         "cycles": 12,
     }
     assert (report["bottleneck_of"], report["met"], report["unfolded"]) == ("folded", True, {})
@@ -236,18 +285,18 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
 
 
 def test_a_budget_no_member_meets_is_relaxed_to_the_bottleneck_reached() -> None:
-    explorer, point = seam()
+    explorer, network = seam()
     strategy = TargetCycles(1)
-    folded = explore(explorer, point, [strategy])
+    folded = explore(explorer, network, [strategy])
     # The activation's fixed PE takes 6 cycles: the MatMuls fold to meet that, no faster.
     assert strategy.relaxed_to == 6
-    chosen = explorer.chosen(folded)
-    assert chosen["first.compute.packed.pe"] == 2 and chosen["first.compute.packed.simd"] == 4
+    values = chosen(explorer, folded)
+    assert values["first.compute.packed.pe"] == 2 and values["first.compute.packed.simd"] == 4
     assert explorer.cost(folded).bottleneck == Bottleneck(
-        ("x", "levels", "first", "activate", "second"), 6
+        ("first", "activate", "second", "x", "levels"), 6
     )
     unrelaxed = TargetCycles(1, relax=False)
-    assert explorer.chosen(unrelaxed.explore(explorer, point))["first.compute.packed.pe"] == 4
+    assert chosen(explorer, unrelaxed.explore(explorer, network))["first.compute.packed.pe"] == 4
     # A miss is stated: the bottleneck reached and that it does not meet the budget.
     report = unrelaxed.report()
     assert report["bottleneck"]["cycles"] == 6  # type: ignore[index]
@@ -260,21 +309,21 @@ def test_target_cycles_states_the_bottleneck_of_the_settled_point_where_it_leave
     None
 ):
     """A member whose cycles wait on a choice that is not its own is left to settling;
-    the report still states the bottleneck, of the point settled, and whether it meets
+    the report still states the bottleneck, of the network settled, and whether it meets
     the budget."""
 
     class Partial(TargetCycles):
-        def _fold(self, seam: Seam, point: Any, name: str, budget: int) -> Any:
+        def _fold(self, seam: Seam, network: Any, name: str, budget: int) -> Any:
             if name == "second":
-                return explore_module._Folded(None, point, "left by the test")
-            return super()._fold(seam, point, name, budget)
+                return explore_module._Folded(None, network, "left by the test")
+            return super()._fold(seam, network, name, budget)
 
-    explorer, point = seam()
+    explorer, network = seam()
     strategy = Partial(12)
-    folded = strategy.explore(explorer, point)
+    folded = strategy.explore(explorer, network)
     # Settled: second at its baseline, the least parallelism.
-    assert explorer.chosen(folded)["second.compute.packed.pe"] == 1
-    assert explorer.chosen(folded)["second.compute.packed.simd"] == 1
+    assert chosen(explorer, folded)["second.compute.packed.pe"] == 1
+    assert chosen(explorer, folded)["second.compute.packed.simd"] == 1
     report = strategy.report()
     # second, and the channels whose cycles wait on its folding.
     unfolded = report["unfolded"]
@@ -286,22 +335,13 @@ def test_target_cycles_states_the_bottleneck_of_the_settled_point_where_it_leave
     assert (report["bottleneck_of"], report["met"]) == ("settled", False)
 
 
-def dsp58_matmul() -> tuple[Seam, Any]:
+def dsp58_matmul() -> tuple[Seam, Network]:
     """The Chain's first MatMul alone, on a DSP58 platform: its core an open choice."""
 
     x_tensor = Tensor((chain.ROWS, chain.INPUTS), ScalarEncoding(chain.A))
 
-    class Single(Root):
-        y_tensor = view_of("first", "result_tensor")
-        w_tensor = view_of("first", "w_carried")
-        w_contents: IntegerTensor = view_of("first", "w_stored", INTEGER_TENSOR)
-        x_end = end_of("first", "x_end")
-        w_end = end_of("first", "w_end")
-        y_end = end_of("first", "y_end")
-        x = Channel(platform=FULL_DSP58, tensor=x_tensor, port="s_axis_0", consumer=x_end)
-        w = Channel(tensor=w_tensor, contents=w_contents, consumer=w_end, platform=FULL_DSP58)
-        y = Channel(tensor=y_tensor, port="m_axis_0", producer=y_end, platform=FULL_DSP58)
-        first = MatMulKernel(
+    def first(**tensors: Any) -> MatMulKernel:
+        return MatMulKernel(
             m=chain.ROWS,
             n=chain.HIDDEN,
             k=chain.INPUTS,
@@ -309,11 +349,35 @@ def dsp58_matmul() -> tuple[Seam, Any]:
             weights_dtype=chain.W,
             platform=FULL_DSP58,
             x_tensor=x_tensor,
-            y_tensor=y_tensor,
             w_contents=chain.W1,
+            **tensors,
         )
 
-    return Seam(("x", "w", "y", "first"), platform=FULL_DSP58), design_space(Single())
+    y_tensor = design_space(first()).result_tensor
+    network = Network(
+        {
+            "x": wire(
+                platform=FULL_DSP58,
+                tensor=x_tensor,
+                port="s_axis_0",
+                consumer=Interface("first", "x_end"),
+            ),
+            "w": wire(
+                tensor=Fact("first", "w_carried"),
+                contents=Fact("first", "w_stored"),
+                consumer=Interface("first", "w_end"),
+                platform=FULL_DSP58,
+            ),
+            "y": wire(
+                tensor=y_tensor,
+                port="m_axis_0",
+                producer=Interface("first", "y_end"),
+                platform=FULL_DSP58,
+            ),
+            "first": first(y_tensor=y_tensor),
+        }
+    )
+    return Seam(FULL_DSP58), network
 
 
 def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on() -> None:
@@ -321,18 +385,18 @@ def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on
     ``int8_dsp58``) its cycles wait on. Each case is folded, and the case kept meets the
     budget with the least parallelism, then the fewest resources; no order is imposed
     on the cases, and the report names the case taken and why."""
-    explorer, point = dsp58_matmul()
-    offered = {choice.key: choice for choice in explorer.choices(point)}
-    assert not offered["first.compute"].ordered
-    assert set(offered["first.compute"].cases or ()) == {"packed", "int8_dsp58"}
+    explorer, network = dsp58_matmul()
+    compute = offered(explorer, network)["first.compute"]
+    assert not compute.ordered and set(compute.cases or ()) == {"packed", "int8_dsp58"}
     strategy = TargetCycles(6)
-    folded = strategy.explore(explorer, point)
+    folded = strategy.explore(explorer, network)
     report = strategy.report()
     assert (report["met"], report["unfolded"]) == (True, {})
     (row,) = report["cases"].values()  # type: ignore[attr-defined]
+    assert list(report["cases"]) == ["first.compute"]  # type: ignore[call-overload]
     taken = row["taken"]
-    assert explorer.chosen(folded)["first.compute"] == taken
-    assert explorer.chosen(folded)[f"first.compute.{taken}.simd"]
+    assert chosen(explorer, folded)["first.compute"] == taken
+    assert chosen(explorer, folded)[f"first.compute.{taken}.simd"]
     folds = row["folded"]
     assert set(folds) == {"packed", "int8_dsp58"} and row["refused"] == {}
     # Both cores fold to the most cycles within 6; tied, the lighter by dominance is kept.
@@ -347,7 +411,8 @@ def test_target_cycles_folds_each_case_of_an_unordered_choice_its_cycles_wait_on
     assert all(
         getattr(used[taken], name) <= getattr(used[other], name) for name in RESOURCE_NAMES
     ) or ("listing order" in row["why"])
-    # What it compared is the member settled in each case; the point it returns is settled.
+    # What it compared is the member settled in each case; the network it returns is
+    # settled.
     assert explorer.choices(folded) == ()
 
 
@@ -356,195 +421,211 @@ def test_target_cycles_keeps_the_case_with_the_least_parallelism_that_meets_the_
 ) -> None:
     """Cycles come first: where one case meets the budget at more cycles than another, it
     is kept whatever it uses; where no case meets it, the fewest cycles."""
-    explorer, point = dsp58_matmul()
+    explorer, network = dsp58_matmul()
     cost = Seam.cost
 
     def slower_int8(self: Seam, at: Any, members: Any = None) -> Any:
         found = cost(self, at, members)
-        if "first" in found.cycles and self.chosen(at).get("first.compute") == "int8_dsp58":
+        if "first" in found.cycles and self.chosen(at).get(("first", "compute")) == "int8_dsp58":
             found.cycles = {**found.cycles, "first": found.cycles["first"] + 1}
         return found
 
     monkeypatch.setattr(Seam, "cost", slower_int8)
     strategy = TargetCycles(12)
-    strategy.explore(explorer, point)
+    strategy.explore(explorer, network)
     (row,) = strategy.report()["cases"].values()  # type: ignore[attr-defined]
     folds = {case: each["cycles"] for case, each in row["folded"].items()}
     assert row["taken"] == max(folds, key=folds.__getitem__) and "least parallelism" in row["why"]
     assert all("resources" not in each for each in row["folded"].values())
     missed = TargetCycles(1, relax=False)
-    missed.explore(explorer, point)
+    missed.explore(explorer, network)
     (row,) = missed.report()["cases"].values()  # type: ignore[attr-defined]
     assert row["taken"] == "packed" and row["why"].startswith("no case meets the budget of 1")
     assert missed.report()["met"] is False
 
 
 def test_a_target_throughput_is_a_cycles_budget_at_the_platform_s_clock() -> None:
-    explorer, point = seam()
+    explorer, network = seam()
     # 5 ns: 1e9 / (5 x 16,666,666) frames a second leaves 12 cycles a frame.
     strategy = TargetThroughput(16_666_666)
-    folded = strategy.explore(explorer, point)
+    folded = strategy.explore(explorer, network)
     assert strategy.cycles == 12
-    assert explorer.chosen(folded) == explorer.chosen(TargetCycles(12).explore(explorer, point))
+    assert explorer.chosen(folded) == explorer.chosen(TargetCycles(12).explore(explorer, network))
     assert strategy.report()["fps"] == 16_666_666
     with pytest.raises(ExploreError, match="needs the seam's platform"):
-        TargetThroughput(1000).explore(Seam(MEMBERS), point)
+        TargetThroughput(1000).explore(Seam(), network)
 
 
-# -- keeping a point complete -------------------------------------------------------------
+# -- keeping a network complete -------------------------------------------------------------
 
 
 def test_the_baseline_takes_each_open_choice_s_first_viable_case_and_leaves_required_ones() -> None:
     """``Seam.baseline`` stores each kernel's first case, every transport ``direct``; a
     required choice stays open."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
-    values = explorer.chosen(base)
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    values = chosen(explorer, base)
     assert values["first.compute.packed.pe"] == 1
     assert values["first.compute.packed.reducer"] == "tree"
     assert {value for key, value in values.items() if key.endswith("transport")} == {"direct"}
     assert explorer.choices(base) == () and explorer.cost(base).bottleneck is not None
-    fifo = explorer.attempt(base, {"levels.transport": "fifo"})
+    fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
-    assert [(c.key, c.required) for c in explorer.choices(explorer.baseline(fifo.point))] == [
-        ("levels.transport.fifo.buffer.depth", True)
+    assert [(c.key, c.required) for c in explorer.choices(explorer.baseline(fifo.network))] == [
+        (("levels", "transport.fifo.buffer.depth"), True)
     ]
 
 
-def test_reopen_widens_the_clear_to_the_stored_choices_the_engine_names() -> None:
-    """Clearing a MatMul's folding leaves its input channel's adapter memory unresolved:
-    the engine refuses the clear naming it, and the reopen clears it too. Nothing
-    outside the reach is touched."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
-    opened, reach = explorer.reopen(base, ["first.compute.packed.pe"])
-    assert reach == ("first.compute.packed.pe", "x.adapter.input_gen.input_gen.ram_style")
+def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel() -> None:
+    """Clearing a MatMul's folding leaves its channels' ends open: they wait, their
+    stored choices with them, and come back when the folding does. Within a member, what
+    the engine names is cleared too. Nothing outside the reach is touched."""
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    opened, reach = explorer.reopen(base, [("first", "compute.packed.pe")])
+    assert reach == (("first", "compute.packed.pe"),)
     assert set(explorer.chosen(base)) - set(explorer.chosen(opened)) == set(reach)
+    held = opened.unbound("x")
+    assert held is not None and held.stored == {
+        key[1]: value for key, value in explorer.chosen(base).items() if key[0] == "x"
+    }
+    # The folding back, the channel is bound again, its choices replayed.
+    again = explorer.set(opened, keyed({"first.compute.packed.pe": 1}))
+    assert isinstance(again, Accepted) and not again.dropped
+    assert explorer.chosen(again.network) == explorer.chosen(base)
     # A key not stored is nothing to reopen.
-    assert explorer.reopen(point, ["first.compute.packed.pe"]) == (point, ())
+    assert explorer.reopen(network, [("first", "compute.packed.pe")]) == (network, ())
     # A selector's nested choices are the engine's to name too.
-    sized = explorer.attempt(
-        base, {"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16}
+    sized = explorer.set(
+        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
     )
     assert isinstance(sized, Accepted)
-    _, reach = explorer.reopen(sized.point, ["hidden.transport"])
-    assert "hidden.transport.fifo.buffer.depth" in reach
+    _, reach = explorer.reopen(sized.network, [("hidden", "transport")])
+    assert ("hidden", "transport.fifo.buffer.depth") in reach
 
 
 def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest() -> None:
-    explorer, point = seam()
+    explorer, network = seam()
     prior = {
-        **explorer.chosen(explorer.baseline(point)),
-        "first.compute.packed.reducer": "compressor",
-        "second.compute.packed.pe": 3,  # no divisor of four: not viable
+        **explorer.chosen(explorer.baseline(network)),
+        **keyed(
+            {
+                "first.compute.packed.reducer": "compressor",
+                "second.compute.packed.pe": 3,  # no divisor of four: not viable
+            }
+        ),
     }
-    settled = explorer.settle(point, prior)
-    chosen = explorer.chosen(settled)
-    assert chosen["first.compute.packed.reducer"] == "compressor"
-    assert chosen["second.compute.packed.pe"] == 1  # its baseline
+    settled = explorer.settle(network, prior)
+    values = chosen(explorer, settled)
+    assert values["first.compute.packed.reducer"] == "compressor"
+    assert values["second.compute.packed.pe"] == 1  # its baseline
     assert explorer.choices(settled) == ()
     # Only the members named, where named.
-    first = explorer.settle(point, prior, ("first",))
-    assert {explorer.member_of(key) for key in explorer.chosen(first)} == {"first"}
+    first = explorer.settle(network, prior, ("first",))
+    assert {key[0] for key in explorer.chosen(first)} == {"first"}
 
 
-def test_set_clears_a_stored_choice_the_change_makes_invalid_then_settles() -> None:
-    """Pumping on at SIMD 2, then SIMD replaced by 1: the engine refuses the attempt,
-    naming the pumping choice; ``set`` clears it with the change, and settling finds it
-    forced off, nothing to store."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
+def test_set_drops_a_stored_choice_the_change_makes_invalid_then_settles() -> None:
+    """Pumping on at SIMD 2, then SIMD replaced by 1: the engine refuses the change
+    beside the pumping choice; ``set`` drops it, named, and settling finds it forced off,
+    nothing to store."""
+    explorer, network = seam()
+    base = explorer.baseline(network)
     pumped = explorer.set(
-        base, {"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True}
+        base, keyed({"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True})
     )
     assert isinstance(pumped, Accepted)
-    refused = explorer.attempt(pumped.point, {"first.compute.packed.simd": 1})
-    assert isinstance(refused, Refused)
-    assert "pumping requires SIMD >= 2" in said(
-        {key: why for key, why in refused.why.items() if key.endswith("compute_pumping")}
-    )
-    replaced = explorer.set(pumped.point, {"first.compute.packed.simd": 1})
+    replaced = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
     assert isinstance(replaced, Accepted)
-    chosen = explorer.chosen(replaced.point)
-    assert chosen["first.compute.packed.simd"] == 1
-    assert "first.compute.packed.compute_pumping" not in chosen
-    assert explorer.choices(replaced.point) == ()
+    (pumping,) = [key for key in replaced.dropped if key[1].endswith("compute_pumping")]
+    assert "pumping requires SIMD >= 2" in said({pumping: replaced.dropped[pumping]})
+    values = chosen(explorer, replaced.network)
+    assert values["first.compute.packed.simd"] == 1
+    assert "first.compute.packed.compute_pumping" not in values
+    assert explorer.choices(replaced.network) == ()
     # A change of the change's own key that is not taken is refused.
-    assert isinstance(explorer.set(base, {"first.compute.packed.pe": 3}), Refused)
+    assert isinstance(explorer.set(base, keyed({"first.compute.packed.pe": 3})), Refused)
 
 
-def test_a_held_choice_a_change_reaches_must_settle_back_or_the_change_is_refused() -> None:
-    explorer, point = seam()
+def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
+    explorer, network = seam()
     pumped = explorer.set(
-        explorer.baseline(point),
-        {"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True},
+        explorer.baseline(network),
+        keyed({"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True}),
     )
     assert isinstance(pumped, Accepted)
-    explorer.held["first.compute.packed.compute_pumping"] = True
-    refused = explorer.set(pumped.point, {"first.compute.packed.simd": 1})
+    pumping = ("first", "compute.packed.compute_pumping")
+    explorer.held[pumping] = True
+    refused = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
     assert isinstance(refused, Refused)
     ((key, (found,)),) = refused.why.items()
-    assert (key, found.code, found.owner) == ("first.compute.packed.compute_pumping", "held", key)
-    assert found.message == "held to True by a pin, now False after the change"
-    # Reached and still viable, it comes back: SIMD 4 keeps pumping viable.
-    kept = explorer.set(pumped.point, {"first.compute.packed.simd": 4})
+    assert (key, found.code, found.owner) == (
+        pumping,
+        "held",
+        "first.compute.packed.compute_pumping",
+    )
+    assert found.message.startswith("held to True by a pin, dropped by the change: ")
+    assert "pumping requires SIMD >= 2" in found.message
+    # Not reached, it stays: SIMD 4 keeps pumping viable.
+    kept = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 4}))
     assert isinstance(kept, Accepted)
-    assert explorer.chosen(kept.point)["first.compute.packed.compute_pumping"] is True
+    assert explorer.chosen(kept.network)[pumping] is True
+    opened = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])[0]
     with pytest.raises(Unsettled, match="compute_pumping: held to True"):
-        explorer.settle(explorer.reopen(pumped.point, ["first.compute.packed.simd"])[0], {})
+        explorer.settle(opened, {})
 
 
 def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> None:
     """A strategy changes only what it decides: a reducer an earlier strategy set stays,
     though the folding strategy reopens every choice of a member; the run records what
-    it reopened (the engine's reach included) and what settling kept and re-baselined."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
-    compressor = explorer.set(base, {"second.compute.packed.reducer": "compressor"})
+    it reopened and what settling kept and re-baselined."""
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    compressor = explorer.set(base, keyed({"second.compute.packed.reducer": "compressor"}))
     assert isinstance(compressor, Accepted)
-    folded = TargetCycles(12).explore(explorer, compressor.point)
-    chosen = explorer.chosen(folded)
-    assert chosen["second.compute.packed.reducer"] == "compressor"
+    folded = TargetCycles(12).explore(explorer, compressor.network)
+    values = chosen(explorer, folded)
+    assert values["second.compute.packed.reducer"] == "compressor"
     assert folding(explorer, folded) == FOLDED_12
     (run,) = explorer.runs
     assert run.strategy == "target_cycles"
-    assert "second.compute.packed.reducer" in run.reopened
-    assert "levels.adapter.input_gen.input_gen.ram_style" in run.reopened
-    assert not any(key.endswith(".transport") for key in run.reopened)
-    assert run.kept["second.compute.packed.reducer"] == "compressor"
-    assert set(run.kept) | set(run.baselined) <= set(run.reopened) | set(chosen)
-    # Again on the folded point: the same folding, nothing new.
+    assert ("second", "compute.packed.reducer") in run.reopened
+    assert ("levels", "adapter.input_gen.input_gen.ram_style") in run.reopened
+    assert not any(key[1].endswith("transport") for key in run.reopened)
+    assert run.kept[("second", "compute.packed.reducer")] == "compressor"
+    assert set(run.kept) | set(run.baselined) <= set(run.reopened) | set(explorer.chosen(folded))
+    # Again on the folded network: the same folding, nothing new.
     again = TargetCycles(12).explore(explorer, folded)
-    assert explorer.chosen(again) == chosen
+    assert explorer.chosen(again) == explorer.chosen(folded)
 
 
 def test_a_pin_holds_its_keys_and_a_later_strategy_folds_around_it() -> None:
     """Pinned first and held (SR6): the target throughput folds the other MatMul and
     keeps the pinned one; its relax step reaches the pin's bottleneck."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
-    explorer.held.update({"first.compute.packed.pe": 1, "first.compute.packed.simd": 1})
+    explorer, network = seam()
+    base = explorer.baseline(network)
+    explorer.held.update(keyed({"first.compute.packed.pe": 1, "first.compute.packed.simd": 1}))
     strategy = TargetCycles(1)
     folded = strategy.explore(explorer, base)
-    chosen = explorer.chosen(folded)
-    assert (chosen["first.compute.packed.pe"], chosen["first.compute.packed.simd"]) == (1, 1)
+    values = chosen(explorer, folded)
+    assert (values["first.compute.packed.pe"], values["first.compute.packed.simd"]) == (1, 1)
     # first at 48 cycles binds: second folds to meet it, no faster.
     assert strategy.relaxed_to == 48
-    assert (chosen["second.compute.packed.pe"], chosen["second.compute.packed.simd"]) == (1, 1)
-    assert "first.compute.packed.pe" not in explorer.runs[-1].reopened
+    assert (values["second.compute.packed.pe"], values["second.compute.packed.simd"]) == (1, 1)
+    assert ("first", "compute.packed.pe") not in explorer.runs[-1].reopened
 
 
 def test_the_baseline_strategy_resets_every_choice_not_held() -> None:
-    explorer, point = seam()
-    folded = TargetCycles(12).explore(explorer, explorer.baseline(point))
-    explorer.held["first.compute.packed.simd"] = 4
+    explorer, network = seam()
+    folded = TargetCycles(12).explore(explorer, explorer.baseline(network))
+    explorer.held[("first", "compute.packed.simd")] = 4
     reset = Rebaseline().explore(explorer, folded)
     assert folding(explorer, reset) == {
         **{key: 1 for key in FOLDED_12},
         "first.compute.packed.simd": 4,
     }
-    assert explorer.chosen(reset) == {
-        **explorer.chosen(explorer.baseline(point)),
+    assert chosen(explorer, reset) == {
+        **chosen(explorer, explorer.baseline(network)),
         "first.compute.packed.simd": 4,
     }
     assert Rebaseline().report() == {"strategy": "baseline"}
@@ -553,16 +634,16 @@ def test_the_baseline_strategy_resets_every_choice_not_held() -> None:
 def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_it() -> None:
     """With nothing required open it sets nothing; a FIFO with no depth is a required
     choice known by membership only, which it refuses, named."""
-    explorer, point = seam()
-    base = explorer.baseline(point)
+    explorer, network = seam()
+    base = explorer.baseline(network)
     placeholder = DebugPlaceholder()
     assert explorer.chosen(placeholder.explore(explorer, base)) == explorer.chosen(base)
     assert placeholder.report() == {"strategy": "placeholder", "set": {}}
     assert placeholder.label == "DEBUG: set by placeholder"
-    fifo = explorer.attempt(base, {"levels.transport": "fifo"})
+    fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
     with pytest.raises(ExploreError, match="known by membership only: .*levels.transport.fifo"):
-        DebugPlaceholder().explore(explorer, fifo.point)
+        DebugPlaceholder().explore(explorer, fifo.network)
 
 
 # -- the most throughput within resources -----------------------------------------------------
@@ -573,25 +654,25 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
 PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, uram=0, dsp=10))
 
 
-def within_part() -> tuple[Seam, Any]:
-    return Seam(MEMBERS, platform=PART), design_space(chain.Chain())
+def within_part() -> tuple[Seam, Network]:
+    return Seam(PART), chain.network()
 
 
-def test_the_seam_states_the_root_s_own_resources_once_its_members_do() -> None:
-    explorer, point = within_part()
-    waiting = explorer.resources(point)
+def test_the_seam_states_the_network_s_resources_once_its_members_do() -> None:
+    explorer, network = within_part()
+    waiting = explorer.resources(network)
     # Not yet: why, its findings (the open choices it waits on).
     assert isinstance(waiting, tuple) and waiting
     assert {finding.code for finding in waiting} == {"decision-unassigned"}
-    base = explorer.baseline(point)
+    base = explorer.baseline(network)
     used = explorer.cost(base).used
     assert used is not None and explorer.resources(base) == Stated(used, {})
 
 
 def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
-    explorer, point = within_part()
+    explorer, network = within_part()
     strategy = MaxThroughput({"dsp": 0.5})
-    folded = strategy.explore(explorer, point)
+    folded = strategy.explore(explorer, network)
     # Half the part's 10 DSPs: the 6- and 12-cycle points use 8, the 24-cycle one 4.
     assert folding(explorer, folded) == {
         "first.compute.packed.pe": 1,
@@ -599,11 +680,11 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
         "second.compute.packed.pe": 1,
         "second.compute.packed.simd": 2,
     }
-    # The point is returned settled, as it was costed.
+    # The network is returned settled, as it was costed.
     assert explorer.choices(folded) == ()
     report = strategy.report()
     assert report["budget"] == {"dsp": 5} and report["kept_budget"] is not None
-    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
+    assert report["bottleneck"] == {"members": ["first", "second", "x", "levels"], "cycles": 24}
     assert (report["lower_bound"], report["unstated"]) == (False, {})
     assert report["used"] == asdict(Resources(lut=331, ff=380, dsp=4))
     assert report["ratio"] == {"dsp": 0.8} and report["binding"] == "dsp" and report["fits"]
@@ -619,17 +700,17 @@ def test_max_throughput_keeps_the_least_budget_whose_point_fits() -> None:
 
 def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_point_once() -> None:
     """The search's folds share what they ask of the seam: each budget tried folds to the
-    point ``TargetCycles`` alone folds it to, and its bottleneck and resources are those
-    of that point settled, in fewer attempts than folding and settling each alone."""
-    explorer, point = within_part()
+    network ``TargetCycles`` alone folds it to, and its bottleneck and resources are those
+    of that network settled, in fewer changes than folding and settling each alone."""
+    explorer, network = within_part()
     strategy = MaxThroughput({"dsp": 0.5})
-    strategy.explore(explorer, point)
+    strategy.explore(explorer, network)
     searched = explorer.attempts
-    alone = Seam(MEMBERS, platform=PART)
+    alone = Seam(PART)
     for tried in strategy.tried:
         budget = explore_module._UNBOUNDED if tried.cycles is None else tried.cycles
         folder = TargetCycles(budget)
-        folded = folder.explore(alone, point)
+        folded = folder.explore(alone, network)
         assert explorer.chosen(explorer.settle(tried.folded, {})) == alone.chosen(folded)
         assert tried.relaxed_to == folder.relaxed_to
         assert tried.reached == alone.cost(folded).bottleneck
@@ -638,10 +719,10 @@ def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_poi
 
 
 def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> None:
-    explorer, point = within_part()
+    explorer, network = within_part()
     # The fastest point fits both budgets: one fold, LUT the nearer its budget.
     both = MaxThroughput({"lut": 0.5, "dsp": 1.0})
-    both.explore(explorer, point)
+    both.explore(explorer, network)
     report = both.report()
     assert report["ratio"] == {"lut": 0.964, "dsp": 0.8} and report["binding"] == "lut"
     assert [tried.cycles for tried in both.tried] == [1]
@@ -650,10 +731,10 @@ def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> 
 def test_max_throughput_states_and_keeps_the_least_parallelism_where_nothing_fits() -> None:
     """Never a refusal and never a Python warning (RC5): a ``resource-budget``
     limitation, in its ``findings`` and its report, naming the binding resource."""
-    explorer, point = within_part()
+    explorer, network = within_part()
     strategy = MaxThroughput({"dsp": 0.1, "lut": 1.0})
-    folded = strategy.explore(explorer, point)
-    assert explorer.chosen(folded)["first.compute.packed.simd"] == 1
+    folded = strategy.explore(explorer, network)
+    assert chosen(explorer, folded)["first.compute.packed.simd"] == 1
     (found,) = strategy.findings
     assert (found.kind, found.code, found.owner) == (
         FindingKind.LIMITATION,
@@ -679,20 +760,20 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     least budget that fits, 13, at 48."""
 
     class Departing(TargetCycles):
-        def _fold_all(self, seam: Seam, point: Any, budget: int) -> Any:
-            return super()._fold_all(seam, point, 48 if 13 <= budget < 24 else budget)
+        def _fold_all(self, seam: Seam, network: Any, budget: int) -> Any:
+            return super()._fold_all(seam, network, 48 if 13 <= budget < 24 else budget)
 
     monkeypatch.setattr(explore_module, "TargetCycles", Departing)
-    explorer, point = within_part()
+    explorer, network = within_part()
     strategy = MaxThroughput({"dsp": 0.5})
-    strategy.explore(explorer, point)
+    strategy.explore(explorer, network)
     report = strategy.report()
     tried = report["tried"]
     assert isinstance(tried, list)
     assert [row["cycles"] for row in tried] == [1, None, 27, 17, 12, 15, 14, 13]
     assert [row["bottleneck"] for row in tried if row["cycles"] == 13] == [48]
     assert report["kept_budget"] == 27
-    assert report["bottleneck"] == {"members": ["x", "levels", "first", "second"], "cycles": 24}
+    assert report["bottleneck"] == {"members": ["first", "second", "x", "levels"], "cycles": 24}
     assert report["used"] == asdict(Resources(lut=331, ff=380, dsp=4)) and report["fits"]
     assert not report["monotone"]
     departures = report["departures"]
@@ -709,15 +790,15 @@ def test_max_throughput_keeps_the_tie_on_cycles_that_uses_the_least(
     cycles: 24 cycles still, at 6 DSPs where budget 27's point uses 4."""
 
     class Heavier(TargetCycles):
-        def _fold(self, seam: Seam, point: Any, name: str, budget: int) -> Any:
+        def _fold(self, seam: Seam, network: Any, name: str, budget: int) -> Any:
             return super()._fold(
-                seam, point, name, 6 if (name, budget) == ("second", 24) else budget
+                seam, network, name, 6 if (name, budget) == ("second", 24) else budget
             )
 
     monkeypatch.setattr(explore_module, "TargetCycles", Heavier)
-    explorer, point = within_part()
+    explorer, network = within_part()
     strategy = MaxThroughput({"dsp": 0.6})
-    strategy.explore(explorer, point)
+    strategy.explore(explorer, network)
     rows = {row.cycles: (row.reached.cycles, row.used.dsp, row.fits) for row in strategy.tried}
     assert rows[27] == (24, 4, True) and rows[24] == (24, 6, True)
     # The bisection's last fitting point.
@@ -731,16 +812,16 @@ def test_max_throughput_budgets_what_is_stated_where_a_member_states_no_resource
     not characterised) is allowed (RC5): the budget is checked against the members that
     state theirs, a lower bound, and it states so (``resources-unstated``), naming the
     member and why, its findings the causes."""
-    explorer, point = within_part()
-    pinned = explorer.attempt(point, {"first.compute.packed.reducer": "compressor"})
+    explorer, network = within_part()
+    pinned = explorer.set(network, keyed({"first.compute.packed.reducer": "compressor"}))
     assert isinstance(pinned, Accepted)
     strategy = MaxThroughput({"dsp": 0.5})
-    folded = strategy.explore(explorer, pinned.point)
+    folded = strategy.explore(explorer, pinned.network)
     (found,) = strategy.findings
     assert found.code == "resources-unstated" and found.kind is FindingKind.LIMITATION
     assert re.search("lower bound.*first .*compressor", found.message)
     assert found.causes == strategy.unstated()["first"]
-    assert explorer.chosen(folded)["first.compute.packed.reducer"] == "compressor"
+    assert chosen(explorer, folded)["first.compute.packed.reducer"] == "compressor"
     report = strategy.report()
     assert report["lower_bound"] is True and report["fits"] is True
     unstated = report["unstated"]
@@ -764,6 +845,6 @@ def test_max_throughput_needs_a_budget_of_named_resources_and_the_part_s_totals(
         MaxThroughput({"lut": 0})
     with pytest.raises(ExploreError, match="is no fraction"):
         MaxThroughput({"lut": "half"})  # type: ignore[dict-item]
-    explorer, point = seam()
+    explorer, network = seam()
     with pytest.raises(ExploreError, match="platform's resources"):
-        MaxThroughput({"lut": 0.5}).explore(explorer, point)
+        MaxThroughput({"lut": 0.5}).explore(explorer, network)

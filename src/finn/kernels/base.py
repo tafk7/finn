@@ -97,7 +97,6 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
-from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -105,12 +104,10 @@ from finn.kernels.artifacts.abi import (
     Data,
     Derived,
     Direction,
-    Endpoint,
     Free,
     Pin,
     Reset,
     Signal,
-    abi_pins,
 )
 from finn.kernels.artifacts.contributions import (
     Contribution,
@@ -122,16 +119,14 @@ from finn.kernels.artifacts.contributions import (
 from finn.kernels.artifacts.module import (
     Abi,
     BuildError,
-    BusExport,
     Composed,
     Fragment,
     Held,
     Leaf,
     Module,
     ProducerIdentity,
-    merge,
 )
-from finn.kernels.control import EXPORTED, top_bus
+from finn.kernels.control import EXPORTED
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.platform.capabilities import Resources
@@ -465,66 +460,36 @@ class Kernel(Space):
     def composed_fragment(self) -> Fragment | Rejected:
         """A kernel with children's ``fragment``: each member's netlist under its node, and
         the buses its ``ControlBus`` nodes present with the writes their configuration
-        takes. A kernel that places none is refused."""
+        takes (``finn.kernels.network.merged``). A kernel that places none is refused."""
+        from finn.kernels.network import merged  # noqa: PLC0415 - the network imports the base
+
         if not self.netlists:
             return reject(
                 "kernel-module",
                 f"{type(self).__qualname__} declares no module and places no kernel",
             )
-        exports = tuple(
-            BusExport(item.node, item.child, item.port, item.registers)
-            for located in self.presented
-            for item in located.value
+        return merged(
+            ((str(item.node), item.value) for item in self.netlists),
+            (item for located in self.presented for item in located.value),
         )
-        try:
-            return merge(
-                *(item.value.under(str(item.node)) for item in self.netlists),
-                Fragment(exports=exports),
-            )
-        except ArtifactError as error:
-            return reject("kernel-netlist", str(error))
 
     @derived
     def composed_abi(self) -> Abi:
         """Its clocks and reset, each boundary channel's AXIS bus (inputs, then outputs), then
-        each presented bus."""
-        fragment = self.fragment
-        doubled = any(
-            isinstance(info.role, Clock) and isinstance(info.role.rate, Derived)
-            for _, leaf in fragment.instances
-            for info in abi_pins(leaf.abi.pins).values()
-        )
-        clocking = Clocking(doubled=CLOCK2X if doubled else None, doubling=doubled)
-        buses = [bus for item in self.boundary_buses for bus in item.value]
-        return Abi(
-            (
-                *clocking.signals(),
-                *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
-                *(bus for bus in buses if bus.endpoint is not Endpoint.TARGET),
-                *(
-                    top_bus(item.bus, item.port, clocking.clock, clocking.reset)
-                    for item in fragment.exports
-                ),
-            ),
-            (),
-            clocking.alignments(),
+        each presented bus (``finn.kernels.network.module_abi``)."""
+        from finn.kernels.network import module_abi  # noqa: PLC0415 - the network imports the base
+
+        return module_abi(
+            self.fragment, (bus for item in self.boundary_buses for bus in item.value)
         )
 
     @derived(semantics=MODULE_SEMANTICS)
     def built(self) -> Leaf | Composed | Rejected:
         if type(self).rtl_module:
             return self.codegen
-        producer = self.producer_identity()
-        try:
-            return Composed(
-                producer.producer_id,
-                producer.contract_version,
-                self.stem(),
-                self.composed_abi,
-                self.fragment,
-            )
-        except ArtifactError as error:
-            return reject("kernel-netlist", str(error))
+        from finn.kernels.network import assembled  # noqa: PLC0415 - the network imports the base
+
+        return assembled(self.producer_identity(), self.stem(), self.composed_abi, self.fragment)
 
     module = View(
         built, requires=(admission, pins_accounted, clocked, netlists, presented, boundary_buses)

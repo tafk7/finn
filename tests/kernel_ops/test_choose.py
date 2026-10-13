@@ -27,6 +27,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
+from finn.kernels.network import dotted
 from finn.platform.target import Target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
@@ -49,8 +50,10 @@ def ranked(policy: RankPolicy) -> ExploreKernelChoices:
 
 
 def offer(key: str, cases: tuple[object, ...], refused: dict[str, str]) -> Choice:
-    """An open Decision with ``cases``, as the seam offers it."""
-    return Choice(key, None, None, cases, False, refused)
+    """An open Decision with ``cases``, as the seam offers it (``key``: its owner and the
+    key there, joined)."""
+    owner, _, below = key.partition(".")
+    return Choice((owner, below), None, cases, False, refused)
 
 
 def choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
@@ -89,16 +92,16 @@ class Last:
         cases = choice.cases or ()
         if not self.memories:
             return tuple(reversed(cases))
-        if not choice.key.endswith("ram_style"):
+        if not choice.key[1].endswith("ram_style"):
             return cases
         return tuple(reversed([case for case in cases if case != "auto"]))
 
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     policy = Lanes(4)
-    fold = Choice("first.compute.packed.pe", None, None, (1, 2, 4, 8), True)
+    fold = Choice(("first", "compute.packed.pe"), None, (1, 2, 4, 8), True)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
-    odd = Choice("x.simd", None, None, (1, 3), True)
+    odd = Choice(("x", "simd"), None, (1, 3), True)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
     memory = offer("w.source.memstream.ram_style", ("block", "auto"), {})
     assert list(policy.rank(memory)) == ["block", "auto"]
@@ -107,7 +110,7 @@ def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
 def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
     policy = Recording(Lanes())
     model = kernel_model().transform(ranked(policy))
-    offered = {choice.key: choice.cases or () for choice in policy.offered}
+    offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
     reducers = {
         key: cases for key, cases in offered.items() if key.endswith("compute.packed.reducer")
     }
@@ -135,7 +138,7 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
 def test_the_policy_is_offered_viable_cases_only_and_no_forced_decision() -> None:
     policy = Recording(Lanes())
     model = kernel_model().transform(ranked(policy))
-    offered = {choice.key: choice.cases or () for choice in policy.offered}
+    offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
     assert offered and all(len(cases) > 1 for cases in offered.values())
     # Ultra96 has no UltraRAM: ultra is never offered; DSP48E2 forces the packed core.
     memories = [cases for key, cases in offered.items() if key.endswith("memstream.ram_style")]
@@ -177,7 +180,7 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
     class Ultra:
         def rank(self, choice: Choice) -> Sequence[object]:
-            if choice.key.endswith("memstream.ram_style"):
+            if choice.key[1].endswith("memstream.ram_style"):
                 return ("ultra",)
             return choice.cases or ()
 
@@ -208,7 +211,7 @@ def test_an_adapter_memory_is_never_ultra_without_ultraram() -> None:
     # policy that prefers it does not get it.
     policy = Recording(PreferUltra())
     ultra96 = kernel_model().transform(ranked(policy))
-    offered = {choice.key: choice.cases or () for choice in policy.offered}
+    offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
     adapters = [cases for key, cases in offered.items() if ".adapter." in key]
     assert adapters and all("ultra" not in cases for cases in adapters)
     memories = adapter_memories(ultra96)

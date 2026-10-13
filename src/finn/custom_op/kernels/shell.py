@@ -143,6 +143,7 @@ from finn.core.space import (
 from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
 from finn.custom_op.kernels.replay import committed, refusal, typed_choices
+from finn.custom_op.kernels.rooted import Rooted
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.base import Kernel, PortEnd
@@ -561,6 +562,11 @@ class ShellRoot:
             return None
         return self.owners[path], key[len(path) + 1 :]
 
+    def network(self) -> Rooted:
+        """The configured root as the seam explores it: its members by graph name, each
+        key a pair (``finn.custom_op.kernels.rooted``, until the graph binds a network)."""
+        return Rooted(self.point, self.members, self.owners)
+
 
 def _replay(point: S, choices: Mapping[str, object]) -> tuple[S, dict[str, str]]:
     """``choices`` replayed on ``point``: together when the facts accept them all;
@@ -830,8 +836,8 @@ def baseline_choices(model: ModelWrapper) -> dict[str, str]:
     by root key, with why, as replay reports them. A required choice (a FIFO's depth)
     stays open."""
     root = shell_root(model, model.graph.node)
-    seam = Seam(root.members, root.owners, read_target(model).platform)
-    persist(model, root, seam.baseline(root.point))
+    baselined = Seam(read_target(model).platform).baseline(root.network())
+    persist(model, root, baselined.point)
     return dict(root.dropped)
 
 

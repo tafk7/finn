@@ -257,7 +257,7 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     # A channel's key under its consumer is no Decision of the root: D8's file is
     # refused, named.
     path.write_text(json.dumps({"second": {"x.transport": "direct"}}))
-    with pytest.raises(ExploreError, match="second.x.transport: not a Decision of this root"):
+    with pytest.raises(ExploreError, match="second.x.transport: not a Decision of this network"):
         explore_kernel_choices(open_model(), Pinned(path))
 
 

@@ -44,6 +44,7 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.graph.walk import between, upstream
 from finn.core.space import Finding, FindingKind, by_code, finding_record, finding_text
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
+from finn.custom_op.kernels.rooted import Rooted
 from finn.kernels.explore import ExploreError, Seam
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
@@ -311,16 +312,12 @@ def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object
     channel has both its ends (``baseline_choices``). Returns the node's choices."""
     op = kernel_op(model, node)
     ports = tuple(port for port in (*op.ports, *op.outputs) if port is not None)
-    seam = Seam((op.member, *ports), {op.member: node.name})
+    rooted = Rooted(op.point(), (op.member, *ports), {op.member: node.name})
     try:
-        point = seam.baseline(op.point())
+        baselined = Seam().baseline(rooted)
     except ExploreError as error:
         raise KernelOpError(f"{op.label}: no baseline: {error}") from error
-    own = {
-        attribute: value
-        for key, value in seam.chosen(point).items()
-        if (attribute := op.attribute(key)) is not None
-    }
+    own = {key: value for (owner, key), value in baselined.chosen().items() if owner == node.name}
     op.save(own)
     return op.choices()
 

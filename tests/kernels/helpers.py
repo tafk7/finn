@@ -6,25 +6,31 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
 
-A kernel with children reads tensors its parent gives, and presents its ends
-on the channels its parent declares, so a test places it in a ``Root``, the top
-of what is emitted, which declares them (as ``placed_dotp`` does for a
-dot-product core). Facts flow one way: each channel takes the ends its kernels
-present (``finn.kernels.channels.end_of``), and its tensor from the root or a
-kernel's view (``view_of``). ``placed_matmul`` places a MatMul (``matmul``) on
-the root's ``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``)
-and, with several weight sets, ``set`` (``in2_V``). The root binds each
-tensor to MatMul's view of it (``activation_tensor``, ``weight_tensor``,
-``result_tensor``), which reads only MatMul's facts and its ``realization``:
-one root serves every realization, a depthwise MatMul's left open until
-committed. Known weights are the root's, given to MatMul (``w_contents``); the
-weight channel carries what MatMul states for it (``w_carried``, ``w_stored``:
-block-diagonal for a dense realization, over their range), with ``set``'s tensor
-its ``index_tensor`` (one index per row) and ``set`` taking its ``set_end``, so
-the channel's ``source`` stores them. The edge choices are the root's
-(``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the MatMul's
-below it (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one from
-concrete facts and choices.
+A kernel reads tensors and presents its ends on channels, so a test places it in a
+network (``finn.kernels.network``): its kernels and channels by name, each its own
+space, each channel taking the ends its kernels present (``Interface``) and, for a
+parameter channel, what its kernel states for it (``Fact``). A test names a choice as
+``member.key`` (``matmul.compute.packed.pe``, ``w.transport``): ``keyed`` makes it the
+network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
+between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on
+``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``) and, with several
+weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own views of them
+(``activation_tensor``, ``weight_tensor``, ``result_tensor``), read from its facts
+before it is placed: they read only its facts and its ``realization``, and the
+result's range is the same in either realization, so one network serves every
+realization, a depthwise MatMul's left open until committed. Known weights are a fact
+given to MatMul (``w_contents``); the weight channel carries what MatMul states for it
+(``w_carried``, ``w_stored``: block-diagonal for a dense realization, over their
+range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
+taking its ``set_end``, so the channel's ``source`` stores them. The edge choices are
+the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
+MatMul's its own (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one
+from concrete facts and choices. A network's module is named ``finn_<stem>``
+(``module_of``).
+
+A kernel that presents its configuration bus through a ``ControlBus`` is placed in a
+``Root``, one Space with its bus, its channels and itself, until a kernel presents its
+control itself and a network presents it on the module.
 
 What a simulation runs on (FinnLib, Vivado, the run's identity) is
 ``finn.harness.toolchain``'s: this module only constructs."""
@@ -32,21 +38,16 @@ What a simulation runs on (FinnLib, Vivado, the run's identity) is
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from functools import cache
+from fnmatch import fnmatchcase
 from typing import Any, TypeVar, cast
 
 from finn.core.space import (
     Constraint,
-    Param,
     Rejected,
     Space,
-    composite,
-    default_semantics,
-    derived,
     design_space,
     inspection,
     reject,
-    supplied,
 )
 from finn.core.space.results import Available, QueryResult
 from finn.dataflow.datatypes import (
@@ -56,20 +57,18 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.module import Composed, Leaf
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, end_of
+from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
+from finn.kernels.base import CYCLES, Kernel
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
+from finn.kernels.network import Fact, Interface, Key, Network, Wire, dotted, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype, set_index_dtype
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerTensorValue,
     IntegerVector,
@@ -128,6 +127,47 @@ def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
     return point.inspect(condition).result
 
 
+PRODUCER = ProducerIdentity("test.root", "1")
+"""Who derives a test network's module: the tests' harness, each module named by its stem."""
+
+
+def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
+    """Choices named as a test names them, ``member.key``, by the network's key: the
+    member, and the key in its space."""
+    found: dict[Key, object] = {}
+    for name, value in choices.items():
+        owner, _, key = name.partition(".")
+        found[(owner, key)] = value
+    return found
+
+
+def choose(network: Network, choices: Mapping[str, object]) -> Network:
+    """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal, or a
+    stored choice the change would drop, is a ``NetworkError`` (a ``ValueError``)."""
+    return network.with_choices(keyed(choices)) if choices else network
+
+
+def module_of(network: Network, stem: str) -> QueryResult[Composed]:
+    """``network``'s module, named ``finn_<stem>``."""
+    return network.module(PRODUCER, f"finn_{stem}")
+
+
+def built(network: Network, stem: str) -> Composed:
+    """``network``'s module, named ``finn_<stem>``, which must be accepted."""
+    module = module_of(network, stem)
+    assert isinstance(module, Available), describe([module])
+    return module.value
+
+
+def cycles_of(network: Network) -> QueryResult[int]:
+    """The most cycles a frame any member of ``network`` takes, once each states its own."""
+    found = [network.query(name, CYCLES) for name in network.members]
+    waiting = [answer for answer in found if not isinstance(answer, Available)]
+    if waiting:
+        return waiting[0]
+    return Available(max(cast(Available[int], answer).value for answer in found))
+
+
 def placed_dotp(
     space_type: Callable[..., S],
     *,
@@ -147,7 +187,7 @@ def placed_dotp(
 ) -> S:
     """A dot-product core between three boundary channels, its folding factors committed.
 
-    The core takes its extents from the channels: ``outputs`` (N) defaults to PE
+    The core takes its extents from its tensors: ``outputs`` (N) defaults to PE
     and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
     stays open, as does ``reducer``, which only a core that declares it commits.
     ``weights_range`` is the range of values the weight channel carries; the
@@ -165,22 +205,35 @@ def placed_dotp(
     x_tensor = Tensor(x_shape, ScalarEncoding(activation_dtype))
     w_tensor = Tensor((k, n), ScalarEncoding(weights_dtype, weights_range))
     y_tensor = Tensor((rows, n), ScalarEncoding(result_dtype, result_range))
-
-    class Placed(Space):
-        x_end = end_of("compute", "x_end")
-        w_end = end_of("compute", "w_end")
-        y_end = end_of("compute", "y_end")
-        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=platform)
-        w = Channel(tensor=w_tensor, port="in1_V", consumer=w_end, platform=platform)
-        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=platform)
-        compute = space_type(
-            x_tensor=x_tensor,
-            w_tensor=w_tensor,
-            y_tensor=y_tensor,
-            result_range=result_range or ordinary_integer_bounds(result_dtype),
-            **facts,
-        )
-
+    network = Network(
+        {
+            "x": wire(
+                tensor=x_tensor,
+                port="in0_V",
+                consumer=Interface("compute", "x_end"),
+                platform=platform,
+            ),
+            "w": wire(
+                tensor=w_tensor,
+                port="in1_V",
+                consumer=Interface("compute", "w_end"),
+                platform=platform,
+            ),
+            "y": wire(
+                tensor=y_tensor,
+                port="out0_V",
+                producer=Interface("compute", "y_end"),
+                platform=platform,
+            ),
+            "compute": space_type(
+                x_tensor=x_tensor,
+                w_tensor=w_tensor,
+                y_tensor=y_tensor,
+                result_range=result_range or ordinary_integer_bounds(result_dtype),
+                **facts,
+            ),
+        }
+    )
     choices = {
         key: value
         for key, value in (
@@ -191,137 +244,109 @@ def placed_dotp(
         )
         if value is not None
     }
-    point = design_space(Placed())
-    placed = commit(point, choices)
-    return placed.compute
+    placed: S = choose(network, choices).member("compute")
+    return placed
 
 
 class Root(Kernel):
-    """The top of what a test emits: the channels it declares and the kernels on them."""
+    """One Space of channels, kernels and the ``ControlBus`` a kernel presents its
+    configuration bus through: the top of what a test emits where a network cannot place
+    it yet."""
 
     id = "test.root"
     version = 1
 
 
-def rooted(name: str, members: Mapping[str, object]) -> Root:
-    """A root named ``name`` (its module's stem ``finn_<name>``) of ``members``."""
-    space_type: Any = composite(name, dict(members), base=Root)
-    root: Root = space_type()
-    return root
+def _views(
+    space_type: type[MatMulKernel], facts: Mapping[str, Any], realization: str | None
+) -> Any:
+    """A MatMul of ``space_type`` on ``facts`` alone, its ``realization`` committed where
+    it is depthwise (as named; else ``dense`` with known weights, ``native`` without):
+    what its views of its tensors read. The result's range is the same either way."""
+    probe = design_space(space_type(**facts))
+    if facts.get("form") is Form.DEPTHWISE:
+        case = realization or ("dense" if "w_contents" in facts else "native")
+        probe = commit(probe, {"realization": case})
+    return probe
 
 
-TENSOR = default_semantics(Tensor)
-"""A ``Tensor``'s value semantics."""
-
-
-def view_of(member: str, name: str, semantics: Any = TENSOR) -> Any:
-    """A derived member of a root: its member ``member``'s ``name`` (a tensor, unless
-    ``semantics`` says otherwise), read by name, so a channel declared before ``member``
-    may take it (a MatMul's ``result_tensor``)."""
-
-    def read(self: Space) -> Any:
-        return getattr(getattr(self, member), name)
-
-    # Its value is the semantics' type: the engine checks the annotation against it.
-    read.__annotations__["return"] = semantics.type_token
-    return derived(semantics=semantics)(read)
-
-
-@cache
-def matmul_root(space_type: type[MatMulKernel]) -> type[Root]:
-    """A root placing a MatMul of ``space_type`` (``matmul``) on the channels it declares, its
-    facts its own formals, the tensors MatMul's views and the weights its own; see the
-    module docstring."""
-
-    class MatMul(Root):
-        m: int = Param()
-        n: int = Param()
-        k: int = Param()
-        form: Form = Param(default=Form.DENSE)
-        activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-        weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-        platform: Platform = Param()
-        # The weights are the root's (the value owner's), one operand a set.
-        weights: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-        weight_sets: int = Param(default=1)
-        known = supplied(weights)
-
-        @derived
-        def several(self) -> bool:
-            return self.weight_sets > 1
-
-        @derived
-        def unknown(self) -> bool:
-            return not self.known
-
-        # Each tensor is MatMul's view of it: its facts, never its ports. Known weights are
-        # given as such; the weight channel carries what MatMul states for it.
-        x_tensor = view_of("matmul", "activation_tensor")
-        y_tensor = view_of("matmul", "result_tensor")
-
-        @derived(when=unknown)
-        def w_tensor(self) -> Tensor:
-            tensor: Tensor = self.matmul.weight_tensor
-            return tensor
-
-        w_carried = view_of("matmul", "w_carried")
-
-        @derived(when=known, semantics=INTEGER_TENSOR)
-        def w_stored(self) -> IntegerTensor:
-            stored: IntegerTensor = self.matmul.w_stored
-            return stored
-
-        @derived(when=several)
-        def set_tensor(self) -> Tensor:
-            """One set index per row, as wide as the weight source's selector."""
-            return Tensor((self.m,), ScalarEncoding(set_index_dtype(self.weight_sets)))
-
-        x_end = end_of("matmul", "x_end")
-        w_end = end_of("matmul", "w_end")
-        y_end = end_of("matmul", "y_end")
-        set_end = end_of("w", "set_end")
-        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=platform)
-        set = Channel(
-            tensor=set_tensor, port="in2_V", consumer=set_end, when=several, platform=platform
-        )
-        w = Channel(
-            tensor=w_carried,
-            contents=w_stored,
-            sets=weight_sets,
-            index_tensor=set_tensor,
-            port="in1_V",
-            consumer=w_end,
+def matmul_network(
+    space_type: type[MatMulKernel] = MatMulKernel,
+    *,
+    m: int,
+    n: int,
+    k: int,
+    activation_dtype: QONNXDataType,
+    weights_dtype: QONNXDataType,
+    platform: Platform,
+    form: Form = Form.DENSE,
+    weights: IntegerTensor | None = None,
+    weight_sets: int = 1,
+    realization: str | None = None,
+) -> Network:
+    """A MatMul of ``space_type`` (``matmul``) on the channels of a network, its tensors its
+    own views of them, the weights given to it; see the module docstring. ``realization``
+    is committed where given."""
+    facts: dict[str, Any] = dict(
+        m=m,
+        n=n,
+        k=k,
+        form=form,
+        activation_dtype=activation_dtype,
+        weights_dtype=weights_dtype,
+        platform=platform,
+    )
+    if weights is not None:
+        facts["w_contents"] = weights
+    views = _views(space_type, facts, realization)
+    tensors: dict[str, Any] = {
+        "x_tensor": views.activation_tensor,
+        "y_tensor": views.result_tensor,
+    }
+    if weights is None:
+        tensors["w_tensor"] = views.weight_tensor
+    several = weight_sets > 1
+    set_tensor = Tensor((m,), ScalarEncoding(set_index_dtype(weight_sets)))
+    members: dict[str, Space | Wire] = {
+        "x": wire(
+            tensor=tensors["x_tensor"],
+            port="in0_V",
+            consumer=Interface("matmul", "x_end"),
             platform=platform,
         )
-        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=platform)
-        matmul = space_type(
-            m=m,
-            n=n,
-            k=k,
-            form=form,
-            activation_dtype=activation_dtype,
-            weights_dtype=weights_dtype,
+    }
+    if several:
+        members["set"] = wire(
+            tensor=set_tensor,
+            port="in2_V",
+            consumer=Interface("w", "set_end"),
             platform=platform,
-            x_tensor=x_tensor,
-            w_tensor=w_tensor,
-            y_tensor=y_tensor,
-            w_contents=weights,
         )
+    weight: dict[str, object] = dict(
+        tensor=Fact("matmul", "w_carried"),
+        contents=Fact("matmul", "w_stored"),
+        sets=weight_sets,
+        port="in1_V",
+        consumer=Interface("matmul", "w_end"),
+        platform=platform,
+    )
+    if several:
+        weight["index_tensor"] = set_tensor
+    members["w"] = wire(**weight)
+    members["y"] = wire(
+        tensor=tensors["y_tensor"],
+        port="out0_V",
+        producer=Interface("matmul", "y_end"),
+        platform=platform,
+    )
+    members["matmul"] = space_type(**facts, **tensors)
+    network = Network(members)
+    return choose(network, {"matmul.realization": realization}) if realization else network
 
-    return MatMul
 
-
-def placed_matmul(**facts: object) -> Root:
-    """A MatMul (``matmul``) in a root declaring its channels; see the module docstring."""
-    space_type: Any = matmul_root(MatMulKernel)
-    root: Root = space_type(**facts)
-    return root
-
-
-def matmul_point(*, realization: str | None = None, **facts: object) -> Any:
-    """``placed_matmul`` as a design space, its ``realization`` committed when given."""
-    point = design_space(placed_matmul(**facts))
-    return commit(point, {"matmul.realization": realization}) if realization else point
+def matmul_point(*, realization: str | None = None, **facts: Any) -> Network:
+    """``matmul_network`` of a ``MatMulKernel``, its ``realization`` committed when given."""
+    return matmul_network(realization=realization, **facts)
 
 
 def controlled(space_type: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
@@ -420,28 +445,49 @@ def pin_names(module: Composed | Leaf) -> set[str]:
 ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
 
+P = TypeVar("P", bound=Space | Network)
 
-def with_adapter_memories(point: S, ram_style: str | None = None) -> S:
+
+def _undecided(subject: Space | Network, pattern: str) -> list[str]:
+    """The open choices of a point or a network matching ``pattern``, by key (a network's
+    as ``member.key``)."""
+    if isinstance(subject, Network):
+        return [dotted(key) for key in subject.undecided() if fnmatchcase(dotted(key), pattern)]
+    return undecided(subject, pattern)
+
+
+def _committed(subject: P, choices: Mapping[str, object]) -> P:
+    if isinstance(subject, Network):
+        return cast(P, choose(subject, choices))
+    return cast(P, commit(subject, choices))
+
+
+def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     """Each open adapter input_gen's memory takes ``ram_style``, or where None its
     baseline, the first viable case (an explicit style, by the size the buffer holds),
-    as ``Seam.baseline`` takes it. Each channel's adapter, its one viable chain, is forced."""
-    styles = undecided(point, ADAPTER_RAM_STYLES)
+    as ``Seam.baseline`` takes it, on a network or a point (a shell root's). Each
+    channel's adapter, its one viable chain, is forced."""
+    styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:
-        return point
+        return subject
     if ram_style is None:
-        first = {item.key: item.cases[0] for item in inspection.viable(point) if item.cases}
-        return commit(point, {key: first[key] for key in styles})
-    return commit(point, dict.fromkeys(styles, ram_style))
+        if isinstance(subject, Network):
+            viable = {dotted(key): item for key, item in subject.viable()}
+        else:
+            viable = {item.key: item for item in inspection.viable(subject)}
+        first = {key: item.cases[0] for key, item in viable.items() if item.cases}
+        return _committed(subject, {key: first[key] for key in styles})
+    return _committed(subject, dict.fromkeys(styles, ram_style))
 
 
 TRANSPORTS = "*.transport"
 """The keys (``fnmatch``) of every channel's transport choice."""
 
 
-def with_direct_transports(point: S) -> S:
+def with_direct_transports(subject: P) -> P:
     """Each channel's open transport direct: its baseline, the first case."""
-    open_ = undecided(point, TRANSPORTS)
-    return commit(point, dict.fromkeys(open_, "direct")) if open_ else point
+    open_ = _undecided(subject, TRANSPORTS)
+    return _committed(subject, dict.fromkeys(open_, "direct")) if open_ else subject
 
 
 class Lanes:
@@ -489,17 +535,18 @@ def _frozen(values: object) -> object:
     return values
 
 
-def _realizes(point: Any, realization: str) -> QueryResult[bool]:
-    """Accepted when the realization commits on ``point``, its own rule holds, and some
+def _realizes(network: Network, realization: str) -> QueryResult[bool]:
+    """Accepted when the realization commits on ``network``, its own rule holds, and some
     core can compute it."""
     try:
-        point = commit(point, {"matmul.realization": realization})
+        network = choose(network, {"matmul.realization": realization})
     except ValueError as error:
         return reject("matmul-realization", str(error))
-    rule: QueryResult[bool] = point.matmul.inspect(MatMulKernel.realization_supported).result
+    matmul = network.member("matmul")
+    rule: QueryResult[bool] = matmul.inspect(MatMulKernel.realization_supported).result
     if not isinstance(rule, Available):
         return rule
-    cores = point.matmul.query(MatMulKernel.compute)  # refused when no core is viable
+    cores = matmul.query(MatMulKernel.compute)  # refused when no core is viable
     if isinstance(cores, Rejected):
         return reject("matmul-realization", "no core computes it")
     return Available(True)
@@ -542,7 +589,8 @@ def matmul_assembly(
     must be chosen from. PE, SIMD and pumping are the core's, and the
     packed core's ``reducer``.
     Every Decision with one viable case (the source, the adapters, the core
-    on DSP48E2) is forced, not committed.
+    on DSP48E2) is forced, not committed. The kernel's choices are committed first,
+    then its channels', whose ends are its.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -562,33 +610,33 @@ def matmul_assembly(
     if weights is not None:
         facts["weights"] = _frozen(weights)
     buffered = weight_fifo_depth is not None
-    choices: dict[str, object] = {"w.transport": "fifo" if buffered else "direct"}
+    channel: dict[str, object] = {"w.transport": "fifo" if buffered else "direct"}
     # The memory's style is ordered by the bits its table holds, which a depthwise
     # weight channel's realization sets: it is committed after the realization.
-    memory: dict[str, object] = {}
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        memory["w.source.memstream.ram_style"] = ram_style
-        memory["w.source.memstream.pumped_memory"] = pumped_memory
+        channel["w.source.memstream.ram_style"] = ram_style
+        channel["w.source.memstream.pumped_memory"] = pumped_memory
     if buffered:
-        choices["w.transport.fifo.buffer.depth"] = weight_fifo_depth
-        choices["w.transport.fifo.buffer.ram_style"] = "auto"
-    point = commit(matmul_point(realization=realization, **facts), choices)
+        channel["w.transport.fifo.buffer.depth"] = weight_fifo_depth
+        channel["w.transport.fifo.buffer.ram_style"] = "auto"
+    network = matmul_point(realization=realization, **facts)
     if form is Form.DEPTHWISE and realization is None:
         # The realization sets the datapath's reduction, and so the weight channel's
-        # tensor: each is tried on the one point.
+        # tensor: each is tried on the one network.
         viable = [
-            case for case in ("native", "dense") if isinstance(_realizes(point, case), Available)
+            case for case in ("native", "dense") if isinstance(_realizes(network, case), Available)
         ]
         if len(viable) != 1:
             named = ", ".join(viable) or "none"
             raise ValueError(f"realizations compatible with this configuration: {named}")
-        point = commit(point, {"matmul.realization": viable[0]})
-    point = commit(point, memory)
+        network = choose(network, {"matmul.realization": viable[0]})
     if core is None:
-        forced = {item.key: item.value for item in inspection.forced(point)}
-        if "matmul.compute" not in forced:
+        forced = network.forced(("matmul",))
+        if ("matmul", "compute") not in forced:
             refusals = {
-                case: inspection.admission(commit(point, {"matmul.compute": case}).matmul.compute)
+                case: inspection.admission(
+                    choose(network, {"matmul.compute": case}).member("matmul").compute
+                )
                 for case in ("packed", "int8_dsp58")
             }
             cores = [
@@ -598,11 +646,11 @@ def matmul_assembly(
                 raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
             found = describe(result for result in refusals.values() if result is not None)
             raise ValueError(f"no compute core is compatible: {found}")
-        core = str(forced["matmul.compute"])
+        core = str(forced[("matmul", "compute")])
     else:
-        point = commit(point, {"matmul.compute": core})
-    point = commit(
-        point,
+        network = choose(network, {"matmul.compute": core})
+    network = choose(
+        network,
         {
             f"matmul.compute.{core}.pe": pe,
             f"matmul.compute.{core}.simd": simd,
@@ -610,20 +658,22 @@ def matmul_assembly(
             **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },
     )
+    network = choose(network, channel)
     # Each channel's adapter is forced; an input_gen's memory is inferred; the other
     # channels connect directly.
-    point = with_direct_transports(with_adapter_memories(point))
-    built = point.query(Kernel.module)
-    if not isinstance(built, Available):
-        raise ValueError(f"MatMul assembly is not accepted: {describe([built])}")
-    matmul = point.matmul
+    network = with_direct_transports(with_adapter_memories(network))
+    module = module_of(network, "matmul")
+    if not isinstance(module, Available):
+        raise ValueError(f"MatMul assembly is not accepted: {describe([module])}")
+    matmul = network.member("matmul")
+    w = network.member("w")
     return MatMulAssembly(
-        point.x.ends.source.sequence.form.beats,
+        network.member("x").ends.source.sequence.form.beats,
         matmul.compute.w.presented.form.beats,
         matmul.compute.y.presented.form.beats,
         matmul.result_type,
         weight_delivery,
-        built.value,
-        point.w.source.image if point.w.valued else (),
-        point,
+        module.value,
+        w.source.image if w.valued else (),
+        network,
     )

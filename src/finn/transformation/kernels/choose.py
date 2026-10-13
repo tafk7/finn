@@ -97,6 +97,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.space import Available, Finding, FindingKind, finding_record, finding_text
+from finn.custom_op.kernels.rooted import Rooted
 from finn.custom_op.kernels.shell import (
     ShellResources,
     admission_refusal,
@@ -119,6 +120,7 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.fifo import FifoKernel
+from finn.kernels.network import Key, dotted
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
 from finn.platform.catalog import part_report
@@ -270,7 +272,7 @@ def _over_part(most: str | None, exceeded: Mapping[str, Mapping[str, int]]) -> t
     )
 
 
-def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
+def _cost_report(network: Rooted, cost: Cost, resources: dict[str, object]) -> dict[str, object]:
     bottleneck = cost.bottleneck
     return {
         "members": {
@@ -279,7 +281,7 @@ def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[s
                 "buffering": cost.buffering.get(name),
                 "resources": asdict(cost.resources[name]) if name in cost.resources else None,
             }
-            for name in seam.members
+            for name in network.members
         },
         "bottleneck": None
         if bottleneck is None
@@ -289,23 +291,26 @@ def _cost_report(seam: Seam, cost: Cost, resources: dict[str, object]) -> dict[s
     }
 
 
-def _fifo_storage(seam: Seam, point: Any) -> dict[str, dict[str, object]]:
-    """Each FIFO's memory style on ``point``, by the graph name (a node or a
-    tensor) and key that would persist it, beside the storage the RTL selects for it
-    (FinnLib's ``auto``: shift, distributed, block or ultra) and what it uses."""
+def _fifo_storage(seam: Seam, network: Rooted) -> dict[str, dict[str, object]]:
+    """Each FIFO's memory style, by the graph name (a node or a tensor) and key that
+    persist it, beside the storage the RTL selects for it (FinnLib's ``auto``: shift,
+    distributed, block or ultra) and what it uses."""
     found: dict[str, dict[str, object]] = {}
-    declared = seam.declared(point)
-    for key, value in seam.chosen(point).items():
+    declared = seam.declared(network)
+    for (owner, key), value in seam.chosen(network).items():
         path, _, name = key.rpartition(".")
-        if declared.get(key) is not FifoKernel or name != "ram_style":
+        if declared.get((owner, key)) is not FifoKernel or name != "ram_style":
             continue
         # A selector's case names no attribute: the selector's value is the case's Space.
-        fifo = reduce(lambda found, name: getattr(found, name, found), path.split("."), point)
+        fifo = reduce(
+            lambda found, name: getattr(found, name, found),
+            path.split("."),
+            network.member(owner),
+        )
         # A FIFO whose depth no strategy sized (required, left open) has neither yet.
         storage = fifo.query(FifoKernel.storage)
         used = fifo.query(FifoKernel.exports[RESOURCES])
-        node, attribute = seam.owner(key) or ("", key)
-        found.setdefault(node, {})[attribute] = {
+        found.setdefault(owner, {})[key] = {
             "ram_style": value,
             "storage": storage.value.effective_style if isinstance(storage, Available) else None,
             "resources": asdict(used.value) if isinstance(used, Available) else None,
@@ -313,18 +318,11 @@ def _fifo_storage(seam: Seam, point: Any) -> dict[str, dict[str, object]]:
     return found
 
 
-def _owned(seam: Seam, key: str) -> str:
-    """``key`` as its owner names it: ``<graph name>.<key>``."""
-    node, attribute = seam.owner(key) or ("", key)
-    return f"{node}.{attribute}"
-
-
-def _by_owner(seam: Seam, values: Mapping[str, object]) -> dict[str, dict[str, object]]:
+def _by_owner(values: Mapping[Key, object]) -> dict[str, dict[str, object]]:
     """``values`` by the graph name (a node or a tensor) and key that persist each."""
     found: dict[str, dict[str, object]] = {}
-    for key, value in values.items():
-        node, attribute = seam.owner(key) or ("", key)
-        found.setdefault(node, {})[attribute] = value
+    for (owner, key), value in values.items():
+        found.setdefault(owner, {})[key] = value
     return found
 
 
@@ -343,18 +341,20 @@ def _fifos(
     return f"sized by size_fifos: {channels} channels, {len(placed)} FIFOs placed"
 
 
-def _placed(seam: Seam, point: Any) -> dict[str, object]:
-    """Every FIFO placed on ``point``: each transport at its FIFO case, with its depth
+def _placed(seam: Seam, network: Rooted) -> dict[Key, object]:
+    """Every FIFO placed on ``network``: each transport at its FIFO case, with its depth
     (None where it is open)."""
-    chosen = seam.chosen(point)
-    found: dict[str, object] = {}
-    for key, fifo in seam.transports(point).items():
+    chosen = seam.chosen(network)
+    found: dict[Key, object] = {}
+    for key, fifo in seam.transports(network).items():
         if chosen.get(key) == fifo:
             depth = next(
                 (
                     value
-                    for name, value in chosen.items()
-                    if name.startswith(f"{key}.{fifo}.") and name.endswith(".depth")
+                    for (owner, name), value in chosen.items()
+                    if owner == key[0]
+                    and name.startswith(f"{key[1]}.{fifo}.")
+                    and name.endswith(".depth")
                 ),
                 None,
             )
@@ -362,11 +362,11 @@ def _placed(seam: Seam, point: Any) -> dict[str, object]:
     return found
 
 
-def _end_rows(point: Any, ends: Sequence[str]) -> dict[str, dict[str, object]]:
+def _end_rows(network: Rooted, ends: Sequence[str]) -> dict[str, dict[str, object]]:
     """Each end's facts and cycles a frame, by its boundary channel."""
     rows: dict[str, dict[str, object]] = {}
     for name in ends:
-        contract: EndContract = getattr(point, name).end_contract
+        contract: EndContract = network.member(name).end_contract
         rows[name] = {
             "kind": contract.kind,
             "direction": contract.direction,
@@ -405,23 +405,24 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     nodes = list(model.graph.node)
     started = time.perf_counter()
     root = shell_root(model, nodes)
-    seam = Seam(root.members, root.owners, read_target(model).platform)
-    seam.held.update(seam.keyed(root.point, held_choices(model), HELD.entry))
-    saved = seam.chosen(root.point)
+    seam = Seam(read_target(model).platform)
+    network = root.network()
+    seam.held.update(seam.keyed(network, held_choices(model), HELD.entry))
+    saved = seam.chosen(network)
     # A choice the body leaves open takes its baseline before the strategy runs; a pin
     # the body records must hold there.
-    point = seam.baseline(root.point)
-    values = seam.chosen(point)
+    network = seam.baseline(network)
+    values = seam.chosen(network)
     baselined = [key for key in values if key not in saved]
     # Who set each value: the body (``saved``), the baseline, or the strategy.
     set_by = {key: "saved" if key in saved else "baseline" for key in values}
     entry: dict[str, object] | None = None
     if strategy is not None:
         attempts, began = seam.attempts, time.perf_counter()
-        before = seam.chosen(point)
-        point = strategy.explore(seam, point)
+        before = seam.chosen(network)
+        network = strategy.explore(seam, network)
         report = strategy.report()
-        after = seam.chosen(point)
+        after = seam.chosen(network)
         label = str(getattr(strategy, "label", report["strategy"]))
         changed = [
             key
@@ -436,16 +437,16 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         entry = {
             **report,
             "committed": sum(key in after for key in changed),
-            "changed": {_owned(seam, key): [before.get(key), after.get(key)] for key in changed},
+            "changed": {dotted(key): [before.get(key), after.get(key)] for key in changed},
             "reopened": len({key for run in seam.runs for key in run.reopened}),
             "kept": len({key for run in seam.runs for key in run.kept}),
-            "re-baselined": [_owned(seam, key) for run in seam.runs for key in run.baselined],
+            "re-baselined": [dotted(key) for run in seam.runs for key in run.baselined],
             "attempts": seam.attempts - attempts,
             "seconds": round(time.perf_counter() - began, 3),
         }
         if isinstance(strategy, Pinned):
-            entry["held"] = [_owned(seam, key) for key in strategy.held]
-    refused = seam.refusals(point)
+            entry["held"] = [dotted(key) for key in strategy.held]
+    refused = seam.refusals(network)
     if refused:
         raise KernelOpError(
             "the explored point is refused: "
@@ -454,6 +455,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             ),
             findings=tuple(finding for why in refused.values() for finding in why),
         )
+    point = network.point
     unadmitted = admission_refusal(point)
     if unadmitted:
         raise KernelOpError(
@@ -463,7 +465,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         )
     persist(model, root, point)
     if seam.held:
-        model.set(HELD, _by_owner(seam, seam.held))
+        model.set(HELD, _by_owner(seam.held))
     if isinstance(strategy, TargetThroughput):
         model.set(OBJECTIVE_FPS, strategy.fps)
     elif isinstance(strategy, FOLDING):
@@ -474,10 +476,10 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         if _placed(seam, point):
             model.set(FIFOS_STALE, True)
     left = [
-        _owned(seam, choice.key) + (" (required)" if choice.required else "")
-        for choice in seam.choices(point)
+        dotted(choice.key) + (" (required)" if choice.required else "")
+        for choice in seam.choices(network)
     ]
-    cost = seam.cost(point)
+    cost = seam.cost(network)
     resources, over_part = _resources_report(
         cost,
         shell_resources(point),
@@ -487,21 +489,20 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     )
     ends: dict[str, object] = {}
     if root.ends and not cost.waiting and not cost.refused:
-        ends = {"ends": _end_rows(point, root.ends), "memory_latency": MEMORY_LATENCY}
-    final = seam.chosen(point)
-    placed = [_owned(seam, key) for key in _placed(seam, point)]
+        boundary = [root.owners.get(path, path) for path in root.ends]
+        ends = {"ends": _end_rows(network, boundary), "memory_latency": MEMORY_LATENCY}
+    final = seam.chosen(network)
+    placed = [dotted(key) for key in _placed(seam, network)]
     explored = {
         "strategy": entry,
-        "baselined": [_owned(seam, key) for key in baselined],
-        "choices": _by_owner(
-            seam, {key: {"value": final[key], "by": set_by[key]} for key in final}
-        ),
-        "held": _by_owner(seam, seam.held),
+        "baselined": [dotted(key) for key in baselined],
+        "choices": _by_owner({key: {"value": final[key], "by": set_by[key]} for key in final}),
+        "held": _by_owner(seam.held),
         "open": left,
-        "fifo_storage": _fifo_storage(seam, point),
+        "fifo_storage": _fifo_storage(seam, network),
         "fifos": _fifos(strategy, entry, placed),
         "dropped": dict(root.dropped),
-        **_cost_report(seam, cost, resources),
+        **_cost_report(network, cost, resources),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
@@ -546,8 +547,7 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
     and their cycles a frame, its saved choices replayed (None where a member's cycles
     wait on a choice left open)."""
     root = shell_root(model, model.graph.node)
-    seam = Seam(root.members, root.owners, read_target(model).platform)
-    return seam.cost(root.point).bottleneck
+    return Seam(read_target(model).platform).cost(root.network()).bottleneck
 
 
 class ExploreKernelChoices(Transformation):
