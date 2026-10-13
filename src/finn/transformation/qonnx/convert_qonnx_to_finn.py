@@ -38,10 +38,14 @@ from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
 from finn.transformation.qonnx.infer_quant_avg_pool_2d import (
     AvgPoolAndTruncToQuantAvgPool,
 )
+from finn.transformation.qonnx.qonnx_activation_handlers import INT_QUANT_OP_TYPES
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
     ConvertQuantActToMultiThreshold,
     default_filter_function_generator,
 )
+
+QONNX_QUANT_OP_TYPES = [*INT_QUANT_OP_TYPES, "BipolarQuant", "FloatQuant", "Trunc"]
+"""Every QONNX quantizer's op type."""
 
 
 class ConvertQONNXtoFINN(Transformation):

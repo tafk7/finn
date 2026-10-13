@@ -39,6 +39,10 @@ from qonnx.transformation.infer_datatypes import int_type_holding
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
+INT_QUANT_OP_TYPES = ("IntQuant", "Quant")
+"""The integer quantizer's op types: qonnx registers IntQuant, and Quant as its other
+name (Brevitas exports Quant). The conversion treats the two alike."""
+
 
 def refused(code, node, message):
     """ConvertQuantActToMultiThreshold's refusal of the Quant ``node``."""
@@ -323,7 +327,7 @@ class QuantReluHandler(QuantActBaseHandler):
         ]
 
     def _check_compatibility(self):
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             q_inst = getCustomOp(self._q_node)
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
@@ -356,7 +360,7 @@ class QuantReluHandler(QuantActBaseHandler):
             bias = np.array([0.0], dtype=np_default_dtype)
         elif act_node.op_type == "Selu":
             q_inst = getCustomOp(self._q_node)
-            if self._q_node.op_type == "Quant":
+            if self._q_node.op_type in INT_QUANT_OP_TYPES:
                 bit_width = self._model.get_initializer(self._q_node.input[3])
                 narrow = q_inst.get_nodeattr("narrow")
             elif self._q_node.op_type == "BipolarQuant":
@@ -374,7 +378,7 @@ class QuantReluHandler(QuantActBaseHandler):
         return bias
 
     def _calculate_thresholds(self):
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
         elif self._q_node.op_type == "BipolarQuant":
             bit_width = 1.0
@@ -477,7 +481,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
         ]
 
     def _check_compatibility(self):
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             if not self._model.get_initializer(self._q_node.input[2]) == 0:
                 raise refused(
                     "quant-zero-point",
@@ -499,7 +503,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
 
     def _calculate_act_bias(self):
         q_inst = getCustomOp(self._q_node)
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
@@ -523,7 +527,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
     def _calculate_thresholds(self):
         quant_scale = self._model.get_initializer(self._q_node.input[1])
         q_inst = getCustomOp(self._q_node)
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
@@ -579,7 +583,7 @@ class QuantIdentityHandler(QuantActBaseHandler):
             return thresholds
 
     def _calculate_act_scale(self):
-        if self._q_node.op_type == "Quant":
+        if self._q_node.op_type in INT_QUANT_OP_TYPES:
             bit_width = self._model.get_initializer(self._q_node.input[3])
         elif self._q_node.op_type == "BipolarQuant":
             bit_width = 1.0

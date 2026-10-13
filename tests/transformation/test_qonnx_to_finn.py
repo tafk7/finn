@@ -50,7 +50,10 @@ from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.core.reporting.findings import Refusal
-from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
+from finn.transformation.qonnx.convert_qonnx_to_finn import (
+    QONNX_QUANT_OP_TYPES,
+    ConvertQONNXtoFINN,
+)
 from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
 from finn.transformation.qonnx.qonnx_activation_handlers import computed_datatype
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
@@ -86,7 +89,7 @@ def analysis_testing_for_no_quant_nodes(model):
     # Test that all Quant nodes have been converted to MultiThreshold nodes
     # or folded into tensor initializers.
 
-    for op_type in ["BinaryQuant", "Quant", "Trunc"]:
+    for op_type in QONNX_QUANT_OP_TYPES:
         q_count = len(model.get_nodes_by_op_type(op_type))
         if q_count > 0:
             raise ValueError(f"There should be no {op_type} nodes left in the graph.")
@@ -151,6 +154,71 @@ def test_QONNX_to_FINN(model_name, wbits, abits):
     _ = model.analysis(analysis_testing_for_no_quant_nodes)
 
     temp_dir.cleanup()
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("op_type", ["IntQuant", "Quant", "BipolarQuant", "FloatQuant", "Trunc"])
+def test_a_leftover_quantizer_fails_the_analysis(op_type):
+    """The analysis test_QONNX_to_FINN ends with fails on a quantizer of any type left in
+    the graph, BipolarQuant, IntQuant and FloatQuant included."""
+    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, [1, 4])
+    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, [1, 4])
+    node = helper.make_node(
+        op_type, ["global_in"], ["global_out"], domain="qonnx.custom_op.general"
+    )
+    model = ModelWrapper(helper.make_model(helper.make_graph([node], "left", [gi], [go])))
+    with pytest.raises(ValueError, match=f"no {op_type} nodes left"):
+        model.analysis(analysis_testing_for_no_quant_nodes)
+
+
+def _converted_parts(model):
+    """What a conversion made of a graph, by position rather than by tensor name (the
+    transformations name the tensors they add at random): each node's op type and
+    attributes, and the values of its initialized inputs."""
+    nodes, values = [], []
+    for node in model.graph.node:
+        nodes.append((node.op_type, node.domain, str(node.attribute)))
+        for name in node.input:
+            value = model.get_initializer(name)
+            if value is not None:
+                values.append(value)
+    return nodes, values
+
+
+@pytest.mark.transform
+def test_an_intquant_graph_converts_as_its_quant_graph(tmp_path):
+    """qonnx registers IntQuant, and Quant as its other name: TFC_W2A2 exported (its
+    weights' and activations' quantizers Quant) and the same graph with every Quant
+    renamed IntQuant convert to the same graph, computing the same values."""
+    brev_model, in_shape, input_tensor = get_brev_model_and_sample_inputs("TFC", 2, 2)
+    raw, clean = str(tmp_path / "raw.onnx"), str(tmp_path / "clean.onnx")
+    export_qonnx(brev_model, torch.randn(in_shape), raw)
+    cleanup(raw, out_file=clean)
+    quant = ModelWrapper(clean)
+    intquant = ModelWrapper(clean)
+    renamed = 0
+    for node in intquant.graph.node:
+        if node.op_type == "Quant":
+            node.op_type = "IntQuant"
+            renamed += 1
+    assert renamed > 0
+    assert not intquant.get_nodes_by_op_type("Quant")
+
+    quant = quant.transform(ConvertQONNXtoFINN())
+    intquant = intquant.transform(ConvertQONNXtoFINN())
+
+    intquant.analysis(analysis_testing_for_no_quant_nodes)
+    quant_nodes, quant_values = _converted_parts(quant)
+    intquant_nodes, intquant_values = _converted_parts(intquant)
+    assert intquant_nodes == quant_nodes
+    assert len(intquant_values) == len(quant_values)
+    for got, want in zip(intquant_values, quant_values):
+        assert got.dtype == want.dtype and np.array_equal(got, want)
+    idict = {quant.get_first_global_in(): input_tensor}
+    want = oxe.execute_onnx(quant, idict)[quant.get_first_global_out()]
+    idict = {intquant.get_first_global_in(): input_tensor}
+    got = oxe.execute_onnx(intquant, idict)[intquant.get_first_global_out()]
+    assert np.array_equal(got, want)
 
 
 def _make_single_quant_model(x, scale, zeropt, bitwidth, signed, narrow, rounding):

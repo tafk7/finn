@@ -37,6 +37,7 @@ from qonnx.transformation.remove import remove_node_and_rewire
 from qonnx.util.basic import get_preferred_qonnx_opset
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
+from finn.transformation.qonnx.qonnx_activation_handlers import INT_QUANT_OP_TYPES
 
 
 def _refused(code, node, message):
@@ -68,7 +69,7 @@ class FoldQuantWeights(Transformation):
         opset_imports = model.get_opset_imports()
         for n in graph.node:
             node_ind += 1
-            if n.op_type == "Quant" or n.op_type == "BipolarQuant":
+            if n.op_type in (*INT_QUANT_OP_TYPES, "BipolarQuant"):
                 node_inp_inits = list(map(lambda x: model.get_initializer(x), n.input))
                 node_inp_dyn = list(filter(lambda x: x is None, node_inp_inits))
                 node_out = n.output[0]
@@ -76,7 +77,10 @@ class FoldQuantWeights(Transformation):
                 ishape = model.get_tensor_shape(n.input[0])
                 is_const_shape = (n.op_type == "Shape") and (ishape is not None)
                 if is_all_constant_inputs or is_const_shape:
-                    if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
+                    if (
+                        n.op_type in INT_QUANT_OP_TYPES
+                        and not model.get_initializer(n.input[2]) == 0
+                    ):
                         raise _refused(
                             "quant-zero-point",
                             n,
