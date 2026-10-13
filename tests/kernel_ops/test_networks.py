@@ -62,7 +62,6 @@ def config(directory: Path) -> DataflowBuildConfig:
     return DataflowBuildConfig(
         output_dir=str(directory),
         target=TargetRequest(part=TARGET.part, period_ns=TARGET.platform.period_ns),
-        generate_outputs=[],
         steps=["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"],
         enable_build_pdb_debug=False,
     )

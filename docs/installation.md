@@ -490,7 +490,7 @@ What a build leaves in its output directory: `build_dataflow.log` (for a reader:
 every record with its level, step and logger), the
 steps' reports under `report/`, each tool's
 transcript under `logs/<step>/` (`<run>.stdout.log`, `.stderr.log`, written as the
-tool runs), the intermediate models, and the outputs asked. `report/build.json` is
+tool runs), the intermediate models, and the outputs its steps made. `report/build.json` is
 the build's manifest, the index of the run a program reads after the exit code, and
 never the log: the build's identity (FINN's revision where it is known, the
 toolchain's selection, the target and the model), what checking the
@@ -557,7 +557,6 @@ the configuration states no `toolchain`):
 {
   "output_dir": "output",
   "target": {"period_ns": 5.0, "board": "Ultra96", "shell": "pynq"},
-  "generate_outputs": ["bitfile", "pynq_driver", "deployment_package"],
   "preprocessing": "preproc.onnx",
   "input_datatype": "UINT8",
   "topk": 1,
@@ -567,7 +566,6 @@ the configuration states no `toolchain`):
     "phase_create_accelerator",
     "step_target_throughput",
     "phase_optimize_hardware",
-    "phase_emit_hardware",
     "phase_generate_outputs"
   ],
   "target_fps": 1000000
@@ -577,37 +575,58 @@ the configuration states no `toolchain`):
 `target` states the clock period, a `board` or a `part` (a board gives its part; a
 part beside it is an assertion) and the `shell`: `ip` unless one is stated, the
 packaged IP its user integrates, whose target states the part alone; `pynq`, the
-Zynq block design for a board. `stitched_ip` and `ooc_synth` are the partition's
-own outputs, on any shell: `stitched_ip/` holds the packaged IP, its interface
-description `interface.json` (the part and period, each clock's `FREQ_HZ`, each
-AXI-Stream port with its element type, lanes, beats and frame shape, each AXI-Lite
-bus with its register map) and an XSim testbench (`testbench/run.sh`, one frame
-drawn from the partition's input datatypes, checked against the partition in
-Python; the build does not run it); `ooc_synth` synthesizes the IP out of context. Every build
+Zynq block design for a board.
+
+A build makes what its list's steps make: each output is a step, and listing it makes
+the output. `step_package_partition` packages the partition, on any shell, into
+`stitched_ip/`: the IP, its interface description `interface.json` (the part and
+period, each clock's `FREQ_HZ`, each AXI-Stream port with its element type, lanes,
+beats and frame shape, each AXI-Lite bus with its register map) and an XSim testbench
+(`testbench/run.sh`, one frame drawn from the partition's input datatypes, checked
+against the partition in Python; the build does not run it); its setting `ooc_synth`
+(default false) synthesizes the IP out of context. `step_build_bitfile` builds the
+shell around the partition to a bitfile (packaging the partition itself unless
+`step_package_partition` packaged it), `step_make_driver` writes the PYNQ driver for
+that bitfile, and `step_deployment_package` packages both for the board, in
+`deploy/`. These three need a shell with a bitfile build (`pynq`), and each is refused
+at its turn on another, such as `ip`. An output made from another is listed after it:
+the driver after the bitfile, the deployment after both; a step whose input is missing
+is refused at its turn, naming the step to list before it. `step_resources_report`
 writes `report/resources.json`: each member of the shell (the partition, each end,
 each IP of the static region) and their total, as the model states them, as Vivado
-synthesized each IP out of context (`pynq`'s per-IP runs with `bitfile`; `ip`'s
-packaged partition with `ooc_synth`), and as placed (`pynq` with `bitfile`); with
-`ooc_synth`, also the partition per member, what synthesis flattened
-`unattributed`. The shell outputs (`bitfile`, `pynq_driver`, `deployment_package`)
-need a shell that integrates the partition, so they are refused on `ip`. The default steps are the build's phases' steps, in order; a phase
-is a name for its steps: `phase_prepare_model` (the export cleaned, its pre- and post-processing added,
-its Quant nodes lowered, then tidied, streamlined and made channels-last),
-`phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator` (the
-partition), `phase_optimize_hardware` (their choices, one strategy step at a time, and
-the partition's verification), `phase_emit_hardware` (the partition's IP) and
-`phase_generate_outputs` (what the shell makes), in
-`finn.builder.build_dataflow_steps.build_dataflow_phases`. `steps` is the list the build
-runs in place of the default one: phase names (each its steps), step names, import paths
-(`package.module.name`) of a step function or of a qonnx `Transformation` class, run with
-its defaults, or in Python the function, `functools.partial` or `Transformation` itself.
-A list names a phase for the steps it does not change, as above; in Python,
-`finn.builder.build_dataflow_steps.default_steps()` is the default list by step name, to
-change and give as `steps`. `start_step` and `stop_step` name a step once in the list,
-or a phase: its first step to start from, its last to stop after.
+synthesized each IP out of context (`pynq`'s per-IP runs with the bitfile; `ip`'s
+packaged partition with `ooc_synth`), and as placed (`pynq` with the bitfile); with
+`ooc_synth`, also the partition per member, what synthesis flattened `unattributed`.
+
+A phase is a name for its steps: `phase_prepare_model` (the export cleaned, its pre- and
+post-processing added, its Quant nodes lowered, then tidied, streamlined and made
+channels-last), `phase_convert_to_hardware` (the KernelOps), `phase_create_accelerator`
+(the partition), `phase_optimize_hardware` (their choices, one strategy step at a time,
+and the partition's verification), `phase_emit_hardware` (the packaged IP) and
+`phase_generate_outputs` (the bitfile, the driver, the resources report and the
+deployment package), in `finn.builder.build_dataflow_steps.build_dataflow_phases`. The
+premade lists, in `build_dataflow_lists` beside them, are names for a list from the
+export to an output, each the first four phases' steps, then:
+
+| List | Then | Makes |
+|---|---|---|
+| `list_partition` (the default) | `step_resources_report` | the partition, its choices (`kernel_choices.json`) and its modelled resources |
+| `list_ip` | `step_package_partition`, `step_resources_report` | and the packaged IP, its interface description and testbench |
+| `list_bitfile` | `step_build_bitfile`, `step_resources_report` | and the bitfile (`pynq`) |
+| `list_deployment` | `step_build_bitfile`, `step_make_driver`, `step_resources_report`, `step_deployment_package` | and the bitfile, its driver and the deployment package (`pynq`) |
+
+`steps` is the list the build runs in place of the default one: names of phases or
+premade lists (each its steps), step names, import paths (`package.module.name`) of a
+step function or of a qonnx `Transformation` class, run with its defaults, or in Python
+the function, `functools.partial` or `Transformation` itself. A list names a phase for
+the steps it does not change, as above; a premade list stands alone (`"steps":
+["list_ip"]`); in Python, `finn.builder.build_dataflow_steps.default_steps()` is the
+default list by step name, to change and give as `steps`. `start_step` and `stop_step`
+name a step once in the list, or a phase or premade list: its first step to start from,
+its last to stop after.
 
 The configuration's fields say how the build runs (`output_dir`, `target`, `toolchain`,
-`generate_outputs`, `steps`, `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
+`steps`, `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
 `verbose`). Every other top-level key is a setting (in Python, `settings={...}`): the
 value of the keyword-only parameter of that name of the steps that declare it
 (`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its
@@ -617,9 +636,9 @@ the same name share its value, and a step that names a parameter like a field is
 refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
-the strategy steps theirs (below); `step_build_bitfile` `hw_debug` (integrated
-logic analyzers on the ends' streams, refused by that step on a shell without a bitfile
-build, such as `ip`); its clock report's objective
+the strategy steps theirs (below); `step_package_partition` `ooc_synth`;
+`step_build_bitfile` `hw_debug` (integrated logic analyzers on the ends' streams); its
+clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
 (a pin, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and

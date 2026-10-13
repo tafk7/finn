@@ -194,7 +194,7 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
     [
         (
             "step_size_fifo",
-            "step-unknown: steps[1]: 'step_size_fifo' is no step or phase; the steps: "
+            "step-unknown: steps[1]: 'step_size_fifo' is no step or named list; the steps: "
             "step_cleanup, ",
         ),
         (
@@ -207,7 +207,7 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
             "finn.builder.build_dataflow_steps has no 'step_size_fifo'",
         ),
         ("pathlib.Path", "step-invalid: steps[1]: Path is a class, not a Transformation"),
-        (3, "step-invalid: steps[1]: 3 is no step: a phase or step name, an import path"),
+        (3, "step-invalid: steps[1]: 3 is no step: the name of a step or named list, an"),
     ],
 )
 def test_an_entry_that_names_no_step_is_refused_naming_its_place(entry: Any, message: str) -> None:
@@ -228,18 +228,15 @@ DEFAULT = [
     "step_create_dataflow_partition",
     "step_size_fifos",
     "step_verify_partition",
-    "step_package_partition",
-    "step_build_bitfile",
-    "step_make_driver",
     "step_resources_report",
-    "step_deployment_package",
 ]
 
 
-def test_the_default_list_is_every_phases_steps_by_name() -> None:
+def test_the_default_list_is_the_partitions_premade_list_by_name() -> None:
     assert default_steps() == DEFAULT
     assert names(build_plan(config())) == DEFAULT
     assert names(build_plan(config(steps=default_steps()))) == DEFAULT
+    assert names(build_plan(config(steps=["list_partition"]))) == DEFAULT
 
 
 def test_a_list_made_from_the_default_one_is_the_list() -> None:
@@ -498,26 +495,27 @@ def test_a_refused_plan_is_the_builds_outcome_before_its_first_step(tmp_path: Pa
 # -- the plan knows no step ---------------------------------------------------------------------
 
 
-def test_the_plan_resolves_a_list_over_the_phases_and_steps_it_is_given() -> None:
+def test_the_plan_resolves_a_list_over_the_named_lists_and_steps_it_is_given() -> None:
     """The plan names no step of its own (it imports none): it resolves a list over the
-    phases and the steps by name the build gives it, the default list every phase's
-    steps, and refuses a name neither holds, naming both."""
-    phases: dict[str, list[StepFunction]] = {"phase_scale": [step_scaled, step_typed]}
+    named lists and the steps by name the build gives it, without ``steps`` the default
+    list it is given, and refuses a name neither holds, naming both."""
+    lists: dict[str, list[StepFunction]] = {"phase_scale": [step_scaled, step_typed]}
     named: dict[str, StepFunction] = {
         "step_scaled": step_scaled,
         "step_typed": step_typed,
         "step_needs": step_needs,
     }
-    assert names(resolve_plan(config(), phases, named)) == ["step_scaled", "step_typed"]
+    default = ["phase_scale"]
+    assert names(resolve_plan(config(), lists, named, default)) == ["step_scaled", "step_typed"]
     listed = config(
         steps=["phase_scale", "step_needs"], stop_step="phase_scale", settings={"target_fps": 1}
     )
-    assert names(resolve_plan(listed, phases, named)) == ["step_scaled", "step_typed"]
+    assert names(resolve_plan(listed, lists, named, default)) == ["step_scaled", "step_typed"]
     with pytest.raises(ConfigurationRefused) as refusal:
-        resolve_plan(config(steps=["step_cleanup"]), phases, named)
+        resolve_plan(config(steps=["step_cleanup"]), lists, named, default)
     assert finding_line(refusal.value.findings[0]) == (
-        "step-unknown: steps[0]: 'step_cleanup' is no step or phase; the steps: step_scaled, "
-        "step_typed, step_needs; the phases: phase_scale"
+        "step-unknown: steps[0]: 'step_cleanup' is no step or named list; the steps: "
+        "step_scaled, step_typed, step_needs; the named lists: phase_scale"
     )
     imported = {
         node.module

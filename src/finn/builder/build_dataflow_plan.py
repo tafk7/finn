@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The build's plan (``resolve_plan``): the steps a configuration runs, in order, each
-with its settings. The build resolves it before its first step, from the configuration
-and the names its phases and steps go by, which the build gives.
+with its settings. The build resolves it before its first step, from the configuration,
+the names its steps and its named lists (phases and premade lists) go by, and its
+default list, which the build gives.
 
-**The list.** A build runs ``steps``, else every phase's steps. An entry is the name of
-a phase (its steps) or of a step; an import path of a step function or a qonnx
+**The list.** A build runs ``steps``, else its default list. An entry is the name of a
+named list (its steps) or of a step; an import path of a step function or a qonnx
 Transformation class; or in Python the object itself, a function (a
 ``functools.partial`` too), a Transformation instance or class. A Transformation runs
 as ``model.transform(transformation)``, a class constructed with its defaults, and is
@@ -19,7 +20,7 @@ the configuration's ``base_dir``. Steps that declare one name share its value, s
 must agree on its annotation and default. A setting without a default must be given.
 
 **Start and stop.** ``start_step`` and ``stop_step`` name a step once in the list, or a
-phase: its first step, or its last. The build starts from the model the step before
+named list: its first step, or its last. The build starts from the model the step before
 ``start_step`` saved.
 
 ``resolve_plan`` refuses at the first entry that does not resolve; otherwise it refuses
@@ -74,7 +75,7 @@ class Setting:
 
 @dataclass(frozen=True)
 class Plan:
-    """The build's list of steps, phases expanded (``steps``); the slice of it the build
+    """The build's list of steps, named lists expanded (``steps``); the slice of it the build
     runs (``run``); and each setting a step of the list declares."""
 
     steps: tuple[Step, ...]
@@ -101,8 +102,9 @@ class Plan:
 _Declared = tuple[str, Callable[..., ModelWrapper], Mapping[str, tuple[Any, Any]]]
 
 
-#: The build's phases: each phase's steps, in order, by the phase's name.
-Phases = Mapping[str, Sequence[StepFunction]]
+#: The build's named lists (its phases and premade lists): each list's steps, in order, by
+#: the list's name.
+NamedLists = Mapping[str, Sequence[StepFunction]]
 
 
 def _refusal(code: str, place: str | None, message: str) -> ConfigurationRefused:
@@ -110,12 +112,12 @@ def _refusal(code: str, place: str | None, message: str) -> ConfigurationRefused
     return ConfigurationRefused([config_finding(code, message, place)])
 
 
-def _index(steps: tuple[Step, ...], phases: Phases, name: str, last: bool, place: str) -> int:
+def _index(steps: tuple[Step, ...], lists: NamedLists, name: str, last: bool, place: str) -> int:
     """The index in ``steps`` of the step ``name`` names: a step once in the list, or a
-    phase's first step (its last if ``last``). Refuses any other, at ``place``."""
+    named list's first step (its last if ``last``). Refuses any other, at ``place``."""
     named, stated = name, repr(name)
-    if name in phases:
-        named = phases[name][-1 if last else 0].__name__
+    if name in lists:
+        named = lists[name][-1 if last else 0].__name__
         stated = f"{name!r} (its {'last' if last else 'first'} step, {named!r})"
     found = [index for index, step in enumerate(steps) if step.name == named]
     if len(found) == 1:
@@ -125,7 +127,7 @@ def _index(steps: tuple[Step, ...], phases: Phases, name: str, last: bool, place
         raise _refusal("step-ambiguous", place, message)
     message = (
         f"{stated} is not one of this build's steps; its steps: "
-        f"{', '.join(step.name for step in steps)}; the phases: {', '.join(phases)}"
+        f"{', '.join(step.name for step in steps)}; the named lists: {', '.join(lists)}"
     )
     raise _refusal("step-absent", place, message)
 
@@ -170,8 +172,8 @@ def _step(entry: object, place: str) -> _Declared:
         return type(entry).__name__, _applying(entry), {}
     if not callable(entry):
         message = (
-            f"{entry!r} is no step: a phase or step name, an import path, a function or a "
-            "Transformation"
+            f"{entry!r} is no step: the name of a step or named list, an import path, a "
+            "function or a Transformation"
         )
         raise _refusal("step-invalid", place, message)
     function = _origin(entry)
@@ -198,20 +200,20 @@ def _origin(function: object) -> object:
 
 
 def _resolved(
-    entry: object, place: str, phases: Phases, named: Mapping[str, StepFunction]
+    entry: object, place: str, lists: NamedLists, named: Mapping[str, StepFunction]
 ) -> list[_Declared]:
-    """The steps an entry names: a phase's, or one."""
+    """The steps an entry names: a named list's, or one."""
     if not isinstance(entry, str):
         return [_step(entry, place)]
-    if entry in phases:
-        return [_step(each, place) for each in phases[entry]]
+    if entry in lists:
+        return [_step(each, place) for each in lists[entry]]
     if entry in named:
         return [_step(named[entry], place)]
     if "." in entry:
         return [_step(_imported(entry, place), place)]
     message = (
-        f"{entry!r} is no step or phase; the steps: {', '.join(named)}; "
-        f"the phases: {', '.join(phases)}"
+        f"{entry!r} is no step or named list; the steps: {', '.join(named)}; "
+        f"the named lists: {', '.join(lists)}"
     )
     raise _refusal("step-unknown", place, message)
 
@@ -289,17 +291,19 @@ def _in_directory(value: Any, directory: str) -> Any:
 
 
 def resolve_plan(
-    cfg: DataflowBuildConfig, phases: Phases, named: Mapping[str, StepFunction]
+    cfg: DataflowBuildConfig,
+    lists: NamedLists,
+    named: Mapping[str, StepFunction],
+    default: Sequence[str],
 ) -> Plan:
     """The configuration's plan, or its refusal (the module docstring), in the build whose
-    phases are ``phases`` and whose steps by name are ``named``."""
-    stated = cfg.steps
-    if stated is None:
-        stated = [step.__name__ for steps in phases.values() for step in steps]
+    named lists are ``lists``, whose steps by name are ``named``, and whose list without
+    ``steps`` is ``default``, entries by name."""
+    stated = default if cfg.steps is None else cfg.steps
     listed = [
         step
         for index, entry in enumerate(stated)
-        for step in _resolved(entry, f"steps[{index}]", phases, named)
+        for step in _resolved(entry, f"steps[{index}]", lists, named)
     ]
     settings, refused = _settings(cfg, listed)
     steps = tuple(
@@ -307,12 +311,12 @@ def resolve_plan(
         for name, function, declared in listed
     )
     bounds = []
-    for place, name, end, default in (
+    for place, name, end, bound in (
         ("start_step", cfg.start_step, False, 0),
         ("stop_step", cfg.stop_step, True, len(steps) - 1),
     ):
         try:
-            bounds.append(default if name is None else _index(steps, phases, name, end, place))
+            bounds.append(bound if name is None else _index(steps, lists, name, end, place))
         except ConfigurationRefused as absent:
             refused.extend(absent.findings)
     if len(bounds) == 2 and cfg.start_step is not None and bounds[0] == 0:
@@ -325,7 +329,7 @@ def resolve_plan(
 
 
 __all__ = [
-    "Phases",
+    "NamedLists",
     "Plan",
     "Setting",
     "Step",

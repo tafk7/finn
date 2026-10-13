@@ -28,19 +28,19 @@ from finn.builder.build_dataflow import (
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
-from finn.builder.build_dataflow_config import (
-    ConfigurationRefused,
-    DataflowBuildConfig,
-    DataflowOutputType,
-)
+from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import (
+    DEFAULT_LIST,
     KERNEL_STRATEGY_STEPS,
+    build_dataflow_lists,
     build_dataflow_phases,
     build_dataflow_step_lookup,
     default_steps,
     step_add_pre_post_processing,
     step_build_bitfile,
+    step_deployment_package,
+    step_make_driver,
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
@@ -73,7 +73,6 @@ def place(finding: Finding) -> object:
 def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
     assert cfg.target == TargetRequest(period_ns=5.0, board="Ultra96", shell="ip")
-    assert cfg.generate_outputs == []
     assert cfg.settings == {}
     assert cfg.steps is None and cfg.toolchain is None and cfg.base_dir is None
     # Every setting at its default: the export's own inputs and outputs, and FIFO sizing
@@ -88,7 +87,6 @@ def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
         "topk": None,
         "fifo_margin": 0,
         "fifo_ram_style": None,
-        "hw_debug": False,
     }
     assert not any(setting.given for setting in settings.values())
     assert [step.name for step in plan.steps] == default_steps()
@@ -104,6 +102,7 @@ SETTINGS: dict[str, Any] = {
     "topk": 1,
     "fifo_margin": 2,
     "fifo_ram_style": "block",
+    "ooc_synth": True,
     "hw_debug": True,
     "target_fps": 1_000_000,
 }
@@ -113,7 +112,6 @@ def test_a_configuration_holds_through_json() -> None:
     cfg = DataflowBuildConfig(
         output_dir="out",
         target=TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq"),
-        generate_outputs=list(DataflowOutputType),
         toolchain=Selection(
             settings=("/tools/settings64.sh",), hls_frontend="vitis-run", vivado_jobs=4
         ),
@@ -138,13 +136,6 @@ def test_a_configuration_holds_through_json() -> None:
         "part": None,
         "shell": "pynq",
     }
-    assert stated["generate_outputs"] == [
-        "stitched_ip",
-        "ooc_synth",
-        "bitfile",
-        "pynq_driver",
-        "deployment_package",
-    ]
     # The settings beside the fields, as stated; the list as written; no base directory.
     assert {name: stated[name] for name in SETTINGS} == SETTINGS
     assert "settings" not in stated and "base_dir" not in stated
@@ -170,8 +161,8 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() 
     )
     assert finding.message == (
         "no step of this build declares it; the settings its steps read: fifo_margin, "
-        "fifo_ram_style, hw_debug, input_datatype, max_multithreshold_bit_width, "
-        "override_inpsize, preprocessing, topk"
+        "fifo_ram_style, input_datatype, max_multithreshold_bit_width, override_inpsize, "
+        "preprocessing, topk"
     )
 
 
@@ -189,7 +180,10 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() 
         ({"target": {"board": "Ultra96"}}, "configuration.target: no period_ns"),
         ({"target": {"period_ns": "5"}}, "configuration.target.period_ns: a float, not '5'"),
         ({"toolchain": {"hls_frontend": "hls"}}, "configuration.toolchain: Unknown HLS frontend"),
-        ({"generate_outputs": None}, "configuration.generate_outputs: null, and it is not"),
+        (
+            {"save_intermediate_models": None},
+            "configuration.save_intermediate_models: null, and it is not",
+        ),
         ({"verbose": "yes"}, "configuration.verbose: a bool, not 'yes'"),
         ({"steps": "phase_prepare_model"}, "configuration.steps: "),
         ({"settings": {"topk": 1}}, "configuration.settings: JSON states each setting as a"),
@@ -247,7 +241,8 @@ def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written()
         ({"max_multithreshold_bit_width": "8"}, "configuration.max_multithreshold_bit_width: "),
         ({"fifo_margin": "2"}, "configuration.fifo_margin: an int, not '2'"),
         ({"fifo_ram_style": 3}, "configuration.fifo_ram_style: a str, not 3"),
-        ({"hw_debug": "yes"}, "configuration.hw_debug: a bool, not 'yes'"),
+        ({"steps": ["list_bitfile"], "hw_debug": "yes"}, "configuration.hw_debug: a bool, not"),
+        ({"steps": ["list_ip"], "ooc_synth": 1}, "configuration.ooc_synth: a bool, not 1"),
         ({"override_inpsize": [1, "28"]}, "configuration.override_inpsize: "),
     ],
 )
@@ -295,34 +290,31 @@ def test_a_value_preparation_cannot_take_is_refused_when_its_step_runs(
     assert finding.message == refused
 
 
-def test_hw_debug_on_a_shell_without_a_build_is_refused_by_the_bitfile_step() -> None:
-    """step_build_bitfile, the setting's reader, refuses it where the shell has no
-    bitfile build, whether or not the bitfile is asked, saying what to change; the plan
-    and the checks before the first step pass it."""
+@pytest.mark.parametrize("step", [step_build_bitfile, step_make_driver, step_deployment_package])
+def test_an_output_of_a_shell_without_a_bitfile_build_is_refused_at_its_step(
+    step: Callable[..., ModelWrapper],
+) -> None:
+    """The bitfile, the driver and the deployment are the bitfile build's: on a shell
+    without one, each step is refused when it runs, with hw_debug or without, saying what
+    to change; the plan and the checks before the first step pass them."""
     model = ModelWrapper(helper.make_model(helper.make_graph([], "empty", [], [])))
-    for shell, passed in (("ip", False), ("pynq", True)):
-        target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
-        cfg = DataflowBuildConfig.from_json(
-            json.dumps({**STATED, "target": target, "hw_debug": True})
-        )
-        assert build_plan(cfg).settings["hw_debug"].readers == ("step_build_bitfile",)
-        assert [each.code for each in checked(cfg) if each.code == "hw-debug-shell"] == []
-        if passed:
-            # No bitfile asked: the step skips.
-            assert step_build_bitfile(model, cfg, hw_debug=True) is model
-            continue
-        with pytest.raises(ConfigurationRefused) as refusal:
-            step_build_bitfile(model, cfg, hw_debug=True)
-        (finding,) = refusal.value.findings
-        assert (finding.code, finding.kind, place(finding)) == (
-            "hw-debug-shell",
-            FindingKind.REJECTION,
-            "configuration.hw_debug",
-        )
-        assert finding.message == (
-            "the 'ip' shell has no build to take it; state a shell with a bitfile build "
-            "(pynq, for a board), or leave hw_debug out"
-        )
+    stated = {**STATED, "steps": ["list_deployment"], "hw_debug": True}
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    assert build_plan(cfg).settings["hw_debug"].readers == ("step_build_bitfile",)
+    assert [each for each in checked(cfg) if each.kind is FindingKind.REJECTION] == []
+    with pytest.raises(ConfigurationRefused) as refusal:
+        step(model, cfg)
+    (finding,) = refusal.value.findings
+    assert (finding.code, finding.kind, place(finding)) == (
+        "shell-without-bitfile",
+        FindingKind.REJECTION,
+        "configuration.target.shell",
+    )
+    name = step.__name__
+    assert finding.message == (
+        f"the 'ip' shell has no bitfile build, which {name} needs; state a shell that has "
+        f"one (pynq, for a board), or leave {name} out of the steps"
+    )
 
 
 def board_build(tmp_path: Path, board: str, shell: str = "pynq") -> DataflowBuildConfig:
@@ -412,44 +404,63 @@ def test_a_build_for_a_board_that_requires_no_release_never_asks_vivado(
     ]
 
 
-def test_an_output_the_build_does_not_make_is_refused() -> None:
-    refused = "configuration.generate_outputs[0]: 'bitstream'; one of ['stitched_ip',"
-    with pytest.raises(ValueError, match=re.escape(refused)):
-        DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": ["bitstream"]}))
-    with pytest.raises(ValueError, match=re.escape(refused)):
-        named: Any = ["bitstream"]
-        DataflowBuildConfig(
-            output_dir="out", target=TargetRequest(period_ns=5.0), generate_outputs=named
+def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None:
+    """A list makes the outputs whose steps it names; a configuration that states
+    outputs apart from its steps is refused as a key no step declares."""
+    stated = {**STATED, "generate_outputs": ["bitfile"]}
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    (finding,) = refusal(cfg).findings
+    assert (finding.code, place(finding)) == ("setting-unknown", "configuration.generate_outputs")
+    with pytest.raises(TypeError, match="generate_outputs"):
+        named: Any = {"generate_outputs": ["bitfile"]}
+        DataflowBuildConfig(output_dir="out", target=TargetRequest(period_ns=5.0), **named)
+
+
+def test_the_premade_lists_end_at_their_outputs() -> None:
+    """Each premade list is the phases from the export to the checked partition, then the
+    steps of its outputs and the resources report; the default list is the first."""
+    partition = [
+        step.__name__
+        for phase in (
+            "phase_prepare_model",
+            "phase_convert_to_hardware",
+            "phase_create_accelerator",
+            "phase_optimize_hardware",
         )
-    stated = {**STATED, "generate_outputs": ["stitched_ip", "ooc_synth"]}
-    assert DataflowBuildConfig.from_json(json.dumps(stated)).generate_outputs == [
-        DataflowOutputType.STITCHED_IP,
-        DataflowOutputType.OOC_SYNTH,
+        for step in build_dataflow_phases[phase]
     ]
+    lists = {
+        name: [step.__name__ for step in steps] for name, steps in build_dataflow_lists.items()
+    }
+    assert {name: steps[len(partition) :] for name, steps in lists.items()} == {
+        "list_partition": ["step_resources_report"],
+        "list_ip": ["step_package_partition", "step_resources_report"],
+        "list_bitfile": ["step_build_bitfile", "step_resources_report"],
+        "list_deployment": [
+            "step_build_bitfile",
+            "step_make_driver",
+            "step_resources_report",
+            "step_deployment_package",
+        ],
+    }
+    assert all(steps[: len(partition)] == partition for steps in lists.values())
+    assert DEFAULT_LIST == "list_partition"
+    assert default_steps() == lists["list_partition"]
+    for name, steps in lists.items():
+        cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "steps": [name]}))
+        assert [step.name for step in build_plan(cfg).steps] == steps
 
 
-def test_a_configuration_made_in_python_names_its_outputs_as_json_does() -> None:
-    """Each name becomes its output, so the checks read a configuration made in Python
-    as one read from JSON: here the driver, asked on the ip shell without its bitfile."""
-    target = TargetRequest(period_ns=5.0, board="Ultra96")
-    named: Any = ["pynq_driver"]
-    cfg = DataflowBuildConfig(output_dir="out", target=target, generate_outputs=named)
-    assert cfg.generate_outputs == [DataflowOutputType.PYNQ_DRIVER]
-    assert [(finding.code, place(finding)) for finding in checked(cfg)] == [
-        ("shell-outputs", "configuration.generate_outputs"),
-        ("output-needs", "configuration.generate_outputs"),
-    ]
-
-
-def test_the_default_list_and_the_lookup_are_the_phase_tables() -> None:
-    """Both derived from the one table: every phase's steps in order, and every step
-    once, by its name, the strategy steps no phase runs by default after the phases'."""
+def test_the_lookup_is_the_phase_tables() -> None:
+    """Every step once, by its name: the phases' steps in order, then the strategy steps
+    no phase runs; every premade list's steps among them."""
     in_phases = [step for steps in build_dataflow_phases.values() for step in steps]
-    assert default_steps() == [step.__name__ for step in in_phases]
     others = [step for step in KERNEL_STRATEGY_STEPS if step not in in_phases]
     assert list(build_dataflow_step_lookup.values()) == [*in_phases, *others]
     assert all(name == step.__name__ for name, step in build_dataflow_step_lookup.items())
     assert len(set(in_phases)) == len(in_phases)
+    listed = {step for steps in build_dataflow_lists.values() for step in steps}
+    assert listed <= set(in_phases)
 
 
 def test_the_steps_declare_their_settings_each_with_a_default() -> None:
@@ -465,7 +476,6 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
         "max_multithreshold_bit_width": ("step_qonnx_to_finn",),
         "fifo_margin": ("step_size_fifos",),
         "fifo_ram_style": ("step_size_fifos",),
-        "hw_debug": ("step_build_bitfile",),
     }
 
 
@@ -482,15 +492,21 @@ def saved_before_start(cfg: DataflowBuildConfig) -> str:
     return name
 
 
-def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
-    """A step inside a phase, or a phase: its first step to start from, its last to
-    stop after; the build starts from the model the step before saved."""
-    inside = {**STATED, "start_step": "step_size_fifos", "stop_step": "step_package_partition"}
+def test_a_build_starts_and_stops_at_any_step_or_named_list() -> None:
+    """A step inside a phase, or a phase or premade list: its first step to start from,
+    its last to stop after; the build starts from the model the step before saved."""
+    inside = {
+        **STATED,
+        "steps": ["list_ip"],
+        "start_step": "step_size_fifos",
+        "stop_step": "step_package_partition",
+    }
     cfg = DataflowBuildConfig.from_json(json.dumps(inside))
     assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
     assert saved_before_start(cfg) == "step_create_dataflow_partition"
     phases = {
         **STATED,
+        "steps": ["list_ip"],
         "start_step": "phase_optimize_hardware",
         "stop_step": "phase_emit_hardware",
     }
@@ -499,15 +515,19 @@ def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     assert saved_before_start(cfg) == "step_create_dataflow_partition"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_prepare_model"}))
     assert names(cfg) == [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
+    listed = {**STATED, "start_step": "step_verify_partition", "stop_step": "list_partition"}
+    cfg = DataflowBuildConfig.from_json(json.dumps(listed))
+    assert names(cfg) == ["step_verify_partition", "step_resources_report"]
 
 
-def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases() -> None:
+def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_lists() -> None:
     cfg = DataflowBuildConfig.from_json(
         json.dumps({**STATED, "steps": ["phase_emit_hardware"], "start_step": "step_size_fifos"})
     )
+    lists = ", ".join([*build_dataflow_phases, *build_dataflow_lists])
     message = (
         "'step_size_fifos' is not one of this build's steps; its steps: "
-        f"step_package_partition; the phases: {', '.join(build_dataflow_phases)}"
+        f"step_package_partition; the named lists: {lists}"
     )
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding), finding.message) == ("step-absent", "start_step", message)
@@ -516,12 +536,13 @@ def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases()
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding)) == ("step-absent", "stop_step")
     assert finding.message.startswith("'phase_kernel' is not one of this build's steps")
-    assert "step_deployment_package" in finding.message
+    assert "step_resources_report" in finding.message
     assert "phase_generate_outputs" in finding.message
+    assert "list_deployment" in finding.message
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "steps": ["phase_kernel"]}))
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding)) == ("step-unknown", "steps[0]")
-    assert finding.message.startswith("'phase_kernel' is no step or phase; the steps: ")
+    assert finding.message.startswith("'phase_kernel' is no step or named list; the steps: ")
 
 
 def test_a_build_runs_saves_times_and_resumes_each_step_of_a_phase(
@@ -620,17 +641,19 @@ def test_a_configuration_is_refused_with_every_rejection_at_once(tmp_path: Path)
     assert "Configuration refused: 3 findings" in log
     assert log.count("setting-required: configuration.target_fps: ") == 1
     # The target resolves, the plan too: the checks' rejections, and their warnings once.
-    stated = {**stated, "target": {"period_ns": 5.0, "board": "Ultra96"}, "target_fps": 1e6}
+    # The board requires a Vivado release, and the toolchain's route has no Vivado.
+    target = {"period_ns": 5.0, "board": "AUP-ZU3_8GB", "shell": "pynq"}
+    stated = {**stated, "target": target, "target_fps": 1e6}
     del stated["fifo_margins"]
-    stated["generate_outputs"] = ["bitfile"]
     stated["stop_step"] = "step_create_dataflow_partition"
     cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
     with pytest.raises(ConfigurationRefused) as refused:
         build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
-    assert [finding.code for finding in refused.value.findings] == ["shell-outputs"]
+    assert [finding.code for finding in refused.value.findings] == ["board-vivado"]
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     assert [each["code"] for each in manifest["configuration_findings"]] == [
-        "shell-outputs",
+        "board-vivado",
         "setting-unread",
     ]
     assert manifest["plan"] is not None

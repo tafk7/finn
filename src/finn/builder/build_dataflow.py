@@ -56,8 +56,10 @@ from finn.builder.build_dataflow_manifest import (
 )
 from finn.builder.build_dataflow_plan import Plan, resolve_plan
 from finn.builder.build_dataflow_steps import (
+    build_dataflow_lists,
     build_dataflow_phases,
     build_dataflow_step_lookup,
+    default_steps,
 )
 from finn.core.space import Finding, FindingKind, by_code
 from finn.platform.refusal import TargetRefused
@@ -188,9 +190,10 @@ def _indexed(cfg: DataflowBuildConfig, target: Target | None):
 
 
 def build_plan(cfg: DataflowBuildConfig) -> Plan:
-    """The plan of ``cfg`` over the build's phases and steps (``resolve_plan``), or its
-    refusal."""
-    return resolve_plan(cfg, build_dataflow_phases, build_dataflow_step_lookup)
+    """The plan of ``cfg`` over the build's phases, premade lists and steps, its default
+    list without ``steps`` (``resolve_plan``), or its refusal."""
+    lists = {**build_dataflow_phases, **build_dataflow_lists}
+    return resolve_plan(cfg, lists, build_dataflow_step_lookup, default_steps())
 
 
 def _configured(

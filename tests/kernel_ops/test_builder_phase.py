@@ -37,10 +37,8 @@ from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
 from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
-    SHELL_OUTPUTS,
     ConfigurationRefused,
     DataflowBuildConfig,
-    DataflowOutputType,
     StepFunction,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
@@ -173,13 +171,11 @@ ULTRA96_PYNQ = TargetRequest(board="Ultra96", period_ns=5.0, shell="pynq")
 
 
 def config(directory: Path, **settings: Any) -> DataflowBuildConfig:
-    """Ultra96 in the Zynq shell at 5 ns, a bitfile asked, the default steps, no
-    debugger."""
+    """Ultra96 in the Zynq shell at 5 ns, the default steps, no debugger."""
     return DataflowBuildConfig(
         **{
             "output_dir": str(directory / "output"),
             "target": ULTRA96_PYNQ,
-            "generate_outputs": [DataflowOutputType.BITFILE],
             "enable_build_pdb_debug": False,
             **settings,
         }
@@ -372,11 +368,10 @@ CHAIN_PINS = {"first": {"compute.packed.simd": 1}}
 
 def chain_build(directory: Path, strategies: list[str], **settings: Any) -> DataflowBuildConfig:
     """The Chain cut into a partition and explored by the strategy steps ``strategies``,
-    then verified, in the ``ip`` shell, nothing else asked."""
+    then verified, in the ``ip`` shell."""
     return config(
         directory,
         target=CHAIN_TARGET,
-        generate_outputs=[],
         steps=["step_create_dataflow_partition", *strategies, "step_verify_partition"],
         settings=settings,
     )
@@ -436,7 +431,6 @@ def test_a_users_folding_step_after_the_fifo_sizing_is_refused_at_packaging(
         cfg = config(
             tmp_path / name,
             target=CHAIN_TARGET,
-            generate_outputs=[DataflowOutputType.STITCHED_IP],
             steps=["step_create_dataflow_partition", *strategies, "step_package_partition"],
             settings={"kernel_choices_file": str(pins)},
         )
@@ -580,49 +574,60 @@ def refusal(cfg: DataflowBuildConfig) -> dict[str, list[str]]:
     return found
 
 
-def test_a_shells_outputs_need_a_shell_that_integrates_the_partition(tmp_path: Path) -> None:
-    """On the ``ip`` shell the build makes the packaged IP's outputs (stitched_ip,
-    ooc_synth), none of a shell's: a bitfile, driver or deployment asked is refused
-    before the build, naming only them and the shell; on pynq every output is
-    accepted. The bitfile's step refuses it too, by the shell the parent graph
-    states."""
+def test_a_shells_outputs_are_refused_at_their_steps_on_a_shell_without_one(
+    tmp_path: Path,
+) -> None:
+    """On the ``ip`` shell the build makes the packaged IP, none of a shell's outputs: a
+    list that names the bitfile, the driver and the deployment resolves and passes the
+    checks before the first step, and in a build the first of those steps is refused
+    when it runs, saying what to change; on pynq the same list passes."""
     on_ip = TargetRequest(board="Ultra96", period_ns=5.0)
-    every = list(DataflowOutputType)
-    cfg = config(tmp_path, target=on_ip, generate_outputs=every)
-    assert failed_checks(cfg) == {
-        "shell-outputs": [
-            "bitfile, pynq_driver, deployment_package: the 'ip' shell does not integrate "
-            "the partition; its outputs are the packaged IP's (stitched_ip, ooc_synth)"
-        ]
+    cfg = config(tmp_path, target=on_ip, steps=["list_deployment"])
+    assert failed_checks(cfg) == {}
+    assert failed_checks(config(tmp_path, steps=["list_deployment"])) == {}
+    model_file = tmp_path / "chain.onnx"
+    kernel_model().save(str(model_file))
+    cut = config(
+        tmp_path,
+        target=CHAIN_TARGET,
+        steps=["step_create_dataflow_partition", "phase_generate_outputs"],
+    )
+    assert build_dataflow_cfg(str(model_file), cut) == -1
+    outcome = json.loads((Path(cut.output_dir) / MANIFEST_FILE).read_text())["outcome"]
+    assert {key: outcome[key] for key in ("status", "step", "kind", "findings")} == {
+        "status": "failed",
+        "step": "step_build_bitfile",
+        "kind": "refusal",
+        "findings": {"shell-without-bitfile": 1},
     }
-    ip_outputs = [DataflowOutputType.STITCHED_IP, DataflowOutputType.OOC_SYNTH]
-    assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=ip_outputs)) == {}
-    assert failed_checks(config(tmp_path, target=on_ip, generate_outputs=[])) == {}
-    assert failed_checks(config(tmp_path, generate_outputs=every)) == {}
+    assert outcome["error"]["message"] == (
+        "shell-without-bitfile: configuration.target.shell: the 'ip' shell has no bitfile "
+        "build, which step_build_bitfile needs; state a shell that has one (pynq, for a "
+        "board), or leave step_build_bitfile out of the steps"
+    )
+
+
+def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -> None:
+    """The driver sets the clock its bitfile delivers, and the deployment ships the bitfile
+    and the driver: listed without them before, each passes the checks and is refused
+    when it runs, naming the steps to list before it."""
+    for steps in (["step_make_driver"], ["step_deployment_package", "step_build_bitfile"]):
+        assert failed_checks(config(tmp_path, steps=steps)) == {}
     model = kernel_model()
+    write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
-    with pytest.raises(ValueError, match="bitfile: the 'ip' shell does not integrate"):
-        step_build_bitfile(parent, cfg)
-
-
-def test_an_output_is_asked_with_the_outputs_it_is_made_from(tmp_path: Path) -> None:
-    """The driver sets the clock its bitfile delivers, and the deployment ships the bitfile
-    and the driver: asked without them, each is refused before any step runs, naming
-    what it lacks."""
-    needs = "it is made from them, in the same build"
-    driver = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
-    assert failed_checks(driver) == {"output-needs": [f"pynq_driver needs bitfile: {needs}"]}
-    deployment = [DataflowOutputType.BITFILE, DataflowOutputType.DEPLOYMENT_PACKAGE]
-    assert failed_checks(config(tmp_path, generate_outputs=deployment)) == {
-        "output-needs": [f"deployment_package needs pynq_driver: {needs}"]
-    }
-    alone = config(tmp_path, generate_outputs=[DataflowOutputType.DEPLOYMENT_PACKAGE])
-    assert failed_checks(alone) == {
-        "output-needs": [f"deployment_package needs bitfile, pynq_driver: {needs}"]
-    }
-    shell = [DataflowOutputType.BITFILE, DataflowOutputType.PYNQ_DRIVER]
-    assert failed_checks(config(tmp_path, generate_outputs=shell)) == {}
+    cfg = config(tmp_path)
+    with pytest.raises(PynqRefused) as refused:
+        step_make_driver(parent, cfg)
+    ((code, message),) = [(each.code, each.message) for each in refused.value.findings]
+    assert code == "clock-absent"
+    assert message.endswith("; list step_build_bitfile before step_make_driver")
+    with pytest.raises(PynqRefused) as refused:
+        step_deployment_package(parent, cfg)
+    ((code, message),) = [(each.code, each.message) for each in refused.value.findings]
+    assert code == "bitfile-absent"
+    assert message.endswith("; list step_build_bitfile and step_make_driver before it")
 
 
 def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path: Path) -> None:
@@ -636,7 +641,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
-    cfg = config(tmp_path, generate_outputs=list(SHELL_OUTPUTS))
+    cfg = config(tmp_path)
     output = Path(cfg.output_dir)
     (output / "driver").mkdir(parents=True)
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
@@ -665,7 +670,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     assert str(refused.value) == (
         f"deployment_package: the driver in this output directory ({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
-        f"{design_digest(body)}; make the driver again (pynq_driver)"
+        f"{design_digest(body)}; make the driver again (step_make_driver)"
     )
     found.append(refused.value.findings)
     assert [(each.code, each.owner, each.kind) for (each,) in found] == [
@@ -755,7 +760,7 @@ def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
     unknown = TargetRequest(board="U250", period_ns=5.0)
-    assert refusal(config(tmp_path, target=unknown, generate_outputs=[])) == {
+    assert refusal(config(tmp_path, target=unknown)) == {
         "unknown-board": [
             "'U250' is not a board (one of ['AUP-ZU3_8GB', 'KV260_SOM', "
             "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'V80', 'ZCU102', 'ZCU104', 'ZCU111'])"
@@ -763,7 +768,7 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
     }
     # A board the Zynq template cannot build: refused before any step runs.
     zcu111 = TargetRequest(board="ZCU111", period_ns=5.0, shell="pynq")
-    assert refusal(config(tmp_path, target=zcu111, generate_outputs=[])) == {
+    assert refusal(config(tmp_path, target=zcu111)) == {
         "no-shell-row": [
             "the 'pynq' shell has no row for board 'ZCU111': the Zynq "
             "template has no branch for it (no board preset)"
@@ -771,7 +776,7 @@ def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Pat
     }
     # The ip shell takes the part.
     on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
-    assert failed_checks(config(tmp_path, target=on_part, generate_outputs=[])) == {}
+    assert failed_checks(config(tmp_path, target=on_part)) == {}
 
 
 def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
@@ -804,9 +809,9 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
 
 def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
     """A build's steps are its own: another name is refused, naming its steps
-    (the strategy steps no phase runs by default among them) and phases, and the default
-    steps are its six phases' steps, in order."""
-    with pytest.raises(ValueError, match="'step_hw_codegen' is no step or phase") as refused:
+    (the strategy steps no phase runs by default among them) and named lists, and the
+    default steps are the partition's premade list, in order."""
+    with pytest.raises(ValueError, match="'step_hw_codegen' is no step or named list") as refused:
         build_plan(config(tmp_path, steps=["step_hw_codegen"]))
     assert "step_target_throughput" in str(refused.value)
     assert "phase_optimize_hardware" in str(refused.value)
@@ -821,11 +826,7 @@ def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
         "step_create_dataflow_partition",
         "step_size_fifos",
         "step_verify_partition",
-        "step_package_partition",
-        "step_build_bitfile",
-        "step_make_driver",
         "step_resources_report",
-        "step_deployment_package",
     ]
 
 
@@ -1361,15 +1362,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     for name, recorded in tool_recorders(tmp_path).items():
         monkeypatch.setattr(pynq_runner, name, recorded)
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / "build"))
-    cfg = config(
-        tmp_path,
-        settings=Z0_SETTINGS,
-        generate_outputs=[
-            DataflowOutputType.BITFILE,
-            DataflowOutputType.PYNQ_DRIVER,
-            DataflowOutputType.DEPLOYMENT_PACKAGE,
-        ],
-    )
+    cfg = config(tmp_path, settings=Z0_SETTINGS)
     vivado = FakeVivado(timing=TIMING_REPORT)
     cfg.prepared_toolchain = cast(Toolchain, vivado)
     # An earlier build's files in the same output directory, which nothing ships.
@@ -1541,9 +1534,9 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
-    cfg = config(tmp_path, generate_outputs=[DataflowOutputType.PYNQ_DRIVER])
+    cfg = config(tmp_path)
     report = Path(cfg.output_dir) / DELIVERED_CLOCK
-    with pytest.raises(ValueError, match=f"pynq_driver: no delivered clock \\({report}\\)"):
+    with pytest.raises(PynqRefused, match=f"pynq_driver: no delivered clock \\({report}\\)"):
         step_make_driver(parent, cfg)
     report.parent.mkdir(parents=True)
     unknown = finding_record(
@@ -1553,8 +1546,9 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
         step_make_driver(parent, cfg)
     report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
-    with pytest.raises(ValueError, match="the model states no bitfile"):
+    with pytest.raises(PynqRefused, match="the model states no bitfile") as refused:
         step_make_driver(parent, cfg)
+    assert [each.code for each in refused.value.findings] == ["bitfile-absent"]
     assert not (Path(cfg.output_dir) / "driver").exists()
 
 
@@ -1573,7 +1567,7 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     write_target(model, ULTRA96)
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
-    cfg = config(tmp_path, generate_outputs=list(SHELL_OUTPUTS))
+    cfg = config(tmp_path)
     output_dir = Path(cfg.output_dir)
     clock = output_dir / DELIVERED_CLOCK
     clock.parent.mkdir(parents=True)
@@ -1602,6 +1596,6 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     assert str(refused.value) == (
         f"{output}: the model's bitfile ({bitfile}) is stale: it was built from the design "
         f"{built_from}, and the partition {node.name}'s design is now {now}; build the "
-        "bitfile again (bitfile)"
+        "bitfile again (step_build_bitfile)"
     )
     assert not (output_dir / "driver").exists() and not (output_dir / "deploy").exists()

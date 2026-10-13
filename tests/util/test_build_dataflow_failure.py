@@ -17,14 +17,16 @@ import sys
 import warnings
 
 import finn.builder.build_dataflow as build
-from finn.builder.build_dataflow_config import (
-    ConfigurationRefused,
-    DataflowBuildConfig,
-    DataflowOutputType,
-)
+from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
-from finn.toolchain.launcher import SELECTED_BY, ToolFailed, ToolUnavailable
+from finn.toolchain.launcher import (
+    SELECTED_BY,
+    Selection,
+    Toolchain,
+    ToolFailed,
+    ToolUnavailable,
+)
 from finn.util.basic import make_build_dir
 
 
@@ -211,27 +213,28 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys)
     output = make_build_dir("test_build_failure_")
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
+    # A board that requires a Vivado release, and a toolchain whose route has no Vivado.
     cfg = DataflowBuildConfig(
         output_dir=output,
-        target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
+        target=TargetRequest(period_ns=10.0, board="AUP-ZU3_8GB", shell="pynq"),
         steps=[step_says, "step_size_fifos"],
         stop_step="step_says",
-        generate_outputs=[DataflowOutputType.BITFILE],
         settings={"fifo_margin": 2},
     )
-    refusal = "shell-outputs: configuration.generate_outputs: bitfile: the 'ip' shell does"
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": output})
+    refusal = "board-vivado: configuration.toolchain: AUP-ZU3_8GB requires Vivado 2024.1"
     with pytest.raises(ConfigurationRefused, match=refusal):
         build.build_dataflow_cfg(model, cfg)
     err = capsys.readouterr().err
     with open(f"{output}/{build.LOG_FILE}") as f:
         log = f.read()
     warning = "setting-unread: configuration.fifo_margin: only step_size_fifos read it"
-    assert err.splitlines()[:3] == [
+    lines = err.splitlines()
+    assert lines[:2] == [
         f"WARNING: {warning}, and start_step/stop_step leave them out",
         "ERROR: Configuration refused: 1 findings",
-        f"ERROR:   {refusal} not integrate the partition; its outputs are the packaged IP's "
-        "(stitched_ip, ooc_synth)",
     ]
+    assert lines[2].startswith(f"ERROR:   {refusal} or later, no Vivado detected")
     assert log.count(refusal) == 1 and log.count(warning) == 1
     assert "Traceback" not in log
     assert sorted(os.listdir(output)) == ["build_dataflow.log", "model.onnx", "report"]

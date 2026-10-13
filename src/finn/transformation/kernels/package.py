@@ -225,10 +225,14 @@ def resources_of(counts: Mapping[str, int]) -> Resources:
     return Resources(**found, bram18=bram18)
 
 
+#: The hierarchical utilization report ``run_synth`` writes in the packaging project.
+UTILIZATION_REPORTS = "*_partition_util.rpt"
+
+
 def partition_utilization_report(project: Path) -> Path:
     """The hierarchical utilization report of a partition packaged with ``run_synth`` in
     ``project``; ``ToolFailed`` unless Vivado left exactly one."""
-    reports = sorted(project.glob("*_partition_util.rpt"))
+    reports = sorted(project.glob(UTILIZATION_REPORTS))
     if len(reports) != 1:
         raise ToolFailed.of(
             "vivado",
@@ -343,6 +347,9 @@ class PackagePartition(Transformation):
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
         ).resolve()
         project.mkdir(parents=True, exist_ok=True)
+        # An earlier packaging's synthesis report is not this IP's.
+        for report in project.glob(UTILIZATION_REPORTS):
+            report.unlink()
         toolchain = self.toolchain
         emitted = emit_module(
             module,

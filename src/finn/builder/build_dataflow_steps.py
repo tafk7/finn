@@ -1,18 +1,23 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The build's steps, and at the end its phases (``build_dataflow_phases``).
+"""The build's steps, and at the end its phases (``build_dataflow_phases``) and premade
+lists (``build_dataflow_lists``).
 
 A step is a function ``(model, cfg, *, settings...) -> model``; its keyword-only
-parameters are its settings. A phase names a list of steps; a build without ``steps``
-runs every phase's steps in order (``default_steps``). A step refuses a setting it cannot
-take, or a model it cannot work on, when it runs, saying what to change: a setting's
-refusal is a ``ConfigurationRefused`` naming the setting.
+parameters are its settings. A phase names a list of steps, and so does a premade list,
+from the export to an output; a build without ``steps`` runs the default list
+(``default_steps``). A step refuses a setting it cannot take, or a model it cannot work
+on, when it runs, saying what to change: a setting's refusal is a
+``ConfigurationRefused`` naming the setting.
 
 The steps prepare a Brevitas export into a streamlined graph; convert its nodes to
 KernelOps and cut them into one partition; choose the partition's parameters, one
-strategy step at a time; and make the outputs the configuration asks for. Each step only
-calls the transformations that do its work.
+strategy step at a time; and make the outputs. Each output is a step, and a list makes
+the outputs whose steps it names: the packaged IP, the bitfile, the driver and the
+deployment package. A step whose input an earlier step makes refuses when that input is
+missing, naming the step to list before it. Each step only calls the transformations
+that do its work.
 """
 
 import logging
@@ -42,7 +47,6 @@ import finn.transformation.streamline.reorder as reorder
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
-    DataflowOutputType,
     StepFunction,
     config_finding,
 )
@@ -360,49 +364,56 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     return model
 
 
-def _refuse_drift(
-    model: ModelWrapper, cfg: DataflowBuildConfig, output: DataflowOutputType
-) -> None:
+def _refuse_drift(model: ModelWrapper, cfg: DataflowBuildConfig, output: str) -> None:
     """Refuse to make ``output`` if the partition's target is not the configuration's."""
     _, body, _ = partition_body(model)
-    refuse_drift(read_target(body), cfg.resolved_target, f"{output.value} build")
+    refuse_drift(read_target(body), cfg.resolved_target, f"{output} build")
 
 
-def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+def _refuse_shell(cfg: DataflowBuildConfig, step: str) -> None:
+    """Refuse ``step`` where the target's shell has no bitfile build: the bitfile, the
+    driver and the deployment are that build's."""
+    target = cfg.resolved_target
+    if shell_row(target.shell, target.board).integration == VIVADO_BLOCK_DESIGN:
+        return
+    message = (
+        f"the {target.shell!r} shell has no bitfile build, which {step} needs; state a "
+        f"shell that has one (pynq, for a board), or leave {step} out of the steps"
+    )
+    raise ConfigurationRefused(
+        [config_finding("shell-without-bitfile", message, "configuration.target.shell")]
+    )
+
+
+def step_package_partition(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, ooc_synth: bool = False
+) -> ModelWrapper:
     """Package the partition as an IP named ``partition`` into ``stitched_ip/``, with its
-    interface description (``interface.json``), if STITCHED_IP or OOC_SYNTH is asked.
-    The partition's body records the IP, so a shell's integration reuses it.
+    interface description (``interface.json``) and an XSim testbench in
+    ``stitched_ip/testbench``, which streams a frame of the partition's inputs drawn from
+    their datatypes. The partition's body records the IP, so a shell's integration
+    reuses it.
 
-    With OOC_SYNTH, the IP is synthesized out of context, and its utilization report
-    listed under this step. With STITCHED_IP, an XSim testbench is written into
-    ``stitched_ip/testbench``: it streams a frame of the partition's inputs drawn from
-    their datatypes."""
-    stitched = DataflowOutputType.STITCHED_IP in cfg.generate_outputs
-    ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
-    if not (stitched or ooc):
-        _LOG.info("STITCHED_IP and OOC_SYNTH not in requested outputs, skipping.")
-        return model
+    ``ooc_synth``: synthesize the IP out of context; its utilization report is listed
+    under this step, and step_resources_report reads it."""
     directory = Path(cfg.output_dir) / STITCHED_IP_DIR
     toolchain = cfg.step_toolchain("step_package_partition")
     node, body, body_file = partition_body(model)
     body = body.transform(
         PackagePartition(
             node.name,
-            run_synth=ooc,
+            run_synth=ooc_synth,
             directory=directory,
             toolchain=toolchain,
         )
     )
     body.save(body_file)
     _LOG.info(f"Packaged IP {node.name} and its interface description in {directory}")
-    if ooc:
+    if ooc_synth:
         reported(partition_utilization_report(directory))
-    if stitched:
-        testbench = directory / TESTBENCH_DIR
-        write_testbench(
-            body, testbench, generated_frame(body), toolchain=toolchain, label=node.name
-        )
-        _LOG.info(f"XSim testbench on a generated frame written into {testbench} (run.sh runs it)")
+    testbench = directory / TESTBENCH_DIR
+    write_testbench(body, testbench, generated_frame(body), toolchain=toolchain, label=node.name)
+    _LOG.info(f"XSim testbench on a generated frame written into {testbench} (run.sh runs it)")
     return model
 
 
@@ -413,28 +424,17 @@ def step_build_bitfile(
     hw_debug: bool = False,
 ) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
-    directory, if BITFILE is asked; only the pynq shell has a bitfile build. Refuses a
-    partition built for another target than the configuration's. The model records the
-    bitfile and its hardware handoff, what it was built from and with which options; the
-    build's reports are collected under report/. A shortfall of the delivered clock is
-    logged as a warning, against the throughput step_target_throughput folded to, where
-    the partition's body records one.
+    directory; only the pynq shell has a bitfile build, and on another this step is
+    refused. The shell's build packages the partition itself unless step_package_partition
+    packaged it from its design as it is. Refuses a partition built for another target
+    than the configuration's. The model records the bitfile and its hardware handoff,
+    what it was built from and with which options; the build's reports are collected
+    under report/. A shortfall of the delivered clock is logged as a warning, against the
+    throughput step_target_throughput folded to, where the partition's body records one.
 
-    ``hw_debug``: insert integrated logic analyzers on the ends' streams; refused where
-    the target's shell has no bitfile build, whether or not BITFILE is asked."""
-    target = cfg.resolved_target
-    if hw_debug and shell_row(target.shell, target.board).integration != VIVADO_BLOCK_DESIGN:
-        message = (
-            f"the {target.shell!r} shell has no build to take it; state a shell with a "
-            "bitfile build (pynq, for a board), or leave hw_debug out"
-        )
-        raise ConfigurationRefused(
-            [config_finding("hw-debug-shell", message, "configuration.hw_debug")]
-        )
-    if DataflowOutputType.BITFILE not in cfg.generate_outputs:
-        _LOG.info("BITFILE not in requested outputs, skipping step_build_bitfile.")
-        return model
-    _refuse_drift(model, cfg, DataflowOutputType.BITFILE)
+    ``hw_debug``: insert integrated logic analyzers on the ends' streams."""
+    _refuse_shell(cfg, "step_build_bitfile")
+    _refuse_drift(model, cfg, "bitfile")
     _, body, _ = partition_body(model)
     building = BuildPynqBitfile(
         Path(cfg.output_dir),
@@ -452,15 +452,13 @@ def step_build_bitfile(
 
 
 def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Write the PYNQ driver into driver/ and its description into report/driver.json,
-    if PYNQ_DRIVER is asked. The driver sets PL0 to the clock the bitfile delivers, and
-    loads the build's bitfile by default. Refuses a bitfile built from another design
-    than the current partition, and a partition built for another target than the
-    configuration's."""
-    if DataflowOutputType.PYNQ_DRIVER not in cfg.generate_outputs:
-        _LOG.info("PYNQ_DRIVER not in requested outputs, skipping step_make_driver.")
-        return model
-    _refuse_drift(model, cfg, DataflowOutputType.PYNQ_DRIVER)
+    """Write the PYNQ driver into driver/ and its description into report/driver.json.
+    The driver sets PL0 to the clock the bitfile delivers, and loads the build's bitfile
+    by default: step_build_bitfile comes before it. Refuses a shell without a bitfile
+    build, a missing bitfile, one built from another design than the current partition,
+    and a partition built for another target than the configuration's."""
+    _refuse_shell(cfg, "step_make_driver")
+    _refuse_drift(model, cfg, "pynq_driver")
     making = MakePynqDriver(Path(cfg.output_dir))
     model = model.transform(making)
     reported(Path(cfg.output_dir) / DRIVER_REPORT)
@@ -478,24 +476,21 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
 
 def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the bitfile, the driver, the host-side model and the driver's description
-    into deploy/, written afresh, if DEPLOYMENT_PACKAGE is asked. Ships what this output
-    directory's own steps made: refuses a missing or foreign bitfile or driver, one made
-    from another design than the current partition, and a partition built for another
-    target than the configuration's."""
-    if DataflowOutputType.DEPLOYMENT_PACKAGE not in cfg.generate_outputs:
-        _LOG.info("DEPLOYMENT_PACKAGE not in requested outputs, skipping.")
-        return model
-    _refuse_drift(model, cfg, DataflowOutputType.DEPLOYMENT_PACKAGE)
+    into deploy/, written afresh. Ships what this output directory's own steps made
+    (step_build_bitfile and step_make_driver come before it): refuses a shell without a
+    bitfile build, a missing or foreign bitfile or driver, one made from another design
+    than the current partition, and a partition built for another target than the
+    configuration's."""
+    _refuse_shell(cfg, "step_deployment_package")
+    _refuse_drift(model, cfg, "deployment_package")
     return model.transform(MakePynqDeployment(Path(cfg.output_dir)))
 
 
 def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Write report/resources.json: the resources of each member of the shell and their
     total, as modelled, as synthesized out of context and as placed, from the reports
-    the build made. A column the build did not make is marked absent."""
-    ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
-    packaged = Path(cfg.output_dir) / STITCHED_IP_DIR if ooc else None
-    stated = shell_resources_report(model, built_reports(model, packaged))
+    the steps before it made. A column the build did not make is marked absent."""
+    stated = shell_resources_report(model, built_reports(model))
     report = Path(cfg.output_dir) / RESOURCES_FILE
     write_report(report, stated)
     absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())
@@ -507,6 +502,7 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
 
 #: The build's phases, in order, each its steps in order. In a configuration's ``steps`` a
 #: phase stands for its steps, as ``start_step`` for its first, as ``stop_step`` its last.
+#: The last two are the outputs' steps: listing either makes each of its outputs.
 build_dataflow_phases: dict[str, list[StepFunction]] = {
     "phase_prepare_model": [
         step_cleanup,
@@ -549,6 +545,42 @@ build_dataflow_step_lookup: dict[str, StepFunction] = {
 }
 
 
+#: The steps every premade list starts with: the partition from the export, its FIFOs
+#: sized at the baseline folding, and checked.
+_PARTITION: list[StepFunction] = [
+    step
+    for phase in (
+        "phase_prepare_model",
+        "phase_convert_to_hardware",
+        "phase_create_accelerator",
+        "phase_optimize_hardware",
+    )
+    for step in build_dataflow_phases[phase]
+]
+
+#: The premade lists, each from the export to the output it names, then the resources
+#: report. In a configuration's ``steps`` a list stands for its steps, as a phase does.
+build_dataflow_lists: dict[str, list[StepFunction]] = {
+    # The partition, its choices (kernel_choices.json) and its modelled resources.
+    "list_partition": [*_PARTITION, step_resources_report],
+    # The packaged IP, its interface description and its testbench, on any shell.
+    "list_ip": [*_PARTITION, step_package_partition, step_resources_report],
+    # The bitfile of a shell with a bitfile build (pynq).
+    "list_bitfile": [*_PARTITION, step_build_bitfile, step_resources_report],
+    # The bitfile, its driver and the deployment package.
+    "list_deployment": [
+        *_PARTITION,
+        step_build_bitfile,
+        step_make_driver,
+        step_resources_report,
+        step_deployment_package,
+    ],
+}
+
+#: The premade list a build runs without ``steps``.
+DEFAULT_LIST = "list_partition"
+
+
 def default_steps() -> list[str]:
-    """The list a build runs without ``steps``: every phase's steps, by name."""
-    return [step.__name__ for steps in build_dataflow_phases.values() for step in steps]
+    """The list a build runs without ``steps`` (``DEFAULT_LIST``), by step name."""
+    return [step.__name__ for step in build_dataflow_lists[DEFAULT_LIST]]

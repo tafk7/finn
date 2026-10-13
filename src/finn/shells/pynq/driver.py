@@ -44,7 +44,12 @@ from finn.core.graph.annotations.outputs import OUTPUT_BITFILE
 from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.pynq import templates
 from finn.shells.pynq.ipgen import data_path
-from finn.shells.pynq.runner import DELIVERED_CLOCK, pynq_row, refuse_stale_bitfile
+from finn.shells.pynq.runner import (
+    DELIVERED_CLOCK,
+    PynqRefused,
+    pynq_row,
+    refuse_stale_bitfile,
+)
 from finn.transformation.kernels.integration import Integration, integration
 from finn.util.data_packing import finnpy_to_packed_bytearray
 
@@ -282,13 +287,15 @@ DRIVER_REPORT = Path("report") / "driver.json"
 
 def delivered_mhz(directory: Path) -> float:
     """The clock the bitfile built into ``directory`` delivers, in MHz, from its
-    delivered-clock report there (``runner.DELIVERED_CLOCK``); no report, or one that
-    found no PL clock, is refused."""
+    delivered-clock report there (``runner.DELIVERED_CLOCK``); no report (a
+    ``PynqRefused``), or one that found no PL clock, is refused."""
     report = Path(directory) / DELIVERED_CLOCK
     if not report.is_file():
-        raise ValueError(
-            f"pynq_driver: no delivered clock ({report}): the driver sets the clock its "
-            "bitfile delivers; build the bitfile first (bitfile)"
+        raise PynqRefused(
+            "pynq_driver",
+            "clock-absent",
+            f"no delivered clock ({report}): the driver sets the clock its bitfile "
+            "delivers; list step_build_bitfile before step_make_driver",
         )
     clock = json.loads(report.read_text())
     if "delivered_mhz" not in clock:
@@ -299,12 +306,15 @@ def delivered_mhz(directory: Path) -> float:
 
 def shipped_bitfile(model: ModelWrapper, directory: Path) -> Path:
     """The bitfile the parent graph ``model`` states (finn.outputs), relative to the output
-    ``directory``, which the deployment package mirrors (bitfile/ beside driver/)."""
+    ``directory``, which the deployment package mirrors (bitfile/ beside driver/); a
+    model that states none is refused (``PynqRefused``)."""
     bitfile = model.get(OUTPUT_BITFILE)
     if bitfile is None:
-        raise ValueError(
-            "pynq_driver: the model states no bitfile (finn.outputs): the driver runs the "
-            "bitfile the build ships; build the bitfile first (bitfile)"
+        raise PynqRefused(
+            "pynq_driver",
+            "bitfile-absent",
+            "the model states no bitfile (finn.outputs): the driver runs the bitfile the "
+            "build ships; list step_build_bitfile before step_make_driver",
         )
     return Path(bitfile).relative_to(Path(directory))
 

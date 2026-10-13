@@ -20,11 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import finn.builder.build_dataflow as build
-from finn.builder.build_dataflow_config import (
-    ConfigurationRefused,
-    DataflowBuildConfig,
-    DataflowOutputType,
-)
+from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import (
     MANIFEST_FILE,
     findings_by_code,
@@ -70,12 +66,9 @@ def build_of(tmp_path: Path, steps, **fields) -> tuple[int, dict, DataflowBuildC
     output = str(tmp_path / "output")
     model = str(tmp_path / "model.onnx")
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
+    fields.setdefault("target", TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"))
     cfg = DataflowBuildConfig(
-        output_dir=output,
-        target=TargetRequest(period_ns=10.0, part="xczu3eg-sbva484-1-e"),
-        steps=steps,
-        enable_build_pdb_debug=False,
-        **fields,
+        output_dir=output, steps=steps, enable_build_pdb_debug=False, **fields
     )
     cfg.prepared_toolchain = fake_toolchain(tmp_path / "tools")
     status = build.build_dataflow_cfg(model, cfg)
@@ -193,12 +186,13 @@ def test_a_failed_step_is_the_outcome_by_its_kind(tmp_path, error, kind):
 
 
 def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
-    with pytest.raises(ConfigurationRefused, match="shell-outputs: ") as refused:
+    # A board that requires a Vivado release; the fake toolchain has no Vivado.
+    with pytest.raises(ConfigurationRefused, match="board-vivado: ") as refused:
         build_of(
             tmp_path,
             [step_reports, "step_size_fifos"],
+            target=TargetRequest(period_ns=10.0, board="AUP-ZU3_8GB", shell="pynq"),
             stop_step="step_reports",
-            generate_outputs=[DataflowOutputType.BITFILE],
             settings={"fifo_margin": 2},
         )
     manifest = manifest_of(str(tmp_path / "output"))
@@ -208,12 +202,13 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     }
     assert manifest["steps"] == []
     found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
-    assert found == [("shell-outputs", "rejection"), ("setting-unread", "limitation")]
+    assert found == [("board-vivado", "rejection"), ("setting-unread", "limitation")]
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
     with pytest.raises(
-        ConfigurationRefused, match="step-unknown: steps\\[0\\]: 'step_none' is no step or phase"
+        ConfigurationRefused,
+        match="step-unknown: steps\\[0\\]: 'step_none' is no step or named list",
     ):
         build_of(tmp_path, ["step_none"])
     manifest = manifest_of(str(tmp_path / "output"))

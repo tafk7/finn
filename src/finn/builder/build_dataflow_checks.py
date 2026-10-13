@@ -2,21 +2,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """What a build's plan cannot see of its configuration as a whole, checked before the
-first step (``configuration_findings``): the outputs and the shell they need, the
-settings the run leaves unread, and the Vivado release a board requires. A rejection
-refuses the build (``ConfigurationRefused``); a limitation is logged as a warning, and
-the build runs. A step's own rules are the step's, refused when it runs."""
+first step (``configuration_findings``): the settings the run leaves unread, and the
+Vivado release a board requires. A rejection refuses the build
+(``ConfigurationRefused``); a limitation is logged as a warning, and the build runs. A
+step's own rules, an output's shell and the outputs it is made from among them, are the
+step's, refused when it runs."""
 
-from finn.builder.build_dataflow_config import (
-    OUTPUT_NEEDS,
-    SHELL_OUTPUTS,
-    DataflowBuildConfig,
-    config_finding,
-)
+from finn.builder.build_dataflow_config import DataflowBuildConfig, config_finding
 from finn.builder.build_dataflow_plan import Plan
 from finn.core.space import Finding, FindingKind
 from finn.platform.boards import BOARDS
-from finn.platform.shells import shell_row
 from finn.platform.target import Target
 from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
@@ -47,26 +42,6 @@ def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target)
     ``plan`` and its resolved ``target``: rejections and limitations."""
     findings = _board_vivado(cfg, target)
     run = plan.steps[plan.run]
-    row = shell_row(target.shell, target.board)
-    shell_outputs = [output for output in cfg.generate_outputs if output in SHELL_OUTPUTS]
-    if shell_outputs and row.integration is None:
-        asked_shell = ", ".join(output.value for output in shell_outputs)
-        message = (
-            f"{asked_shell}: the {target.shell!r} shell does not integrate the partition; "
-            "its outputs are the packaged IP's (stitched_ip, ooc_synth)"
-        )
-        findings.append(config_finding("shell-outputs", message, "configuration.generate_outputs"))
-    asked = set(cfg.generate_outputs)
-    for output, needs in OUTPUT_NEEDS.items():
-        missing = [need.value for need in needs if output in asked and need not in asked]
-        if missing:
-            message = (
-                f"{output.value} needs {', '.join(missing)}: it is made from them, in the "
-                "same build"
-            )
-            findings.append(
-                config_finding("output-needs", message, "configuration.generate_outputs")
-            )
     read = {name for step in run for name in step.settings}
     for name in sorted(name for name in cfg.settings if name not in read):
         readers = ", ".join(plan.settings[name].readers)
