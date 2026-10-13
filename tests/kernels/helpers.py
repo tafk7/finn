@@ -28,9 +28,8 @@ MatMul's its own (``matmul.compute.packed.pe``). ``matmul_assembly`` configures 
 from concrete facts and choices. A network's module is named ``finn_<stem>``
 (``module_of``).
 
-A kernel that presents its configuration bus through a ``ControlBus`` is placed in a
-``Root``, one Space with its bus, its channels and itself, until a kernel presents its
-control itself and a network presents it on the module.
+A kernel presents its configuration bus itself, at the port it is given (``control``);
+a network presents it on the module.
 
 What a simulation runs on (FinnLib, Vivado, the run's identity) is
 ``finn.harness.toolchain``'s: this module only constructs."""
@@ -60,9 +59,8 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
-from finn.kernels.base import CYCLES, ComposedKernel
+from finn.kernels.base import CYCLES
 from finn.kernels.configure import commit, describe, undecided
-from finn.kernels.control import ControlBus
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.fifo import FifoKernel
@@ -261,16 +259,6 @@ def placed_dotp(
     return placed
 
 
-class Root(ComposedKernel):
-    """One Space of channels, kernels and the ``ControlBus`` a kernel presents its
-    configuration bus through: the top of what a test emits where a network cannot place
-    it yet. A root presents no interface: its boundary channels are its pins."""
-
-    id = "test.root"
-    version = 1
-    interfaces = ()
-
-
 def _views(
     space_type: type[MatMulKernel], facts: Mapping[str, Any], realization: str | None
 ) -> Any:
@@ -386,16 +374,9 @@ def matmul_point(*, realization: str | None = None, **facts: Any) -> Network:
 
 
 def controlled(space_type: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
-    """A kernel (``kernel``) presenting its configuration bus through a ``ControlBus``, its
-    choices committed by their keys below it; as placed alone it holds the bus."""
-
-    class Controlled(Space):
-        config = ControlBus(port="s_axilite")
-        kernel = space_type(**facts, control=config)
-
-    point = commit(design_space(Controlled()), {f"kernel.{key}": v for key, v in choices.items()})
-    kernel: S = point.kernel
-    return kernel
+    """A kernel given a port for its configuration bus (``s_axilite``), its ``choices``
+    committed; as placed alone it holds the bus."""
+    return commit(design_space(space_type(**facts, control="s_axilite")), choices)
 
 
 THRESHOLDS = IntegerTensorValue.of((((-2, 0, 3), (-1, 1, 4)),))

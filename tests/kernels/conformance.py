@@ -65,12 +65,9 @@ channel's tensor, which the channel holds the kernel's output to.
 
 ``reference`` maps named input arrays to named output arrays.
 
-A fact given as a ``ControlPort`` is a ``ControlBus`` on that port, given to the
-kernel's input of the fact's name: the kernel's control bus is presented at the
-top, and in simulation written with what the kernel's configuration declares (its
-register map) before any stream starts. A network does not place a control bus
-yet, so such a sample is one ``Root``, its bus, its channels and its kernel, until a
-kernel presents its control itself.
+A kernel's control fact (``control``) names the port its control bus is presented
+at: the network presents the bus at the top, and in simulation it is written with what
+the kernel's configuration declares (its register map) before any stream starts.
 
 ``known`` names the (sample label, mode) simulations a known defect makes fail,
 each with its reason. It is strict: one of them passing fails the check, as
@@ -100,7 +97,6 @@ from finn.core.space import (
     Param,
     QueryResult,
     RequestError,
-    design_space,
     inspection,
 )
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
@@ -122,16 +118,14 @@ from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit, describe, undecided
-from finn.kernels.control import ControlBus
+from finn.kernels.channels import Channel
+from finn.kernels.configure import describe
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, dotted, wire
 from finn.kernels.transport import StreamContract
 from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import (
     FULL_DSP48E2,
-    Root,
     choose,
     cycles_of,
     module_of,
@@ -147,13 +141,6 @@ Factors = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
 Reference = Callable[..., Mapping[str, Any]]
 EMPTY: Mapping[str, object] = MappingProxyType({})
-
-
-@dataclass(frozen=True)
-class ControlPort:
-    """A fact: the root's ``ControlBus`` on ``port``, given to the kernel's input."""
-
-    port: str
 
 
 class RtlDeclined(UserWarning):
@@ -278,10 +265,7 @@ def _label(config: Mapping[str, object]) -> str:
 
 def _candidates(point: Any, key: str) -> tuple[object, ...]:
     """The candidates of the kernel's Decision ``key`` (``kernel.<key>``) on a design."""
-    if isinstance(point, Network):
-        kernel, key = point.member(KERNEL), key[len(KERNEL) + 1 :]
-    else:
-        kernel = point
+    kernel, key = point.member(KERNEL), key[len(KERNEL) + 1 :]
     reference = {info.key: info.reference for info in inspection.decisions(kernel)}[key]
     found = kernel.field(reference).candidates()
     assert isinstance(found, Available) and found.value, f"{key} has no candidates: {found}"
@@ -291,13 +275,10 @@ def _candidates(point: Any, key: str) -> tuple[object, ...]:
 def _keys(base: Any) -> tuple[set[str], list[str], list[str]]:
     """A design's selectors, its open choices in rank order, and the kernel's undecided
     choices, each by ``member.key``."""
-    if isinstance(base, Network):
-        selectors = {dotted(key) for key, info in base.decisions().items() if info.selector}
-        ranked = [dotted(key) for key, _ in base.viable()]
-        open_ = [dotted(key) for key in base.undecided() if key[0] == KERNEL]
-        return selectors, ranked, open_
-    selectors = {info.key for info in inspection.decisions(base) if info.selector}
-    return selectors, [item.key for item in inspection.viable(base)], undecided(base, f"{KERNEL}.*")
+    selectors = {dotted(key) for key, info in base.decisions().items() if info.selector}
+    ranked = [dotted(key) for key, _ in base.viable()]
+    open_ = [dotted(key) for key in base.undecided() if key[0] == KERNEL]
+    return selectors, ranked, open_
 
 
 def _enumerated(
@@ -370,10 +351,7 @@ def _design(
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
     """A network of the kernel on one channel per tensor, each taking the kernel's end at
-    its interface; ``fed``'s channel from a memory (``source``). With a ``ControlPort``
-    fact, a ``Root`` (``_rooted``)."""
-    if any(isinstance(value, ControlPort) for value in facts.values()):
-        return _rooted(space_type, inputs, outputs, facts, fed)
+    its interface; ``fed``'s channel from a memory (``source``)."""
     members: dict[str, Any] = {}
     tensors = {**inputs, **outputs}
     for name, tensor in tensors.items():
@@ -402,68 +380,25 @@ def _source(tensor: Tensor, form: Traversal, contents: object) -> MemStreamKerne
     )
 
 
-def _rooted(
-    space_type: type[Kernel],
-    inputs: Mapping[str, Tensor],
-    outputs: Mapping[str, Tensor],
-    facts: Mapping[str, object],
-    fed: tuple[str, Traversal, object] | None = None,
-) -> Any:
-    """A ``Root`` of the kernel on one channel per tensor and on the ``ControlBus`` each
-    ``ControlPort`` fact names: a network places no control bus yet."""
-    namespace: dict[str, object] = {}
-    # A node is placed once: each design declares its own control bus.
-    facts = {
-        name: ControlBus(port=value.port) if isinstance(value, ControlPort) else value
-        for name, value in facts.items()
-    }
-    namespace |= {name: value for name, value in facts.items() if isinstance(value, ControlBus)}
-    tensors = {**inputs, **outputs}
-    for name, tensor in tensors.items():
-        side = "consumer" if name in inputs else "producer"
-        ends = {side: end_of(KERNEL, f"{_interface(name)}_end")}
-        if fed is not None and fed[0] == name:
-            ends["producer"] = end_of(SOURCE, "output_end")
-        namespace |= {f"{name}_{each}": end for each, end in ends.items()}
-        settings: dict[str, Any] = dict(ends)
-        if fed is None or fed[0] != name:
-            settings["port"] = name
-        namespace[name] = Channel(tensor=tensor, platform=FULL_DSP48E2, **settings)
-    given = {f"{_interface(name)}_tensor": tensor for name, tensor in inputs.items()}
-    namespace[KERNEL] = space_type(**facts, **given)
-    if fed is not None:
-        name, form, contents = fed
-        namespace[SOURCE] = _source(tensors[name], form, contents)
-    return design_space(type(f"{space_type.__name__}Conformance", (Root,), namespace)())
-
-
 def design_member(design: Any, name: str) -> Any:
-    """Member ``name`` of a design: a network's, or a root's."""
-    return design.member(name) if isinstance(design, Network) else getattr(design, name)
+    """Member ``name`` of a design, a network."""
+    return design.member(name)
 
 
 def design_module(design: Any, space_type: type[Kernel]) -> QueryResult[Any]:
     """A design's module, ``finn_<kernel>conformance``."""
-    if isinstance(design, Network):
-        return module_of(design, _stem(space_type))
-    found: QueryResult[Any] = design.query(type(design).module)
-    return found
+    return module_of(design, _stem(space_type))
 
 
 def design_cycles(design: Any) -> QueryResult[Any]:
     """The most cycles a frame a member of a design takes."""
-    if isinstance(design, Network):
-        return cycles_of(design)
-    found: QueryResult[Any] = design.query(type(design).cycles)
-    return found
+    return cycles_of(design)
 
 
 def kernel_space(design: Any) -> tuple[Any, str, str]:
-    """Where a design's kernel's own Decisions are read: a network's kernel, every key its
-    own, named ``kernel.<key>`` (the prefix); or a root, its keys ``kernel.*``."""
-    if isinstance(design, Network):
-        return design.member(KERNEL), "*", f"{KERNEL}."
-    return design, f"{KERNEL}.*", ""
+    """Where a design's kernel's own Decisions are read: the network's kernel, every key
+    its own, named ``kernel.<key>`` (the prefix)."""
+    return design.member(KERNEL), "*", f"{KERNEL}."
 
 
 def configured(design: Any, choices: Mapping[str, object]) -> Any:
@@ -474,7 +409,7 @@ def configured(design: Any, choices: Mapping[str, object]) -> Any:
 
 def _chosen(design: Any, choices: Mapping[str, object]) -> Any:
     """A design with ``choices`` (``member.key``) committed."""
-    return choose(design, choices) if isinstance(design, Network) else commit(design, choices)
+    return choose(design, choices)
 
 
 def _user(point: Any, name: str) -> str:
@@ -861,7 +796,6 @@ __all__ = [
     "design_cycles",
     "design_member",
     "design_module",
-    "ControlPort",
     "NonConformance",
     "RtlDeclined",
     "SAMPLED",

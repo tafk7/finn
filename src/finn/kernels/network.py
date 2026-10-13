@@ -95,7 +95,8 @@ from finn.kernels.artifacts.module import (
 from finn.kernels.base import BOUNDARY, CLOCK2X, NETLIST, Clocking, PortEnd
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, undecided
-from finn.kernels.control import Exported, top_bus
+from finn.kernels.control import CONTROL, Control, Exported, top_bus
+from finn.kernels.control import presented as presented_buses
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
@@ -966,11 +967,13 @@ class Network:
 
     def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
         """Its composed module (``compose``): each member's netlist under its name, in the
-        order declared, with each boundary channel's AXIS bus; or why not, every member's
+        order declared, with each boundary channel's AXIS bus and each control bus its
+        kernels present (``CONTROL``, at the port each was given); or why not, every member's
         refusal (or, where none refuses, what they wait on), each finding owned by its path
         from the network (``first.well_formed``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
+        controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
             netlist = self.query(name, NETLIST)
@@ -978,7 +981,13 @@ class Network:
                 netlists.append((self._nodes[name], netlist.value))
             else:
                 failed.append((name, netlist))
-            if name in self._wires:
+            if name not in self._wires:
+                control = self.query(name, CONTROL)
+                if isinstance(control, Available):
+                    controls.append((self._nodes[name], control.value))
+                elif not isinstance(control, Inapplicable):
+                    failed.append((name, control))
+            else:
                 buses = self.query(name, BOUNDARY)
                 if isinstance(buses, Available):
                     boundary.extend(buses.value)
@@ -996,7 +1005,10 @@ class Network:
             if rejected:
                 return Rejected(findings)
             return Unresolved(findings) if findings else Inapplicable()
-        built = compose(producer, stem, netlists, boundary)
+        exported = presented_buses(controls)
+        if isinstance(exported, Rejected):
+            return exported
+        built = compose(producer, stem, netlists, boundary, exported)
         return built if isinstance(built, Rejected) else Available(built)
 
     def _owned(self, name: str, finding: Finding) -> Finding:

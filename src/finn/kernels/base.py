@@ -35,7 +35,7 @@ of its facts (``y_tensor``), whose element is what the module produces. Optional
 leaf states its ``clocking`` (its clock and reset pins, when not the plain ``ap_clk``
 and ``ap_rst_n``), and ``other_pins``, ``held`` and ``controlled``: pins that are no
 port's (an AXI-Lite bus), what it holds of them, and the buses among them it presents
-through a ``ControlBus`` (``finn.kernels.control``).
+(``finn.kernels.control``: a kernel exports its ``Control`` itself, under ``CONTROL``).
 
 The leaf base derives the rest. ``codegen`` is its ``Leaf``: its pins (clocking, other
 pins, then every port's), parameters, sources and data, and what it holds (the
@@ -58,7 +58,7 @@ It states:
   checked when the class is made;
 - its children: the kernels and channels it places, its members. It merges their
   netlists (``NETLIST``: each child's and each channel's ``Fragment``, under its node)
-  and the control buses its ``ControlBus`` nodes present; one that places no kernel is
+  and the control buses its children present (``CONTROL``); one that places no kernel is
   refused (``kernel-module``). It gives its interfaces' tensors to the children that
   read them, and the channels between its children are its own. Placed alone, as the
   root of what is emitted, it is one ``Composed`` module whose pins are ``ap_clk``,
@@ -144,7 +144,7 @@ from finn.kernels.artifacts.module import (
     Module,
     ProducerIdentity,
 )
-from finn.kernels.control import EXPORTED
+from finn.kernels.control import CONTROL, presented
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.platform.capabilities import Resources
@@ -391,7 +391,8 @@ class LeafKernel(Kernel, protocol=True):
 
     @derived
     def controlled(self) -> tuple[Bus, ...]:
-        """The buses among its other pins it presents through a ``ControlBus``."""
+        """The buses among its other pins it presents (its ``Control``, at the port its
+        placement names)."""
         return ()
 
     # -- its ports ------------------------------------------------------------------------
@@ -591,20 +592,20 @@ class ComposedKernel(Kernel, protocol=True):
     # -- its children: their netlists, merged ---------------------------------------------
 
     netlists = Members(NETLIST)
-    presented = Members(EXPORTED)
+    controls = Members(CONTROL)
     boundary_buses = Members(BOUNDARY)
 
     @derived
     def fragment(self) -> Fragment | Rejected:
-        """Each member's netlist under its node, and the buses its ``ControlBus`` nodes
+        """Each member's netlist under its node, and the control buses its members
         present; its own module is complete only as the root, whose channels it declares,
         so a parent reads its netlist, not its module."""
         return self.composed_fragment()
 
     def composed_fragment(self) -> Fragment | Rejected:
         """A kernel with children's ``fragment``: each member's netlist under its node, and
-        the buses its ``ControlBus`` nodes present with the writes their configuration
-        takes (``finn.kernels.network.merged``). A kernel that places none is refused."""
+        the control buses its members present with the writes their configuration takes
+        (``finn.kernels.network.merged``). A kernel that places none is refused."""
         from finn.kernels.network import merged  # noqa: PLC0415 - the network imports the base
 
         if not self.netlists:
@@ -612,10 +613,10 @@ class ComposedKernel(Kernel, protocol=True):
                 "kernel-module",
                 f"{type(self).__qualname__} declares no module and places no kernel",
             )
-        return merged(
-            ((str(item.node), item.value) for item in self.netlists),
-            (item for located in self.presented for item in located.value),
-        )
+        buses = presented((str(item.node), item.value) for item in self.controls)
+        if isinstance(buses, Rejected):
+            return buses
+        return merged(((str(item.node), item.value) for item in self.netlists), buses)
 
     @derived
     def composed_abi(self) -> Abi:
@@ -633,8 +634,8 @@ class ComposedKernel(Kernel, protocol=True):
 
         return assembled(self.producer_identity(), self.stem(), self.composed_abi, self.fragment)
 
-    module = View(built, requires=(Kernel.admission, netlists, presented, boundary_buses))
-    netlist = View(fragment, requires=(Kernel.admission, netlists, presented, boundary_buses))
+    module = View(built, requires=(Kernel.admission, netlists, controls, boundary_buses))
+    netlist = View(fragment, requires=(Kernel.admission, netlists, controls, boundary_buses))
 
     # -- what a design space exploration ranks by ------------------------------------------
 

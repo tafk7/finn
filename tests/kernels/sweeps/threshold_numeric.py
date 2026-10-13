@@ -6,7 +6,7 @@
 Each case places ``ThresholdingAxiKernel`` between two boundary channels and
 streams every INT4 value through it, free and stalled. Its table is one row
 shared by every channel (C = 1, PE above it: each lane keeps a copy of the
-row), or a row a channel. With AXI-Lite, the kernel sits on a control bus and
+row), or a row a channel. With AXI-Lite, the kernel presents its control bus and
 the run first writes a new table through it: the writes the kernel declares for
 that table (its register map, ``ThresholdingAxiKernel.register_map``), into
 hardware built with the initial one. Every output word shows that the write
@@ -32,18 +32,16 @@ from qonnx.core.datatype import DataType
 
 from finn.core.rtlsim_bench import materialize
 from finn.core.rtlsim_pacing import FREE, STALLED
-from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack, vector_major
 from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.module import declared_registers
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
-from finn.kernels.control import ControlBus
+from finn.kernels.channels import Channel
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, Root, with_direct_transports
+from kernels.helpers import FULL_DSP48E2, built, choose, with_direct_transports
 from kernels.sweeps.rtl_transport import drive_observed
 
 ELEMENT = DataType["INT4"]
@@ -74,23 +72,13 @@ CASES = (
 )
 
 
-def placed(case: Case) -> Any:
-    """The kernel between boundary channels ``s_axis_0`` and ``m_axis_0``, on a control
-    bus ``s_axilite`` when the case writes its table."""
+def placed(case: Case) -> Network:
+    """The kernel between boundary channels ``s_axis_0`` and ``m_axis_0``, presenting its
+    control bus at ``s_axilite`` when the case writes its table."""
     count = len(case.initial[0])
     result = ScalarEncoding(DataType[f"UINT{count.bit_length()}"])
     x = Tensor((PIXELS, CHANNELS), ScalarEncoding(ELEMENT))
     y = Tensor((PIXELS, CHANNELS), result)
-    namespace: dict[str, Any] = {
-        "x_end": end_of("activate", "input_end"),
-        "y_end": end_of("activate", "output_end"),
-    }
-    namespace["x"] = Channel(
-        tensor=x, port="s_axis_0", consumer=namespace["x_end"], platform=FULL_DSP48E2
-    )
-    namespace["y"] = Channel(
-        tensor=y, port="m_axis_0", producer=namespace["y_end"], platform=FULL_DSP48E2
-    )
     facts: dict[str, Any] = dict(
         threshold_dtype=ELEMENT,
         thresholds=(case.initial,),
@@ -99,12 +87,27 @@ def placed(case: Case) -> Any:
         platform=FULL_DSP48E2,
     )
     if case.written is not None:
-        namespace["config"] = facts["control"] = ControlBus(port="s_axilite")
-    namespace["activate"] = ThresholdingAxiKernel(**facts)
-    space = type(f"Thresholds_{case.label}", (Root,), namespace)
+        facts["control"] = "s_axilite"
+    network = Network(
+        {
+            "x": wire(
+                tensor=x,
+                port="s_axis_0",
+                consumer=Interface("activate", "input_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "y": wire(
+                tensor=y,
+                port="m_axis_0",
+                producer=Interface("activate", "output_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "activate": ThresholdingAxiKernel(**facts),
+        }
+    )
     return with_direct_transports(
-        commit(
-            design_space(space()),
+        choose(
+            network,
             {
                 "activate.pe": case.pe,
                 "activate.use_axilite": case.written is not None,
@@ -117,26 +120,31 @@ def placed(case: Case) -> Any:
     )
 
 
+def stem(case: Case) -> str:
+    """A case's module's stem: ``thresholds_<label>``."""
+    return f"thresholds_{case.label}"
+
+
 def run(case: Case, evidence: Path) -> None:
     point = placed(case)
     table = np.array(case.written if case.written is not None else case.initial)
     if len(table) == 1:
         table = np.repeat(table, CHANNELS, axis=0)  # the reference's row a channel
     levels = (VALUES[..., None] >= table).sum(axis=-1)
-    result_bits = point.activate.result_dtype.bitwidth()
+    result_bits = point.member("activate").result_dtype.bitwidth()
     form = vector_major((PIXELS, CHANNELS), case.pe)
     for name in ("x", "y"):
-        ends = getattr(point, name).query(Channel.endpoints).value
+        ends = point.member(name).query(Channel.endpoints).value
         assert form in (ends.sink.form, ends.source.form), (case.label, name, ends)
     stimulus = list(pack(form, VALUES.ravel().tolist(), ELEMENT.bitwidth()))
     expected = list(pack(form, levels.ravel().tolist(), result_bits))
     top, sources, data = materialize(
-        point.module, evidence / case.label, toolchain=host_toolchain()
+        built(point, stem(case)), evidence / case.label, toolchain=host_toolchain()
     )
     # The writes a kernel holding the written table declares, into the hardware built
     # with the initial one: the same addresses (the same shape and PE), other words.
     written = placed(replace(case, initial=case.written)) if case.written is not None else None
-    configuration = declared_registers(written.module) if written is not None else {}
+    configuration = declared_registers(built(written, stem(case))) if written is not None else {}
     assert set(configuration) == ({"s_axilite"} if case.written is not None else set())
     mask = (1 << (case.pe * result_bits)) - 1
     for stalled in (False, True):

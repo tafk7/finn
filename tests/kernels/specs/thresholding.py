@@ -19,7 +19,6 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.conformance import ControlPort
 from kernels.helpers import FULL_DSP48E2
 from kernels.specs.base import ORACLE, KernelSpec, Probe, SweepCases, refuses
 
@@ -82,7 +81,7 @@ def written_rows() -> dict[str, Any]:
     case = thresholding()
     case["factors"] = ({"pe": 3},)
     case["choices"] = {**CHOICES, "use_axilite": True}
-    case["facts"] = {**FACTS, "control": ControlPort("s_axilite")}
+    case["facts"] = {**FACTS, "control": "s_axilite"}
     return case
 
 
@@ -93,7 +92,7 @@ def shared_row(*, axilite: bool = False) -> dict[str, Any]:
     facts: dict[str, object] = {**FACTS, "thresholds": ((SHARED_ROW,),)}
     choices = {**CHOICES, "use_axilite": axilite}
     if axilite:
-        facts["control"] = ControlPort("s_axilite")
+        facts["control"] = "s_axilite"
     return dict(
         space_type=ThresholdingAxiKernel,
         inputs={"input_channel": tensor((PIXELS, SHARED_CHANNELS), "INT4")},

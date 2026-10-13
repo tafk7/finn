@@ -9,12 +9,11 @@ together (each ``IODMA_hls`` end presents one), gives a partition no memory port
 own and supplies no doubled clock; the ``ip`` shell bounds neither count and supplies
 the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavailable``.
 
-No KernelOp places a control bus, so a partition of KernelOps presents no AXI-Lite bus:
-the buses are counted here on a root built from the kernels directly, AXI-Lite
-thresholdings each on its ``ControlBus`` (a network presents none yet), its module's
-counts (``bus_counts``) admitted by the same ``budgets`` and rows a partition's network
-reads. No kernel initiates a memory port (no bus protocol states one), so that count is
-always zero.
+No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
+the buses are counted here on a network built from the kernels directly, AXI-Lite
+thresholdings each given its port, its module's counts (``bus_counts``) admitted by the
+same ``budgets`` and rows a partition's network reads. No kernel initiates a memory port
+(no bus protocol states one), so that count is always zero.
 """
 
 from __future__ import annotations
@@ -23,19 +22,17 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from kernels.helpers import Root, with_adapter_memories, with_direct_transports
+from kernels.helpers import built, choose, with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.space import Finding, composite, design_space, finding_text
+from finn.core.space import Finding, finding_text
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import budgets, bus_counts, configured_root, network
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
-from finn.kernels.control import ControlBus
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.shells import IP_ROW, ShellRow, shell_row
 from finn.transformation.kernels import explore_kernel_choices
@@ -51,61 +48,62 @@ TABLE = (((0, 1, 2), (0, 1, 2)),)
 """Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
 
 
-def thresholdings(count: int, row: ShellRow) -> Any:
-    """A root for ``row`` of ``count`` AXI-Lite thresholdings in a row, each
+def thresholdings(count: int, row: ShellRow) -> Network:
+    """A network for ``row`` of ``count`` AXI-Lite thresholdings in a row, each
     presenting its bus (``t<i>_s_axilite``), configured: every thresholding
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
     offered: dict[str, Any] = {"end_offer": row.ends} if row.ends else {}
     # Each channel takes the ends of the thresholdings on either side of it.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
-    ends: dict[str, Any] = {}
-    channels: dict[str, Channel] = {}
+    channels: dict[str, Any] = {}
     for index, name in enumerate(names):
         sides: dict[str, Any] = {}
         if index > 0:
-            sides["producer"] = end_of(f"t{index - 1}", "output_end")
+            sides["producer"] = Interface(f"t{index - 1}", "output_end")
         if index < count:
-            sides["consumer"] = end_of(f"t{index}", "input_end")
-        ends |= {f"{name}-{side}": end for side, end in sides.items()}
+            sides["consumer"] = Interface(f"t{index}", "input_end")
         boundary = {"port": "s_axis_0" if index == 0 else "m_axis_0", **offered}
-        channels[name] = Channel(
+        channels[name] = wire(
             tensor=TENSOR,
             platform=platform,
             **sides,
             **(boundary if name in ("x", "y") else {}),
         )
-    members: dict[str, object] = {**ends, **{name: channels[name] for name in names[:-1]}}
+    members: dict[str, Any] = {name: channels[name] for name in names[:-1]}
     for index in range(count):
-        bus = ControlBus(port=f"t{index}_s_axilite")
-        members[f"bus{index}"] = bus
         members[f"t{index}"] = ThresholdingAxiKernel(
             threshold_dtype=UINT2,
             thresholds=TABLE,
             bias=0,
             input_tensor=TENSOR,
-            control=bus,
+            control=f"t{index}_s_axilite",
             platform=platform,
         )
-    root: Any = composite(f"shell{count}", {**members, "y": channels["y"]}, base=Root)
+    members["y"] = channels["y"]
     choices: dict[str, object] = {}
     for index in range(count):
         held = {"use_axilite": True, "pe": 1, "deep_pipeline": False, "ram_style": "auto"}
         choices |= {f"t{index}.{key}": value for key, value in held.items()}
         choices[f"t{index}.ultra_stages"] = 0
-    point = commit(with_direct_transports(design_space(root())), choices)
+    point = with_direct_transports(choose(Network(members), choices))
     return with_adapter_memories(point)
 
 
-def admission(point: Any, row: ShellRow) -> tuple[Finding, ...]:
+def ends_of(point: Network) -> tuple[Any, ...]:
+    """The ends the shell places on the network's boundary channels."""
+    return tuple(point.member("x").placed_end) + tuple(point.member("y").placed_end)
+
+
+def admission(point: Network, row: ShellRow) -> tuple[Finding, ...]:
     """``row``'s budgets of ``point``'s module and of its ends' AXI-Lite buses."""
-    ends = sum(end.control_buses for end in point.x.placed_end + point.y.placed_end)
-    return budgets(row, bus_counts(point.module.abi), ends)
+    ends = sum(end.control_buses for end in ends_of(point))
+    return budgets(row, bus_counts(built(point, "shell").abi), ends)
 
 
 def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
     point = thresholdings(8, PYNQ_ROW)
-    assert [end.control_buses for end in point.x.placed_end + point.y.placed_end] == [1, 1]
+    assert [end.control_buses for end in ends_of(point)] == [1, 1]
     (found,) = admission(point, PYNQ_ROW)
     assert finding_text(found) == (
         "budgets: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
@@ -120,8 +118,8 @@ def test_seven_and_two_ends_fill_the_budget() -> None:
 def test_the_ip_shell_admits_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
     assert admission(point, IP_ROW) == ()
-    assert point.x.placed_end == ()
-    ports = [pin.name for pin in point.module.abi.pins if getattr(pin, "protocol", None)]
+    assert tuple(point.member("x").placed_end) == ()
+    ports = [pin.name for pin in built(point, "shell").abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
         f"t{index}_s_axilite" for index in range(8)
     ]
@@ -173,11 +171,12 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
 
 
 def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
-    """A root's netlist is a kernel with children's composition of its members, each bus
-    it presents with the writes its thresholding's table takes."""
+    """A network's netlist presents each bus its thresholdings present, with the writes
+    each table takes, under each member's node."""
     point = thresholdings(2, IP_ROW)
-    assert point.fragment == point.composed_fragment()
-    assert [(item.port, item.registers) for item in point.fragment.exports] == [
-        (f"t{index}_s_axilite", getattr(point, f"t{index}").register_map) for index in range(2)
+    exports = built(point, "shell").fragment.exports
+    assert [(item.instance, item.port, item.registers) for item in exports] == [
+        (f"t{index}", f"t{index}_s_axilite", point.member(f"t{index}").register_map)
+        for index in range(2)
     ]
-    assert all(len(item.registers.writes) == 6 for item in point.fragment.exports)
+    assert all(len(item.registers.writes) == 6 for item in exports)

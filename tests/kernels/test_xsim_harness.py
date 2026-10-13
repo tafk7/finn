@@ -67,8 +67,16 @@ from finn.toolchain.launcher import (
 from finn.toolchain.xsim import TOOLS, available
 from kernels.chain import STEM, chain
 from kernels.conformance import Sample, design_module, place
-from kernels.helpers import FULL_DSP48E2, built, full_platform, point_for
-from kernels.sweeps.threshold_numeric import CHANNELS, ELEMENT, PIXELS, VALUES, Case, placed
+from kernels.helpers import FULL_DSP48E2, built, cycles_of, full_platform, point_for
+from kernels.sweeps.threshold_numeric import (
+    CHANNELS,
+    ELEMENT,
+    PIXELS,
+    VALUES,
+    Case,
+    placed,
+    stem,
+)
 from kernels.xsim import requires_xsim
 
 CHAIN_IN: dict[str, Words] = {"s_axis_0": ([1, 2, 3], 6)}
@@ -330,16 +338,27 @@ def _written(initial: tuple[tuple[int, ...], ...], written: tuple[tuple[int, ...
     return placed(Case("written", initial, written))
 
 
+def _module(point: Any) -> Any:
+    """The written thresholds' module, ``finn_thresholds_written``."""
+    return built(point, "thresholds_written")
+
+
+def _cycles(point: Any) -> int:
+    found = cycles_of(point)
+    assert isinstance(found, Available), found
+    return found.value
+
+
 def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> None:
     point = _written(((-3, 0, 2),), ((-6, -1, 5),))
-    declared = declared_registers(point.module)
-    assert declared == {"s_axilite": point.activate.register_map}
+    declared = declared_registers(_module(point))
+    assert declared == {"s_axilite": point.member("activate").register_map}
     # One 32-bit word a threshold of the shared row (C = 1, N = 3): the word select alone.
     assert declared["s_axilite"] == RegisterMap(((0, 0xD), (4, 0x0), (8, 0x2)))
     stimulus = {"s_axis_0": ([0] * (PIXELS * CHANNELS // 4), 16)}
     expected = {"m_axis_0": ([0] * (PIXELS * CHANNELS // 4), 8)}
     bench = stream_bench(
-        point.module, tmp_path, inputs=stimulus, outputs=expected, toolchain=host_toolchain()
+        _module(point), tmp_path, inputs=stimulus, outputs=expected, toolchain=host_toolchain()
     )
     assert (tmp_path / "s_axilite.writes.mem").read_text().split() == [
         "00000000d",
@@ -349,7 +368,7 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
     assert "wire configured = s_axilite_written == 3;" in bench.text
     other = RegisterMap(((0, 1),))
     stream_bench(
-        point.module,
+        _module(point),
         tmp_path / "other",
         inputs=stimulus,
         outputs=expected,
@@ -361,7 +380,7 @@ def test_a_control_bus_is_written_what_its_kernel_declares(tmp_path: Path) -> No
         ValueError, match="no control bus s_axilite_1; its control buses: s_axilite"
     ):
         stream_bench(
-            point.module,
+            _module(point),
             tmp_path / "unknown",
             inputs=stimulus,
             outputs=expected,
@@ -519,13 +538,13 @@ def test_words_that_differ_are_raised_as_they_arrived(tmp_path: Path) -> None:
     case = Case("shared", ((-3, 0, 2),))
     point = placed(case)
     form = vector_major((PIXELS, CHANNELS), case.pe)
-    bits = point.activate.result_dtype.bitwidth()
+    bits = point.member("activate").result_dtype.bitwidth()
     levels = (VALUES[..., None] >= np.array(case.initial[0])).sum(axis=-1)
     words = pack_beats(form, levels.ravel().tolist(), bits)
     wrong = [*words[:1], words[1] ^ 1, *words[2:]]
     with pytest.raises(WordsDiffer) as differ:
         stream_through(
-            point.module,
+            built(point, stem(case)),
             tmp_path,
             inputs={
                 "s_axis_0": (
@@ -550,14 +569,14 @@ def test_writes_its_kernel_does_not_declare_reach_the_memories(
     kernel holding the other row declares): every level is the written row's."""
     initial, written = ((-3, 0, 2),), ((-6, -1, 5),)
     point = _written(initial, written)
-    registers = declared_registers(_written(written, written).module)
-    pe = point.activate.pe
+    registers = declared_registers(_module(_written(written, written)))
+    pe = point.member("activate").pe
     form = vector_major((PIXELS, CHANNELS), pe)
     levels = (VALUES[..., None] >= np.array(written[0])).sum(axis=-1)
     assert not np.array_equal(levels, (VALUES[..., None] >= np.array(initial[0])).sum(axis=-1))
-    result_bits = point.activate.result_dtype.bitwidth()
+    result_bits = point.member("activate").result_dtype.bitwidth()
     stream_through(
-        point.module,
+        _module(point),
         tmp_path,
         inputs={"s_axis_0": (list(pack_beats(form, VALUES.ravel().tolist(), 4)), 4 * pe)},
         outputs={
@@ -568,7 +587,7 @@ def test_writes_its_kernel_does_not_declare_reach_the_memories(
         },
         pacing=pacing,
         registers=registers,
-        cycles=point.cycles,
+        cycles=_cycles(point),
         toolchain=host_toolchain(),
     )
     assert ELEMENT.bitwidth() == 4
