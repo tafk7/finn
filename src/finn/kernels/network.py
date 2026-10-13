@@ -489,11 +489,21 @@ class Network:
     """Kernels and channels by name, each its own space, and the wiring between them; see
     the module docstring. Immutable: ``trial`` and ``with_choices`` return another."""
 
-    __slots__ = ("_kernels", "_order", "_points", "_ranked", "_unbound", "_wires", "_facts")
+    __slots__ = (
+        "_facts",
+        "_kernels",
+        "_order",
+        "_points",
+        "_rank",
+        "_ranked",
+        "_unbound",
+        "_wires",
+    )
 
     _order: tuple[str, ...]
     _kernels: tuple[str, ...]
     _ranked: tuple[str, ...]
+    _rank: Mapping[str, int]
     _wires: Mapping[str, Wire]
     _points: Mapping[str, Space]
     _unbound: Mapping[str, Unbound]
@@ -519,6 +529,7 @@ class Network:
         self._kernels = tuple(kernels)
         self._wires = MappingProxyType(wires)
         self._ranked = _ranked(self._kernels, wires)
+        self._rank = MappingProxyType({name: index for index, name in enumerate(self._ranked)})
         points: dict[str, Space] = {}
         for name, declared in kernels.items():
             try:
@@ -549,6 +560,7 @@ class Network:
     ) -> Network:
         made = cls.__new__(cls)
         made._order, made._kernels, made._ranked = like._order, like._kernels, like._ranked
+        made._rank = like._rank
         made._wires = like._wires
         made._points = MappingProxyType(dict(points))
         made._unbound = MappingProxyType(dict(unbound))
@@ -642,9 +654,15 @@ class Network:
             found |= {(name, key): info for key, info in _decisions(subject).items()}
         return found
 
+    def _wanted(self, names: Iterable[str] | None) -> Sequence[str]:
+        """``names`` (every member where None) ranked, those of the network only."""
+        if names is None:
+            return self._ranked
+        rank = self._rank
+        return sorted((name for name in set(names) if name in rank), key=lambda name: rank[name])
+
     def _bound_members(self, names: Iterable[str] | None) -> Iterable[tuple[str, Space]]:
-        wanted = self._ranked if names is None else [n for n in self._ranked if n in set(names)]
-        return ((name, self._points[name]) for name in wanted if name in self._points)
+        return ((name, self._points[name]) for name in self._wanted(names) if name in self._points)
 
     def viable(
         self, names: Iterable[str] | None = None
@@ -679,9 +697,8 @@ class Network:
     def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
         """Every choice stored (of ``names`` only, where named), by key, ranked: each bound
         member's committed Decisions, and the choices an unbound channel holds."""
-        wanted = self._ranked if names is None else [n for n in self._ranked if n in set(names)]
         found: dict[Key, object] = {}
-        for name in wanted:
+        for name in self._wanted(names):
             held = self._unbound.get(name)
             values = held.stored if held is not None else _chosen(self._points[name])
             found |= {(name, key): value for key, value in values.items()}

@@ -557,14 +557,19 @@ class Seam:
         kept: dict[Key, object] = {}
         baselined: dict[Key, object] = {}
         passed: set[Key] = set()
-        names = None if members is None else tuple(members)
+        wanted = set(network.members if members is None else members)
         if keys is not None:
-            names = tuple(dict.fromkeys(key[0] for key in keys if names is None or key[0] in names))
-        while True:
+            wanted &= {key[0] for key in keys}
+        # A change reaches its member and the members ranked after it (facts flow one
+        # way: kernels first, then each channel after what it reads), so settling moves
+        # forward a member at a time, in rank order, and never looks back.
+        order = [name for name in network.members if name in wanted]
+        index = 0
+        while index < len(order):
             choice = next(
                 (
                     choice
-                    for choice in self.choices(network, names)
+                    for choice in self.choices(network, (order[index],))
                     if choice.key not in passed
                     and (keys is None or choice.key in keys)
                     and (
@@ -576,9 +581,8 @@ class Seam:
                 None,
             )
             if choice is None:
-                if members is None and keys is None:
-                    self._check_held(network)
-                return Settled(network, kept, baselined)
+                index += 1
+                continue
             passed.add(choice.key)
             held = self.held.get(choice.key, _ABSENT)
             if held is not _ABSENT:
@@ -600,6 +604,9 @@ class Seam:
             if choice.cases is None or choice.required:
                 continue
             network, baselined[choice.key] = _first_case(self, network, choice, choice.cases)
+        if members is None and keys is None:
+            self._check_held(network)
+        return Settled(network, kept, baselined)
 
     def _check_held(self, network: Composition) -> None:
         """``Unsettled`` for the first held key ``network`` does not hold at its value (one

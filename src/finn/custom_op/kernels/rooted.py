@@ -72,12 +72,20 @@ class Rooted:
         self._channels = tuple(named[path] for path in channels)
         self._rank = {name: index for index, name in enumerate(self._members)}
         self._infos: dict[str, inspection.DecisionInfo[object]] | None = None
+        self._reads: dict[str, Any] = {}
 
     def _again(self, point: Any) -> Rooted:
         made = Rooted.__new__(Rooted)
         made.__dict__.update(self.__dict__)
         made.point = point
+        made._reads = {}
         return made
+
+    def _read(self, question: str, answer: Any) -> Any:
+        """``answer()``, read once of this root's point (it is immutable)."""
+        if question not in self._reads:
+            self._reads[question] = answer()
+        return self._reads[question]
 
     # -- keys -------------------------------------------------------------------------------
 
@@ -149,24 +157,32 @@ class Rooted:
         self, names: Iterable[str] | None = None
     ) -> tuple[tuple[Key, inspection.Viable], ...]:
         wanted = self._wanted(names)
-        found = self._pairs((item.key, item) for item in inspection.viable(self.point))
+        found = self._read(
+            "viable",
+            lambda: self._pairs((item.key, item) for item in inspection.viable(self.point)),
+        )
         return tuple(item for item in found if wanted is None or item[0][0] in wanted)
 
     def open(  # noqa: A003 - the inspection's name
         self, names: Iterable[str] | None = None
     ) -> tuple[tuple[Key, inspection.Open], ...]:
         wanted = self._wanted(names)
-        found = self._pairs((item.key, item) for item in inspection.open(self.point))
+        found = self._read(
+            "open", lambda: self._pairs((item.key, item) for item in inspection.open(self.point))
+        )
         return tuple(item for item in found if wanted is None or item[0][0] in wanted)
 
     def forced(self, names: Iterable[str] | None = None) -> dict[Key, object]:
         wanted = self._wanted(names)
-        found = self._pairs((item.key, item.value) for item in inspection.forced(self.point))
+        found = self._read(
+            "forced",
+            lambda: self._pairs((item.key, item.value) for item in inspection.forced(self.point)),
+        )
         return {key: value for key, value in found if wanted is None or key[0] in wanted}
 
     def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
         wanted = self._wanted(names)
-        found = self._pairs(chosen(self.point).items())
+        found = self._read("chosen", lambda: self._pairs(chosen(self.point).items()))
         return {key: value for key, value in found if wanted is None or key[0] in wanted}
 
     def admission(self, name: str) -> tuple[Finding, ...]:
