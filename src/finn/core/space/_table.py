@@ -21,7 +21,7 @@ from ._configuration import Space
 from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
-from .declarations import Declaration, ValueRef, ViewKey
+from .declarations import Declaration, ValueRef
 from .expressions import IntOperator
 from .ir import Choice, Node, NodeKind, Scope
 from .semantics import BOOL, ValueSemantics
@@ -47,11 +47,6 @@ class ScopeDraft:
     children: dict[object, int] = field(default_factory=dict)
     named_children: dict[str, int] = field(default_factory=dict)
     choices: dict[object, int] = field(default_factory=dict)
-    references: dict[object, int] = field(default_factory=dict)
-    # Each reference input's declaration -> the scope it reaches (None: unsupplied).
-    targets: dict[object, int | None] = field(default_factory=dict)
-    # A per-input export: key -> (reference input name, view node) in declared order.
-    input_exports: dict[ViewKey[object], tuple[tuple[str, int], ...]] = field(default_factory=dict)
     # The value inputs nothing supplies here: a guard on their supply never holds.
     unsupplied: set[str] = field(default_factory=set)
 
@@ -68,7 +63,6 @@ class ScopeDraft:
             self.guard,
             self.choices,
             self.record,
-            self.references,
         )
 
 
@@ -143,10 +137,6 @@ class Table:
     guards: list[GuardTask] = field(default_factory=list)
     # The frozen scopes, once allocation has fixed their identities and maps.
     scopes: tuple[Scope, ...] = ()
-    # Referenced scope -> the (user scope, input name) pairs that reference it.
-    users: dict[int, list[tuple[int, str]]] = field(default_factory=dict)
-    # A forwarded reference input: (scope, input) -> the input it forwards.
-    forwarded: dict[tuple[int, str], tuple[int, str]] = field(default_factory=dict)
     # Allocation -> checks: selections linked for a member name several candidates share.
     shared: dict[int, tuple[int, str]] = field(default_factory=dict)
     # Lowering -> checks: integer expressions, and each callback argument's target.

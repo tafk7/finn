@@ -7,8 +7,8 @@ A member, a path of records (``kitchen.area``), a Decision over nodes' case or
 member (``heating.kw``), a projection (``spec.payload_bits``), a presence
 (``Present``), a location (``LocatedParam``) and an integer expression each
 resolve to one node; those that need one get it reserved here, once per scope
-and source. ``members_candidates`` and ``users_candidates`` list the views
-``Members`` and ``Users`` read, named as the reading scope sees them.
+and source. ``members_candidates`` lists the views ``Members`` reads, named as
+the reading scope sees them.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import replace
 from typing import cast
 
-from ._nodes import NodeDecision, NodeDecl, is_reference_input, unwrap
+from ._nodes import NodeDecision, NodeDecl, unwrap
 from ._table import ExpressionTask, Table
 from .declarations import (
     CaseRef,
@@ -69,23 +69,14 @@ class Names:
             if record is draft.record:
                 continue
             child = draft.children.get(record)
-            if child is not None:
-                names.append(self.table.local_name(current, child))
-            elif record in draft.references:
-                # Through a reference input: named by the input, not by the node reached.
-                child = draft.references[record]
-                names.append(draft.effective.aliases[record])
-            else:
+            if child is None:
                 raise DefinitionError(f"{record.name}: node is not placed in this scope")
+            names.append(self.table.local_name(current, child))
             current = child
         return ".".join(names)
 
     def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
-        """Each child node's contribution for ``key``: (its name, member, view).
-
-        A plain export contributes one entry, named by the key; a per-input
-        export one entry per input, named by the input.
-        """
+        """Each child node's export of ``key``: (its name, the key's name, view)."""
 
         result: list[tuple[str, str, int]] = []
         for child in self.placed(scope):
@@ -94,8 +85,6 @@ class Names:
             if target is not None:
                 self.check_view(child, key, target)
                 result.append((name, key.name, target))
-            for member, target in self.table.drafts[child].input_exports.get(key, ()):
-                result.append((name, member, target))
         return result
 
     def placed(self, scope: int) -> tuple[int, ...]:
@@ -108,9 +97,6 @@ class Names:
         for name, declaration in draft.effective.members.items():
             if isinstance(declaration, NodeDecl):
                 children.append(draft.named_children[name])
-            elif is_reference_input(declaration):
-                if name in draft.named_children:  # a referenced node belongs where it is placed
-                    children.append(draft.named_children[name])
             elif isinstance(declaration, NodeDecision):
                 cases = self.table.choice_drafts[draft.choices[declaration]].cases
                 children.extend(child for _, child in cases if child is not None)
@@ -122,54 +108,6 @@ class Names:
             raise DefinitionError(
                 f"{self.table.drafts[scope].name or '<root>'}: member {key.name} must be a view"
             )
-
-    def exports_through(self, user: int, member: str, key: ViewKey[object]) -> bool:
-        """Whether ``user`` exports ``key`` for its input ``member`` (or for every input)."""
-        per_input = self.table.drafts[user].input_exports.get(key)
-        if per_input is not None:
-            return member in dict(per_input)
-        return self.table.drafts[user].members.get(key) is not None
-
-    def represented(self, user: int, member: str, key: ViewKey[object]) -> bool:
-        """A forwarding user whose forwarder exports ``key`` for that input: it answers for it."""
-        via = self.table.forwarded.get((user, member))
-        while via is not None:
-            if self.exports_through(*via, key):
-                return True
-            via = self.table.forwarded.get(via)
-        return False
-
-    def users_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
-        """Each user's export of ``key``: (its name beside this node, input, view).
-
-        A user reaching this node through inputs it was forwarded is left out
-        when a node it forwards through exports ``key`` for that input.
-        """
-
-        parent = self.table.drafts[scope].parent
-        order = {
-            user: list(self.table.drafts[user].effective.members)
-            for user, _ in self.table.users.get(scope, ())
-        }
-        result: list[tuple[str, str, int]] = []
-        for user, member in sorted(
-            self.table.users.get(scope, ()),
-            key=lambda item: (item[0], order[item[0]].index(item[1])),
-        ):
-            if self.represented(user, member, key):
-                continue
-            per_input = self.table.drafts[user].input_exports.get(key)
-            if per_input is not None:
-                target = dict(per_input).get(member)
-            else:
-                target = self.table.drafts[user].members.get(key)
-                if target is not None:
-                    self.check_view(user, key, target)
-            if target is None:
-                continue
-            name = "" if parent is None or user == parent else self.table.local_name(parent, user)
-            result.append((name, member, target))
-        return result
 
     def fresh_number(self, owner: str) -> int:
         number = self.expression_counts.get(owner, 0)
@@ -311,7 +249,7 @@ class Names:
             draft = self.table.drafts[scope]
             if record is draft.record:
                 continue
-            child = draft.children.get(record, draft.references.get(record))
+            child = draft.children.get(record)
             if child is None:
                 raise DefinitionError(
                     f"{owner}: {getattr(record, 'describe', lambda: record.name)()} is not "

@@ -20,7 +20,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Users,
     ViewKey,
     composite,
     constraint,
@@ -119,7 +118,7 @@ def test_behaviour_is_not_assignable(member: str) -> None:
         setattr(target, member, 1)
 
     class Budget(Space):
-        claims = Users(COST)
+        claims = Members(COST)
 
         @derived
         def claimed(self) -> int:
@@ -146,22 +145,14 @@ def test_a_subclass_changes_what_belongs_to_the_space_class() -> None:
 
 
 def test_a_root_that_supplies_structure_is_refused_with_a_pointer() -> None:
-    class Account(Space):
-        limit: int = Param()
-
-    class Team(Space):
-        account: Account = Param()
-        size: int = Param(default=1)
-
-    with pytest.raises(DefinitionError, match="write a subclass, or build one with composite"):
-        design_space(Team(account=Account(limit=3)))
-
     class Sized(Space):
         size: int = Param()
 
-    with pytest.raises(DefinitionError, match="size supplies structure"):
+    with pytest.raises(DefinitionError, match="write a subclass, or build one with composite"):
         design_space(Sized(size=Decision(values=(1, 2))))
+    with pytest.raises(DefinitionError, match="size supplies structure"):
+        design_space(Sized(size=Room.area))
     # The pointer's way: the structure in a Space class built from data.
-    local = Account(limit=3)
-    staffed = composite("Staffed", {"local": local, "team": Team(account=local)})
-    assert getattr(design_space(staffed()), "team").account.limit == 3
+    room = Room(area=3)
+    sized = composite("Measured", {"room": room, "sized": Sized(size=room.area)})
+    assert getattr(design_space(sized()), "sized").size == 3

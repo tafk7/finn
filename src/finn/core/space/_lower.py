@@ -6,8 +6,8 @@
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a constant, a Decision's domain and its arguments, a callback with
-its arguments, a view's output and obligations, ``Members``, ``Users`` and
-``Present`` alternatives. Guards and integer expressions are linked after every
+its arguments, a view's output and obligations, ``Members`` and ``Present``
+alternatives. Guards and integer expressions are linked after every
 member, references resolving through ``_names``.
 """
 
@@ -38,7 +38,6 @@ from .declarations import (
     Param,
     Present,
     Supplied,
-    Users,
     ValueRef,
     View,
     ViewKey,
@@ -165,13 +164,7 @@ class _Lowering:
         for source in sources:
             if not isinstance(source, allowed):
                 raise DefinitionError(f"{owner}: unsupported obligation declaration")
-            if isinstance(source, Users):
-                # Each user is obliged separately; one referencing twice counts once.
-                key = cast(ViewKey[object], source.key)
-                indices = list(
-                    dict.fromkeys(target for *_, target in self.names.users_candidates(scope, key))
-                )
-            elif isinstance(source, Members):
+            if isinstance(source, Members):
                 # A Members group obliges each member's acceptance separately.
                 indices = [
                     target
@@ -184,7 +177,7 @@ class _Lowering:
                 if self.table.nodes[indices[0]].kind not in {"view", "constraint", "group"}:
                     raise DefinitionError(
                         f"{owner}: a view may require only constraints, groups, views, "
-                        "references to views, Members and Users"
+                        "references to views and Members"
                     )
             for index in indices:
                 if index in seen:
@@ -367,14 +360,6 @@ class _Lowering:
                     (Constraint, ConstraintGroup, View, ValueRef, Members),
                     owner=node.key,
                 ),
-            }
-        if isinstance(declaration, Users):
-            entries = self.names.users_candidates(
-                scope.index, cast(ViewKey[object], declaration.key)
-            )
-            return {
-                "alternatives": tuple((name, target) for name, _, target in entries),
-                "value": tuple(member for _, member, _ in entries),
             }
         if isinstance(declaration, Present):
             return {

@@ -5,8 +5,7 @@
 
 A reusable Space class exposes its child's formals as its own and binds them by
 name (``port = Port(dtype=dtype, lanes=lanes)``); whoever places it supplies
-them. A fresh inline ``Decision`` at a node call (also on a node the caller
-supplies to a reference input) owns its choice.
+them. A fresh inline ``Decision`` at a node call owns its choice.
 """
 
 from __future__ import annotations
@@ -53,13 +52,6 @@ class Reusable(Space):
     port = Port(dtype=dtype, lanes=lanes)
 
 
-class Kernel(Space):
-    """The caller supplies the port node itself, with its own bindings."""
-
-    count: int = Param()
-    port: Port = Param()
-
-
 def test_outer_params_and_decisions_supply_interface_slots_without_new_choices() -> None:
     class Parent(Space):
         dtype: str = Param()
@@ -91,54 +83,51 @@ def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
     class Parent(Space):
         extent: int = Param()
         enabled: bool = Param()
-        # A fresh Decision at the call of the node supplied to a reference
-        # formal: its domain and guard read the enclosing Space class.
-        kernel = Kernel(
-            count=9,
-            port=Port(dtype="INT4", lanes=Decision(domain=divisors_of(extent), when=enabled)),
-        )
+        # A fresh Decision at the call of a node: its domain and guard read the
+        # enclosing Space class.
+        kernel = Port(dtype="INT4", lanes=Decision(domain=divisors_of(extent), when=enabled))
 
-        @derived(lanes=kernel.port.lanes)
+        @derived(lanes=kernel.lanes)
         def folded(*, lanes: int) -> int:
             return lanes * 2
 
     base = design_space(Parent(extent=12, enabled=True))
-    field = base.kernel.port.field(Port.lanes)
+    field = base.kernel.field(Port.lanes)
     assert isinstance(field, BoundDecision)  # the fresh Decision is owned here
     assert field.candidates() == Available((1, 2, 3, 4, 6, 12))
-    chosen = base.with_choices({Parent.kernel.port.lanes: 3})
+    chosen = base.with_choices({Parent.kernel.lanes: 3})
     assert chosen.folded == 6
-    assert chosen.kernel.port.lanes == 3
-    assert [item.key for item in inspection.decisions(chosen)] == ["kernel.port.lanes"]
+    assert chosen.kernel.lanes == 3
+    assert [item.key for item in inspection.decisions(chosen)] == ["kernel.lanes"]
     with pytest.raises(ConfigurationError):
-        base.with_choices({Parent.kernel.port.lanes: 5})
+        base.with_choices({Parent.kernel.lanes: 5})
     inactive = design_space(Parent(extent=12, enabled=False))
-    inactive_field = inactive.kernel.port.field(Port.lanes)
+    inactive_field = inactive.kernel.field(Port.lanes)
     assert isinstance(inactive_field, BoundDecision)
     assert isinstance(inactive_field.state, Inapplicable)
-    assert isinstance(inactive.kernel.port.query(Port.lanes), Inapplicable)
+    assert isinstance(inactive.kernel.query(Port.lanes), Inapplicable)
 
 
 def test_repeated_placements_keep_fresh_choices_independent() -> None:
     class Pair(Space):
-        first = Kernel(count=1, port=Port(dtype="INT4", lanes=Decision(values=(1, 2))))
-        second = Kernel(count=1, port=Port(dtype="INT8", lanes=Decision(values=(2, 4))))
+        first = Port(dtype="INT4", lanes=Decision(values=(1, 2)))
+        second = Port(dtype="INT8", lanes=Decision(values=(2, 4)))
 
     base = design_space(Pair())
-    chosen = base.with_choices({Pair.first.port.lanes: 2})
-    assert chosen.first.port.physical == ("INT4", 2)
-    assert isinstance(chosen.second.port.query(Port.lanes), Unresolved)
-    assert isinstance(base.first.port.query(Port.lanes), Unresolved)
+    chosen = base.with_choices({Pair.first.lanes: 2})
+    assert chosen.first.physical == ("INT4", 2)
+    assert isinstance(chosen.second.query(Port.lanes), Unresolved)
+    assert isinstance(base.first.query(Port.lanes), Unresolved)
     keys = [item.key for item in inspection.decisions(base)]
-    assert keys == ["first.port.lanes", "second.port.lanes"]
+    assert keys == ["first.lanes", "second.lanes"]
 
 
 def test_an_unnamed_decision_shared_by_two_nodes_is_a_definition_error() -> None:
     lanes: int = Decision(values=(1, 2, 4))  # unnamed: bound at calls, never a class attribute
 
     class Shared(Space):
-        first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes))
-        second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
+        first = Port(dtype="INT4", lanes=lanes)
+        second = Port(dtype="INT8", lanes=lanes)
 
     with pytest.raises(DefinitionError, match="a shared decision must be named") as caught:
         design_space(Shared())
@@ -150,22 +139,22 @@ def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
 
     class Shared(Space):
         use_first: bool = Decision(values=(False, True))
-        first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes), when=use_first)
-        second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
+        first = Port(dtype="INT4", lanes=lanes, when=use_first)
+        second = Port(dtype="INT8", lanes=lanes)
 
     (info,) = [item for item in inspection.decisions(Shared) if item.key != "use_first"]
     # Owned by the lowest scope containing both uses, keyed by that scope and its name.
     assert (info.key, info.scope) == ("lanes", "")
     base = design_space(Shared())
     # Either use edits the one decision; it applies whenever its owner does.
-    point = base.with_choices({Shared.second.port.lanes: 4}, use_first=False)
-    assert point.second.port.physical == ("INT8", 4)
-    assert isinstance(point.first.port.query(Port.lanes), Inapplicable)
+    point = base.with_choices({Shared.second.lanes: 4}, use_first=False)
+    assert point.second.physical == ("INT8", 4)
+    assert isinstance(point.first.query(Port.lanes), Inapplicable)
     assert point.query(info.reference) == Available(4)
-    both = point.with_choices({Shared.first.port.lanes: 2}, use_first=True)
-    assert both.first.port.physical == ("INT4", 2)
-    assert both.second.port.physical == ("INT8", 2)
-    assert both.with_choices(lanes=1).second.port.physical == ("INT8", 1)
+    both = point.with_choices({Shared.first.lanes: 2}, use_first=True)
+    assert both.first.physical == ("INT4", 2)
+    assert both.second.physical == ("INT8", 2)
+    assert both.with_choices(lanes=1).second.physical == ("INT8", 1)
     assert committed(both) == {"lanes": 2, "use_first": True}
 
 
@@ -178,8 +167,8 @@ def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
 
     class Clash(Space):
         width = Const(4)
-        first = Kernel(count=1, port=Port(dtype="INT4", lanes=lanes))
-        second = Kernel(count=2, port=Port(dtype="INT8", lanes=lanes))
+        first = Port(dtype="INT4", lanes=lanes)
+        second = Port(dtype="INT8", lanes=lanes)
 
     with pytest.raises(DefinitionError, match="is named like a member"):
         design_space(Clash())

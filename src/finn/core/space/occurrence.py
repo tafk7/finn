@@ -99,56 +99,47 @@ def bind(model: Model[S], parameters: Mapping[int, object]) -> S:
     return cast(S, attach(snapshot, 0))
 
 
-def _node_scope(point: Space, reference: object) -> tuple[int, int | None] | None:
-    """For a node reference: (the scope holding it, the node's scope or None if unsupplied)."""
+def _node_scope(point: Space, reference: object) -> int | None:
+    """For a node reference, the node's scope; None for anything else."""
     from ._configuration import Space
-    from ._nodes import NodeDecl, is_reference_input
+    from ._nodes import NodeDecl
     from .references import descend
 
-    if isinstance(reference, Space):
-        path = declared_path(reference)
-        if path is None:
-            return None
-        *outer, last = path
-    elif is_reference_input(reference):
-        outer, last = [], cast(Declaration, reference)
-    else:
+    if not isinstance(reference, Space):
         return None
-    if not isinstance(last, NodeDecl) and not is_reference_input(last):
+    path = declared_path(reference)
+    if path is None:
+        return None
+    *outer, last = path
+    if not isinstance(last, NodeDecl):
         return None
     current = state(point)
     scopes = current.linked.scopes
     holder = descend(scopes, point._scope, outer)
     scope = scopes[holder]
     if last is scope.record:
-        return holder, holder
-    target = scope.children.get(last, scope.references.get(last))
-    if target is None and last not in scope.members:
+        return holder
+    target = scope.children.get(last)
+    if target is None:
         raise RequestError("node is not part of this compiled scope")
-    return holder, target
+    return target
 
 
-def _presence(point: Space, holder: int, target: int | None, last: object) -> int | None:
-    """The node answering a node's presence: its guard, or a reference input's presence node."""
-    scopes = state(point).linked.scopes
-    if last in scopes[holder].members:  # a reference input
-        return scopes[holder].members[last]
-    return None if target is None else scopes[target].guard
+def _presence(point: Space, target: int) -> int | None:
+    """The node answering a node's presence: its guard."""
+    return state(point).linked.scopes[target].guard
 
 
 def query(point: Space, reference: object) -> QueryResult[object]:
     _execution.driver_only("query inspection")
     current = state(point)
-    located = _node_scope(point, reference)
-    if located is not None:
-        holder, target = located
-        last = cast(tuple[Declaration, ...], declared_path(reference) or (reference,))[-1]
-        presence = _presence(point, holder, target, last)
+    target = _node_scope(point, reference)
+    if target is not None:
+        presence = _presence(point, target)
         if presence is not None:
             answer = _runtime.evaluate(current, presence).result
             if not isinstance(answer, Available) or answer.value is not True:
                 return answer if not isinstance(answer, Available) else Inapplicable()
-        assert target is not None
         return Available(attach(current, target))
     index = current.model.resolve(point._scope, reference)
     result = _runtime.evaluate(current, index).result
@@ -158,18 +149,14 @@ def query(point: Space, reference: object) -> QueryResult[object]:
 def present(point: Space, node: object) -> bool:
     """Whether a node, or a value input, is present, read like a value (undecided presence
     raises)."""
-    located = _node_scope(point, node)
-    if located is None:
+    target = _node_scope(point, node)
+    if target is None:
         if isinstance(node, Param):
             return _supplied(point, node)
-        raise RequestError(
-            "present() takes a node (a child, a candidate or a reference input) or a value input"
-        )
-    holder, target = located
-    last = cast(tuple[Declaration, ...], declared_path(node) or (node,))[-1]
-    presence = _presence(point, holder, target, last)
+        raise RequestError("present() takes a node (a child or a candidate) or a value input")
+    presence = _presence(point, target)
     if presence is None:
-        return target is not None
+        return True
     answer = _read_result(point, presence)
     if isinstance(answer, Available):
         return answer.value is True
@@ -371,20 +358,11 @@ def root(point: Space) -> Space:
 
 
 def child(point: Space, record: Declaration) -> Space:
-    """A child node's configuration; through a reference input, the referenced node's.
-
-    Every read through a referenced node that is absent is inapplicable, as for
-    any guarded node. An unsupplied optional reference input has no node: it
-    reads its presence, which is unsupplied, exactly like a value read.
-    """
-    from ._nodes import is_reference_input
-
+    """A child node's configuration."""
     current = state(point)
     _execution.check_snapshot(current)
     scope = current.linked.scopes[point._scope]
-    child_scope = scope.children.get(record, scope.references.get(record))
-    if child_scope is None and is_reference_input(record) and record in scope.members:
-        _read_index(point, scope.members[record])  # raises: unsupplied
+    child_scope = scope.children.get(record)
     if child_scope is None:
         raise RequestError("child node is not part of this compiled scope")
     return attach(current, child_scope)

@@ -4,19 +4,18 @@
 """Allocate a Space class's occurrences: every placed node a scope, every member a node.
 
 The root scope is the Space class's own, its formals runtime inputs; scopes are
-then walked breadth-first. A child node, a Decision over nodes' candidates and
-a fresh node supplied to a reference input each place a scope. Each member gets
-its node, bound by what the body that declared the node supplied for it (a
-formal only), and the task that lowers it. Reference inputs are then resolved
-in the bodies that wrote them, and a named shared Decision gets one owning
-node. Afterwards scope identities and membership maps are
-fixed (``Table.scopes``); later phases replace node payloads only.
+then walked breadth-first. A child node and a Decision over nodes' candidates
+each place a scope. Each member gets its node, bound by what the body that
+declared the node supplied for it (a formal only), and the task that lowers it.
+A named shared Decision then gets one owning node. Afterwards scope identities
+and membership maps are fixed (``Table.scopes``); later phases replace node
+payloads only.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import cast
 
 from ._bindings import PlacementBinding, Slot, classify
@@ -25,8 +24,6 @@ from ._nodes import (
     NodeDecision,
     NodeDecl,
     fallback,
-    is_fresh,
-    is_reference_input,
     missing_formal,
 )
 from ._ordering import dependency_order
@@ -62,17 +59,6 @@ from .errors import DefinitionError
 from .expressions import Expr
 from .ir import Argument, NodeKind
 from .semantics import BOOL, STRING
-
-
-@dataclass(frozen=True)
-class _ReferenceTask:
-    """A reference input to resolve once every node of its authoring scope is placed."""
-
-    scope: int
-    name: str
-    supplier: NodeDecl | Param[object]
-    source_scope: int
-    presence: int
 
 
 def _matches(expected: str) -> Callable[..., object]:
@@ -125,8 +111,6 @@ class _Allocation:
         # Named Decisions that are not class attributes, by authoring scope: their uses.
         self.named: dict[tuple[int, int], list[int]] = {}
         self.named_declarations: dict[tuple[int, int], Decision[object]] = {}
-        # Reference inputs waiting for their authoring scope to be placed.
-        self.pending: list[_ReferenceTask] = []
         # Required formals nothing supplies, reported together after allocation.
         self.missing: list[str] = []
 
@@ -205,18 +189,14 @@ class _Allocation:
         kinds = self.table.kinds[draft.effective.space_type]
         for member_name, declaration in draft.effective.members.items():
             kind = kinds[member_name]
-            # Structure (nodes, choices and reference inputs) is allocated below.
-            if kind not in ("node", "choice", "reference"):
+            # Structure (nodes and choices) is allocated below.
+            if kind not in ("node", "choice"):
                 self.member(draft, member_name, declaration)
         for declaration, member_name in draft.effective.aliases.items():
             if member_name in draft.named_members:
                 draft.members[declaration] = draft.named_members[member_name]
         for export, declaration in draft.effective.exports.items():
             draft.members[export] = draft.members[declaration]
-        for export, entries in draft.effective.input_exports.items():
-            draft.input_exports[export] = tuple(
-                (name, draft.members[view]) for name, view in entries
-            )
         return index
 
     def member(self, draft: ScopeDraft, member_name: str, declaration: Declaration) -> None:
@@ -450,129 +430,6 @@ class _Allocation:
             choice.members[member] = node
             self.table.shared[node] = (choice.index, member)
 
-    def reference_input(self, scope: ScopeDraft, name: str, formal: Param[object]) -> None:
-        """``output: Channel = Param()``: place a fresh node here, or reference a placed one.
-
-        Either way the input gets a presence node: a constant guarded by the
-        reached node's own guard, so reading the input of an absent node is
-        inapplicable. An unsupplied optional input is unsupplied.
-        """
-        key = member_key(scope.name, name)
-        aliases = self.table.aliases[scope.effective.space_type][name]
-        slot = scope.slots.get(name)
-        presence = self.table.reserve(
-            scope.index,
-            key,
-            "const" if slot is not None else "present",
-            BOOL,
-            origin=formal.origin,
-        )
-        scope.named_members[name] = presence
-        for alias in aliases:
-            scope.members[alias] = presence
-        if slot is None:
-            for alias in aliases:
-                scope.targets[alias] = None
-            if formal.required and scope.parent is not None:
-                self.missing.append(
-                    missing_formal(key, formal, scope.record, self.table.space_type.__qualname__)
-                )
-            return
-        supplier = cast("NodeDecl | Param[object]", slot.supplier)
-        if isinstance(supplier, NodeDecl):
-            expected = cast("type[Space]", formal.reference_space_type())
-            if not issubclass(supplier.space_type, expected):
-                raise DefinitionError(
-                    f"{key}: expected a {expected.__qualname__} node, got "
-                    f"{supplier.space_type.__qualname__}{at(supplier.origin)}"
-                )
-        elif not isinstance(supplier, Param):
-            raise DefinitionError(f"{key}: a reference input takes a node declaration")
-        if isinstance(supplier, Param) or not is_fresh(supplier):
-            self.pending.append(_ReferenceTask(scope.index, name, supplier, slot.scope, presence))
-            return
-        if len(supplier.sites) > 1:
-            raise DefinitionError(
-                f"{supplier.describe()} is supplied to {len(supplier.sites)} reference inputs "
-                f"({', '.join(supplier.sites)}) and placed by none: place it (a class attribute "
-                "or a composite member) so that each input references it"
-            )
-        guard = self.table.guarded(
-            slot.scope, scope.guard, supplier.when, key + ".$guard", owner=key
-        )
-        child = self.place(
-            scope, name, supplier, guard, source_scope=slot.scope, keys=(*aliases, supplier)
-        )
-        scope.named_children[name] = child
-        for alias in aliases:
-            scope.targets[alias] = child
-        self.table.users.setdefault(child, []).append((scope.index, name))
-        self.table.nodes[presence] = replace(self.table.nodes[presence], value=True, guard=guard)
-
-    def resolve_references(self) -> None:
-        """Resolve each reference input in the body that wrote it, in scope order.
-
-        A reference names a node placed in that body (a sibling, a candidate)
-        or forwards one of that body's own reference inputs. Nothing else is
-        visible: a Space class reaches an ancestor's node only through its inputs.
-        A forwarded input resolves to the node it finally references, so no
-        chain of forwarding composites is walked when reading it. The
-        forwarding node is a user of that node too, represented by the nodes
-        it forwards through (``users_candidates``): ``Users`` sees a kernel's
-        port that references a channel through its kernel's input.
-        """
-        for task in self.pending:
-            draft = self.table.drafts[task.scope]
-            source = self.table.drafts[task.source_scope]
-            supplier = task.supplier
-            key = member_key(draft.name, task.name)
-            target: int | None
-            if isinstance(supplier, Param):
-                if not is_reference_input(supplier) or supplier not in source.targets:
-                    raise DefinitionError(
-                        f"{key}: forwards {supplier.name or 'a formal'}{at(supplier.origin)}, "
-                        "which is not a reference input of "
-                        f"{source.effective.space_type.__qualname__}"
-                    )
-                formal = cast(Param[object], draft.effective.members[task.name])
-                expected = cast("type[Space]", formal.reference_space_type())
-                given = cast("type[Space]", supplier.reference_space_type())
-                if not issubclass(given, expected):
-                    raise DefinitionError(
-                        f"{key}: forwards {supplier.name}{at(supplier.origin)}, a "
-                        f"{given.__qualname__} input of "
-                        f"{source.effective.space_type.__qualname__}; "
-                        f"{draft.effective.space_type.__qualname__}.{task.name} takes a "
-                        f"{expected.__qualname__}"
-                    )
-                target = source.targets[supplier]
-                if target is not None:
-                    self.table.users.setdefault(target, []).append((task.scope, task.name))
-                    self.table.forwarded[(task.scope, task.name)] = (
-                        task.source_scope,
-                        str(supplier.name),
-                    )
-            else:
-                target = source.children.get(supplier)
-                if target is None:
-                    raise DefinitionError(
-                        f"{key}: references {supplier.describe()}, which is not placed in "
-                        f"{source.name or '<root>'}: a reference input names a node placed "
-                        "beside it, or forwards an input of the enclosing Space class"
-                    )
-                self.table.users.setdefault(target, []).append((task.scope, task.name))
-            for alias in self.table.aliases[draft.effective.space_type][task.name]:
-                draft.targets[alias] = target
-                if target is not None:
-                    draft.references[alias] = target
-            node = self.table.nodes[task.presence]
-            if target is None:
-                self.table.nodes[task.presence] = replace(node, kind="present")
-            else:
-                self.table.nodes[task.presence] = replace(
-                    node, value=True, guard=self.table.drafts[target].guard
-                )
-
     def allocate(self) -> None:
         self.new_scope(
             self.table.space_type,
@@ -589,13 +446,10 @@ class _Allocation:
             kinds = self.table.kinds[scope.effective.space_type]
             for name, declaration in scope.effective.members.items():
                 kind = kinds[name]
-                if kind == "reference":
-                    self.reference_input(scope, name, cast(Param[object], declaration))
-                elif kind == "node":
+                if kind == "node":
                     self.child(scope, name, cast(NodeDecl, declaration))
                 elif kind == "choice":
                     self.choice(scope, name, cast(NodeDecision, declaration))
-        self.resolve_references()
         if self.missing:
             raise DefinitionError("; ".join(self.missing))
         self.own_named_decisions()

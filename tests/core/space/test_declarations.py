@@ -353,33 +353,25 @@ def test_inferred_derived_override_cannot_change_value_type() -> None:
 
 
 def test_binding_forms_and_local_edit_ownership() -> None:
-    # A reference input is supplied by a node, and a root keeps its values as
-    # runtime parameters.
+    # A root keeps its values as runtime parameters.
     class Child(Space):
         size: int = Param()
         internal: str = Decision(values=("auto", "block"))
-
-    class Holder(Space):
-        held: Child = Param()
 
     class Parent(Space):
         supplied: int = Decision(values=(1, 2))
         literal = Child(size=4)
         alias = Child(size=supplied)
         local = Child(size=Decision(values=(4, 8)))
-        holder = Holder(held=Child(size=2))
 
     # How each supply links: a literal is a constant, a reference an alias, a
-    # fresh Decision a decision, a node at a reference input its placement.
+    # fresh Decision a decision.
     linked = compile_model(Parent).linked
     kinds = [
         linked.nodes[compile_model(Parent).resolve(0, node.size)].kind
         for node in (Parent.literal, Parent.alias, Parent.local)
     ]
     assert kinds == ["const", "alias", "decision"]
-    assert linked.scopes[0].named_children["holder"] in {
-        scope.parent for scope in linked.scopes if scope.name == "holder.held"
-    }
     root = compile_model(Child).linked
     assert root.nodes[root.keys["size"]].kind == "param"
     model = compile_model(Parent)

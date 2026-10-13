@@ -11,7 +11,7 @@ choices, and a *design point* one complete for the question asked.
 ``design_space(node)`` is the one step from a declaration to a design space. A
 Space class is compiled once, into the model every design space of it shares; a
 root supplies plain values for its value formals, bound as runtime inputs. A
-root that supplies structure (a node, a reference, a fresh Decision) is refused:
+root that supplies structure (a reference, a fresh Decision) is refused:
 structure belongs to a Space class. Preparing a model freezes every node
 declaration it instantiates, and ``design_space`` freezes its root: from then
 on, assignment is refused.
@@ -29,7 +29,6 @@ from ._configuration import Space
 from ._linker import link_space
 from ._nodes import (
     NodeDecl,
-    is_reference_input,
     missing_formal,
     node_record,
     space_formals,
@@ -163,18 +162,18 @@ def root_record(node: object) -> NodeDecl:
         raise RequestError(
             "design_space() takes a node declaration, as in design_space(House(budget=100))"
         )
-    if record.placement is not None or record.sites:
-        where = record.placement or f"supplied to {', '.join(record.sites)}"
+    if record.placement is not None:
         raise RequestError(
-            f"design_space() takes a root: {record.describe()} is already placed ({where}); "
+            f"design_space() takes a root: {record.describe()} is already placed "
+            f"({record.placement}); "
             "open the design space of the node that contains it"
         )
     structural = structural_settings(record)
     if structural:
         raise DefinitionError(
             f"design_space() of {record.describe()}: a root supplies plain values for its "
-            f"value formals, and {', '.join(structural)} supplies structure (a node, a "
-            "reference or a Decision); write a subclass, or build one with composite()"
+            f"value formals, and {', '.join(structural)} supplies structure (a reference "
+            "or a Decision); write a subclass, or build one with composite()"
         )
     return record
 
@@ -192,7 +191,7 @@ def root_parameters(model: Model[Space], record: NodeDecl) -> dict[int, object]:
         if name in own:
             value = own[name]
             values[index] = getattr(value, "value", value) if _is_const(value) else value
-        elif not is_reference_input(formal):
+        else:
             default = formal.default
             if default is not MISSING and default is not UNSUPPLIED:
                 values[index] = default

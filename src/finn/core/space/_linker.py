@@ -5,10 +5,8 @@
 
 Every declared node becomes a scope; every member a node of the evaluation
 graph. A Decision over nodes becomes a selector decision, one guarded scope
-per candidate, and a ``select`` node per member read through it. A reference
-input becomes a presence node plus a scope reference (or, for a fresh node, a
-placement there); ``Users`` becomes a ``members`` node over the exports of
-the nodes whose inputs reference this one.
+per candidate, and a ``select`` node per member read through it; ``Members``
+becomes a ``members`` node over its children's exports.
 
 The phases pass one table (``_table``): ``_allocate`` places the scopes and
 reserves every member's node, ``_lower`` gives each node its payload

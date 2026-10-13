@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from ._nodes import NodeDecision, NodeDecl
-from .declarations import Const, Decision, Param, ValueRef, View, at
+from .declarations import Const, Decision, Param, ValueRef, View
 from .errors import DefinitionError
 
 BindingKind = Literal["literal", "reference", "local-decision"]
@@ -51,11 +51,6 @@ def classify(slot: Slot) -> tuple[BindingKind, object]:
     if isinstance(value, NodeDecl):
         raise DefinitionError(
             f"{slot.key}: a node or a Decision over nodes is not a value; bind one of its members"
-        )
-    if isinstance(value, Param) and value.reference_space_type() is not None:
-        raise DefinitionError(
-            f"{slot.key}: forwards the reference input {value.name}"
-            f"{at(value.origin)}, but the formal takes a value"
         )
     if isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision):
         return "local-decision", value

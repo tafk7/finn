@@ -392,8 +392,8 @@ def _graph_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         where, member = cast(tuple[str | None, str], node.value)
         return Evaluation(Available(Located(where, member, answer.value)))
     assert node.kind == "members"
-    # Members and Users: one (node name, export) alternative per entry, with
-    # the member name of each entry (the key's name, or the user's input name).
+    # Members: one (node name, export) alternative per entry, with the member
+    # name of each entry (the key's name).
     located: list[Located[object]] = []
     failures: list[QueryResult[object]] = []
     for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):

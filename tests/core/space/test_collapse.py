@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TypeVar, cast
 
 from core.space._collapse_support import answers, counts, open_space
-from core.space._toys_support import Budget, Company, Department, House
+from core.space._toys_support import House
 from finn.core.space import (
     Decision,
     Inapplicable,
@@ -51,16 +51,6 @@ class Outer(Space):
     outside = Leaf(width=guarded.leaf.width)
 
 
-class Division(Space):
-    budget: Budget = Param()
-    team = Department(budget=budget)  # forwards its reference input
-
-
-class Holding(Space):
-    shared = Budget(limit=100, rate=10)
-    division = Division(budget=shared)
-
-
 S = TypeVar("S", bound=Space)
 
 
@@ -86,9 +76,6 @@ def test_every_node_answers_the_same_with_and_without_collapse() -> None:
                 "garage.finish": 1,
             },
         ),
-        (Company(limit=40), {}),
-        (Company(limit=40), {"sales.staff": 2, "research.staff": 3, "open_lab": True}),
-        (Holding(), {"division.team.staff": 2}),
     ]
     for declaration, choices in cases:
         collapsed = open_space(declaration, collapsed=True)

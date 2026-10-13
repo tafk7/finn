@@ -6,8 +6,8 @@ Declarations are typed as the values they stand for: a node call
 ``Room(area=12)`` is a ``Room``, and ``kitchen.finish`` in a class body is an
 ``int``. Formals and Decisions are annotated with their value type
 (``area: int = Param()``), so a class-level member is typed as its value too,
-and so is a read through a reference input in the class body
-(``output.spec.payload_bits``). A view is no exception: ``kitchen.cost`` in a
+and so is an attribute of a formal's value in the class body
+(``spec.payload_bits``). A view is no exception: ``kitchen.cost`` in a
 class body and ``point.total`` on a configuration are typed as the view's
 value; class access (``House.total``) is the view declaration, which
 ``point.inspect`` and ``point.query`` take. Inside methods ``self`` is a
@@ -36,7 +36,6 @@ from finn.core.space import (
     Present,
     QueryResult,
     Space,
-    Users,
     ValueHandle,
     ValueSemantics,
     View,
@@ -135,47 +134,7 @@ class House(Space):
         return sum(member.value for member in self.costs)
 
 
-class Estate(Space):
-    """A reference input: the caller supplies the node (placed here if it is fresh)."""
-
-    home: House = Param()
-
-    @derived
-    def finish(self) -> int:
-        assert_type(self.home, House)
-        return self.home.kitchen.finish
-
-
-class Stream(Space):
-    spec: int = Param()
-    ends = Users(COST)
-
-    @derived
-    def users(self) -> int:
-        assert_type(self.ends, tuple[Located[int], ...])
-        return len(self.ends)
-
-
-class Producer(Space):
-    output: Stream = Param()
-    feed: Stream = Param(required=False)
-
-    @view
-    def cost(self) -> int:
-        # A reference input reads as the referenced node's configuration.
-        assert_type(self.output, Stream)
-        assert_type(self.output.spec, int)
-        return self.output.spec
-
-    exports = {COST: cost}
-
-
 class Graph(Space):
-    edge = Stream(spec=8)
-    producer = Producer(output=edge)  # a placed node: a reference
-    later = Producer()
-    later.output = edge  # a reference input may be assigned too
-    fresh = Producer(output=Stream(spec=4))  # a fresh node: placed at the input
     shared: int = Decision(values=(1, 2), name="shared")
     assert_type(shared, int)
 
@@ -242,7 +201,6 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(House.kitchen.finish, int)
     # The compile step is typed as the Space class.
     assert_type(design_space(House(budget=100)), House)
-    assert_type(design_space(Estate(home=House(budget=1))), Estate)
     assert_type(design_space(Room()), Room)  # a bare call type-checks
     # Configuration reads are exact.
     assert_type(point.word_bits, int)
@@ -276,7 +234,7 @@ def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
     assert_type(GuardedAssembly.physical, View[int])
 
 
-# -- annotated formals, reads through reference inputs, overrides -----------------------
+# -- annotated formals and reads of their values' attributes ---------------------------
 
 
 @dataclass(frozen=True)
@@ -289,38 +247,32 @@ class Spec:
         return self.lanes * self.bits
 
 
-class Wire(Space):
-    spec: Spec = Param()
-
-
 class Buffer(Space):
     word_bits: int = Param()
     depth: int = Decision(values=(2, 4, 8))
 
 
 class Kernel(Space):
-    output: Wire = Param()  # a reference input, annotated with its Space class
-    buffer = Buffer(word_bits=output.spec.payload_bits)  # typed in the class body
-    assert_type(output, Wire)
-    assert_type(output.spec, Spec)
-    assert_type(output.spec.payload_bits, int)
+    spec: Spec = Param()  # a formal annotated with its value type
+    buffer = Buffer(word_bits=spec.payload_bits)  # typed in the class body
+    assert_type(spec, Spec)
+    assert_type(spec.payload_bits, int)
 
 
 class Board(Space):
-    wire = Wire(spec=Spec(4, 8))
-    kernel = Kernel(output=wire)
-    spare = Kernel(output=wire)
+    kernel = Kernel(spec=Spec(4, 8))
+    spare = Kernel(spec=Spec(4, 8))
     lobby = Room(area=1)
     stages = Room(area=lobby.cost)  # a view's accepted value supplies a formal
 
 
 def keys(board: Board, house: House) -> None:
     assert_type(Room(), Room)  # every member is optional at the call
-    assert_type(Kernel.output, Wire)
+    assert_type(Kernel.spec, Spec)
     assert_type(Board.kernel.buffer.depth, int)
-    assert_type(board.kernel.query(Kernel.output), QueryResult[Wire])
-    assert_type(board.kernel.present(Kernel.output), bool)
-    assert_type(board.kernel.output.spec.payload_bits, int)
+    assert_type(board.kernel.query(Kernel.spec), QueryResult[Spec])
+    assert_type(board.kernel.present(Kernel.spec), bool)
+    assert_type(board.kernel.spec.payload_bits, int)
     assert_type(inspection.decision_handle(house, House.kitchen.finish), DecisionHandle[int])
     assert_type(inspection.decision_handle(house, House.heating), DecisionHandle[str])
     assert_type(inspection.value_handle(board, Board.kernel.buffer.word_bits), ValueHandle[int])

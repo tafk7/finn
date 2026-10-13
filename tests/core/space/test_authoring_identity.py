@@ -39,10 +39,9 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
 
 def test_malformed_candidates_fail_as_definitions() -> None:
     # A node is declared by calling its Space class, so the malformed forms are a
-    # candidate or a reference input that is not a node, and a composite over a
-    # non-Space base.
+    # candidate that is not a node, and a composite over a non-Space base.
     class Holder(Space):
-        held: Space = Param()
+        held: int = Param()
 
     with pytest.raises(DefinitionError, match="Space base class"):
         composite("NotSpace", {}, base=cast(type[Space], int))
@@ -51,8 +50,8 @@ def test_malformed_candidates_fail_as_definitions() -> None:
     # Candidates are entries, not a mapping of values.
     with pytest.raises(DefinitionError, match="lists its candidates as entries"):
         Decision(values={"case": Holder()})
-    with pytest.raises(DefinitionError, match="takes a node declaration"):
-        Holder(held=cast(Space, 4))
+    with pytest.raises(DefinitionError, match="a node or a Decision over nodes is not a value"):
+        Holder(held=cast(int, Holder(held=1)))
     with pytest.raises(DefinitionError, match="at least one candidate"):
         Decision({})
     with pytest.raises(DefinitionError, match="at least one candidate"):

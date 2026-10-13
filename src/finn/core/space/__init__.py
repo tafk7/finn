@@ -22,7 +22,6 @@ from .declarations import (
     Members,
     Param,
     Present,
-    Users,
     ValueRef,
     View,
     ViewKey,
@@ -88,7 +87,6 @@ __all__ = [
     # Graph primitives
     "Present",
     "Members",
-    "Users",
     "Located",
     "derived",
     "constraint",

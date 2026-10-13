@@ -387,15 +387,14 @@ class Param(ValueDecl[T], Generic[T]):
 
     ``Param()`` is required: preparing a Space class in which nothing supplies it is
     a definition error. ``default=`` makes it optional, and ``required=False``
-    leaves it unsupplied when nobody binds it. A formal annotated with a Space class
-    (``output: Channel = Param()``) is a reference input: the caller supplies a
-    node, placed there if it is fresh and referenced if it is placed elsewhere.
+    leaves it unsupplied when nobody binds it. A formal takes a value, never a node:
+    a formal annotated with a Space class is refused (a node is placed in a class
+    body, and reads what it needs as values).
     """
 
     default: object
     required: bool
     explicit: ValueSemantics[T] | None
-    space_type: type[Space] | None
     resolved: bool
 
     @overload
@@ -421,7 +420,6 @@ class Param(ValueDecl[T], Generic[T]):
         object.__setattr__(instance, "_body", class_body())
         instance.explicit = cast("ValueSemantics[object] | None", semantics)
         instance.semantics = instance.explicit
-        instance.space_type = None
         instance.resolved = False
         instance.required = default is MISSING and required is not False
         instance.default = default if default is not MISSING or instance.required else UNSUPPLIED
@@ -435,7 +433,7 @@ class Param(ValueDecl[T], Generic[T]):
             pass  # a forward reference: resolved again when the Space class is collected
 
     def resolve(self) -> Param[T]:
-        """Read the annotation: a value type (with its semantics) or a Space class (a reference)."""
+        """Read the annotation: a value type, with its semantics."""
         if self.resolved:
             return self
         annotation = declared_annotation(self, "Param")
@@ -444,29 +442,18 @@ class Param(ValueDecl[T], Generic[T]):
         label = describe_formal(self, "Param")
         space_type = _annotated_space_type(annotation)
         if space_type is not None:
-            if self.explicit is not None or self.default not in (MISSING, UNSUPPLIED):
-                raise DefinitionError(
-                    f"{label}: a reference input has no value default or semantics; "
-                    "required=False makes it optional"
-                )
-            self.space_type, self.semantics = space_type, None
-        else:
-            semantics = _annotation_semantics(annotation, self.explicit, label)
-            if self.default not in (MISSING, UNSUPPLIED):
-                if not recognize(semantics, self.default, owner=label, role="default recognition"):
-                    raise DefinitionError(
-                        f"{label}: invalid formal default: {unrecognized(semantics)}"
-                    )
-                self.default = snapshot(
-                    semantics, self.default, owner=label, role="default snapshot"
-                )
-            self.semantics = semantics
+            raise DefinitionError(
+                f"{label}: a formal takes a value, not a {space_type.__qualname__} node; "
+                "place the node in a class body, and give the formal the values it reads"
+            )
+        semantics = _annotation_semantics(annotation, self.explicit, label)
+        if self.default not in (MISSING, UNSUPPLIED):
+            if not recognize(semantics, self.default, owner=label, role="default recognition"):
+                raise DefinitionError(f"{label}: invalid formal default: {unrecognized(semantics)}")
+            self.default = snapshot(semantics, self.default, owner=label, role="default snapshot")
+        self.semantics = semantics
         self.resolved = True
         return self
-
-    def reference_space_type(self) -> type[Space] | None:
-        """The Space class of a reference input, or None for a value formal."""
-        return self.resolve().space_type
 
     @overload
     def __get__(self, instance: None, owner: type[object] | None = None) -> Self: ...
@@ -477,49 +464,20 @@ class Param(ValueDecl[T], Generic[T]):
     def __get__(self, instance: Space | None, owner: type[object] | None = None) -> Any:
         if instance is None:
             return self
-        space_type = self.reference_space_type()
-        if space_type is None:
-            return ValueDecl.__get__(self, instance, owner)
-        path = declared_path(instance)
-        if path is not None:
-            from ._nodes import path_proxy
-
-            return path_proxy(space_type, (*path, self))
-        from .occurrence import child
-
-        return child(instance, self)
+        return ValueDecl.__get__(self, instance, owner)
 
     if not TYPE_CHECKING:
 
         def __getattr__(self, name: str) -> Any:
-            # ``output.spec`` in the class body that declares ``output: Channel``:
-            # a member of the node the reference input will name. A value formal
-            # projects an attribute of its value (``platform.uram``), as a derived
-            # value does.
+            # A formal projects an attribute of its value (``platform.uram``), as a
+            # derived value does.
             if name.startswith("_"):
                 raise AttributeError(name)
             try:
-                space_type = self.reference_space_type()
-            except PendingAnnotation:
-                raise AttributeError(
-                    f"{name}: the reference's annotation does not resolve yet (its Space class is "
-                    "still being defined); read the member in a method"
-                ) from None
+                self.resolve()
             except DefinitionError:
                 raise AttributeError(name) from None
-            if space_type is None:
-                return project(self, name)
-            if not _has_member(space_type, name):
-                raise AttributeError(name)
-            from ._nodes import path_proxy
-
-            return getattr(path_proxy(space_type, (self,)), name)
-
-
-def _has_member(space_type: type[Space], name: str) -> bool:
-    from ._nodes import slot_declaration
-
-    return any(slot_declaration(vars(base).get(name)) is not None for base in space_type.__mro__)
+            return project(self, name)
 
 
 class LocatedParam(Param[Located[T]], Generic[T]):
@@ -536,7 +494,6 @@ class LocatedParam(Param[Located[T]], Generic[T]):
         object.__setattr__(instance, "_body", None)
         instance.explicit = cast("ValueSemantics[Located[T]]", LOCATED)
         instance.semantics = instance.explicit
-        instance.space_type = None
         instance.resolved = True
         instance.required = required
         instance.default = MISSING if required else UNSUPPLIED
@@ -1465,7 +1422,7 @@ def supplied(formal: object) -> bool:
     evaluation: where the declaration never supplies the input, a Decision over
     nodes it guards can never apply, and its candidates are not compiled.
     """
-    if not isinstance(formal, Param) or formal.reference_space_type() is not None:
+    if not isinstance(formal, Param):
         raise DefinitionError("supplied() takes a value input (a Param) of this Space class")
     return cast(bool, Supplied(cast("Param[object]", formal)))
 
@@ -1509,8 +1466,6 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     declaration order; as an obligation, each member's acceptance counts.
 
     Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
-    A child exporting ``key`` per input (``exports = {key: {input: view}}``)
-    contributes one entry per input, with ``member=<input name>``.
     """
 
     def __init__(self, key: ViewKey[T]) -> None:
@@ -1518,21 +1473,6 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
             raise DefinitionError(f"{type(self).__name__} requires a ViewKey")
         self.key = key
         self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
-
-
-class Users(Members[T], Generic[T]):
-    """The mirror of ``Members``: every present node whose input references this one.
-
-    In declaration order, each entry is ``Located(node=<user's name beside this
-    node>, member=<the user's input name>, value=<the user's export of key>)``.
-    A user reached through a Decision candidate or a guard is present only when
-    that candidate is selected or that guard holds; a user that does not export
-    ``key`` is omitted. As an obligation, each user's acceptance counts.
-
-    A user may export ``key`` per input, ``exports = {key: {input: view, ...}}``:
-    each node it references then sees only the view presented through the
-    input that references it, and an input without an entry is omitted.
-    """
 
 
 __all__ = [
@@ -1553,7 +1493,6 @@ __all__ = [
     "Required",
     "Supplied",
     "UNSUPPLIED",
-    "Users",
     "ValueDecl",
     "ValueRef",
     "View",

@@ -8,9 +8,8 @@ body that declares a node supplies its formals, each once, and nothing else:
 its Decisions, Decisions over nodes and child nodes belong to its Space class
 (a subclass changes them), and a node below it is supplied where it is declared.
 
-A node is placed exactly once: by a class-body attribute, as a candidate of a
-Decision, or (when nothing else places it) at the one reference input it is
-supplied to. Nothing here compiles.
+A node is placed exactly once: by a class-body attribute, or as a candidate of a
+Decision. Nothing here compiles.
 """
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
@@ -23,7 +22,6 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from .declarations import (
     MISSING,
-    UNSUPPLIED,
     ChoiceMemberRef,
     Const,
     Decision,
@@ -60,9 +58,9 @@ def _space() -> type[Space]:
     return _SPACE[0]
 
 
-# What a member is, for what may supply it: a body supplies formals (values and
-# reference inputs); the rest belongs to the Space class.
-SlotKind = Literal["param", "reference", "decision", "choice", "node", "behaviour"]
+# What a member is, for what may supply it: a body supplies formals; the rest
+# belongs to the Space class.
+SlotKind = Literal["param", "decision", "choice", "node", "behaviour"]
 
 
 class NodeDecl(Declaration):
@@ -86,8 +84,6 @@ class NodeDecl(Declaration):
         self.placement: str | None = None
         self.candidate_of: NodeDecision | None = None
         self.aliases: list[str] = []
-        # Every reference input this node was supplied to, for place-once checks.
-        self.sites: list[str] = []
         self.frozen: str | None = None
 
     @property
@@ -128,7 +124,7 @@ def _refuse_placement(record: NodeDecl, where: str) -> NoReturn:
     raise DefinitionError(
         f"{record.describe()} cannot also be placed at {where}: a node declaration is "
         "placed exactly once. Declare a fresh node for each placement, for example from "
-        "a function that returns one; pass a placed node to a reference input to share it."
+        "a function that returns one."
     )
 
 
@@ -149,11 +145,6 @@ def place_as_candidate(record: NodeDecl, decision: NodeDecision, key: str) -> No
     if record.placement is not None or record.candidate_of is not None:
         _refuse_placement(record, where)
     record.name, record.placement, record.candidate_of = key, where, decision
-
-
-def is_fresh(record: NodeDecl) -> bool:
-    """Placed by nothing: a node supplied to a reference input is then placed there."""
-    return record.placement is None and record.candidate_of is None
 
 
 def node_record(value: object) -> NodeDecl | None:
@@ -190,18 +181,9 @@ def slot_declaration(value: object) -> Declaration | None:
     return None
 
 
-def is_reference_input(declaration: object) -> bool:
-    """``output: Channel = Param()``: a formal whose value is a node."""
-    return (
-        isinstance(declaration, Param)
-        and not isinstance(declaration, LocatedParam)
-        and cast(Param[object], declaration).reference_space_type() is not None
-    )
-
-
 def slot_kind(declaration: Declaration) -> SlotKind:
     if isinstance(declaration, Param):
-        return "reference" if is_reference_input(declaration) else "param"
+        return "param"
     if isinstance(declaration, NodeDecision):
         return "choice"
     if isinstance(declaration, Decision):
@@ -232,7 +214,7 @@ def space_members(space_type: type[Space]) -> tuple[dict[str, Declaration], set[
 
 
 def space_formals(space_type: type[Space]) -> dict[str, Param[object]]:
-    """Every formal (value or reference input) of ``space_type`` by name."""
+    """Every formal of ``space_type`` by name."""
     members, _ = space_members(space_type)
     return {
         name: cast(Param[object], member)
@@ -294,30 +276,6 @@ def _value_supplier(
     return _freeze_literal(semantics, name, label, value)
 
 
-def _reference_supplier(formal: Param[object], value: object, label: str) -> object:
-    from ._configuration import Space
-
-    if isinstance(value, Param):
-        return value  # forwards an input of the enclosing Space class; checked when linking
-    supplied = node_record(value)
-    path = declared_path(value) if isinstance(value, Space) else None
-    if supplied is None and path is not None and len(path) > 1:
-        raise DefinitionError(
-            f"{label}: {path_text(path)} reaches into another node; a reference input "
-            "names a node placed beside it, or forwards an input of the enclosing Space class"
-        )
-    if supplied is None:
-        raise DefinitionError(f"{label}: a reference input takes a node declaration")
-    expected = cast("type[Space]", formal.reference_space_type())
-    if not issubclass(supplied.space_type, expected):
-        raise DefinitionError(
-            f"{label}: expected a {expected.__qualname__} node, got "
-            f"{supplied.space_type.__qualname__}"
-        )
-    supplied.sites.append(label)
-    return supplied
-
-
 _KINDS: Mapping[str, str] = {
     "decision": "Decision",
     "choice": "Decision over nodes",
@@ -340,7 +298,7 @@ def check_supplier(
     ):
         return _pending_supplier(member, value, label)
     kind = slot_kind(member)
-    if kind not in ("param", "reference"):
+    if kind != "param":
         what = _KINDS.get(kind)
         belongs = "it belongs" if what else "behaviour belongs"
         raise DefinitionError(
@@ -348,8 +306,6 @@ def check_supplier(
             f"{belongs} to the Space class; subclass it to change it (a body supplies formals "
             "only)"
         )
-    if kind == "reference":
-        return _reference_supplier(cast(Param[object], member), value, label)
     cast(Param[object], member).resolve()
     semantics = cast("ValueSemantics[object] | None", getattr(member, "semantics", None))
     if isinstance(member, LocatedParam):
@@ -362,22 +318,13 @@ def check_supplier(
 def _pending_supplier(member: Param[object], value: object, label: str) -> object:
     """A supplier of a formal whose annotation does not resolve yet (its Space class is being
     defined, across an import cycle): checked when linking, where every annotation
-    resolves. A forward, a node or a reference waits; a literal needs its value type now."""
+    resolves. A forward or a reference waits; a literal needs its value type now."""
     from ._configuration import Space
 
-    if isinstance(value, NodeChoice):
-        raise DefinitionError(f"{label}: a Decision over nodes is not a supplier; bind a member")
+    if isinstance(value, (NodeChoice, Space)):
+        raise DefinitionError(f"{label}: a node is not a value; bind one of its members")
     if isinstance(value, (ValueRef, View)):
         return value  # a forward (a Param), a member reference or an expression
-    if isinstance(value, Space):
-        record = node_record(value)
-        if record is None:
-            raise DefinitionError(
-                f"{label}: a node reached through another node is not a supplier; a reference "
-                "input names a node placed beside it"
-            )
-        record.sites.append(label)
-        return record
     raise DefinitionError(
         f"{label}: the annotation of {member.name} does not resolve yet, so a literal "
         "cannot be recognized here; bind a member, or assign the value where the Space class "
@@ -490,7 +437,7 @@ def structural_settings(record: NodeDecl) -> list[str]:
     found = []
     for key, (value, _) in record.settings.items():
         formal = formals.get(key)
-        if formal is None or is_reference_input(formal):
+        if formal is None:
             found.append(key)
         elif isinstance(value, (ValueRef, View, NodeDecl)) and not isinstance(value, Const):
             found.append(key)
@@ -515,8 +462,6 @@ def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, space
 
 def fallback(formal: Param[object]) -> object:
     """The default of an unsupplied formal: a value, UNSUPPLIED, or MISSING if required."""
-    if is_reference_input(formal):
-        return MISSING if formal.required else UNSUPPLIED
     return formal.default
 
 
@@ -799,8 +744,6 @@ __all__ = [
     "fallback",
     "space_formals",
     "space_members",
-    "is_fresh",
-    "is_reference_input",
     "is_required",
     "structural_settings",
     "missing_formal",
