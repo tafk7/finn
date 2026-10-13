@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.space._choices_support import committed, replay
 from core.space._results_support import codes
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
@@ -25,7 +26,6 @@ from finn.core.space import (
     Unresolved,
     design_space,
     inspection,
-    selections,
 )
 
 
@@ -104,7 +104,7 @@ def test_the_garage_is_present_only_when_wanted() -> None:
     assert wanted.with_choices({House.garage.finish: 2}).garage.cost == 40
 
 
-def test_keys_selections_and_inspection_use_declaration_paths() -> None:
+def test_keys_commitments_and_inspection_use_declaration_paths() -> None:
     house = design_space(House(budget=200))
     keys = {item.key for item in inspection.decisions(house)}
     assert keys == {
@@ -117,10 +117,10 @@ def test_keys_selections_and_inspection_use_declaration_paths() -> None:
         "garage.finish",
     }
     point = house.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
-    captured = selections.capture(point)
-    assert captured.keys == ("heating", "heating.heat_pump.cop")
-    replayed = selections.restore(design_space(House(budget=999)), captured)
-    assert replayed.accepted and replayed.instance.thermostat.kw == 8
+    chosen = committed(point)
+    assert chosen == {"heating": "heat_pump", "heating.heat_pump.cop": 4}
+    replayed = replay(design_space(House(budget=999)), chosen)
+    assert replayed.thermostat.kw == 8
     (choice,) = inspection.choices(house)
     assert [case.name for case in choice.cases] == ["boiler", "heat_pump"]
 

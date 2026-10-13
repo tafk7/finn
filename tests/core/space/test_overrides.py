@@ -38,7 +38,6 @@ from finn.core.space import (
     design_space,
     inspection,
     reject,
-    selections,
     view,
 )
 
@@ -137,28 +136,6 @@ def test_a_value_pins_a_decision_and_its_key_disappears() -> None:
         point.with_choices({House.wing.study.finish: 3})
     # A pin at the call is an assignment by the calling body.
     assert [item.key for item in inspection.decisions(design_space(Room(finish=3)))] == []
-
-
-def test_a_pinned_key_leaves_the_selection_with_who_pinned_it() -> None:
-    wing = design_space(Wing()).with_choices({Wing.study.finish: 3, Wing.kitchen.finish: 1})
-    captured = selections.capture(wing)
-    assert captured.keys == ("kitchen.finish", "study.finish")
-
-    class Pinned(Wing):
-        pass
-
-    class Holder(Space):
-        wing = Pinned()
-        wing.study.finish = 2
-
-    assert selections.restore(design_space(Wing()), captured).accepted
-    # In the pinned placement the key is gone, and who pinned it is reported.
-    (pinned,) = inspection.pinned(design_space(Holder()))
-    assert pinned.key == "wing.study.finish"
-    assert "wing.study.finish = 2 (set by Holder at test_overrides.py:" in pinned.text()
-    # A captured selection belongs to its model: restoring it elsewhere is refused.
-    with pytest.raises(RequestError, match="different compiled model"):
-        selections.restore(design_space(Holder()), captured)
 
 
 def test_a_narrower_decision_keeps_its_key_and_the_declared_domain_still_checks() -> None:

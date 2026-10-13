@@ -24,7 +24,6 @@ from finn.core.space import (
     design_space,
     domain,
     inspection,
-    selections,
     view,
 )
 from finn.core.space.occurrence import state
@@ -81,8 +80,6 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
         "change",
         "clear",
         "update",
-        "capture",
-        "restore",
         "explain",
         "assign",
         "delete",
@@ -108,7 +105,6 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
             return 0
 
     foreign = design_space(Example(fact=8))
-    saved = selections.capture(foreign)
     actions: dict[str, Callable[[Example], object]] = {
         "query": lambda point: point.query(Example.choice),
         "inspect": lambda point: point.inspect(Example.output),
@@ -117,8 +113,6 @@ def test_driver_operations_remain_sticky_when_caught(operation: str) -> None:
         "change": lambda point: point.field(Example.choice).change(1),
         "clear": lambda point: point.field(Example.choice).clear(),
         "update": lambda point: point.with_choices(choice=1),
-        "capture": selections.capture,
-        "restore": lambda point: selections.restore(point, saved),
         "explain": lambda point: inspection.explain(point, Example.choice),
         "assign": lambda point: setattr(point, "fact", 99),
         "delete": lambda point: delattr(point, "fact"),

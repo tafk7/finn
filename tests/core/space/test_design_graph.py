@@ -18,6 +18,7 @@ from typing import cast
 
 import pytest
 
+from core.space._choices_support import committed, replay
 from core.space._results_support import codes
 from finn.core.space import (
     Available,
@@ -42,7 +43,6 @@ from finn.core.space import (
     divisors_of,
     inspection,
     reject,
-    selections,
     view,
 )
 
@@ -416,8 +416,8 @@ def test_a_structural_choice_reduces_to_primitives(
     fixed = tuned.with_choices({space_type.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)
-    replayed = selections.restore(design_space(space_type(base=4)), selections.capture(tuned))
-    assert replayed.accepted and replayed.instance.query(physical) == Available(6)
+    replayed = replay(design_space(space_type(base=4)), committed(tuned))
+    assert replayed.query(physical) == Available(6)
 
 
 def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:

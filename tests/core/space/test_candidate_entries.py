@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.space._choices_support import committed
 from core.space._collapse_support import answers, open_space
 from finn.core.space import (
     Available,
@@ -38,7 +39,6 @@ from finn.core.space import (
     inspection,
     reject,
     required,
-    selections,
     view,
 )
 from finn.core.space._nodes import NodeChoice
@@ -437,7 +437,7 @@ def test_optional_adds_a_none_candidate_that_places_nothing() -> None:
         Decision({"none": PackedCore}, optional=True)
 
 
-# -- selections --------------------------------------------------------------------------
+# -- replay ------------------------------------------------------------------------------
 
 
 def refusal(point: Space, choices: dict[str, object]) -> set[tuple[str, str]]:
@@ -453,11 +453,11 @@ def refusal(point: Space, choices: dict[str, object]) -> set[tuple[str, str]]:
     }
 
 
-def test_selections_capture_and_restore_by_key_and_refuse_unknown_and_narrowed_cases() -> None:
+def test_commitments_replay_by_key_and_refuse_unknown_and_narrowed_cases() -> None:
     base = design_space(Unit(width=8))
     point = commit(base, {"compute": "packed", "compute.packed.pe": 4, "compute.packed.simd": 2})
-    restored = selections.restore(design_space(Unit(width=8)), selections.capture(point))
-    assert restored.accepted and restored.instance.cycles == 2
+    replayed = commit(design_space(Unit(width=8)), committed(point))
+    assert replayed.cycles == 2
     assert refusal(base, {"compute": "bogus"}) == {("compute", "domain-membership")}
 
     class Narrowed(Space):

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Typed design-space authoring, immutable specialization and public services."""
 
-from . import inspection, selections
+from . import inspection
 from ._configuration import BoundDecision, BoundValue, Space
 from ._execution import (
     CleanupFailure,
@@ -65,7 +65,6 @@ from .results import (
     reject,
     require_value,
 )
-from .selections import Selection, SelectionEntry
 from .semantics import ValueSemantics, default_semantics
 
 __all__ = [
@@ -129,13 +128,11 @@ __all__ = [
     "finding_text",
     "reject",
     "require_value",
-    # Configuration revisions and selections
+    # Configuration revisions
     "Change",
     "ChangeRequest",
     "ChangeOutcome",
     "ConfigurationResult",
-    "Selection",
-    "SelectionEntry",
     # Errors and native cleanup diagnostics
     "DefinitionError",
     "RequestError",
@@ -149,5 +146,4 @@ __all__ = [
     "cancellation_details",
     # Public services
     "inspection",
-    "selections",
 ]

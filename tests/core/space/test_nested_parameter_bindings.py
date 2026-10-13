@@ -16,6 +16,7 @@ from typing import cast
 
 import pytest
 
+from core.space._choices_support import committed
 from finn.core.space import (
     Available,
     BoundDecision,
@@ -31,7 +32,6 @@ from finn.core.space import (
     design_space,
     divisors_of,
     inspection,
-    selections,
 )
 from finn.core.space.errors import ConfigurationError, DefinitionError, RequestError
 
@@ -75,7 +75,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     chosen = base.with_choices(lanes=2)
     assert chosen.kernel.port.physical == ("INT8", 2)
     assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
-    assert len(selections.capture(chosen).entries) == 1
+    assert committed(chosen) == {"lanes": 2}
     # A formal supplied by an assignment is not a choice of its own.
     with pytest.raises(RequestError, match="not independently editable"):
         chosen.with_choices({Parent.kernel.port.lanes: 1})
@@ -169,7 +169,7 @@ def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
     assert both.first.port.physical == ("INT4", 2)
     assert both.second.port.physical == ("INT8", 2)
     assert both.with_choices(lanes=1).second.port.physical == ("INT8", 1)
-    assert len(selections.capture(both).entries) == 2
+    assert committed(both) == {"lanes": 2, "use_first": True}
 
 
 def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:

@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from core.space._choices_support import committed
 from finn.core.space import (
     Available,
     ConstraintGroup,
@@ -33,7 +34,6 @@ from finn.core.space import (
     reject,
     requires,
     requiring,
-    selections,
 )
 
 
@@ -86,7 +86,7 @@ def test_one_viable_case_reads_as_that_case_and_is_never_committed() -> None:
     state = point.field(Unit.compute).state
     assert isinstance(state, Available)
     assert (state.value.status, state.value.value) == ("unassigned", None)
-    assert selections.capture(point).keys == ()
+    assert committed(point) == {}
     (item,) = inspection.forced(point)
     assert (item.key, item.value) == ("compute", "stub")
     assert set(item.refused) == {"packed"} and "packed-width" in item.refused["packed"]
@@ -108,7 +108,7 @@ def test_several_viable_cases_stay_open_and_none_is_a_refusal_naming_each_case()
 def test_a_choice_nested_under_a_forced_selector_commits_without_it() -> None:
     # The trial reads its base's forced selector, so the nested choice applies.
     point = commit(design_space(Unit(width=128)), {"compute.stub.rows": 2})
-    assert selections.capture(point).keys == ("compute.stub.rows",)
+    assert list(committed(point)) == ["compute.stub.rows"]
     assert point.compute.rows == 2 and forced(point) == {"compute": "stub"}
 
 

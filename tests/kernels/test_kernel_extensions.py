@@ -20,7 +20,6 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
-    selections,
 )
 from finn.core.space.errors import DefinitionError, RequestError
 from finn.dataflow.datatypes import (
@@ -29,6 +28,7 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.kernels.base import ComposedKernel, Kernel
+from finn.kernels.configure import chosen, commit
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import INTEGER_VECTOR, QONNX_DATATYPE_VALUE_SEMANTICS
 
@@ -92,7 +92,7 @@ def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: s
     assert not semantics.accepts(name)
 
 
-def test_a_dtype_selection_restores_the_exact_datatype() -> None:
+def test_a_dtype_choice_replays_the_exact_datatype() -> None:
     class DtypeKernel(ComposedKernel):
         id = "test.dtype"
         interfaces = ()
@@ -103,11 +103,10 @@ def test_a_dtype_selection_restores_the_exact_datatype() -> None:
 
     base = design_space(DtypeKernel())
     point = base.with_choices(dtype=resolve_qonnx_datatype_name("TERNARY"))
-    restored = selections.restore(base, selections.capture(point))
-    assert restored.accepted
-    assert restored.instance.dtype.name == "TERNARY"
+    replayed = commit(base, chosen(point))
+    assert replayed.dtype.name == "TERNARY"
     assert not QONNX_DATATYPE_VALUE_SEMANTICS.values_equal(
-        restored.instance.dtype, resolve_qonnx_datatype_name("INT2")
+        replayed.dtype, resolve_qonnx_datatype_name("INT2")
     )
     with pytest.raises(RequestError):
         base.with_choices(dtype=cast(QONNXDataType, "TERNARY"))
