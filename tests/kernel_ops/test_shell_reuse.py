@@ -77,12 +77,12 @@ def test_the_same_facts_reuse_the_class_never_a_point() -> None:
     assert open_memories(first)[1] == styles
 
 
-def test_the_class_reads_a_tensor_as_its_channel_carries_it() -> None:
-    """(1, 3, 4) and (3, 4) are the same rows: the channel's tensor, and the facts, are
-    the same, so the class is."""
+def test_the_class_reads_a_tensor_at_the_graphs_rank() -> None:
+    """(1, 3, 4) and (3, 4) are the same rows of other tensors: a channel carries the
+    graph's tensor whole, so the classes differ."""
     first, _ = root(matmul_model(x_shape=[1, 3, 4]))
     again, reused = root(matmul_model(x_shape=[3, 4]))
-    assert reused and type(again.point) is type(first.point)
+    assert not reused and type(again.point) is not type(first.point)
 
 
 def changed_weights() -> ModelWrapper:

@@ -30,15 +30,11 @@ from finn.kernels.values.semantics import IntegerTensorValue
 from kernel_ops.models import TARGET
 
 INT3 = dtype("INT3")
-FACTS: dict[str, Any] = dict(
-    m=3,
-    k=4,
-    n=4,
-    activation_dtype=INT3,
-    weights_dtype=INT3,
-    platform=TARGET.platform,
-)
-"""A node root's facts: the platform (its DSP block the compute cores') and the clock."""
+FACTS: dict[str, Any] = dict(weights_dtype=INT3, platform=TARGET.platform)
+"""A node root's facts beside its tensors, its weights known: the platform (its DSP block
+the compute cores') and the clock, and the weights' declared datatype."""
+STREAMED: dict[str, Any] = dict(platform=TARGET.platform)
+"""Its facts with streamed weights, whose datatype is their tensor's."""
 WEIGHTS = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
 X = Tensor((3, 4), ScalarEncoding(INT3))
 W = Tensor((4, 4), ScalarEncoding(INT3, (-1, 1)))  # the initializer's, over its values' range
@@ -59,7 +55,7 @@ def test_one_root_serves_stored_and_streamed_weights() -> None:
     root = MatMul.root()
     assert root is MatMul.root()  # generated once
     streamed = design_space(
-        root(**FACTS, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)), y_tensor=Y)
+        root(**STREAMED, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)), y_tensor=Y)
     )
     assert stored().w.valued and not streamed.w.valued
     keys = {item.key for item in inspection.decisions(root)}
@@ -80,7 +76,7 @@ def test_the_views_answer_from_facts() -> None:
     # one, its columns' (K7), each stated on the result element.
     root = MatMul.root()
     streamed = design_space(
-        root(**FACTS, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)))
+        root(**STREAMED, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3)))
     )
     assert streamed.matmul.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), (-48, 64)))
     owned = design_space(root(**FACTS, x_tensor=X, w_tensor=W, w_contents=WEIGHTS))
@@ -119,7 +115,7 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
 
 def facts(digest: str, *, size: int = 4) -> Facts:
     weights = tuple(tuple((r + c) % 3 - 1 for c in range(size)) for r in range(size))
-    formals = dict(FACTS, k=size, n=size)
+    formals = dict(FACTS)
     inputs = {
         "x": Tensor((3, size), ScalarEncoding(INT3)),
         "w": Tensor((size, size), ScalarEncoding(INT3, (-1, 1))),

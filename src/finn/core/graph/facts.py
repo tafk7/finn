@@ -9,7 +9,6 @@ values of an initializer of integers. A missing shape or annotation raises
 from __future__ import annotations
 
 from array import array
-from math import prod
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -65,15 +64,12 @@ def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
     return found
 
 
-def rows(dims: tuple[int, ...]) -> tuple[int, int]:
-    """Leading axes are rows: (1, M, K) is M rows of K."""
-    return prod(dims[:-1]), dims[-1]
-
-
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
-    """The tensor a channel carries: its shape as rows and its datatype. For an
-    initializer of integers, the datatype is narrowed to its values' range
-    (``stored_element``: INT8-typed ternary weights become INT2 over [-1, 1])."""
+    """The tensor as a fact, which a kernel's port reads and a channel carries: the
+    graph's shape, whole (a kernel that reads another view of it, MatMul's rows, states
+    so), and its datatype. For an initializer of integers, the datatype is narrowed to
+    its values' range (``stored_element``: INT8-typed ternary weights become INT2 over
+    [-1, 1])."""
     dtype = datatype(model, tensor, label)
     stored = model.get_initializer(tensor)
     element = (
@@ -81,7 +77,7 @@ def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
         if stored is not None and is_ordinary_integer(dtype)
         else ScalarEncoding(dtype)
     )
-    return Tensor(rows(shape(model, tensor, label)), element)
+    return Tensor(shape(model, tensor, label), element)
 
 
 def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
@@ -131,6 +127,5 @@ __all__ = [
     "edge_tensor",
     "integer_tensor",
     "known_shape",
-    "rows",
     "shape",
 ]

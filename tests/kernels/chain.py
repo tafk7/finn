@@ -54,13 +54,10 @@ MEMBERS = ("first", "activate", "second", "x", "w1", "hidden", "levels", "w2", "
 """The Chain's members, ranked: its kernels, then its channels."""
 
 
-def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> MatMulKernel:
-    """A MatMul of ``k`` by ``n`` known ``weights`` on activations of ``dtype``."""
+def matmul(weights: Any, x_tensor: Any) -> MatMulKernel:
+    """A MatMul of known ``weights`` (``W``) on the activations ``x_tensor``: its extents
+    and the activations' datatype are its tensors'."""
     return MatMulKernel(
-        m=ROWS,
-        n=n,
-        k=k,
-        activation_dtype=dtype,
         weights_dtype=W,
         platform=FULL_DSP48E2,
         x_tensor=x_tensor,
@@ -68,14 +65,14 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> MatMulKer
     )
 
 
-def result(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> Tensor:
+def result(weights: Any, x_tensor: Any) -> Tensor:
     """The tensor of a MatMul's results: its statement, which reads its facts and weights."""
-    found: Tensor = design_space(matmul(k, n, dtype, weights, x_tensor)).y_tensor
+    found: Tensor = design_space(matmul(weights, x_tensor)).y_tensor
     return found
 
 
-HIDDEN_TENSOR = result(INPUTS, HIDDEN, A, W1, X_TENSOR)
-Y_TENSOR = result(HIDDEN, OUTPUTS, T, W2, LEVELS)
+HIDDEN_TENSOR = result(W1, X_TENSOR)
+Y_TENSOR = result(W2, LEVELS)
 
 
 def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
@@ -123,7 +120,7 @@ def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
                 producer=Interface("second", "y_end"),
                 platform=platform,
             ),
-            "first": matmul(INPUTS, HIDDEN, A, W1, X_TENSOR),
+            "first": matmul(W1, X_TENSOR),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=THRESHOLD_DTYPE,
                 thresholds=THRESHOLDS,
@@ -132,7 +129,7 @@ def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
                 input_tensor=hidden,
                 platform=platform,
             ),
-            "second": matmul(HIDDEN, OUTPUTS, T, W2, LEVELS),
+            "second": matmul(W2, LEVELS),
         }
     )
 

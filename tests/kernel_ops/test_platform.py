@@ -94,10 +94,11 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
 
 
 def test_a_bare_kernel_states_its_platform() -> None:
-    formals = op(matmul_model()).facts().formals()
-    facts = {name: formals[name] for name in ("m", "n", "k", "activation_dtype", "weights_dtype")}
+    tensors = {
+        f"{port}_tensor": tensor for port, tensor in op(matmul_model()).input_edges().items()
+    }
     with pytest.raises(DefinitionError, match="platform is not supplied"):
-        design_space(MatMulKernel(**facts))
+        design_space(MatMulKernel(**tensors))
 
 
 def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:

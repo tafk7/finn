@@ -80,10 +80,21 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
 
 
 def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
-    misplaced = matmul(INPUTS, HIDDEN, A, W1, Tensor((ROWS, INPUTS + 2), ScalarEncoding(A)))
+    # Its K is the activations' last axis: two more than its known weights' rows.
+    misplaced = matmul(W1, Tensor((ROWS, INPUTS + 2), ScalarEncoding(A)))
     refused = design_space(misplaced).query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"matmul-tensor"}
+
+
+def test_a_matmul_reads_its_extents_and_datatypes_from_its_tensors():
+    """Its extents and its activations' datatype are its tensors', stated once; at any
+    rank, its rows are the activations' leading axes, and its results keep them."""
+    point = design_space(matmul(W1, Tensor((1, ROWS, INPUTS), ScalarEncoding(A))))
+    assert (point.m, point.n, point.k) == (ROWS, HIDDEN, INPUTS)
+    assert point.activation_dtype == A
+    assert point.y_tensor.shape == (1, ROWS, HIDDEN)
+    assert point.query(MatMulKernel.carried) == Available(True)
 
 
 def hidden_on(element: ScalarEncoding) -> object:
@@ -106,21 +117,18 @@ def test_a_matmuls_results_fit_their_channels_tensor():
         assert {finding.code for finding in refused.findings} == {"channel-tensor"}
 
 
-def carried(x: ScalarEncoding, w: ScalarEncoding, *, known: bool = True) -> object:
+def carried(
+    x: ScalarEncoding, w: ScalarEncoding, *, known: bool = True, declared: bool | None = None
+) -> object:
     """MatMul's ``carried`` on tensors of these elements; its weights W1 (known weights,
-    whose tensor MatMul states) or a tensor of ``w``."""
-    facts = dict(
-        m=ROWS,
-        n=HIDDEN,
-        k=INPUTS,
-        activation_dtype=A,
-        weights_dtype=W,
-        platform=FULL_DSP48E2,
-    )
+    whose tensor MatMul states over the datatype they are declared in) or a tensor of
+    ``w``. ``declared``: whether ``weights_dtype`` is given (as known weights state it)."""
+    declares = known if declared is None else declared
     weights = {"w_contents": W1} if known else {"w_tensor": Tensor((INPUTS, HIDDEN), w)}
     stated = MatMulKernel(
-        **facts,
+        platform=FULL_DSP48E2,
         x_tensor=Tensor((ROWS, INPUTS), x),
+        **({"weights_dtype": W} if declares else {}),
         **weights,
     )
     return design_space(stated).query(MatMulKernel.carried)
@@ -130,15 +138,17 @@ def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_pro
     plain_a, plain_w = ScalarEncoding(A), ScalarEncoding(W)
     tight = ScalarEncoding(A, (-3, 3))  # INT3 without -4
     accepted = Available(True)
-    # Consumed: an upstream with a tighter range feeds MatMul's activations.
+    # Consumed: the activations' datatype is their tensor's, at any range.
     assert carried(tight, plain_w) == accepted
     assert carried(plain_a, plain_w) == accepted
-    # Weights are consumed: known, MatMul states their tensor over their range; unknown,
-    # their tensor's values fit MatMul's datatype.
+    # Weights are consumed: known, MatMul states their tensor over their range, in the
+    # datatype they are declared in; streamed, their datatype is their tensor's.
     assert carried(plain_a, ScalarEncoding(W, (-3, 3))) == accepted
     assert carried(plain_a, tight, known=False) == accepted
-    refused = carried(plain_a, ScalarEncoding(DataType["INT4"]), known=False)
-    assert isinstance(refused, Rejected) and "w_tensor" in str(refused)
+    assert carried(plain_a, ScalarEncoding(DataType["INT4"]), known=False) == accepted
+    # A datatype stated twice is refused: streamed weights' is their tensor's.
+    restated = carried(plain_a, plain_w, known=False, declared=True)
+    assert isinstance(restated, Rejected) and "weights_dtype" in str(restated)
 
 
 @requires_xsim

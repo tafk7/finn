@@ -614,11 +614,6 @@ def kernel_fixtures(api):
         # The compute core is a Decision over kernels; ``packed`` is its entry.
         "matmul": (
             MatMulKernel(
-                m=2,
-                n=4,
-                k=4,
-                activation_dtype=int3,
-                weights_dtype=int3,
                 platform=platform,
                 x_tensor=matmul_tensors[0],
                 w_tensor=matmul_tensors[1],

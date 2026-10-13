@@ -3,8 +3,11 @@
 
 """A matrix-multiply unit on tensors: activations and weights in, results out.
 
-The facts are the extents in canonical GEMM notation, ``m`` rows, ``n``
-outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
+Its facts are its tensors and the ``form`` (``finn.dataflow.gemm``). Its extents in
+canonical GEMM notation, ``m`` rows, ``n`` outputs and the reduction ``k``, and the
+activations' datatype are read from the tensors, each stated once: ``m``, ``k`` and
+``activation_dtype`` from the activations (``m`` every leading axis together, at any
+rank), ``n`` from the weights:
 
 - ``DENSE``: Y[m, n] = sum over k of X[m, k] * W[k, n]. Every output reads the
   whole activation row, so the row is replayed once per output fold.
@@ -14,9 +17,12 @@ outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
 A dense operation may read its activations through a ``window``
 (``finn.dataflow.gemm.Window``): a convolution lowered to a matrix multiplication,
 ``m`` the output pixels (OH * OW) and ``k`` the window ``(kh, kw, c)``, KH * KW * C.
-Its activations are then the image, ``(H * W, C)``, which the activation channel's
-adapter reads through the window (an ``input_gen``); its weights and results are
-the dense form's.
+Its activations are then the image, ``(H * W, C)`` or ``(1, H, W, C)`` at the graph's
+rank, which the activation channel's adapter reads through the window (an
+``input_gen``); its weights and results are the dense form's. Its results are stated at
+the activations' rank (``leading``): ``(..., N)`` from ``(..., K)``, ``(1, OH, OW, N)``
+from an image ``(1, H, W, C)``; what it requires of a given activation tensor is its
+element count and last axis (``carried``).
 
 Weights are read ``(k, n)``, as ONNX ``MatMul`` stores them. A depthwise
 operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
@@ -32,12 +38,14 @@ are its parent's: the parent (a test harness, a KernelOp's node root, or a shell
 root) declares each channel, gives it the tensor MatMul's port reads or writes, and
 gives it MatMul's ends. MatMul's own view of each tensor (``activation_tensor``,
 ``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
-``realization``, never a port; ``carried`` refuses a given input tensor of another
-shape, or whose values do not fit what MatMul reads (``matmul-tensor``). A boundary
-channel there presents its ``port`` name (``in0_V``).
+``realization``, never a port; ``carried`` refuses a given input tensor that is not
+what MatMul requires of it (the activations' element count and last axis, the
+weights' shape), or whose values do not fit what MatMul reads (``matmul-tensor``). A
+boundary channel there presents its ``port`` name (``in0_V``).
 
 MatMul consumes its weights; it never holds them. Known weights are a fact
-(``w_contents``, given by the value's owner), and its weight channel's value:
+(``w_contents``, given by the value's owner, with the datatype the graph declares
+them in, ``weights_dtype``), and its weight channel's value:
 MatMul states what that channel carries, downstream of it. ``w_stored`` is the
 contents its source stores, block-diagonal for a dense realization of a
 depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
@@ -71,6 +79,8 @@ Its ``module`` (``finn.kernels.base``) merges its children's netlists.
 """
 
 from __future__ import annotations
+
+from math import prod
 
 from finn.core.space import (
     ConstraintGroup,
@@ -171,15 +181,19 @@ class MatMulKernel(ComposedKernel):
     version = 1
     interfaces = ("x", "w", "y")
 
-    m: int = Param()
-    n: int = Param()
-    k: int = Param()
     form: Form = Param(default=Form.DENSE)
     # A dense form read through a window: a lowered convolution (module docstring).
     window: Window = Param(required=False)
-    activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     platform: Platform = Param()
+    # The tensors its ports read, and the known weights: facts its parent gives.
+    x_tensor: Tensor = Param()
+    w_tensor: Tensor = Param(required=False)
+    w_contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    # Known weights' datatype, the graph's, which their values narrow (``w_carried``);
+    # streamed weights' is their tensor's.
+    weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS, required=False)
+    # Whether the weights are known, which the weight channel's source stores.
+    stored = supplied(w_contents)
 
     @derived
     def depthwise(self) -> bool:
@@ -190,13 +204,74 @@ class MatMulKernel(ComposedKernel):
         """Whether it reads its activations through a window."""
         return self.present(MatMulKernel.window)
 
+    # Its extents and datatypes, read from its tensors: each is stated once, as a tensor.
+
+    @derived
+    def m(self) -> int:
+        """M, the rows: a window's output pixels; otherwise every leading axis of the
+        activations together, before their last (dense) or their last two (depthwise)."""
+        if self.windowed:
+            rows, columns = self.window.output
+            return rows * columns
+        return prod(self.x_tensor.shape[: -2 if self.depthwise else -1])
+
+    @derived
+    def k(self) -> int | Rejected:
+        """K, the reduction: a window's taps times the image's channels, the activations'
+        second last axis depthwise, else their last."""
+        shape = self.x_tensor.shape
+        if self.windowed:
+            return self.window.tap_count * shape[-1]
+        if self.depthwise:
+            if len(shape) != 3:
+                return reject("matmul-tensor", f"depthwise activations are (M, K, N), not {shape}")
+            return shape[-2]
+        return shape[-1]
+
+    @derived
+    def n(self) -> int | Rejected:
+        """N, the outputs: the weights' last axis, known or streamed."""
+        if self.stored:
+            shape = integer_shape(self.w_contents)
+            if not shape:
+                return reject("matmul-tensor", "the known weights state no shape")
+            return shape[-1]
+        if self.present(MatMulKernel.w_tensor):
+            found: int = self.w_tensor.shape[-1]
+            return found
+        return reject("matmul-tensor", "MatMul reads its weights: known (w_contents) or a tensor")
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def activation_dtype(self) -> QONNXDataType:
+        """The activations' datatype: their tensor's."""
+        found: QONNXDataType = self.x_tensor.element.dtype
+        return found
+
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def weights_type(self) -> QONNXDataType | Rejected:
+        """The weights' datatype: known weights' as the graph declares them
+        (``weights_dtype``), streamed weights' their tensor's."""
+        given = self.present(MatMulKernel.weights_dtype)
+        if self.stored:
+            if not given:
+                return reject("matmul-tensor", "known weights state their datatype (weights_dtype)")
+            declared: QONNXDataType = self.weights_dtype
+            return declared
+        if given:
+            return reject(
+                "matmul-tensor",
+                "streamed weights' datatype is their tensor's: weights_dtype is known weights'",
+            )
+        found: QONNXDataType = self.w_tensor.element.dtype
+        return found
+
     @derived
     def reads_depthwise(self) -> bool:
         """Whether a core reads depthwise operands natively: only the INT8 DSP58 core
         does, within its own bounds on the platform's DSP and the datatypes."""
         return (
             Int8Dsp58DotpKernel.operand_refusal(
-                self.platform.dsp, self.activation_dtype, self.weights_dtype
+                self.platform.dsp, self.activation_dtype, self.weights_type
             )
             is None
         )
@@ -242,7 +317,7 @@ class MatMulKernel(ComposedKernel):
         try:
             if self.stored:
                 return column_range(self.activation_dtype, self.w_stored)
-            return datatype_range(self.k, self.activation_dtype, self.weights_dtype)
+            return datatype_range(self.k, self.activation_dtype, self.weights_type)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
 
@@ -255,19 +330,25 @@ class MatMulKernel(ComposedKernel):
 
     @constraint
     def extents_supported(self) -> bool | Rejected:
-        if any(type(value) is not int or value < 1 for value in (self.m, self.n, self.k)):
-            return reject("matmul-extents", "the extents m, n and k must be positive integers")
+        """A window reads one image of its own extent, from a dense form's activations:
+        its ``(H * W, C)`` rows, or the image ``(..., H, W, C)`` at the graph's rank, every
+        leading axis one."""
         if not self.windowed:
             return True
-        window = self.window
+        window, shape = self.window, self.x_tensor.shape
         if self.depthwise:
             return reject("matmul-window", "a window reads a dense form's activations")
-        if self.k % window.tap_count or self.m != window.output[0] * window.output[1]:
+        (height, width) = window.image
+        if len(shape) == 2:
+            fits = shape[0] == height * width
+        else:
+            fits = len(shape) >= 3 and shape[-3:-1] == (height, width)
+            fits = fits and all(extent == 1 for extent in shape[:-3])
+        if not fits:
             return reject(
                 "matmul-window",
-                f"a {window.size} window over {window.image} reads M = "
-                f"{window.output[0] * window.output[1]} pixels and a K of its {window.tap_count} "
-                f"taps times the channels, not M = {self.m}, K = {self.k}",
+                f"a {window.size} window over {window.image} reads one image of those "
+                f"pixels, as (H * W, C) rows or (..., H, W, C); the activations are {shape}",
             )
         return True
 
@@ -290,7 +371,8 @@ class MatMulKernel(ComposedKernel):
     @view
     def activation_tensor(self) -> Tensor | Rejected:
         """(M, K), or (M, K, N) depthwise, however the datapath reads it; through a window,
-        the image's (H * W, C) rows."""
+        the image's (H * W, C) rows. What it requires of the activations' tensor: its
+        element count and last axis (``carried``)."""
         shape: tuple[int, ...]
         if self.windowed:
             (height, width), taps = self.window.image, self.window.tap_count
@@ -303,19 +385,26 @@ class MatMulKernel(ComposedKernel):
     def weight_tensor(self) -> Tensor | Rejected:
         """(K, N) as the datapath reads it, in the weights' datatype: the weights' values
         must be values of it, in whatever encoding their owner states."""
-        return self._tensor((self.datapath_k, self.n), self.weights_dtype)
+        return self._tensor((self.datapath_k, self.n), self.weights_type)
+
+    @derived
+    def leading(self) -> tuple[int, ...]:
+        """The results' axes before N, at the activations' rank: their leading axes
+        (before their last two, depthwise); through a window, the pixels ``(OH * OW,)``,
+        or ``(..., OH, OW)`` over an image at the graph's rank."""
+        shape = self.x_tensor.shape
+        if self.windowed:
+            if len(shape) == 2:
+                return (self.m,)
+            return (*shape[:-3], *self.window.output)
+        found: tuple[int, ...] = shape[: -2 if self.depthwise else -1]
+        return found
 
     @view
     def y_tensor(self) -> Tensor | Rejected:
-        """Its results: (M, N), the result type over the result range."""
-        return self._tensor((self.m, self.n), self.result_type, self.result_range)
-
-    # The tensors its ports read, and the known weights: facts its parent gives.
-    x_tensor: Tensor = Param(required=False)
-    w_tensor: Tensor = Param(required=False)
-    w_contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
-    # Whether the weights are known, which the weight channel's source stores.
-    stored = supplied(w_contents)
+        """Its results: ``(..., N)``, the activations' leading axes (``leading``) and N, in
+        the result type over the result range."""
+        return self._tensor((*self.leading, self.n), self.result_type, self.result_range)
 
     @derived
     def weighted(self) -> bool:
@@ -332,12 +421,15 @@ class MatMulKernel(ComposedKernel):
     @view(when=weighted)
     def w_carried(self) -> Tensor | Rejected:
         """The tensor the weight channel carries, which the cores read: with known weights,
-        ``weight_tensor``'s shape over the stored values' range, narrowed to it
+        a set of the stored values, ``(K, N)``, over their range, narrowed to it
         (``stored_element``); otherwise ``w_tensor``."""
         if not self.stored:
             tensor: Tensor = self.w_tensor
             return tensor
-        dtype, shape = self.weights_dtype, self.weight_tensor.shape
+        stored = integer_shape(self.w_stored)
+        if not stored or len(stored) < 2:
+            return reject("matmul-tensor", f"known weights are (K, N) a set, not {stored}")
+        dtype, shape = self.weights_type, stored[-2:]
         if not is_ordinary_integer(dtype):
             return Tensor(shape, ScalarEncoding(dtype))
         least, greatest = integer_range(self.w_stored)
@@ -350,20 +442,24 @@ class MatMulKernel(ComposedKernel):
 
     @constraint
     def carried(self) -> bool | Rejected:
-        """Each given tensor is of the shape MatMul derives for it, and its values are
-        values of MatMul's, in any integer encoding (``values_within``): the owner of
-        known weights states them narrowed to their values."""
-        given: list[tuple[str, Tensor, str]] = []
-        if self.present(MatMulKernel.x_tensor):
-            given.append(("x_tensor", self.x_tensor, "activation_tensor"))
+        """Each given tensor is what MatMul requires of it, and its values are values of
+        MatMul's, in any integer encoding (``values_within``): the owner of known weights
+        states them narrowed to their values. The activations are the element count and
+        the last axis of ``activation_tensor``, at any rank; the weights its shape."""
+        given: list[tuple[str, Tensor, str, bool]] = [
+            ("x_tensor", self.x_tensor, "activation_tensor", False)
+        ]
         if self.weighted:
             weights = "w_carried" if self.stored else "w_tensor"
-            given.append((weights, self.w_carried, "weight_tensor"))
-        for name, supplied_, tensor in given:
+            given.append((weights, self.w_carried, "weight_tensor", True))
+        for name, supplied_, tensor, whole in given:
             derived_ = getattr(self, tensor)
-            if supplied_.shape != derived_.shape or not values_within(
-                supplied_.element, derived_.element
-            ):
+            fits = (
+                supplied_.shape == derived_.shape
+                if whole
+                else supplied_.size == derived_.size and supplied_.shape[-1] == derived_.shape[-1]
+            )
+            if not fits or not values_within(supplied_.element, derived_.element):
                 return reject(
                     "matmul-tensor",
                     f"{name} is {supplied_.shape} {supplied_.element}; "

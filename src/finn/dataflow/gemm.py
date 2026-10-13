@@ -22,8 +22,10 @@ pixel ``(oh, ow)`` and the reduction ``k`` is ``(kh, kw, c)``, ``c`` innermost, 
 order ``Im2Col`` and ``LowerConvsToMatMul``'s weights use. X is the image itself,
 ``(H, W, C)`` stored as its ``H * W`` rows of ``C``, read at
 ``(oh * SH + kh * DH, ow * SW + kw * DW, c)``; W is its stored ``(K, N)`` viewed
-``(KH, KW, C, N)``; Y is ``(OH * OW, N)`` (``Window.signature``). No position is
-padded: a window reads only the image.
+``(KH, KW, C, N)``; Y is ``(OH * OW, N)`` (``Window.signature``). An image at the
+graph's rank, ``(1, H, W, C)``, is read as it is, its leading axes at a constant 0
+(``ZERO``), and Y is then ``(1, OH, OW, N)`` (``Window.over``). No position is padded:
+a window reads only the image.
 """
 
 from __future__ import annotations
@@ -35,6 +37,9 @@ from finn.dataflow.schedule import Affine, Index
 
 m, n, k = Index("m"), Index("n"), Index("k")
 oh, ow, kh, kw, c = (Index(name) for name in ("oh", "ow", "kh", "kw", "c"))
+
+ZERO = Affine(())
+"""The constant 0: an axis of extent one that no index walks (an image's leading axis)."""
 
 
 @dataclass(frozen=True)
@@ -129,5 +134,22 @@ class Window:
             y=(oh * self.output[1] + ow, n),
         )
 
+    def over(self, rank: int) -> Signature:
+        """The signature over an image of ``rank`` axes: at rank 2, its ``(H * W, C)``
+        rows (``signature``); above, the image ``(..., H, W, C)`` itself, each leading axis
+        read at ``ZERO`` (one image), X at ``(oh * SH + kh * DH, ow * SW + kw * DW, c)``
+        and Y over ``(..., OH, OW, N)``."""
+        if rank == 2:
+            return self.signature
+        if rank < 3:
+            raise ValueError(f"a window reads an image of rank 2 or at least 3, not {rank}")
+        (row_step, column_step), (row_gap, column_gap) = self.stride, self.dilation
+        leading = (ZERO,) * (rank - 3)
+        return Signature(
+            x=(*leading, oh * row_step + kh * row_gap, ow * column_step + kw * column_gap, c),
+            w=(kh, kw, c, n),
+            y=(*leading, oh, ow, n),
+        )
 
-__all__ = ["Form", "Signature", "Window", "c", "k", "kh", "kw", "m", "n", "oh", "ow"]
+
+__all__ = ["ZERO", "Form", "Signature", "Window", "c", "k", "kh", "kw", "m", "n", "oh", "ow"]

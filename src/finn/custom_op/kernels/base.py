@@ -420,13 +420,26 @@ class KernelOp(CustomOp):
 
     # -- inference ------------------------------------------------------------------------
 
-    def output_tensors(self) -> Shapes:
-        """Each output's ONNX shape and datatype, from the kernel's views (``view``)."""
-        raise NotImplementedError
+    def output_tensors(self) -> dict[str, Tensor]:
+        """Each output's tensor, by graph name: what the kernel states it writes, bound on
+        the node's inputs (each output's ``Wiring.tensor``), one rule for every op. It may
+        read an input's value (MatMul's result range comes from its weights)."""
+        kernel = getattr(BIND_CACHE.inputs(self.facts()), self.member)
+        found: dict[str, Tensor] = {}
+        for port, name in zip(self.outputs, self.onnx_node.output):
+            answer = kernel.query(getattr(type(kernel), self.wiring[port].tensor))
+            if not isinstance(answer, Available):
+                raise KernelOpError(f"{self.label}: {describe([answer])}", findings=answer.findings)
+            found[name] = answer.value
+        return found
 
     def infer_output_tensors(self, model: ModelWrapper) -> Shapes:
+        """Each output's ONNX shape and datatype (``output_tensors``)."""
         self.attach_model(model)
-        return self.output_tensors()
+        return {
+            name: (tensor.shape, tensor.element.dtype)
+            for name, tensor in self.output_tensors().items()
+        }
 
     def make_shape_compatible_op(self, model: ModelWrapper) -> Any:
         ((dims, _),) = self.infer_output_tensors(model).values()
@@ -475,16 +488,6 @@ class KernelOp(CustomOp):
             f"{self.label}: {finding.owner}: {finding.code}: {finding.message}"
             for finding in self.refusals(point)
         ]
-
-    def view(self, name: str) -> Any:
-        """A view of the kernel bound on the node's inputs only (``y_tensor``,
-        ``result_dtype``): what output inference reads. It may read an input's value
-        (MatMul's result range comes from its weights)."""
-        kernel = getattr(BIND_CACHE.inputs(self.facts()), self.member)
-        answer = kernel.query(getattr(type(kernel), name))
-        if not isinstance(answer, Available):
-            raise KernelOpError(f"{self.label}: {describe([answer])}", findings=answer.findings)
-        return answer.value
 
 
 def candidate_refusals(point: Space, key: str, cases: tuple[str, ...]) -> tuple[Finding, ...]:

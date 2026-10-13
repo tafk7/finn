@@ -67,17 +67,18 @@ def test_facts_come_from_the_model() -> None:
     # initializer.
     assert facts.root is MatMul.root() and facts.owned == ("w",)
     formals = facts.formals()
-    assert (formals["m"], formals["k"], formals["n"]) == (3, 4, 4)
+    # Its extents and datatypes are its tensors': the formals are the platform and the
+    # known weights' declared datatype.
+    assert set(formals) == {"weights_dtype", "platform"}
     # The weights are the weight channel's value, not a formal of MatMul's; the channel's
     # tensor is the initializer's, over its values' range.
     assert "weights" not in formals
     value = IntegerTensorValue.of(tuple(tuple(int(v) for v in row) for row in WEIGHTS))
     assert facts.values() == {"w": value}
     assert facts.inputs()["w"].element.value_range == value.range
-    # The output keeps the input's leading axes.
-    assert op(model).output_tensors() == {
-        "y": ((1, 3, 4), op(model).view("y_tensor").element.dtype)
-    }
+    # The output keeps the input's leading axes: the kernel states it at their rank.
+    (result,) = op(model).output_tensors().values()
+    assert op(model).infer_output_tensors(model) == {"y": ((1, 3, 4), result.element.dtype)}
     streamed = matmul_model(stored=False)
     assert op(streamed).facts().root is MatMul.root()
     assert op(streamed).facts().owned == ()

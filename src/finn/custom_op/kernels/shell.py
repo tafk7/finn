@@ -93,8 +93,8 @@ and budgets.
   is integrated beside the IP, not in it.
 
 The class is kept by what it is built from, by value (``ShellKey``): the name; the
-target's platform; each channel as declared (the tensor it carries, rows and
-annotation, its port); each node's name, op class, node-root class, facts key (its
+target's platform; each channel as declared (the tensor it carries, at the graph's
+rank, its port); each node's name, op class, node-root class, facts key (its
 formals and owned values by value, as the bind cache keys them), owned parameter ports
 and tensors; and the ends the row offers. A call on the same facts compiles nothing
 again, and reads an owned value only to build it; ``SHELLS`` keeps the 16 most
@@ -275,8 +275,8 @@ class Shell(ComposedKernel):
 
 @dataclass(frozen=True)
 class Declared:
-    """A channel as the shell root declares it: the tensor it carries, rows and
-    annotation (a parameter channel's over its values' range), and its boundary port."""
+    """A channel as the shell root declares it: the tensor it carries, at the graph's rank
+    (a parameter channel's over its values' range), and its boundary port."""
 
     tensor: Tensor
     port: str | None = None

@@ -9,7 +9,8 @@ The build lowers each ONNX ``Conv`` to this pair before conversion
 a patch ``(kh, kw, c)``, ``c`` innermost, and ``LowerConvsToMatMul`` stores the (K, N)
 weights in that order. The op covers both nodes, anchored at the ``Im2Col``, so the
 patches never become a tensor in the graph or in hardware: the node reads the image
-``(1, H, W, C)`` and the weights, and writes ``(1, OH, OW, N)``. The window is a reorder
+``(1, H, W, C)`` and the weights, and writes ``(1, OH, OW, N)``, which the kernel states
+at the image's rank. The window is a reorder
 on the image's input channel (``finn.dataflow.gemm.Window``), not a kernel of its own.
 
 The op type is ``Conv``, in the KernelOps' domain. qonnx looks an op up by its domain
@@ -32,7 +33,7 @@ from qonnx.custom_op.general.im2col import im2col_indices_nchw
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import known_shape, shape
 from finn.core.space import Finding, Rejected
-from finn.custom_op.kernels.base import Match, Shapes, node_attributes, refused, unstated
+from finn.custom_op.kernels.base import Match, node_attributes, refused, unstated
 from finn.custom_op.kernels.matmul import MatMul
 from finn.dataflow.gemm import Window
 from finn.kernels.matmul import MatMulKernel
@@ -128,26 +129,18 @@ class Conv(MatMul):
             raise KernelOpError(f"{label}: the image {x} is {dims}, not one (1, H, W, C)")
         return dims[0], dims[1], dims[2], dims[3]
 
-    def extents(self) -> tuple[int, int, int, dict[str, object]]:
-        """(m, n, k): the output pixels, the weights' columns, the window's taps times the
-        image's channels; and the ``window``."""
+    def shaped(self) -> dict[str, object]:
+        """The ``window`` over the image; the weights' rows must be the window's taps times
+        the image's channels."""
         label, (x, w) = self.label, self.onnx_node.input
         channels, window = self.image()[3], self.window()
-        k, n = self.weights()
+        k, _ = self.weights()
         if k != window.tap_count * channels:
             raise KernelOpError(
                 f"{label}: the weights {w} have {k} rows, not the {window.size} window's "
                 f"{window.tap_count} taps of the {channels} channels of {x}"
             )
-        rows, columns = window.output
-        return rows * columns, n, k, {"window": window}
-
-    def output_tensors(self) -> Shapes:
-        result = self.view("y_tensor")
-        rows, columns = self.window().output
-        return {
-            self.onnx_node.output[0]: ((1, rows, columns, result.shape[-1]), result.element.dtype)
-        }
+        return {"window": window}
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """The reference: qonnx's Im2Col of the image, then MatMul's product with the

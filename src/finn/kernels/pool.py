@@ -6,13 +6,15 @@
 ``pooling_stream`` (FinnLib ``hls/nonlin/pooling.hpp``) is a reduction alone: it
 takes the maximum of the beats it is given until one arrives with ``last``, and
 then presents it. It does not walk a feature map: the window is the channel's
-(decision K2). The kernel's input port reads an ``(H, W, C)`` tensor through the
+(decision K2). The kernel's input port reads an ``(H, W, C)`` tensor, or one at the
+graph's rank, ``(1, H, W, C)`` (each leading axis one, read at ``ZERO``), through the
 window, ``(oh * SH + kh, ow * SW + kw, c)``, on the schedule ``(oh, ow, c, kh, kw)``
 with ``c`` folded by PE, and closes each window with the marker of its innermost
 two indices (``closes``), so the channel's adapter (``input_gen``) presents the
 windows in order and its loop-end marker becomes the stream's TLAST, as dotp's
 activation TLAST closes each reduction. Its output, the tensor it states
-(``output_tensor``), is ``(oh, ow, c)``, presented after each window (``reduces``), PE
+(``output_tensor``), is ``(oh, ow, c)`` at the input's rank (``(1, oh, ow, c)``),
+presented after each window (``reduces``), PE
 channels a beat, in the input's element: the maximum of values in a range stays in
 it.
 
@@ -44,6 +46,7 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType
+from finn.dataflow.gemm import ZERO
 from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
@@ -179,11 +182,18 @@ class PoolKernel(LeafKernel):
         channels are bound from the input's tensor."""
         (rows, columns), (row_step, column_step) = self.window, self.stride
         shape = self.input_tensor.shape
-        if len(shape) != 3 or shape[0] < rows or shape[1] < columns:
-            return reject("pool-geometry", f"a {rows}x{columns} window fits no HWC {shape}")
+        if (
+            len(shape) < 3
+            or any(extent != 1 for extent in shape[:-3])
+            or shape[-3] < rows
+            or shape[-2] < columns
+        ):
+            return reject(
+                "pool-geometry", f"a {rows}x{columns} window fits no (..., H, W, C) image {shape}"
+            )
         windows = {
-            oh: (shape[0] - rows) // row_step + 1,
-            ow: (shape[1] - columns) // column_step + 1,
+            oh: (shape[-3] - rows) // row_step + 1,
+            ow: (shape[-2] - columns) // column_step + 1,
         }
         return self._bound({kh: rows, kw: columns, **windows})
 
@@ -191,9 +201,18 @@ class PoolKernel(LeafKernel):
     pe: int = Decision(domain=divisors_of(channels))
 
     @derived
+    def leading(self) -> tuple[Affine, ...]:
+        """An index for each of the input's leading axes, one image each: ``ZERO``."""
+        return (ZERO,) * (len(self.input_tensor.shape) - 3)
+
+    @derived
     def input_index(self) -> tuple[Affine, ...]:
         rows, columns = self.stride
-        return (oh * rows + kh, ow * columns + kw, Affine.of(c))
+        return (*self.leading, oh * rows + kh, ow * columns + kw, Affine.of(c))
+
+    @derived
+    def output_index(self) -> tuple[Index | Affine, ...]:
+        return (*self.leading, oh, ow, c)
 
     @derived
     def schedule(self) -> Schedule | Rejected:
@@ -219,8 +238,8 @@ class PoolKernel(LeafKernel):
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
-        """Its output: ``(OH, OW, C)``, in the input's element."""
-        shape = self.spanned((oh, ow, c))
+        """Its output: ``(OH, OW, C)`` at the input's rank, in the input's element."""
+        shape = self.spanned(self.output_index)
         if isinstance(shape, Rejected):
             return shape
         return Tensor(shape, self.input.element)
@@ -231,7 +250,7 @@ class PoolKernel(LeafKernel):
         tensor=output_tensor,
         admits=ELEMENTS,
         schedule=schedule,
-        index=(oh, ow, c),
+        index=output_index,
         lanes=(c,),
         reduces=(kh, kw),
         spelling=AxisSpelling.UPPER,

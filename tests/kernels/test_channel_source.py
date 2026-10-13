@@ -68,6 +68,9 @@ FACTS = dict(
     weights_dtype=DataType["INT3"],
     platform=FULL_DSP48E2,
 )
+"""The harness's MatMul (``matmul_point``, ``matmul_assembly``)."""
+KNOWN = dict(weights_dtype=DataType["INT3"], platform=FULL_DSP48E2)
+"""MatMul's facts beside its tensors, its weights known: their declared datatype."""
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 # The result of WEIGHTS' columns over INT3 activations (K7): [-30, 40].
 INT7 = ScalarEncoding(DataType["INT7"])
@@ -130,7 +133,7 @@ def stored(platform: Platform) -> Network:
                 platform=platform,
             ),
             "matmul": MatMulKernel(
-                **{**FACTS, "platform": platform},
+                **{**KNOWN, "platform": platform},
                 x_tensor=Tensor((3, 4), INT3),
                 w_contents=WEIGHTS,
             ),
@@ -227,9 +230,9 @@ def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     assert codes(refused) == {"dtype-storage"}
     assert owners(refused) == {"w_carried"}
     assert codes(outside.query("w", NETLIST)) == {"dtype-storage"}
-    # A shape error is refused by the memory that packs them.
-    wrong = module_of(configured(base(weights=((0,),)), style="auto"), "matmul")
-    assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
+    # A shape error is refused by MatMul: its K is its activations', not the weights'.
+    wrong = base(weights=((0,),)).member("matmul").query(MatMulKernel.carried)
+    assert isinstance(wrong, Rejected) and codes(wrong) == {"matmul-tensor"}
 
 
 def test_the_result_range_follows_what_the_weight_channel_carries():
@@ -318,9 +321,10 @@ def test_the_sources_choices_round_trip_through_another_network():
     # Without known weights the channel has no source: its choices are stale, refused.
     with pytest.raises(NetworkError, match="w.source.memstream.ram_style: .*inapplicable"):
         base().with_choices(saved)
-    # Facts that invalidate a saved folding refuse replay atomically.
+    # Facts that invalidate a saved folding refuse replay atomically: five outputs.
+    wider = tuple((*row, 0) for row in WEIGHTS)
     with pytest.raises(NetworkError, match="matmul.compute.packed.pe"):
-        base(weights=WEIGHTS, n=5).with_choices(saved)
+        base(weights=wider, n=5).with_choices(saved)
 
 
 def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused():
@@ -344,7 +348,7 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
                 platform=FULL_DSP48E2,
             ),
             "matmul": MatMulKernel(
-                **FACTS,
+                **KNOWN,
                 x_tensor=Tensor((3, 4), INT3),
                 w_contents=(WEIGHTS, WEIGHTS),
             ),
@@ -407,7 +411,7 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
                 producer=Interface("matmul", "y_end"),
                 platform=FULL_DSP48E2,
             ),
-            "matmul": MatMulKernel(**FACTS, x_tensor=x_tensor, w_tensor=w_tensor),
+            "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, w_tensor=w_tensor),
         }
     )
     answer = folded(produced).member("y").query(Channel.endpoints)

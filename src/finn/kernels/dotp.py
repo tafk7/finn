@@ -33,6 +33,10 @@ and SIMD are dotp's own Decisions, the folding factors of ``n`` and ``k``, and i
 ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every port's beat sequence
 derives from it. ``reshape_activations`` reads (M, K, N) activations as (M, K * N): a
 densely realized depthwise operation, whose rows are the activations' leading axis.
+Dense activations of another rank than two, ``(..., K)`` at the graph's rank, are read
+through the view ``(m, k)`` (``rows_viewed``), ``m`` every leading axis together, and
+the results are stated at the activations' rank, ``(..., N)``, written through the view
+``(m, n)``.
 
 A dense form read through a ``window`` (``finn.dataflow.gemm.Window``, a lowered
 convolution) splits ``m`` into the pixels ``(oh, ow)`` and ``k`` into the window
@@ -40,8 +44,10 @@ convolution) splits ``m`` into the pixels ``(oh, ow)`` and ``k`` into the window
 ``(oh * SH + kh * DH, ow * SW + kw * DW, c)``, w its ``(K, N)`` viewed
 ``(KH, KW, C, N)`` and y ``(OH * OW, N)``; the schedule walks ``(oh, ow, n, kh, kw,
 c)`` with ``n`` split by PE and ``c`` by SIMD (so SIMD divides the channels), and
-activation TLAST closes each window. The window's extents are its own, the channels
-the image's and the outputs the weights' last axis. The core sees the beats of a dense form of
+activation TLAST closes each window. An image at the graph's rank, ``(1, H, W, C)``, is
+read as it is and the results are ``(1, OH, OW, N)`` (``Window.over``). The window's
+extents are its own, the channels the image's and the outputs the weights' last axis.
+The core sees the beats of a dense form of
 ``K = KH * KW * C``: the window is the activation channel's (its adapter reads the
 image through it), not the core's.
 
@@ -56,7 +62,7 @@ frame's accumulation to it, every partial sum included.
 
 from __future__ import annotations
 
-from math import ceil, floor
+from math import ceil, floor, prod
 from typing import ClassVar
 
 from finn.core.space import (
@@ -195,16 +201,41 @@ class DotpAxiKernel(LeafKernel):
         return self.present(DotpAxiKernel.window)
 
     @derived
+    def x_rank(self) -> int:
+        """The activations' rank (two when none are given)."""
+        return len(self.x_tensor.shape) if self.present(DotpAxiKernel.x_tensor) else 2
+
+    @derived
+    def rows_viewed(self) -> bool:
+        """Whether dense activations of another rank than two are read through the view
+        ``(m, k)``, and the results written through ``(m, n)``: their leading axes are the
+        rows."""
+        return (
+            self.form is Form.DENSE
+            and not self.windowed
+            and not self.reshape_activations
+            and self.x_rank != 2
+        )
+
+    @derived
+    def x_viewed(self) -> bool:
+        """Whether x reads its tensor through a view."""
+        return self.reshape_activations or self.rows_viewed
+
+    @derived
     def extents(self) -> dict[Index, int] | Rejected:
         """Each index's extent, bound from the tensors its inputs read; a window's own
         (``Window.extents``) and its outputs, the weights' last axis, which they read
-        through a view; and densely realized depthwise activations' rows, their leading
-        axis, which they read through a view."""
+        through a view; and the rows of activations read through a view: densely realized
+        depthwise ones', their leading axis, and dense ones' of another rank, every
+        leading axis together."""
         given: dict[Index, int] = {}
         if self.windowed:
             given |= {**self.window.extents, n: self.w_tensor.shape[-1]}
         if self.reshape_activations:
             given[m] = self.x_tensor.shape[0]
+        if self.rows_viewed:
+            given[m] = prod(self.x_tensor.shape[:-1])
         return self._bound(given or None)
 
     rows = extent_of(m)  # M: the results' rows
@@ -253,8 +284,8 @@ class DotpAxiKernel(LeafKernel):
 
     @derived
     def signature(self) -> tuple[tuple[Index | Affine, ...], ...]:
-        """The indices x, w and y read: the form's, or its window's."""
-        found = self.window.signature if self.windowed else self.form.value
+        """The indices x, w and y read: the form's, or its window's over the image's rank."""
+        found = self.window.over(self.x_rank) if self.windowed else self.form.value
         return found.x, found.w, found.y
 
     @derived
@@ -271,14 +302,17 @@ class DotpAxiKernel(LeafKernel):
 
     @derived
     def y_tensor(self) -> Tensor | Rejected:
-        """The results: ``(m, n)``, a window's ``(OH * OW, n)``, in the core's accumulator
-        over ``result_range``."""
+        """The results: ``(m, n)``, a window's ``(OH * OW, n)`` (``(1, OH, OW, n)`` over an
+        image at the graph's rank), rows read through a view ``(..., n)`` at the
+        activations' rank; in the core's accumulator over ``result_range``."""
         element = admit_element(self.accumulator, self.result_range)
         if isinstance(element, Rejected):
             return element
         shape = self.spanned(self.y_index)
         if isinstance(shape, Rejected):
             return shape
+        if self.rows_viewed:
+            shape = (*self.x_tensor.shape[:-1], shape[-1])
         return Tensor(shape, element)
 
     @derived
@@ -305,7 +339,7 @@ class DotpAxiKernel(LeafKernel):
         index=x_index,
         lanes=x_lanes,
         closes=reduced,
-        reshaped=reshape_activations,
+        reshaped=x_viewed,
     )
     w = AxiStreamPort(
         name="s_axis_weights",
@@ -326,6 +360,7 @@ class DotpAxiKernel(LeafKernel):
         index=y_index,
         lanes=(n,),
         reduces=reduced,
+        reshaped=rows_viewed,
     )
     x_end = interface("x")
     w_end = interface("w")

@@ -38,9 +38,9 @@ def test_facts_and_the_output() -> None:
         (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
     )
     assert formals["bias"] == -1
-    ((dims, dtype),) = op(model).output_tensors().values()
+    ((dims, dtype),) = op(model).infer_output_tensors(model).values()
     assert dims == (3, 4) and dtype.name == "INT3"  # [-1, 2], in the RTL's output width
-    assert op(thresholding_model()).output_tensors()["y"][1].name == "UINT2"
+    assert op(thresholding_model()).output_tensors()["y"].element.dtype.name == "UINT2"
 
 
 def test_the_thresholds_must_be_an_initializer_with_one_row_or_a_row_per_channel() -> None:
