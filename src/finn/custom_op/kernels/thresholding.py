@@ -95,7 +95,6 @@ class Thresholding(KernelOp):
     op_type = "Thresholding"
     op_version = ThresholdingAxiKernel.version
     kernel = ThresholdingAxiKernel
-    member = "activate"
     formals = ("threshold_dtype", "thresholds", "bias", "platform")
     ports = ("x", None)
     wiring = {
@@ -188,7 +187,7 @@ class Thresholding(KernelOp):
             platform,
             summary.content_digest,
         )
-        return Facts(self.root(), key, formals, self.input_edges, self.output_edges)
+        return self.binding(key, formals)
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """The reference: count(X >= T[c]) + bias, in X's element type."""

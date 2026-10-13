@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from kernels.helpers import choose
 from kernels.xsim import requires_vivado, requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 
@@ -31,8 +32,7 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, member, shell_root
-from finn.kernels.configure import commit, undecided
+from finn.custom_op.kernels.shell import configured_root, network
 from finn.kernels.explore import Ranked
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
@@ -129,19 +129,19 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     # A second frame that repeated the first's logits would not show the first one left
     # nothing behind.
     assert not np.array_equal(*expected)
-    root = shell_root(body, body.graph.node)
-    assert undecided(root.point, "*") == [] and not root.dropped
-    assert root.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
+    bound = network(body, body.graph.node)
+    assert bound.undecided() == () and not bound.stale
+    assert bound.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
+    point, boundary = configured_root(body, "partition")
     # The input's one threshold row, shared by its 784 pixels, is bound as it is
     # (thresholding_axi's C = 1), not tiled to 784 rows.
     first = body.graph.node[0]
     assert body.get_initializer(first.input[1]).shape == (1, 2)
-    leaves = dict(root.point.module.fragment.instances)
+    leaves = dict(point.module.fragment.instances)
     parameters = dict(leaves[first.name].parameters)
     assert parameters["C"] == 1
     (table,) = [item for item in leaves[first.name].data if item.path.startswith("thresholds_")]
     assert len(table.data.split()) == 2
-    point, boundary = configured_root(body, "partition")
     assert boundary_facts(body, point, boundary, "partition") == FACTS
     # Python ints: the packed words are wider than numpy's integers.
     pixels = [int(value) for image in images for value in image.reshape(-1)]  # the host's flatten
@@ -150,7 +150,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     lanes = 16
     for mode, pacing in {"free": FREE, "stalled": STALLED}.items():
         stream_through(
-            root.point.module,
+            point.module,
             tmp_path / "xsim" / mode,
             inputs={
                 "s_axis_0": (
@@ -160,7 +160,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
             },
             outputs={"m_axis_0": (words, bits * expected[0].size)},
             pacing=pacing,
-            cycles=FRAMES * root.point.cycles,  # its layers' work, beyond its boundary's beats
+            cycles=FRAMES * point.cycles,  # its layers' work, beyond its boundary's beats
             toolchain=host_toolchain(),
         )
 
@@ -242,23 +242,19 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
     shell drives no 2x clock)."""
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
-    root = shell_root(body, body.graph.node)
-    paths = {path.rpartition(".")[2]: path for path in root.members}
+    bound = network(body, body.graph.node)
     weights = [
-        paths[member(node.input[1])]
+        node.input[1]
         for node in body.graph.node
         if node.op_type == "MatMul" and body.get_initializer(node.input[1]) is not None
     ]
     assert len(weights) == 4
-    streams = {member(tensor) for node in body.graph.node for tensor in node.input}
-    for stream in streams & set(paths):
-        channel = root.point
-        for name in paths[stream].split("."):
-            channel = getattr(channel, name)
-        assert channel.platform == ULTRA96.platform
+    streams = {tensor for node in body.graph.node for tensor in node.input}
+    for stream in streams & set(bound.channels):
+        assert bound.member(stream).platform == ULTRA96.platform
     # Each adapter memory the flow committed (``auto``), stated on its edge's tensor.
     adapters = [
-        f"{paths[member(tensor)]}.{key}"
+        f"{tensor}.{key}"
         for tensor in body.tensors_stating(CHANNEL)
         for key in channel_choices(body, tensor)
         if key.startswith("adapter.") and key.endswith(".ram_style")
@@ -266,6 +262,6 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
     assert len(adapters) == 4
     for key in adapters:
         with pytest.raises(ValueError, match="uram-absent"):
-            commit(root.point, {key: "ultra"})
+            choose(bound, {key: "ultra"})
     with pytest.raises(ValueError, match="uram-absent"):
-        commit(root.point, {f"{weights[0]}.source.memstream.ram_style": "ultra"})
+        choose(bound, {f"{weights[0]}.source.memstream.ram_style": "ultra"})

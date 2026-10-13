@@ -19,10 +19,10 @@ from typing import Any
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import design_space
+from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.matmul import MatMulKernel, column_range
-from finn.kernels.network import Fact, Interface, Network, wire
+from finn.kernels.network import Fact, Interface, Network, Wire, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
 from kernels.helpers import (
@@ -76,13 +76,19 @@ Y_TENSOR = result(W2, LEVELS)
 
 
 def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
-    """The Chain, nothing chosen. The input is the network's to state, and the levels'
-    channel's tensor too, as a graph states the thresholding's output. Each MatMul's
-    results are its statement, which reads only its facts and its weights, and each
-    weight channel carries what its MatMul states for it. The hidden channel's tensor,
-    which the thresholding reads, is ``hidden``: the first MatMul's results by default."""
+    """The Chain, nothing chosen (``members``)."""
+    return Network(members(hidden))
+
+
+def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
+    """The Chain's members, as declared. The input is the network's to state, and the
+    levels' channel's tensor too, as a graph states the thresholding's output. Each
+    MatMul's results are its statement, which reads only its facts and its weights, and
+    each weight channel carries what its MatMul states for it. The hidden channel's
+    tensor, which the thresholding reads, is ``hidden``: the first MatMul's results by
+    default."""
     platform = FULL_DSP48E2
-    return Network(
+    return dict(
         {
             "x": wire(
                 platform=platform,

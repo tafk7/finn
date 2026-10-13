@@ -6,13 +6,13 @@
 ``XSim`` claims a partition node (StreamingDataflowPartition) whose body is a partition
 of KernelOps (``kernel_partition_body``), and runs it as packaging builds it:
 
-1. **the point**: the body's shell root, its nodes' and its tensors' channel choices
+1. **the network**: the body's network, its nodes' and its tensors' channel choices
    replayed, and its boundary (``configured_root``, which refuses an open choice): each
    graph input and output at its port;
 2. **the words**: each input tensor, as integers of its boundary element (a value
    that is no integer, or one the element does not hold, is refused: ``Unstreamable``),
    presented as the port presents it, one word a beat (``finn.dataflow.traversal.pack``);
-3. **the simulation**: the root's module in XSim (``rtlsim_bench.stream_out``), paced by
+3. **the simulation**: the network's module in XSim (``rtlsim_bench.stream_out``), paced by
    ``pacing``, every input streamed and each output's words taken as they arrive,
    none expected;
 4. **the tensors**: each output's words read back as the port presents them
@@ -67,8 +67,7 @@ from finn.core.graph.partition import kernel_partition_body
 from finn.core.onnx_exec import running, window
 from finn.core.rtlsim_bench import Receive, SimulationFailed, Tap, Words, stream_out
 from finn.core.rtlsim_pacing import STALLED, Pacing
-from finn.core.space import Available
-from finn.custom_op.kernels.shell import configured_root, member
+from finn.custom_op.kernels.shell import Configured, configured_root
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
 from finn.toolchain.launcher import Toolchain, host_toolchain
@@ -139,7 +138,6 @@ class XSim:
         reached = {tensor for inner in window(body, None, run.end_node) for tensor in inner.output}
         point, streams = boundary(body, node)
         tapped = links(body, point, reached) if run.full_context else ()
-        cycles = point.query(type(point).cycles)
         inputs: dict[str, Words] = {}
         outputs: dict[str, Receive] = {}
         for stream in streams:
@@ -154,7 +152,7 @@ class XSim:
             inputs=inputs,
             outputs=outputs,
             pacing=self.pacing,
-            cycles=cycles.value if isinstance(cycles, Available) else 0,
+            cycles=point.cycles,
             toolchain=self.toolchain,
             cache=self.cache,
             taps={link.name: link.tap for link in tapped},
@@ -211,10 +209,10 @@ class Tapped:
     signed: bool
 
 
-def links(body: ModelWrapper, point: Any, tensors: Collection[str]) -> tuple[Tapped, ...]:
+def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tuple[Tapped, ...]:
     """The links of ``body`` among ``tensors``, in the body's node order: each tensor a
     node of the body produces and another consumes, tapped at its producer's end of its
-    channel in ``point``, the body's configured root (``boundary``): its first hop's
+    channel in ``point``, the body's configured network (``boundary``): its first hop's
     source, before any adapter."""
     consumed = {tensor for inner in body.graph.node for tensor in inner.input}
     found: list[Tapped] = []
@@ -222,9 +220,9 @@ def links(body: ModelWrapper, point: Any, tensors: Collection[str]) -> tuple[Tap
         for tensor in inner.output:
             if tensor not in tensors or tensor not in consumed:
                 continue
-            channel = getattr(point, member(tensor))
+            channel = point.channel(tensor)
             produced = channel.endpoints.source
-            end = channel.hops[0].source.under(member(tensor))
+            end = channel.hops[0].source.under(point.node(tensor))
             form, bits = produced.form, produced.element.bits
             low, _ = ordinary_integer_bounds(produced.element.dtype)
             tap = Tap(end, form.beats, form.lanes * bits)
@@ -263,8 +261,8 @@ def _read(
     )
 
 
-def boundary(body: ModelWrapper, node: NodeProto) -> tuple[Any, tuple[Stream, ...]]:
-    """The body's configured root point (``configured_root``) and its boundary ports,
+def boundary(body: ModelWrapper, node: NodeProto) -> tuple[Configured, tuple[Stream, ...]]:
+    """The body's configured network (``configured_root``) and its boundary ports,
     each with the tensor it carries in the parent graph: the partition node's inputs and
     outputs, by position, are its body's graph inputs and outputs."""
     point, ports = configured_root(body, node.name)

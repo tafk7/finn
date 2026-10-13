@@ -34,9 +34,9 @@ tensors its parent gives, ``x_tensor`` (the activations) and ``w_tensor`` (the
 weights), and present its interfaces (``x``, ``w``, ``y``): ``x_end``, ``w_end`` and
 ``y_end`` are the selected core's ports' ends, labelled ``compute.<core>.x``
 (``finn.kernels.base.PortEnd``). Each channel, its adapter, its FIFO and its source
-are its parent's: the parent (a test harness, a KernelOp's node root, or a shell
-root) declares each channel, gives it the tensor MatMul's port reads or writes, and
-gives it MatMul's ends. MatMul's own view of each tensor (``activation_tensor``,
+are its network's: the network (a test harness's, or the graph's, a KernelOp's alone or
+a partition's) declares each channel, gives it the tensor MatMul's port reads or
+writes, and gives it MatMul's ends. MatMul's own view of each tensor (``activation_tensor``,
 ``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
 ``realization``, never a port; ``carried`` refuses a given input tensor that is not
 what MatMul requires of it (the activations' element count and last axis, the

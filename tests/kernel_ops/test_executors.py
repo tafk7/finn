@@ -419,7 +419,7 @@ def test_xsim_taps_the_links_between_the_kernels_of_a_partition(tmp_path: Path) 
     }.items():
         tap = found[tensor].tap
         assert (tap.end.instance, tap.end.data) == (instance, pin) and instance in placed
-        channel = getattr(point, tensor)
+        channel = point.channel(tensor)
         assert found[tensor].form == channel.endpoints.source.form
         assert tap.count == found[tensor].form.beats
     assert "levels.adapter.input_gen.input_gen" in placed

@@ -100,15 +100,15 @@ def test_a_float_matmul_stays_on_the_host_with_the_kernels_codes() -> None:
     # not integers are no contradiction of FLOAT32.
     for weights in (np.eye(4), np.full((4, 4), 0.5)):
         found = refused(matmul("FLOAT32", "FLOAT32", weights))
-        assert found == [("matmul.result_range", "matmul-arithmetic")]
+        assert found == [("result_range", "matmul-arithmetic")]
 
 
 def test_an_int20_matmul_stays_on_the_host_with_each_cores_code() -> None:
     """INT20 activations on a DSP48E2: the packed core's DSP input is too narrow, and
     the INT8 core needs a DSP58. Each case of the ``compute`` Decision says why."""
     assert sorted(refused(matmul("INT20", "INT20"))) == [
-        ("matmul.compute.int8_dsp58.core_supported", "dotp-target"),
-        ("matmul.compute.packed.core_supported", "dotp-activation-width"),
+        ("compute.int8_dsp58.core_supported", "dotp-target"),
+        ("compute.packed.core_supported", "dotp-activation-width"),
     ]
 
 
@@ -117,15 +117,15 @@ def test_an_int32_matmul_stays_on_the_host_with_each_cores_code() -> None:
     ``compute`` Decision by its code. Its sums pass 2**24, which no longer matters:
     FINN executes the ONNX it covers with exact integers."""
     assert sorted(refused(matmul("INT32", "INT32"))) == [
-        ("matmul.compute.int8_dsp58.core_supported", "dotp-target"),
-        ("matmul.compute.packed.core_supported", "dotp-activation-width"),
+        ("compute.int8_dsp58.core_supported", "dotp-target"),
+        ("compute.packed.core_supported", "dotp-activation-width"),
     ]
 
 
 def test_a_float_multithreshold_stays_on_the_host_with_the_kernels_codes() -> None:
     assert refused(multithreshold("FLOAT32", "FLOAT32")) == [
-        ("activate.table_supported", "threshold-type"),
-        ("activate.types_supported", "dtype-family"),
+        ("table_supported", "threshold-type"),
+        ("types_supported", "dtype-family"),
     ]
 
 
@@ -173,7 +173,7 @@ def test_admission_reads_the_types_the_nodes_before_state() -> None:
     """``h`` carries a stale INT20 annotation, which the second MatMul's cores refuse.
     Conversion states ``h`` from the first MatMul's kernel (its weights' columns) before
     it asks the kernels about the second, so both convert."""
-    assert ("matmul.compute.packed.core_supported", "dotp-activation-width") in refused(
+    assert ("compute.packed.core_supported", "dotp-activation-width") in refused(
         matmul("INT20", "INT4")
     )
     nodes = [

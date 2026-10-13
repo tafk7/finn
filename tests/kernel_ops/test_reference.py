@@ -135,7 +135,7 @@ def test_a_positive_graph_no_kernel_admits_is_a_gap_record() -> None:
         "admitted": [],
         "refused": [
             {
-                "owner": "matmul.result_range",
+                "owner": "result_range",
                 "code": "matmul-arithmetic",
                 "rows": [list(row) for row in ROWS],
             }
@@ -158,8 +158,8 @@ def test_a_positive_graph_some_rows_admit_records_which() -> None:
         "int20",
         VERSAL,
         {
-            ("matmul.compute.int8_dsp58.core_supported", "dotp-target"): others,
-            ("matmul.compute.packed.core_supported", "dotp-activation-width"): others,
+            ("compute.int8_dsp58.core_supported", "dotp-target"): others,
+            ("compute.packed.core_supported", "dotp-activation-width"): others,
         },
     )
     assert not covered.gap
@@ -192,9 +192,7 @@ def test_a_float_matmuls_reference_is_onnxs_float_matmul() -> None:
     _, conversion = converted(source, TARGET)
     (outcome,) = conversion.outcomes
     assert outcome.op is None
-    assert {(f.owner, f.code) for f in outcome.findings} == {
-        ("matmul.result_range", "matmul-arithmetic")
-    }
+    assert {(f.owner, f.code) for f in outcome.findings} == {("result_range", "matmul-arithmetic")}
 
 
 def _restated(model: ModelWrapper, annotation: str | None) -> ModelWrapper:

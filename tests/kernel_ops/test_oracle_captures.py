@@ -17,7 +17,7 @@ import pytest
 from oracle import CAPTURES, capture_file, document
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.custom_op.kernels.shell import shell_root
+from finn.custom_op.kernels.shell import network
 from kernel_ops.measure_cycles import finn_cycles, schedule_of
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.tfc import partition
@@ -40,8 +40,8 @@ def test_every_capture_is_one_oracles_with_the_files_it_names() -> None:
 
 def measured(model: ModelWrapper, label: str) -> dict[str, int]:
     """FINN's cycles of each layer ``measure_cycles`` measures in ``model``."""
-    root = shell_root(model, model.graph.node, name=label)
-    return {node.name: finn_cycles(node, schedule_of(root, node)) for node in model.graph.node}
+    bound = network(model, model.graph.node, name=label)
+    return {node.name: finn_cycles(node, schedule_of(bound, node)) for node in model.graph.node}
 
 
 def test_the_chains_layers_have_finns_cycles_captured() -> None:

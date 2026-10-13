@@ -1,45 +1,41 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The bind cache: bound node roots, keyed by the facts they were bound from.
+"""The bind cache: each node's kernel, bound, keyed by the facts it was bound from.
 
 qonnx creates a new op instance for every call, so without a cache a KernelOp would
 bind its kernel again each time, and evaluate again what the bound point had already
-evaluated. Bound points never change and are keyed by value (an initializer by its
-content digest), so one can be shared between instances and models, and a cached point
-never goes stale: changed facts make a new key. The cache is a bounded LRU
-(``LeastRecentlyUsed``, which the shell roots use too).
+evaluated. A node's kernel is bound once from its facts, by value: its formals, its
+input tensors and the values of the initializers it holds (an initializer by its
+content digest). Bound points never change, so one can be shared between instances,
+models and networks, and a cached point never goes stale: changed facts make a new key.
+Its outputs are the kernel's statement, not a fact, so a node has one binding. The cache
+is a bounded LRU (``LeastRecentlyUsed``).
 """
 
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Hashable, Mapping
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
 from finn.core.space import design_space
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.values.semantics import IntegerTensorValue
 
 V = TypeVar("V")
 
 
 @dataclass(frozen=True)
 class Facts:
-    """What binding a node reads: the node root class, a key that identifies the facts
-    by value, and functions that give the kernel arguments and the held initializers'
-    values (called only on a cache miss) and the ports' tensors by port (an output's
-    is known only once inference has written it). ``owned`` lists the ports whose
-    initializer the node holds."""
+    """What binding a node's kernel reads: its kernel class, a key that identifies the
+    facts by value, and a function that gives the kernel's arguments by name (called only
+    on a cache miss): its formals, each input port's tensor and each held initializer's
+    values. ``owned`` lists the ports whose initializer the node holds."""
 
-    root: type[Kernel]
+    kernel: type[Kernel]
     key: tuple[Hashable, ...]
-    formals: Callable[[], dict[str, object]]
-    inputs: Callable[[], dict[str, Tensor]]
-    outputs: Callable[[], dict[str, Tensor]]
-    values: Callable[[], dict[str, IntegerTensorValue]] = dict
+    arguments: Callable[[], dict[str, object]]
     owned: tuple[str, ...] = ()
 
 
@@ -72,46 +68,19 @@ class LeastRecentlyUsed(Generic[V]):
 
 
 class BindCache(LeastRecentlyUsed[Kernel]):
-    """Points by facts, replayed points by facts and choices; a bounded LRU."""
+    """Each node's kernel bound from its facts, nothing chosen; a bounded LRU."""
 
     def __init__(self, size: int = 128) -> None:
         super().__init__(size)
 
-    def _bound(
-        self, facts: Facts, outputs: bool
-    ) -> tuple[tuple[Hashable, ...], Callable[[], Kernel]]:
-        """The key of the root bound on its inputs, and its outputs too when ``outputs``;
-        and how to bind it."""
-        edges = facts.inputs() | (facts.outputs() if outputs else {})
-        key = (facts.root, *facts.key, outputs, *sorted(edges.items()))
+    def bound(self, facts: Facts) -> Kernel:
+        """The kernel bound from ``facts``, nothing chosen: one binding per set of facts."""
 
         def bind() -> Kernel:
-            tensors = {f"{port}_tensor": tensor for port, tensor in edges.items()}
-            values = {f"{port}_contents": value for port, value in facts.values().items()}
-            bound: Kernel = design_space(
-                cast(Any, facts.root)(**facts.formals(), **tensors, **values)
-            )
-            return bound
+            point: Kernel = design_space(cast(Any, facts.kernel)(**facts.arguments()))
+            return point
 
-        return key, bind
-
-    def inputs(self, facts: Facts) -> Kernel:
-        """The node root bound on its inputs from ``facts``, its outputs absent."""
-        return self.get(*self._bound(facts, outputs=False))
-
-    def point(self, facts: Facts) -> Kernel:
-        """The node root bound from ``facts``, nothing chosen."""
-        return self.get(*self._bound(facts, outputs=True))
-
-    def configured(
-        self, facts: Facts, choices: Mapping[str, object], build: Callable[[Kernel], Kernel]
-    ) -> Kernel:
-        """The point with ``choices`` applied, made by ``build`` from the base point and
-        cached by facts and choices. A refusal raises out of ``build`` and caches
-        nothing."""
-        chosen = tuple(sorted((key, type(value).__name__, value) for key, value in choices.items()))
-        key, _ = self._bound(facts, outputs=True)
-        return self.get((*key, chosen), lambda: build(self.point(facts)))
+        return self.get((facts.kernel, *facts.key), bind)
 
 
 BIND_CACHE = BindCache()

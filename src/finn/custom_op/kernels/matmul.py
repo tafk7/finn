@@ -65,7 +65,6 @@ class MatMul(KernelOp):
     op_type = "MatMul"
     op_version = MatMulKernel.version
     kernel = MatMulKernel
-    member = "matmul"
     formals: ClassVar[tuple[str, ...]] = ("weights_dtype", "platform")
     ports = ("x", "w")
     wiring = {
@@ -117,17 +116,13 @@ class MatMul(KernelOp):
         shaped = self.shaped()
         platform = self.target().platform
         key = (self.op_type, self.op_version, platform, *shaped.values())
-        root = self.root()
         if model.get_initializer(b) is None:
             streamed: dict[str, object] = dict(platform=platform, **shaped)
-            inputs = self.input_edges()  # each a fact: a missing shape or datatype is named
-            return Facts(root, (*key, None), lambda: streamed, lambda: inputs, self.output_edges)
+            return self.binding((*key, None), lambda: streamed)
         # Known weights: their values, and the datatype the graph declares them in.
         weights_dtype = datatype(model, b, label)
         common: dict[str, object] = dict(weights_dtype=weights_dtype, platform=platform, **shaped)
         digest = admitted(model, b, weights_dtype, label)
-        inputs = self.input_edges()
-        edges = (lambda: inputs, self.output_edges)
 
         def values() -> dict[str, IntegerTensorValue]:
             stored = model.get_initializer(b)
@@ -135,9 +130,7 @@ class MatMul(KernelOp):
                 raise KernelOpError(f"{label}: {b} is not an initializer")
             return {"w": integer_tensor(stored)}
 
-        return Facts(
-            root, (*key, weights_dtype.name, digest), lambda: common, *edges, values, ("w",)
-        )
+        return self.binding((*key, weights_dtype.name, digest), lambda: common, ("w",), values)
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """Y = A @ B, by ``product``."""

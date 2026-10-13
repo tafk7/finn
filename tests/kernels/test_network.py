@@ -6,7 +6,9 @@
 On the Chain (``kernels.chain``): its members ranked kernels first, then each channel
 after the members it reads; a channel bound once its ends are known, and once per set
 of facts; a change reaching one kernel and the channels that read it; what replay drops
-named, what the change names refused; and its module, one composed netlist.
+named, what the change names refused; its module, one composed netlist, each member under
+its node; its stored choices replayed as each member binds; a kernel given bound; and a
+change that keeps a network's class.
 """
 
 from __future__ import annotations
@@ -14,9 +16,9 @@ from __future__ import annotations
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Unresolved
+from finn.core.space import Space, Unresolved, design_space
 from finn.kernels.base import CYCLES
-from finn.kernels.network import Interface, Network, NetworkError, wire
+from finn.kernels.network import Interface, Network, NetworkError, Wire, wire
 from kernels import chain
 from kernels.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point
 
@@ -116,3 +118,63 @@ def test_its_module_is_one_netlist_in_the_order_declared() -> None:
 def test_a_network_reads_only_its_own_members() -> None:
     with pytest.raises(NetworkError, match="no members"):
         Network({"x": wire(tensor=chain.X_TENSOR, consumer=Interface("k", "x_end"))})
+
+
+def test_stored_choices_are_replayed_as_each_member_binds() -> None:
+    """A network given its members' stored choices replays each as the member binds: a
+    kernel's on its point, a channel's once its ends are known (until then it holds
+    them); what replay refuses is dropped, with why."""
+    stored = chain.chain().chosen()
+    replayed = Network(chain.members(), stored=stored)
+    assert replayed.chosen() == stored and not replayed.dropped
+    stale = Network(chain.members(), stored={**stored, ("first", "compute.packed.pe"): 3})
+    assert list(stale.dropped) == [("first", "compute.packed.pe")]
+    assert {f.code for f in stale.dropped[("first", "compute.packed.pe")]} == {"domain-membership"}
+    waiting = Network(chain.members(), stored={("x", "transport"): "direct"})
+    held = waiting.unbound("x")
+    assert held is not None and held.stored == {"transport": "direct"}
+    assert waiting.chosen()[("x", "transport")] == "direct" and not waiting.dropped
+    with pytest.raises(NetworkError, match="nobody.pe: no member of the network stores it"):
+        Network(chain.members(), stored={("nobody", "pe"): 1})
+
+
+def test_a_kernel_given_bound_is_used_as_it_is() -> None:
+    """A kernel's point, bound by its owner's cache, is a member as it is."""
+    declared = chain.members()
+    point = design_space(declared["first"])  # type: ignore[type-var]
+    network = Network({**declared, "first": point})
+    assert network.member("first") is point
+
+
+def test_each_member_sits_under_its_node_in_the_module() -> None:
+    """``nodes`` names each member's node in the module, the prefix of its instances and
+    of the ends it presents to its channels; two members of one node are refused."""
+    stored = chain.chain().chosen()
+    renamed = Network(chain.members(), stored=stored, nodes={"first": "mm_first"})
+    module = built(renamed, chain.STEM)
+    assert "mm_first.compute.packed" in labels(module)
+    assert renamed.member("x").consumer.label == "mm_first.compute.packed.x"
+    with pytest.raises(NetworkError, match="members share a node in the module: x: x, first"):
+        Network(chain.members(), nodes={"first": "x"})
+
+
+class Labelled(Network):
+    """A network that keeps a label beside its members, and what it read of them."""
+
+    __slots__ = ("label", "reads")
+
+    def __init__(self, members: dict[str, Space | Wire], label: str) -> None:
+        super().__init__(members)
+        self.label, self.reads = label, 0
+
+    def _changed(self) -> None:
+        self.reads = 0
+
+
+def test_a_change_keeps_the_networks_class_and_what_it_holds() -> None:
+    labelled = Labelled(chain.members(), "the chain")
+    labelled.reads = 3
+    changed = labelled.trial(keyed(FOLDING)).network
+    assert isinstance(changed, Labelled) and changed is not labelled
+    assert (changed.label, changed.reads) == ("the chain", 0)
+    assert labelled.reads == 3

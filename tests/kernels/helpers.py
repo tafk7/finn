@@ -145,7 +145,10 @@ def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
     return found
 
 
-def choose(network: Network, choices: Mapping[str, object]) -> Network:
+N = TypeVar("N", bound=Network)
+
+
+def choose(network: N, choices: Mapping[str, object]) -> N:
     """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal, or a
     stored choice the change would drop, is a ``NetworkError`` (a ``ValueError``)."""
     return network.with_choices(keyed(choices)) if choices else network
@@ -540,6 +543,12 @@ ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
 """The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
 
 P = TypeVar("P", bound=Space | Network)
+
+
+def open_choices(network: Network, pattern: str) -> list[str]:
+    """The open choices of ``network`` matching ``pattern`` (``fnmatch``), as
+    ``member.key``."""
+    return _undecided(network, pattern)
 
 
 def _undecided(subject: Space | Network, pattern: str) -> list[str]:

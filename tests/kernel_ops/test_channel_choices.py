@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """A channel's stated choices on its tensor (``finn.channel``): the namespace generated
-from ``Channel``'s decisions, its reader and its writer checked by the shell root, in a
-partition's body only, and how the cut, exploration and the choices export carry them.
+from ``Channel``'s decisions, its reader and its writer checked by the partition's
+network, in a partition's body only, and how the cut, exploration and the choices export carry them.
 
 The demarcation's cases: (1) a channel choice stated on a graph with nodes on the host
 (the whole graph, before the cut) is refused; (2) a boundary tensor's are the body's
 only: the cut moves them into the body and clears the parent's copy; (4) a model of
 KernelOps the cut has not made is a body already, and the cut wraps it as one, its
 parent stating none (the harness's parity check cuts it so). (3), several partitions,
-waits for several partitions designed as one shell root.
+waits for several partitions designed as one network.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import persist, save_channels, shell_root
+from finn.custom_op.kernels.shell import network, persist, save_channels
 from finn.kernels.channels import Channel
 from finn.kernels.explore import ExploreError, Pinned, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
@@ -96,11 +96,11 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
     # A node holds its kernel's choices only.
     attributes = {attribute.name for node in model.graph.node for attribute in node.attribute}
     assert not any(name.partition(".")[0] in ("x", "w", "y") for name in attributes)
-    assert shell_root(model, model.graph.node).point.levels.transport.buffer.depth == 8
+    assert network(model, model.graph.node).member("levels").transport.buffer.depth == 8
 
 
-def test_the_writer_is_checked_by_replaying_the_shell_root() -> None:
-    """Only the shell root holds both of a channel's ends: a choice it refuses, a key no
+def test_the_writer_is_checked_by_replaying_the_network() -> None:
+    """Only the network holds both of a channel's ends: a choice it refuses, a key no
     channel declares, a value of another type and a tensor that is no channel are
     refused, by name, and nothing is written; ``None`` clears a choice."""
     model = kernel_model()
@@ -137,19 +137,19 @@ def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path)
     outside = r"channel choices \(finn.channel\) are stated in a partition's body only, not"
     hosts = r"on a graph with nodes on the host \(host\)"
     with pytest.raises(KernelOpError, match=rf"x, .*: {outside} {hosts}"):
-        shell_root(model, nodes)
+        network(model, nodes)
     with pytest.raises(KernelOpError, match=f"^x: {outside}"):
         save_channels(model, {"x": EDGE})
-    with pytest.raises(KernelOpError, match=f"w1: {outside}"):
-        kernel_op(model, nodes[0]).point()  # first owns w1's channel
+    # A node replays its kernel's choices only: its weight channel's are the network's.
+    assert kernel_op(model, nodes[0]).verify_node() == []
     with pytest.raises(KernelOpError, match=outside):
         kernel_choices_config(model)
     with pytest.raises(KernelOpError, match=outside):
         model.transform(CutKernelPartition(tmp_path))
-    # Stated nowhere, the graph's shell root replays the nodes' choices as before.
+    # Stated nowhere, the graph's network replays the nodes' choices as before.
     for tensor in model.tensors_stating(CHANNEL):
         model.clear(CHANNEL, tensor=tensor)
-    assert not shell_root(model, nodes).dropped
+    assert not network(model, nodes).stale
 
 
 def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
@@ -175,7 +175,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
         "adapter.input_gen.input_gen.ram_style": "distributed",
         "transport.fifo.buffer.ram_style": "auto",
     }
-    assert not shell_root(body, body.graph.node).dropped
+    assert not network(body, body.graph.node).stale
 
 
 def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path: Path) -> None:
@@ -199,11 +199,10 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     first.set_nodeattr("compute.packed.simd", 2)
     first.set_nodeattr("compute.packed.pe", 3)
     model = model.transform(baselining)
-    # Its input buffer's memory, which reads the folding, is stale with it.
-    assert sorted(baselining.dropped) == [
-        "first.compute.packed.pe",
-        "x.adapter.input_gen.input_gen.ram_style",
-    ]
+    # Its input buffer's memory, which reads the folding, waits with it: the channel's
+    # ends wait on the reopened pe, and its stored memory is replayed once the baseline
+    # chooses one, where it still applies.
+    assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
     assert "domain-membership" in baselining.dropped["first.compute.packed.pe"]
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
@@ -319,7 +318,7 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
         KernelOpError,
         match="second: x.transport is not a choice of MatMul; a channel's choices are its tensor's",
     ):
-        shell_root(model, model.graph.node)
+        network(model, model.graph.node)
     model = kernel_model()
     (annotation,) = [
         each for each in model.graph.quantization_annotation if each.tensor_name == "levels"
@@ -328,18 +327,18 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
         StringStringEntryProto(key="finn.channel/x.transport", value="direct")
     )
     with pytest.raises(KernelOpError, match=r"levels: .*\['x.transport'\] are not declared.*again"):
-        shell_root(model, model.graph.node)
+        network(model, model.graph.node)
 
 
 def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> None:
     """Written past the writer, on Thresholding's table (a fact of its kernel, no
-    channel): the shell root drops them, with why, and persisting clears them."""
+    channel): the network drops them, with why, and persisting clears them."""
     model = kernel_model()
     model.set(CHANNEL_KEYS["transport"], "direct", tensor="thresholds")
-    root = shell_root(model, model.graph.node)
-    assert dict(root.dropped) == {
+    bound = network(model, model.graph.node)
+    assert dict(bound.stale) == {
         "thresholds.transport": "stated on a tensor that is no channel of the partition"
     }
-    persist(model, root, root.point)
+    persist(model, bound)
     assert "thresholds" not in model.tensors_stating(CHANNEL)
-    assert not shell_root(model, model.graph.node).dropped
+    assert not network(model, model.graph.node).stale

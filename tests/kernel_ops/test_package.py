@@ -45,9 +45,10 @@ from kernel_ops.packaging import NoVivado, reaches_vivado
 
 
 def test_the_partition_packages_its_nodes_choices() -> None:
-    _, point = configure_partition(model := kernel_model())
+    configure_partition(model := kernel_model())
     module = configured_root(model, "sdp_1")[0].module
-    assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
+    reference = configured_root(model, "partition")[0].module
+    assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
     assert module.stem == "finn_partition"
     assert [port.name for port in module.abi.pins] == [
         "ap_clk",
@@ -66,9 +67,10 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
         configured_root(model, "sdp_1")
     assert refused.value.keys and all(key.endswith(".ram_style") for key in refused.value.keys)
     assert kernel_choices_config(model) == kernel_choices_config(kernel_model())
-    _, point = configure_partition(kernel_model())
+    configure_partition(configured := kernel_model())
+    reference = configured_root(configured, "partition")[0].module
     module = configured_root(model.transform(BaselineChoices()), "sdp_1")[0].module
-    assert (module.fragment, module.abi) == (point.module.fragment, point.module.abi)
+    assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:

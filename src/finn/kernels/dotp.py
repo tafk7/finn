@@ -163,7 +163,7 @@ class DotpAxiKernel(LeafKernel):
     further one, against half the period when compute is pumped. Only the INT8
     core reads SEGMENTLEN. Pumped compute takes a phase-aligned 2x clock
     (``ap_clk2x``), which its module states; whether the shell supplies one is the
-    shell root's admission (``clock-unavailable``), not a capability of the platform.
+    shell's admission (``clock-unavailable``), not a capability of the platform.
     The DSP block is the ``platform``'s (``dsp``): a platform that states none is
     refused (``dotp-dsp``).
     """

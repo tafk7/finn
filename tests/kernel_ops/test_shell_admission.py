@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell root's admission (``Shell.budgets``): what the module presents, within
-what its shell's row takes.
+"""The shell's admission (``shell.budgets``): what the module presents, within what
+its shell's row takes.
 
 The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its ends'
 together (each ``IODMA_hls`` end presents one), gives a partition no memory port of its
@@ -10,10 +10,11 @@ own and supplies no doubled clock; the ``ip`` shell bounds neither count and sup
 the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavailable``.
 
 No KernelOp places a control bus, so a partition of KernelOps presents no AXI-Lite bus:
-the buses are counted here on a shell root built from the kernels directly, AXI-Lite
-thresholdings each on its ``ControlBus``, through the same ``Shell`` class and rows the
-shell root reads. No kernel initiates a memory port (no bus protocol
-states one), so that count is always zero.
+the buses are counted here on a root built from the kernels directly, AXI-Lite
+thresholdings each on its ``ControlBus`` (a network presents none yet), its module's
+counts (``bus_counts``) admitted by the same ``budgets`` and rows a partition's network
+reads. No kernel initiates a memory port (no bus protocol states one), so that count is
+always zero.
 """
 
 from __future__ import annotations
@@ -22,19 +23,18 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from kernels.helpers import with_adapter_memories, with_direct_transports
+from kernels.helpers import Root, with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.space import composite, design_space, finding_text
-from finn.core.space.errors import ValueUnavailableError
+from finn.core.space import Finding, composite, design_space, finding_text
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import Shell, admission_refusal, configured_root, shell_root
+from finn.custom_op.kernels.shell import budgets, bus_counts, configured_root, network
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit, describe
+from finn.kernels.configure import commit
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.shells import IP_ROW, ShellRow, shell_row
@@ -52,7 +52,7 @@ TABLE = (((0, 1, 2), (0, 1, 2)),)
 
 
 def thresholdings(count: int, row: ShellRow) -> Any:
-    """A shell root for ``row`` of ``count`` AXI-Lite thresholdings in a row, each
+    """A root for ``row`` of ``count`` AXI-Lite thresholdings in a row, each
     presenting its bus (``t<i>_s_axilite``), configured: every thresholding
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
@@ -87,37 +87,39 @@ def thresholdings(count: int, row: ShellRow) -> Any:
             control=bus,
             platform=platform,
         )
-    root: Any = composite(f"shell{count}", {**members, "y": channels["y"]}, base=Shell)
+    root: Any = composite(f"shell{count}", {**members, "y": channels["y"]}, base=Root)
     choices: dict[str, object] = {}
     for index in range(count):
         held = {"use_axilite": True, "pe": 1, "deep_pipeline": False, "ram_style": "auto"}
         choices |= {f"t{index}.{key}": value for key, value in held.items()}
         choices[f"t{index}.ultra_stages"] = 0
-    point = commit(with_direct_transports(design_space(root(row=row))), choices)
+    point = commit(with_direct_transports(design_space(root())), choices)
     return with_adapter_memories(point)
+
+
+def admission(point: Any, row: ShellRow) -> tuple[Finding, ...]:
+    """``row``'s budgets of ``point``'s module and of its ends' AXI-Lite buses."""
+    ends = sum(end.control_buses for end in point.x.placed_end + point.y.placed_end)
+    return budgets(row, bus_counts(point.module.abi), ends)
 
 
 def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
     point = thresholdings(8, PYNQ_ROW)
     assert [end.control_buses for end in point.x.placed_end + point.y.placed_end] == [1, 1]
-    (found,) = admission_refusal(point)
+    (found,) = admission(point, PYNQ_ROW)
     assert finding_text(found) == (
         "budgets: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
         "the partition presents 8 and its ends 2"
     )
-    # Its module is refused by the same admission.
-    with pytest.raises(ValueUnavailableError) as error:
-        _ = point.module
-    assert "interface-budget-exceeded" in describe([error.value.result])
 
 
 def test_seven_and_two_ends_fill_the_budget() -> None:
-    assert admission_refusal(thresholdings(7, PYNQ_ROW)) == ()
+    assert admission(thresholdings(7, PYNQ_ROW), PYNQ_ROW) == ()
 
 
 def test_the_ip_shell_admits_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
-    assert admission_refusal(point) == ()
+    assert admission(point, IP_ROW) == ()
     assert point.x.placed_end == ()
     ports = [pin.name for pin in point.module.abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
@@ -125,7 +127,7 @@ def test_the_ip_shell_admits_the_same_partition_presenting_every_bus() -> None:
     ]
 
 
-def test_a_shell_root_of_kernel_ops_counts_its_ends() -> None:
+def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
     """The Chain in the Zynq shell: no AXI-Lite bus of its own and two ends, within nine;
     on a row taking one bus, its ends alone exceed it."""
     model = kernel_model()
@@ -135,8 +137,8 @@ def test_a_shell_root_of_kernel_ops_counts_its_ends() -> None:
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
-        root = shell_root(model, model.graph.node, name="chain")
-        assert root.row == narrow
+        bound = network(model, model.graph.node, name="chain")
+        assert bound.row == narrow
         with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:
             explore_kernel_choices(model)
         with pytest.raises(
@@ -161,7 +163,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
     write_target(model, ULTRA96)
-    assert not shell_root(model, model.graph.node, name="chain").row.clk2x
+    assert not network(model, model.graph.node, name="chain").row.clk2x
     with pytest.raises(
         KernelOpError,
         match="clock-unavailable: the partition takes an aligned doubled clock "
@@ -171,8 +173,8 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
 
 
 def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
-    """The shell root's netlist is ``Kernel``'s composition of its members, each bus it
-    presents with the writes its thresholding's table takes."""
+    """A root's netlist is a kernel with children's composition of its members, each bus
+    it presents with the writes its thresholding's table takes."""
     point = thresholdings(2, IP_ROW)
     assert point.fragment == point.composed_fragment()
     assert [(item.port, item.registers) for item in point.fragment.exports] == [

@@ -32,8 +32,8 @@ def op(model: ModelWrapper) -> Thresholding:
 def test_facts_and_the_output() -> None:
     model = thresholding_model(bias=-1)
     facts = op(model).facts()
-    assert facts.root is Thresholding.root() and facts.owned == ()
-    formals = facts.formals()
+    assert facts.kernel is ThresholdingAxiKernel and facts.owned == ()
+    formals = facts.arguments()
     assert formals["thresholds"] == IntegerTensorValue.of(
         (tuple(tuple(int(v) for v in row) for row in THRESHOLDS),)
     )
@@ -56,9 +56,9 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     model = thresholding_model(thresholds=THRESHOLDS[:1], bias=-1)
     assert model.get_initializer("t").shape == (1, 3)
     stated = IntegerTensorValue.of(((tuple(int(v) for v in THRESHOLDS[0]),),))
-    assert op(model).facts().formals()["thresholds"] == stated
+    assert op(model).facts().arguments()["thresholds"] == stated
     op(model).save({"pe": 4, "use_axilite": False, "deep_pipeline": False, **MEMORY})
-    activate = op(model).point().activate
+    activate = op(model).point()
     parameters = dict(activate.module.parameters)
     assert (parameters["C"], parameters["PE"]) == (1, 4)
     # One row in INT5, the type the facts derive, padded to four words.
@@ -81,11 +81,11 @@ def test_the_thresholds_type_holds_a_value_below_the_least_an_input_can_miss() -
     threshold at the input's own minimum, which every input meets, needs none."""
     table = np.array([[-16, -3, 2], [-9, 0, 15], [-4, -4, 7], [-1, 6, 14]])
     model = thresholding_model(thresholds=table)
-    assert op(model).facts().formals()["threshold_dtype"] == DataType["INT6"]
+    assert op(model).facts().arguments()["threshold_dtype"] == DataType["INT6"]
     assert not op(model).verify_node()
     floor = table.copy()
     floor[0, 0] = -128
-    formals = op(thresholding_model(thresholds=floor)).facts().formals()
+    formals = op(thresholding_model(thresholds=floor)).facts().arguments()
     assert formals["threshold_dtype"] == DataType["INT8"]
 
 
@@ -94,7 +94,7 @@ def test_the_table_is_derived_from_the_stored_thresholds_and_the_input_type() ->
     holds; the graph's table stays as it was, unannotated."""
     table = np.array([[-300.0, -2.5, 0.25], [-9.0, 1.0, 130.0], [-1.5, 3.0, 4.0], [0, 1, 2]])
     model = thresholding_model(thresholds=table, bias=-1, annotate=("x",))
-    formals = op(model).facts().formals()
+    formals = op(model).facts().arguments()
     assert formals["thresholds"] == IntegerTensorValue.of(
         (((-128, -2, 1), (-9, 1, 128), (-1, 3, 4), (0, 1, 2)),)
     )
@@ -122,8 +122,8 @@ def test_a_float_thresholding_is_refused_while_its_choices_are_open() -> None:
         model.set_tensor_datatype(name, DataType["FLOAT32"])
     problems = op(model.transform(InferKernelTensors())).verify_node()
     assert [problem.split(": ")[:3] for problem in problems] == [
-        ["activate", "activate.table_supported", "threshold-type"],
-        ["activate", "activate.types_supported", "dtype-family"],
+        ["activate", "table_supported", "threshold-type"],
+        ["activate", "types_supported", "dtype-family"],
     ]
 
 
@@ -157,7 +157,7 @@ def test_save_and_replay_a_memory_choice() -> None:
     model = thresholding_model()
     op(model).save({"pe": 2, "use_axilite": False, "deep_pipeline": False, **MEMORY})
     point = op(model).point()
-    assert dict(point.activate.module.parameters)["DEPTH_TRIGGER_BRAM"] == 4  # stage 1, PE 2
+    assert dict(point.module.parameters)["DEPTH_TRIGGER_BRAM"] == 4  # stage 1, PE 2
     with pytest.raises(KernelOpError) as error:
         op(model).save({"block_stages": 3})
     assert error.value.keys == ("block_stages",)
