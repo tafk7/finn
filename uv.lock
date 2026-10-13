@@ -62,8 +62,8 @@ wheels = [
 
 [[package]]
 name = "brevitas"
-version = "0.12.2.dev51+gaad4d5a29"
-source = { git = "https://github.com/Xilinx/brevitas.git?rev=aad4d5a293db6f2ec622a92a5d3278e47072453e#aad4d5a293db6f2ec622a92a5d3278e47072453e" }
+version = "0.13.4"
+source = { git = "https://github.com/Xilinx/brevitas.git?rev=06133f4778ecedc77020b5e778022cf4e805bc86#06133f4778ecedc77020b5e778022cf4e805bc86" }
 dependencies = [
     { name = "dependencies", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "packaging", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -220,7 +220,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "brevitas", git = "https://github.com/Xilinx/brevitas.git?rev=aad4d5a293db6f2ec622a92a5d3278e47072453e" },
+    { name = "brevitas", git = "https://github.com/Xilinx/brevitas.git?rev=06133f4778ecedc77020b5e778022cf4e805bc86" },
     { name = "build", specifier = ">=1.2.2" },
     { name = "importlib-resources", specifier = ">=6.1.0" },
     { name = "mypy", specifier = "==2.3.1" },
@@ -240,7 +240,7 @@ gates = [
     { name = "ruff", specifier = "==0.16.4" },
 ]
 test = [
-    { name = "brevitas", git = "https://github.com/Xilinx/brevitas.git?rev=aad4d5a293db6f2ec622a92a5d3278e47072453e" },
+    { name = "brevitas", git = "https://github.com/Xilinx/brevitas.git?rev=06133f4778ecedc77020b5e778022cf4e805bc86" },
     { name = "build", specifier = ">=1.2.2" },
     { name = "importlib-resources", specifier = ">=6.1.0" },
     { name = "onnxoptimizer" },
