@@ -24,6 +24,7 @@ from qonnx.transformation.general import GiveUniqueNodeNames
 from finn.builder.build_dataflow import (
     build_dataflow_cfg,
     build_dataflow_directory,
+    build_plan,
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
@@ -33,12 +34,13 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
-from finn.builder.build_dataflow_plan import default_steps, resolve_plan
 from finn.builder.build_dataflow_steps import (
     KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
+    default_steps,
     step_add_pre_post_processing,
+    step_build_bitfile,
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
@@ -54,13 +56,13 @@ STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 
 def checked(cfg: DataflowBuildConfig) -> list[Finding]:
     """The configuration checks' findings of ``cfg``, its plan and its target."""
-    return configuration_findings(cfg, resolve_plan(cfg), cfg.resolved_target)
+    return configuration_findings(cfg, build_plan(cfg), cfg.resolved_target)
 
 
 def refusal(cfg: DataflowBuildConfig) -> ConfigurationRefused:
     """The refusal of ``cfg``'s plan."""
     with pytest.raises(ConfigurationRefused) as refused:
-        resolve_plan(cfg)
+        build_plan(cfg)
     return refused.value
 
 
@@ -76,7 +78,7 @@ def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
     assert cfg.steps is None and cfg.toolchain is None and cfg.base_dir is None
     # Every setting at its default: the export's own inputs and outputs, and FIFO sizing
     # at the baseline folding, the default strategy step, without a margin.
-    plan = resolve_plan(cfg)
+    plan = build_plan(cfg)
     settings = plan.settings
     assert {name: setting.value for name, setting in settings.items()} == {
         "override_inpsize": None,
@@ -255,43 +257,72 @@ def test_a_setting_of_the_wrong_type_is_refused_naming_it(
     """By the annotation of the step that declares it, when the plan resolves."""
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, **settings}))
     with pytest.raises(ConfigurationRefused, match=re.escape(refused)) as refusal:
-        resolve_plan(cfg)
+        build_plan(cfg)
     assert [finding.code for finding in refusal.value.findings] == ["setting-invalid"]
 
 
 @pytest.mark.parametrize(
-    "settings, refused",
+    "settings, where, refused",
     [
-        ({"input_datatype": "UINT33x"}, "input_datatype: 'UINT33x' is no qonnx datatype"),
-        ({"topk": 0}, "topk: 0; at least 1"),
+        (
+            {"input_datatype": "UINT33x"},
+            "configuration.input_datatype",
+            "'UINT33x' is no qonnx datatype; name one, such as UINT8 or INT4",
+        ),
+        (
+            {"topk": 0},
+            "configuration.topk",
+            "0; give at least 1, or no topk for the network's own outputs",
+        ),
     ],
 )
 def test_a_value_preparation_cannot_take_is_refused_when_its_step_runs(
-    settings: dict[str, Any], refused: str
+    settings: dict[str, Any], where: str, refused: str
 ) -> None:
+    """The step refuses the setting, naming it and what to give instead; the plan
+    resolves."""
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, **settings}))
-    resolve_plan(cfg)
+    build_plan(cfg)
     model = ModelWrapper(helper.make_model(helper.make_graph([], "empty", [], [])))
-    with pytest.raises(ValueError, match=re.escape(refused)):
+    with pytest.raises(ConfigurationRefused) as refusal:
         step_add_pre_post_processing(model, cfg, **settings)
+    (finding,) = refusal.value.findings
+    assert (finding.code, finding.kind, place(finding)) == (
+        "setting-invalid",
+        FindingKind.REJECTION,
+        where,
+    )
+    assert finding.message == refused
 
 
-def test_hw_debug_on_a_shell_without_a_build_is_refused_before_the_build() -> None:
-    """The configuration's check names what its shell refuses; the bitfile step
-    declares the setting."""
+def test_hw_debug_on_a_shell_without_a_build_is_refused_by_the_bitfile_step() -> None:
+    """step_build_bitfile, the setting's reader, refuses it where the shell has no
+    bitfile build, whether or not the bitfile is asked, saying what to change; the plan
+    and the checks before the first step pass it."""
+    model = ModelWrapper(helper.make_model(helper.make_graph([], "empty", [], [])))
     for shell, passed in (("ip", False), ("pynq", True)):
         target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
         cfg = DataflowBuildConfig.from_json(
             json.dumps({**STATED, "target": target, "hw_debug": True})
         )
-        assert resolve_plan(cfg).settings["hw_debug"].readers == ("step_build_bitfile",)
-        found = [finding for finding in checked(cfg) if finding.code == "hw-debug-shell"]
+        assert build_plan(cfg).settings["hw_debug"].readers == ("step_build_bitfile",)
+        assert [each.code for each in checked(cfg) if each.code == "hw-debug-shell"] == []
         if passed:
-            assert found == []
+            # No bitfile asked: the step skips.
+            assert step_build_bitfile(model, cfg, hw_debug=True) is model
             continue
-        (finding,) = found
-        assert (finding.kind, place(finding)) == (FindingKind.REJECTION, "configuration.hw_debug")
-        assert finding.message == "the 'ip' shell has no build to take it"
+        with pytest.raises(ConfigurationRefused) as refusal:
+            step_build_bitfile(model, cfg, hw_debug=True)
+        (finding,) = refusal.value.findings
+        assert (finding.code, finding.kind, place(finding)) == (
+            "hw-debug-shell",
+            FindingKind.REJECTION,
+            "configuration.hw_debug",
+        )
+        assert finding.message == (
+            "the 'ip' shell has no build to take it; state a shell with a bitfile build "
+            "(pynq, for a board), or leave hw_debug out"
+        )
 
 
 def board_build(tmp_path: Path, board: str, shell: str = "pynq") -> DataflowBuildConfig:
@@ -425,7 +456,7 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
     """The settings of the default build and the steps that read them: a configuration
     that gives none resolves."""
     cfg = DataflowBuildConfig.from_json(json.dumps(STATED))
-    readers = {name: setting.readers for name, setting in resolve_plan(cfg).settings.items()}
+    readers = {name: setting.readers for name, setting in build_plan(cfg).settings.items()}
     assert readers == {
         "override_inpsize": ("step_cleanup",),
         "preprocessing": ("step_add_pre_post_processing",),
@@ -440,13 +471,13 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
 
 def names(cfg: DataflowBuildConfig) -> list[str]:
     """The names of the steps ``cfg``'s build runs, in order."""
-    plan = resolve_plan(cfg)
+    plan = build_plan(cfg)
     return [step.name for step in plan.steps[plan.run]]
 
 
 def saved_before_start(cfg: DataflowBuildConfig) -> str:
     """The step whose saved model ``cfg``'s build starts from."""
-    plan = resolve_plan(cfg)
+    plan = build_plan(cfg)
     name: str = plan.steps[plan.run.start - 1].name
     return name
 

@@ -24,7 +24,7 @@ from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.graph.annotations.choices import HELD
+from finn.core.graph.annotations.choices import FIFOS_STALE, HELD
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
@@ -33,6 +33,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, save_channels, shell_root
 from finn.kernels.explore import (
     Accepted,
+    DebugPlaceholder,
     ExploreError,
     Pinned,
     Ranked,
@@ -455,6 +456,33 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
     pinned.write_text(json.dumps({"first": {"compute.packed.simd": 2}}))
     with pytest.raises(ExploreError, match="held to 1 by an earlier pin"):
         explore_kernel_choices(model, Pinned(pinned))
+
+
+def test_a_fifo_sized_before_a_folding_is_marked_stale_until_sized_again(
+    tmp_path: Path,
+) -> None:
+    """A strategy that may change the folding, one no build step runs included, marks a
+    body holding a FIFO as sized at another folding (``FIFOS_STALE``); FIFO sizing clears
+    it, and the debug placeholder and the baselines alone leave it. A body without a
+    FIFO, as the cut makes it, is not marked."""
+    model = kernel_model()
+    explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
+    assert model.get(FIFOS_STALE) is None
+    pinned = tmp_path / "pins.json"
+    pinned.write_text(
+        json.dumps({"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    )
+    explore_kernel_choices(model, Pinned(pinned))
+    assert model.get(FIFOS_STALE) is True
+    explore_kernel_choices(model, SizeFifos())
+    assert model.get(FIFOS_STALE) is None
+    explore_kernel_choices(model, Ranked(Lanes(2)))
+    assert model.get(FIFOS_STALE) is True
+    explore_kernel_choices(model, DebugPlaceholder())
+    explore_kernel_choices(model)
+    assert model.get(FIFOS_STALE) is True
+    explore_kernel_choices(model, SizeFifos())
+    assert model.get(FIFOS_STALE) is None
 
 
 def int8_matmul() -> ModelWrapper:

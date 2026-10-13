@@ -39,7 +39,8 @@ The partition's choices are its nodes' and its channels' (each on its tensor,
 ``finn.channel``), every one stored where it is created and replaced by the
 exploration: the root is replayed from them (a stale choice refuses, named), a
 Decision with one viable case is forced, and an open choice refuses, named
-(``configured_root``). The body's graph
+(``configured_root``). A body whose FIFOs were sized at another folding than its own
+(``finn.choices/fifos_stale``) is refused (``fifos-stale``). The body's graph
 inputs and outputs, in order, are the root's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
@@ -85,6 +86,7 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
+from finn.core.graph.annotations.choices import FIFOS_STALE
 from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
@@ -95,6 +97,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
 from finn.core.graph.partition import design_digest
+from finn.core.space import Finding, FindingKind
 from finn.custom_op.kernels.shell import configured_root, member, shell_root
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
@@ -326,6 +329,13 @@ class PackagePartition(Transformation):
         self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        if model.get(FIFOS_STALE):
+            message = (
+                f"{self.ip_name}: its FIFOs were sized at another folding than its own; size "
+                "them again after the last step that may change the folding (step_size_fifos)"
+            )
+            stale = Finding(FindingKind.REJECTION, "fifos-stale", "PackagePartition", message)
+            raise KernelOpError(message, findings=(stale,))
         built = read_target(model)
         point, boundary = configured_root(model, self.ip_name)
         module = point.module

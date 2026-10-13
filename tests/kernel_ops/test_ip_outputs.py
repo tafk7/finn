@@ -31,9 +31,12 @@ from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutp
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import step_package_partition
 from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
+from finn.core.graph.annotations.choices import FIFOS_STALE
 from finn.core.graph.annotations.outputs import OUTPUT_IP
+from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.rtlsim_bench import SimulationFailed
+from finn.core.space import FindingKind
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
@@ -196,6 +199,29 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
     assert (testbench / RUN_SCRIPT).is_file()
     assert not (testbench / "xsim.log").exists()
+
+
+def test_a_body_whose_fifos_are_stale_is_refused_before_packaging(tmp_path: Path) -> None:
+    """A body whose FIFOs were sized at another folding (``FIFOS_STALE``) is refused
+    before anything is emitted, saying where to size them again."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, _ = partition_body(parent)
+    body.set(FIFOS_STALE, True)
+    packaging = PackagePartition(
+        node.name, directory=tmp_path / "ip", toolchain=cast(Toolchain, PackagedByStub())
+    )
+    with pytest.raises(KernelOpError) as refused:
+        body.transform(packaging)
+    (finding,) = refused.value.findings
+    assert (finding.kind, finding.code, finding.owner) == (
+        FindingKind.REJECTION,
+        "fifos-stale",
+        "PackagePartition",
+    )
+    assert finding.message.endswith(
+        "size them again after the last step that may change the folding (step_size_fifos)"
+    )
+    assert not (tmp_path / "ip").exists()
 
 
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:

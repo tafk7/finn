@@ -20,7 +20,6 @@ from qonnx.util.basic import qonnx_make_model
 from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_plan import resolve_plan
 from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
 from finn.toolchain.vivado import vivado_jobs
@@ -156,7 +155,9 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     # The settings as stated, until the plan decodes them: the paths joined, the rest of
     # them as stated, a str a step does not declare as a path included.
     assert read.settings == settings
-    decoded = {name: setting.value for name, setting in resolve_plan(read).settings.items()}
+    decoded = {
+        name: setting.value for name, setting in build_dataflow.build_plan(read).settings.items()
+    }
     assert decoded["preprocessing"] == directory / "preproc.onnx"
     assert decoded["kernel_choices_file"] == directory / "kernel_choices.json"
     assert decoded["frames"] == directory / "inputs/input.npy"
@@ -167,7 +168,7 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     )
     (directory / build_dataflow.CONFIG_FILE).write_text(absolute.to_json())
     read_again = build_dataflow.read_build_config(str(directory))
-    chosen = resolve_plan(read_again).settings["kernel_choices_file"].value
+    chosen = build_dataflow.build_plan(read_again).settings["kernel_choices_file"].value
     assert chosen == Path("/elsewhere/kernel_choices.json")
     # Absolute as stated, unset, or the empty command directory: unchanged.
     stated = builder_config(
@@ -179,7 +180,7 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     read = build_dataflow.read_build_config(str(directory))
     assert read.output_dir == "/results" and read.toolchain == Selection(command_dir="")
     assert read.settings == {}
-    unset = resolve_plan(read).settings
+    unset = build_dataflow.build_plan(read).settings
     assert unset["preprocessing"].value is None
     # A path setting's default names a file in the directory too.
     assert unset["frames"].value == directory / "input.npy"

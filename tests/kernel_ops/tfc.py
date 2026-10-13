@@ -35,8 +35,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
 
+from finn.builder.build_dataflow import build_plan
 from finn.builder.build_dataflow_config import DataflowBuildConfig
-from finn.builder.build_dataflow_plan import resolve_plan
 from finn.kernels.explore import Ranked
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -101,9 +101,9 @@ def preparation_config(directory: Path, **fields: Any) -> DataflowBuildConfig:
 
 def run_steps(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """``model`` through the steps ``cfg`` names (its plan,
-    finn.builder.build_dataflow_plan.resolve_plan), each with its settings, in memory:
+    finn.builder.build_dataflow.build_plan), each with its settings, in memory:
     no model read or saved between them."""
-    plan = resolve_plan(cfg)
+    plan = build_plan(cfg)
     for step in plan.steps[plan.run]:
         model = step.function(model, cfg, **step.settings)
     return model

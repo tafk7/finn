@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The build's plan (``resolve_plan``): the steps a configuration runs, in order, each
-with its settings. The build resolves it before its first step.
+with its settings. The build resolves it before its first step, from the configuration
+and the names its phases and steps go by, which the build gives.
 
-**The list.** A build runs ``steps``, else every phase's steps (``default_steps``). An
-entry is the name of a phase (its steps) or of a step; an import path of a step
-function or a qonnx Transformation class; or in Python the object itself, a function
-(a ``functools.partial`` too), a Transformation instance or class. A Transformation
-runs as ``model.transform(transformation)``, a class constructed with its defaults,
-and is named by its class.
+**The list.** A build runs ``steps``, else every phase's steps. An entry is the name of
+a phase (its steps) or of a step; an import path of a step function or a qonnx
+Transformation class; or in Python the object itself, a function (a
+``functools.partial`` too), a Transformation instance or class. A Transformation runs
+as ``model.transform(transformation)``, a class constructed with its defaults, and is
+named by its class.
 
 **Settings.** A step's keyword-only parameters are its settings, none named like a field
 of the configuration. Each setting given must be declared by a step of the list, and is
@@ -21,14 +22,10 @@ must agree on its annotation and default. A setting without a default must be gi
 phase: its first step, or its last. The build starts from the model the step before
 ``start_step`` saved.
 
-**FIFO depths.** A FIFO's depth is sized at the folding of its ends, so a step that may
-change the folding (``FOLDING_STEPS``) is refused after the run's last step that sizes
-FIFOs, and so is one with no sizing step after it where no cut before it made the
-partition.
-
 ``resolve_plan`` refuses at the first entry that does not resolve; otherwise it refuses
-every rejection of the settings, the bounds and the order together, as one
-``ConfigurationRefused``.
+every rejection of the settings and the bounds together, as one ``ConfigurationRefused``.
+A step's own rules, about its settings and the model it is given, are the step's, refused
+when it runs.
 """
 
 from __future__ import annotations
@@ -37,7 +34,7 @@ import functools
 import importlib
 import inspect
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from pathlib import PurePath
 from typing import Any
@@ -48,14 +45,8 @@ from qonnx.transformation.base import Transformation
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
+    StepFunction,
     config_finding,
-)
-from finn.builder.build_dataflow_steps import (
-    FIFO_SIZING_STEPS,
-    FOLDING_STEPS,
-    build_dataflow_phases,
-    build_dataflow_step_lookup,
-    step_create_dataflow_partition,
 )
 from finn.core.space import Finding
 from finn.util.typed_json import decoded, encoded
@@ -90,26 +81,6 @@ class Plan:
     run: slice
     settings: Mapping[str, Setting]
 
-    def index(self, name: str, *, last: bool = False, place: str | None = None) -> int:
-        """The index in ``steps`` of the step ``name`` names: a step once in the list, or
-        a phase's first step (its last if ``last``). Refuses any other, at ``place``."""
-        named, stated = name, repr(name)
-        if name in build_dataflow_phases:
-            named = build_dataflow_phases[name][-1 if last else 0].__name__
-            stated = f"{name!r} (its {'last' if last else 'first'} step, {named!r})"
-        found = [index for index, step in enumerate(self.steps) if step.name == named]
-        if len(found) == 1:
-            return found[0]
-        if found:
-            message = f"{stated} is {len(found)} steps of this build, not one"
-            raise _refusal("step-ambiguous", place, message)
-        message = (
-            f"{stated} is not one of this build's steps; its steps: "
-            f"{', '.join(step.name for step in self.steps)}; the phases: "
-            f"{', '.join(build_dataflow_phases)}"
-        )
-        raise _refusal("step-absent", place, message)
-
     def record(self) -> dict[str, Any]:
         """The plan as the build's manifest records it."""
         return {
@@ -125,19 +96,38 @@ class Plan:
         }
 
 
-def default_steps() -> list[str]:
-    """The list a build runs without ``steps``: every phase's steps, by name."""
-    return [step.__name__ for steps in build_dataflow_phases.values() for step in steps]
-
-
 #: A step before its settings: its name, its function, and each setting it declares
 #: with its annotation and default.
 _Declared = tuple[str, Callable[..., ModelWrapper], Mapping[str, tuple[Any, Any]]]
 
 
+#: The build's phases: each phase's steps, in order, by the phase's name.
+Phases = Mapping[str, Sequence[StepFunction]]
+
+
 def _refusal(code: str, place: str | None, message: str) -> ConfigurationRefused:
     """A refusal of one rejection, at ``place`` in the configuration."""
     return ConfigurationRefused([config_finding(code, message, place)])
+
+
+def _index(steps: tuple[Step, ...], phases: Phases, name: str, last: bool, place: str) -> int:
+    """The index in ``steps`` of the step ``name`` names: a step once in the list, or a
+    phase's first step (its last if ``last``). Refuses any other, at ``place``."""
+    named, stated = name, repr(name)
+    if name in phases:
+        named = phases[name][-1 if last else 0].__name__
+        stated = f"{name!r} (its {'last' if last else 'first'} step, {named!r})"
+    found = [index for index, step in enumerate(steps) if step.name == named]
+    if len(found) == 1:
+        return found[0]
+    if found:
+        message = f"{stated} is {len(found)} steps of this build, not one"
+        raise _refusal("step-ambiguous", place, message)
+    message = (
+        f"{stated} is not one of this build's steps; its steps: "
+        f"{', '.join(step.name for step in steps)}; the phases: {', '.join(phases)}"
+    )
+    raise _refusal("step-absent", place, message)
 
 
 def _imported(path: str, place: str) -> object:
@@ -207,19 +197,21 @@ def _origin(function: object) -> object:
     return function.func if isinstance(function, functools.partial) else function
 
 
-def _resolved(entry: object, place: str) -> list[_Declared]:
+def _resolved(
+    entry: object, place: str, phases: Phases, named: Mapping[str, StepFunction]
+) -> list[_Declared]:
     """The steps an entry names: a phase's, or one."""
     if not isinstance(entry, str):
         return [_step(entry, place)]
-    if entry in build_dataflow_phases:
-        return [_step(each, place) for each in build_dataflow_phases[entry]]
-    if entry in build_dataflow_step_lookup:
-        return [_step(build_dataflow_step_lookup[entry], place)]
+    if entry in phases:
+        return [_step(each, place) for each in phases[entry]]
+    if entry in named:
+        return [_step(named[entry], place)]
     if "." in entry:
         return [_step(_imported(entry, place), place)]
     message = (
-        f"{entry!r} is no step or phase; the steps: {', '.join(build_dataflow_step_lookup)}; "
-        f"the phases: {', '.join(build_dataflow_phases)}"
+        f"{entry!r} is no step or phase; the steps: {', '.join(named)}; "
+        f"the phases: {', '.join(phases)}"
     )
     raise _refusal("step-unknown", place, message)
 
@@ -296,73 +288,46 @@ def _in_directory(value: Any, directory: str) -> Any:
     return value
 
 
-def resolve_plan(cfg: DataflowBuildConfig) -> Plan:
-    """The configuration's plan, or its refusal (the module docstring)."""
-    stated = default_steps() if cfg.steps is None else cfg.steps
+def resolve_plan(
+    cfg: DataflowBuildConfig, phases: Phases, named: Mapping[str, StepFunction]
+) -> Plan:
+    """The configuration's plan, or its refusal (the module docstring), in the build whose
+    phases are ``phases`` and whose steps by name are ``named``."""
+    stated = cfg.steps
+    if stated is None:
+        stated = [step.__name__ for steps in phases.values() for step in steps]
     listed = [
-        step for index, entry in enumerate(stated) for step in _resolved(entry, f"steps[{index}]")
+        step
+        for index, entry in enumerate(stated)
+        for step in _resolved(entry, f"steps[{index}]", phases, named)
     ]
     settings, refused = _settings(cfg, listed)
     steps = tuple(
         Step(name, function, {key: settings[key].value for key in declared if key in settings})
         for name, function, declared in listed
     )
-    plan = Plan(steps, slice(0, len(steps)), settings)
     bounds = []
     for place, name, end, default in (
         ("start_step", cfg.start_step, False, 0),
         ("stop_step", cfg.stop_step, True, len(steps) - 1),
     ):
         try:
-            bounds.append(default if name is None else plan.index(name, last=end, place=place))
+            bounds.append(default if name is None else _index(steps, phases, name, end, place))
         except ConfigurationRefused as absent:
             refused.extend(absent.findings)
-    if len(bounds) == 2:
-        first, last = bounds
-        if cfg.start_step is not None and first == 0:
-            message = "no step runs before it, so no model was saved to start from"
-            refused.append(config_finding("start-without-model", message, "start_step"))
-        plan = Plan(steps, slice(first, last + 1), settings)
-        refused.extend(_stale_fifos(plan.steps[plan.run]))
+    if len(bounds) == 2 and cfg.start_step is not None and bounds[0] == 0:
+        message = "no step runs before it, so no model was saved to start from"
+        refused.append(config_finding("start-without-model", message, "start_step"))
     if refused:
         raise ConfigurationRefused(refused)
-    return plan
-
-
-def _stale_fifos(run: tuple[Step, ...]) -> list[Finding]:
-    """The rejections of a run whose FIFO depths would be sized at another folding than
-    the one built (the module docstring)."""
-    refused = []
-    origins = [_origin(step.function) for step in run]
-    sizing = [index for index, origin in enumerate(origins) if origin in FIFO_SIZING_STEPS]
-    last = max(sizing, default=None)
-    for index, step in enumerate(run):
-        if origins[index] not in FOLDING_STEPS:
-            continue
-        place = f"{step.name} (step {index + 1} of the run)"
-        if last is not None and index > last:
-            message = (
-                f"{place} follows {run[last].name} (step {last + 1}), the last that sizes "
-                "FIFOs: their depths are sized at the folding before it and would go stale; "
-                "size FIFOs after the last step that changes the folding"
-            )
-            refused.append(config_finding("fifos-stale", message))
-        cut = step_create_dataflow_partition in origins[:index]
-        if last is None and not cut:
-            message = (
-                f"{place} may change the folding, and no step after it sizes FIFOs: the "
-                "partition comes from an earlier run (no step_create_dataflow_partition "
-                "before it), whose FIFOs may be sized at another folding; add "
-                "step_size_fifos after it"
-            )
-            refused.append(config_finding("fifos-unsized", message))
-    return refused
+    first, last = bounds
+    return Plan(steps, slice(first, last + 1), settings)
 
 
 __all__ = [
+    "Phases",
     "Plan",
     "Setting",
     "Step",
-    "default_steps",
     "resolve_plan",
 ]
