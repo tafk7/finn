@@ -38,7 +38,7 @@ from finn.dataflow.traversal import pack, vector_major
 from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.module import declared_registers
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -79,23 +79,25 @@ def placed(case: Case) -> Any:
     bus ``s_axilite`` when the case writes its table."""
     count = len(case.initial[0])
     result = ScalarEncoding(DataType[f"UINT{count.bit_length()}"])
+    x = Tensor((PIXELS, CHANNELS), ScalarEncoding(ELEMENT))
+    y = Tensor((PIXELS, CHANNELS), result)
     namespace: dict[str, Any] = {
-        "x": Channel(
-            tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(ELEMENT)),
-            port="s_axis_0",
-            platform=FULL_DSP48E2,
-        ),
-        "y": Channel(
-            tensor=Tensor((PIXELS, CHANNELS), result), port="m_axis_0", platform=FULL_DSP48E2
-        ),
+        "x_end": end_of("activate", "input_end"),
+        "y_end": end_of("activate", "output_end"),
     }
+    namespace["x"] = Channel(
+        tensor=x, port="s_axis_0", consumer=namespace["x_end"], platform=FULL_DSP48E2
+    )
+    namespace["y"] = Channel(
+        tensor=y, port="m_axis_0", producer=namespace["y_end"], platform=FULL_DSP48E2
+    )
     facts: dict[str, Any] = dict(
         input_dtype=ELEMENT,
         threshold_dtype=ELEMENT,
         thresholds=(case.initial,),
         bias=0,
-        input_channel=namespace["x"],
-        output_channel=namespace["y"],
+        input_tensor=x,
+        output_tensor=y,
         platform=FULL_DSP48E2,
     )
     if case.written is not None:

@@ -4,8 +4,9 @@
 """A channel with a known value carries a ``source``: MatMul's weights on its weight channel.
 
 The MatMul sits in a test root (``kernels.helpers.placed_matmul``) that
-declares its channels and owns the weights: the weight channel's ``contents``,
-its tensor over their range. Known weights give the channel a value, so its ``source``
+declares its channels and owns the weights, which it gives MatMul: the weight
+channel carries what MatMul states for it, its ``contents`` and its tensor over
+their range. Known weights give the channel a value, so its ``source``
 applies (``memstream``, its one candidate, forced) and stores them; unknown
 weights leave the channel without a source, and it is the boundary ``in1_V``.
 These tests cover the forced source, laziness, the memory's own choices,
@@ -21,6 +22,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import (
     Available,
     Inapplicable,
+    Param,
     Rejected,
     Unresolved,
     design_space,
@@ -32,11 +34,12 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 from finn.platform.capabilities import Platform
 from kernels.helpers import (
     FULL_DSP48E2,
@@ -47,6 +50,7 @@ from kernels.helpers import (
     matmul_assembly,
     matmul_point,
     placed,
+    view_of,
     with_adapter_memories,
     with_direct_transports,
 )
@@ -97,6 +101,28 @@ def configured(point, *, style=None, pe=2, simd=2):
                 },
             )
         )
+    )
+
+
+class Stored(Root):
+    """MatMul with known weights (``weights``), its channels on ``platform``: the weight
+    channel carries what MatMul states for it."""
+
+    weights: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    platform: Platform = Param()
+    w_tensor = view_of("matmul", "w_carried")
+    w_contents: IntegerTensor = view_of("matmul", "w_stored", INTEGER_TENSOR)
+    x_end = end_of("matmul", "x_end")
+    w_end = end_of("matmul", "w_end")
+    y_end = end_of("matmul", "y_end")
+    x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", consumer=x_end, platform=platform)
+    w = Channel(tensor=w_tensor, contents=w_contents, consumer=w_end, platform=platform)
+    y = Channel(tensor=Tensor((3, 4), INT7), port="out0_V", producer=y_end, platform=platform)
+    matmul = MatMulKernel(
+        **{**FACTS, "platform": platform},
+        x_tensor=Tensor((3, 4), INT3),
+        y_tensor=Tensor((3, 4), INT7),
+        w_contents=weights,
     )
 
 
@@ -184,13 +210,13 @@ def test_the_channel_owns_its_source_and_its_choices():
 def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     uncommitted = configured(base(weights=WEIGHTS))
     assert isinstance(uncommitted.query(Kernel.module), Unresolved)
-    # Weights outside their type are refused where their owner, the root, states their
-    # range on the weight channel's tensor.
+    # Weights outside their type are refused where MatMul states their range on the
+    # weight channel's tensor.
     outside = base(weights=((4,) * 4,) * 4)
-    refused = outside.query(type(outside).w_tensor)
+    refused = outside.query(type(outside).w_carried)
     assert isinstance(refused, Rejected)
     assert codes(refused) == {"dtype-storage"}
-    assert owners(refused) == {"w_tensor"}
+    assert owners(refused) == {"matmul.w_carried"}
     # A shape error is refused by the memory that packs them.
     wrong = configured(base(weights=((0,),)), style="auto").query(Kernel.module)
     assert isinstance(wrong, Rejected) and "shape" in wrong.findings[0].message
@@ -303,18 +329,16 @@ def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused(
 
 def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
     # Several sets need the set channel; a memory without one refuses itself.
-    class Unindexed(Root):
-        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
+    class Unindexed(Stored):
         w = Channel(
-            tensor=Tensor((4, 4), INT3),
-            contents=(WEIGHTS, WEIGHTS),
+            tensor=Stored.w_tensor,
+            contents=Stored.w_contents,
             sets=2,
+            consumer=Stored.w_end,
             platform=FULL_DSP48E2,
         )
-        y = Channel(tensor=Tensor((3, 4), INT7), port="out0_V", platform=FULL_DSP48E2)
-        matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
 
-    point = design_space(Unindexed())
+    point = design_space(Unindexed(weights=(WEIGHTS, WEIGHTS), platform=FULL_DSP48E2))
     answer = point.w.query(Channel.source)
     assert isinstance(answer, Rejected) and codes(answer) == {"decision-no-viable-case"}
     assert "memstream-set-channel" in answer.findings[0].message
@@ -327,14 +351,7 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
 
 def placed_with(platform: Platform):
     """MatMul with known weights, its weight channel on ``platform``."""
-
-    class OnPlatform(Root):
-        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=platform)
-        w = Channel(tensor=Tensor((4, 4), INT3), contents=WEIGHTS, platform=platform)
-        y = Channel(tensor=Tensor((3, 4), INT7), port="out0_V", platform=platform)
-        matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
-
-    return design_space(OnPlatform())
+    return design_space(Stored(weights=WEIGHTS, platform=platform))
 
 
 @pytest.mark.parametrize(
@@ -358,11 +375,25 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
 
 
 def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
+    x_tensor, w_tensor, y_tensor = (
+        Tensor((3, 4), INT3),
+        Tensor((4, 4), INT3),
+        Tensor((3, 4), INT8),
+    )
+
     class Produced(Root):
-        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=FULL_DSP48E2)
-        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=FULL_DSP48E2)
-        y = Channel(tensor=Tensor((3, 4), INT8), contents=((0,) * 4,) * 3, platform=FULL_DSP48E2)
-        matmul = MatMulKernel(**FACTS, x_channel=x, w_channel=w, y_channel=y)
+        x_end = end_of("matmul", "x_end")
+        w_end = end_of("matmul", "w_end")
+        y_end = end_of("matmul", "y_end")
+        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
+        w = Channel(tensor=w_tensor, port="in1_V", consumer=w_end, platform=FULL_DSP48E2)
+        y = Channel(
+            tensor=y_tensor,
+            contents=((0,) * 4,) * 3,
+            producer=y_end,
+            platform=FULL_DSP48E2,
+        )
+        matmul = MatMulKernel(**FACTS, x_tensor=x_tensor, w_tensor=w_tensor, y_tensor=y_tensor)
 
     answer = configured(design_space(Produced())).y.query(Channel.endpoints)
     assert isinstance(answer, Rejected) and codes(answer) == {"channel-users"}

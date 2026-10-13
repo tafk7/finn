@@ -3,7 +3,7 @@
 
 """A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
-A user's end belongs to the kernel whose port it is, beside the channel
+An end belongs to the kernel whose port it is, beside the channel
 (``^compute``); a stage sits at its label below the channel
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a boundary end is
 the root's own pins (``None``).
@@ -11,33 +11,39 @@ the root's own pins (``None``).
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Param, Rejected, Space, design_space, view
+from finn.core.space import Rejected, Space, design_space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.base import PORT
-from finn.kernels.channels import Channel
+from finn.kernels.base import PORT_END, PortEnd
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.transport import STREAM_CONTRACT, AxisBeat, StreamContract
+from finn.kernels.transport import AxisBeat, StreamContract
 from kernels.helpers import FULL_DSP48E2, with_adapter_memories, with_direct_transports
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
+X = Tensor((3, 4), ScalarEncoding(INT3))
+W = Tensor((4, 4), ScalarEncoding(INT3))
+Y = Tensor((3, 4), ScalarEncoding(INT8))
 
 
 class Placed(Space):
     """dotp between boundary channels: three rows of four, four outputs, PE = SIMD = 2."""
 
-    x = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2)
-    w = Channel(platform=FULL_DSP48E2, tensor=Tensor((4, 4), ScalarEncoding(INT3)), port="in1_V")
-    y = Channel(tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V", platform=FULL_DSP48E2)
+    x_end = end_of("compute", "x_end")
+    w_end = end_of("compute", "w_end")
+    y_end = end_of("compute", "y_end")
+    x = Channel(tensor=X, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
+    w = Channel(platform=FULL_DSP48E2, tensor=W, port="in1_V", consumer=w_end)
+    y = Channel(tensor=Y, port="out0_V", producer=y_end, platform=FULL_DSP48E2)
     compute = PackedDotpKernel(
         result_range=ordinary_integer_bounds(INT8),
-        x_channel=x,
-        w_channel=w,
-        y_channel=y,
+        x_tensor=X,
+        w_tensor=W,
+        y_tensor=Y,
         platform=FULL_DSP48E2,
     )
 
@@ -89,24 +95,11 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
 
 
 def test_a_boundary_no_port_names_is_refused() -> None:
-    """A weight channel with one user and no port is a boundary nothing may cross: only an
+    """A weight channel with one end and no port is a boundary nothing may cross: only an
     ONNX input or output of a partition is one."""
 
-    class Unnamed(Space):
-        x = Channel(
-            tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V", platform=FULL_DSP48E2
-        )
-        w = Channel(tensor=Tensor((4, 4), ScalarEncoding(INT3)), platform=FULL_DSP48E2)
-        y = Channel(
-            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT8)), port="out0_V"
-        )
-        compute = PackedDotpKernel(
-            result_range=ordinary_integer_bounds(INT8),
-            x_channel=x,
-            w_channel=w,
-            y_channel=y,
-            platform=FULL_DSP48E2,
-        )
+    class Unnamed(Placed):
+        w = Channel(tensor=W, consumer=Placed.w_end, platform=FULL_DSP48E2)
 
     folding = {
         "compute.pe": 2,
@@ -124,28 +117,24 @@ def test_a_boundary_no_port_names_is_refused() -> None:
 
 
 class Reader(Space):
-    """A consumer that exports its end itself, not through a kernel's port."""
+    """A consumer that presents its end itself, not through a kernel's port."""
 
-    input_channel: Channel = Param()
-
-    @view(semantics=STREAM_CONTRACT)
-    def port(self) -> StreamContract:
+    @view(semantics=PORT_END)
+    def end(self) -> PortEnd:
         beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
-        return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
+        contract = StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
+        return PortEnd("", contract)
 
-    exports = {PORT: {input_channel: port}}
 
-
-def test_a_user_that_is_no_kernels_port_has_no_netlist() -> None:
+def test_an_end_that_is_no_kernels_port_has_no_netlist() -> None:
     class Bare(Space):
-        edge = Channel(
-            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(INT3)), port="in0_V"
-        )
-        reader = Reader(input_channel=edge)
+        reader_end = end_of("reader", "end")
+        edge = Channel(platform=FULL_DSP48E2, tensor=X, port="in0_V", consumer=reader_end)
+        reader = Reader()
 
     point = with_direct_transports(design_space(Bare()))
-    assert point.edge.users[0].node == "reader"
+    assert point.edge.consumer.label == "reader"
     refused = point.edge.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"channel-port"}

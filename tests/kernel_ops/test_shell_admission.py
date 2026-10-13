@@ -33,7 +33,7 @@ from finn.core.space.errors import ValueUnavailableError
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import Shell, admission_refusal, configured_root, shell_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit, describe
 from finn.kernels.control import ControlBus
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -57,11 +57,25 @@ def thresholdings(count: int, row: ShellRow) -> Any:
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
     offered: dict[str, Any] = {"end_offer": row.ends} if row.ends else {}
-    x = Channel(tensor=TENSOR, platform=platform, port="s_axis_0", **offered)
-    y = Channel(tensor=TENSOR, platform=platform, port="m_axis_0", **offered)
-    inner = [Channel(tensor=TENSOR, platform=platform) for _ in range(count - 1)]
-    sides = [x, *inner, y]
-    members: dict[str, object] = {"x": x, **{f"c{index}": each for index, each in enumerate(inner)}}
+    # Each channel takes the ends of the thresholdings on either side of it.
+    names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
+    ends: dict[str, Any] = {}
+    channels: dict[str, Channel] = {}
+    for index, name in enumerate(names):
+        sides: dict[str, Any] = {}
+        if index > 0:
+            sides["producer"] = end_of(f"t{index - 1}", "output_end")
+        if index < count:
+            sides["consumer"] = end_of(f"t{index}", "input_end")
+        ends |= {f"{name}-{side}": end for side, end in sides.items()}
+        boundary = {"port": "s_axis_0" if index == 0 else "m_axis_0", **offered}
+        channels[name] = Channel(
+            tensor=TENSOR,
+            platform=platform,
+            **sides,
+            **(boundary if name in ("x", "y") else {}),
+        )
+    members: dict[str, object] = {**ends, **{name: channels[name] for name in names[:-1]}}
     for index in range(count):
         bus = ControlBus(port=f"t{index}_s_axilite")
         members[f"bus{index}"] = bus
@@ -70,12 +84,12 @@ def thresholdings(count: int, row: ShellRow) -> Any:
             threshold_dtype=UINT2,
             thresholds=TABLE,
             bias=0,
-            input_channel=sides[index],
-            output_channel=sides[index + 1],
+            input_tensor=TENSOR,
+            output_tensor=TENSOR,
             control=bus,
             platform=platform,
         )
-    root: Any = composite(f"shell{count}", {**members, "y": y}, base=Shell)
+    root: Any = composite(f"shell{count}", {**members, "y": channels["y"]}, base=Shell)
     choices: dict[str, object] = {}
     for index in range(count):
         held = {"use_axilite": True, "pe": 1, "deep_pipeline": False, "ram_style": "auto"}

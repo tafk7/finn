@@ -13,7 +13,8 @@ Three terms, used throughout the package:
 - the node's *facts*: what it reads from the model it is attached to, which are its
   tensors' shapes and datatypes, the values of the initializers it holds (weights,
   thresholds) and the build target (``read_target``);
-- its *node root*: its kernel with a channel on each input and output (``roots``);
+- its *node root*: its kernel with a channel on each input and output (``roots``),
+  wired by its ``wiring``;
 - its *point*: the node root bound to its facts (cached by facts, ``cache``), with the
   node's stored choices applied (``replay``).
 
@@ -31,6 +32,19 @@ A node's attributes are its semantic attributes, which are part of the operation
 (Thresholding's ``bias``), and its kernel's choices (``compute.packed.pe``), each set to
 its baseline at conversion. A channel's choices are stored on its tensor instead, and
 only in a partition's body (``CHANNEL``).
+
+**Wiring.** Each ONNX input and output that carries a stream (a *port*: ``x``, ``w``,
+``y``) meets the kernel as a ``Wiring``: the kernel's Param its tensor is given as
+(``tensor``, ``x_tensor``) and the kernel's interface its channel takes as an end
+(``end``, ``x_end``, a view of a ``finn.kernels.base.PortEnd``). A parameter port,
+whose initializer the node may hold (MatMul's weights), also names the kernel's Param
+the initializer's values are given as (``contents``, ``w_contents``) and the kernel's
+views of what its channel carries, downstream of the kernel: the tensor (``carried``,
+``w_carried``) and the values its source stores (``stored``, ``w_stored``). The node
+root and the shell root place the kernel and its channels by it: each tensor and
+value to the kernel, each channel's tensor (a parameter channel's from the kernel's
+views) and its end from the kernel (``finn.kernels.channels.end_of``). Facts flow one
+way: tensor, kernel, end, channel.
 """
 
 from __future__ import annotations
@@ -61,7 +75,6 @@ from finn.custom_op.kernels.roots import node_root, placed
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
 from finn.platform.target import Target
 
@@ -75,6 +88,25 @@ Shapes = dict[str, tuple[tuple[int, ...], QONNXDataType]]
 
 
 # -- patterns ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Wiring:
+    """How one port of a KernelOp meets its kernel (the module docstring): the kernel's
+    Param of the port's tensor and the view of its interface's end; for a parameter port,
+    the kernel's Param of the held values and its views of the tensor and the values the
+    port's channel carries."""
+
+    tensor: str
+    end: str
+    contents: str | None = None
+    carried: str | None = None
+    stored: str | None = None
+
+    @property
+    def parameter(self) -> bool:
+        """Whether it wires a parameter port: its contents and the kernel's views named."""
+        return None not in (self.contents, self.carried, self.stored)
 
 
 @dataclass(frozen=True)
@@ -120,9 +152,9 @@ class KernelOp(CustomOp):
     - ``formals``, the kernel arguments read from the graph (``facts``);
     - ``ports``, the channel name of each ONNX input (None for an input read as an
       argument, such as Thresholding's thresholds), and ``outputs``, of each output;
-    - ``references``, the kernel argument each port's channel is passed as;
+    - ``wiring``, how each port meets the kernel (``Wiring``, the module docstring);
     - ``parameters``, the ports whose value may be an initializer the node holds
-      (MatMul's weights);
+      (MatMul's weights), each wired with its contents and the kernel's views;
     - ``semantic``, its semantic attributes;
     - ``anchor``, the ``(domain, op_type)`` its pattern starts from, and ``match``.
 
@@ -138,7 +170,7 @@ class KernelOp(CustomOp):
     formals: ClassVar[tuple[str, ...]]
     ports: ClassVar[tuple[str | None, ...]]
     outputs: ClassVar[tuple[str, ...]] = ("y",)
-    references: ClassVar[Mapping[str, str]]
+    wiring: ClassVar[Mapping[str, Wiring]]
     parameters: ClassVar[tuple[str, ...]] = ()
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
     anchor: ClassVar[tuple[str, str]]
@@ -159,6 +191,17 @@ class KernelOp(CustomOp):
             and all(isinstance(part, str) for part in anchor)
         ):
             raise TypeError(f"{cls.__qualname__} must state its anchor, (domain, op_type)")
+        ports = {port for port in (*cls.ports, *cls.outputs) if port is not None}
+        wiring = getattr(cls, "wiring", {})
+        if set(wiring) != ports:
+            raise TypeError(
+                f"{cls.__qualname__} must state the wiring of each port {sorted(ports)}"
+            )
+        unvalued = [port for port in cls.parameters if not wiring[port].parameter]
+        if unvalued:
+            raise TypeError(
+                f"{cls.__qualname__}: the parameter ports {unvalued} name no contents and views"
+            )
 
     @property
     def label(self) -> str:
@@ -357,12 +400,19 @@ class KernelOp(CustomOp):
         (``facts``, the node's), by port."""
         return {port: self.onnx_node.input[self.ports.index(port)] for port in facts.owned}
 
-    def place(self, facts: Facts, channels: Mapping[str, Channel]) -> Kernel:
-        """This node's kernel on a shell root's ``channels`` (by tensor), its arguments
-        the values in ``facts``: the placement its node root is generated from."""
-        tensors = self.inputs() | dict(zip(self.outputs, self.onnx_node.output))
-        on = {port: channels[tensor] for port, tensor in tensors.items()}
-        return placed(type(self), facts.formals(), on)
+    def place(
+        self,
+        facts: Facts,
+        tensors: Mapping[str, Tensor],
+        values: Mapping[str, object],
+    ) -> Kernel:
+        """This node's kernel in a shell root: its arguments the values in ``facts``, its
+        ports' tensors ``tensors`` and its held initializers' values ``values`` (each by
+        graph name): the placement its node root is generated from."""
+        names = self.inputs() | dict(zip(self.outputs, self.onnx_node.output))
+        given = {port: tensors[name] for port, name in names.items()}
+        held = {port: values[name] for port, name in self.owned(facts).items()}
+        return placed(type(self), facts.formals(), given, held)
 
     # -- inference ------------------------------------------------------------------------
 
@@ -475,6 +525,7 @@ def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
 __all__ = [
     "KernelOp",
     "Match",
+    "Wiring",
     "Shapes",
     "kernel_op",
     "node_attributes",

@@ -5,17 +5,24 @@
 
 ``node_root`` builds one Space class per op from the op's class attributes: its kernel,
 with a channel on each ONNX input and output, and Params for the kernel arguments read
-from the graph, each channel's tensor, and the values of an initializer the node holds.
+from the graph, each port's tensor, and the values of an initializer the node holds.
 Binding those Params to a node's facts gives the node's point.
 
+The root wires its members by ordinary edges, by the op's ``wiring``
+(``finn.custom_op.kernels.base``): the kernel takes each port's tensor (and a held
+initializer's values) from the root's Params; each channel carries the port's tensor,
+a parameter channel the tensor and values the kernel states for it (MatMul's
+``w_carried`` and ``w_stored``), and takes as its end the one the kernel presents at the
+port's interface (``finn.kernels.channels.end_of``, a member named ``<port>_end``).
+
 Every channel is a boundary port (``in<i>_V``, ``out<j>_V`` by ONNX position): a kernel's
-cores take their extents from the ports on its channels, so a node's choices can be
+cores take their extents from the ports on its tensors, so a node's choices can be
 checked on the node alone. The output channels are optional: bound on its inputs only,
 the root answers output inference. The platform is bound to the kernel and to every
 channel, so the requirements of their cases read the device the model is built for.
 
 A partition's shell root (``shell``) places the same kernels (``placed``), with fixed
-arguments, on channels shared between nodes.
+arguments, and the channels between nodes on their ends.
 """
 
 from __future__ import annotations
@@ -26,7 +33,7 @@ from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from finn.core.space import UNSUPPLIED, Param, composite, default_semantics, supplied
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 
 if TYPE_CHECKING:
@@ -34,13 +41,16 @@ if TYPE_CHECKING:
 
 
 def placed(
-    op: type[KernelOp], formals: Mapping[str, object], channels: Mapping[str, Channel]
+    op: type[KernelOp],
+    formals: Mapping[str, object],
+    tensors: Mapping[str, object],
+    values: Mapping[str, object],
 ) -> Kernel:
-    """``op``'s kernel from ``formals`` (Params or literals) on ``channels`` (by port)."""
-    references = {
-        reference: channels[port] for port, reference in op.references.items() if port in channels
-    }
-    placement: Kernel = cast(Any, op.kernel)(**formals, **references)
+    """``op``'s kernel from ``formals``, each port's tensor ``tensors`` and each held
+    initializer's ``values`` (by port; Params or literals), by the op's ``wiring``."""
+    given = {op.wiring[port].tensor: tensor for port, tensor in tensors.items()}
+    held = {cast(str, op.wiring[port].contents): value for port, value in values.items()}
+    placement: Kernel = cast(Any, op.kernel)(**formals, **given, **held)
     return placement
 
 
@@ -63,9 +73,10 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
     for name in op.formals:
         members[name], annotations[name] = _formal(getattr(op.kernel, name)), hints[name]
     platform = members["platform"]
-    channels: dict[str, Channel] = {}
-    sides = (("in", op.ports), ("out", op.outputs))
-    for side, ports in sides:
+    tensors: dict[str, Tensor] = {}
+    values: dict[str, IntegerTensor] = {}
+    sides: dict[str, tuple[str, int]] = {}
+    for side, ports in (("in", op.ports), ("out", op.outputs)):
         for index, port in enumerate(ports):
             if port is None:
                 continue
@@ -75,20 +86,31 @@ def node_root(op: type[KernelOp]) -> type[Kernel]:
             tensor: Tensor = (
                 Param(required=False, semantics=default_semantics(Tensor)) if output else Param()
             )
-            members[f"{port}_tensor"] = tensor
+            members[f"{port}_tensor"] = tensors[port] = tensor
             annotations[f"{port}_tensor"] = Tensor
-            stated: dict[str, Any] = {}
             if output:
-                members[f"{port}_stated"] = stated["when"] = supplied(tensor)
+                members[f"{port}_stated"] = supplied(tensor)
             if port in op.parameters:
                 contents: IntegerTensor = Param(required=False, semantics=INTEGER_TENSOR)
-                members[f"{port}_contents"] = stated["contents"] = contents
+                members[f"{port}_contents"] = values[port] = contents
                 annotations[f"{port}_contents"] = IntegerTensor
-            channels[port] = Channel(
-                tensor=tensor, port=f"{side}{index}_V", platform=platform, **stated
-            )
+            sides[port] = (side, index)
     formals = {name: members[name] for name in op.formals}
-    kernel = placed(op, formals, channels)
+    kernel = placed(op, formals, tensors, values)
+    channels: dict[str, Channel] = {}
+    for port, (side, index) in sides.items():
+        wiring = op.wiring[port]
+        members[f"{port}_end"] = end = end_of(op.member, wiring.end)
+        settings: dict[str, Any] = {"producer" if side == "out" else "consumer": end}
+        if side == "out":
+            settings["when"] = members[f"{port}_stated"]
+        if port in values:
+            # A parameter channel carries what the kernel states for it.
+            settings["tensor"] = getattr(kernel, cast(str, wiring.carried))
+            settings["contents"] = getattr(kernel, cast(str, wiring.stored))
+        else:
+            settings["tensor"] = tensors[port]
+        channels[port] = Channel(port=f"{side}{index}_V", platform=platform, **settings)
     identity = {"id": f"finn.custom_op.kernels.node.{op.op_type.lower()}", "version": op.op_version}
     return composite(
         f"{op.__name__}Node",

@@ -1,11 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channels as ordinary Spaces: kernels reference them, and each channel sees its users.
+"""Channels as ordinary Spaces: each takes the ends of the ports on it as facts.
 
-Every channel owns its refusals; a channel with one user is a boundary of the
+Every channel owns its refusals; a channel with one end is a boundary of the
 root and presents its ``port`` name, by the boundary rule; a channel's tensor
-is anchored where it is declared, and deriving it from a user is refused as a
+is anchored where it is declared, and deriving it from an end is refused as a
 dependency cycle.
 """
 
@@ -19,8 +19,6 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    Users,
-    derived,
     design_space,
     inspection,
     view,
@@ -28,11 +26,11 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import PORT, Kernel
-from finn.kernels.channels import Channel, boundary_contract
+from finn.kernels.base import PORT_END, Kernel, PortEnd
+from finn.kernels.channels import Channel, boundary_contract, end_of
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.transport import STREAM_CONTRACT, AxisBeat, StreamContract
-from kernels.helpers import FULL_DSP48E2, Root, with_direct_transports
+from finn.kernels.transport import AxisBeat, StreamContract
+from kernels.helpers import FULL_DSP48E2, Root, view_of, with_direct_transports
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)
@@ -44,22 +42,26 @@ class Constants(Root):
 
     first_tensor: Tensor = Param()
     second_tensor: Tensor = Param()
+    first_end = end_of("first_source", "output_end")
+    second_end = end_of("second_source", "output_end")
     # Each channel has only its producer: it is a boundary, named by its port.
-    first = Channel(tensor=first_tensor, port="out0_V", platform=FULL_DSP48E2)
-    second = Channel(tensor=second_tensor, port="out1_V", platform=FULL_DSP48E2)
+    first = Channel(tensor=first_tensor, port="out0_V", producer=first_end, platform=FULL_DSP48E2)
+    second = Channel(
+        tensor=second_tensor, port="out1_V", producer=second_end, platform=FULL_DSP48E2
+    )
 
     first_source = MemStreamKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=(1, 2, 3, 4),
-        output_channel=first,
+        output_tensor=first_tensor,
         platform=FULL_DSP48E2,
     )
     second_source = MemStreamKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
         contents=(5, 6, 7, -8),
-        output_channel=second,
+        output_tensor=second_tensor,
         platform=FULL_DSP48E2,
     )
 
@@ -128,10 +130,10 @@ def test_a_channel_waits_for_its_own_endpoints_only():
     assert isinstance(point.first.query(Channel.netlist), Available)
     assert isinstance(point.second.query(Channel.netlist), Available)
     assert isinstance(point.query(Kernel.module), Unresolved)
-    # A channel sees its users by declaration name and by the input that references it.
-    (end,) = point.first.users
-    assert (end.node, end.member) == ("first_source.output", "channel")
-    assert end.value.transport.endpoint is Endpoint.INITIATOR  # the source produces
+    # A channel takes its ends as facts, each labelled from the root.
+    end = point.first.producer
+    assert end.label == "first_source.output"
+    assert end.contract.transport.endpoint is Endpoint.INITIATOR  # the source produces
     ends = point.first.endpoints
     assert (ends.source_owner, ends.sink_owner) == ("first_source.output", None)
     assert ends.sink.transport.name == "out0_V"
@@ -148,25 +150,25 @@ def test_boundary_ports_are_axis_and_byte_aligned():
 class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed."""
 
-    input_channel: Channel = Param()
-
-    @view(semantics=STREAM_CONTRACT)
-    def port(self) -> StreamContract:
+    @view(semantics=PORT_END)
+    def end(self) -> PortEnd:
         beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
-        return StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
-
-    exports = {PORT: {input_channel: port}}
+        contract = StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
+        return PortEnd("port", contract)
 
 
 def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
     class Receiver(Space):
-        edge = Channel(tensor=Tensor((2, 4), INT4), port="in0_V", platform=FULL_DSP48E2)
-        reader = Replaying(input_channel=edge)
+        reader_end = end_of("reader", "end")
+        edge = Channel(
+            tensor=Tensor((2, 4), INT4), port="in0_V", consumer=reader_end, platform=FULL_DSP48E2
+        )
+        reader = Replaying()
 
     ends = design_space(Receiver()).edge.endpoints
-    assert ends.source_owner is None and ends.sink_owner == "reader"
+    assert ends.source_owner is None and ends.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
     assert ends.source.form == vector_major((2, 4), 2)
     assert ends.source.transport.name == "in0_V" and not ends.source.rules
@@ -176,19 +178,24 @@ def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_re
 def test_two_producers_on_one_channel_are_refused_by_the_channel():
     class Clash(Space):
         tensor: Tensor = Param()
-        shared = Channel(tensor=tensor, port="out0_V", platform=FULL_DSP48E2)
+        a_end = end_of("a", "output_end")
+        b_end = end_of("b", "output_end")
+        # b's end given as the consumer is a producer's all the same.
+        shared = Channel(
+            tensor=tensor, port="out0_V", producer=a_end, consumer=b_end, platform=FULL_DSP48E2
+        )
         a = MemStreamKernel(
             dtype=DataType["INT4"],
             form=PRODUCED,
             contents=(1, 2, 3, 4),
-            output_channel=shared,
+            output_tensor=tensor,
             platform=FULL_DSP48E2,
         )
         b = MemStreamKernel(
             dtype=DataType["INT4"],
             form=PRODUCED,
             contents=(1, 2, 3, 4),
-            output_channel=shared,
+            output_tensor=tensor,
             platform=FULL_DSP48E2,
         )
 
@@ -196,18 +203,19 @@ def test_two_producers_on_one_channel_are_refused_by_the_channel():
     refused = point.shared.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {f.code for f in refused.findings} == {"channel-users"}
-    assert "a.output.channel, b.output.channel" in refused.findings[0].message
+    assert "a.output, b.output" in refused.findings[0].message
 
 
 def test_a_boundary_channel_needs_its_port_name():
     class Unnamed(Space):
         tensor: Tensor = Param()
-        out = Channel(tensor=tensor, platform=FULL_DSP48E2)
+        source_end = end_of("source", "output_end")
+        out = Channel(tensor=tensor, producer=source_end, platform=FULL_DSP48E2)
         source = MemStreamKernel(
             dtype=DataType["INT4"],
             form=PRODUCED,
             contents=(1, 2, 3, 4),
-            output_channel=out,
+            output_tensor=tensor,
             platform=FULL_DSP48E2,
         )
 
@@ -218,45 +226,46 @@ def test_a_boundary_channel_needs_its_port_name():
     assert {(f.code, f.owner) for f in refused.findings} == {("channel-boundary", "out.endpoints")}
 
 
-# -- the anchoring rule: a channel's tensor must not depend on its users ----------------
+# -- the anchoring rule: a channel's tensor must not depend on its ends -----------------
 
 
 class ProducerTensorChannel(Space):
-    """A channel that derives its tensor from its producer's contract: not anchored."""
+    """A channel that derives its tensor from its producer's end: not anchored."""
 
-    ends = Users(PORT)
+    producer: PortEnd = Param(semantics=PORT_END)
 
-    @derived
+    @view
     def tensor(self) -> Tensor:
-        (end,) = self.ends
-        return Tensor(end.value.form.shape, end.value.element)
+        contract = self.producer.contract
+        return Tensor(contract.form.shape, contract.element)
 
 
 class TensorReadingProducer(Space):
-    """Builds its port contract from the channel's tensor, as every kernel does."""
+    """Builds its end from the tensor it is given, as every kernel does."""
 
-    output_channel: ProducerTensorChannel = Param()
+    output_tensor: Tensor = Param()
     source = MemStreamKernel(
         platform=FULL_DSP48E2, dtype=DataType["INT4"], form=PRODUCED, contents=(1, 2, 3, 4)
     )
 
-    @view(semantics=STREAM_CONTRACT)
-    def port(self) -> StreamContract:
+    @view(semantics=PORT_END)
+    def end(self) -> PortEnd:
         contract = self.source.output.contract
-        tensor = self.output_channel.tensor  # the channel's tensor shapes the port
-        return StreamContract(contract.transport, tensor.element, vector_major(tensor.shape, 2))
+        tensor = self.output_tensor  # the tensor shapes the port
+        form = vector_major(tensor.shape, 2)
+        return PortEnd("port", StreamContract(contract.transport, tensor.element, form))
 
-    exports = {PORT: {output_channel: port}}
 
-
-def test_a_tensor_derived_from_its_users_is_refused_with_the_cycle_path():
+def test_a_tensor_derived_from_its_ends_is_refused_with_the_cycle_path():
     class Unanchored(Space):
-        edge = ProducerTensorChannel()
-        producer = TensorReadingProducer(output_channel=edge)
+        edge_tensor = view_of("edge", "tensor")
+        producer_end = end_of("producer", "end")
+        edge = ProducerTensorChannel(producer=producer_end)
+        producer = TensorReadingProducer(output_tensor=edge_tensor)
 
     point = design_space(Unanchored())
     with pytest.raises(EvaluationError, match="dependency cycle") as caught:
         point.edge.tensor
     path = str(caught.value)
-    # The cycle, in evaluation order: the tensor reads the users, a user's port reads the tensor.
-    assert "edge.tensor" in path and "edge.ends" in path and "producer.port" in path
+    # The cycle, in evaluation order: the tensor reads the end, the end reads the tensor.
+    assert "edge.tensor" in path and "producer_end" in path and "producer.end" in path

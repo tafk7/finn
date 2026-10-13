@@ -45,8 +45,8 @@ from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.kernels.base import Kernel, factor_domain
-from finn.kernels.channels import Channel
+from finn.dataflow.tensor import Tensor
+from finn.kernels.base import Kernel, factor_domain, interface
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import AxisSpelling
 from finn.kernels.values.domains import Integer
@@ -158,8 +158,8 @@ class PoolKernel(Kernel):
     window: tuple[int, int] = Param()
     stride: tuple[int, int] = Param()
     platform: Platform = Param()
-    input_channel: Channel = Param(required=False)
-    output_channel: Channel = Param(required=False)
+    input_tensor: Tensor = Param(required=False)
+    output_tensor: Tensor = Param(required=False)
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -174,7 +174,7 @@ class PoolKernel(Kernel):
         fit whole, ``(H - KH) // SH + 1`` a row (no padding: a pad is its own stage). The
         channels are bound from the tensors, as is the output, which must agree."""
         (rows, columns), (row_step, column_step) = self.window, self.stride
-        shape = self.input_channel.tensor.shape
+        shape = self.input_tensor.shape
         if len(shape) != 3 or shape[0] < rows or shape[1] < columns:
             return reject("pool-geometry", f"a {rows}x{columns} window fits no HWC {shape}")
         windows = {
@@ -203,7 +203,7 @@ class PoolKernel(Kernel):
     input = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
-        channel=input_channel,
+        tensor=input_tensor,
         admits=ELEMENTS,
         schedule=schedule,
         index=input_index,
@@ -225,7 +225,7 @@ class PoolKernel(Kernel):
     output = AxiStreamPort(
         name="m_axis",
         endpoint=Endpoint.INITIATOR,
-        channel=output_channel,
+        tensor=output_tensor,
         admits=ELEMENTS,
         schedule=schedule,
         index=(oh, ow, c),
@@ -235,11 +235,13 @@ class PoolKernel(Kernel):
         value_range=element_range,
         spelling=AxisSpelling.UPPER,
     )
+    input_end = interface("input")
+    output_end = interface("output")
 
     @constraint
     def element_supported(self) -> bool | Rejected:
         """An ordinary integer: ``std::max`` over ``ap_int`` or ``ap_uint`` lanes."""
-        return ELEMENTS.check(self.input_channel.tensor.element.dtype)
+        return ELEMENTS.check(self.input_tensor.element.dtype)
 
     admission = ConstraintGroup(geometry_supported, element_supported)
 

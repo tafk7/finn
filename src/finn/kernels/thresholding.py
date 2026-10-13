@@ -42,8 +42,10 @@ runtime-writable thresholds a ``control`` bus to be placed on, each a named
 refusal of the case.
 
 All native pins remain present when AXI-Lite or set selection is disabled;
-disabled outputs may be unspecified. Placed in a kernel with children, it sits
-on an input, an output and (with several sets) a set-selector channel; its
+disabled outputs may be unspecified. Placed in a kernel with children, it reads
+an input tensor and (with several sets) a tensor of set indices and writes an
+output tensor, facts its parent gives, and states the end of each of its ports
+(``input_end``, ``output_end``, ``set_end``), which the channels on them take; its
 AXI-Lite bus is presented through a ``ControlBus`` when thresholds are
 runtime-writable (``controlled``), and otherwise held idle by its module, as
 is the set selector of a single set. Presented, the bus carries the writes that
@@ -93,8 +95,8 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held, RegisterMap
-from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
-from finn.kernels.channels import Channel
+from finn.dataflow.tensor import Tensor
+from finn.kernels.base import CLOCK, RESET, Kernel, extent_of, interface
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -254,11 +256,11 @@ class ThresholdingAxiKernel(Kernel):
 
     channels = extent_of(c)  # the input's channels, bound by placement
     pe: int = Decision(domain=lane_counts(rows))  # channels a beat
-    # Where a parent places it: the channels it sits on, and the control
+    # Where a parent places it: the tensors its ports read and write, and the control
     # bus that exports its AXI-Lite interface when thresholds are runtime-writable.
-    input_channel: Channel = Param(required=False)
-    output_channel: Channel = Param(required=False)
-    set_channel: Channel = Param(required=False)
+    input_tensor: Tensor = Param(required=False)
+    output_tensor: Tensor = Param(required=False)
+    set_tensor: Tensor = Param(required=False)
     control: ControlBus = Param(required=False)
     platform: Platform = Param()
 
@@ -460,7 +462,7 @@ class ThresholdingAxiKernel(Kernel):
     @derived
     def indices(self) -> tuple[Index, ...]:
         """The input's axes: any leading ones, then the channels ``c``, innermost."""
-        rank = len(self.input_channel.tensor.shape)
+        rank = len(self.input_tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
@@ -510,7 +512,7 @@ class ThresholdingAxiKernel(Kernel):
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
         """One set index for each input beat."""
-        shape = self.set_channel.tensor.shape
+        shape = self.set_tensor.shape
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")
         if shape != (self.input.presented.form.beats,):
@@ -520,7 +522,7 @@ class ThresholdingAxiKernel(Kernel):
     input = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
-        channel=input_channel,
+        tensor=input_tensor,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -530,7 +532,7 @@ class ThresholdingAxiKernel(Kernel):
     output = AxiStreamPort(
         name="m_axis",
         endpoint=Endpoint.INITIATOR,
-        channel=output_channel,
+        tensor=output_tensor,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -541,10 +543,13 @@ class ThresholdingAxiKernel(Kernel):
     set = AxiStreamPort(
         name="s_axis_set",
         endpoint=Endpoint.TARGET,
-        channel=set_channel,
+        tensor=set_tensor,
         sequence=set_sequence,
         dtype=selector_dtype,
     )
+    input_end = interface("input")
+    output_end = interface("output")
+    set_end = interface("set")
 
     @derived
     def thresholds_file(self) -> GeneratedData:

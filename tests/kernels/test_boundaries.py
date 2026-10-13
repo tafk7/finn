@@ -41,7 +41,9 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.transport import AxisBeat
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
+from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
+from finn.core.space import Param, derived
 from qonnx.core.datatype import DataType
 
 PLATFORM = Platform(
@@ -54,27 +56,23 @@ PLATFORM = Platform(
 )
 
 
+X2 = Tensor((1, 2), ScalarEncoding(DataType["INT3"]))
+W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
+Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
+
+
 class Placed(Space):
-    x = Channel(
-        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])),
-        port="in0_V",
-        platform=PLATFORM,
-    )
-    w = Channel(
-        tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])),
-        port="in1_V",
-        platform=PLATFORM,
-    )
-    y = Channel(
-        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
-        port="out0_V",
-        platform=PLATFORM,
-    )
+    x_end = end_of("compute", "x_end")
+    w_end = end_of("compute", "w_end")
+    y_end = end_of("compute", "y_end")
+    x = Channel(tensor=X2, port="in0_V", consumer=x_end, platform=PLATFORM)
+    w = Channel(tensor=W2, port="in1_V", consumer=w_end, platform=PLATFORM)
+    y = Channel(tensor=Y2, port="out0_V", producer=y_end, platform=PLATFORM)
     compute = PackedDotpKernel(
         result_range=ordinary_integer_bounds(DataType["INT8"]),
-        x_channel=x,
-        w_channel=w,
-        y_channel=y,
+        x_tensor=X2,
+        w_tensor=W2,
+        y_tensor=Y2,
         platform=PLATFORM,
     )
 
@@ -106,18 +104,36 @@ for memory in ("none", "memstream"):
         weights_dtype=DataType["INT3"],
         platform=PLATFORM,
     )
-    # Stored weights are the weight channel's value, which its source stores; the
-    # result is their columns' (the identity's, [-4, 3]: INT3), or the datatypes' (INT8).
-    stored, result = {}, INT8
+    # Stored weights are MatMul's, and the weight channel's value, which its source
+    # stores; the result is their columns' (the identity's, [-4, 3]: INT3), or the
+    # datatypes' (INT8).
+    weights, result = {"w_tensor": Tensor((4, 4), INT3)}, INT8
     if memory == "memstream":
-        stored["contents"] = ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+        weights = {"w_contents": ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))}
         result = INT3
+    x_tensor, y_tensor = Tensor((2, 4), INT3), Tensor((2, 4), result)
 
+    # The weight channel carries what MatMul states for it.
     class Placed(Root):
-        x = Channel(tensor=Tensor((2, 4), INT3), port="in0_V", platform=PLATFORM)
-        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM, **stored)
-        y = Channel(tensor=Tensor((2, 4), result), port="out0_V", platform=PLATFORM)
-        matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
+        known: bool = Param()
+        x_end = end_of("matmul", "x_end")
+        w_end = end_of("matmul", "w_end")
+        y_end = end_of("matmul", "y_end")
+
+        @derived
+        def w_tensor(self) -> Tensor:
+            return self.matmul.w_carried
+
+        @derived(when=known, semantics=INTEGER_TENSOR)
+        def w_contents(self) -> IntegerTensor:
+            return self.matmul.w_stored
+
+        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=PLATFORM)
+        w = Channel(
+            tensor=w_tensor, contents=w_contents, port="in1_V", consumer=w_end, platform=PLATFORM
+        )
+        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=PLATFORM)
+        matmul = MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights)
 
     choices = {
         "x.transport": "direct",
@@ -130,7 +146,7 @@ for memory in ("none", "memstream"):
             "w.source.memstream.ram_style": "auto",
             "w.source.memstream.pumped_memory": False,
         }
-    root = commit(design_space(Placed()), choices)
+    root = commit(design_space(Placed(known=memory == "memstream")), choices)
     root = commit(
         root,
         {

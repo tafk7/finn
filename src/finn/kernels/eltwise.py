@@ -33,8 +33,8 @@ from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain
-from finn.kernels.channels import Channel
+from finn.dataflow.tensor import Tensor
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain, interface
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -46,7 +46,7 @@ c = Index("c")
 class EltwiseKernel(Kernel):
     """PE results a beat of ``lhs`` and ``rhs``, element by element.
 
-    Placed on channels, each operand's tensor is walked row-major, PE elements
+    Placed on its tensors, each operand's is walked row-major, PE elements
     of its innermost axis a beat, on one schedule over ``lhs``'s axes. An
     ``rhs`` whose shape is a trailing part of ``lhs``'s (a channel vector, say)
     reads the trailing indices, so it is broadcast: the port presents it once
@@ -63,10 +63,10 @@ class EltwiseKernel(Kernel):
     pe: int = Decision(domain=factor_domain(c))
     lhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     rhs_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    # The channels it sits on, when a parent places it.
-    lhs_channel: Channel = Param(required=False)
-    rhs_channel: Channel = Param(required=False)
-    result_channel: Channel = Param(required=False)
+    # The tensors its ports read and write, when a parent places it.
+    lhs_tensor: Tensor = Param(required=False)
+    rhs_tensor: Tensor = Param(required=False)
+    result_tensor: Tensor = Param(required=False)
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -132,13 +132,13 @@ class EltwiseKernel(Kernel):
     @derived
     def indices(self) -> tuple[Index, ...]:
         """lhs's axes, ``c`` innermost; the result keeps lhs's shape."""
-        rank = len(self.lhs_channel.tensor.shape)
+        rank = len(self.lhs_tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 1)), c)
 
     @derived
     def rhs_indices(self) -> tuple[Index, ...]:
         """rhs reads the trailing axes of lhs: a broadcast it presents once per element it meets."""
-        indices, rank = self.indices, len(self.rhs_channel.tensor.shape)
+        indices, rank = self.indices, len(self.rhs_tensor.shape)
         return indices[max(0, len(indices) - rank) :]  # a longer rhs is refused by rank
 
     @derived
@@ -158,7 +158,7 @@ class EltwiseKernel(Kernel):
     lhs = AxiStreamPort(
         name="lhs",
         endpoint=Endpoint.TARGET,
-        channel=lhs_channel,
+        tensor=lhs_tensor,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -171,7 +171,7 @@ class EltwiseKernel(Kernel):
     rhs = AxiStreamPort(
         name="rhs",
         endpoint=Endpoint.TARGET,
-        channel=rhs_channel,
+        tensor=rhs_tensor,
         schedule=schedule,
         factors=factors,
         index=rhs_indices,
@@ -184,7 +184,7 @@ class EltwiseKernel(Kernel):
     result = AxiStreamPort(
         name="result",
         endpoint=Endpoint.INITIATOR,
-        channel=result_channel,
+        tensor=result_tensor,
         schedule=schedule,
         factors=factors,
         index=indices,
@@ -194,6 +194,9 @@ class EltwiseKernel(Kernel):
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
     )
+    lhs_end = interface("lhs")
+    rhs_end = interface("rhs")
+    result_end = interface("result")
 
     @derived
     def clocking(self) -> Clocking:

@@ -38,7 +38,15 @@ from qonnx.analysis.tensor_value_summary import (
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import datatype, integer_tensor, known_shape, rows, shape
 from finn.core.space import Finding, Rejected
-from finn.custom_op.kernels.base import KernelOp, Match, Shapes, node_attributes, refused, unstated
+from finn.custom_op.kernels.base import (
+    KernelOp,
+    Match,
+    Shapes,
+    Wiring,
+    node_attributes,
+    refused,
+    unstated,
+)
 from finn.custom_op.kernels.cache import Facts
 from finn.dataflow.datatypes import (
     DatatypeError,
@@ -91,7 +99,10 @@ class Thresholding(KernelOp):
     member = "activate"
     formals = ("input_dtype", "threshold_dtype", "thresholds", "bias", "platform")
     ports = ("x", None)
-    references = {"x": "input_channel", "y": "output_channel"}
+    wiring = {
+        "x": Wiring("input_tensor", "input_end"),
+        "y": Wiring("output_tensor", "output_end"),
+    }
     semantic = {"bias": ("i", True, 0)}
     anchor = ("qonnx.custom_op.general", "MultiThreshold")
 

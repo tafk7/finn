@@ -68,6 +68,10 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.module",
         "compute.netlist",
         "compute.resources",
+        # The end each port presents, which the channel on it takes.
+        "compute.w_end",
+        "compute.x_end",
+        "compute.y_end",
     ]
     for port in (point.x, point.w, point.y):
         assert isinstance(port, AxiStreamPort)
@@ -79,9 +83,9 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "compute.reshape_activations",
         "compute.result_range",
         "compute.platform",
-        "compute.x_channel",
-        "compute.w_channel",
-        "compute.y_channel",
+        "compute.x_tensor",
+        "compute.w_tensor",
+        "compute.y_tensor",
     }
     # The core's own choices.
     assert {item.key for item in inspection.decisions(point)} == {

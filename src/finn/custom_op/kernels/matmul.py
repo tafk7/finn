@@ -24,7 +24,7 @@ import numpy.typing as npt
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import admitted, datatype, integer_tensor, known_shape, rows, shape
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import KernelOp, Match, Shapes, refused, unstated
+from finn.custom_op.kernels.base import KernelOp, Match, Shapes, Wiring, refused, unstated
 from finn.custom_op.kernels.cache import Facts
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -74,7 +74,11 @@ class MatMul(KernelOp):
         "platform",
     )
     ports = ("x", "w")
-    references = {"x": "x_channel", "w": "w_channel", "y": "y_channel"}
+    wiring = {
+        "x": Wiring("x_tensor", "x_end"),
+        "w": Wiring("w_tensor", "w_end", "w_contents", "w_carried", "w_stored"),
+        "y": Wiring("y_tensor", "y_end"),
+    }
     parameters = ("w",)
     anchor = ("", "MatMul")
 

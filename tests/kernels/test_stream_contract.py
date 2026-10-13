@@ -38,7 +38,7 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.channels import Channel, wired
+from finn.kernels.channels import Channel, end_of, wired
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
@@ -496,16 +496,30 @@ def eltwise_with_constant(form=None):
     form = vector_major((CHANNELS,), PE) if form is None else form
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
+    x_tensor = Tensor((PIXELS, CHANNELS), INT4)
+    c_tensor = Tensor((CHANNELS,), INT4)
+    y_tensor = Tensor((PIXELS, CHANNELS), ScalarEncoding(int5))
+
     class Constant(Root):
-        x = Channel(tensor=Tensor((PIXELS, CHANNELS), INT4), port="in0_V", platform=FULL_DSP48E2)
-        c = Channel(tensor=Tensor((CHANNELS,), INT4), adaptable=False, platform=FULL_DSP48E2)
-        y = Channel(
-            tensor=Tensor((PIXELS, CHANNELS), ScalarEncoding(int5)),
-            port="out0_V",
+        x_end = end_of("add", "lhs_end")
+        c_producer = end_of("rhs", "output_end")
+        c_consumer = end_of("add", "rhs_end")
+        y_end = end_of("add", "result_end")
+        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
+        c = Channel(
+            tensor=c_tensor,
+            adaptable=False,
+            producer=c_producer,
+            consumer=c_consumer,
             platform=FULL_DSP48E2,
         )
+        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=FULL_DSP48E2)
         rhs = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=int4, form=form, contents=PARAMETERS, output_channel=c
+            platform=FULL_DSP48E2,
+            dtype=int4,
+            form=form,
+            contents=PARAMETERS,
+            output_tensor=c_tensor,
         )
         add = EltwiseKernel(
             operation="ADD",
@@ -514,9 +528,9 @@ def eltwise_with_constant(form=None):
             rhs_dtype=int4,
             b_scale=1.0,
             platform=FULL_DSP58,
-            lhs_channel=x,
-            rhs_channel=c,
-            result_channel=y,
+            lhs_tensor=x_tensor,
+            rhs_tensor=c_tensor,
+            result_tensor=y_tensor,
         )
 
     return commit(

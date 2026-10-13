@@ -49,7 +49,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, pack
 from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.eltwise import EltwiseKernel
 from finn.toolchain.launcher import host_toolchain
@@ -114,15 +114,20 @@ def placed(case: Case) -> Any:
         "rhs": Tensor(case.rhs_shape, ScalarEncoding(rhs)),
         "result": Tensor(case.lhs_shape, ScalarEncoding(result)),
     }
-    namespace: dict[str, Any] = {
-        name: Channel(tensor=tensor, port=PORTS[name], platform=FULL_DSP58)
+    ends = {name: end_of("arithmetic", f"{name}_end") for name in tensors}
+    sides = {"lhs": "consumer", "rhs": "consumer", "result": "producer"}
+    namespace: dict[str, Any] = {f"{name}_end": end for name, end in ends.items()}
+    namespace |= {
+        name: Channel(
+            tensor=tensor, port=PORTS[name], platform=FULL_DSP58, **{sides[name]: ends[name]}
+        )
         for name, tensor in tensors.items()
     }
     namespace["arithmetic"] = EltwiseKernel(
         **facts,
-        lhs_channel=namespace["lhs"],
-        rhs_channel=namespace["rhs"],
-        result_channel=namespace["result"],
+        lhs_tensor=tensors["lhs"],
+        rhs_tensor=tensors["rhs"],
+        result_tensor=tensors["result"],
     )
     space = type(f"Eltwise_{case.label}", (Root,), namespace)
     return with_direct_transports(commit(design_space(space()), {"arithmetic.pe": case.pe}))

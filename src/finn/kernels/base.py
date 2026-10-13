@@ -14,6 +14,9 @@ them; never both. On the protocol a leaf declares only what is its own:
   ``<rtl_module>_<key16>``;
 - one ``Port`` node per interface (``finn.kernels.port``): each exports its
   pins, its clock, and what it holds while idle;
+- for each stream interface, the tensor it reads or writes, a fact
+  (``x_tensor: Tensor = Param(required=False)``, given to its port's ``tensor``;
+  absent, the port is idle), and its end (below);
 - ``parameters()``: the module's parameters, from its choices;
 - ``clocking``: its clock and reset pins, when not the plain ``ap_clk`` and
   ``ap_rst_n``;
@@ -30,12 +33,24 @@ what it holds (the doubled clock while unused, idle ports, and its own
 ``pins_accounted`` (every input among its other pins is held or presented) and
 ``clocked`` (every port runs on its clock).
 
+**One contract per interface.** A kernel states, for each stream interface by
+name (``x``, ``w``, ``y``), its end: a view ``<name>_end`` of a ``PortEnd``, the
+contract its port presents there and the port's label relative to the kernel. A
+leaf states it with ``interface``: ``x_end = interface("x")`` is its port ``x``'s
+contract, labelled ``x``. A kernel with children names the child that serves the
+interface and the port's label below it (MatMul's ``x_end`` is the selected
+core's, ``compute.packed.x``). Facts flow one way: a kernel's tensors in, its
+ends out. A channel (``finn.kernels.channels``) takes the two ends on it as facts,
+``producer`` and ``consumer``, each labelled from the Space that declares the
+channel (``end_of``: ``matmul.compute.packed.x``), so that its hops name the
+kernel whose port it is (``^matmul.compute.packed``).
+
 A kernel with children merges its members' netlists (``NETLIST``: each
 child's and each channel's ``Fragment``, under its node) and the control buses
-its ``ControlBus`` nodes present. Its interface channels are reference inputs
-its parent supplies; the channels between its children are its own. Placed
-alone, as the root of what is emitted, it is one ``Composed`` module whose
-pins are ``ap_clk``, ``ap_clk2x`` when an instance takes a doubled clock,
+its ``ControlBus`` nodes present. It gives its interfaces' tensors to the
+children that read them, and the channels between its children are its own.
+Placed alone, as the root of what is emitted, it is one ``Composed`` module
+whose pins are ``ap_clk``, ``ap_clk2x`` when an instance takes a doubled clock,
 ``ap_rst_n``, the AXIS bus of each boundary channel it declares (inputs, then
 outputs) and each presented bus.
 
@@ -79,6 +94,7 @@ from finn.core.space import (
     divisors_of,
     domain,
     reject,
+    view,
 )
 from finn.dataflow.schedule import Access, Index, Refused, Schedule, bind_extents
 from finn.kernels.artifacts import ArtifactError
@@ -116,7 +132,7 @@ from finn.kernels.artifacts.module import (
     merge,
 )
 from finn.kernels.control import EXPORTED, top_bus
-from finn.kernels.transport import STREAM_CONTRACT
+from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.platform.capabilities import Resources
 
@@ -145,9 +161,6 @@ BOUNDARY = ViewKey("boundary", default_semantics(tuple))
 """A channel's AXIS bus on the root's boundary: one, or none when both of its ends are
 kernels."""
 
-PORT = ViewKey("port", STREAM_CONTRACT)
-"""A kernel's port on one channel, exported per reference input."""
-
 PINS = ViewKey("pins", default_semantics(tuple))
 """A port's pins (signals, or one bus), collected by its kernel into the module's pins."""
 
@@ -155,8 +168,8 @@ CLOCKED = ViewKey("clocked", default_semantics(str))
 """The clock pin a port runs on, collected by its kernel (``clocked``)."""
 
 ACCESS = ViewKey("access", default_semantics(Access))
-"""A placed scheduled port's read of its channel's tensor, collected by its kernel to bind
-the extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
+"""A placed scheduled port's read of its tensor, collected by its kernel to bind the
+extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
 
 HELD_SEMANTICS = default_semantics(Held)
 HELD = ViewKey("held", HELD_SEMANTICS)
@@ -177,6 +190,26 @@ members and stages."""
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
+
+
+@dataclass(frozen=True)
+class PortEnd:
+    """The end a port presents on a channel: its ``contract`` and its ``label``, the port's
+    path relative to the member that states the end (``x`` for a leaf's port,
+    ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
+    set port; empty for an end the member presents itself, which is no port's).
+    ``under`` labels it from the Space that places that member."""
+
+    label: str
+    contract: StreamContract
+
+    def under(self, member: str) -> PortEnd:
+        """The end as seen from the Space where ``member`` is placed."""
+        return PortEnd(f"{member}.{self.label}" if self.label else member, self.contract)
+
+
+PORT_END = default_semantics(PortEnd)
+"""A ``PortEnd``'s value semantics: a frozen value, compared by value."""
 
 
 @dataclass(frozen=True)
@@ -547,6 +580,17 @@ class Kernel(Space):
     }
 
 
+def interface(port: str) -> PortEnd:
+    """A view of a leaf: the end its port ``port`` presents (``Port.contract``), labelled
+    ``port``. Name it in the class body after the interface (``x_end = interface("x")``)."""
+
+    def end(self: Kernel) -> PortEnd:
+        contract: StreamContract = getattr(self, port).contract
+        return PortEnd(port, contract)
+
+    return cast(PortEnd, view(semantics=PORT_END)(end))
+
+
 def extent_of(index: Index) -> int:
     """A derived member: ``index``'s extent, bound from the kernel's placed ports.
 
@@ -610,9 +654,11 @@ __all__ = [
     "NATIVE_CLOCKING",
     "NETLIST",
     "PINS",
-    "PORT",
+    "PORT_END",
+    "PortEnd",
     "RESET",
     "RESOURCES",
     "extent_of",
     "factor_domain",
+    "interface",
 ]

@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FinnLib ``inner_shuffle`` as a node between two channels: a banked matrix transpose.
+"""FinnLib ``inner_shuffle`` as a node from one tensor to another: a banked matrix transpose.
 
 A row-major ``(I, J)`` matrix, SIMD elements of it a beat, becomes its
 columns, SIMD elements of a column a beat (``LANE_REGROUP``). It is not a
@@ -30,8 +30,8 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Index, Schedule
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of
-from finn.kernels.channels import Channel
+from finn.dataflow.tensor import Tensor
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, extent_of, interface
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -99,15 +99,15 @@ class TransposeKernel(Kernel):
     version = 1
     rtl_module = "inner_shuffle"
 
-    input_channel: Channel = Param(required=False)
-    output_channel: Channel = Param(required=False)
+    input_tensor: Tensor = Param(required=False)
+    output_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
 
     @derived
     def extents(self) -> dict[Index, int] | Rejected:
         """Each index's extent: the input reads its tensor through a view, which binds
         none, so the kernel gives its axes' extents; the output's read must agree."""
-        return self._bound(dict(zip(self.indices, self.input_channel.tensor.shape)))
+        return self._bound(dict(zip(self.indices, self.input_tensor.shape)))
 
     rows = extent_of(i)  # I
     cols = extent_of(j)  # J
@@ -115,7 +115,7 @@ class TransposeKernel(Kernel):
     @derived
     def pages_bits(self) -> int:
         """The bits both pages hold: ``2 I J`` elements."""
-        return 2 * self.rows * self.cols * self.input_channel.tensor.element.bits
+        return 2 * self.rows * self.cols * self.input_tensor.element.bits
 
     ram_style: str = Decision(
         domain=requiring(memory_styles(pages_bits), *uram_requirements(platform, ("ultra",)))
@@ -135,7 +135,7 @@ class TransposeKernel(Kernel):
     @derived
     def indices(self) -> tuple[Index, ...]:
         """The input's axes: any leading ones (a sequence of matrices), then ``i`` and ``j``."""
-        rank = len(self.input_channel.tensor.shape)
+        rank = len(self.input_tensor.shape)
         return (*(Index(f"a{axis}") for axis in range(rank - 2)), i, j)
 
     @derived
@@ -153,12 +153,12 @@ class TransposeKernel(Kernel):
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def dtype(self) -> QONNXDataType:
         """The element it moves: the input's, unchanged."""
-        return self.input_channel.tensor.element.dtype
+        return self.input_tensor.element.dtype
 
     input = AxiStreamPort(
         name="input",
         endpoint=Endpoint.TARGET,
-        channel=input_channel,
+        tensor=input_tensor,
         schedule=columns_out,
         index=columns,
         lanes=(i,),
@@ -171,7 +171,7 @@ class TransposeKernel(Kernel):
     output = AxiStreamPort(
         name="output",
         endpoint=Endpoint.INITIATOR,
-        channel=output_channel,
+        tensor=output_tensor,
         schedule=columns_out,
         index=indices,
         lanes=(i,),
@@ -180,6 +180,8 @@ class TransposeKernel(Kernel):
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
     )
+    input_end = interface("input")
+    output_end = interface("output")
 
     @derived
     def clocking(self) -> Clocking:
@@ -190,7 +192,7 @@ class TransposeKernel(Kernel):
         if self.ram_style == "auto":
             return auto_unstated("the transpose's pages")
         return inner_shuffle_resources(
-            bits=self.input_channel.tensor.element.bits,
+            bits=self.input_tensor.element.bits,
             i=self.rows,
             j=self.cols,
             simd=self.simd,
@@ -200,7 +202,7 @@ class TransposeKernel(Kernel):
 
     def parameters(self) -> Mapping[str, int | str]:
         return {
-            "BITS": self.input_channel.tensor.element.bits,
+            "BITS": self.input_tensor.element.bits,
             "I": self.rows,
             "J": self.cols,
             "RAM_STYLE": f'"{self.ram_style}"',
