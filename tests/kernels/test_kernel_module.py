@@ -35,8 +35,8 @@ from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Held, Leaf
 from finn.kernels.base import Clocking, ComposedKernel, Kernel, LeafKernel, interface
-from finn.kernels.configure import commit
 from finn.kernels.channels import end_of
+from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
