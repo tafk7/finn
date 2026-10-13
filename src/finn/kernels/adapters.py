@@ -59,7 +59,6 @@ from finn.core.space import (
     ConstraintGroup,
     Param,
     Rejected,
-    Space,
     composite,
     constraint,
     derived,
@@ -70,17 +69,11 @@ from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.input_generator import (
-    Generate,
-    GeometryError,
-    InputGeneratorKernel,
-    generated,
-    nest_geometry,
-)
+from finn.kernels.base import ComposedKernel
+from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.transport import StreamContract
-from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.kernels.vpc import VpcKernel
-from finn.platform.capabilities import Platform, Resources
+from finn.platform.capabilities import Platform
 
 
 @dataclass(frozen=True)
@@ -177,15 +170,20 @@ def _side(name: str, side: str) -> BeatSequence:
     return derived(read)
 
 
-class StreamAdapter(Space):
+class StreamAdapter(ComposedKernel):
     """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
     Each candidate places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
     the two sides of its step of the realization, which its ports present. An
     ``input_gen`` child owns its memory's ``ram_style``, on the channel's ``platform``.
+    Its netlist, cycles, buffering and resources are its stages', by the base. It
+    presents no interface: its channel wires its stages hop by hop (``stages``).
     """
 
+    id = "finn.channel.adapter"
+    version = 1
+    interfaces = ()
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param()
@@ -220,41 +218,6 @@ class StreamAdapter(Space):
             if _stage_name(kinds, index) == name:
                 return stage
         return reject("adapter-plan", f"the plan's chain has no {name} stage")
-
-    # Cost, from the realization alone: a stage's memory style changes neither.
-    @view
-    def beats(self) -> int:
-        """The most beats any of its stages' ports carries a frame."""
-        return max(
-            beats
-            for stage in self.realization
-            for beats in (stage.source.form.beats, stage.sink.form.beats)
-        )
-
-    @view
-    def held_bits(self) -> int | Rejected:
-        """The bits its ``input_gen`` stages hold: each its buffer, ``BUF_SIZE`` input
-        words as the RTL derives it (``nest_geometry``), not one frame."""
-        bits = self.tensor.element.bits
-        held = 0
-        for stage in self.realization:
-            module = stage.module
-            if not isinstance(module, Generate):
-                continue
-            try:
-                words = nest_geometry(module.frame, module.dims, module.coefs).buffer_words
-            except GeometryError as error:
-                return reject("adapter-buffer", str(error))
-            held += words * stage.source.form.lanes * bits
-        return held
-
-    @view(semantics=RESOURCES_SEMANTICS)
-    def resources(self) -> Resources:
-        """What its stages use of the device, each child's own statement, summed."""
-        kinds = [stage.kind for stage in self.realization]
-        return total(
-            getattr(self, _stage_name(kinds, index)).resources for index in range(len(kinds))
-        )
 
     # The sides of every stage a chain can name; each chain reads its own.
     input_gen_arriving = _side("input_gen", "source")

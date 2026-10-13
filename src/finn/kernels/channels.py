@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channels: one tensor from one producer to one consumer, an ordinary Space that takes its ends.
+"""Channels: one tensor from one producer to one consumer, a kernel with children taking its ends.
 
 A ``Channel`` is one real producer-to-consumer edge, a node of its own,
 declared in the kernel with children (or the root) that owns the edge, beside
@@ -47,8 +47,9 @@ Every channel, boundaries included, owns a ``transport`` Decision over two
 nodes between its adapters: ``direct`` or ``fifo``. The FIFO candidate owns its
 ``depth``, a Decision known by its domain's membership only, which a design
 space exploration proposes, and the FIFO's ``ram_style``; it is an identity
-stage presenting what arrives at it, inside the root that declares the channel
-(on a boundary, between the root's pins and its port). A FIFO carries data
+stage presenting what arrives at it (its ``FifoKernel`` is given it, and its ports
+present it), inside the root that declares the channel (on a boundary, between the
+root's pins and its port). A FIFO carries data
 words only: where what arrives carries markers (a producer whose own output
 carries them; a width conversion drops them), the FIFO refuses itself
 (``fifo-markers``). The adapters' and transport's stages are checked on both
@@ -69,25 +70,35 @@ sets, the source's set port is an interface of the channel (``set_end``,
 labelled ``source.<case>.set``): the index tensor's channel takes it as its
 consumer, so an end may be any member's interface, a kernel's or a channel's.
 
-Beside ``compatible``, each checked hop is resolved into wires (``wired``),
-and the channel exports its netlist under ``NETLIST``: its stages' leaves at
-their labels below it (``output_adapter.vpc.vpc``, ``transport.fifo.buffer``,
-``adapter.input_gen.input_gen``) and its hops. An end belongs to the kernel
-whose ``Port`` it is, beside the channel (``^matmul.compute.packed``); a
-boundary end is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus
-its boundary side presents, if any.
+A channel is a kernel with children (``finn.kernels.base.ComposedKernel``): its
+members are its source, its output adapter, its transport and its input adapter (each
+a kernel with children of its stages, the FIFO's ``ChannelFifo``) and its end,
+declared in the order the stream runs through them. Each stage is a leaf presenting on
+its ports the beat sequences its step of the plan gives it, so its contracts are its
+ports' (``Stage``: its module and its ports' contracts, labelled below the channel).
+Beside ``compatible``, each checked hop is resolved into wires (``wired``), and the
+channel exports its netlist under ``NETLIST``: its members' netlists under their
+nodes, in that order, so its stages' leaves sit at their labels below it
+(``output_adapter.vpc.vpc``, ``transport.fifo.buffer``,
+``adapter.input_gen.input_gen``), and its hops. An end belongs to the kernel whose
+``Port`` it is, beside the channel (``^matmul.compute.packed``); a boundary end is
+the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its boundary side
+presents, if any. It is a composition inside its parent's module, not a module of
+its own: it exports no ``MODULE``, and its ``module`` is refused
+(``channel-module``).
 
 A channel refuses itself as a kernel does, through its ``admission``
-(``well_formed``, ``realizable``, ``compatible``). It exports its cost, which
-waits on no admission and reads no memory style: under ``CYCLES`` the clock
-cycles a frame takes through its own stages (the most beats its source's or an
-adapter's port carries a frame; a FIFO presents what arrives, so it adds none,
-and a channel of wires takes none of its own) and its end's, if it has one,
-under ``BUFFERING`` the bits its stages hold (an adapter's ``input_gen``
-buffers, a FIFO's depth), and under ``RESOURCES`` what its source and stages use
-of the device, each stage kernel's own statement summed (a channel of wires uses
-none). Its end is not counted: the shell integrates it beside the root, and its
-resources are the shell's.
+(``well_formed``, ``realizable``, ``compatible``). It exports its cost, its
+members', which waits on no admission and reads no memory style: under ``CYCLES``
+the clock cycles a frame takes through its own members, the slowest's (its
+source's or an adapter's stages', each the most beats its ports carry a frame, and
+its end's, if it has one; a FIFO presents what arrives, whose beats are counted
+where they are made, so its transport states none, and a channel of wires takes none
+of its own), under ``BUFFERING`` the bits its stages hold, their sum (an adapter's
+``input_gen`` buffers, a FIFO's depth), and under ``RESOURCES`` what its source and
+stages use of the device, their sum (a channel of wires uses none). Its end states
+no resources here: the shell integrates it beside the root, and its resources are
+the shell's.
 
 A boundary channel's side without an end is its **free side** (``free_side``):
 the AXIS port the root presents. A shell that integrates ends supplies the ends
@@ -96,9 +107,9 @@ Decision places one, as it places its ``source``: it applies only when offers
 are supplied, its candidates are the kinds ``ENDS`` knows, each refusing a kind
 not offered, so one offered is forced and nothing is persisted. The shell's end
 is not a port's: it reads the free side the channel's one end determines, binds no RTL
-(the root's pins stay its pins), and exports its facts (``end_contract``). Its
-cycles a frame (``end_cycles``) are the channel's, beside its stages', and under
-``END`` it exports its end's contract (none without an end), whose AXI-Lite buses
+(the root's pins stay its pins), and exports its facts (``end_contract``). It
+exports its cycles a frame, the channel's member that it is, and under
+``END`` the channel exports its end's contract (none without an end), whose AXI-Lite buses
 the shell root's admission counts, and whose resources and memory ports it counts
 with its static region.
 
@@ -134,16 +145,18 @@ from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.artifacts.module import Fragment, Leaf, Link, LinkEnd, Marker
+from finn.kernels.artifacts.module import Composed, Fragment, Leaf, Link, LinkEnd, Marker, merge
 from finn.kernels.base import (
     BOUNDARY,
     BUFFERING,
     CLOCK,
     CYCLES,
+    MODULE_SEMANTICS,
     NETLIST,
     PORT_END,
     RESET,
     RESOURCES,
+    ComposedKernel,
     PortEnd,
 )
 from finn.kernels.ends import END, ENDS, EndContract, EndOffer, IodmaEnd
@@ -158,13 +171,12 @@ from finn.kernels.transport import (
     marker_bit,
     marker_pairs,
 )
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
 )
-from finn.platform.capabilities import Platform, Resources
+from finn.platform.capabilities import Platform
 
 SOURCES: dict[str, type[MemStreamKernel]] = {"memstream": MemStreamKernel}
 """The kernels that can drive a channel with its known value, by case: a memory."""
@@ -209,23 +221,27 @@ def wired(
 
 
 class _Direct(Space):
-    """No stage: the hop across the transport connects directly."""
+    """No stage: the hop across the transport connects directly. It places nothing, so
+    it exports nothing its channel sums."""
 
     @view
     def stages(self) -> tuple[Stage, ...]:
         return ()
 
-    @view
-    def held_bits(self) -> int:
-        return 0
 
-    @view(semantics=RESOURCES_SEMANTICS)
-    def resources(self) -> Resources:
-        return Resources()
+class ChannelFifo(ComposedKernel):
+    """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
+    Its netlist, buffering and resources are its FIFO's, by the base. It states no
+    cycles: a FIFO presents what arrives, whose beats are counted where they are made
+    (the channel's producer, its source, its output adapter), so its channel's cycles
+    are its other members'. It presents no interface: its channel wires it hop by hop
+    (``stages``).
+    """
 
-class ChannelFifo(Space):
-    """An identity stage: what arrives at it, presented on both sides of a native FIFO."""
+    id = "finn.channel.fifo"
+    version = 1
+    interfaces = ()
 
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
@@ -264,23 +280,17 @@ class ChannelFifo(Space):
     admission = ConstraintGroup(carries_data)
 
     @view
-    def held_bits(self) -> int:
-        """Its FIFO's own statement: its depth of words."""
-        held: int = self.buffer.held_bits
-        return held
-
-    @view(semantics=RESOURCES_SEMANTICS)
-    def resources(self) -> Resources:
-        """Its FIFO's own statement."""
-        used: Resources = self.buffer.resources
-        return used
-
-    @view
     def stages(self) -> tuple[Stage, ...]:
         buffer = self.buffer
         module = buffer.module
         assert isinstance(module, Leaf)
         return (Stage(module, buffer.input.contract, buffer.output.contract, "fifo.buffer"),)
+
+    exports = {
+        NETLIST: ComposedKernel.netlist,
+        BUFFERING: ComposedKernel.buffering,
+        RESOURCES: ComposedKernel.resources,
+    }
 
 
 @dataclass(frozen=True)
@@ -296,7 +306,7 @@ class ChannelEnds:
     sink: StreamContract
 
 
-class Channel(Space):
+class Channel(ComposedKernel):
     """One tensor between the ports whose ends it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are the ends of the ports on it, facts its
@@ -305,9 +315,20 @@ class Channel(Space):
     port ``port``, where the ``end`` the shell offers (``end_offer``) sits. A
     channel with a known value has its ``source`` as its producer, and with several
     sets its source reads the set indices (``index_tensor``) from the channel whose
-    consumer is ``set_end``. ``platform`` is the target's, stated by whoever
-    declares the channel: its source, its adapter's stages and its FIFO read it.
+    consumer is ``set_end``, the one interface it presents. ``platform`` is the
+    target's, stated by whoever declares the channel: its source, its adapter's stages
+    and its FIFO read it.
+
+    It is a kernel with children: its source, its adapters (their stages), its
+    transport (its FIFO) and its end, declared in the order the stream runs through
+    them, so that its netlist places them in that order. Its netlist, buffering and
+    resources are theirs, by the base; it is a composition inside its parent's module,
+    not a module of its own.
     """
+
+    id = "finn.channel"
+    version = 1
+    interfaces = ("set",)
 
     tensor: Tensor = Param()
     # False admits no adapter: the ends must connect directly.
@@ -369,8 +390,6 @@ class Channel(Space):
         platform=platform,
     )
     source_case = selected(source)
-    source_module = View(source.module)
-    source_resources = View(source.resources)
 
     @derived
     def source_label(self) -> str:
@@ -459,12 +478,6 @@ class Channel(Space):
     end_contract = View(end.contract)
 
     @derived
-    def end_cycles(self) -> int:
-        """Its end's cycles a frame (``EndContract.cycles``)."""
-        contract: EndContract = self.end_contract
-        return contract.cycles
-
-    @derived
     def placed_end(self) -> tuple[EndContract, ...]:
         """Its end's contract, or none without an end."""
         if not self.ended:
@@ -532,17 +545,6 @@ class Channel(Space):
         platform=platform,
     )
     output_adapter_stages = View(output_adapter.stages)
-    output_adapter_beats = View(output_adapter.beats)
-    output_adapter_held = View(output_adapter.held_bits)
-    output_adapter_resources = View(output_adapter.resources)
-
-    adapter: StreamAdapter = Decision(
-        ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
-    )
-    adapter_stages = View(adapter.stages)
-    adapter_beats = View(adapter.beats)
-    adapter_held = View(adapter.held_bits)
-    adapter_resources = View(adapter.resources)
 
     @derived
     def output_adapted(self) -> tuple[Stage, ...]:
@@ -580,8 +582,10 @@ class Channel(Space):
     )
     transport_stages = View(transport.stages)
 
-    transport_held = View(transport.held_bits)
-    transport_resources = View(transport.resources)
+    adapter: StreamAdapter = Decision(
+        ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
+    )
+    adapter_stages = View(adapter.stages)
 
     @view
     def stages(self) -> tuple[Stage, ...]:
@@ -653,64 +657,36 @@ class Channel(Space):
             return reject("channel-link", str(error))
         return tuple(links)
 
-    @view(requires=(well_formed, realizable, compatible))
-    def netlist(self) -> Fragment:
-        """Its source's and stages' leaves below it, and its hops."""
-        stages = tuple((stage.label, stage.module) for stage in self.stages)
-        if self.valued:
-            module = self.source_module
-            assert isinstance(module, Leaf)
-            stages = ((self.source_label, module), *stages)
-        return Fragment(stages, self.hops)
-
     admission = ConstraintGroup(well_formed, realizable, compatible)
+
+    @derived
+    def fragment(self) -> Fragment | Rejected:
+        """Its members' netlists under their nodes, in the order the stream runs through
+        them (its source, its output adapter's stages, its FIFO, its input adapter's
+        stages), and its hops; a channel of wires places none."""
+        try:
+            return merge(
+                *(item.value.under(str(item.node)) for item in self.netlists),
+                Fragment(links=self.hops),
+            )
+        except ArtifactError as error:
+            return reject("kernel-netlist", str(error))
+
+    @derived(semantics=MODULE_SEMANTICS)
+    def built(self) -> Leaf | Composed | Rejected:
+        return reject(
+            "channel-module",
+            "a channel is a composition inside its parent's module, not a module of its own",
+        )
 
     # -- what a design space exploration ranks by ------------------------------------------
 
     @derived
     def frame_cycles(self) -> int:
-        """The clock cycles a frame takes through its own stages: the most beats its
-        source's port or an adapter's carries a frame (one beat a cycle at best), or its
-        end's cycles."""
-        found = [0]
-        if self.ended:
-            found.append(self.end_cycles)
-        if self.valued:
-            found.append(self.source_contract.form.beats)
-        if self.output_adapting:
-            found.append(self.output_adapter_beats)
-        if self.adapting:
-            found.append(self.adapter_beats)
-        return max(found)
-
-    @derived
-    def held_bits(self) -> int:
-        """The bits its stages hold between its ends: the adapters' buffers, a FIFO's
-        depth."""
-        held: int = self.transport_held
-        if self.output_adapting:
-            held += self.output_adapter_held
-        if self.adapting:
-            held += self.adapter_held
-        return held
-
-    @derived(semantics=RESOURCES_SEMANTICS)
-    def resource_use(self) -> Resources:
-        """What its source and stages use of the device, each one's own statement; not
-        its end's, which is the shell's."""
-        used: Resources = self.transport_resources
-        if self.valued:
-            used = used + self.source_resources
-        if self.output_adapting:
-            used = used + self.output_adapter_resources
-        if self.adapting:
-            used = used + self.adapter_resources
-        return used
-
-    # Cost, not validity: read apart from the channel's admission.
-    cycles = View(frame_cycles)
-    buffering = View(held_bits)
-    resources = View(resource_use)
+        """The clock cycles a frame takes through its own members: the slowest's (its
+        source's, its adapters' stages', its end's), one beat a cycle at best; a FIFO
+        states none, and a channel of wires takes none of its own."""
+        return max((item.value for item in self.member_cycles), default=0)
 
     @view(requires=(well_formed, realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
@@ -721,12 +697,13 @@ class Channel(Space):
 
     end_export = View(placed_end)
 
+    # Not ``MODULE``: a channel is no module of its own.
     exports = {
-        NETLIST: netlist,
+        NETLIST: ComposedKernel.netlist,
         BOUNDARY: boundary_bus,
-        CYCLES: cycles,
-        BUFFERING: buffering,
-        RESOURCES: resources,
+        CYCLES: ComposedKernel.cycles,
+        BUFFERING: ComposedKernel.buffering,
+        RESOURCES: ComposedKernel.resources,
         END: end_export,
     }
 

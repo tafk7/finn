@@ -43,10 +43,14 @@ doubled clock while unused, idle ports, and its own ``held``). Two constraints a
 for its pins: ``pins_accounted`` (every input among its other pins is held or
 presented) and ``clocked`` (every port runs on its clock). Its cycles are the most
 beats any of its ports carries a frame (``BEATS``: one beat a cycle at best), so a leaf
-states no cycles of its own; it holds no channel's buffering.
+states no cycles of its own. It holds nothing between a channel's ends, unless it is a
+channel's stage that buffers (a FIFO, an ``input_gen``), which states what it holds
+(``held_bits``).
 
 A **kernel with children** (``ComposedKernel``) places kernels and the channels
-between them. It states:
+between them. A channel is one too (``finn.kernels.channels``): its members are its
+source, its adapters' stages, its FIFO and its end, though it is no module of its own.
+It states:
 
 - ``interfaces``: the names of the interfaces it presents, each the end of a view
   ``<name>_end`` that names the child serving it (below); a root, the top of what is
@@ -193,13 +197,14 @@ CYCLES = ViewKey("cycles", default_semantics(int))
 any of its ports carries; a kernel with children's its slowest member's."""
 
 BUFFERING = ViewKey("buffering", default_semantics(int))
-"""The bits a channel's stages hold between its ends (an adapter's ``input_gen``
-buffers, a FIFO's depth); a kernel with children's is the sum over its members."""
+"""The bits a channel's stages hold between its ends: a stage's its own (an
+``input_gen``'s buffer, a FIFO's depth); a kernel with children's, a channel's among
+them, the sum over its members."""
 
 RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
 """What a kernel or a channel uses of the device (``finn.platform.capabilities.Resources``):
-a leaf's own statement; a kernel with children's and a channel's the sum over its
-members and stages."""
+a leaf's own statement; a kernel with children's, a channel's among them, the sum over
+its members."""
 
 # The composed module's clocking pins: its interface convention, not a routing rule.
 CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
@@ -532,7 +537,8 @@ class LeafKernel(Kernel, protocol=True):
 
     @derived
     def held_bits(self) -> int:
-        """The bits its channels' stages hold: a leaf holds none of them."""
+        """The bits it holds between a channel's ends: none, but for a stage that buffers
+        (a FIFO, an ``input_gen``), which states its own."""
         return 0
 
     @derived(semantics=RESOURCES_SEMANTICS)

@@ -185,12 +185,14 @@ def test_an_unvalued_channel_never_demands_its_source():
     visited = {node.declaration.key for node in evidence.nodes}
     # Whether the channel has a value is read (the weights' presence), never the value.
     assert {"valued", "ends", "endpoints"} <= visited
-    # Nothing of the source runs.
+    # Nothing of the source runs: the channel's members are summed (its netlist), so its
+    # source's guard is read, and is False; everything below it is inapplicable.
     reached = {
         node.declaration.key: node.result
         for node in evidence.nodes
         if node.declaration.key.startswith("source.")
     }
+    assert reached.pop("source.$guard", Available(False)) == Available(False)
     assert all(isinstance(result, Inapplicable) for result in reached.values())
 
 

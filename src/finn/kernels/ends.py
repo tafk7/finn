@@ -54,6 +54,8 @@ stream side, the free side's contract:
 
 A boundary channel exports its end's contract under ``END`` (none without an end),
 which the shell root sums with its static region (``finn.custom_op.kernels.shell``).
+The end exports its cycles a frame under ``CYCLES``, the channel's member that it is:
+the channel's are at least its end's.
 These ends are not ``finn.dataflow.ends``'s, which are the two beat sequences a channel's
 producer and consumer present (``End``, ``Ends``).
 """
@@ -68,6 +70,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    View,
     ViewKey,
     constraint,
     default_semantics,
@@ -77,6 +80,7 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import passes, period
 from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import CYCLES
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
@@ -316,6 +320,17 @@ class IodmaEnd(Space):
                 direction=direction, intf_width=memory, stream_width=tdata
             ),
         )
+
+    @derived
+    def frame_cycles(self) -> int:
+        """Its cycles a frame (``EndContract.cycles``)."""
+        contract: EndContract = self.contract
+        return contract.cycles
+
+    # Cost, not validity: read apart from its admission.
+    cycles = View(frame_cycles)
+
+    exports = {CYCLES: cycles}
 
 
 ENDS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaEnd}
