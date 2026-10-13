@@ -69,11 +69,13 @@ def test_a_required_decision_evaluates_as_any_other() -> None:
     assert inspection.open(committed) == ()
 
 
-def test_an_overriding_decision_states_its_own_requirement() -> None:
+def test_a_subclass_decision_states_its_own_requirement() -> None:
+    class Block(Shared):
+        # The subclass declares the Decision again, with a baseline: it is not required.
+        style: str = Decision(values=("block",))
+
     class Narrowed(Space):
-        # The enclosing body replaces the required Decision with one of its own,
-        # which states a baseline: it is not required.
-        shared = Shared(style=Decision(values=("block",)))
+        shared = Block()
 
     class Kept(Space):
         shared = Shared()

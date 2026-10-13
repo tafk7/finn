@@ -49,7 +49,6 @@ from finn.core.space import (
     selected,
     view,
 )
-from finn.core.space.inspection import Provenance
 
 
 @dataclass(frozen=True)
@@ -310,17 +309,13 @@ class Kernel(Space):
 class Board(Space):
     wire = Wire(spec=Spec(4, 8))
     kernel = Kernel(output=wire)
-    kernel.buffer.depth = 4  # pin a Decision of a descendant
     spare = Kernel(output=wire)
-    spare.buffer.depth = Decision(values=(2, 4))  # narrow it: same key
-    spare.buffer = Buffer(word_bits=16)  # replace a child node (same Space class)
     lobby = Room(area=1)
     stages = Room(area=lobby.cost)  # a view's accepted value supplies a formal
 
 
 def keys(board: Board, house: House) -> None:
     assert_type(Room(), Room)  # every member is optional at the call
-    assert_type(Room(area=3, finish=2), Room)  # a Decision may be pinned at the call
     assert_type(Kernel.output, Wire)
     assert_type(Board.kernel.buffer.depth, int)
     assert_type(board.kernel.query(Kernel.output), QueryResult[Wire])
@@ -329,7 +324,6 @@ def keys(board: Board, house: House) -> None:
     assert_type(inspection.decision_handle(house, House.kitchen.finish), DecisionHandle[int])
     assert_type(inspection.decision_handle(house, House.heating), DecisionHandle[str])
     assert_type(inspection.value_handle(board, Board.kernel.buffer.word_bits), ValueHandle[int])
-    assert_type(inspection.provenance(board, Board.kernel.buffer.depth), Provenance | None)
     assert_type(house.with_choices({House.kitchen.finish: 2}), House)
 
 

@@ -184,11 +184,11 @@ def _supplied(point: Space, formal: Param[object]) -> bool:
     Presence is known before the value is: the walk follows the edges a read
     of the value would follow, reading only facts (guards, the choices that
     select a candidate's member, whether an input was given at start) and
-    never a computation (a derived value, a view's callback, a pinned domain
-    check). Omitted at start, or a formal no present source supplies, it is
-    not supplied. A source that applies is supplied whatever its value then
-    answers: a refusal surfaces where the value is read, with its findings.
-    Undecided presence raises like any value read.
+    never a computation (a derived value, a view's callback). Omitted at
+    start, or a formal no present source supplies, it is not supplied. A
+    source that applies is supplied whatever its value then answers: a
+    refusal surfaces where the value is read, with its findings. Undecided
+    presence raises like any value read.
     """
     applies = _source_applies(point, state(point).model.resolve(point._scope, formal))
     if isinstance(applies, bool):

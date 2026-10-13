@@ -24,14 +24,13 @@ from ._check import check
 from ._collapse import collapse
 from ._configuration import Space
 from ._lower import lower
-from ._nodes import NodeDecl
 from ._ordering import dependency_order
 from .errors import DefinitionError
 from .ir import LinkedModel
 
 
-def link_space(space_type: type[Space], root: NodeDecl | None = None) -> LinkedModel:
-    table = allocate(space_type, root)
+def link_space(space_type: type[Space]) -> LinkedModel:
+    table = allocate(space_type)
     lower(table)
     order = dependency_order(
         tuple(node.dependencies for node in table.nodes),
@@ -53,8 +52,5 @@ def link_space(space_type: type[Space], root: NodeDecl | None = None) -> LinkedM
         keys,
         choices,
         frozenset(table.editable_aliases),
-        table.provenance,
-        table.scope_provenance,
-        table.pinned,
         forward,
     )

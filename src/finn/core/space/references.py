@@ -9,7 +9,7 @@ handles. Handles retain compilation, never a configuration, assignments or cache
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar, cast
 
@@ -23,7 +23,7 @@ from .declarations import (
     ValueRef,
 )
 from .errors import RequestError
-from .ir import Choice, LinkedModel, Node, Provenance, Scope
+from .ir import Choice, LinkedModel, Node, Scope
 from .semantics import ValueSemantics
 
 T = TypeVar("T")
@@ -174,7 +174,6 @@ def resolve_decision(
     scope: int,
     reference: object,
     editable_aliases: Collection[int] = (),
-    linked_pinned: Mapping[str, Provenance] | None = None,
 ) -> int:
     """The owning decision a reference may edit.
 
@@ -198,12 +197,6 @@ def resolve_decision(
         index = node.output
         node = nodes[index]
     if node.kind != "decision":
-        pinned = linked_pinned.get(node.key) if linked_pinned else None
-        if pinned is not None:
-            raise RequestError(
-                f"{node.key} is not an owned Decision: an enclosing body pinned it "
-                f"({pinned.text()})"
-            )
         raise RequestError(
             f"{node.key} is not an owned Decision: a formal bound to a supplier is not "
             "independently editable"

@@ -382,8 +382,8 @@ class Param(ValueDecl[T], Generic[T]):
     Annotate it with its value type: ``area: int = Param()``. The annotation is
     the single source of the value type; ``semantics=`` gives custom value
     semantics for it. Supply a formal at the call (``Room(area=12)``) or by
-    assignment (``hall.area = kitchen.area``); an enclosing body may override
-    what an inner one supplied, and the outermost assignment wins.
+    assignment (``hall.area = kitchen.area``), once, in the body that declares
+    the node.
 
     ``Param()`` is required: preparing a Space class in which nothing supplies it is
     a definition error. ``default=`` makes it optional, and ``required=False``
@@ -590,9 +590,7 @@ class Decision(ValueDecl[T], Generic[T]):
 
     ``heating.area`` reads a member every candidate declares;
     ``heating["pump"].cop`` reads one candidate's member, inapplicable while
-    another is selected. An enclosing body pins the choice with a key
-    (``house.heating = "pump"``) or narrows it with a Decision over keys
-    (``Decision(values=("boiler",))``), keeping the declared candidates.
+    another is selected.
 
     A Decision that is not a class attribute takes its value type from the
     formal it supplies. It may supply exactly one formal
@@ -601,9 +599,9 @@ class Decision(ValueDecl[T], Generic[T]):
     class attribute, or ``Decision(..., name="depth")``, which is owned by the
     lowest scope containing every node it supplies.
 
-    An enclosing body may override a Decision of a node it contains: a value
-    pins the coordinate (its key disappears), another Decision replaces it
-    under the same key. Either is checked against this Decision's domain.
+    A Decision belongs to its Space class: no body supplies it a value, a key or
+    another Decision. A choice is committed on a configuration
+    (``with_choices``); a narrower one is a subclass's.
     """
 
     domain: Domain[T]

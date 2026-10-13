@@ -3,13 +3,12 @@
 
 """Lower each allocated member into its node's payload.
 
-A supplied member becomes its binding (a literal, an alias of what it
-references, a pin checked against the declared domain); a Space class's own member
-becomes its kind's payload: a formal's requirement, a constant, a Decision's
-domain and its arguments, a callback with its arguments, a view's output and
-obligations, ``Members``, ``Users`` and ``Present`` alternatives. Guards and
-integer expressions are linked after every member, references resolving
-through ``_names``.
+A supplied formal becomes its binding (a literal, or an alias of what it
+references); a Space class's own member becomes its kind's payload: a formal's
+requirement, a constant, a Decision's domain and its arguments, a callback with
+its arguments, a view's output and obligations, ``Members``, ``Users`` and
+``Present`` alternatives. Guards and integer expressions are linked after every
+member, references resolving through ``_names``.
 """
 
 from __future__ import annotations
@@ -238,15 +237,6 @@ class _Lowering:
                     ) from cause
         return domain, tuple(arguments)
 
-    def contract(
-        self, scope: ScopeDraft, decision: Decision[object], node: Node
-    ) -> tuple[Domain[object], tuple[Argument, ...]]:
-        """The declared domain of an overridden Decision, read in its Space class's body."""
-        semantics = scope.effective.semantics.get(decision, node.semantics)
-        if semantics is None:
-            raise DefinitionError(f"{node.key}: the declared Decision has no value semantics")
-        return self.domain(scope.index, decision, semantics, owner=node.key)
-
     def callback(self, node: Node, function: BoundFunction) -> dict[str, Any]:
         """A callback's payload: its function, call style and resolved arguments."""
         return {
@@ -279,33 +269,21 @@ class _Lowering:
         scope = self.table.drafts[task.scope]
         node = self.table.nodes[task.index]
         binding = task.binding
-        # A supplier is read in the body that wrote it: the node's own source
-        # scope, or the enclosing node's for a binding assigned through a path.
-        written = (
-            scope.source_scope
-            if binding is None or binding.source_scope is None
-            else binding.source_scope
-        )
+        # A supplier is read in the body that wrote it: the node's source scope.
+        written = scope.source_scope
         changes: dict[str, Any]
-        if binding is not None and binding.kind in {"literal", "reference", "pin", "pin-reference"}:
-            changes = self.supplied(task, scope, node, binding, written)
-        elif binding is not None and binding.kind == "parameter":
-            changes = {"required": False}
+        if binding is not None and binding.kind in {"literal", "reference"}:
+            changes = self.supplied(task, node, binding, written)
         else:
             changes = self.declared(task, scope, node, written)
         self.table.nodes[node.index] = replace(node, **changes)
 
     def supplied(
-        self,
-        task: MemberTask,
-        scope: ScopeDraft,
-        node: Node,
-        binding: PlacementBinding,
-        written: int,
+        self, task: MemberTask, node: Node, binding: PlacementBinding, written: int
     ) -> dict[str, Any]:
-        """A member an enclosing body supplied: its value, or what it references."""
+        """A formal its declaring body supplied: its value, or what it references."""
         changes: dict[str, Any] = {}
-        if binding.kind in {"literal", "pin"}:
+        if binding.kind == "literal":
             changes["value"] = binding.supplier
         elif type(binding.supplier) is int and task.index in self.table.editable_aliases:
             changes["output"] = binding.supplier
@@ -314,20 +292,6 @@ class _Lowering:
             changes["output"] = self.names.supply(
                 written, binding.supplier, owner=node.key, locate=located
             )
-        if binding.contract is not None:
-            # A pinned coordinate keeps its declared guard and domain: the
-            # Space class's contract checks whatever an enclosing body supplies.
-            changes["guard"] = self.table.guarded(
-                scope.index,
-                scope.guard,
-                scope.effective.guards.get(binding.contract),
-                node.key + ".$guard",
-                owner=node.key,
-            )
-            changes["domain"], changes["domain_arguments"] = self.contract(
-                scope, cast(Decision[object], binding.contract), node
-            )
-            changes["note"] = binding.provenance.text() if binding.provenance is not None else None
         return changes
 
     def declared(
@@ -340,23 +304,13 @@ class _Lowering:
         condition: ValueRef[bool] | None = scope.effective.guards.get(declaration)
         guard_scope = scope
         outer = scope.guard
-        replaced: Decision[object] | None = None
         if binding is not None and binding.kind == "local-decision":
-            replaced = cast("Decision[object] | None", binding.contract)
             declaration = cast(Decision[object], binding.supplier)
             source_scope = written
             condition = declaration.when
             if task.owner_scope is not None:
                 guard_scope = self.table.drafts[task.owner_scope]
             outer = guard_scope.guard
-            if replaced is not None:
-                outer = self.table.guarded(
-                    scope.index,
-                    outer,
-                    scope.effective.guards.get(replaced),
-                    node.key + ".$contract",
-                    owner=node.key,
-                )
         guard = self.table.guarded(
             source_scope,
             outer,
@@ -365,7 +319,7 @@ class _Lowering:
             owner=node.key,
         )
         changes: dict[str, Any] = {"guard": guard}
-        changes.update(self.payload(task, declaration, node, guard, source_scope, replaced))
+        changes.update(self.payload(task, declaration, node, guard, source_scope))
         return changes
 
     def payload(
@@ -375,11 +329,9 @@ class _Lowering:
         node: Node,
         guard: int | None,
         source_scope: int,
-        replaced: Decision[object] | None,
     ) -> dict[str, Any]:
         """What a declared member's node holds, by the kind of its declaration."""
         scope = self.table.drafts[task.scope]
-        binding = task.binding
         if isinstance(declaration, Param):
             return {"required": declaration.required}
         if isinstance(declaration, Const):
@@ -392,15 +344,6 @@ class _Lowering:
                 source_scope, declaration, node.semantics, owner=node.key
             )
             changes["required_choice"] = declaration.required
-            if replaced is not None:
-                changes["contract"], changes["contract_arguments"] = self.contract(
-                    scope, replaced, node
-                )
-                changes["note"] = (
-                    binding.provenance.text()
-                    if binding is not None and binding.provenance is not None
-                    else None
-                )
             return changes
         if isinstance(declaration, Expr):
             self.names.expression(scope.index, declaration, owner=node.key, index=node.index)

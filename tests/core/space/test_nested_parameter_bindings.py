@@ -1,18 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A reusable interface leaves nested formals unsupplied; enclosing nodes supply them.
+"""Nested formals are supplied where their node is declared; a fresh Decision owns its choice.
 
-A nested formal left unsupplied is assigned through a path by an enclosing
-Space class (``kernel.port.dtype = dtype``), which binds it for that placement only;
-a formal that should be exposed is declared on the enclosing Space class and bound
-by name; and a fresh inline ``Decision`` at a node call (also on a node the
-caller supplies to a reference input) owns its choice.
+A reusable Space class exposes its child's formals as its own and binds them by
+name (``port = Port(dtype=dtype, lanes=lanes)``); whoever places it supplies
+them. A fresh inline ``Decision`` at a node call (also on a node the caller
+supplies to a reference input) owns its choice.
 """
 
 from __future__ import annotations
-
-from typing import cast
 
 import pytest
 
@@ -48,10 +45,12 @@ class Port(Space):
 
 
 class Reusable(Space):
-    """Its port's formals stay unsupplied: whoever places a Reusable supplies them."""
+    """Its port's formals are its own: whoever places a Reusable supplies them."""
 
     count: int = Param()
-    port = Port()
+    dtype: str = Param()
+    lanes: int = Param()
+    port = Port(dtype=dtype, lanes=lanes)
 
 
 class Kernel(Space):
@@ -65,9 +64,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     class Parent(Space):
         dtype: str = Param()
         lanes: int = Decision(values=(1, 2, 4))
-        kernel = Reusable(count=1)
-        kernel.port.dtype = dtype  # for this placement of Reusable only
-        kernel.port.lanes = lanes
+        kernel = Reusable(count=1, dtype=dtype, lanes=lanes)
 
     base = design_space(Parent(dtype="INT8"))
     assert base.kernel.port.dtype == "INT8"
@@ -76,7 +73,7 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     assert chosen.kernel.port.physical == ("INT8", 2)
     assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
     assert committed(chosen) == {"lanes": 2}
-    # A formal supplied by an assignment is not a choice of its own.
+    # A formal supplied by another member is not a choice of its own.
     with pytest.raises(RequestError, match="not independently editable"):
         chosen.with_choices({Parent.kernel.port.lanes: 1})
     evidence = inspection.explain(chosen.kernel.port, Port.description)
@@ -192,9 +189,7 @@ def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_space_class() ->
     # The formal is declared here and bound to the child by name.
     class Parent(Space):
         lanes: int = Param(required=False)
-        kernel = Reusable(count=1)
-        kernel.port.dtype = "INT8"
-        kernel.port.lanes = lanes
+        kernel = Reusable(count=1, dtype="INT8", lanes=lanes)
 
     omitted = design_space(Parent())
     assert omitted.kernel.port.dtype == "INT8"
@@ -203,28 +198,17 @@ def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_space_class() ->
     assert supplied.kernel.port.physical == ("INT8", 3)
 
 
-def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> None:
+def test_a_childs_formal_nothing_supplies_is_reported_and_exposed_by_name() -> None:
     class Middle(Space):
-        kernel = Reusable(count=1)  # the port's formals stay unsupplied through Middle
+        kernel = Reusable(count=1)  # dtype and lanes left unsupplied
 
-    class Outer(Space):
-        lanes: int = Decision(values=(2, 4))
-        middle = Middle()
-        middle.kernel.port.dtype = "INT3"
-        middle.kernel.port.lanes = lanes
-
-    point = design_space(Outer())
-    chosen = point.with_choices(lanes=4)
-    assert chosen.middle.kernel.port.physical == ("INT3", 4)
-    with pytest.raises(DefinitionError, match=r"kernel\.port\.dtype is not supplied"):
+    with pytest.raises(DefinitionError, match=r"kernel\.dtype is not supplied"):
         design_space(Middle())
 
-    # Re-exposing by name: the enclosing Space class declares the formal and binds it.
+    # Exposing by name: the enclosing Space class declares the formal and binds it.
     class Named(Space):
         dtype: str = Param()
-        kernel = Reusable(count=1)
-        kernel.port.dtype = dtype
-        kernel.port.lanes = 2
+        kernel = Reusable(count=1, dtype=dtype, lanes=2)
 
     class Top(Space):
         named = Named(dtype="INT5")
@@ -232,54 +216,11 @@ def test_reexposed_nested_slot_can_be_bound_again_by_an_outer_placement() -> Non
     assert design_space(Top()).named.kernel.port.physical == ("INT5", 2)
 
 
-@pytest.mark.parametrize("kind", ["literal", "alias", "decision"])
-def test_an_outer_assignment_overrides_an_internal_binding(kind: str) -> None:
-    # Parameters are template fields: an enclosing body may override what an
-    # inner body supplied, and the outermost assignment wins.
-    class Internal(Space):
-        local = Const(2)
-        port = Port(
-            dtype="INT8",
-            lanes=2
-            if kind == "literal"
-            else cast(int, local)
-            if kind == "alias"
-            else Decision(values=(1, 2)),
-        )
-
-    class Parent(Space):
-        child = Internal()
-        child.port.lanes = 4
-
-    inner = [item.key for item in inspection.decisions(Internal)]
-    assert inner == (["port.lanes"] if kind == "decision" else [])
-    point = design_space(Parent())
-    assert point.child.port.physical == ("INT8", 4)
-    assert [item.key for item in inspection.decisions(point)] == []
-    provenance = inspection.provenance(point, Parent.child.port.lanes)
-    assert provenance is not None
-    assert provenance.text().startswith("child.port.lanes = 4 (set by Parent at ")
-
-
-def test_an_outer_assignment_beside_an_inner_one_wins() -> None:
-    class Middle(Space):
-        kernel = Reusable(count=1)
-        kernel.port.dtype = "INT8"
-        kernel.port.lanes = 2
-
-    class Outer(Space):
-        middle = Middle()
-        middle.kernel.port.dtype = "INT4"
-
-    assert design_space(Middle()).kernel.port.physical == ("INT8", 2)
-    assert design_space(Outer()).middle.kernel.port.physical == ("INT4", 2)
-
-
 def test_assignment_targets_are_checked() -> None:
     class Parent(Space):
         child = Reusable(count=2)
-        child.port.dtype = "INT8"
-        child.port.lanes = 1
+        child.dtype = "INT8"
+        child.lanes = 1
 
     assert design_space(Parent()).child.count == 2
 
@@ -289,18 +230,17 @@ def test_assignment_targets_are_checked() -> None:
             child = Reusable(count=1)
             child.count = 2
 
-    with pytest.raises(DefinitionError, match="already assigned"):
+    with pytest.raises(DefinitionError, match="a node below it is supplied where it is declared"):
 
-        class DuplicateNested(Space):
+        class Nested(Space):
             child = Reusable(count=1)
             child.port.dtype = "INT8"
-            child.port.dtype = "INT4"
 
     with pytest.raises(DefinitionError, match="behaviour belongs to the Space class"):
 
         class NonParameter(Space):
-            child = Reusable(count=1)
-            child.port.description = ("x", 2)
+            port = Port(dtype="INT8", lanes=2)
+            port.description = ("x", 2)
 
     with pytest.raises(DefinitionError, match="expected value of nominal type int"):
         Reusable().count = "two"  # type: ignore[assignment]
@@ -313,14 +253,14 @@ def test_assignment_after_freezing_is_refused() -> None:
         first: str = Param()
         second: str = Param()
         kernel = Reusable(count=1)
-        kernel.port.dtype = first
-        kernel.port.lanes = 1
+        kernel.dtype = first
+        kernel.lanes = 1
 
     reference = Parent.kernel.port.dtype
     old = design_space(Parent(first="INT3", second="INT7"))
     # Preparing Parent froze its node declarations: the model cannot drift.
     with pytest.raises(DefinitionError, match="is frozen .Parent was prepared") as caught:
-        Parent.kernel.port.lanes = 2
+        Parent.kernel.lanes = 2
     assert "assigned at test_nested_parameter_bindings.py:" in str(caught.value)
     point = design_space(Parent(first="INT3", second="INT7"))
     assert old.query(reference) == point.query(reference) == Available("INT3")
@@ -332,28 +272,27 @@ def test_assignment_after_freezing_is_refused() -> None:
 def test_configure_freezes_its_root() -> None:
     root = Reusable()
     root.count = 3
-    root.port.dtype = "INT8"
-    root.port.lanes = 2
+    root.dtype = "INT8"
+    root.lanes = 2
     assert design_space(root).port.physical == ("INT8", 2)
     with pytest.raises(DefinitionError, match="is frozen"):
         root.count = 4
 
 
-def test_a_graph_built_as_data_binds_nested_formals_and_keeps_their_types() -> None:
+def test_a_graph_built_as_data_binds_formals_and_keeps_their_types() -> None:
     # Nodes are plain values, joined by assignment, named by composite.
     child = Reusable(count=1)
-    child.port.dtype = "INT8"
-    child.port.lanes = 2
+    child.dtype = "INT8"
+    child.lanes = 2
     declaration = inspection.declaration(child)
-    assert dict(declaration.bindings) == {"count": 1}
-    assert dict(declaration.nested) == {"port.dtype": "INT8", "port.lanes": 2}
+    assert dict(declaration.bindings) == {"count": 1, "dtype": "INT8", "lanes": 2}
     assert declaration.unsupplied == () and declaration.frozen is None
     space_type = composite("Parent", {"child": child})
     point = design_space(space_type())
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
     assert placed.port.physical == ("INT8", 2)
-    with pytest.raises(DefinitionError, match=r"child\.port\.dtype is not supplied"):
+    with pytest.raises(DefinitionError, match=r"child\.dtype is not supplied"):
         design_space(composite("Unbound", {"child": Reusable(count=1)})())
 
 

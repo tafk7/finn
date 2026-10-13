@@ -23,7 +23,7 @@ from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef, ViewKey
 from .expressions import IntOperator
-from .ir import Choice, Node, NodeKind, Provenance, Scope
+from .ir import Choice, Node, NodeKind, Scope
 from .semantics import BOOL, ValueSemantics
 
 
@@ -41,10 +41,6 @@ class ScopeDraft:
     guard: int | None
     source_scope: int
     record: NodeDecl | None
-    # Who wrote the record's own settings (ROOT_WRITER for the root declaration).
-    writer: int
-    # The nearest strict ancestor whose record assigns through a path.
-    carrier: int | None
     slots: dict[str, Slot] = field(default_factory=dict)
     members: dict[object, int] = field(default_factory=dict)
     named_members: dict[str, int] = field(default_factory=dict)
@@ -158,10 +154,6 @@ class Table:
     argument_checks: list[tuple[BoundArgument, int, str]] = field(default_factory=list)
     # For the linked model. Formals supplied by a named shared Decision.
     editable_aliases: set[int] = field(default_factory=set)
-    # Who set each supplied member (by node) and each replaced child (by scope).
-    provenance: dict[int, Provenance] = field(default_factory=dict)
-    scope_provenance: dict[int, Provenance] = field(default_factory=dict)
-    pinned: dict[str, Provenance] = field(default_factory=dict)
 
     def collected(self, space_type: type[Space]) -> EffectiveSpace:
         effective = self.effective.get(space_type)

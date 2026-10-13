@@ -8,12 +8,13 @@ compiled structure, with no inputs; a *design space* is a model with its inputs
 bound and every choice open; a *configuration* is a design space after some
 choices, and a *design point* one complete for the question asked.
 
-``design_space(node)`` is the one step from a declaration to a design space.
-A root whose bindings are all plain values reuses its Space class's model and binds
-the values as runtime inputs; a root that supplies structure (a node, a
-reference, a fresh Decision, an override below it) is compiled for that
-declaration. Preparing a model freezes every node declaration it instantiates,
-and ``design_space`` freezes its root: from then on, assignment is refused.
+``design_space(node)`` is the one step from a declaration to a design space. A
+Space class is compiled once, into the model every design space of it shares; a
+root supplies plain values for its value formals, bound as runtime inputs. A
+root that supplies structure (a node, a reference, a fresh Decision) is refused:
+structure belongs to a Space class. Preparing a model freezes every node
+declaration it instantiates, and ``design_space`` freezes its root: from then
+on, assignment is refused.
 """
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
@@ -29,10 +30,10 @@ from ._linker import link_space
 from ._nodes import (
     NodeDecl,
     is_reference_input,
-    is_structural,
     missing_formal,
     node_record,
     space_formals,
+    structural_settings,
     unsupplied_formals,
 )
 from .declarations import MISSING, UNSUPPLIED
@@ -76,7 +77,6 @@ class Model(Generic[S]):
             scope,
             reference,
             self.linked.editable_aliases,
-            self.linked.pinned,
         )
 
 
@@ -157,20 +157,6 @@ def compile_model(space_type: type[S]) -> Model[S]:
         return model
 
 
-def _compile_node(record: NodeDecl) -> Model[Space]:
-    """The model of one root declaration; plain values stay runtime inputs."""
-
-    with _PREPARATION_LOCK:
-        if not is_structural(record):
-            return cast(Model[Space], compile_model(record.space_type))
-        cached = record.model
-        if isinstance(cached, Model):
-            return cached
-        model: Model[Space] = _publish(record.space_type, link_space(record.space_type, record))
-        record.model = model
-        return model
-
-
 def root_record(node: object) -> NodeDecl:
     record = node_record(node)
     if record is None:
@@ -182,6 +168,13 @@ def root_record(node: object) -> NodeDecl:
         raise RequestError(
             f"design_space() takes a root: {record.describe()} is already placed ({where}); "
             "open the design space of the node that contains it"
+        )
+    structural = structural_settings(record)
+    if structural:
+        raise DefinitionError(
+            f"design_space() of {record.describe()}: a root supplies plain values for its "
+            f"value formals, and {', '.join(structural)} supplies structure (a node, a "
+            "reference or a Decision); write a subclass, or build one with composite()"
         )
     return record
 
@@ -232,7 +225,7 @@ def design_space(node: S) -> S:
             f"{'; '.join(missing)}; while opening the design space of {record.describe()}"
         )
     try:
-        model = _compile_node(record)
+        model = cast(Model[Space], compile_model(record.space_type))
     except DefinitionError as error:
         raise DefinitionError(
             f"{error}; while opening the design space of {record.describe()}",

@@ -239,16 +239,6 @@ def test_an_unsupplied_required_input_is_an_authoring_error_naming_the_candidate
     assert "compute.packed.width is not supplied" in str(raised.value)
     assert "compute.stub.width is not supplied" in str(raised.value)
 
-    class Supplying(Space):
-        inner = Open()
-        inner.compute["packed"].width = 4  # type: ignore[index]
-        inner.compute["stub"].width = 6  # type: ignore[index]
-
-    point = commit(
-        design_space(Supplying()), {"inner.compute": "stub", "inner.compute.stub.rows": 1}
-    )
-    assert point.inner.compute.cycles == 6
-
 
 # -- required() --------------------------------------------------------------------------
 
@@ -316,36 +306,13 @@ def test_a_class_body_handle_is_the_typed_spelling_of_a_qualified_read() -> None
         narrow = View(packed.narrow_weights)
         indexed = View(compute["packed"].narrow_weights)  # type: ignore[index]
 
-    class Design(Space):
-        held = Handled(width=8)
-        held.packed.pe = 2  # the same key as held.compute["packed"].pe
-
     base = design_space(Handled(width=8))
     assert keys(base) == keys(design_space(Unit(width=8)))
-    assert [item.key for item in inspection.pinned(design_space(Design()))] == [
-        "held.compute.packed.pe"
-    ]
     packed = commit(base, {"compute": "packed"})
     assert packed.narrow is True and packed.indexed is True
 
 
-# -- keys and enclosing bodies -----------------------------------------------------------
-
-
-def test_an_enclosing_body_pins_a_candidates_choice_and_overrides_its_inputs() -> None:
-    class Design(Space):
-        unit = Unit(width=8)
-        unit.compute["packed"].pe = 2  # type: ignore[index]
-        unit.compute["packed"].narrow_weights = False  # type: ignore[index]
-        unit.compute["stub"].width = 6  # type: ignore[index]
-
-    base = design_space(Design())
-    assert keys(base) == ["unit.compute", "unit.compute.packed.simd", "unit.compute.stub.rows"]
-    assert [item.key for item in inspection.pinned(base)] == ["unit.compute.packed.pe"]
-    packed = commit(base, {"unit.compute": "packed", "unit.compute.packed.simd": 1})
-    assert packed.unit.cycles == 4 and packed.unit.narrow is False
-    stub = commit(base, {"unit.compute": "stub", "unit.compute.stub.rows": 1})
-    assert stub.unit.cycles == 6
+# -- keys ----------------------------------------------------------------------------------
 
 
 def test_switching_candidates_refuses_a_stale_candidate_choice_until_cleared() -> None:
@@ -359,61 +326,14 @@ def test_switching_candidates_refuses_a_stale_candidate_choice_until_cleared() -
     assert stub.cycles == 16
 
 
-def test_an_enclosing_body_pins_or_narrows_the_choice_by_key() -> None:
-    class Pinned(Space):
-        unit = Unit(width=8)
-        unit.compute = "stub"  # type: ignore[assignment]
-
-    class Narrowed(Space):
-        unit = Unit(width=8)
-        unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
-
-    pinned, narrowed = design_space(Pinned()), design_space(Narrowed())
-    assert "unit.compute" not in keys(pinned)
-    assert [item.key for item in inspection.pinned(pinned)] == ["unit.compute"]
-    (choice,) = inspection.choices(pinned)
-    assert choice.selector is None and [case.name for case in choice.cases] == ["packed", "stub"]
-    point = commit(pinned, {"unit.compute.stub.rows": 4})
-    assert isinstance(point.unit.compute, StubCore) and point.unit.cycles == 32
-    assert isinstance(point.query(Pinned.unit.compute["packed"].narrow_weights), Inapplicable)  # type: ignore[index]
-    assert "unit.compute" in keys(narrowed)
-    handle = inspection.decision_handle(narrowed, Narrowed.unit.compute)
-    assert narrowed.field(handle).candidates() == Available(("stub",))
-    with pytest.raises(ConfigurationError):
-        narrowed.with_choices({handle: "packed"})
-    with pytest.raises(DefinitionError, match="does not add one"):
-
-        class Added(Space):
-            unit = Unit(width=8)
-            unit.compute = "bogus"  # type: ignore[assignment]
-
-    with pytest.raises(DefinitionError, match=r"Decision\(values=\(<keys>"):
-
-        class Scalar(Space):
-            unit = Unit(width=8)
-            unit.compute = Decision(values=(1,))  # type: ignore[assignment]
-
-
-def test_a_pinned_or_narrowed_choice_answers_the_same_with_and_without_collapse() -> None:
-    class Pinned(Space):
-        unit = Unit(width=8)
-        unit.compute = "packed"  # type: ignore[assignment]
-
-    class Narrowed(Space):
-        unit = Unit(width=8)
-        unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
-
-    for space_type, choices in (
-        (Unit, {}),
-        (Unit, {"compute": "packed", "compute.packed.pe": 2, "compute.packed.simd": 1}),
-        (Pinned, {"unit.compute.packed.pe": 4}),
-        (Narrowed, {"unit.compute": "stub", "unit.compute.stub.rows": 2}),
+def test_a_choice_answers_the_same_with_and_without_collapse() -> None:
+    for choices in (
+        {},
+        {"compute": "packed", "compute.packed.pe": 2, "compute.packed.simd": 1},
+        {"compute": "stub", "compute.stub.rows": 2},
     ):
-        root = space_type(width=8) if space_type is Unit else space_type()
-        collapsed = open_space(root, collapsed=True)
-        plain = open_space(
-            space_type(width=8) if space_type is Unit else space_type(), collapsed=False
-        )
+        collapsed = open_space(Unit(width=8), collapsed=True)
+        plain = open_space(Unit(width=8), collapsed=False)
         if choices:
             collapsed, plain = commit(collapsed, dict(choices)), commit(plain, dict(choices))
         assert answers(collapsed) == answers(plain)
@@ -453,20 +373,12 @@ def refusal(point: Space, choices: dict[str, object]) -> set[tuple[str, str]]:
     }
 
 
-def test_commitments_replay_by_key_and_refuse_unknown_and_narrowed_cases() -> None:
+def test_commitments_replay_by_key_and_an_unknown_case_is_refused() -> None:
     base = design_space(Unit(width=8))
     point = commit(base, {"compute": "packed", "compute.packed.pe": 4, "compute.packed.simd": 2})
     replayed = commit(design_space(Unit(width=8)), committed(point))
     assert replayed.cycles == 2
     assert refusal(base, {"compute": "bogus"}) == {("compute", "domain-membership")}
-
-    class Narrowed(Space):
-        unit = Unit(width=8)
-        unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
-
-    narrowed = design_space(Narrowed())
-    assert commit(narrowed, {"unit.compute": "stub"}).unit.compute is not None
-    assert refusal(narrowed, {"unit.compute": "packed"}) == {("unit.compute", "domain-membership")}
 
 
 # -- programmatic declaration ------------------------------------------------------------
@@ -503,19 +415,6 @@ def test_the_candidates_admissions_force_one_case_and_leave_several_open() -> No
     # Committed, the choice is no longer forced.
     chosen = commit(design_space(Unit(width=128)), {"compute": "stub"})
     assert "compute" not in forced(chosen)
-
-
-def test_a_pinned_choice_is_no_decision_and_a_narrowed_one_of_one_case_is_forced() -> None:
-    class Pinned(Space):
-        unit = Unit(width=8)
-        unit.compute = "packed"  # type: ignore[assignment]
-
-    class Narrowed(Space):
-        unit = Unit(width=8)
-        unit.compute = Decision(values=("stub",))  # type: ignore[assignment]
-
-    assert "unit.compute" not in forced(design_space(Pinned()))
-    assert forced(design_space(Narrowed()))["unit.compute"] == "stub"
 
 
 # -- users through a forwarded input -----------------------------------------------------

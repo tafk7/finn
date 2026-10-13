@@ -1,17 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Node declarations: calling a Space class, assigning members, and placing each node once.
+"""Node declarations: calling a Space class, supplying its formals, and placing each node once.
 
 ``Room(area=12)`` returns a declaration-mode ``Room`` object carrying a
-``NodeDecl`` record; ``hall.area = kitchen.area`` supplies a formal later.
-Assignment reaches any depth (``middle.kernel.port.lanes = lanes``): the value
-is stored on the first node of the path, keyed by the member path below it,
-and applies to that placement only. Where several bodies set one member, the
-outermost wins; one body setting it twice is a definition error.
+``NodeDecl`` record; ``hall.area = kitchen.area`` supplies a formal later. The
+body that declares a node supplies its formals, each once, and nothing else:
+its Decisions, Decisions over nodes and child nodes belong to its Space class
+(a subclass changes them), and a node below it is supplied where it is declared.
 
 A node is placed exactly once: by a class-body attribute, as a candidate of a
-Decision, as the replacement of a child node, or (when nothing else places it)
-at the one reference input it is supplied to. Nothing here compiles.
+Decision, or (when nothing else places it) at the one reference input it is
+supplied to. Nothing here compiles.
 """
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
@@ -61,18 +60,18 @@ def _space() -> type[Space]:
     return _SPACE[0]
 
 
-# What an assignment may target. Data is overridable; behaviour is not.
+# What a member is, for what may supply it: a body supplies formals (values and
+# reference inputs); the rest belongs to the Space class.
 SlotKind = Literal["param", "reference", "decision", "choice", "node", "behaviour"]
 
 
 class NodeDecl(Declaration):
-    """One declared node of ``space_type``: its assignments, guard and placement.
+    """One declared node of ``space_type``: its formals' suppliers, guard and placement.
 
-    ``overrides`` maps a member path below this node (``"area"``, or
-    ``"port.dtype"`` through a child) to its supplier and the line that wrote
-    it. A path of one segment is the node's own binding (at the call, or by
-    direct assignment). A declaration is mutable until it is frozen: when a
-    model containing it is prepared, or when ``design_space`` takes it as a root.
+    ``settings`` maps each formal the declaring body supplied (at the call, or by
+    assignment) to its supplier and the line that wrote it. A declaration is
+    mutable until it is frozen: when a model containing it is prepared, or when
+    ``design_space`` takes it as a root.
     """
 
     _record_origin = False
@@ -82,25 +81,19 @@ class NodeDecl(Declaration):
         # (a Space node, a Decision) would read through its __get__ in mypy.
         self.space_type: type[Space] = space_type
         self.origin = origin
-        self.overrides: dict[str, tuple[object, str | None]] = {}
+        self.settings: dict[str, tuple[object, str | None]] = {}
         self.instance: object = None
         self.placement: str | None = None
         self.candidate_of: NodeDecision | None = None
         self.aliases: list[str] = []
         # Every reference input this node was supplied to, for place-once checks.
         self.sites: list[str] = []
-        self.model: object = None
         self.frozen: str | None = None
 
     @property
     def bindings(self) -> dict[str, object]:
-        """The node's own members supplied at its call or by direct assignment."""
-        return {key: value for key, (value, _) in self.overrides.items() if "." not in key}
-
-    @property
-    def nested(self) -> dict[str, object]:
-        """Members of descendants assigned through a path, keyed ``"port.dtype"``."""
-        return {key: value for key, (value, _) in self.overrides.items() if "." in key}
+        """The node's formals supplied at its call or by assignment."""
+        return {key: value for key, (value, _) in self.settings.items()}
 
     def describe(self) -> str:
         where = f" placed at {self.placement}" if self.placement else ""
@@ -119,8 +112,6 @@ class NodeDecision(Decision[str]):
 
     candidates: Mapping[str, NodeDecl | None]
     proxy: NodeChoice
-    # Where it replaces another Decision over nodes, if it is an override.
-    replaces: str | None
     # Declared with candidate entries: a direct read needs a member every candidate has.
     strict: bool
 
@@ -327,111 +318,21 @@ def _reference_supplier(formal: Param[object], value: object, label: str) -> obj
     return supplied
 
 
-class KeySelection:
-    """An enclosing body's pin (one key) or narrowing (several keys) of a Decision over nodes.
-
-    The declared candidates stay placed, with the bindings of the body that
-    declared them; the selection only restricts which of them may be selected.
-    """
-
-    __slots__ = ("keys", "pin")
-
-    def __init__(self, keys: tuple[str, ...], pin: bool) -> None:
-        self.keys, self.pin = keys, pin
-
-    def __repr__(self) -> str:
-        return repr(self.keys[0]) if self.pin else f"Decision(values={self.keys!r})"
-
-
-def _key_selection(original: NodeDecision, value: object, label: str) -> KeySelection | None:
-    """``"pump"`` pins a Decision over nodes; ``Decision(values=("pump", ...))`` narrows it."""
-    keys: tuple[str, ...]
-    if isinstance(value, str):
-        keys, pin = (value,), True
-    elif isinstance(value, Decision) and not isinstance(value, NodeDecision):
-        found = value.domain._finite_values
-        if (
-            value.when is not None
-            or value.name is not None
-            or found is None
-            or any(type(item) is not str for item in found)
-        ):
-            raise DefinitionError(
-                f"{label}: narrow a Decision over nodes with Decision(values=(<keys>, ...))"
-            )
-        keys, pin = tuple(cast(tuple[str, ...], found)), False
-    else:
-        return None
-    unknown = [key for key in keys if key not in original.candidates]
-    if unknown:
-        raise DefinitionError(
-            f"{label}: {unknown} are not cases of {original.describe()}; an override narrows "
-            "the cases, it does not add one"
-        )
-    return KeySelection(keys, pin)
-
-
-def _choice_supplier(
-    original: NodeDecision, value: object, label: str
-) -> NodeDecision | KeySelection:
-    """A Decision over nodes may be pinned or narrowed by key, or replaced by a narrower one."""
-    selection = _key_selection(original, value, label)
-    if selection is not None:
-        return selection
-    if not isinstance(value, NodeChoice) or len(value._space_path) != 1:
-        raise DefinitionError(
-            f"{label}: a Decision over nodes is pinned by a key, narrowed by a Decision over "
-            "keys, or replaced by another Decision over nodes (a narrower one)"
-        )
-    decision = value._space_decision()
-    if decision.owner is not None or decision.replaces is not None:
-        raise DefinitionError(f"{label}: {decision.describe()} is already placed")
-    for key, record in decision.candidates.items():
-        if key not in original.candidates:
-            raise DefinitionError(
-                f"{label}: case {key!r} is not a case of {original.describe()}; an override "
-                "narrows the cases, it does not add one"
-            )
-        previous = original.candidates[key]
-        if (record is None) != (previous is None) or (
-            record is not None
-            and previous is not None
-            and not issubclass(record.space_type, previous.space_type)
-        ):
-            expected = "None" if previous is None else f"a {previous.space_type.__qualname__} node"
-            raise DefinitionError(f"{label}: case {key!r} must be {expected}")
-    decision.replaces = label
-    for key, record in decision.candidates.items():
-        if record is not None:
-            record.placement = f"{label}.{key}"
-    return decision
-
-
-def _node_supplier(original: NodeDecl, value: object, label: str) -> NodeDecl:
-    """A child node may be replaced by a fresh node of its Space class or a subclass."""
-    record = node_record(value)
-    if record is None:
-        raise DefinitionError(f"{label}: a child node is replaced by a node declaration")
-    if not issubclass(record.space_type, original.space_type):
-        raise DefinitionError(
-            f"{label}: expected a {original.space_type.__qualname__} node (or a subclass), got "
-            f"{record.space_type.__qualname__}; a replacement must keep every member the "
-            "enclosing bodies can name"
-        )
-    if record.when is not None:
-        raise DefinitionError(
-            f"{label}: a replacement takes its slot's presence; declare when= on the slot"
-        )
-    if not is_fresh(record) or record.sites:
-        _refuse_placement(record, f"override {label}")
-    record.placement = f"override {label}"
-    return record
+_KINDS: Mapping[str, str] = {
+    "decision": "Decision",
+    "choice": "Decision over nodes",
+    "node": "child node",
+}
 
 
 def check_supplier(
     space_type: type[Space], name: str, member: Declaration, value: object, label: str
 ) -> object:
-    """Validate one supplier of a member, as far as it can be checked before linking."""
+    """Validate one supplier of a formal, as far as it can be checked before linking.
+
+    Only formals are supplied: a Decision, a Decision over nodes, a child node and
+    behaviour belong to the Space class, and a subclass changes them.
+    """
     if (
         isinstance(member, Param)
         and not isinstance(member, LocatedParam)
@@ -439,23 +340,17 @@ def check_supplier(
     ):
         return _pending_supplier(member, value, label)
     kind = slot_kind(member)
-    if kind == "behaviour":
-        what = type(member).__name__
+    if kind not in ("param", "reference"):
+        what = _KINDS.get(kind)
+        belongs = "it belongs" if what else "behaviour belongs"
         raise DefinitionError(
-            f"{label}: {space_type.__qualname__}.{name} is a {what}: behaviour belongs to the "
-            "Space class; subclass it to change it (only Params, Decisions and child nodes are "
-            "assigned)"
+            f"{label}: {space_type.__qualname__}.{name} is a {what or type(member).__name__}: "
+            f"{belongs} to the Space class; subclass it to change it (a body supplies formals "
+            "only)"
         )
     if kind == "reference":
         return _reference_supplier(cast(Param[object], member), value, label)
-    if kind == "choice":
-        return _choice_supplier(cast(NodeDecision, member), value, label)
-    if kind == "node":
-        return _node_supplier(cast(NodeDecl, member), value, label)
-    if isinstance(member, Param):
-        member.resolve()
-    elif isinstance(member, Decision):
-        cast(Decision[object], member).resolve()
+    cast(Param[object], member).resolve()
     semantics = cast("ValueSemantics[object] | None", getattr(member, "semantics", None))
     if isinstance(member, LocatedParam):
         if isinstance(value, (ValueRef, View)):
@@ -500,15 +395,14 @@ def _annotated_yet(member: Param[object]) -> bool:
     return True
 
 
-def _record(head: NodeDecl, key: str, supplier: object, origin: str | None, label: str) -> None:
-    earlier = head.overrides.get(key)
+def _record(record: NodeDecl, name: str, supplier: object, origin: str | None, label: str) -> None:
+    earlier = record.settings.get(name)
     if earlier is not None:
         raise DefinitionError(
-            f"{label}: {key} is already assigned at {earlier[1]} in this body; a body sets a "
-            "member once, and only an enclosing body may override it (write alternatives "
-            "as Present(a, b))"
+            f"{label}: {name} is already assigned at {earlier[1]}; a body supplies a formal "
+            "once (write alternatives as Present(a, b))"
         )
-    head.overrides[key] = (supplier, origin)
+    record.settings[name] = (supplier, origin)
 
 
 def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Space:
@@ -534,7 +428,7 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
     record.when = when
     for name, value in keywords.items():
         label = f"{space_type.__qualname__}.{name}{at(origin)}"
-        record.overrides[name] = (
+        record.settings[name] = (
             check_supplier(space_type, name, members[name], value, label),
             origin,
         )
@@ -543,19 +437,12 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
     return node
 
 
-def _segments(record: Declaration) -> tuple[str, ...]:
-    if isinstance(record, NodeDecl) and record.candidate_of is not None:
-        return (str(record.candidate_of.name), str(record.name))
-    return (str(record.name),)
-
-
 def assign(instance: object, name: str, value: object) -> None:
-    """``node.member = value``: supply or override a member of a declaration.
+    """``node.member = value``: supply a formal of a node declaration.
 
-    Through a path (``kernel.port.dtype = x``) the member is set for this
-    placement of ``kernel`` only; the assignment is stored on ``kernel``,
-    keyed by the path below it, and overrides whatever the bodies inside
-    ``kernel`` set. One body setting a member twice is a definition error.
+    Only the node's own formals: a node reached through another
+    (``kernel.port.dtype = x``) is supplied where it is declared, and its
+    Space class decides the rest. A body supplies a formal once.
     """
 
     origin = source_origin()
@@ -563,30 +450,28 @@ def assign(instance: object, name: str, value: object) -> None:
     if path is None:
         raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
     label = f"{path_text(path)}.{name} (assigned at {origin})"
-    if any(not isinstance(item, NodeDecl) for item in path):
+    if len(path) != 1 or not isinstance(path[0], NodeDecl):
         raise DefinitionError(
-            f"{label}: assign members of a node declaration, or of the nodes below it, not "
-            "through a reference input (assign the referenced node where it is placed)"
+            f"{label}: assign a formal of the node declaration itself; a node below it is "
+            "supplied where it is declared (or write a subclass)"
         )
-    records = cast(tuple[NodeDecl, ...], path)
-    head, target = records[0], records[-1]
-    members, handles = space_members(target.space_type)
+    record = path[0]
+    members, handles = space_members(record.space_type)
     if name in handles:
         raise DefinitionError(
-            f"{label}: {name} names a candidate of a Decision; override the Decision instead"
+            f"{label}: {name} names a candidate of a Decision; it belongs to the Space class"
         )
     if name not in members:
         raise DefinitionError(
-            f"{label}: {target.space_type.__qualname__} has no member {name!r} to assign"
+            f"{label}: {record.space_type.__qualname__} has no member {name!r} to assign"
         )
-    if head.frozen is not None:
+    if record.frozen is not None:
         raise DefinitionError(
-            f"{label}: {head.describe()} is frozen ({head.frozen}); a declaration can be "
+            f"{label}: {record.describe()} is frozen ({record.frozen}); a declaration can be "
             "assigned only until its Space class is prepared or design_space() takes it"
         )
-    key = ".".join((*(segment for record in records[1:] for segment in _segments(record)), name))
-    supplier = check_supplier(target.space_type, name, members[name], value, label)
-    _record(head, key, supplier, origin, label)
+    supplier = check_supplier(record.space_type, name, members[name], value, label)
+    _record(record, name, supplier, origin, label)
 
 
 def unsupplied_formals(record: NodeDecl) -> list[str]:
@@ -599,16 +484,17 @@ def unsupplied_formals(record: NodeDecl) -> list[str]:
     ]
 
 
-def is_structural(record: NodeDecl) -> bool:
-    """Whether a root supplies structure: anything but plain values for its own formals."""
+def structural_settings(record: NodeDecl) -> list[str]:
+    """What a root supplies beyond plain values for its value formals, by formal name."""
     formals = space_formals(record.space_type)
-    for key, (value, _) in record.overrides.items():
+    found = []
+    for key, (value, _) in record.settings.items():
         formal = formals.get(key)
         if formal is None or is_reference_input(formal):
-            return True
-        if isinstance(value, (ValueRef, View, NodeDecl)) and not isinstance(value, Const):
-            return True
-    return False
+            found.append(key)
+        elif isinstance(value, (ValueRef, View, NodeDecl)) and not isinstance(value, Const):
+            found.append(key)
+    return found
 
 
 def missing_formal(key: str, formal: Declaration, record: NodeDecl | None, space_name: str) -> str:
@@ -656,11 +542,6 @@ class NodeChoice:
                 f"{owner.__qualname__}.{name}: a nested choice path is a reference"
             )
         decision = self._space_decision()
-        if decision.replaces is not None:
-            raise DefinitionError(
-                f"{owner.__qualname__}.{name}: {decision.describe()} already overrides "
-                f"{decision.replaces}"
-            )
         decision.__set_name__(owner, name)
         for key, record in decision.candidates.items():
             if record is not None:
@@ -722,7 +603,6 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
 
     decision = Declaration.__new__(NodeDecision)
     object.__setattr__(decision, "_body", class_body())
-    decision.replaces = None
     decision.strict = False
     decision.required = False
     candidates: dict[str, NodeDecl | None] = {}
@@ -809,7 +689,7 @@ def entry_choice(
         members, _ = space_members(space_type)
         for name, value in shared.items():
             label = f"{space_type.__qualname__}.{name} (shared binding of candidate {key!r}{where})"
-            record.overrides[name] = (
+            record.settings[name] = (
                 check_supplier(space_type, name, members[name], value, label),
                 origin,
             )
@@ -847,7 +727,7 @@ def _check_shared(
         )
     for key, record in records.items():
         for name in shared:
-            earlier = record.overrides.get(name)
+            earlier = record.settings.get(name)
             if earlier is not None:
                 raise DefinitionError(
                     f"Decision{where}: candidate {key!r} already binds {name} (at {earlier[1]}), "
@@ -908,7 +788,6 @@ def unwrap(value: object) -> object:
 
 
 __all__ = [
-    "KeySelection",
     "NONE_CASE",
     "NodeChoice",
     "NodeDecision",
@@ -923,7 +802,7 @@ __all__ = [
     "is_fresh",
     "is_reference_input",
     "is_required",
-    "is_structural",
+    "structural_settings",
     "missing_formal",
     "node_choice",
     "node_record",

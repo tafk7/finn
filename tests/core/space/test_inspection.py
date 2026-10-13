@@ -106,7 +106,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
     assert selectors[0].key == "implementation"
     assert selectors[0].cases == ("a", "b")
     choice = inspection.choices(point)[0]
-    # None only when an enclosing body pinned the choice.
+    # None only when its guard can never hold here.
     assert_type(choice.selector, DecisionHandle[str] | None)
     assert choice.selector is not None and choice.selector == selectors[0].reference
     chosen = point.with_choices({choice.selector: "b"})

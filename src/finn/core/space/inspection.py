@@ -31,13 +31,12 @@ from .declarations import (
     MemberRef,
     ValueRef,
     View,
-    declared_path,
 )
 from .errors import RequestError
-from .ir import Layer, LinkedModel, NodeKind, Provenance
+from .ir import LinkedModel, NodeKind
 from .occurrence import candidate as _candidate
 from .occurrence import state
-from .references import DecisionHandle, ValueHandle, decision_key, descend
+from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
     Available,
     ConstraintAssessment,
@@ -62,8 +61,6 @@ class NodeInfo:
     generated: bool
     guard: ValueHandle[bool] | None
     origin: str | None = None
-    # Who set this member's value, for a member some body supplied or overrode.
-    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +99,7 @@ class ChoiceInfo:
     key: str
     scope: str
     cases: tuple[CaseInfo, ...]
-    # None when an enclosing body pinned the choice: its key is then listed as pinned.
+    # None when its guard can never hold here: it has no key.
     selector: DecisionHandle[str] | None
     guard: ValueHandle[bool] | None
 
@@ -215,7 +212,6 @@ def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](linked, node.guard),
         node.origin,
-        linked.provenance.get(index),
     )
 
 
@@ -383,22 +379,6 @@ def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
     )
 
 
-def provenance(subject: Space | Model[S] | type[Space], reference: object) -> Provenance | None:
-    """Who set a member's effective value, and what it overrides; None if nothing set it.
-
-    ``reference`` is a member (``House.kitchen.area``), a child node
-    (``House.kitchen.sub``, replaced by an enclosing body) or a handle. The
-    text form reads ``kitchen.area = 16 (set by House at house.py:42; declared
-    12 at room.py:10)``.
-    """
-    compiled, scope = _context(subject)
-    linked = compiled.linked
-    record = declared_path(reference) if isinstance(reference, Space) else None
-    if record is not None:
-        return linked.scope_provenance.get(descend(linked.scopes, scope, record))
-    return linked.provenance.get(compiled.resolve(scope, reference))
-
-
 def admission(candidate: Space) -> QueryResult[object] | None:
     """A candidate's own refusal of its configuration: its ``admission`` member, if any.
 
@@ -492,17 +472,6 @@ def open(point: Space) -> tuple[Open, ...]:  # noqa: A001 - the inspection's nam
     )
 
 
-def pinned(subject: Space | Model[S] | type[Space]) -> tuple[Provenance, ...]:
-    """Every decision key an override removed by pinning its coordinate, with who pinned it."""
-    compiled, scope = _context(subject)
-    prefix = compiled.linked.scopes[scope].name
-    return tuple(
-        item
-        for key, item in sorted(compiled.linked.pinned.items())
-        if not prefix or key.startswith(prefix + ".")
-    )
-
-
 def dependencies(
     subject: Space | Model[S] | type[Space],
     reference: object,
@@ -593,11 +562,9 @@ def explain(point: Space, reference: object) -> object:
 class NodeDeclaration:
     """A node declaration read without compiling it.
 
-    ``bindings`` maps each member this node's own body set (at the call or by
-    direct assignment) to its supplier: a value, a reference, a fresh Decision,
-    or a node. ``nested`` maps the members of descendants assigned through a
-    path (``"port.dtype"``), which override what the bodies inside set.
-    ``unsupplied`` names the required formals nothing supplies yet, and
+    ``bindings`` maps each formal its declaring body supplied (at the call or by
+    assignment) to its supplier: a value, a reference, a fresh Decision, or a
+    node. ``unsupplied`` names the required formals nothing supplies yet, and
     ``frozen`` says why assignment is closed.
     """
 
@@ -606,7 +573,6 @@ class NodeDeclaration:
     placement: str | None
     members: tuple[str, ...]
     bindings: Mapping[str, object]
-    nested: Mapping[str, object]
     unsupplied: tuple[str, ...]
     frozen: str | None
     when: object
@@ -644,14 +610,12 @@ def declaration(node: object) -> NodeDeclaration:
         return value
 
     bindings = {name: public(value) for name, value in record.bindings.items()}
-    nested = {path: public(value) for path, value in record.nested.items()}
     return NodeDeclaration(
         record.space_type,
         record.name,
         record.placement,
         tuple(collect_space(record.space_type).members),
         MappingProxyType(bindings),
-        MappingProxyType(nested),
         tuple(sorted(unsupplied_formals(record))),
         record.frozen,
         record.when,
@@ -684,9 +648,7 @@ __all__ = [
     "DecisionInfo",
     "EvidenceNode",
     "Forced",
-    "Layer",
     "NodeInfo",
-    "Provenance",
     "ModelStatistics",
     "Open",
     "QueryEvidence",
@@ -706,8 +668,6 @@ __all__ = [
     "members",
     "model",
     "open",
-    "pinned",
-    "provenance",
     "reference",
     "statistics",
     "value_handle",

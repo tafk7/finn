@@ -396,7 +396,6 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
                 via,
                 _runtime.read_decisions(snapshot, dependencies, via),
             )
-            outcome = _runtime.supplied_provenance(snapshot, outcome, task.context.index)
             if isinstance(task.identity, int):
                 snapshot.cache[task.identity] = outcome
         task.frame.close()
