@@ -18,7 +18,7 @@ import warnings
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
-from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import (
     SELECTED_BY,
@@ -82,12 +82,11 @@ def test_a_failed_step_at_a_terminal_starts_the_debugger(monkeypatch):
     assert status == -1 and len(debugged) == 1
 
 
-class Refused(ValueError):
-    """A refusal of no common base: an error carrying findings."""
+class Refused(Refusal):
+    """A step's own refusal, of its own message."""
 
     def __init__(self, findings):
-        super().__init__(f"{len(findings)} reasons")
-        self.findings = tuple(findings)
+        super().__init__(findings, f"{len(findings)} reasons")
 
 
 def blocker(code: str, message: str) -> Finding:
@@ -160,6 +159,16 @@ def test_a_tool_unavailable_is_logged_naming_what_selects_it(capsys):
 def test_a_plain_assert_is_a_bug_with_its_traceback_on_the_console(capsys):
     err, _ = logged_failure(capsys, AssertionError("unreachable"))
     assert err.startswith("ERROR: step_fails failed: AssertionError: unreachable\nTraceback")
+
+
+@pytest.mark.util
+def test_a_plain_value_error_is_a_bug_even_with_findings(capsys):
+    """A refusal is told by its type: a ValueError that is no Refusal is a bug, whatever
+    it carries."""
+    plain = ValueError("not typed")
+    plain.findings = (blocker("odd", "one is odd"),)
+    err, _ = logged_failure(capsys, plain)
+    assert err.startswith("ERROR: step_fails failed: ValueError: not typed\nTraceback")
 
 
 def step_says(model, cfg):

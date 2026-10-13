@@ -121,7 +121,7 @@ from math import floor
 from os import PathLike
 from typing import Any, Generic, Protocol, TypeVar
 
-from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import (
     Available,
     Inapplicable,
@@ -193,9 +193,23 @@ S = TypeVar("S", bound=Composition)
 # dataclasses, since a frozen one is a value class, which holds immutable values only.
 
 
-class ExploreError(ValueError):
-    """An exploration that cannot go on: a Decision no case of which is viable, or no
-    case an explorer proposes is accepted, each named with why."""
+class ExploreError(Refusal):
+    """An exploration that cannot go on, and why: its one finding (``findings``), owned by
+    who refused: a Decision none of whose cases is viable or accepted, by its key; a
+    pin the seam refuses, by the file that states it; a strategy's own setting or need,
+    by the strategy. What the seam or the engine found against it are the finding's
+    causes. Its message is the finding's line."""
+
+    def __init__(
+        self,
+        code: str,
+        owner: str,
+        message: str,
+        *,
+        causes: Iterable[Finding] = (),
+        kind: FindingKind = FindingKind.REJECTION,
+    ) -> None:
+        super().__init__((Finding(kind, code, owner, message, causes=tuple(causes)),))
 
 
 @dataclass
@@ -319,11 +333,11 @@ class Run:
 
 
 class Unsettled(ExploreError):
-    """A held key (a pin of this run) that settling cannot bring back to its held value:
-    the change that reached it is refused, naming the pin."""
+    """A held key (a pin of this run) that settling cannot bring back to its held value
+    (``pin-unsettled``, owned by the key): the change that reached it is refused."""
 
-    def __init__(self, key: Key, why: str) -> None:
-        super().__init__(f"{dotted(key)}: {why}")
+    def __init__(self, key: Key, why: str, causes: Iterable[Finding] = ()) -> None:
+        super().__init__("pin-unsettled", dotted(key), why, causes=causes)
         self.key = key
         self.why = why
 
@@ -365,6 +379,11 @@ def _text(key: Key, findings: Iterable[Finding]) -> str:
 def _reasons(why: Mapping[Key, Iterable[Finding]]) -> str:
     """Each key's reasons as text (``_text``), in ``why``'s order."""
     return "; ".join(f"{dotted(key)}: {_text(key, found)}" for key, found in why.items())
+
+
+def _all(why: Mapping[Any, Iterable[Finding]]) -> tuple[Finding, ...]:
+    """Every finding of ``why``, each once, in its order."""
+    return tuple(dict.fromkeys(finding for found in why.values() for finding in found))
 
 
 def _findings_of(result: object) -> tuple[Finding, ...]:
@@ -525,11 +544,14 @@ class Seam:
             reach = {key for key in trial.refused if key in stored} - clear
             if not reach:
                 raise ExploreError(
+                    "reopen-refused",
+                    "reopen",
                     "reopening is refused: "
                     + "; ".join(
                         f"{dotted(key)}: " + "; ".join(map(str, why))
                         for key, why in trial.refused.items()
-                    )
+                    ),
+                    causes=_all(trial.refused),
                 )
             clear |= reach
 
@@ -588,6 +610,7 @@ class Seam:
                         choice.key,
                         f"held to {held!r} by a pin, refused after the change: "
                         + _reasons(outcome.why),
+                        _all(outcome.why),
                     )
                 network, kept[choice.key] = outcome.network, held
                 continue
@@ -742,7 +765,7 @@ class Seam:
             for name in held
         ]
         if unknown:
-            raise ExploreError(f"{source}: no member of the network owns {unknown}")
+            raise ExploreError("member-unknown", source, f"no member of the network owns {unknown}")
         found = {
             (owner, name): value for owner, held in values.items() for name, value in held.items()
         }
@@ -833,13 +856,15 @@ class Ranked:
     def _commit(self, seam: Seam, network: S, choice: Choice) -> S:
         assert choice.cases is not None
         if not choice.cases:
-            detail = "; ".join(f"{case}: {why}" for case, why in choice.refused.items())
-            raise ExploreError(f"{dotted(choice.key)}: no case is viable: {detail}")
+            raise _no_viable_case(choice)
         ranked = list(self.policy.rank(choice))
         if not ranked or any(case not in choice.cases for case in ranked):
             raise ExploreError(
+                "policy-case-not-viable",
+                type(self.policy).__name__,
                 f"{dotted(choice.key)}: the policy ranked {ranked}, not among the viable "
-                f"{list(choice.cases)}"
+                f"{list(choice.cases)}",
+                kind=FindingKind.AUTHORING,
             )
         return _first_accepted(seam, network, choice, ranked)
 
@@ -849,21 +874,35 @@ def _first_accepted(seam: Seam, network: S, choice: Choice, cases: Sequence[obje
     return _first_case(seam, network, choice, cases)[0]
 
 
+def _no_viable_case(choice: Choice) -> ExploreError:
+    """The refusal of ``choice``, none of whose cases is viable, owned by its key."""
+    detail = "; ".join(f"{case}: {why}" for case, why in choice.refused.items())
+    return ExploreError(
+        "decision-no-viable-case", dotted(choice.key), f"no case is viable: {detail}"
+    )
+
+
 def _first_case(
     seam: Seam, network: S, choice: Choice, cases: Sequence[object]
 ) -> tuple[S, object]:
     """``network`` with ``choice`` committed to the first of ``cases`` the seam accepts, and
     that case."""
     if not cases:
-        detail = "; ".join(f"{case}: {why}" for case, why in choice.refused.items())
-        raise ExploreError(f"{dotted(choice.key)}: no case is viable: {detail}")
-    refusals = []
+        raise _no_viable_case(choice)
+    refusals: list[str] = []
+    causes: list[Finding] = []
     for case in cases:
         outcome = seam.set(network, {choice.key: case})
         if isinstance(outcome, Accepted):
             return outcome.network, case
         refusals.append(f"{case!r}: " + _reasons(outcome.why))
-    raise ExploreError(f"{dotted(choice.key)}: no case is accepted: " + "; ".join(refusals))
+        causes.extend(_all(outcome.why))
+    raise ExploreError(
+        "decision-no-accepted-case",
+        dotted(choice.key),
+        "no case is accepted: " + "; ".join(refusals),
+        causes=causes,
+    )
 
 
 # -- resetting and the debug placeholder ---------------------------------------------------
@@ -908,8 +947,10 @@ class DebugPlaceholder:
             if choice is None:
                 if required:
                     raise ExploreError(
+                        "placeholder-no-case",
+                        self.strategy,
                         "the placeholder has no case to take for a required choice known by "
-                        "membership only: " + ", ".join(dotted(each.key) for each in required)
+                        "membership only: " + ", ".join(dotted(each.key) for each in required),
                     )
                 return network
             network, case = _first_case(seam, network, choice, choice.cases or ())
@@ -937,12 +978,15 @@ class Pinned:
 
     def __init__(self, path: str | PathLike[str]) -> None:
         self.path = str(path)
-        with open(path) as file:
-            loaded = json.load(file)
+        try:
+            with open(path) as file:
+                loaded = json.load(file)
+        except (OSError, ValueError) as error:
+            raise ExploreError("pins-invalid", self.path, f"not read: {error}") from error
         if not isinstance(loaded, dict) or not all(
             isinstance(values, dict) for values in loaded.values()
         ):
-            raise ExploreError(f"{self.path}: not a {{graph name: {{key: value}}}} file")
+            raise ExploreError("pins-invalid", self.path, "not a {graph name: {key: value}} file")
         self.choices: dict[str, dict[str, object]] = loaded
         self.held: dict[Key, object] = {}
 
@@ -955,7 +999,7 @@ class Pinned:
             if key in seam.held and seam.held[key] != value
         }
         if refused:
-            raise ExploreError(f"{self.path}: refused choices: " + _named(refused))
+            raise _pins_refused(self.path, refused)
         batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
 
         def pin(opened: S, _: Mapping[Key, object]) -> S:
@@ -963,7 +1007,7 @@ class Pinned:
                 return opened
             outcome = seam.set(opened, batch)
             if isinstance(outcome, Refused):
-                raise ExploreError(f"{self.path}: refused choices: " + _named(outcome.why))
+                raise _pins_refused(self.path, outcome.why)
             return outcome.network
 
         self.held = wanted
@@ -971,7 +1015,9 @@ class Pinned:
         try:
             return seam.run(network, (), pin, self.strategy)
         except Unsettled as error:
-            raise ExploreError(f"{self.path}: refused choices: {error}") from error
+            raise ExploreError(
+                "pin-refused", self.path, f"refused choices: {error}", causes=error.findings
+            ) from error
 
     def report(self) -> dict[str, object]:
         return {"strategy": self.strategy, "path": self.path}
@@ -979,6 +1025,11 @@ class Pinned:
 
 def _named(why: Mapping[Key, tuple[Finding, ...]]) -> str:
     return _reasons(dict(sorted(why.items())))
+
+
+def _pins_refused(path: str, why: Mapping[Key, tuple[Finding, ...]]) -> ExploreError:
+    """The refusal of the pins ``path`` states, the seam's reasons by key its causes."""
+    return ExploreError("pin-refused", path, "refused choices: " + _named(why), causes=_all(why))
 
 
 # -- throughput ----------------------------------------------------------------------------
@@ -1032,7 +1083,9 @@ class TargetCycles:
 
     def __init__(self, cycles: int, *, relax: bool = True) -> None:
         if cycles < 1:
-            raise ExploreError(f"a budget of {cycles} cycles a frame is none")
+            raise ExploreError(
+                "budget-invalid", self.strategy, f"a budget of {cycles} cycles a frame is none"
+            )
         self.cycles = cycles
         self.relax = relax
         self.relaxed_to: int | None = None
@@ -1364,18 +1417,28 @@ class TargetThroughput(TargetCycles):
 
     def __init__(self, fps: float, *, relax: bool = True) -> None:
         if fps <= 0:
-            raise ExploreError(f"a throughput of {fps} frames a second is none")
+            raise ExploreError(
+                "throughput-invalid",
+                self.strategy,
+                f"a throughput of {fps} frames a second is none",
+            )
         super().__init__(1, relax=relax)
         self.fps = fps
 
     def explore(self, seam: Seam, network: S) -> S:
         if seam.platform is None:
-            raise ExploreError("a target throughput needs the seam's platform (its clock)")
+            raise ExploreError(
+                "platform-unstated",
+                self.strategy,
+                "a target throughput needs the seam's platform (its clock)",
+            )
         self.cycles = floor(1e9 / (seam.platform.period_ns * self.fps))
         if self.cycles < 1:
             raise ExploreError(
+                "throughput-unreachable",
+                self.strategy,
                 f"{self.fps} frames a second leaves less than a cycle a frame at "
-                f"{seam.platform.period_ns} ns"
+                f"{seam.platform.period_ns} ns",
             )
         return super().explore(seam, network)
 
@@ -1480,15 +1543,29 @@ class MaxThroughput:
 
     def __init__(self, within: Mapping[str, float]) -> None:
         if not within:
-            raise ExploreError("max_throughput needs a budget: within={resource: fraction}")
+            raise ExploreError(
+                "budget-invalid",
+                self.strategy,
+                "max_throughput needs a budget: within={resource: fraction}",
+            )
         unknown = sorted(set(within) - set(RESOURCE_NAMES))
         if unknown:
-            raise ExploreError(f"no resource is named {unknown} (one of {list(RESOURCE_NAMES)})")
+            raise ExploreError(
+                "budget-invalid",
+                self.strategy,
+                f"no resource is named {unknown} (one of {list(RESOURCE_NAMES)})",
+            )
         for name, fraction in within.items():
             if isinstance(fraction, bool) or not isinstance(fraction, (int, float)):
-                raise ExploreError(f"within {name}: {fraction!r} is no fraction")
+                raise ExploreError(
+                    "budget-invalid", self.strategy, f"within {name}: {fraction!r} is no fraction"
+                )
             if fraction <= 0:
-                raise ExploreError(f"within {name}: a fraction of {fraction} is no budget")
+                raise ExploreError(
+                    "budget-invalid",
+                    self.strategy,
+                    f"within {name}: a fraction of {fraction} is no budget",
+                )
         self.within = dict(within)
         self.budget: dict[str, int] = {}
         self.tried: list[_Tried] = []
@@ -1501,7 +1578,9 @@ class MaxThroughput:
         platform = seam.platform
         if platform is None or platform.resources is None:
             raise ExploreError(
-                "max_throughput needs the seam's platform's resources (its part's totals)"
+                "platform-unstated",
+                self.strategy,
+                "max_throughput needs the seam's platform's resources (its part's totals)",
             )
         self.budget = {
             name: floor(fraction * getattr(platform.resources, name))
@@ -1651,10 +1730,18 @@ class MaxThroughput:
         cost = seam.cost(settled)
         reached, used = cost.bottleneck, seam.resources(settled)
         if reached is None:
-            raise ExploreError("max_throughput needs every member's cycles: " + _unknown(cost))
+            raise ExploreError(
+                "cycles-unknown",
+                self.strategy,
+                "max_throughput needs every member's cycles: " + _unknown(cost),
+                causes=_all(cost.refused),
+            )
         if not isinstance(used, Stated):
             raise ExploreError(
-                "max_throughput needs the network's resources: " + "; ".join(map(str, used))
+                "resources-unknown",
+                self.strategy,
+                "max_throughput needs the network's resources: " + "; ".join(map(str, used)),
+                causes=used,
             )
         return reached, used
 
@@ -1771,11 +1858,19 @@ class SizeFifos:
         frames: int = 16,
     ) -> None:
         if method != "analytical":
-            raise ExploreError(f"no FIFO-sizing method {method!r}; only 'analytical'")
+            raise ExploreError(
+                "sizing-invalid",
+                self.strategy,
+                f"no FIFO-sizing method {method!r}; only 'analytical'",
+            )
         if margin < 0:
-            raise ExploreError(f"a margin of {margin} words is none")
+            raise ExploreError(
+                "sizing-invalid", self.strategy, f"a margin of {margin} words is none"
+            )
         if frames < 1:
-            raise ExploreError(f"a model of {frames} frames is none")
+            raise ExploreError(
+                "sizing-invalid", self.strategy, f"a model of {frames} frames is none"
+            )
         self.method = method
         self.margin = margin
         self.ram_style = ram_style
@@ -1805,7 +1900,12 @@ class SizeFifos:
         cost = seam.cost(network)
         bottleneck = cost.bottleneck
         if bottleneck is None:
-            raise ExploreError("sizing FIFOs needs every member's cycles: " + _unknown(cost))
+            raise ExploreError(
+                "cycles-unknown",
+                self.strategy,
+                "sizing FIFOs needs every member's cycles: " + _unknown(cost),
+                causes=_all(cost.refused),
+            )
         self.period = bottleneck.cycles
         transports = self.transports(seam, network)
         proposals: dict[str, _Proposal] = {}
@@ -1846,7 +1946,12 @@ class SizeFifos:
                         proposals[channel].refused = f"{dotted(key)}: {_text(key, why)}"
                         dropped = True
             if not dropped:
-                raise ExploreError("sizing FIFOs: refused: " + _named(outcome.why))
+                raise ExploreError(
+                    "fifos-refused",
+                    self.strategy,
+                    "sizing FIFOs: refused: " + _named(outcome.why),
+                    causes=_all(outcome.why),
+                )
         return network
 
     def report(self) -> dict[str, object]:

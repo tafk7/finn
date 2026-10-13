@@ -550,11 +550,14 @@ class KernelOp(CustomOp):
     def baselined(self) -> Network:
         """The node alone (``network``), every choice with cases at its baseline
         (``Seam.baseline``): refused (``KernelOpError``) where a Decision has no viable
-        case."""
+        case, with the exploration's findings, each naming the node."""
         try:
             return Seam().baseline(self.network())
         except ExploreError as error:
-            raise KernelOpError(f"{self.label}: no baseline: {error}") from error
+            raise KernelOpError(
+                f"{self.label}: no baseline: {error}",
+                findings=tuple(finding.about(node=self.label) for finding in error.findings),
+            ) from error
 
     def admission(self) -> tuple[Finding, ...]:
         """Why conversion refuses this node: its kernel's refusals bound on its inputs,
@@ -567,9 +570,7 @@ class KernelOp(CustomOp):
         try:
             based = self.baselined()
         except KernelOpError as error:
-            return (
-                Finding(FindingKind.REJECTION, "decision-no-viable-case", self.label, str(error)),
-            )
+            return error.findings
         refused: list[Finding] = []
         for name in based.members:
             if based.unbound(name) is not None:

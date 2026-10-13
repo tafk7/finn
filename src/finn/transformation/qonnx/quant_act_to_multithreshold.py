@@ -33,6 +33,7 @@ from qonnx.transformation.base import Transformation
 from finn.transformation.qonnx.qonnx_activation_handlers import (
     QuantActBaseHandler,
     QuantIdentityHandler,
+    refused,
 )
 
 
@@ -48,7 +49,9 @@ def default_filter_function_generator(max_multithreshold_bit_width=8):
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
         if bit_width is None:
-            raise ValueError("Quant nodes must have a static bit width.")
+            raise refused(
+                "quant-bitwidth-dynamic", q_node, "Quant nodes must have a static bit width."
+            )
         if bit_width > max_multithreshold_bit_width:
             warnings.warn(
                 f'The Quant node with name: "{q_node.name}" was not converted to a '
@@ -97,8 +100,10 @@ class ConvertQuantActToMultiThreshold(Transformation):
                 else:
                     predecessor_op_type = predecessor
                 if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
-                    raise ValueError(
-                        "Only Quant nodes with zero-point == 0 are currently supported."
+                    raise refused(
+                        "quant-zero-point",
+                        n,
+                        "Only Quant nodes with zero-point == 0 are currently supported.",
                     )
 
                 if not self._filter_function(model, n):

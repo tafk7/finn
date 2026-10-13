@@ -21,6 +21,7 @@ from pathlib import Path
 
 from finn.builder.build_dataflow_testbench import run_testbench, write_testbench
 from finn.core import rtlsim_bench
+from finn.core.reporting.findings import Refusal
 from finn.core.rtlsim_exec import XSim
 from finn.harness.hls import c_simulate
 from finn.platform import generate
@@ -79,7 +80,8 @@ def test_the_machine_hls_frontend_follows_the_host_files_release(tmp_path, versi
 
 
 def test_a_machine_release_that_is_no_release_is_refused():
-    with pytest.raises(ValueError, match="FINN_XILINX_VERSION=latest"):
+    refused = "FINN_XILINX_VERSION: host-setting-invalid: latest is not a release"
+    with pytest.raises(Refusal, match=refused):
         host_selection({**NO_FILE, "FINN_XILINX_VERSION": "latest"})
 
 

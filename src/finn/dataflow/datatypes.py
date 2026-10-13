@@ -27,8 +27,9 @@ holds is the caller's own instance and nothing can rename it in place. A
 ``BaseDataType`` subclass defined elsewhere is not one of those values and is
 refused.
 
-This module has **no FINN imports at all**, and ``finn.dataflow`` imports no
-engine (the layer table, ``tests/layering.py``, holds the package directions).
+This module imports of FINN only its findings (``finn.core.reporting``), and
+``finn.dataflow`` imports no engine (the layer table, ``tests/layering.py``, holds the
+package directions).
 The engine-side ``ValueSemantics`` declaration lives in
 ``finn.kernels.values.semantics``, built from the helpers here.
 
@@ -50,6 +51,8 @@ import re
 from typing import TypeAlias
 
 from qonnx.core.datatype import BaseDataType, DataType, is_datatype
+
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
 __all__ = [
     "DatatypeError",
@@ -78,8 +81,15 @@ partial uses. ``get_hls_datatype_str`` raises a bare ``AssertionError`` for
 arbitrary float formats, which no ``except`` clause should be catching."""
 
 
-class DatatypeError(ValueError):
-    """A value was offered as a datatype and is not one this stack can hold."""
+class DatatypeError(Refusal):
+    """A value was offered as a datatype and is not one this stack can hold: one
+    ``datatype-unsupported`` rejection, owned by ``DataType``, whose rules refuse it."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            (Finding(FindingKind.REJECTION, "datatype-unsupported", "DataType", message),),
+            message,
+        )
 
 
 def is_ordinary_integer(value: QONNXDataType) -> bool:

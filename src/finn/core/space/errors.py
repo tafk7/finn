@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
-from finn.core.reporting.findings import Finding, Refusal
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
 if TYPE_CHECKING:
     from .edits import ConfigurationResult
@@ -20,13 +20,19 @@ class SpaceError(Exception):
 
 
 class DefinitionError(SpaceError, Refusal):
-    """An authored definition cannot be compiled into a valid model.
+    """An authored definition cannot be compiled into a valid model: the declaration's
+    code is wrong, not its input.
 
-    It carries the findings that explain it.
+    It carries the findings that explain it; where the raiser names none, one
+    ``definition-invalid`` authoring finding owned by ``Space``, whose rules the
+    definition breaks, its message the detail (which names the declaration).
     """
 
     def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
-        super().__init__(findings, detail)
+        found = tuple(findings) or (
+            Finding(FindingKind.AUTHORING, "definition-invalid", "Space", detail),
+        )
+        super().__init__(found, detail)
 
 
 class RequestError(SpaceError, ValueError):

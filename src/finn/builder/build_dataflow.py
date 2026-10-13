@@ -56,7 +56,7 @@ from finn.builder.build_dataflow_steps import (
     build_dataflow_step_lookup,
     default_steps,
 )
-from finn.core.reporting.findings import Finding, FindingKind, by_code
+from finn.core.reporting.findings import Finding, FindingKind, Refusal, by_code
 from finn.core.reporting.log import FILE_ONLY, running_step
 from finn.core.reporting.manifest import note, recorded_run
 from finn.platform.refusal import TargetRefused
@@ -75,13 +75,13 @@ _LOG = logging.getLogger(__name__)
 
 
 def _failure_kind(error: BaseException) -> str:
-    """The kind of a failed step's error, as the manifest records it: ``tool-unavailable``,
-    ``tool-failed``, ``refusal`` (an error with ``findings``), else ``bug``."""
+    """The kind of a failed step's error, by its type, as the manifest records it:
+    ``tool-unavailable``, ``tool-failed``, ``refusal`` (a ``Refusal``), else ``bug``."""
     if isinstance(error, ToolUnavailable):
         return "tool-unavailable"
     if isinstance(error, ToolFailed):
         return "tool-failed"
-    if hasattr(error, "findings"):
+    if isinstance(error, Refusal):
         return "refusal"
     return "bug"
 
@@ -91,13 +91,13 @@ def _log_failure(step: str, error: BaseException) -> str:
     the log file, and for a bug to the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
-    if kind in ("tool-unavailable", "tool-failed"):
-        _LOG.error("%s: %s: %s", step, name, error)
-    elif kind == "refusal":
-        findings = tuple(error.findings)
+    if isinstance(error, Refusal):
+        findings = error.findings
         _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), name, error)
         for line in by_code(findings):
             _LOG.error("  %s", line)
+    elif kind != "bug":
+        _LOG.error("%s: %s: %s", step, name, error)
     else:
         _LOG.error("%s failed: %s: %s", step, name, error, exc_info=error)
         return kind
@@ -208,21 +208,17 @@ def _configured(
     return plan
 
 
-def _log_refusal(error: BaseException) -> None:
-    """Log a build stopped before its first step: a refused configuration finding by
-    finding, any other error with its traceback in the log file."""
-    if isinstance(error, ConfigurationRefused):
+def _refused(manifest: BuildManifest, error: BaseException) -> None:
+    """Log a build stopped before its first step and record it as ``refused``: a refusal
+    (there, only the configuration refuses) finding by finding, any other error with its
+    traceback in the log file."""
+    if isinstance(error, Refusal):
         _LOG.error("Configuration refused: %d findings", len(error.findings))
         for finding in error.findings:
             _LOG.error("  %s", finding)
-        return
-    _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
-    _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
-
-
-def _refused(manifest: BuildManifest, error: BaseException) -> None:
-    """Log a build stopped before its first step and record it as ``refused``."""
-    _log_refusal(error)
+    else:
+        _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
+        _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
     manifest.refused(error)
 
 

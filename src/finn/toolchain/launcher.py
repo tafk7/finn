@@ -41,6 +41,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol
 
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.reporting.manifest import RECORDS, TOOL_RUN
 
 # Modules, not names: finn.toolchain.vivado and .hls import this module in turn.
@@ -364,7 +365,7 @@ class Selection:
             # The host file's licence server, so that a process which never
             # sourced activate.sh still launches licensed tools. A licence
             # variable already set wins; a site route owns its own.
-            licence = host.license_for(environment, host.settings())
+            licence = host.license_for(environment, host_settings())
             if licence:
                 environment["XILINXD_LICENSE_FILE"] = licence
         return Toolchain(self, environment)
@@ -660,6 +661,22 @@ COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
 VIVADO_JOBS_SETTING = "FINN_VIVADO_JOBS"
 
 
+def setting_refused(name: str, message: str) -> Refusal:
+    """The refusal of the machine's setting ``name`` (``host-setting-invalid``), owned by
+    it: the environment variable, or the host file's line, to change."""
+    return Refusal((Finding(FindingKind.REJECTION, "host-setting-invalid", name, message),))
+
+
+def host_settings(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The host file's settings, each overridden by the environment (``host.settings``);
+    a host file that does not read is refused, owned by ``FINN_XILINX_ENV``, which names
+    the file."""
+    try:
+        return host.settings(environ)
+    except host.ConfigError as error:
+        raise setting_refused("FINN_XILINX_ENV", str(error)) from error
+
+
 def host_selection(
     environ: Mapping[str, str] | None = None, *, stated: Selection | None = None
 ) -> Selection:
@@ -671,7 +688,7 @@ def host_selection(
     environ = os.environ if environ is None else environ
     jobs = environ.get(VIVADO_JOBS_SETTING)
     if jobs is not None and not re.fullmatch(r"[0-9]+", jobs):
-        raise ValueError(f"{VIVADO_JOBS_SETTING}={jobs} is not a number of runs")
+        raise setting_refused(VIVADO_JOBS_SETTING, f"{jobs} is not a number of runs")
     frontend = hls.host_frontend(environ)
     try:
         machine = Selection(
@@ -680,7 +697,7 @@ def host_selection(
             vivado_jobs=None if jobs is None else int(jobs),
         )
     except ValueError as error:
-        raise ValueError(f"{VIVADO_JOBS_SETTING}: {error}") from error
+        raise setting_refused(VIVADO_JOBS_SETTING, str(error)) from error
     return machine if stated is None else stated.over(machine)
 
 

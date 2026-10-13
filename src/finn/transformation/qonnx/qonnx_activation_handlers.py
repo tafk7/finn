@@ -36,6 +36,17 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
+
+
+def refused(code, node, message):
+    """ConvertQuantActToMultiThreshold's refusal of the Quant ``node``."""
+    details = (("node", node.name),)
+    return Refusal(
+        [Finding(FindingKind.REJECTION, code, "ConvertQuantActToMultiThreshold", message, details)]
+    )
+
+
 np_default_dtype = np.float32
 
 
@@ -102,9 +113,11 @@ class QuantActBaseHandler(ABC):
         if len(nonunit_axes) == 0:
             return None
         if len(nonunit_axes) > 1:
-            raise ValueError(
+            raise refused(
+                "quant-scale-multi-axis",
+                self._q_node,
                 f"Quant node {self._q_node.name} has a multi-axis scale of shape "
-                f"{scale_shape}; only per-tensor or per-channel scales are supported."
+                f"{scale_shape}; only per-tensor or per-channel scales are supported.",
             )
         return nonunit_axes[0]
 
@@ -114,14 +127,20 @@ class QuantActBaseHandler(ABC):
         channels_first = {2: "NC", 3: "NCW", 4: "NCHW"}
         channels_last = {2: "NC", 3: "NWC", 4: "NHWC"}
         if ndim not in channels_first:
-            raise ValueError(f"Unsupported tensor rank {ndim} for MultiThreshold data layout.")
+            raise refused(
+                "multithreshold-rank",
+                self._q_node,
+                f"Unsupported tensor rank {ndim} for MultiThreshold data layout.",
+            )
         if channel_axis == ndim - 1:
             return channels_last[ndim]
         if channel_axis == 1:
             return channels_first[ndim]
-        raise ValueError(
+        raise refused(
+            "multithreshold-channel-axis",
+            self._q_node,
             f"Channel axis {channel_axis} (derived from the scale shape) is neither "
-            f"axis 1 nor the last axis; MultiThreshold cannot represent this layout."
+            f"axis 1 nor the last axis; MultiThreshold cannot represent this layout.",
         )
 
     def calculate_node_parameters(self):
@@ -304,17 +323,21 @@ class QuantReluHandler(QuantActBaseHandler):
             narrow = q_inst.get_nodeattr("narrow")
             signed = q_inst.get_nodeattr("signed")
             if not self._model.get_initializer(self._q_node.input[2]) == 0:
-                raise ValueError(
+                raise refused(
+                    "quant-zero-point",
+                    self._q_node,
                     "Only Quant nodes with zero-point == 0 "
-                    "are currently supported for ReLu activations."
+                    "are currently supported for ReLu activations.",
                 )
             act_node = self._model.find_direct_predecessors(self._q_node)
             act_node = act_node[0]
             if act_node.op_type == "Relu":
                 if signed or narrow:
-                    raise ValueError(
+                    raise refused(
+                        "relu-quant-signed",
+                        self._q_node,
                         "FINN only supports unsigned and non-narrow Quant nodes "
-                        "for Relu activations."
+                        "for Relu activations.",
                     )
         elif self._q_node.op_type == "BipolarQuant":
             return
@@ -451,16 +474,20 @@ class QuantIdentityHandler(QuantActBaseHandler):
     def _check_compatibility(self):
         if self._q_node.op_type == "Quant":
             if not self._model.get_initializer(self._q_node.input[2]) == 0:
-                raise ValueError(
+                raise refused(
+                    "quant-zero-point",
+                    self._q_node,
                     "Only Quant nodes with zero-point == 0 "
-                    "are currently supported for identity activations."
+                    "are currently supported for identity activations.",
                 )
         elif self._q_node.op_type == "BipolarQuant":
             quant_scale = self._model.get_initializer(self._q_node.input[1])
             if (quant_scale.flatten().shape[0] != 1) or quant_scale.flatten()[0] != 1.0:
-                raise ValueError(
+                raise refused(
+                    "bipolar-identity-scale",
+                    self._q_node,
                     "FINN only supports Bipolar identity activations "
-                    "with out per channel scaling and the scaling must be 1. "
+                    "with out per channel scaling and the scaling must be 1. ",
                 )
         else:
             raise RuntimeError("Got an unexpected quantizer node type")

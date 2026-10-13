@@ -37,6 +37,14 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import get_by_name
 
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
+
+
+def _refused(owner, code, node, message):
+    """The refusal of ``node`` by the transformation ``owner``."""
+    details = (("node", node.name),)
+    return Refusal([Finding(FindingKind.REJECTION, code, owner, message, details)])
+
 
 def _get_signed_from_upstream(model, trunc_node):
     """Whether the input of ``trunc_node`` is signed: its datatype's, else the first
@@ -148,61 +156,87 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
                         running_node_index = node_ind
                         k_s = get_by_name(n.attribute, "kernel_shape")
                         if k_s is None or len(k_s.ints) != 2 or len(set(k_s.ints)) != 1:
-                            raise ValueError(
-                                "FINN only supports average pooling with " "2D square kernels."
+                            raise _refused(
+                                type(self).__name__,
+                                "avgpool-kernel",
+                                n,
+                                "FINN only supports average pooling with " "2D square kernels.",
                             )
                         k_s = k_s.ints[0]
 
                         pads = get_by_name(n.attribute, "pads")
                         if pads is None or len(set(pads.ints)) != 1 or pads.ints[0] != 0:
-                            raise ValueError("FINN dosn't support padding for average pooling.")
+                            raise _refused(
+                                type(self).__name__,
+                                "avgpool-padding",
+                                n,
+                                "FINN dosn't support padding for average pooling.",
+                            )
 
                         stride = get_by_name(n.attribute, "strides")
                         if stride is None or len(stride.ints) != 2 or len(set(stride.ints)) != 1:
-                            raise ValueError(
+                            raise _refused(
+                                type(self).__name__,
+                                "avgpool-stride",
+                                n,
                                 "FINN only supports 2D strides with equal values in "
-                                "each direction."
+                                "each direction.",
                             )
                         stride = stride.ints[0]
 
                         mul_val = model.get_initializer(mul_node.input[1])
                         if mul_val is None or len(mul_val.shape) != 0 or mul_val != k_s * k_s:
-                            raise ValueError(
+                            raise _refused(
+                                type(self).__name__,
+                                "avgpool-scale",
+                                mul_node,
                                 f"The Mul node after the AveragePool node must have "
                                 f"static initialization at the second input, "
                                 f"further the initialization must be of zero dimension "
                                 f"and the value of the initialization must be "
                                 f"the quadratic value of the kernel size, "
-                                f"in this case {k_s * k_s}."
+                                f"in this case {k_s * k_s}.",
                             )
 
                         rounding_mode = get_by_name(t_node.attribute, "rounding_mode")
                         normalized_mode_string = rounding_mode.s.upper()
                         if rounding_mode is None or normalized_mode_string != b"FLOOR":
-                            raise ValueError(
-                                "The Trunc node must have the rounding_mode " "set to 'FLOOR'."
+                            raise _refused(
+                                type(self).__name__,
+                                "trunc-rounding-mode",
+                                t_node,
+                                "The Trunc node must have the rounding_mode " "set to 'FLOOR'.",
                             )
                         for inp in t_node.input[1:]:
                             if model.get_initializer(inp) is None:
-                                raise ValueError(
+                                raise _refused(
+                                    type(self).__name__,
+                                    "trunc-input-dynamic",
+                                    t_node,
                                     f"All inputs of the Trunc node, "
                                     f"except the first, must be statically "
-                                    f"initialized. However, {inp} is not."
+                                    f"initialized. However, {inp} is not.",
                                 )
                         zero_pt = model.get_initializer(t_node.input[2])
                         if len(zero_pt.shape) != 0 or zero_pt != 0:
-                            raise ValueError(
+                            raise _refused(
+                                type(self).__name__,
+                                "trunc-zero-point",
+                                t_node,
                                 f"Finn only supports 0 as the zero point for "
-                                f"the Trunc node, it currently is {zero_pt}."
+                                f"the Trunc node, it currently is {zero_pt}.",
                             )
                         trunc_in_bits = model.get_initializer(t_node.input[3]).flatten()
                         trunc_out_bits = model.get_initializer(t_node.input[4]).flatten()
                         if len(trunc_in_bits.shape) != 1 or len(trunc_out_bits.shape) != 1:
-                            raise ValueError(
+                            raise _refused(
+                                type(self).__name__,
+                                "trunc-bitwidth",
+                                t_node,
                                 f"Finn only supports scalar bit widths "
                                 f"for the Trunc node. The input bit width "
                                 f"currently is: {trunc_in_bits}, "
-                                f"while the output bit width is: {trunc_out_bits}."
+                                f"while the output bit width is: {trunc_out_bits}.",
                             )
                         trunc_in_bits = int(trunc_in_bits[0])
                         trunc_out_bits = int(trunc_out_bits[0])
@@ -301,40 +335,60 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                     running_node_index = node_ind
                     k_s = get_by_name(node.attribute, "kernel_shape")
                     if k_s is None or len(k_s.ints) != 2 or len(set(k_s.ints)) != 1:
-                        raise ValueError(
-                            "FINN only supports average pooling with " "2D square kernels."
+                        raise _refused(
+                            type(self).__name__,
+                            "avgpool-kernel",
+                            node,
+                            "FINN only supports average pooling with " "2D square kernels.",
                         )
                     k_s = k_s.ints[0]
 
                     pads = get_by_name(node.attribute, "pads")
                     if pads is None or len(set(pads.ints)) != 1 or pads.ints[0] != 0:
-                        raise ValueError("FINN dosn't support padding for average pooling.")
+                        raise _refused(
+                            type(self).__name__,
+                            "avgpool-padding",
+                            node,
+                            "FINN dosn't support padding for average pooling.",
+                        )
 
                     stride = get_by_name(node.attribute, "strides")
                     if stride is None or len(stride.ints) != 2 or len(set(stride.ints)) != 1:
-                        raise ValueError(
-                            "FINN only supports 2D strides with equal values in " "each direction."
+                        raise _refused(
+                            type(self).__name__,
+                            "avgpool-stride",
+                            node,
+                            "FINN only supports 2D strides with equal values in " "each direction.",
                         )
                     stride = stride.ints[0]
 
                     rounding_mode = get_by_name(t_node.attribute, "rounding_mode")
                     normalized_mode_string = rounding_mode.s.upper()
                     if rounding_mode is None or normalized_mode_string != b"FLOOR":
-                        raise ValueError(
-                            "The Trunc node must have the rounding_mode " "set to 'FLOOR'."
+                        raise _refused(
+                            type(self).__name__,
+                            "trunc-rounding-mode",
+                            t_node,
+                            "The Trunc node must have the rounding_mode " "set to 'FLOOR'.",
                         )
                     for inp in t_node.input[1:]:
                         if model.get_initializer(inp) is None:
-                            raise ValueError(
+                            raise _refused(
+                                type(self).__name__,
+                                "trunc-input-dynamic",
+                                t_node,
                                 f"All inputs of the Trunc node, "
                                 f"except the first, must be statically "
-                                f"initialized. However, {inp} is not."
+                                f"initialized. However, {inp} is not.",
                             )
                     zero_pt = model.get_initializer(t_node.input[2])
                     if len(zero_pt.shape) != 0 or zero_pt != 0:
-                        raise ValueError(
+                        raise _refused(
+                            type(self).__name__,
+                            "trunc-zero-point",
+                            t_node,
                             f"Finn only supports 0 as the zero point for "
-                            f"the Trunc node, it currently is {zero_pt}."
+                            f"the Trunc node, it currently is {zero_pt}.",
                         )
                     scale = model.get_initializer(t_node.input[1]).flatten()
                     out_scale = model.get_initializer(t_node.input[4]).flatten()
@@ -342,20 +396,26 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
                     trunc_in_bits = model.get_initializer(t_node.input[3]).flatten()
                     trunc_out_bits = model.get_initializer(t_node.input[5]).flatten()
                     if len(trunc_in_bits.shape) != 1 or len(trunc_out_bits.shape) != 1:
-                        raise ValueError(
+                        raise _refused(
+                            type(self).__name__,
+                            "trunc-bitwidth",
+                            t_node,
                             f"Finn only supports scalar bit widths "
                             f"for the Trunc node. The input bit width "
                             f"currently is: {trunc_in_bits}, "
-                            f"while the output bit width is: {trunc_out_bits}."
+                            f"while the output bit width is: {trunc_out_bits}.",
                         )
                     trunc_in_bits = int(trunc_in_bits[0])
                     trunc_out_bits = int(trunc_out_bits[0])
                     if np.round(np.log2(out_scale / scale) != trunc_in_bits - trunc_out_bits):
-                        raise ValueError(
+                        raise _refused(
+                            type(self).__name__,
+                            "trunc-scale-bits",
+                            t_node,
                             f"The scale values for the Trunc node are not "
                             f"compatible with the specified bit widths. "
                             f"Input scale: {scale}, output scale: {out_scale}, "
-                            f"input bits: {trunc_in_bits}, output bits: {trunc_out_bits}."
+                            f"input bits: {trunc_in_bits}, output bits: {trunc_out_bits}.",
                         )
 
                     # The input width whose sum over the window the Trunc narrows.

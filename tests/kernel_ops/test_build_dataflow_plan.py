@@ -360,6 +360,19 @@ def test_a_setting_of_the_wrong_type_is_refused_naming_its_place(
     )
 
 
+def step_hooked(model: ModelWrapper, cfg: DataflowBuildConfig, *, hook: Any = None) -> ModelWrapper:
+    """Declares a setting of any value."""
+    return model
+
+
+def test_a_setting_given_with_no_json_form_is_refused_naming_its_place() -> None:
+    """The manifest records each setting's value, so a value given in Python that JSON
+    cannot state is refused with the other settings, before the first step."""
+    line = refused(config(steps=[step_hooked], settings={"hook": object()}))
+    assert line.startswith("configuration.hook: setting-invalid: <object object at ")
+    assert line.endswith("> has no JSON form")
+
+
 def test_a_setting_no_step_declares_is_refused_naming_the_settings_the_steps_read() -> None:
     cfg = config(steps=[step_typed, step_cleanup], settings={"scael": 2.0})
     assert refused(cfg) == (

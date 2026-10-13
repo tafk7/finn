@@ -26,6 +26,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
+from finn.core.reporting.findings import FindingKind
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Available
 from finn.custom_op.kernels import shell
@@ -318,8 +319,10 @@ def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
     a, b = model.graph.node
     assert b.input[1] != "w"
     b.input[1] = a.input[1]
-    with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: w is read by a, b"):
+    with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: w is read by a, b") as fan:
         network(model, model.graph.node)
+    # Fan-out refuses the network: a rejection.
+    assert [each.kind for each in fan.value.findings] == [FindingKind.REJECTION]
 
 
 def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_persist() -> None:

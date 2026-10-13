@@ -665,14 +665,14 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     with pytest.raises(PynqRefused) as refused:
         step_deployment_package(parent, cfg)
     assert str(refused.value) == (
-        f"deployment_package: driver-stale: the driver in this output directory "
+        f"MakePynqDeployment: driver-stale: the driver in this output directory "
         f"({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
         f"{design_digest(body)}; make the driver again (step_make_driver)"
     )
     found.append(refused.value.findings)
-    assert [(each.code, each.owner, each.kind) for (each,) in found] == [
-        (code, "deployment_package", FindingKind.REJECTION)
+    assert [(each.code, each.owner, each.kind, dict(each.details)) for (each,) in found] == [
+        (code, "MakePynqDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
         for code in ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
     ]
     assert not (output / "deploy").exists()
@@ -1573,7 +1573,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
     report = Path(cfg.output_dir) / DELIVERED_CLOCK
-    absent = f"pynq_driver: clock-absent: no delivered clock \\({report}\\)"
+    absent = f"MakePynqDriver: clock-absent: no delivered clock \\({report}\\)"
     with pytest.raises(PynqRefused, match=absent):
         step_make_driver(parent, cfg)
     report.parent.mkdir(parents=True)
@@ -1581,7 +1581,10 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
         FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it"
     ).record()
     report.write_text(json.dumps({"target_period_ns": 5.0, "clocks": [], "findings": [unknown]}))
-    with pytest.raises(ValueError, match="the bitfile's clock is not known: no PL clock in it"):
+    unknown_clock = (
+        "MakePynqDriver: clock-unknown: the bitfile's clock is not known: no PL clock in it"
+    )
+    with pytest.raises(PynqRefused, match=unknown_clock):
         step_make_driver(parent, cfg)
     report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
     with pytest.raises(PynqRefused, match="the model states no bitfile") as refused:
@@ -1591,11 +1594,17 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    "step, output",
-    [(step_make_driver, "pynq_driver"), (step_deployment_package, "deployment_package")],
+    "step, output, maker",
+    [
+        (step_make_driver, "pynq_driver", "MakePynqDriver"),
+        (step_deployment_package, "deployment_package", "MakePynqDeployment"),
+    ],
 )
 def test_a_bitfile_built_from_another_design_is_refused_by_name(
-    tmp_path: Path, step: Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper], output: str
+    tmp_path: Path,
+    step: Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper],
+    output: str,
+    maker: str,
 ) -> None:
     """The driver and the deployment run the bitfile on the partition the model states: a
     bitfile that states no design it was built from, or another than the partition's
@@ -1614,11 +1623,11 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
     parent.set(OUTPUT_BITFILE, str(bitfile))
     (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
     with pytest.raises(
-        PynqRefused, match=rf"{output}: bitfile-unmade: the model's bitfile \(.*\) states no design"
+        PynqRefused, match=rf"{maker}: bitfile-unmade: the model's bitfile \(.*\) states no design"
     ) as refused:
         step(parent, cfg)
-    assert [(each.code, each.owner) for each in refused.value.findings] == [
-        ("bitfile-unmade", output)
+    assert [(each.code, each.owner, dict(each.details)) for each in refused.value.findings] == [
+        ("bitfile-unmade", maker, {"output": output})
     ]
     node, body, body_file = partition_body(parent)
     built_from = design_digest(body)
@@ -1632,7 +1641,7 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
         step(parent, cfg)
     assert [each.code for each in refused.value.findings] == ["bitfile-stale"]
     assert str(refused.value) == (
-        f"{output}: bitfile-stale: the model's bitfile ({bitfile}) is stale: it was built from "
+        f"{maker}: bitfile-stale: the model's bitfile ({bitfile}) is stale: it was built from "
         f"the design "
         f"{built_from}, and the partition {node.name}'s design is now {now}; build the "
         "bitfile again (step_build_bitfile)"

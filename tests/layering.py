@@ -116,8 +116,15 @@ LAYERS: tuple[Layer, ...] = (
     Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
     # The generic Space engine: the standard library and its native dependency.
     Layer("space", ("finn.core.space",), ("reporting",), ("greenlet",), "tests/core/space"),
-    # Canonical logical values: QONNX's datatypes and numpy, no engine.
-    Layer("dataflow", ("finn.dataflow",), (), ("qonnx.core.datatype", "numpy"), "tests/dataflow"),
+    # Canonical logical values: QONNX's datatypes and numpy, no engine; the findings
+    # their refusals carry.
+    Layer(
+        "dataflow",
+        ("finn.dataflow",),
+        ("reporting",),
+        ("qonnx.core.datatype", "numpy"),
+        "tests/dataflow",
+    ),
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
     Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
@@ -150,11 +157,12 @@ LAYERS: tuple[Layer, ...] = (
     # its writers (the cut, PackagePartition) and its readers (the channel's annotation,
     # whose choices a partition's body states; the builder, the integration export, the
     # shell's build, the executors). qonnx (and onnx, which qonnx depends on: its nodes
-    # are NodeProto) only, so the builder reads it without loading the kernel stack.
+    # are NodeProto) and the findings only, so the builder reads it without loading the
+    # kernel stack.
     Layer(
         "graph.partition",
         ("finn.core.graph.partition", "finn.core.graph.annotations.outputs"),
-        (),
+        ("reporting",),
         ("onnx", "qonnx"),
         "tests/kernel_ops",
     ),
@@ -180,9 +188,9 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # What FINN knows of the external tools it runs: the launcher, the host file, one
-    # module per tool. The standard library only, the records its tool runs are logged
-    # to (finn.core.reporting), and one module of util: the resource store (standard
-    # library only), on whose primitives the HLS cache builds.
+    # module per tool. The standard library only, the findings and the records its tool
+    # runs are logged to (finn.core.reporting), and one module of util: the resource store
+    # (standard library only), on whose primitives the HLS cache builds.
     Layer(
         "toolchain",
         ("finn.toolchain",),
@@ -219,7 +227,7 @@ LAYERS: tuple[Layer, ...] = (
             "finn.transformation.qonnx",
             "finn.transformation.streamline",
         ),
-        ("util",),
+        ("reporting", "util"),
         ("numpy", "onnx", "qonnx"),
         "tests/kernel_ops",
     ),

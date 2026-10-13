@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Any
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.facts import known_shape
 from finn.core.graph.partition import partition_body
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
@@ -190,14 +191,23 @@ class Integration:
         }
 
 
-class IntegrationError(ValueError):
-    """A partition its shell does not integrate, or not by an integration exported here."""
+class IntegrationError(Refusal):
+    """A partition its shell does not integrate, or not by an integration exported here:
+    one rejection, owned by who refused (the integration, or the target's shell), its
+    message the finding's line."""
+
+    def __init__(self, code: str, owner: str, message: str) -> None:
+        super().__init__((Finding(FindingKind.REJECTION, code, owner, message),))
 
 
 def iodma_configuration(contract: EndContract) -> IodmaConfiguration:
     """An ``IODMA_hls`` end's node, from its facts, in its byte container."""
     if contract.kind != IODMA_HLS:
-        raise IntegrationError(f"an end of kind {contract.kind!r} is not an {IODMA_HLS} end")
+        raise IntegrationError(
+            "end-kind-unsupported",
+            "iodma_configuration",
+            f"an end of kind {contract.kind!r} is not an {IODMA_HLS} end",
+        )
     return IodmaConfiguration(
         direction=contract.direction,
         vectors=(1, contract.beats),
@@ -214,9 +224,11 @@ def wire_one_bus_each(contract: EndContract, where: str) -> None:
     and costing read the counts the end's contract states."""
     if (contract.control_buses, contract.memory_ports) != (1, 1):
         raise IntegrationError(
+            "end-buses-unwired",
+            VIVADO_BLOCK_DESIGN,
             f"{where}: its {contract.kind} end states {contract.control_buses} AXI-Lite "
             f"buses and {contract.memory_ports} memory ports; the {VIVADO_BLOCK_DESIGN!r} "
-            "integration wires one of each an end"
+            "integration wires one of each an end",
         )
 
 
@@ -225,7 +237,11 @@ def _aperture(bus: Bus, least: int) -> int:
     ``least`` at least. A bus with no ``awaddr`` is refused, naming it."""
     widths = [signal.width for signal in bus.signals if signal.logical == "awaddr"]
     if not widths:
-        raise IntegrationError(f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture")
+        raise IntegrationError(
+            "bus-aperture-unknown",
+            VIVADO_BLOCK_DESIGN,
+            f"{bus.name}: an AXI-Lite bus with no awaddr has no aperture",
+        )
     return max(1 << widths[0], least)
 
 
@@ -238,8 +254,10 @@ def integration(model: ModelWrapper) -> Integration:
     row = point.row
     if row.integration != VIVADO_BLOCK_DESIGN or row.static_region is None:
         raise IntegrationError(
+            "integration-unexported",
+            "configuration.target.shell",
             f"the {row.shell!r} shell's integration is {row.integration!r}: no export "
-            f"(the {VIVADO_BLOCK_DESIGN!r} integration has one)"
+            f"(the {VIVADO_BLOCK_DESIGN!r} integration has one)",
         )
     region = row.static_region
     memory, control = f"{region.memory_interconnect}_0", f"{region.control_interconnect}_0"
@@ -249,12 +267,18 @@ def integration(model: ModelWrapper) -> Integration:
         channel = point.channel(tensor)
         if not channel.ended:
             raise IntegrationError(
+                "end-absent",
+                VIVADO_BLOCK_DESIGN,
                 f"{tensor} ({port}): the {row.shell!r} shell places no end on it; its "
-                "integration connects every boundary port to an end"
+                "integration connects every boundary port to an end",
             )
         shape = known_shape(body, tensor)
         if shape is None:
-            raise IntegrationError(f"{tensor} ({port}): the partition states no shape for it")
+            raise IntegrationError(
+                "shape-unstated",
+                VIVADO_BLOCK_DESIGN,
+                f"{tensor} ({port}): the partition states no shape for it",
+            )
         contract: EndContract = channel.end_contract
         wire_one_bus_each(contract, f"{tensor} ({port})")
         prefix = END_INSTANCES[contract.direction]

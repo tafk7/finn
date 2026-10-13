@@ -151,11 +151,14 @@ def by_code(
 
 class Refusal(ValueError):
     """An error that refuses a request, carrying the findings that say why
-    (``findings``, empty where a refusal names no coded reason). Its message is their
-    lines, one per finding, unless the raiser gives its own (``message``)."""
+    (``findings``, at least one). Its message is their lines, one per finding, unless the
+    raiser gives its own (``message``). Every refusal is one, so a run tells a refusal
+    from a bug by its type."""
 
-    def __init__(self, findings: Iterable[Finding] = (), message: str | None = None) -> None:
+    def __init__(self, findings: Iterable[Finding], message: str | None = None) -> None:
         self.findings = tuple(findings)
+        if not self.findings:
+            raise TypeError("a refusal carries at least one finding")
         super().__init__("\n".join(map(str, self.findings)) if message is None else message)
 
 

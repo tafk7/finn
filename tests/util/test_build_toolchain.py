@@ -20,6 +20,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn import resources
 from finn.builder import build_dataflow
 from finn.builder.build_dataflow_config import DataflowBuildConfig
+from finn.core.reporting.findings import Refusal
 from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import Selection, host_selection
 from finn.toolchain.vivado import vivado_jobs
@@ -250,7 +251,20 @@ def test_vivados_jobs_are_a_machine_setting_of_the_selection(monkeypatch):
     no_file = {"FINN_XILINX_ENV": ""}
     assert host_selection(no_file).vivado_jobs is None
     assert host_selection({**no_file, "FINN_VIVADO_JOBS": "12"}).vivado_jobs == 12
-    with pytest.raises(ValueError, match="FINN_VIVADO_JOBS: Vivado's jobs must be a positive"):
+    jobs = "FINN_VIVADO_JOBS: host-setting-invalid"
+    with pytest.raises(Refusal, match=f"{jobs}: Vivado's jobs must be a positive"):
         host_selection({**no_file, "FINN_VIVADO_JOBS": "0"})
-    with pytest.raises(ValueError, match="FINN_VIVADO_JOBS=four is not a number of runs"):
+    with pytest.raises(Refusal, match=f"{jobs}: four is not a number of runs"):
         host_selection({**no_file, "FINN_VIVADO_JOBS": "four"})
+
+
+def test_a_host_file_that_does_not_read_is_refused_by_the_setting_naming_it(tmp_path):
+    """A host file that does not read refuses the selection, owned by the setting that
+    names the file."""
+    unread = tmp_path / "xilinx.env"
+    unread.write_text("NOT A SETTING\n")
+    with pytest.raises(Refusal) as refused:
+        host_selection({"FINN_XILINX_ENV": str(unread)})
+    (finding,) = refused.value.findings
+    assert (finding.code, finding.owner) == ("host-setting-invalid", "FINN_XILINX_ENV")
+    assert finding.message == f"{unread}:1: expected NAME=value"

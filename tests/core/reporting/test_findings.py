@@ -89,7 +89,8 @@ def test_a_refusal_carries_its_findings_and_says_them_one_line_each() -> None:
         "configuration.target.shell: unknown-shell: no"
     )
     assert str(Refusal([first], "the board is refused")) == "the board is refused"
-    assert Refusal(message="no finding yet").findings == ()
+    with pytest.raises(TypeError, match="at least one finding"):
+        Refusal([], "no finding")
 
 
 def test_by_code_gives_one_line_per_code_and_kind_in_the_order_first_found() -> None:

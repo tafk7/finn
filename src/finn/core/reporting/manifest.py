@@ -35,7 +35,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, TypeVar
 
-from finn.core.reporting.findings import Finding
+from finn.core.reporting.findings import Finding, Refusal
 from finn.core.reporting.log import log_run
 
 #: The logger of the records a run's manifest lists. A run that records sets its level,
@@ -185,7 +185,8 @@ class Manifest:
     def failed(self, step: str, kind: str, error: BaseException) -> None:
         """Record that the run failed in ``step`` with ``error`` of ``kind``, with a
         refusal's findings by code."""
-        codes = Counter(each.code for each in getattr(error, "findings", ()))
+        found = error.findings if isinstance(error, Refusal) else ()
+        codes = Counter(each.code for each in found)
         with self._lock:
             self.state["outcome"] = {
                 "status": "failed",

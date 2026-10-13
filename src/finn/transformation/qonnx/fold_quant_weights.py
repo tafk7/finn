@@ -36,6 +36,14 @@ from qonnx.transformation.quant_constant_folding import FoldTransposeIntoQuantIn
 from qonnx.transformation.remove import remove_node_and_rewire
 from qonnx.util.basic import get_preferred_qonnx_opset
 
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
+
+
+def _refused(code, node, message):
+    """FoldQuantWeights' refusal of the Quant ``node``."""
+    details = (("node", node.name),)
+    return Refusal([Finding(FindingKind.REJECTION, code, "FoldQuantWeights", message, details)])
+
 
 def _drop_tensor_layout(model, tensor_name):
     """Remove the data layout annotation of ``tensor_name``, if it has one."""
@@ -69,13 +77,17 @@ class FoldQuantWeights(Transformation):
                 is_const_shape = (n.op_type == "Shape") and (ishape is not None)
                 if is_all_constant_inputs or is_const_shape:
                     if n.op_type == "Quant" and not model.get_initializer(n.input[2]) == 0:
-                        raise ValueError(
-                            "Only Quant nodes with zero-point == 0 " "are currently supported."
+                        raise _refused(
+                            "quant-zero-point",
+                            n,
+                            "Only Quant nodes with zero-point == 0 " "are currently supported.",
                         )
                     if model.is_fork_node(n):
-                        raise ValueError(
+                        raise _refused(
+                            "weight-quant-fork",
+                            n,
                             "Weights quantized with the Quant node are not "
-                            "allowed to be fork nodes node."
+                            "allowed to be fork nodes node.",
                         )
                     target_node = model.find_direct_successors(n)
                     if target_node is None:
@@ -115,10 +127,12 @@ class FoldQuantWeights(Transformation):
                         all_supported_ops.extend(add_like_nodes)
 
                         if target_node.op_type not in all_supported_ops:
-                            raise ValueError(
+                            raise _refused(
+                                "weight-quant-consumer",
+                                n,
                                 f"Can't constant fold Quant weight node "
                                 f"into node type {target_node.op_type} "
-                                f"at node: {target_node}."
+                                f"at node: {target_node}.",
                             )
 
                         if (

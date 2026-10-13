@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from finn.core.reporting.findings import Finding, Refusal
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
 
 class KernelOpError(Refusal):
@@ -15,23 +15,31 @@ class KernelOpError(Refusal):
     refused choice. ``keys`` names what is refused, if anything: a node's choice
     attributes (``compute.packed.pe``), a channel's keys (``transport``, or
     ``<tensor>.<key>``), or tensors whose channel choices are refused whole.
-    ``findings`` holds the coded reasons, which tests and the build's reports read, none
-    where a refusal names no coded reason."""
+    ``findings`` holds the coded reasons, which tests and the build's reports read;
+    where the raiser names none, one ``kernel-op-refused`` rejection owned by
+    ``KernelOp``, whose rules refuse, its message the error's (which names the node or
+    tensor), with ``keys`` in its details."""
 
     def __init__(
         self, message: str, keys: tuple[str, ...] = (), findings: Iterable[Finding] = ()
     ) -> None:
-        super().__init__(findings, message)
+        details = (("keys", keys),) if keys else ()
+        found = tuple(findings) or (
+            Finding(FindingKind.REJECTION, "kernel-op-refused", "KernelOp", message, details),
+        )
+        super().__init__(found, message)
         self.keys = keys
 
 
 class FactUnstated(KernelOpError):
-    """The graph lacks ``tensor``'s shape or datatype annotation, which binding needs.
-    Conversion leaves the node on the host (``fact-unstated``) instead of stopping the
+    """The graph lacks ``tensor``'s shape or datatype annotation, which binding needs
+    (``fact-unstated``). Conversion leaves the node on the host instead of stopping the
     build."""
 
     def __init__(self, message: str, tensor: str) -> None:
-        super().__init__(message)
+        details = (("tensor", tensor),)
+        unstated = Finding(FindingKind.REJECTION, "fact-unstated", "KernelOp", message, details)
+        super().__init__(message, findings=(unstated,))
         self.tensor = tensor
 
 

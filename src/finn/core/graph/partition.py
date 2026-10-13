@@ -26,6 +26,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
 from finn.core.graph.annotations.outputs import OUTPUTS
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
 KERNEL_OPS_DOMAIN = "finn.custom_op.kernels"
 """The KernelOps' ONNX domain: the name of the package that registers them."""
@@ -105,12 +106,16 @@ def kernel_partition_nodes(model: ModelWrapper) -> list[NodeProto]:
 
 def partition_body(model: ModelWrapper) -> tuple[NodeProto, ModelWrapper, str]:
     """The parent graph's one partition node of KernelOps, its body opened through the
-    node, and the body's file. Refuses a graph with none or more than one."""
+    node, and the body's file. Refuses a graph with none or more than one
+    (``partition-count``)."""
     found = kernel_partition_nodes(model)
     if len(found) != 1:
-        raise ValueError(
+        message = (
             f"the model holds {len(found)} partitions of KernelOps; a build's "
             "parent graph holds one (step_create_dataflow_partition cuts once)"
+        )
+        raise Refusal(
+            (Finding(FindingKind.REJECTION, "partition-count", "partition_body", message),)
         )
     (node,) = found
     path = body_file(node)

@@ -46,6 +46,7 @@ from tempfile import TemporaryDirectory
 from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
+from finn.core.reporting.findings import Refusal
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
 
@@ -254,5 +255,7 @@ def test_QONNX_to_FINN_unsupported_channel_axis():
     x = np.zeros(ishape, dtype=np.float32)
 
     model = _make_single_quant_model(x, scale, zeropt, bitwidth, 1, 0, "ROUND")
-    with pytest.raises(ValueError):
+    with pytest.raises(Refusal) as refused:
         model.transform(ConvertQONNXtoFINN())
+    ((code, owner),) = [(each.code, each.owner) for each in refused.value.findings]
+    assert (code, owner) == ("multithreshold-channel-axis", "ConvertQuantActToMultiThreshold")

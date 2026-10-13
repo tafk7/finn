@@ -570,8 +570,12 @@ def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
     assert isinstance(kept, Accepted)
     assert explorer.chosen(kept.network)[pumping] is True
     opened = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])[0]
-    with pytest.raises(Unsettled, match="compute_pumping: held to True"):
+    with pytest.raises(
+        Unsettled, match="compute_pumping: pin-unsettled: held to True"
+    ) as unsettled:
         explorer.settle(opened, {})
+    (finding,) = unsettled.value.findings
+    assert finding.owner == "first.compute.packed.compute_pumping"
 
 
 def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> None:
