@@ -461,8 +461,8 @@ def test_importing_finn_turns_exact_integers_on() -> None:
 def test_preparation_folds_constants_exactly(tmp_path: Path) -> None:
     """The builder's tidy-up folds constants with exact integers: a dot product of
     constants whose partial sums pass 2**24, which float32 rounds, folds to its exact 1;
-    an INT32 sum of 16777216 and 1, which float32 cannot hold, raises naming the tensor
-    rather than folding to 16777216."""
+    an INT32 sum of 16777216 and 1, which float32 cannot hold, stays unfolded and the
+    tidied graph computes 16777217."""
     cfg = preparation_config(tmp_path)
     dot = graph(
         [
@@ -488,8 +488,11 @@ def test_preparation_folds_constants_exactly(tmp_path: Path) -> None:
     )
     x = {"x": np.zeros(1, dtype=np.float32)}
     assert execute_onnx(total, x)["y"].item() == 2**24 + 1
-    with pytest.raises(ArithmeticError, match=r"Add_0 \(Add\): c folds to 16777217"):
-        step_tidy_up(total, cfg)
+    tidied = step_tidy_up(total, cfg)
+    kept, _ = tidied.graph.node
+    assert kept.op_type == "Add" and tidied.get_initializer(kept.output[0]) is None
+    (inp,), (out,) = tidied.graph.input, tidied.graph.output
+    assert execute_onnx(tidied, {inp.name: x["x"]})[out.name].item() == 2**24 + 1
 
 
 def test_the_xnor_identity_is_streamlinings_rewrite_not_a_patterns_type_test(
