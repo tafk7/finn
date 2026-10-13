@@ -222,24 +222,6 @@ class AbsorbScalarBiasIntoMultiThreshold(Transformation):
         return model, graph_modified
 
 
-class AbsorbSignBiasIntoMultiThreshold(AbsorbScalarBiasIntoMultiThreshold):
-    """Deprecated alias for :class:`AbsorbScalarBiasIntoMultiThreshold`.
-
-    The transformation was renamed because it no longer only absorbs sign
-    bias but any scalar bias. This alias is kept for backwards compatibility
-    and will be removed in a future release."""
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "AbsorbSignBiasIntoMultiThreshold has been renamed to "
-            "AbsorbScalarBiasIntoMultiThreshold and will be removed in a "
-            "future release.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
-
-
 class AbsorbAddIntoMultiThreshold(Transformation):
     """Absorb preceding Add ops into MultiThreshold by updating the threshold
     values. Only scalar/1D add vectors can be absorbed."""
