@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.transformation.infer_shapes import InferShapes
 
@@ -252,13 +253,18 @@ def wide() -> tuple[ModelWrapper, dict[str, Any]]:
     return source, {"x": x}
 
 
-def test_onnx_and_the_reference_agree_where_float32_would_round() -> None:
-    """Past 2**24 qonnx's default execution rounds the float32 MatMul; FINN's execution
-    computes it in float64, so ONNX's values are the exact integers the reference
-    computes, and the harness finds no difference."""
+def test_onnx_and_the_reference_agree_where_float32_would_round(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past 2**24 qonnx's execution without exact integers rounds the float32 MatMul;
+    FINN's execution computes it in float64, so ONNX's values are the exact integers the
+    reference computes, and the harness finds no difference."""
     source, inputs = wide()
     exact = inputs["x"] @ np.asarray(source.get_initializer("w"), dtype=np.int64)
-    rounded = qonnx_execute(source.transform(InferShapes()), {"x": inputs["x"].astype(np.float32)})
+    with monkeypatch.context() as patch:
+        patch.setenv(EXACT_INTEGERS, "0")
+        x = inputs["x"].astype(np.float32)
+        rounded = qonnx_execute(source.transform(InferShapes()), {"x": x})
     assert not np.array_equal(rounded["y"], exact)  # float32 rounds here
     observed = observe(source, by_hand(source), inputs)
     assert np.array_equal(observed.reference["y"], exact)

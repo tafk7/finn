@@ -97,7 +97,7 @@ class FoldQuantWeights(Transformation):
                         opset_version = opset_imports[n.domain]
                     else:
                         opset_version = get_preferred_qonnx_opset()
-                    oxe.execute_node(n, execution_context, graph, opset_version)
+                    oxe.execute_node(n, execution_context, graph, opset_version, model=model)
                     q_node_output = execution_context[node_out]
                     if unity_scale:
                         model.set_initializer(node_out, q_node_output)

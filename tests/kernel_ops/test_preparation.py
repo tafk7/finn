@@ -28,6 +28,7 @@ import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
@@ -385,7 +386,9 @@ def _wide_layer(thresholds: npt.NDArray[np.float64], exported: bool) -> ModelWra
     return model.transform(InferDataTypes())  # type: ignore[no-untyped-call]
 
 
-def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
+def test_a_wide_layer_converts_and_its_graphs_agree_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """INT8 times INT8 over k 2304: one sum is odd and past 2**24, where float32 rounds it
     down, and channel 0's top threshold sits at it, so float32 would change the
     thresholded output. FINN's execution computes the sums exactly, so the layer converts
@@ -407,8 +410,10 @@ def test_a_wide_layer_converts_and_its_graphs_agree_exactly() -> None:
     kernel_ops = copy.deepcopy(made).transform(conversion)
     ops = {outcome.nodes[0]: outcome.op for outcome in conversion.outcomes}
     assert (ops["MatMul_a"], ops["MultiThreshold_a"]) == ("MatMul", "Thresholding")
-    # qonnx's default execution rounds the odd sum, and the output with it.
-    rounded = qonnx_execute(made, {"x": x.astype(np.float32)}, True)
+    # qonnx's execution without exact integers rounds the odd sum, and the output with it.
+    with monkeypatch.context() as patch:
+        patch.setenv(EXACT_INTEGERS, "0")
+        rounded = qonnx_execute(made, {"x": x.astype(np.float32)}, True)
     assert not np.array_equal(np.asarray(rounded["ya"]), ya)
     scaled = None
     for model in (export, made, kernel_ops):
