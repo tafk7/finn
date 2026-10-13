@@ -33,7 +33,7 @@ from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import Ranked
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
@@ -133,7 +133,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     bound = network(body, body.graph.node)
     assert bound.undecided() == () and not bound.stale
     assert bound.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
-    point, boundary = configured_root(body, "partition")
+    point, boundary = configured_network(body, "partition")
     # The input's one threshold row, shared by its 784 pixels, is bound as it is
     # (thresholding_axi's C = 1), not tiled to 784 rows.
     first = body.graph.node[0]
@@ -205,7 +205,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
         for bus in root.iter(f"{spirit}busInterface")
     }
     assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "10")
-    point, boundary = configured_root(body, sdp.name)
+    point, boundary = configured_network(body, sdp.name)
     assert boundary_facts(body, point, boundary, sdp.name) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()
     # The interface description beside the IP: the module's pins, the boundary facts.

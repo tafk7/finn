@@ -25,7 +25,7 @@ the choices it decides, explores and settles, and then:
 - persists every value of the network where it is stated, each owner's whole
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
-  (``configured_root``);
+  (``configured_network``);
 - records the pins held, those the body recorded and those the strategy pinned, in the
   body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
   the body holds them: a pin holds for the build, and re-baselining keeps it; and a

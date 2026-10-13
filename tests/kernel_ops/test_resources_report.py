@@ -17,7 +17,7 @@ import pytest
 from finn.builder.build_dataflow_resources import shell_resources_report
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import partition_body
-from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
+from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
@@ -58,7 +58,7 @@ def test_a_partition_on_the_ip_shell_states_its_model_alone(tmp_path: Path) -> N
     end and no static region; neither Vivado column was made, and each says why."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path))
     node, body, _ = partition_body(parent)
-    point, _ = configured_root(body, node.name)
+    point, _ = configured_network(body, node.name)
     modelled = shell_resources(point)
     assert isinstance(modelled, ShellResources)
     stated = shell_resources_report(parent, {})

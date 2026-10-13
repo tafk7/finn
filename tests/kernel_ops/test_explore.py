@@ -31,7 +31,7 @@ from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import Partition, network, save_channels
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,
@@ -245,7 +245,7 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
     } == values
     # Nothing is left open, where it is explored or generated.
     assert report["open"] == []
-    point, _ = configured_root(model, "the chain")
+    point, _ = configured_network(model, "the chain")
     assert {
         f"{node}.{attribute}": value for (node, attribute), value in point.network.chosen().items()
     } == values
@@ -565,7 +565,7 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
     assert report["open"] == []
     # Emission replays the saved choices: the configured network is the explored one.
-    point, _ = configured_root(model, "the partition")
+    point, _ = configured_network(model, "the partition")
     assert point.network.viable() == () and len(point.network.decisions()) > 57
 
 

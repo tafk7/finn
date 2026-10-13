@@ -22,7 +22,7 @@ from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import measure
 from finn.custom_op.kernels.network import member, network
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.toolchain.launcher import host_toolchain
 from kernel_ops.measure_cycles import schedule_of
 from kernel_ops.models import configure_partition, kernel_model
@@ -35,7 +35,7 @@ def test_the_chain_leaves_a_frame_per_bottleneck_beat_count(tmp_path: Path) -> N
     feed = {"x": np.array(chain.X, dtype=np.float32)}
     context = execute_onnx(model, feed, return_full_exec_context=True)
     bound = network(model, model.graph.node, name="chain")
-    point, boundary = configured_root(model, "chain")
+    point, boundary = configured_network(model, "chain")
     inputs, outputs = boundary_words(model, point, boundary, context, "chain")
     beats = {node.name: schedule_of(bound, node).beat_count for node in model.graph.node}
     assert beats == {"first": 12, "activate": 6, "second": 12}

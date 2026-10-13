@@ -33,7 +33,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import Seam
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -80,7 +80,7 @@ def chain(shell: str = "ip") -> ModelWrapper:
 def facts(model: ModelWrapper) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The boundary facts of ``model``'s configured root, as the interface description
     and the testbench read them."""
-    point, boundary = configured_root(model, "partition")
+    point, boundary = configured_network(model, "partition")
     return boundary_facts(model, point, boundary, "partition")
 
 
@@ -283,7 +283,7 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             kernel_op(model, second).save(folding)
         configure_partition(model)
         with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable") as refused:
-            configured_root(model, "partition")
+            configured_network(model, "partition")
         for refusal in refusals:
             assert re.search(refusal, str(refused.value))
         assert ("end-order" in str(refused.value)) == (tiled in refusals)

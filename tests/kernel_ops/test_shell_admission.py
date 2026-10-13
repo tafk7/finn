@@ -31,7 +31,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -132,7 +132,7 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
     model = kernel_model()
     write_target(model, ULTRA96)
     explore_kernel_choices(model)
-    configured_root(model, "chain")
+    configured_network(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
         patched.setattr(graph_network, "shell_row", lambda *_: narrow)
@@ -143,7 +143,7 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
         with pytest.raises(
             KernelOpError, match="takes 1 AXI-Lite buses; the partition presents 0"
         ) as packaged:
-            configured_root(model, "chain")
+            configured_network(model, "chain")
     # Each refusal carries the shell's findings, by code.
     for refused in (explored, packaged):
         assert [f.code for f in refused.value.findings] == ["interface-budget-exceeded"]
@@ -158,7 +158,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     pumped = {**MATMUL, "compute.packed.compute_pumping": True}
     kernel_op(model, model.graph.node[0]).save(pumped)
     configure_partition(model)
-    point, _ = configured_root(model, "chain")
+    point, _ = configured_network(model, "chain")
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
     write_target(model, ULTRA96)
@@ -168,7 +168,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         match="clock-unavailable: the partition takes an aligned doubled clock "
         r"\(ap_clk2x\), which the 'pynq' shell does not supply",
     ):
-        configured_root(model, "chain")
+        configured_network(model, "chain")
 
 
 def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:

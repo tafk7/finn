@@ -40,7 +40,7 @@ from qonnx.transformation.infer_shapes import InferShapes
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.custom_op.kernels import Conv
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.traversal import vector_major
 from finn.harness.ops import check_parity
 from finn.transformation.kernels import ToKernelOps
@@ -107,7 +107,7 @@ def test_the_image_enters_once_and_its_channel_reads_the_windows(
 ) -> None:
     body = folded(name, simd, pe, tmp_path)
     (node,) = body.graph.node
-    point, _ = configured_root(body, name)
+    point, _ = configured_network(body, name)
     channel = point.channel(node.input[0])
     ends = channel.ends
     assert ends.source.sequence.form == vector_major(channel.tensor.shape, simd)
@@ -173,7 +173,7 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
     pe: int, simd: int, steps: tuple[str, ...]
 ) -> None:
     # Converted, not cut: its channels' choices created as the cut creates them.
-    point, _ = configured_root(thresholded(pe, simd).transform(BaselineChoices()), "inside")
+    point, _ = configured_network(thresholded(pe, simd).transform(BaselineChoices()), "inside")
     assert tuple(hop.step.value for hop in point.channel("a").plan.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels

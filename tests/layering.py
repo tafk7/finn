@@ -273,7 +273,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The executors and the execution that runs a model with them (finn.core.onnx_exec):
     # what runs a model's nodes, chosen by the caller. They run the KernelOps (by their
-    # domain) and a partition's hardware (XSim: configured_root, the testbench).
+    # domain) and a partition's hardware (XSim: configured_network, the testbench).
     # Nothing below the flow imports them but the partition node, which executes its
     # body with them.
     Layer(

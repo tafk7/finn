@@ -24,7 +24,7 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
 from finn.kernels.network import dotted
 from finn.platform.target import Target
@@ -166,7 +166,7 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     left = explore.explored.report["open"]
     assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
     with pytest.raises(KernelOpError, match=r"refused at emission: ") as refused:
-        configured_root(model, "the chain")
+        configured_network(model, "the chain")
     assert all(key.endswith("transport.fifo.buffer.depth") for key in refused.value.keys)
     required = "(required: run step_size_fifos or step_placeholder_choices)"
     assert str(refused.value).count(required) == len(left)

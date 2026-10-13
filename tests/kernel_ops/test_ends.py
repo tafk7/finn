@@ -30,7 +30,7 @@ from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.partition import partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.custom_op.kernels.network import Partition, network, persist
-from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
+from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -433,7 +433,7 @@ def module_of(model: ModelWrapper, directory: Path) -> str:
     as the kernel path cuts it."""
     parent = model.transform(CutKernelPartition(directory))
     node, body, _ = partition_body(parent)
-    point, _ = configured_root(body, node.name)
+    point, _ = configured_network(body, node.name)
     return module_name(point.module)
 
 

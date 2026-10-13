@@ -202,7 +202,7 @@ def test_the_table_rejects_an_import_across_its_order(layer: str, name: str) -> 
         ("tests.kernels", "finn.core.rtlsim_bench.stream_through"),
         ("tests.kernels", "finn.core.rtlsim_pacing.STALLED"),
         ("executors", "finn.core.rtlsim_bench.stream_out"),
-        ("executors", "finn.custom_op.kernels.shell.configured_root"),
+        ("executors", "finn.custom_op.kernels.shell.configured_network"),
         # Parity: two runs of the executors.
         ("harness", "finn.core.rtlsim_exec.XSim"),
         ("harness", "finn.core.onnx_exec.execute_onnx"),

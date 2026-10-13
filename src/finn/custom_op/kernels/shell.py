@@ -18,7 +18,7 @@
   (``SHELL_CHARACTERISED``), which overstates the placed shell. The ``ip`` shell has
   neither, so its resources are its members'.
 
-``configured_root`` is a partition's network as emission builds it (``Configured``: the
+``configured_network`` is a partition's network as emission builds it (``Configured``: the
 network, its module and its cycles a frame).
 """
 
@@ -151,7 +151,7 @@ def _resources(network: Partition) -> QueryResult[ShellResources]:
 
 @dataclass(frozen=True)
 class Configured:
-    """A partition's network as emission builds it (``configured_root``): every choice
+    """A partition's network as emission builds it (``configured_network``): every choice
     stored, none open, admitted by its shell; its ``module`` and its ``cycles`` a frame,
     its slowest member's."""
 
@@ -188,7 +188,7 @@ def _about(finding: Finding) -> str:
     return str(finding) if about is None else f"{about}: {finding}"
 
 
-def configured_root(
+def configured_network(
     model: ModelWrapper, label: str
 ) -> tuple[Configured, tuple[tuple[str, str], ...]]:
     """A partition model's network (``network``, in the shell of its target), replayed
@@ -266,6 +266,6 @@ __all__ = [
     "Configured",
     "ShellResources",
     "admission_refusal",
-    "configured_root",
+    "configured_network",
     "shell_resources",
 ]

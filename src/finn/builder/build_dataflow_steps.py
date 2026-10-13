@@ -60,7 +60,7 @@ from finn.core.graph.annotations.choices import OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.manifest import note, reported, write_report
-from finn.custom_op.kernels.shell import configured_root
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import (
     DebugPlaceholder,
     Explorer,
@@ -361,7 +361,7 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     configuration's."""
     node, body, _ = partition_body(model)
     write_report(Path(cfg.output_dir) / KERNEL_CHOICES_FILE, kernel_choices_config(body))
-    configured_root(body, node.name)
+    configured_network(body, node.name)
     refuse_drift(read_target(body), cfg.resolved_target, "build")
     return model
 
