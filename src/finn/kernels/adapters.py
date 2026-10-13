@@ -69,7 +69,7 @@ from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.base import ComposedKernel
+from finn.kernels.base import BUFFERING, CYCLES, NETLIST, RESOURCES, ComposedKernel
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.transport import StreamContract
 from finn.kernels.vpc import VpcKernel
@@ -178,7 +178,8 @@ class StreamAdapter(ComposedKernel):
     the two sides of its step of the realization, which its ports present. An
     ``input_gen`` child owns its memory's ``ram_style``, on the channel's ``platform``.
     Its netlist, cycles, buffering and resources are its stages', by the base. It
-    presents no interface: its channel wires its stages hop by hop (``stages``).
+    presents no interface: its channel wires its stages hop by hop (``stages``). Like
+    its channel, it is no module of its own: it exports no ``MODULE``.
     """
 
     id = "finn.channel.adapter"
@@ -243,6 +244,13 @@ class StreamAdapter(ComposedKernel):
                 )
             )
         return tuple(found)
+
+    exports = {
+        NETLIST: ComposedKernel.netlist,
+        CYCLES: ComposedKernel.cycles,
+        BUFFERING: ComposedKernel.buffering,
+        RESOURCES: ComposedKernel.resources,
+    }
 
 
 def _input_gen(name: str) -> InputGeneratorKernel:
