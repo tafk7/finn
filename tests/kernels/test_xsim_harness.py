@@ -43,6 +43,7 @@ from finn.core.rtlsim_bench import (
     stream_through,
 )
 from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
+from finn.core.space import Available
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import pack as pack_beats
@@ -303,7 +304,9 @@ def test_a_pumped_module_gets_its_doubled_clock_aligned(tmp_path: Path) -> None:
             "result_range": datatype_range(6, DataType["INT8"], DataType["INT8"]),
         },
     )
-    module = design_module(point, Int8Dsp58DotpKernel).value
+    found = design_module(point, Int8Dsp58DotpKernel)
+    assert isinstance(found, Available)
+    module = found.value
     assert module.abi.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)
     words: dict[str, Words] = {name: ([0], 8) for name in inputs}
     bench = stream_bench(

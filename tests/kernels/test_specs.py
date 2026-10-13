@@ -27,7 +27,7 @@ import pytest
 from layering import ROOT
 
 from finn.core.space import Available, Space
-from finn.harness.points import covering, refusal, refused_cases, rejected
+from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
 from finn.kernels.configure import undecided
 from finn.kernels.network import Network
 from kernels.conformance import (
@@ -48,7 +48,7 @@ def _base(spec: KernelSpec) -> Any:
     return unchosen(**spec.cases[spec.space]())
 
 
-def _covering(base: Any) -> Any:
+def _covering(base: Any) -> Covering:
     """The covering points of a design's kernel's Decisions, each keyed ``kernel.<key>``."""
     space, pattern, prefix = kernel_space(base)
     found = covering(space, pattern)

@@ -80,7 +80,7 @@ def test_the_input_presents_each_window_whole_and_closes_it() -> None:
     output = ends["output_channel"]
     assert (output.form.beats, output.form.lanes) == (2 * 3 * 2, 3)
     assert output.element == ScalarEncoding(DataType["INT4"])
-    assert design_cycles(point).value == 2 * 3 * 2 * 4
+    assert design_cycles(point) == Available(2 * 3 * 2 * 4)
 
 
 def test_a_strided_window_counts_the_windows_that_fit_and_drops_the_rest() -> None:
@@ -174,7 +174,9 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
     beats = design_member(point, KERNEL).schedule.beat_count
     module = design_module(point, PoolKernel)
     assert isinstance(module, Available)
-    cycles = design_cycles(point).value
+    found = design_cycles(point)
+    assert isinstance(found, Available)
+    cycles = found.value
     measured = measure(
         module.value,
         tmp_path,

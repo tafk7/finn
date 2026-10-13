@@ -33,7 +33,7 @@ FACTS = dict(
 # Stored (k, n), any values: collapse is checked on a memory, not on what it holds.
 WEIGHTS = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
 
-KERNEL = {
+KERNEL: dict[str, dict[str, object]] = {
     "none": {
         "matmul.compute": "packed",
         "matmul.compute.packed.compute_pumping": False,
@@ -49,7 +49,7 @@ KERNEL = {
         "matmul.compute.packed.simd": 1,
     },
 }
-WEIGHT = {
+WEIGHT: dict[str, dict[str, object]] = {
     "none": {"w.transport": "direct"},
     "memstream-fifo": {
         "w.source.memstream.ram_style": "block",
@@ -85,7 +85,8 @@ def _channel(case: str, *, collapsed: bool) -> Space:
     """The weight channel, bound from what the configured MatMul states for it, opened
     afresh, its choices committed."""
     network = choose(matmul_point(**_facts(case)), KERNEL[case])
-    opened = open_space(Channel(**network.facts("w")), collapsed=collapsed)
+    channel: Any = Channel
+    opened: Space = open_space(channel(**network.facts("w")), collapsed=collapsed)
     return commit(opened, {key: value for (_, key), value in keyed(WEIGHT[case]).items()})
 
 
