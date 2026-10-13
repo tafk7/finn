@@ -14,8 +14,9 @@ function or of a qonnx Transformation class; or in Python the object itself, a f
 as ``model.transform(transformation)``, a class constructed with its defaults, and is
 named by its class name in the log, the manifest and the intermediate models.
 
-**Settings.** A step's keyword-only parameters are its settings. Each setting the
-configuration gives must be declared by a step of the list (before ``start_step`` and
+**Settings.** A step's keyword-only parameters are its settings, none named like a field
+of the configuration. Each setting the configuration gives must be declared by a step of
+the list (before ``start_step`` and
 ``stop_step`` trim it), and is decoded by that step's annotation; a ``Path``, given or
 by default, is joined to the configuration's ``base_dir``. Steps that declare the same
 name share its value, so they must declare the same annotation and default. A setting
@@ -54,7 +55,7 @@ import importlib
 import inspect
 import typing
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import PurePath
 from typing import Any
 
@@ -264,8 +265,17 @@ def _settings(
         message = f"no step of this build declares it; the settings its steps read: {read}"
         refused.append(config_finding("setting-unknown", message, f"configuration.{name}"))
     settings = {}
+    configuration = {item.name for item in fields(DataflowBuildConfig)}
     for name, readers in declared.items():
         place = f"configuration.{name}"
+        if name in configuration:
+            steps = ", ".join(dict.fromkeys(step for step, _, _ in readers))
+            message = (
+                f"{steps} declare {name}, a field of the configuration, so no setting can "
+                "give it; rename the parameter"
+            )
+            refused.append(config_finding("setting-is-field", message, place))
+            continue
         kinds = {step: kind for step, kind, _ in readers}
         defaults = [default for _, _, default in readers]
         if len({repr(kind) for kind in kinds.values()}) > 1:

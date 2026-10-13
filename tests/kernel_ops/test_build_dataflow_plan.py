@@ -376,6 +376,22 @@ def test_steps_that_declare_one_setting_differently_are_refused() -> None:
     )
 
 
+def step_verbose(
+    model: ModelWrapper, cfg: DataflowBuildConfig, *, verbose: bool = False
+) -> ModelWrapper:
+    """Declares a setting named like a field of the configuration."""
+    return model
+
+
+def test_a_step_parameter_named_like_a_field_is_refused() -> None:
+    """No setting can give it (the configuration refuses a setting named like a field), so
+    the plan refuses the step before the first one runs."""
+    assert refused(config(steps=[step_verbose])) == (
+        "setting-is-field: configuration.verbose: step_verbose declare verbose, a field of "
+        "the configuration, so no setting can give it; rename the parameter"
+    )
+
+
 def test_a_setting_without_a_default_must_be_given() -> None:
     assert refused(config(steps=[step_needs])) == (
         "setting-required: configuration.target_fps: step_needs require it, and it is not given"

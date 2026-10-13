@@ -612,7 +612,8 @@ value of the keyword-only parameter of that name of the steps that declare it
 (`def step_build_bitfile(model, cfg, *, hw_debug: bool = False)`), decoded by its
 annotation; a path setting is relative to the build directory. A setting no step of
 the build declares is refused, naming the settings its steps read; steps that declare
-the same name share its value. The preparation steps declare `override_inpsize`
+the same name share its value, and a step that names a parameter like a field is
+refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
 the strategy steps theirs (below); `step_package_partition` and
