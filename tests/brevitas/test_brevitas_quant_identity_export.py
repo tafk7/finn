@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import onnx  # noqa
 import os
+import shutil
 import torch
 from brevitas.core.scaling import ScalingImplType
 from brevitas.export import export_qonnx
@@ -17,7 +18,7 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir, robust_rmtree
+from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
@@ -48,10 +49,10 @@ def test_brevitas_quant_identity_export(abits, ishape, narrow, quant):
     b_act.eval()
     expected = b_act.forward(inp_tensor).detach().numpy()
 
-    # kept for diagnosis on failure: robust_rmtree below is skipped if the
+    # kept for diagnosis on failure: the rmtree below is skipped if the
     # assert raises (see tests/README.md)
     assert np.isclose(produced, expected, atol=1e-3).all()
-    robust_rmtree(build_dir)
+    shutil.rmtree(build_dir)
 
 
 @pytest.mark.brevitas_export
@@ -125,7 +126,7 @@ def test_brevitas_quant_identity_export_per_channel(
     b_act.eval()
     expected = b_act.forward(inp_tensor).detach().numpy()
 
-    # kept for diagnosis on failure: robust_rmtree below is skipped if the
+    # kept for diagnosis on failure: the rmtree below is skipped if the
     # assert raises (see tests/README.md)
     assert np.isclose(produced, expected, atol=1e-3).all()
-    robust_rmtree(build_dir)
+    shutil.rmtree(build_dir)

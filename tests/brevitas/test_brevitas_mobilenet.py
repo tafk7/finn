@@ -47,13 +47,14 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.transformation.insert_topk import InsertTopK
 from qonnx.transformation.merge_onnx_models import MergeONNXModels
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
+from torchvision.transforms.functional import center_crop, resize
+from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 import finn.transformation.streamline.absorb as absorb
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.util.basic import make_build_dir
 from finn.util.pytorch import NormalizePreProc
-from finn.util.test import crop_center, get_test_model_trained, resize_smaller_side
 
 
 @pytest.mark.brevitas_export
@@ -63,9 +64,9 @@ def test_brevitas_mobilenet():
     img = Image.open(Path(__file__).parent / "king_charles.jpg")
     # resize smallest side of the image to 256 pixels and resize larger side
     # with same ratio
-    img = resize_smaller_side(256, img)
+    img = resize(img, 256)
     # crop central 224*224 window
-    img = crop_center(224, img)
+    img = center_crop(img, 224)
     # save image as numpy array and as torch tensor to enable testing in
     # brevitas/pytorch and finn and transpose from (H, W, C) to (C, H, W)
     img_np = np.asarray(img).copy().astype(np.float32).transpose(2, 0, 1)
