@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-import warnings
+import logging
 from qonnx.transformation.base import Transformation
 
 from finn.transformation.qonnx.qonnx_activation_handlers import (
@@ -35,6 +35,8 @@ from finn.transformation.qonnx.qonnx_activation_handlers import (
     QuantIdentityHandler,
     refused,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 def default_filter_function_generator(max_multithreshold_bit_width=8):
@@ -53,7 +55,7 @@ def default_filter_function_generator(max_multithreshold_bit_width=8):
                 "quant-bitwidth-dynamic", q_node, "Quant nodes must have a static bit width."
             )
         if bit_width > max_multithreshold_bit_width:
-            warnings.warn(
+            _LOG.warning(
                 f'The Quant node with name: "{q_node.name}" was not converted to a '
                 f"MultiThreshold node, because its bit width of {bit_width} is "
                 f"higher than the configured maximum bit width of "
@@ -107,7 +109,7 @@ class ConvertQuantActToMultiThreshold(Transformation):
                     )
 
                 if not self._filter_function(model, n):
-                    warnings.warn(
+                    _LOG.warning(
                         f'The Quant node with name: "{n.name}" was not converted to a '
                         f"MultiThreshold node, because the filtering function "
                         f"returned False for this node."

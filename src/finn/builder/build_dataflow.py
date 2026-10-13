@@ -69,9 +69,12 @@ CONFIG_FILE = "dataflow_build_config.json"
 #: The build log, in the output directory.
 LOG_FILE = "build_dataflow.log"
 
-#: The runner's logger: the console shows its INFO lines, and only warnings from the
-#: other loggers.
+#: The runner's logger.
 _LOG = logging.getLogger(__name__)
+
+#: The build's own loggers, the runner's and the steps': the console shows their INFO
+#: lines, and only the warnings and errors of the others.
+_BUILD_LOGGERS = "finn.builder"
 
 
 def _failure_kind(error: BaseException) -> str:
@@ -236,7 +239,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     except TargetRefused as refused:
         target, found = None, list(refused.findings)
     with recorded_run(
-        log_file, _manifest(cfg, target), runner=_LOG.name, verbose=cfg.verbose
+        log_file, _manifest(cfg, target), runner=_BUILD_LOGGERS, verbose=cfg.verbose
     ) as manifest:
         try:
             _LOG.info("Intermediate outputs will be generated in %s", resources.scratch())
@@ -262,7 +265,7 @@ def _refused_in(output_dir: str, refused: ConfigurationRefused) -> None:
     """Log and record in ``output_dir`` a build refused before its configuration
     decoded, replacing the manifest an earlier build left there."""
     manifest = BuildManifest(output_dir, _identity(output_dir, None, None))
-    with recorded_run(os.path.join(output_dir, LOG_FILE), manifest, runner=_LOG.name):
+    with recorded_run(os.path.join(output_dir, LOG_FILE), manifest, runner=_BUILD_LOGGERS):
         manifest.configured(list(refused.findings))
         _refused(manifest, refused)
 

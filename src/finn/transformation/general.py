@@ -8,10 +8,12 @@
 ############################################################################
 
 import json
-import warnings
+import logging
 from onnx import AttributeProto
 from qonnx.custom_op.registry import getCustomOp, is_custom_op
 from qonnx.transformation.base import Transformation
+
+_LOG = logging.getLogger(__name__)
 
 
 class ApplyConfig(Transformation):
@@ -27,7 +29,7 @@ class ApplyConfig(Transformation):
 
     A node in a subgraph is named by its parents and their graph attributes, joined
     by ``_``. Nodes without an entry, entries for standard nodes and entries no node
-    used are warned of.
+    used are logged as warnings.
     """
 
     def __init__(self, config, node_filter=lambda x: True):
@@ -106,15 +108,15 @@ class ApplyConfig(Transformation):
         # Shared subgraphs (an If node's) report a node more than once.
         unique_missing = list(dict.fromkeys(self.missing_configurations))
         if len(unique_missing) > 0:
-            warnings.warn("\nNo HW configuration for nodes: " + ", ".join(unique_missing))
+            _LOG.warning("No HW configuration for nodes: " + ", ".join(unique_missing))
 
         unique_non_custom = list(dict.fromkeys(self.ignored_non_custom_configurations))
         if len(unique_non_custom) > 0:
             formatted_non_custom = [
                 "{} ({})".format(config_key, op_type) for config_key, op_type in unique_non_custom
             ]
-            warnings.warn(
-                "\nHW configurations for non-custom nodes were ignored: "
+            _LOG.warning(
+                "HW configurations for non-custom nodes were ignored: "
                 + ", ".join(formatted_non_custom)
                 + ". Configs can only be applied to custom ops."
             )
@@ -130,6 +132,6 @@ class ApplyConfig(Transformation):
             and x != "Defaults"
         ]
         if len(unused_configs) > 0:
-            warnings.warn("\nUnused HW configurations: " + ", ".join(unused_configs))
+            _LOG.warning("Unused HW configurations: " + ", ".join(unused_configs))
 
         return (model, False)
