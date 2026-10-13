@@ -28,14 +28,22 @@ from finn.core.space import (
     derived,
     design_space,
     reject,
+    view,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Held, Leaf
-from finn.kernels.base import Clocking, ComposedKernel, Kernel, LeafKernel, interface
-from finn.kernels.channels import end_of
+from finn.kernels.base import (
+    PORT_END,
+    Clocking,
+    ComposedKernel,
+    Kernel,
+    LeafKernel,
+    PortEnd,
+    interface,
+)
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
@@ -194,8 +202,12 @@ def test_a_kernel_with_children_names_the_end_of_each_interface() -> None:
         class Unended(ComposedKernel):
             id = "test.unended"
             interfaces = ("x", "y")
-            x_end = end_of("kernel", "x_end")
             kernel = Probe(tensor=TENSOR)
+
+            @view(semantics=PORT_END)
+            def x_end(self) -> PortEnd:
+                served: PortEnd = self.kernel.x_end
+                return served.under("kernel")
 
 
 def test_a_kernel_is_a_leaf_or_a_kernel_with_children() -> None:

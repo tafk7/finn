@@ -62,12 +62,12 @@ required=True)`` has no safe baseline and stays open until a strategy sets it
   its choices with it. It returns the network and every key it cleared;
 - ``settle(network, prior)``: every open choice, in rank order, at its ``prior`` value
   where that is still accepted, else (with cases, not required) at its baseline. A key
-  ``held`` comes back to its held value, or the settle is refused naming the pin.
+  ``held`` comes back to its held value, or the settle is refused naming the key.
 
-``held`` holds the pinned keys with their values, which no strategy changes (``set``
-refuses another value for one, and refuses to drop one): those a ``Pinned`` strategy
-fixes, and those the seam's maker seeds. The build's exploration seeds the pins its
-partition's body records, so that a pin holds for the whole build
+``held`` holds the keys no strategy changes, with their values (``set`` refuses another
+value for one, and refuses to drop one): those a ``Pinned`` strategy fixes, and those
+the seam's maker seeds. The build's exploration seeds those its partition's body
+records (``HELD``), so that each holds for the whole build
 (``finn.transformation.kernels.choose``).
 
 The engine decides validity; an explorer only proposes and prefers. An
@@ -333,7 +333,7 @@ class Run:
 
 
 class Unsettled(ExploreError):
-    """A held key (a pin of this run) that settling cannot bring back to its held value
+    """A held key that settling cannot bring back to its held value
     (``pin-unsettled``, owned by the key): the change that reached it is refused."""
 
     def __init__(self, key: Key, why: str, causes: Iterable[Finding] = ()) -> None:
@@ -401,7 +401,7 @@ def _records(why: Mapping[str, Iterable[Finding]]) -> dict[str, list[dict[str, A
 class Seam:
     """The seam over the networks of one exploration: the ``platform`` its kernels are
     built for (its clock, which a throughput reads). ``attempts`` counts the changes tried
-    through it; ``held`` holds the pinned keys, with their values; ``runs`` records each
+    through it; ``held`` maps each held key to its value; ``runs`` records each
     strategy's run, in order."""
 
     def __init__(self, platform: Platform | None = None) -> None:
@@ -470,8 +470,7 @@ class Seam:
                     key: _refusal(
                         key,
                         "held",
-                        f"held to {self.held[key]!r} by a pin, dropped by the change: "
-                        + _text(key, why),
+                        f"held to {self.held[key]!r}, dropped by the change: " + _text(key, why),
                     )
                     for key, why in held.items()
                 }
@@ -493,7 +492,7 @@ class Seam:
             if network.decision(key) is None:
                 why[key] = _refusal(key, "not-a-decision", "not a Decision of this network")
             elif held is not _ABSENT and held != value:
-                why[key] = _refusal(key, "held", f"held to {held!r} by a pin")
+                why[key] = _refusal(key, "held", f"held to {held!r}")
             elif choice is None:
                 if forced is None:
                     forced = network.forced({k[0] for k in batch})
@@ -608,8 +607,7 @@ class Seam:
                 if isinstance(outcome, Refused):
                     raise Unsettled(
                         choice.key,
-                        f"held to {held!r} by a pin, refused after the change: "
-                        + _reasons(outcome.why),
+                        f"held to {held!r}, refused after the change: " + _reasons(outcome.why),
                         _all(outcome.why),
                     )
                 network, kept[choice.key] = outcome.network, held
@@ -642,7 +640,7 @@ class Seam:
             found = values.get(key, forced.get(key, _ABSENT))
             if found != value:
                 now = "inapplicable or open" if found is _ABSENT else f"now {found!r}"
-                raise Unsettled(key, f"held to {value!r} by a pin, {now} after the change")
+                raise Unsettled(key, f"held to {value!r}, {now} after the change")
 
     def run(
         self,
@@ -994,7 +992,7 @@ class Pinned:
         stored = seam.chosen(network)
         wanted = seam.keyed(network, self.choices, self.path)
         refused = {
-            key: _refusal(key, "held", f"held to {seam.held[key]!r} by an earlier pin")
+            key: _refusal(key, "held", f"already held to {seam.held[key]!r}")
             for key, value in wanted.items()
             if key in seam.held and seam.held[key] != value
         }

@@ -432,7 +432,7 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
     """A pin recorded in the body holds for every later exploration of it, as one run of
     several strategies held it: a fold, FIFO sizing and going back to the baselines keep
     a pinned FIFO and a pinned folding, and pinning a held key to another value is
-    refused, naming the earlier pin."""
+    refused, naming the value it is held to."""
     pinned = tmp_path / "pins.json"
     pins = {
         "first": {"compute.packed.simd": 1},
@@ -453,7 +453,7 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
     assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its baseline
     assert model.get(HELD) == pins
     pinned.write_text(json.dumps({"first": {"compute.packed.simd": 2}}))
-    with pytest.raises(ExploreError, match="held to 1 by an earlier pin"):
+    with pytest.raises(ExploreError, match="already held to 1"):
         explore_kernel_choices(model, Pinned(pinned))
 
 

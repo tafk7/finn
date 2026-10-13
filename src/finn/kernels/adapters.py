@@ -178,8 +178,7 @@ class StreamAdapter(ComposedKernel):
     the two sides of its step of the realization, which its ports present. An
     ``input_gen`` child owns its memory's ``ram_style``, on the channel's ``platform``.
     Its netlist, cycles, buffering and resources are its stages', by the base. It
-    presents no interface: its channel wires its stages hop by hop (``stages``). Like
-    its channel, it is no module of its own: it exports no ``MODULE``.
+    presents no interface: its channel wires its stages hop by hop (``stages``).
     """
 
     id = "finn.channel.adapter"

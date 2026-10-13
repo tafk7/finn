@@ -53,23 +53,16 @@ source, its adapters' stages, its FIFO and its end, though it is no module of it
 It states:
 
 - ``interfaces``: the names of the interfaces it presents, each the end of a view
-  ``<name>_end`` that names the child serving it (below); a root, the top of what is
-  emitted, presents none, its boundary channels being its pins. Each named view is
-  checked when the class is made;
+  ``<name>_end`` that names the child serving it (below); a channel's stages present
+  none. Each named view is checked when the class is made;
 - its children: the kernels and channels it places, its members. It merges their
   netlists (``NETLIST``: each child's and each channel's ``Fragment``, under its node)
   and the control buses its children present (``CONTROL``); one that places no kernel is
   refused (``kernel-module``). It gives its interfaces' tensors to the children that
-  read them, and the channels between its children are its own. Placed alone, as the
-  root of what is emitted, it is one ``Composed`` module whose pins are ``ap_clk``,
-  ``ap_clk2x`` when an instance takes a doubled clock, ``ap_rst_n``, the AXIS bus of
-  each boundary channel it declares (inputs, then outputs) and each presented bus. The
-  merge is one plain function, which a network of kernels and channels
-  (``finn.kernels.network``) composes its module with too: ``composed_fragment``,
-  ``composed_abi`` and ``built`` call its steps (``merged``, ``module_abi``,
-  ``assembled``). Its cycles are its slowest member's, kernels and channels alike, so a
-  root's cycles are its bottleneck; its buffering and resources the sums over its
-  members.
+  read them, and the channels between its children are its own. It is no module of its
+  own: a network (``finn.kernels.network``) composes the module its netlist is part of,
+  and merges with the same function (``merged``). Its cycles are its slowest member's,
+  kernels and channels alike; its buffering and resources the sums over its members.
 
 **One contract per interface.** A kernel states, for each stream interface by name
 (``x``, ``w``, ``y``), its end: a view ``<name>_end`` of a ``PortEnd``, the contract its
@@ -79,17 +72,16 @@ A kernel with children names the child that serves the interface and the port's 
 below it (MatMul's ``x_end`` is the selected core's, ``compute.packed.x``). Facts flow
 one way: a kernel's input tensors in, its ends and its output tensors out. A channel
 (``finn.kernels.channels``) takes the two ends on it as facts, ``producer`` and
-``consumer``, each labelled from the Space that declares the channel (``end_of``:
+``consumer``, each labelled from the network that holds both (``Interface``:
 ``matmul.compute.packed.x``), so that its hops name the kernel whose port it is
 (``^matmul.compute.packed``).
 
-Every kernel exports its netlist (``NETLIST``) and its ``module`` (``MODULE``): the
-``Leaf``, or the ``Composed`` module, accepted under its admission (and a leaf's pins
-accounted for). It also exports what a design space exploration ranks by: cost, not
-validity, so no cost export waits on an admission, and each reads only the choices it
-depends on: ``cycles`` (``CYCLES``), the clock cycles a frame takes; ``buffering``
-(``BUFFERING``), the bits its channels' stages hold; ``resources`` (``RESOURCES``), what
-it uses of the device.
+Every kernel exports its netlist (``NETLIST``), and a leaf its ``module`` (``MODULE``,
+its ``Leaf``), accepted under its admission (and a leaf's pins accounted for). It also
+exports what a design space exploration ranks by: cost, not validity, so no cost export
+waits on an admission, and each reads only the choices it depends on: ``cycles``
+(``CYCLES``), the clock cycles a frame takes; ``buffering`` (``BUFFERING``), the bits its
+channels' stages hold; ``resources`` (``RESOURCES``), what it uses of the device.
 """
 
 from __future__ import annotations
@@ -142,7 +134,6 @@ from finn.kernels.artifacts.module import (
     Held,
     Leaf,
     Module,
-    ProducerIdentity,
 )
 from finn.kernels.control import CONTROL, presented
 from finn.kernels.transport import StreamContract
@@ -163,7 +154,7 @@ def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
 
 MODULE_SEMANTICS = cast("ValueSemantics[Module]", _frozen("module", Leaf, Composed))
 MODULE = ViewKey("module", MODULE_SEMANTICS)
-"""A kernel's module: its ``Leaf``, or its children's netlist as one ``Composed`` module."""
+"""A leaf's module, its ``Leaf``."""
 
 NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
 NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
@@ -565,7 +556,7 @@ class LeafKernel(Kernel, protocol=True):
 class ComposedKernel(Kernel, protocol=True):
     """A kernel with children: see the module docstring for what it states."""
 
-    # The interfaces it presents, by name, each a view ``<name>_end``; a root presents none.
+    # The interfaces it presents, by name, each a view ``<name>_end``; a stage presents none.
     interfaces: ClassVar[tuple[str, ...]] = required(tuple)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -580,26 +571,15 @@ class ComposedKernel(Kernel, protocol=True):
                 "each is a view <name>_end naming the child that serves it"
             )
 
-    def stem(self) -> str:
-        """Its composed module's name stem."""
-        return "finn_" + type(self).__name__.lower()
-
-    def producer_identity(self) -> ProducerIdentity:
-        """What derives its composed module."""
-        space_type = type(self)
-        return ProducerIdentity(space_type.id, str(space_type.version))
-
     # -- its children: their netlists, merged ---------------------------------------------
 
     netlists = Members(NETLIST)
     controls = Members(CONTROL)
-    boundary_buses = Members(BOUNDARY)
 
     @derived
     def fragment(self) -> Fragment | Rejected:
         """Each member's netlist under its node, and the control buses its members
-        present; its own module is complete only as the root, whose channels it declares,
-        so a parent reads its netlist, not its module."""
+        present: what a network, or a parent, merges into its own."""
         return self.composed_fragment()
 
     def composed_fragment(self) -> Fragment | Rejected:
@@ -618,24 +598,7 @@ class ComposedKernel(Kernel, protocol=True):
             return buses
         return merged(((str(item.node), item.value) for item in self.netlists), buses)
 
-    @derived
-    def composed_abi(self) -> Abi:
-        """Its clocks and reset, each boundary channel's AXIS bus (inputs, then outputs), then
-        each presented bus (``finn.kernels.network.module_abi``)."""
-        from finn.kernels.network import module_abi  # noqa: PLC0415 - the network imports the base
-
-        return module_abi(
-            self.fragment, (bus for item in self.boundary_buses for bus in item.value)
-        )
-
-    @derived(semantics=MODULE_SEMANTICS)
-    def built(self) -> Leaf | Composed | Rejected:
-        from finn.kernels.network import assembled  # noqa: PLC0415 - the network imports the base
-
-        return assembled(self.producer_identity(), self.stem(), self.composed_abi, self.fragment)
-
-    module = View(built, requires=(Kernel.admission, netlists, controls, boundary_buses))
-    netlist = View(fragment, requires=(Kernel.admission, netlists, controls, boundary_buses))
+    netlist = View(fragment, requires=(Kernel.admission, netlists, controls))
 
     # -- what a design space exploration ranks by ------------------------------------------
 
@@ -668,7 +631,6 @@ class ComposedKernel(Kernel, protocol=True):
 
     exports = {
         NETLIST: netlist,
-        MODULE: module,
         CYCLES: cycles,
         BUFFERING: buffering,
         RESOURCES: resources,

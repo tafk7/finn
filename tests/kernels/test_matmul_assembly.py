@@ -200,11 +200,8 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
     _ = matmul.compute.module
     assert matmul.compute.y.presented.form.beats == 4
     # The MatMul contributes its children's netlist; the network's module adds the
-    # channels. Without them, MatMul alone is no complete module: its core's inputs are
-    # the channels'.
+    # channels.
     assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]
-    alone = matmul.query(MatMulKernel.module)
-    assert isinstance(alone, Rejected) and "nothing drives" in alone.findings[0].message
     module = built(point, "matmul")
     assert labels(module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")

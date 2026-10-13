@@ -50,8 +50,8 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
 class BaselineChoices(Transformation):
     """What the cut does to the body it makes, for a body made by hand: every open
     choice at its baseline, and the nodes' stored choices checked in context
-    (``network.baseline_choices``). ``dropped`` lists those reset, by root key, with
-    why."""
+    (``network.baseline_choices``). ``dropped`` lists those reset, by owner and key
+    (``MatMul_0.compute.packed.pe``), with why."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -67,7 +67,7 @@ class CutKernelPartition(Transformation):
     ``directory`` at its baselines (see the module docstring). Refuses a model that
     holds a partition already or no KernelOps, one with host nodes between KernelOps or
     storing channel choices, and one with a host node named ``PARTITION``. ``dropped``
-    lists the node choices reset at the cut, by root key, with why."""
+    lists the node choices reset at the cut, by owner and key, with why."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()

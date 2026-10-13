@@ -176,10 +176,9 @@ def test_known_weights_give_the_weight_channel_its_source():
     assert not unvalued.valued
     assert isinstance(unvalued.query(Channel.source), Inapplicable)
     assert unvalued.endpoints.source_owner is None
-    # MatMul's netlist is its cores' alone, and it derives the same either way.
+    # MatMul's netlist is its cores' alone.
     matmul = stored_.member("matmul")
     assert [item.node for item in matmul.netlists] == ["compute.packed"]
-    assert external.member("matmul").producer_identity() == matmul.producer_identity()
 
 
 def test_an_unvalued_channel_never_demands_its_source():

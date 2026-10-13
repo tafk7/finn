@@ -116,7 +116,7 @@ class NetworkError(ValueError):
     """A network that cannot be built as declared, or a member read that is no member's."""
 
 
-# -- the module: one function, for a network and for a kernel with children --------------
+# -- the module ---------------------------------------------------------------------------
 
 
 def merged(
@@ -179,8 +179,8 @@ def compose(
     presented: Iterable[Exported] = (),
 ) -> Composed | Rejected:
     """One composed module: each netlist under its node in order (``merged``), the pins
-    of ``module_abi`` and the module ``assembled``. A kernel with children's module and a
-    network's are this one function's."""
+    of ``module_abi`` and the module ``assembled``: a network's. A kernel with children
+    merges its netlist with ``merged`` too."""
     fragment = merged(netlists, presented)
     if isinstance(fragment, Rejected):
         return fragment

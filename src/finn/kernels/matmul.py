@@ -513,9 +513,6 @@ class MatMulKernel(ComposedKernel):
 
     admission = ConstraintGroup(extents_supported, realization_supported, carried)
 
-    def stem(self) -> str:
-        return "finn_matmul"
-
 
 __all__ = [
     "MatMulKernel",

@@ -12,7 +12,7 @@ given to its port's ``tensor``, ``finn.kernels.port``), states the end each
 port presents (``finn.kernels.base.PortEnd``: the port's contract and its
 label), and the channel takes its two ends as facts, ``producer`` and
 ``consumer``, each the end of a kernel's interface (``x_end``) or of another
-member's, labelled from the Space that declares the channel (``end_of``:
+member's, labelled from the network that holds both (``Interface``:
 ``matmul.compute.packed.x``), or absent: the root's boundary. Each end presents
 its own traversal of its tensor in its contract; the channel's tensor is never
 derived from an end. The contract's transport endpoint says whether the end
@@ -83,9 +83,7 @@ nodes, in that order, so its stages' leaves sit at their labels below it
 ``adapter.input_gen.input_gen``), and its hops. An end belongs to the kernel whose
 ``Port`` it is, beside the channel (``^matmul.compute.packed``); a boundary end is
 the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus its boundary side
-presents, if any. It is a composition inside its parent's module, not a module of
-its own: it exports no ``MODULE``, and its ``module`` is refused
-(``channel-module``).
+presents, if any. It is no module of its own.
 
 A channel refuses itself as a kernel does, through its ``admission``
 (``well_formed``, ``realizable``, ``compatible``). It exports its cost, its
@@ -145,13 +143,12 @@ from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
-from finn.kernels.artifacts.module import Composed, Fragment, Leaf, Link, LinkEnd, Marker, merge
+from finn.kernels.artifacts.module import Fragment, Leaf, Link, LinkEnd, Marker, merge
 from finn.kernels.base import (
     BOUNDARY,
     BUFFERING,
     CLOCK,
     CYCLES,
-    MODULE_SEMANTICS,
     NETLIST,
     PORT_END,
     RESET,
@@ -310,20 +307,18 @@ class Channel(ComposedKernel):
     """One tensor between the ports whose ends it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are the ends of the ports on it, facts its
-    declarer gives (``end_of``), each labelled from the Space that declares the
-    channel. A side without an end is the root's boundary, presented as the AXIS
-    port ``port``, where the ``end`` the shell offers (``end_offer``) sits. A
-    channel with a known value has its ``source`` as its producer, and with several
-    sets its source reads the set indices (``index_tensor``) from the channel whose
-    consumer is ``set_end``, the one interface it presents. ``platform`` is the
-    target's, stated by whoever declares the channel: its source, its adapter's stages
-    and its FIFO read it.
+    network gives (``Interface``), each labelled from the network. A side without an
+    end is the root's boundary, presented as the AXIS port ``port``, where the ``end``
+    the shell offers (``end_offer``) sits. A channel with a known value has its
+    ``source`` as its producer, and with several sets its source reads the set indices
+    (``index_tensor``) from the channel whose consumer is ``set_end``, the one interface
+    it presents. ``platform`` is the target's, stated by whoever declares the channel:
+    its source, its adapter's stages and its FIFO read it.
 
     It is a kernel with children: its source, its adapters (their stages), its
     transport (its FIFO) and its end, declared in the order the stream runs through
     them, so that its netlist places them in that order. Its netlist, buffering and
-    resources are theirs, by the base; it is a composition inside its parent's module,
-    not a module of its own.
+    resources are theirs, by the base; it is no module of its own.
     """
 
     id = "finn.channel"
@@ -441,7 +436,7 @@ class Channel(ComposedKernel):
         if not (producers and consumers) and not self.present(Channel.port):
             return reject(
                 "channel-boundary",
-                "a boundary of its root, but no port names it: only an ONNX input or output "
+                "a boundary of its network, but no port names it: only an ONNX input or output "
                 "of a partition crosses its boundary",
             )
         try:
@@ -672,13 +667,6 @@ class Channel(ComposedKernel):
         except ArtifactError as error:
             return reject("kernel-netlist", str(error))
 
-    @derived(semantics=MODULE_SEMANTICS)
-    def built(self) -> Leaf | Composed | Rejected:
-        return reject(
-            "channel-module",
-            "a channel is a composition inside its parent's module, not a module of its own",
-        )
-
     # -- what a design space exploration ranks by ------------------------------------------
 
     @derived
@@ -697,7 +685,6 @@ class Channel(ComposedKernel):
 
     end_export = View(placed_end)
 
-    # Not ``MODULE``: a channel is no module of its own.
     exports = {
         NETLIST: ComposedKernel.netlist,
         BOUNDARY: boundary_bus,
@@ -706,21 +693,6 @@ class Channel(ComposedKernel):
         RESOURCES: ComposedKernel.resources,
         END: end_export,
     }
-
-
-def end_of(member: str, interface: str) -> PortEnd:
-    """A derived member of a Space that declares channels: the end its member ``member``
-    presents at ``interface`` (a view of a ``PortEnd``: a kernel's ``x_end``, a channel's
-    ``set_end``), labelled from that Space (``matmul.compute.packed.x``). Name it in the
-    class body (``x_consumer = end_of("matmul", "x_end")``) and give that name to a
-    channel's ``producer`` or ``consumer``; it reads ``member`` by name, so the channel
-    may be declared before it."""
-
-    def end(self: Space) -> PortEnd:
-        found: PortEnd = getattr(getattr(self, member), interface)
-        return found.under(member)
-
-    return derived(semantics=PORT_END)(end)
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
@@ -735,6 +707,5 @@ __all__ = [
     "ChannelEnds",
     "ChannelFifo",
     "boundary_contract",
-    "end_of",
     "wired",
 ]
