@@ -203,10 +203,8 @@ def test_a_change_drops_what_it_makes_stale_names_it_and_settles_it() -> None:
     assert isinstance(fifo, Accepted)
     direct = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
     assert isinstance(direct, Accepted)
-    assert set(direct.dropped) == {
-        ("hidden", "transport.fifo.buffer.depth"),
-        ("hidden", "transport.fifo.buffer.ram_style"),
-    } or set(direct.dropped) == {("hidden", "transport.fifo.buffer.depth")}
+    # Its style was never stored (``set`` settles only what it drops): the depth alone.
+    assert set(direct.dropped) == {("hidden", "transport.fifo.buffer.depth")}
     assert "hidden.transport.fifo.buffer.depth" not in chosen(explorer, direct.network)
     assert explorer.choices(direct.network) == ()
     explorer.held[("hidden", "transport.fifo.buffer.depth")] = 16
