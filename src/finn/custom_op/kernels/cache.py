@@ -30,7 +30,7 @@ V = TypeVar("V")
 class Facts:
     """What binding a node reads: the node root class, a key that identifies the facts
     by value, and functions that give the kernel arguments and the held initializers'
-    values (called only on a cache miss) and the channels' tensors by port (an output's
+    values (called only on a cache miss) and the ports' tensors by port (an output's
     is known only once inference has written it). ``owned`` lists the ports whose
     initializer the node holds."""
 

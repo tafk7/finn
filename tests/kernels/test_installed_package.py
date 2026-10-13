@@ -51,7 +51,8 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
+from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -92,27 +93,22 @@ PLATFORM = Platform(
 )
 
 
+X2 = Tensor((1, 2), ScalarEncoding(DataType["INT3"]))
+W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
+Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
+
 class PlacedDotp(Space):
-    x = Channel(
-        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT3"])),
-        port="in0_V",
-        platform=PLATFORM,
-    )
-    w = Channel(
-        tensor=Tensor((2, 2), ScalarEncoding(DataType["INT3"])),
-        port="in1_V",
-        platform=PLATFORM,
-    )
-    y = Channel(
-        tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
-        port="out0_V",
-        platform=PLATFORM,
-    )
+    x_end = end_of("compute", "x_end")
+    w_end = end_of("compute", "w_end")
+    y_end = end_of("compute", "y_end")
+    x = Channel(tensor=X2, port="in0_V", consumer=x_end, platform=PLATFORM)
+    w = Channel(tensor=W2, port="in1_V", consumer=w_end, platform=PLATFORM)
+    y = Channel(tensor=Y2, port="out0_V", producer=y_end, platform=PLATFORM)
     compute = PackedDotpKernel(
         result_range=ordinary_integer_bounds(DataType["INT8"]),
-        x_channel=x,
-        w_channel=w,
-        y_channel=y,
+        x_tensor=X2,
+        w_tensor=W2,
+        y_tensor=Y2,
         platform=PLATFORM,
     )
 
@@ -176,10 +172,13 @@ for memory in ("none", "memstream"):
     }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     # Unknown weights: the datatypes' result, INT8. Stored ones: their columns', INT7.
-    stored, bits = {}, 8
+    weights, bits = {"w_tensor": Tensor((4, 4), INT3)}, 8
     if memory == "memstream":
-        # Stored (k, n): the columns of the by-output rows; the weight channel's value.
-        stored["contents"] = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+        # Stored (k, n): the columns of the by-output rows; MatMul's, and the weight
+        # channel's value.
+        weights = {
+            "w_contents": ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+        }
         bits = 7
         choices |= {
             "w.source.memstream.ram_style": "auto",
@@ -187,18 +186,33 @@ for memory in ("none", "memstream"):
         }
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
 
-    # The MatMul in a root that declares its streams.
-    class Placed(Root):
-        x = Channel(tensor=Tensor((3, 4), INT3), port="in0_V", platform=PLATFORM)
-        w = Channel(tensor=Tensor((4, 4), INT3), port="in1_V", platform=PLATFORM, **stored)
-        y = Channel(
-            tensor=Tensor((3, 4), ScalarEncoding(DataType[f"INT{bits}"])),
-            port="out0_V",
-            platform=PLATFORM,
-        )
-        matmul = MatMulKernel(**facts, x_channel=x, w_channel=w, y_channel=y)
+    x_tensor = Tensor((3, 4), INT3)
+    y_tensor = Tensor((3, 4), ScalarEncoding(DataType[f"INT{bits}"]))
 
-    root = commit(design_space(Placed()), choices)
+    # The MatMul in a root that declares its streams; the weight channel carries what
+    # MatMul states for it.
+    class Placed(Root):
+        known: bool = Param()
+        x_end = end_of("matmul", "x_end")
+        w_end = end_of("matmul", "w_end")
+        y_end = end_of("matmul", "y_end")
+
+        @derived
+        def w_tensor(self) -> Tensor:
+            return self.matmul.w_carried
+
+        @derived(when=known, semantics=INTEGER_TENSOR)
+        def w_contents(self) -> IntegerTensor:
+            return self.matmul.w_stored
+
+        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=PLATFORM)
+        w = Channel(
+            tensor=w_tensor, contents=w_contents, port="in1_V", consumer=w_end, platform=PLATFORM
+        )
+        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=PLATFORM)
+        matmul = MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights)
+
+    root = commit(design_space(Placed(known=memory == "memstream")), choices)
     root = commit(root, {
         "matmul.compute.packed.pe": 2,
         "matmul.compute.packed.simd": 2,

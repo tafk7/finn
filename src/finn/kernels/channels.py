@@ -1,24 +1,22 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channels: one tensor from one producer to one consumer, an ordinary Space kernels reference.
+"""Channels: one tensor from one producer to one consumer, an ordinary Space that takes its ends.
 
 A ``Channel`` is one real producer-to-consumer edge, a node of its own,
 declared in the kernel with children (or the root) that owns the edge, beside
 the kernels it joins, carrying one ``tensor`` its owner supplies: stated, or
-read from a kernel's fact-level view (``MatMulKernel.weight_tensor``). A kernel
-has one reference input per channel it sits on (``output_channel: Channel =
-Param()``), bound to the ``channel`` of one of its ports
-(``finn.kernels.port``), which exports its contract under ``PORT``; a kernel
-with children passes the reference down to the child that uses it, so the
-channel's user is always a leaf's port, at any depth. Each end presents its
-own traversal of the tensor in that contract, reading only the channel's
-``tensor``: a tensor derived from an end is a dependency cycle, but a kernel's
-fact-level view (its facts and value choices, no port) is not one. The
-channel sees the ports that reference it through ``users = Users(PORT)``,
-each with only the contract it presents on this channel, so a port's refusal
-stays on its own channel. The contract's transport endpoint says whether the
-kernel produces into the channel (initiator) or consumes from it (target).
+read from a kernel's fact-level view (``MatMulKernel.w_carried``). Facts flow
+one way: a kernel takes its tensors as facts (``x_tensor: Tensor = Param()``,
+given to its port's ``tensor``, ``finn.kernels.port``), states the end each
+port presents (``finn.kernels.base.PortEnd``: the port's contract and its
+label), and the channel takes its two ends as facts, ``producer`` and
+``consumer``, each the end of a kernel's interface (``x_end``) or of another
+member's, labelled from the Space that declares the channel (``end_of``:
+``matmul.compute.packed.x``), or absent: the root's boundary. Each end presents
+its own traversal of its tensor in its contract; the channel's tensor is never
+derived from an end. The contract's transport endpoint says whether the end
+produces into the channel (initiator) or consumes from it (target).
 
 Its ``ends`` are the contracts' logical part (``finn.dataflow.ends``): each
 must traverse the tensor (``well_formed``, ``channel-tensor``), and the
@@ -34,7 +32,7 @@ fixed chains of FinnLib modules (``finn.kernels.adapters``), each refusing a
 plan it does not carry out, so at most one survives a side. A channel whose
 ``adaptable`` input is False admits no adapter and refuses any plan.
 
-A channel with a user on one side only is a boundary of the root that
+A channel with an end on one side only is a boundary of the root that
 declares it. Its ``port`` input names the top-level AXIS port (``in0_V``): an
 ABI name is design data of the channel, independent of its node name, which
 is its identity and the prefix of its persisted decision keys. A boundary
@@ -50,7 +48,7 @@ nodes between its adapters: ``direct`` or ``fifo``. The FIFO candidate owns its
 ``depth``, a Decision known by its domain's membership only, which a design
 space exploration proposes, and the FIFO's ``ram_style``; it is an identity
 stage presenting what arrives at it, inside the root that declares the channel
-(on a boundary, between the root's pins and its user). A FIFO carries data
+(on a boundary, between the root's pins and its port). A FIFO carries data
 words only: where what arrives carries markers (a producer whose own output
 carries them; a width conversion drops them), the FIFO refuses itself
 (``fifo-markers``). The adapters' and transport's stages are checked on both
@@ -59,20 +57,23 @@ sides, on the channel's ``platform``. Their keys are the channel's
 whoever owns the edge.
 
 A channel whose tensor has a known value (``contents``, one operand per set;
-with several ``sets``, its ``index`` channel selects one) carries a
-``source`` Decision over the kernels that can drive it with that value
-(``SOURCES``: a memory). It applies only when the value is known
+with several ``sets``, the tensor of the set indices is ``index_tensor``)
+carries a ``source`` Decision over the kernels that can drive it with that
+value (``SOURCES``: a memory). It applies only when the value is known
 (``valued``), and it has no ``none`` case: one viable candidate is forced. The
 source is the channel's producer end, placed by the channel (``staged``), its
 leaf below the channel at ``source.<case>``; it stores one period of the value
 in the order the channel's consumer reads it. The invariant: **a channel with
-a value has its source as its only producer** (``channel-users``).
+a value has its source as its only producer** (``channel-users``). With several
+sets, the source's set port is an interface of the channel (``set_end``,
+labelled ``source.<case>.set``): the index tensor's channel takes it as its
+consumer, so an end may be any member's interface, a kernel's or a channel's.
 
 Beside ``compatible``, each checked hop is resolved into wires (``wired``),
 and the channel exports its netlist under ``NETLIST``: its stages' leaves at
 their labels below it (``output_adapter.vpc.vpc``, ``transport.fifo.buffer``,
-``adapter.input_gen.input_gen``) and its hops. A user's end belongs to the
-kernel whose ``Port`` it is, beside the channel (``^compute.packed``); a
+``adapter.input_gen.input_gen``) and its hops. An end belongs to the kernel
+whose ``Port`` it is, beside the channel (``^matmul.compute.packed``); a
 boundary end is the root's own pins. Under ``BOUNDARY`` it exports the AXIS bus
 its boundary side presents, if any.
 
@@ -88,23 +89,21 @@ of the device, each stage kernel's own statement summed (a channel of wires uses
 none). Its end is not counted: the shell integrates it beside the root, and its
 resources are the shell's.
 
-A boundary channel's side without a user is its **free side** (``free_side``):
+A boundary channel's side without an end is its **free side** (``free_side``):
 the AXIS port the root presents. A shell that integrates ends supplies the ends
 it offers there (``end_offer``, ``finn.kernels.ends``), and the channel's ``end``
 Decision places one, as it places its ``source``: it applies only when offers
 are supplied, its candidates are the kinds ``ENDS`` knows, each refusing a kind
-not offered, so one offered is forced and nothing is persisted. The end is not a
-user: it reads the free side the channel's one user determines, binds no RTL
+not offered, so one offered is forced and nothing is persisted. The shell's end
+is not a port's: it reads the free side the channel's one end determines, binds no RTL
 (the root's pins stay its pins), and exports its facts (``end_contract``). Its
 cycles a frame (``end_cycles``) are the channel's, beside its stages', and under
 ``END`` it exports its end's contract (none without an end), whose AXI-Lite buses
 the shell root's admission counts, and whose resources and memory ports it counts
 with its static region.
 
-The Space class refers to itself (``index``) and, through its source's port, is
-referred to by ``finn.kernels.port`` and ``finn.kernels.memstream``, which
-this module imports: those annotate with ``channels.Channel`` and the Space
-engine resolves the reference when it collects the Space class.
+A channel's source is a ``MemStreamKernel`` (``finn.kernels.memstream``), which
+this module imports.
 """
 
 from __future__ import annotations
@@ -118,7 +117,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Users,
     View,
     constraint,
     derived,
@@ -143,9 +141,10 @@ from finn.kernels.base import (
     CLOCK,
     CYCLES,
     NETLIST,
-    PORT,
+    PORT_END,
     RESET,
     RESOURCES,
+    PortEnd,
 )
 from finn.kernels.ends import END, ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
@@ -290,9 +289,10 @@ class ChannelFifo(Space):
 
 @dataclass(frozen=True)
 class ChannelEnds:
-    """A channel's two ends: each end's owner (the user's port node; the channel's
-    source label, ``source.<case>``, for a known value; None at the root's boundary)
-    and its contract."""
+    """A channel's two ends: each end's owner (its port's label from the Space that
+    declares the channel, ``matmul.compute.packed.x``; the channel's source label,
+    ``source.<case>``, for a known value; None at the root's boundary) and its
+    contract."""
 
     source_owner: str | None
     source: StreamContract
@@ -301,25 +301,27 @@ class ChannelEnds:
 
 
 class Channel(Space):
-    """One tensor between the kernels that reference it: one producer, one consumer.
+    """One tensor between the ports whose ends it takes: one producer, one consumer.
 
-    ``users`` holds the port each present user presents on this channel,
-    located by the user's name and the input it references this channel
-    through. A side without a user is the root's boundary, presented as the
-    AXIS port ``port``, where the ``end`` the shell offers (``end_offer``) sits.
-    A channel with a known value has its ``source`` as its producer.
-    ``platform`` is the target's, stated by whoever declares the channel: its
-    source, its adapter's stages and its FIFO read it.
+    ``producer`` and ``consumer`` are the ends of the ports on it, facts its
+    declarer gives (``end_of``), each labelled from the Space that declares the
+    channel. A side without an end is the root's boundary, presented as the AXIS
+    port ``port``, where the ``end`` the shell offers (``end_offer``) sits. A
+    channel with a known value has its ``source`` as its producer, and with several
+    sets its source reads the set indices (``index_tensor``) from the channel whose
+    consumer is ``set_end``. ``platform`` is the target's, stated by whoever
+    declares the channel: its source, its adapter's stages and its FIFO read it.
     """
 
     tensor: Tensor = Param()
     # False admits no adapter: the ends must connect directly.
     adaptable: bool = Param(default=True)
     port: str = Param(required=False)
-    users = Users(PORT)
+    producer: PortEnd = Param(required=False, semantics=PORT_END)
+    consumer: PortEnd = Param(required=False, semantics=PORT_END)
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     sets: int = Param(default=1)
-    index: Channel = Param(required=False)
+    index_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
     end_offer: tuple[EndOffer, ...] = Param(required=False)
     # Whether the channel carries a known value, which its source drives: where nothing
@@ -330,12 +332,22 @@ class Channel(Space):
     ended = supplied(end_offer)
 
     @derived
+    def attached(self) -> tuple[PortEnd, ...]:
+        """The ends given, the producer's first."""
+        found: list[PortEnd] = []
+        if self.present(Channel.producer):
+            found.append(self.producer)
+        if self.present(Channel.consumer):
+            found.append(self.consumer)
+        return tuple(found)
+
+    @derived
     def consumed(self) -> StreamContract | Rejected:
-        """The consuming user's contract: the order a source stores the value in."""
+        """The consuming end's contract: the order a source stores the value in."""
         consumers = [
-            end.value
-            for end in self.users
-            if end.value.transport.endpoint is not Endpoint.INITIATOR
+            end.contract
+            for end in self.attached
+            if end.contract.transport.endpoint is not Endpoint.INITIATOR
         ]
         if len(consumers) != 1:
             return reject("channel-source", "a known value streams to exactly one consumer")
@@ -357,7 +369,7 @@ class Channel(Space):
         form=source_form,
         contents=contents,
         sets=sets,
-        set_channel=index,
+        set_tensor=index_tensor,
         platform=platform,
         staged=True,
     )
@@ -374,16 +386,28 @@ class Channel(Space):
         contract: StreamContract = self.source.output.contract
         return contract
 
+    @view(semantics=PORT_END)
+    def set_end(self) -> PortEnd | Rejected:
+        """With several sets, its source's set port, an interface of the channel labelled
+        below it (``source.memstream.set``): the index tensor's channel's consumer. A
+        channel without a known value has no source: nothing reads the indices."""
+        if not self.valued:
+            return reject(
+                "channel-unused", "no source reads the set indices: the channel has no value"
+            )
+        end: PortEnd = self.source.set_end
+        return end.under(self.source_label)
+
     @derived
     def endpoints(self) -> ChannelEnds | Rejected:
         """The producing and consuming ends, without the stages between them: with a
         known value, the producer is the channel's source."""
         producers: list[tuple[str | None, StreamContract]] = []
         consumers: list[tuple[str | None, StreamContract]] = []
-        for end in self.users:
-            contract = end.value
+        for end in self.attached:
+            contract = end.contract
             producing = contract.transport.endpoint is Endpoint.INITIATOR
-            (producers if producing else consumers).append((end.node, contract))
+            (producers if producing else consumers).append((end.label, contract))
         if self.valued:
             if producers:
                 return reject(
@@ -393,13 +417,13 @@ class Channel(Space):
                 )
             producers.append((self.source_label, self.source_contract))
         if len(producers) > 1 or len(consumers) > 1:
-            named = ", ".join(f"{end.node}.{end.member}" for end in self.users)
+            named = ", ".join(end.label for end in self.attached)
             return reject(
                 "channel-users",
-                f"a channel has at most one producer and one consumer; referenced by {named}",
+                f"a channel has at most one producer and one consumer; its ends are {named}",
             )
         if not producers and not consumers:
-            return reject("channel-unused", "no present kernel references this channel")
+            return reject("channel-unused", "no present port's end is on this channel")
         if not (producers and consumers) and not self.present(Channel.port):
             return reject(
                 "channel-boundary",
@@ -407,7 +431,7 @@ class Channel(Space):
                 "of a partition crosses its boundary",
             )
         try:
-            # A side without a user is the boundary. Seen from inside, the
+            # A side without an end is the boundary. Seen from inside, the
             # root's input is the AXIS target and its output the initiator.
             if not producers:
                 inside = consumers[0][1]
@@ -425,14 +449,15 @@ class Channel(Space):
 
     @derived
     def free_side(self) -> StreamContract | Rejected:
-        """The side without a user, as the root presents it: where an end sits."""
+        """The side without a port's end, as the root presents it: where a shell's end
+        sits."""
         found = self.endpoints
         if found.source_owner is None:
             return found.source
         if found.sink_owner is None:
             return found.sink
         return reject(
-            "channel-end", "an end sits on a boundary's free side, and both sides have a user"
+            "channel-end", "an end sits on a boundary's free side, and both sides have a port"
         )
 
     end: IodmaEnd = Decision(ENDS, when=ended, offers=end_offer, side=free_side)
@@ -604,9 +629,9 @@ class Channel(Space):
     def hops(self) -> tuple[Link, ...] | Rejected:
         """Each hop, source through every stage to sink, as wires.
 
-        A user's end belongs to its kernel beside the channel: the user is a
-        kernel's ``Port`` (``compute.packed.x``, at any depth below the
-        channel's owner), its kernel the node above it (``^compute.packed``).
+        An end belongs to its kernel beside the channel: its label is a
+        kernel's ``Port`` (``matmul.compute.packed.x``, at any depth below the
+        channel's owner), its kernel the node above it (``^matmul.compute.packed``).
         A stage and the source sit below the channel at their labels; a
         boundary end is the root's own pins (``None``).
         """
@@ -694,7 +719,7 @@ class Channel(Space):
 
     @view(requires=(well_formed, realizable, compatible))
     def boundary_bus(self) -> tuple[Bus, ...]:
-        """The AXIS bus the root presents for it, when one side has no user."""
+        """The AXIS bus the root presents for it, when one side has no end."""
         ends = self.endpoints
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
@@ -711,6 +736,21 @@ class Channel(Space):
     }
 
 
+def end_of(member: str, interface: str) -> PortEnd:
+    """A derived member of a Space that declares channels: the end its member ``member``
+    presents at ``interface`` (a view of a ``PortEnd``: a kernel's ``x_end``, a channel's
+    ``set_end``), labelled from that Space (``matmul.compute.packed.x``). Name it in the
+    class body (``x_consumer = end_of("matmul", "x_end")``) and give that name to a
+    channel's ``producer`` or ``consumer``; it reads ``member`` by name, so the channel
+    may be declared before it."""
+
+    def end(self: Space) -> PortEnd:
+        found: PortEnd = getattr(getattr(self, member), interface)
+        return found.under(member)
+
+    return derived(semantics=PORT_END)(end)
+
+
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
     if not found:
         return True
@@ -723,5 +763,6 @@ __all__ = [
     "ChannelEnds",
     "ChannelFifo",
     "boundary_contract",
+    "end_of",
     "wired",
 ]

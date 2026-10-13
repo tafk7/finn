@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical FinnLib ``dotp_axi`` around one compute core, on three channels.
+"""Physical FinnLib ``dotp_axi`` around one compute core, on three tensors.
 
 Each compute core is its own kernel: ``PackedDotpKernel`` (FinnLib ``dotp``,
 lanes packed into DSP48E1, DSP48E2 or DSP58 slices) and
@@ -18,9 +18,10 @@ SIMD lanes, SIMD varying fastest; each result beat PE lanes. Lanes are
 packed low first; only the complete beat is padded to a byte boundary.
 Activation TLAST closes each reduction and produces one result beat.
 
-Its three ports (``x``, ``w``, ``y``) sit on the channels its parent supplies
-(``x_channel``, ``w_channel``, ``y_channel``). The extents are bound from the
-tensors the ports read, which must agree (``kernel-extents``): x reads
+Its three ports (``x``, ``w``, ``y``) take the tensors its parent gives
+(``x_tensor``, ``w_tensor``, ``y_tensor``), and it states the end each presents
+(``x_end``, ``w_end``, ``y_end``; ``finn.kernels.base.interface``). The extents
+are bound from the tensors the ports read, which must agree (``kernel-extents``): x reads
 ``(m, k)`` (``(m, k, n)`` depthwise), w ``(k, n)`` (weights stored ``(k, n)``)
 and y ``(m, n)``. PE and SIMD are dotp's own Decisions, the folding factors of ``n`` and ``k``,
 and its ``schedule`` walks ``m``, then ``n``, then ``k`` innermost; every
@@ -72,10 +73,10 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Affine, Index, Schedule
+from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
-from finn.kernels.channels import Channel
+from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of, interface
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.kernels.values.domains import Integer, range_dtype
@@ -168,10 +169,10 @@ class DotpAxiKernel(Kernel):
     # so that it is known before the results channel exists.
     result_range: tuple[int, int] = Param()
     platform: Platform = Param()
-    # The channels dotp sits on: reference inputs, each a Channel placed beside it.
-    x_channel: Channel = Param(required=False)
-    w_channel: Channel = Param(required=False)
-    y_channel: Channel = Param(required=False)
+    # The tensors its ports read and write: facts its parent gives.
+    x_tensor: Tensor = Param(required=False)
+    w_tensor: Tensor = Param(required=False)
+    y_tensor: Tensor = Param(required=False)
 
     @derived
     def windowed(self) -> bool:
@@ -283,7 +284,7 @@ class DotpAxiKernel(Kernel):
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
-        channel=x_channel,
+        tensor=x_tensor,
         admits=activation_policy,
         schedule=schedule,
         index=x_index,
@@ -294,7 +295,7 @@ class DotpAxiKernel(Kernel):
     w = AxiStreamPort(
         name="s_axis_weights",
         endpoint=Endpoint.TARGET,
-        channel=w_channel,
+        tensor=w_tensor,
         admits=Integer(min_bits=2, signed=True),
         schedule=schedule,
         index=w_index,
@@ -304,7 +305,7 @@ class DotpAxiKernel(Kernel):
     y = AxiStreamPort(
         name="m_axis_output",
         endpoint=Endpoint.INITIATOR,
-        channel=y_channel,
+        tensor=y_tensor,
         admits=Integer(),
         schedule=schedule,
         index=y_index,
@@ -313,6 +314,9 @@ class DotpAxiKernel(Kernel):
         dtype=result_dtype,
         value_range=result_range,
     )
+    x_end = interface("x")
+    w_end = interface("w")
+    y_end = interface("y")
 
     @derived
     def dsp(self) -> DspBlock | Rejected:
@@ -478,7 +482,7 @@ class PackedDotpKernel(DotpAxiKernel):
     """FinnLib ``dotp``: activation and weight lanes packed into DSP48E1, DSP48E2 or DSP58.
 
     Activations are broadcast (``DENSE`` only). ``narrow_weights`` derives from
-    the weight channel's element: when its range excludes the type's most
+    the weight tensor's element: when its range excludes the type's most
     negative value (a value owner stated it), a weight needs no sign guard bit,
     which packs more lanes per DSP and admits weights as wide as the DSP's A
     input. FinnLib stops simulation on a weight that breaks it.
@@ -505,7 +509,7 @@ class PackedDotpKernel(DotpAxiKernel):
 
     @derived
     def narrow_weights(self) -> bool:
-        """No weight its channel carries is its type's minimum."""
+        """No weight its tensor holds is its type's minimum."""
         element = self.w.element
         if element.value_range is None:
             return False  # not an integer encoding: the weight port refuses it

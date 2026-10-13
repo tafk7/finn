@@ -14,7 +14,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -40,20 +40,26 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat."""
     rows, channels = source.shape
 
+    x_tensor = Tensor(source.shape, ELEMENT)
+    y_tensor = Tensor(source.shape, ScalarEncoding(DataType["UINT4"]))
+
     class Adapted(Root):
+        x_producer = end_of("producer", "output_end")
+        x_consumer = end_of("activate", "input_end")
+        y_producer = end_of("activate", "output_end")
         x = Channel(
-            tensor=Tensor(source.shape, ELEMENT), adaptable=adaptable, platform=FULL_DSP48E2
-        )
-        y = Channel(
-            tensor=Tensor(source.shape, ScalarEncoding(DataType["UINT4"])),
-            port="out0_V",
+            tensor=x_tensor,
+            adaptable=adaptable,
+            producer=x_producer,
+            consumer=x_consumer,
             platform=FULL_DSP48E2,
         )
+        y = Channel(tensor=y_tensor, port="out0_V", producer=y_producer, platform=FULL_DSP48E2)
         producer = MemStreamKernel(
             dtype=DataType["INT4"],
             form=source,
             contents=values(rows, channels),
-            output_channel=x,
+            output_tensor=x_tensor,
             platform=FULL_DSP48E2,
         )
         activate = ThresholdingAxiKernel(
@@ -64,8 +70,8 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True, commit_all: b
             pe=pe,
             ram_style="auto",
             ultra_stages=0,
-            input_channel=x,
-            output_channel=y,
+            input_tensor=x_tensor,
+            output_tensor=y_tensor,
             platform=FULL_DSP48E2,
         )
 
@@ -100,10 +106,14 @@ def transposed(
     """``inner_shuffle`` placed between two boundary channels: rows in, columns out."""
     shape = (batches, rows, cols)
 
+    tensor = Tensor(shape, ELEMENT)
+
     class Transposed(Root):
-        a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=platform)
-        b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=platform)
-        shuffle = TransposeKernel(input_channel=a, output_channel=b, platform=platform)
+        a_end = end_of("shuffle", "input_end")
+        b_end = end_of("shuffle", "output_end")
+        a = Channel(tensor=tensor, port="in0_V", consumer=a_end, platform=platform)
+        b = Channel(tensor=tensor, port="out0_V", producer=b_end, platform=platform)
+        shuffle = TransposeKernel(input_tensor=tensor, output_tensor=tensor, platform=platform)
 
     point = with_direct_transports(design_space(Transposed()))
     return commit(point, {"shuffle.ram_style": ram_style, "shuffle.simd": simd})

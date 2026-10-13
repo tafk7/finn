@@ -548,7 +548,8 @@ def kernel_fixtures(api):
     commit = importlib.import_module("finn.kernels.configure").commit
     target = importlib.import_module("finn.platform.capabilities")
     Fabric = target.Fabric
-    Channel = importlib.import_module("finn.kernels.channels").Channel
+    channels = importlib.import_module("finn.kernels.channels")
+    Channel, end_of = channels.Channel, channels.end_of
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
@@ -562,15 +563,22 @@ def kernel_fixtures(api):
     )
     int3, int8 = dtype("INT3"), dtype("INT8")
 
-    def streams(x, w, y):
+    def streams(kernel, x, w, y):
+        """The three boundary streams of ``kernel``'s tensors, each taking its end."""
+        ends = {
+            "x_end": end_of(kernel, "x_end"),
+            "w_end": end_of(kernel, "w_end"),
+            "y_end": end_of(kernel, "y_end"),
+        }
         return {
-            "x": Channel(tensor=x, port="in0_V", platform=platform),
-            "w": Channel(tensor=w, port="in1_V", platform=platform),
-            "y": Channel(tensor=y, port="out0_V", platform=platform),
+            **ends,
+            "x": Channel(tensor=x, port="in0_V", consumer=ends["x_end"], platform=platform),
+            "w": Channel(tensor=w, port="in1_V", consumer=ends["w_end"], platform=platform),
+            "y": Channel(tensor=y, port="out0_V", producer=ends["y_end"], platform=platform),
         }
 
     # A dot-product core between three boundary streams.
-    dotp_streams = streams(
+    dotp_tensors = (
         Tensor((1, 4), ScalarEncoding(int3)),
         Tensor((4, 4), ScalarEncoding(int3)),
         Tensor((1, 4), ScalarEncoding(int8)),
@@ -578,11 +586,11 @@ def kernel_fixtures(api):
     dotp_root = api.composite(
         "PlacedDotp",
         {
-            **dotp_streams,
+            **streams("compute", *dotp_tensors),
             "compute": PackedDotpKernel(
-                x_channel=dotp_streams["x"],
-                w_channel=dotp_streams["w"],
-                y_channel=dotp_streams["y"],
+                x_tensor=dotp_tensors[0],
+                w_tensor=dotp_tensors[1],
+                y_tensor=dotp_tensors[2],
                 result_range=(-128, 127),  # int8's: the core's accumulator is INT8
                 platform=platform,
             ),
@@ -592,7 +600,7 @@ def kernel_fixtures(api):
     # A MatMul (M=2, K=4, N=4) on streams that carry the tensors it derives.
     datatype_range = importlib.import_module("finn.kernels.matmul").datatype_range
     range_dtype = importlib.import_module("finn.kernels.values.domains").range_dtype
-    matmul_streams = streams(
+    matmul_tensors = (
         Tensor((2, 4), ScalarEncoding(int3)),
         Tensor((4, 4), ScalarEncoding(int3)),
         Tensor((2, 4), ScalarEncoding(range_dtype(*datatype_range(4, int3, int3)))),
@@ -600,7 +608,7 @@ def kernel_fixtures(api):
     matmul_root = api.composite(
         "PlacedMatMul",
         {
-            **matmul_streams,
+            **streams("matmul", *matmul_tensors),
             "matmul": MatMulKernel(
                 m=2,
                 n=4,
@@ -608,9 +616,9 @@ def kernel_fixtures(api):
                 activation_dtype=int3,
                 weights_dtype=int3,
                 platform=platform,
-                x_channel=matmul_streams["x"],
-                w_channel=matmul_streams["w"],
-                y_channel=matmul_streams["y"],
+                x_tensor=matmul_tensors[0],
+                w_tensor=matmul_tensors[1],
+                y_tensor=matmul_tensors[2],
             ),
         },
     )

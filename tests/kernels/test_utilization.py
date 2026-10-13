@@ -22,7 +22,7 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.base import RESOURCES
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
@@ -263,10 +263,14 @@ def pages(rows: int, cols: int) -> Any:
     """A transpose of two ``rows x cols`` INT4 matrices, SIMD 4, its pages' style open."""
     shape = (2, rows, cols)
 
+    tensor = Tensor(shape, ELEMENT)
+
     class Transposed(Root):
-        a = Channel(tensor=Tensor(shape, ELEMENT), port="in0_V", platform=FULL_DSP48E2)
-        b = Channel(tensor=Tensor(shape, ELEMENT), port="out0_V", platform=FULL_DSP48E2)
-        shuffle = TransposeKernel(input_channel=a, output_channel=b, platform=FULL_DSP48E2)
+        a_end = end_of("shuffle", "input_end")
+        b_end = end_of("shuffle", "output_end")
+        a = Channel(tensor=tensor, port="in0_V", consumer=a_end, platform=FULL_DSP48E2)
+        b = Channel(tensor=tensor, port="out0_V", producer=b_end, platform=FULL_DSP48E2)
+        shuffle = TransposeKernel(input_tensor=tensor, output_tensor=tensor, platform=FULL_DSP48E2)
 
     return commit(with_direct_transports(design_space(Transposed())), {"shuffle.simd": 4})
 

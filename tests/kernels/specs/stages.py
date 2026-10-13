@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The channel stages: fifo, vpc and input_gen, each on the two channels it moves words
+"""The channel stages: fifo, vpc and input_gen, each between the two tensors it moves words
 between.
 
 No KernelOp reaches a channel stage: a channel's adapter places it (``finn.kernels.
 adapters.realize``). Its ports are opaque words, and its realization states what they
 carry; its case places it on two channels (``StagedFifo``, ``StagedVpc``,
 ``StagedInputGenerator``: its module, its native pins, ports presenting what its
-realization gives them), so XSim checks that the RTL walks the realization. Its
+realization gives them, and their ends), so XSim checks that the RTL walks the
+realization. Its
 test-side reference is the identity: a stage moves elements, it computes none.
 """
 
@@ -20,12 +21,12 @@ from typing import Any
 from finn.core.space import Param, derived
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.plan import plan
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, Generate, RealizedStage, realize
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING
-from finn.kernels.channels import Channel
+from finn.kernels.base import NATIVE_CLOCKING, interface
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.port import AxiStreamPort
@@ -38,19 +39,20 @@ from kernels.specs.thresholding import tensor
 
 
 def stage_ports(
-    input_channel: Any, output_channel: Any, arriving: Any, leaving: Any, moved: Any
+    input_tensor: Any, output_tensor: Any, arriving: Any, leaving: Any, moved: Any
 ) -> tuple[AxiStreamPort, AxiStreamPort]:
-    """A channel stage's native pins on the two channels the harness places, presenting the
+    """A channel stage's native pins on the two tensors the harness gives, presenting the
     beat sequences its realization gives them (``arriving``, ``leaving``).
 
     On a channel a stage's ports are opaque words (``WordPort``) and its adapter states
-    what they carry (``finn.kernels.adapters.realize``); here the ports sit on channels
-    and present exactly that, so XSim checks that the RTL walks it.
+    what they carry (``finn.kernels.adapters.realize``); here the ports take tensors,
+    present exactly that, and their ends sit on the harness's channels, so XSim checks
+    that the RTL walks it.
     """
     input = AxiStreamPort(
         name="input",
         endpoint=Endpoint.TARGET,
-        channel=input_channel,
+        tensor=input_tensor,
         sequence=arriving,
         signals=("idat", "ivld", "irdy"),
         clock=NATIVE_CLOCKING.clock,
@@ -59,7 +61,7 @@ def stage_ports(
     output = AxiStreamPort(
         name="output",
         endpoint=Endpoint.INITIATOR,
-        channel=output_channel,
+        tensor=output_tensor,
         sequence=leaving,
         dtype=moved,
         signals=("odat", "ovld", "ordy"),
@@ -70,62 +72,68 @@ def stage_ports(
 
 
 class StagedFifo(FifoKernel):
-    """FifoKernel between two channels: what arrives leaves unchanged."""
+    """FifoKernel between two tensors: what arrives leaves unchanged."""
 
     id = "test.staged.fifo"
-    input_channel: Channel = Param(required=False)
-    output_channel: Channel = Param(required=False)
+    input_tensor: Tensor = Param(required=False)
+    output_tensor: Tensor = Param(required=False)
     arriving: BeatSequence = Param()
     leaving: BeatSequence = Param()
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def moved(self) -> QONNXDataType:
-        return self.input_channel.tensor.element.dtype
+        return self.input_tensor.element.dtype
 
-    # On channels, in place of the stage's opaque word ports (WordPort).
+    # On tensors, in place of the stage's opaque word ports (WordPort).
     input, output = stage_ports(  # type: ignore[assignment]
-        input_channel, output_channel, arriving, leaving, moved
+        input_tensor, output_tensor, arriving, leaving, moved
     )
+    input_end = interface("input")
+    output_end = interface("output")
 
 
 class StagedVpc(VpcKernel):
-    """VpcKernel between two channels: a width conversion."""
+    """VpcKernel between two tensors: a width conversion."""
 
     id = "test.staged.vpc"
-    input_channel: Channel = Param(required=False)
-    output_channel: Channel = Param(required=False)
+    input_tensor: Tensor = Param(required=False)
+    output_tensor: Tensor = Param(required=False)
     arriving: BeatSequence = Param()
     leaving: BeatSequence = Param()
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def moved(self) -> QONNXDataType:
-        return self.input_channel.tensor.element.dtype
+        return self.input_tensor.element.dtype
 
-    # On channels, in place of the stage's opaque word ports (WordPort).
+    # On tensors, in place of the stage's opaque word ports (WordPort).
     input, output = stage_ports(  # type: ignore[assignment]
-        input_channel, output_channel, arriving, leaving, moved
+        input_tensor, output_tensor, arriving, leaving, moved
     )
+    input_end = interface("input")
+    output_end = interface("output")
 
 
 class StagedInputGenerator(InputGeneratorKernel):
-    """InputGeneratorKernel between two channels: a reorder. ``olst``, its loop-completion
+    """InputGeneratorKernel between two tensors: a reorder. ``olst``, its loop-completion
     marker, is left unused: the harness's boundaries carry no marker. The dotp and MatMul
     cases check it, as the TLAST that frames their activations."""
 
     id = "test.staged.input_generator"
-    input_channel: Channel = Param(required=False)
-    output_channel: Channel = Param(required=False)
+    input_tensor: Tensor = Param(required=False)
+    output_tensor: Tensor = Param(required=False)
     arriving: BeatSequence = Param()
     leaving: BeatSequence = Param()
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def moved(self) -> QONNXDataType:
-        return self.input_channel.tensor.element.dtype
+        return self.input_tensor.element.dtype
 
-    # On channels, in place of the stage's opaque word ports (WordPort).
+    # On tensors, in place of the stage's opaque word ports (WordPort).
     input, output = stage_ports(  # type: ignore[assignment]
-        input_channel, output_channel, arriving, leaving, moved
+        input_tensor, output_tensor, arriving, leaving, moved
     )
+    input_end = interface("input")
+    output_end = interface("output")
 
     def other_pins(self) -> tuple[Signal, ...]:
         return (Signal("olst", Direction.OUT, len(self.dims)),)

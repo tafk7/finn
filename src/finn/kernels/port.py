@@ -15,31 +15,31 @@ outputs unused.
   ``ivld``, ``irdy`` for a target, ``odat``, ``ovld``, ``ordy`` for an
   initiator, on ``clk`` and ``rst``), with any loop-completion ``markers``: a
   channel stage's port (``input_gen``, ``vpc``, ``fifo``).
-- An ``AxiStreamPort`` sits on a channel (``channel``) and presents what it
-  carries of the channel's tensor (``presented``): its kernel's ``Schedule``
-  projected through the indices it reads (``index``), its lane order
-  (``lanes``, outer first), the indices it is presented after (``reduces``)
-  or before (``holds``) and the reduction its marker closes (``closes``),
-  through a row-major view when ``reshaped``; or, for a traversal no schedule
-  derives, a given ``sequence``. Its element is its ``dtype`` when given
-  (its channel refuses another; a producer must give it) and otherwise its
-  channel's; ``admits`` is the
-  integer policy its hardware takes. It is an AXIS bus named ``name``, with a
-  ``TLAST`` when what it presents carries a marker, its member pins spelled as
-  its module spells them (``spelling``); or, given ``signals``
-  (data, valid, ready), those ready/valid pins, without a marker. Placed with
-  a schedule, it exports its read of the tensor under ``ACCESS``, from which
-  its kernel binds its indices' extents, and its contract states its ``pace``
-  (when it presents each beat, ``Schedule.beat_times``). Left without a channel it is idle,
-  with the pins of its ``dtype`` and of the ``factors`` of its ``lanes``.
+- An ``AxiStreamPort`` takes the tensor it reads or writes (``tensor``), a fact
+  its kernel gives it, and presents what it carries of it (``presented``): its
+  kernel's ``Schedule`` projected through the indices it reads (``index``), its
+  lane order (``lanes``, outer first), the indices it is presented after
+  (``reduces``) or before (``holds``) and the reduction its marker closes
+  (``closes``), through a row-major view when ``reshaped``; or, for a traversal
+  no schedule derives, a given ``sequence``. Its element is its ``dtype`` when
+  given (its channel refuses another; a producer must give it) and otherwise its
+  tensor's; ``admits`` is the integer policy its hardware takes. It is an AXIS
+  bus named ``name``, with a ``TLAST`` when what it presents carries a marker,
+  its member pins spelled as its module spells them (``spelling``); or, given
+  ``signals`` (data, valid, ready), those ready/valid pins, without a marker.
+  Placed with a schedule, it exports its read of the tensor under ``ACCESS``,
+  from which its kernel binds its indices' extents, and its contract states its
+  ``pace`` (when it presents each beat, ``Schedule.beat_times``). Its
+  ``contract`` is what its kernel states as its end on a channel
+  (``finn.kernels.base.PortEnd``). Without a tensor it is idle, with the pins of
+  its ``dtype`` and of the ``factors`` of its ``lanes``.
 """
 
 from __future__ import annotations
 
 from math import prod
-from typing import TYPE_CHECKING, TypeVar
+from typing import TypeVar
 
-import finn.kernels
 from finn.core.space import (
     Param,
     Rejected,
@@ -54,7 +54,7 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
-from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
@@ -65,7 +65,6 @@ from finn.kernels.base import (
     HELD,
     NATIVE_CLOCKING,
     PINS,
-    PORT,
     RESET,
 )
 from finn.kernels.transport import (
@@ -77,9 +76,6 @@ from finn.kernels.transport import (
 )
 from finn.kernels.values.domains import Integer, admit_element
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
-
-if TYPE_CHECKING:
-    import finn.kernels.channels
 
 T = TypeVar("T")
 
@@ -181,7 +177,7 @@ OPTIONAL_DTYPE = or_none(QONNX_DATATYPE_VALUE_SEMANTICS)
 
 
 class AxiStreamPort(Port):
-    """One AXI-Stream interface: what it presents of its channel's tensor, its element, its pins.
+    """One AXI-Stream interface: what it presents of its tensor, its element, its pins.
 
     It presents either its kernel's ``schedule``, projected through the indices
     it reads (``index``), its lane order (``lanes``, outer first), the indices
@@ -193,25 +189,22 @@ class AxiStreamPort(Port):
     contract states its pace (``Pace``: the schedule with its ``reduces`` and
     ``holds``), so a channel reads when each end presents its beats.
 
-    Its element is ``dtype`` when given, placed or idle (its channel refuses
-    another), and otherwise its channel's. A producer (an initiator) must give
-    it, from its kernel's facts, choices and input elements, never from its
-    own output channel: a compiler asks a kernel for its output types before
-    the downstream tensor exists. A producer that knows its values states
-    their ``value_range`` (minimum, maximum) with it; ``()`` is the datatype's own.
-    ``admits`` is the integer policy its hardware takes. Idle (no channel), it
-    carries the lanes of the ``factors`` of its ``lanes`` indices. It is an
-    AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a
-    marker; or, given ``signals`` (data, valid, ready), those ready/valid pins,
-    without a marker. ``staged``, a channel's source placed by the channel itself
-    (``finn.kernels.channels``), presents its given sequence and dtype without a
-    channel reference: it is not idle.
+    Its ``tensor`` is a fact its kernel gives it: the tensor it reads, or the one it
+    writes. Its element is ``dtype`` when given, placed or idle (its channel refuses
+    another), and otherwise its tensor's. A producer (an initiator) must give it,
+    from its kernel's facts, choices and input elements, never from its output
+    tensor: a compiler asks a kernel for its output types before the downstream
+    tensor exists. A producer that knows its values states their ``value_range``
+    (minimum, maximum) with it; ``()`` is the datatype's own. ``admits`` is the
+    integer policy its hardware takes. Idle (no tensor), it carries the lanes of the
+    ``factors`` of its ``lanes`` indices. It is an AXIS bus named ``name``, with a
+    ``TLAST`` when what it presents carries a marker; or, given ``signals`` (data,
+    valid, ready), those ready/valid pins, without a marker. ``staged``, a channel's
+    source placed by the channel itself (``finn.kernels.channels``), presents its
+    given sequence and dtype without a tensor: it is not idle.
     """
 
-    # By its full path, and not imported: channels imports this module (a channel's source
-    # has a port), and the engine resolves the annotation when it collects the Space class. A
-    # kernel that places a port on a channel names that Space class itself, so it is loaded.
-    channel: finn.kernels.channels.Channel = Param(required=False)
+    tensor: Tensor = Param(required=False)
     schedule: Schedule | None = Param(default=None, semantics=OPTIONAL_SCHEDULE)
     index: tuple[Index | Affine, ...] = Param(default=())
     lanes: tuple[Index, ...] = Param(default=())
@@ -232,11 +225,11 @@ class AxiStreamPort(Port):
 
     @derived
     def idle(self) -> bool:
-        return not self.present(AxiStreamPort.channel) and not self.staged
+        return not self.present(AxiStreamPort.tensor) and not self.staged
 
     @derived
     def presented(self) -> BeatSequence | Rejected:
-        """What the port presents of its channel's tensor: its schedule's projection, or given."""
+        """What the port presents of its tensor: its schedule's projection, or given."""
         schedule, given = self.schedule, self.sequence
         if (schedule is None) == (given is None):
             return reject(
@@ -254,7 +247,7 @@ class AxiStreamPort(Port):
                     raise Refused("a reshaped port reads plain indices")
                 view = tuple(schedule.extent(axis) for axis in plain)
             form = schedule.present(
-                self.channel.tensor.shape,
+                self.tensor.shape,
                 index,
                 lanes=self.lanes,
                 reduces=self.reduces,
@@ -276,12 +269,12 @@ class AxiStreamPort(Port):
 
     @view(when=binds)
     def access(self) -> Access:
-        return Access(self.name, self.channel.tensor.shape, self.index, self.reshaped)
+        return Access(self.name, self.tensor.shape, self.index, self.reshaped)
 
     @derived
     def element(self) -> ScalarEncoding | Rejected:
         """``dtype`` over ``value_range`` when given, placed or idle (its channel refuses
-        another); else the channel's."""
+        another); else its tensor's."""
         dtype, bounds = self.dtype, self.value_range
         if dtype is not None:
             if bounds and len(bounds) != 2:
@@ -292,7 +285,7 @@ class AxiStreamPort(Port):
             return reject("port-element", f"{self.name}: a producer states its dtype")
         if self.idle:
             return reject("port-element", f"{self.name}: an idle port states its dtype")
-        return self.channel.tensor.element
+        return self.tensor.element
 
     @constraint
     def admitted(self) -> bool | Rejected:
@@ -364,7 +357,6 @@ class AxiStreamPort(Port):
         )
 
     exports = {
-        PORT: {channel: contract},
         PINS: pins,
         HELD: Port.held,
         CLOCKED: Port.clock_pin,

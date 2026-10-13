@@ -7,7 +7,7 @@ The first layer produces its results PE = 4 lanes a beat, each row once; the
 second reads them as activations, SIMD = 2 lanes a beat, each row once per
 output fold, framed by reduction. Neither kernel knows the other: each
 presents its own traversal of the hidden tensor, derived from its own schedule
-over its own folding factors.
+over its own folding factors, and the channel between them takes both ends.
 The channel between them plans a width conversion, a replay and the frame, and
 its adapter places a ``vpc`` and an ``input_gen``. The root's module computes
 ``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a channel that admits no
@@ -27,7 +27,7 @@ from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -53,32 +53,48 @@ X = tuple(tuple((5 * r + 3 * k) % 8 - 4 for k in range(INPUTS)) for r in range(R
 
 
 def layered(*, adaptable: bool = True):
+    x_tensor = Tensor((ROWS, INPUTS), ScalarEncoding(A))
+    w1_tensor = Tensor((INPUTS, HIDDEN), ScalarEncoding(W))
+    h_tensor = Tensor((ROWS, HIDDEN), ScalarEncoding(H))
+    w2_tensor = Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W))
+    y_tensor = Tensor((ROWS, OUTPUTS), ScalarEncoding(Y))
+
     class Layered(Root):
-        x = Channel(
-            platform=FULL_DSP48E2, tensor=Tensor((ROWS, INPUTS), ScalarEncoding(A)), port="in0_V"
+        x_consumer = end_of("first", "x_end")
+        w1_producer = end_of("rom1", "output_end")
+        w1_consumer = end_of("first", "w_end")
+        h_producer = end_of("first", "y_end")
+        h_consumer = end_of("second", "x_end")
+        w2_producer = end_of("rom2", "output_end")
+        w2_consumer = end_of("second", "w_end")
+        y_producer = end_of("second", "y_end")
+        x = Channel(platform=FULL_DSP48E2, tensor=x_tensor, port="in0_V", consumer=x_consumer)
+        w1 = Channel(
+            tensor=w1_tensor, producer=w1_producer, consumer=w1_consumer, platform=FULL_DSP48E2
         )
-        w1 = Channel(tensor=Tensor((INPUTS, HIDDEN), ScalarEncoding(W)), platform=FULL_DSP48E2)
         h = Channel(
-            tensor=Tensor((ROWS, HIDDEN), ScalarEncoding(H)),
+            tensor=h_tensor,
             adaptable=adaptable,
+            producer=h_producer,
+            consumer=h_consumer,
             platform=FULL_DSP48E2,
         )
-        w2 = Channel(tensor=Tensor((HIDDEN, OUTPUTS), ScalarEncoding(W)), platform=FULL_DSP48E2)
-        y = Channel(
-            platform=FULL_DSP48E2, tensor=Tensor((ROWS, OUTPUTS), ScalarEncoding(Y)), port="out0_V"
+        w2 = Channel(
+            tensor=w2_tensor, producer=w2_producer, consumer=w2_consumer, platform=FULL_DSP48E2
         )
+        y = Channel(platform=FULL_DSP48E2, tensor=y_tensor, port="out0_V", producer=y_producer)
         first = PackedDotpKernel(
             result_range=ordinary_integer_bounds(H),
-            x_channel=x,
-            w_channel=w1,
-            y_channel=h,
+            x_tensor=x_tensor,
+            w_tensor=w1_tensor,
+            y_tensor=h_tensor,
             platform=FULL_DSP48E2,
         )
         second = PackedDotpKernel(
             result_range=ordinary_integer_bounds(Y),
-            x_channel=h,
-            w_channel=w2,
-            y_channel=y,
+            x_tensor=h_tensor,
+            w_tensor=w2_tensor,
+            y_tensor=y_tensor,
             platform=FULL_DSP48E2,
         )
 
@@ -92,10 +108,18 @@ def layered(*, adaptable: bool = True):
             return period(self.second.w.presented.form)
 
         rom1 = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=W, form=first_period, contents=W1, output_channel=w1
+            platform=FULL_DSP48E2,
+            dtype=W,
+            form=first_period,
+            contents=W1,
+            output_tensor=w1_tensor,
         )
         rom2 = MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=W, form=second_period, contents=W2, output_channel=w2
+            platform=FULL_DSP48E2,
+            dtype=W,
+            form=second_period,
+            contents=W2,
+            output_tensor=w2_tensor,
         )
 
     point = commit(

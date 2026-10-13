@@ -7,8 +7,10 @@
 each sample it
 
 1. places the kernel in a generated ``Root`` between boundary channels, one
-   per reference input, commits the sample's factors and the pinned ``choices``,
-   and the memories of the adapter chains (each chain forced);
+   per stream interface: a channel named ``<interface>_channel`` carries the
+   tensor given to the kernel as ``<interface>_tensor`` and takes the end it
+   presents, ``<interface>_end``. It commits the sample's factors and the pinned
+   ``choices``, and the memories of the adapter chains (each chain forced);
 2. checks each of the kernel's leaves in the root's module (the kernel, or
    the children of a kernel with children) against its materialized sources
    under the declared parameter binding (``artifacts.rtl.extract``, then the
@@ -23,7 +25,7 @@ each sample it
    presents its port's traversal (an input's ``unreplayed``), and
    ``parameters()`` names exactly the module's parameters, and with its
    outputs unplaced the kernel still states every output element (a
-   producer's element never reads its own output channel);
+   producer's element never reads its own output tensor);
 4. given an ``xsim`` directory, streams random integers in each input's range
    through the design, free and stalled (``finn.core.rtlsim_pacing``'s ``FREE`` and
    ``STALLED``; the watchdog counts the root's ``cycles`` too), every pin driven
@@ -41,8 +43,8 @@ presenting ``vector_major`` at another lane count, so that input's channel
 places a width conversion and the adapter is part of the simulated path. A
 kernel without inputs has none.
 
-A port is found where it is placed: the user of each channel below the
-kernel, a member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
+A port is found where it is placed: the end on each channel below the kernel, a
+member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's scalar Decisions that ``choices`` leaves open,
@@ -117,7 +119,7 @@ from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.memstream import MemStreamKernel
@@ -324,10 +326,15 @@ def _enumerated(
 # -- placement -----------------------------------------------------------------------------
 
 
+def _interface(name: str) -> str:
+    """The kernel's interface a channel of the root is named after: ``x_channel``'s ``x``."""
+    return name.removesuffix("_channel")
+
+
 def _ports(space_type: type[Kernel]) -> dict[str, str]:
-    """Each reference input's port among the kernel's own members: the member whose
-    ``channel`` it binds. A kernel with children has none; its children's ports are found
-    placed (``_user``)."""
+    """Each tensor Param's port among the kernel's own members: the member whose
+    ``tensor`` it binds, by the Param's name. A kernel with children has none; its
+    children's ports are found placed (``_user``)."""
     found: dict[str, str] = {}
     for owner in reversed(space_type.__mro__):
         for name, member in vars(owner).items():
@@ -335,19 +342,21 @@ def _ports(space_type: type[Kernel]) -> dict[str, str]:
                 declared = inspection.declaration(member)
             except RequestError:
                 continue
-            channel = declared.bindings.get("channel")
-            if issubclass(declared.space_type, AxiStreamPort) and isinstance(channel, Param):
-                found[str(channel.name)] = name
+            tensor = declared.bindings.get("tensor")
+            if issubclass(declared.space_type, AxiStreamPort) and isinstance(tensor, Param):
+                found[str(tensor.name)] = name
     return found
 
 
 def _design(
     space_type: type[Kernel],
-    tensors: Mapping[str, Tensor],
+    inputs: Mapping[str, Tensor],
+    outputs: Mapping[str, Tensor],
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """A root of the kernel on one channel per tensor; ``fed``'s channel from a memory."""
+    """A root of the kernel on one channel per tensor, each taking the kernel's end at
+    its interface; ``fed``'s channel from a memory."""
     namespace: dict[str, object] = {}
     # A node is placed once: each design declares its own control bus.
     facts = {
@@ -355,21 +364,26 @@ def _design(
         for name, value in facts.items()
     }
     namespace |= {name: value for name, value in facts.items() if isinstance(value, ControlBus)}
+    tensors = {**inputs, **outputs}
     for name, tensor in tensors.items():
-        inside = fed is not None and fed[0] == name
-        namespace[name] = (
-            Channel(tensor=tensor, platform=FULL_DSP48E2)
-            if inside
-            else Channel(tensor=tensor, port=name, platform=FULL_DSP48E2)
-        )
-    namespace[KERNEL] = space_type(**facts, **{name: namespace[name] for name in tensors})
+        side = "consumer" if name in inputs else "producer"
+        ends = {side: end_of(KERNEL, f"{_interface(name)}_end")}
+        if fed is not None and fed[0] == name:
+            ends["producer"] = end_of(SOURCE, "output_end")
+        namespace |= {f"{name}_{each}": end for each, end in ends.items()}
+        settings: dict[str, Any] = dict(ends)
+        if fed is None or fed[0] != name:
+            settings["port"] = name
+        namespace[name] = Channel(tensor=tensor, platform=FULL_DSP48E2, **settings)
+    given = {f"{_interface(name)}_tensor": tensor for name, tensor in tensors.items()}
+    namespace[KERNEL] = space_type(**facts, **given)
     if fed is not None:
         name, form, contents = fed
         namespace[SOURCE] = MemStreamKernel(
             dtype=tensors[name].element.dtype,
             form=form,
             contents=contents,
-            output_channel=namespace[name],
+            output_tensor=tensors[name],
             platform=FULL_DSP48E2,
         )
     return design_space(type(f"{space_type.__name__}Conformance", (Root,), namespace)())
@@ -406,9 +420,9 @@ def _stated(
     space_type: type[Kernel], name: str, inputs: Mapping[str, Tensor], facts: Mapping[str, object]
 ) -> ScalarEncoding:
     """The element the kernel states on output ``name`` with that output unplaced."""
-    port, hint = _ports(space_type)[name], f"give {name} a Tensor"
+    port, hint = _ports(space_type)[f"{_interface(name)}_tensor"], f"give {name} a Tensor"
     try:
-        probe = _design(space_type, inputs, facts)
+        probe = _design(space_type, inputs, {}, facts)
     except DefinitionError as error:
         raise ValueError(f"{space_type.__name__} is not built without {name}; {hint}") from error
     node = getattr(getattr(probe, KERNEL), port)
@@ -454,7 +468,9 @@ def _committed(
         if isinstance(getattr(space_type, key, None), Param)
     }
     known = {**facts, **given}
-    point = _design(space_type, _tensors(space_type, inputs, outputs, known), known, fed)
+    tensors = _tensors(space_type, inputs, outputs, known)
+    placed = {name: tensors[name] for name in outputs}
+    point = _design(space_type, inputs, placed, known, fed)
     chosen = {**choices, **{key: value for key, value in config.items() if key not in given}}
     keys = {f"{KERNEL}.{key}": value for key, value in chosen.items()}
     if fed is not None:

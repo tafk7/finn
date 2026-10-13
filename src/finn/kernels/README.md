@@ -9,7 +9,7 @@ outside this repository until the package is final.
 
 | Module | Holds |
 |---|---|
-| `base.py`, `port.py`, `channels.py`, `adapters.py` | the kernel base (a leaf, or a kernel with children; its clocking), the ports (`AxiStreamPort`, `WordPort`), the `Channel` (one Space per edge: its plan, adapter, transport and source) and the adapters planned between its ends |
+| `base.py`, `port.py`, `channels.py`, `adapters.py` | the kernel base (a leaf, or a kernel with children; its clocking; the end each port presents, `PortEnd`), the ports (`AxiStreamPort`, `WordPort`), the `Channel` (one Space per edge, taking its two ends as facts: its plan, adapter, transport and source) and the adapters planned between its ends |
 | `dotp.py`, `matmul.py`, `thresholding.py`, `eltwise.py`, `fifo.py`, `memstream.py`, `input_generator.py`, `transpose.py`, `vpc.py`, `pool.py` | the kernels (`pool.py`: the first HLS kernel, over `pooling_stream`) |
 | `configure.py` | committing choices by key, and naming the open and the committed ones |
 | `explore.py`, `fifo_sizing.py` | the DSE seam (`Seam`), its strategies (`Pinned`, `TargetThroughput`, `MaxThroughput`, `SizeFifos`, `Rebaseline`, the debug `DebugPlaceholder`) and the operations that keep a point complete (`baseline`, `reopen`, `settle`, `set`); a channel's FIFO depth from both ends' beat patterns |

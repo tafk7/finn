@@ -12,13 +12,16 @@ values it streams, so it states their ``value_range`` on its output: its element
 
 - With one set, the image streams cyclically.
 - With ``sets`` > 1, ``contents`` holds one operand per set, and each index
-  accepted on ``set_channel`` streams one whole set. The output presents one
-  pass per index; the set channel is an ordinary channel reference input.
+  accepted on its ``set`` port streams one whole set. The output presents one
+  pass per index; the indices are a tensor (``set_tensor``), a fact like any
+  other.
 - Its AXI-Lite port is tied off: the contents are fixed at build time.
 
 It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by the
-channel it drives, ``staged``, its output presents into that channel without a
-reference to it, and its set port references the channel's ``index``.
+channel it drives, ``staged``, its output presents its given sequence without an
+output tensor, and its set port reads the channel's ``index_tensor``. Placed by
+a parent, it states its ends (``output_end``, ``set_end``), which the channels on
+them take.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
@@ -53,7 +56,7 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
 )
 from finn.dataflow.schedule import Index
-from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
     Repetition,
@@ -69,7 +72,7 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, interface
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -129,12 +132,10 @@ class MemStreamKernel(Kernel):
     form: Traversal = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
-    # Where a parent places it: the channel it drives and the set-index channel
-    # (several sets only); or, as a channel's source, placed by the channel (staged).
-    # channels imports this module (a memory is a channel's source), so it is imported last;
-    # the engine resolves these annotations when it collects the Space class.
-    output_channel: channels.Channel = Param(required=False)
-    set_channel: channels.Channel = Param(required=False)
+    # Where a parent places it: the tensor it drives and the set indices (several sets
+    # only); or, as a channel's source, placed by the channel (staged), no output tensor.
+    output_tensor: Tensor = Param(required=False)
+    set_tensor: Tensor = Param(required=False)
     staged: bool = Param(default=False)
     platform: Platform = Param()
 
@@ -200,15 +201,15 @@ class MemStreamKernel(Kernel):
 
     @constraint
     def selected(self) -> bool | Rejected:
-        """Several sets take a set channel of indices, one a beat; a single set none."""
-        placed = self.present(MemStreamKernel.set_channel)
+        """Several sets take a tensor of set indices, one a beat; a single set none."""
+        placed = self.present(MemStreamKernel.set_tensor)
         if self.sets < 2:
             if placed:
                 return reject("memstream-set-channel", "a single set takes no set channel")
             return True
         if not placed:
             return reject("memstream-set-channel", "several sets take a set channel")
-        if len(self.set_channel.tensor.shape) != 1:
+        if len(self.set_tensor.shape) != 1:
             return reject("memstream-set-channel", "the set channel carries a vector of indices")
         return True
 
@@ -286,13 +287,13 @@ class MemStreamKernel(Kernel):
     @derived
     def set_sequence(self) -> BeatSequence:
         """One index a beat, one beat per pass of the weights."""
-        return BeatSequence(vector_major(self.set_channel.tensor.shape, 1))
+        return BeatSequence(vector_major(self.set_tensor.shape, 1))
 
     @derived
     def output_sequence(self) -> BeatSequence:
         """One set streams cyclically; several stream one pass per accepted index."""
         if self.sets > 1:
-            return BeatSequence(self.form.repeated(self.set_channel.tensor.size))
+            return BeatSequence(self.form.repeated(self.set_tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 
     @derived(semantics=RESOURCES_SEMANTICS)
@@ -322,7 +323,7 @@ class MemStreamKernel(Kernel):
     set = AxiStreamPort(
         name="set",
         endpoint=Endpoint.TARGET,
-        channel=set_channel,
+        tensor=set_tensor,
         sequence=set_sequence,
         dtype=set_dtype,
         signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
@@ -332,7 +333,7 @@ class MemStreamKernel(Kernel):
     output = AxiStreamPort(
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
-        channel=output_channel,
+        tensor=output_tensor,
         staged=staged,
         sequence=output_sequence,
         dtype=dtype,
@@ -342,6 +343,8 @@ class MemStreamKernel(Kernel):
         clock=NATIVE_CLOCKING.clock,
         reset=NATIVE_CLOCKING.reset,
     )
+    set_end = interface("set")
+    output_end = interface("output")
 
     @derived
     def clocking(self) -> Clocking:
@@ -379,8 +382,5 @@ class MemStreamKernel(Kernel):
         """AXI-Lite, always: the contents are fixed at build time."""
         return held_bus(self.config_bus)
 
-
-# Last: channels imports this module (see the annotations above).
-from finn.kernels import channels  # noqa: E402
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

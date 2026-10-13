@@ -35,7 +35,7 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
@@ -84,25 +84,37 @@ def placed(
     core = Int8Dsp58DotpKernel if form is Form.DEPTHWISE else PackedDotpKernel
     tiled = weights_tile() if weights_form is None else weights_form
 
+    a_tensor = Tensor(x, ScalarEncoding(A))
+    w_tensor = Tensor(w, ScalarEncoding(W))
+    r_tensor = Tensor(y, ScalarEncoding(R))
+
     class Placed(Space):
-        a = Channel(tensor=Tensor(x, ScalarEncoding(A)), port="in0_V", platform=FULL_DSP48E2)
+        a_end = end_of("compute", "x_end")
+        w_producer = end_of("weights", "output_end")
+        w_consumer = end_of("compute", "w_end")
+        r_end = end_of("compute", "y_end")
+        a = Channel(tensor=a_tensor, port="in0_V", consumer=a_end, platform=FULL_DSP48E2)
         w_s = Channel(
-            platform=FULL_DSP48E2, tensor=Tensor(w, ScalarEncoding(W)), adaptable=adaptable
+            platform=FULL_DSP48E2,
+            tensor=w_tensor,
+            adaptable=adaptable,
+            producer=w_producer,
+            consumer=w_consumer,
         )
-        r = Channel(tensor=Tensor(y, ScalarEncoding(R)), port="out0_V", platform=FULL_DSP48E2)
+        r = Channel(tensor=r_tensor, port="out0_V", producer=r_end, platform=FULL_DSP48E2)
         weights = MemStreamKernel(
             platform=FULL_DSP48E2,
             dtype=W,
             form=tiled,
             contents=weight_values(w),
-            output_channel=w_s,
+            output_tensor=w_tensor,
         )
         compute = core(
             form=form,
             result_range=ordinary_integer_bounds(R),
-            x_channel=a,
-            w_channel=w_s,
-            y_channel=r,
+            x_tensor=a_tensor,
+            w_tensor=w_tensor,
+            y_tensor=r_tensor,
             platform=FULL_DSP58,
         )
 
@@ -132,9 +144,8 @@ def test_every_port_presents_what_the_schedule_derives():
     )
     assert y.form == vector_major((ROWS, OUTPUTS), PE)
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
-    # Each end is presented by a port node, named after it on the channel.
-    (end,) = point.r.users
-    assert (end.node, end.member) == ("compute.y", "channel")
+    # Each end is presented by a port node, labelled after it from the root.
+    assert point.r.producer.label == "compute.y"
     # The cyclic weights and the results connect as derived.
     assert isinstance(point.w_s.query(Channel.netlist), Available)
     assert isinstance(point.r.query(Channel.netlist), Available)
@@ -226,20 +237,17 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
     """An ADD between boundary channels: lhs (3, 4), rhs of ``rhs_shape``, PE 2."""
     int4 = DataType["INT4"]
 
+    lhs_tensor = Tensor((3, 4), ScalarEncoding(int4))
+    rhs_tensor = Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype]))
+    out_tensor = Tensor((3, 4), ScalarEncoding(DataType["INT5"]))
+
     class Added(Space):
-        lhs = Channel(
-            platform=FULL_DSP48E2, tensor=Tensor((3, 4), ScalarEncoding(int4)), port="in0_V"
-        )
-        rhs = Channel(
-            tensor=Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype])),
-            port="in1_V",
-            platform=FULL_DSP48E2,
-        )
-        out = Channel(
-            tensor=Tensor((3, 4), ScalarEncoding(DataType["INT5"])),
-            port="out0_V",
-            platform=FULL_DSP48E2,
-        )
+        lhs_end = end_of("add", "lhs_end")
+        rhs_end = end_of("add", "rhs_end")
+        out_end = end_of("add", "result_end")
+        lhs = Channel(platform=FULL_DSP48E2, tensor=lhs_tensor, port="in0_V", consumer=lhs_end)
+        rhs = Channel(tensor=rhs_tensor, port="in1_V", consumer=rhs_end, platform=FULL_DSP48E2)
+        out = Channel(tensor=out_tensor, port="out0_V", producer=out_end, platform=FULL_DSP48E2)
         add = EltwiseKernel(
             operation="ADD",
             pe=2,
@@ -247,9 +255,9 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
             rhs_dtype=int4,
             b_scale=1.0,
             platform=FULL_DSP58,
-            lhs_channel=lhs,
-            rhs_channel=rhs,
-            result_channel=out,
+            lhs_tensor=lhs_tensor,
+            rhs_tensor=rhs_tensor,
+            result_tensor=out_tensor,
         )
 
     return with_direct_transports(design_space(Added()))

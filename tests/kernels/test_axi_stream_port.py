@@ -35,8 +35,8 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import Kernel, extent_of
-from finn.kernels.channels import Channel
+from finn.kernels.base import Kernel, extent_of, interface
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
@@ -50,8 +50,8 @@ class Pool(Kernel):
 
     id = "test.accpool"
     rtl_module = "accpool_axi"
-    x_channel: Channel = Param(required=False)
-    y_channel: Channel = Param(required=False)
+    x_tensor: Tensor = Param(required=False)
+    y_tensor: Tensor = Param(required=False)
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -67,7 +67,7 @@ class Pool(Kernel):
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,
-        channel=x_channel,
+        tensor=x_tensor,
         schedule=schedule,
         factors=factors,
         index=(b, s, c),
@@ -76,7 +76,7 @@ class Pool(Kernel):
     y = AxiStreamPort(
         name="m_axis_output",
         endpoint=Endpoint.INITIATOR,
-        channel=y_channel,
+        tensor=y_tensor,
         schedule=schedule,
         factors=factors,
         index=(b, c),
@@ -84,24 +84,40 @@ class Pool(Kernel):
         reduces=(s,),
         dtype=DataType["INT8"],
     )
+    x_end = interface("x")
+    y_end = interface("y")
 
     def parameters(self) -> Mapping[str, int | str]:
         return {"CHANNELS": self.channels, "PE": self.pe}
 
 
-def stream(shape: tuple[int, ...], dtype: str, port: str) -> Channel:
-    return Channel(
-        tensor=Tensor(shape, ScalarEncoding(DataType[dtype])), port=port, platform=FULL_DSP58
-    )
+def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
+    return Tensor(shape, ScalarEncoding(DataType[dtype]))
+
+
+X, Y = tensor((1, 4, 8), "INT4"), tensor((1, 8), "INT8")
+
+
+class Placed(Space):
+    """A kernel (``kernel``) between two boundary channels, ``x`` and ``y``, of the
+    tensors ``X`` and ``Y``."""
+
+    x_end = end_of("kernel", "x_end")
+    y_end = end_of("kernel", "y_end")
+    x = Channel(tensor=X, port="in0_V", consumer=x_end, platform=FULL_DSP58)
+    y = Channel(tensor=Y, port="out0_V", producer=y_end, platform=FULL_DSP58)
+    kernel = Pool(x_tensor=X, y_tensor=Y)
 
 
 def pool(x_shape: tuple[int, ...] = (1, 4, 8), y_shape: tuple[int, ...] = (1, 8)) -> Space:
-    class Placed(Space):
-        x = stream(x_shape, "INT4", "in0_V")
-        y = stream(y_shape, "INT8", "out0_V")
-        kernel = Pool(x_channel=x, y_channel=y)
+    x_tensor, y_tensor = tensor(x_shape, "INT4"), tensor(y_shape, "INT8")
 
-    return design_space(Placed())
+    class Shaped(Placed):
+        x = Channel(tensor=x_tensor, port="in0_V", consumer=Placed.x_end, platform=FULL_DSP58)
+        y = Channel(tensor=y_tensor, port="out0_V", producer=Placed.y_end, platform=FULL_DSP58)
+        kernel = Pool(x_tensor=x_tensor, y_tensor=y_tensor)
+
+    return design_space(Shaped())
 
 
 def coded_messages(result: object) -> set[tuple[str, str]]:
@@ -128,8 +144,9 @@ def test_ports_that_disagree_on_an_extent_are_refused() -> None:
 
 def test_an_idle_port_carries_the_lanes_of_its_folding_factors() -> None:
     class Half(Space):
-        x = stream((1, 4, 8), "INT4", "in0_V")
-        kernel = Pool(x_channel=x)
+        x_end = end_of("kernel", "x_end")
+        x = Channel(tensor=X, port="in0_V", consumer=x_end, platform=FULL_DSP58)
+        kernel = Pool(x_tensor=X)
 
     point = commit(design_space(Half()), {"kernel.pe": 2})
     assert point.kernel.y.idle and point.kernel.y.lane_count == 2
@@ -148,13 +165,11 @@ def test_extent_of_is_a_named_member() -> None:
         id = "test.accpool.inline"
         pe: int = Decision(domain=divisors_of(extent_of(c)))
 
-    class Placed(Space):
-        x = stream((1, 4, 8), "INT4", "in0_V")
-        y = stream((1, 8), "INT8", "out0_V")
-        kernel = Inline(x_channel=x, y_channel=y)
+    class Placing(Placed):
+        kernel = Inline(x_tensor=X, y_tensor=Y)
 
     with pytest.raises(DefinitionError, match="is not a member of this scope"):
-        design_space(Placed())
+        design_space(Placing())
 
 
 def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
@@ -163,29 +178,25 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
         x = AxiStreamPort(
             name="s_axis_input",
             endpoint=Endpoint.TARGET,
-            channel=Pool.x_channel,
+            tensor=Pool.x_tensor,
             schedule=Pool.schedule,
             sequence=BeatSequence(vector_major((1, 4, 8), 8)),
             index=(b, s, c),
             lanes=(c,),
         )
 
-    class Placed(Space):
-        x = stream((1, 4, 8), "INT4", "in0_V")
-        y = stream((1, 8), "INT8", "out0_V")
-        kernel = Both(x_channel=x, y_channel=y)
+    class Placing(Placed):
+        kernel = Both(x_tensor=X, y_tensor=Y)
 
-    point = commit(design_space(Placed()), {"kernel.pe": 8})
+    point = commit(design_space(Placing()), {"kernel.pe": 8})
     ((code, message),) = coded_messages(point.kernel.x.query(AxiStreamPort.presented))
     assert code == "port-presentation"
     assert message.startswith("s_axis_input: exactly one of a schedule or a sequence")
 
 
 def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
-    class Stated(Space):
-        x = stream((1, 4, 8), "INT4", "in0_V")
-        y = stream((1, 8), "INT8", "out0_V")
-        kernel = Pool(x_channel=x, y_channel=y)
+    class Stated(Placed):
+        kernel = Pool(x_tensor=X, y_tensor=Y)
         kernel.y.dtype = DataType["INT9"]  # a parent may pin what the producer states
 
     point = commit(with_direct_transports(design_space(Stated())), {"kernel.pe": 4})
@@ -195,35 +206,30 @@ def test_a_stated_element_is_the_ports_and_its_stream_refuses_another() -> None:
 
 
 def test_dotp_binds_from_its_ports_through_the_dense_view() -> None:
-    class Placed(Space):
-        x = stream((2, 3, 4), "INT3", "in0_V")
-        w = stream((12, 4), "INT3", "in1_V")
-        y = stream((2, 4), "INT9", "out0_V")
-        compute = PackedDotpKernel(
+    x, w, y = tensor((2, 3, 4), "INT3"), tensor((12, 4), "INT3"), tensor((2, 4), "INT9")
+    point = design_space(
+        PackedDotpKernel(
             form=Form.DENSE,
             reshape_activations=True,
             platform=FULL_DSP58,
             result_range=ordinary_integer_bounds(DataType["INT9"]),
-            x_channel=x,
-            w_channel=w,
-            y_channel=y,
+            x_tensor=x,
+            w_tensor=w,
+            y_tensor=y,
         )
-
-    point = design_space(Placed()).compute
+    )
     assert (point.rows, point.outputs, point.reduction) == (2, 4, 12)
 
     # A too-wide activation tensor is refused, not left partly unread.
-    class Wide(Placed):
-        x = stream((2, 14), "INT3", "in0_V")
-        compute = PackedDotpKernel(
+    wide = design_space(
+        PackedDotpKernel(
             platform=FULL_DSP58,
             result_range=ordinary_integer_bounds(DataType["INT9"]),
-            x_channel=x,
-            w_channel=Placed.w,
-            y_channel=Placed.y,
+            x_tensor=tensor((2, 14), "INT3"),
+            w_tensor=w,
+            y_tensor=y,
         )
-
-    wide = design_space(Wide()).compute
+    )
     assert coded_messages(wide.query(PackedDotpKernel.extents)) == {
         ("kernel-extents", "k is 14 (x axis 1) and 12 (w axis 0)")
     }
@@ -235,18 +241,16 @@ def test_a_producer_states_its_element() -> None:
         y = AxiStreamPort(
             name="m_axis_output",
             endpoint=Endpoint.INITIATOR,
-            channel=Pool.y_channel,
+            tensor=Pool.y_tensor,
             schedule=Pool.schedule,
             index=(b, c),
             lanes=(c,),
             reduces=(s,),
         )
 
-    class Placed(Space):
-        x = stream((1, 4, 8), "INT4", "in0_V")
-        y = stream((1, 8), "INT8", "out0_V")
-        kernel = Silent(x_channel=x, y_channel=y)
+    class Placing(Placed):
+        kernel = Silent(x_tensor=X, y_tensor=Y)
 
-    point = commit(design_space(Placed()), {"kernel.pe": 4})
+    point = commit(design_space(Placing()), {"kernel.pe": 4})
     ((code, message),) = coded_messages(point.kernel.y.query(AxiStreamPort.element))
     assert code == "port-element" and message.startswith("m_axis_output: a producer states")

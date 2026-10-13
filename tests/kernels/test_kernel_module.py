@@ -21,8 +21,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.module import Held, Leaf
-from finn.kernels.base import Clocking, Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.base import Clocking, Kernel, interface
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
@@ -38,17 +38,18 @@ class Probe(Kernel):
     id = "test.probe"
     rtl_module = "probe"
 
-    channel: Channel = Param(required=False)
+    tensor: Tensor = Param(required=False)
     hold_mode: bool = Param(default=True)
     port_clock: str = Param(default="ap_clk")
 
     x = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
-        channel=channel,
+        tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
         clock=port_clock,
     )
+    x_end = interface("x")
 
     @derived
     def clocking(self) -> Clocking:
@@ -66,8 +67,9 @@ class Probe(Kernel):
 
 def probe(**facts: object) -> Probe:
     class Placed(Space):
-        edge = Channel(tensor=TENSOR, port="in0_V", platform=FULL_DSP48E2)
-        kernel = Probe(channel=edge, **facts)  # type: ignore[arg-type]
+        x_end = end_of("kernel", "x_end")
+        edge = Channel(tensor=TENSOR, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
+        kernel = Probe(tensor=TENSOR, **facts)  # type: ignore[arg-type]
 
     return design_space(Placed()).kernel
 

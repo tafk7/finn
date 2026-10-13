@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A matrix-multiply unit on channels: activations and weights in, results out.
+"""A matrix-multiply unit on tensors: activations and weights in, results out.
 
 The facts are the extents in canonical GEMM notation, ``m`` rows, ``n``
 outputs and the reduction ``k``, and the ``form`` (``finn.dataflow.gemm``):
@@ -23,49 +23,52 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``realization`` Decision, on the dense datapath with block-diagonal weights
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
-``MatMulKernel`` is a kernel with children: the compute cores that sit on the
-channels its parent supplies, ``x_channel`` (the activations), ``w_channel`` (the
-weights) and ``y_channel`` (the results). Each channel, its adapter, its FIFO
-and its source are its parent's: the parent (a test harness, a KernelOp's node
-root, or a shell root) declares each channel and either binds its tensor to
-MatMul's view of it (``activation_tensor``, ``weight_tensor``,
-``result_tensor``), which reads only MatMul's facts and ``realization``, never
-a port, or states it; ``carried`` refuses a stated tensor of another shape, or
-whose values do not fit (``matmul-tensor``): MatMul's results must fit their
-channel, and an input channel's values must fit what MatMul reads. A boundary
-channel there presents its ``port`` name (``in0_V``).
+``MatMulKernel`` is a kernel with children: the compute cores, which read the
+tensors its parent gives, ``x_tensor`` (the activations), ``w_tensor`` (the
+weights) and ``y_tensor`` (the results), and present its interfaces: ``x_end``,
+``w_end`` and ``y_end`` are the selected core's ports' ends, labelled
+``compute.<core>.x`` (``finn.kernels.base.PortEnd``). Each channel, its adapter,
+its FIFO and its source are its parent's: the parent (a test harness, a
+KernelOp's node root, or a shell root) declares each channel, gives it the tensor
+MatMul's port reads or writes, and gives it MatMul's ends. MatMul's own view of
+each tensor (``activation_tensor``, ``weight_tensor``, ``result_tensor``) reads
+only its facts and ``realization``, never a port; ``carried`` refuses a given
+tensor of another shape, or whose values do not fit (``matmul-tensor``): MatMul's
+results must fit their tensor, and an input tensor's values must fit what MatMul
+reads. A boundary channel there presents its ``port`` name (``in0_V``).
 
-MatMul consumes its weights; it never holds them. Known weights are the weight
-channel's value: its ``contents``, which its ``source`` stores, bound by
-whoever declares the channel (the value's owner), who states on the channel's
-tensor the range it promises (``INT4 over [-7, 7]``). With several weight sets
-the channel's ``sets`` and ``index`` select one per row. A consumer derives
-from what the channel carries what it may (every core's weight width, the
-packed core's ``NARROW_WEIGHTS``); the owner states known weights narrowed to
-their values (``stored_element``: INT8-typed ternary weights are ``INT2``); a
-channel without a value carries the datatype's range. A dense realization of a
-depthwise operation reads block-diagonal weights, so it needs a value on its
-weight channel (``matmul-realization``).
+MatMul consumes its weights; it never holds them. Known weights are a fact
+(``w_contents``, given by the value's owner), and its weight channel's value:
+MatMul states what that channel carries, downstream of it. ``w_stored`` is the
+contents its source stores, block-diagonal for a dense realization of a
+depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
+carries, over the stored values' range, narrowed to it (``stored_element``:
+INT8-typed ternary weights are ``INT2``); without known weights, ``w_carried``
+is ``w_tensor``. The parent binds the weight channel's ``tensor`` and
+``contents`` to them. With several weight sets the contents hold one operand a
+set, and the channel's ``sets`` and ``index_tensor`` select one per row. Each
+core reads its weights from ``w_carried``: its weight width, and the packed
+core's ``NARROW_WEIGHTS``. A dense realization of a depthwise operation reads
+block-diagonal weights, so it needs known weights (``matmul-realization``).
 
-The result's range is derived from what the weight channel carries: with a
-value, the exact range of each output column's dot products over the
-activation datatype (``column_range``), unioned over the columns; without one,
-every dot product of the two datatypes' values. The result's type is the
-range's smallest encoding, ``UINT`` when no value is negative (``range_dtype``,
-``result_type``), whatever core computes it; the result element states the
-range (``result_tensor``). Each core derives its accumulator from the range
-(the core's ``result_range``).
+The result's range is derived from the weights: known, the exact range of each
+output column's dot products over the activation datatype (``column_range``),
+unioned over the columns; otherwise, every dot product of the two datatypes'
+values. The result's type is the range's smallest encoding, ``UINT`` when no
+value is negative (``range_dtype``, ``result_type``), whatever core computes it;
+the result element states the range (``result_tensor``). Each core derives its
+accumulator from the range (the core's ``result_range``).
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
-  and channels. Each core owns its folding factors (``compute.<core>.pe``,
-  ``.simd``, ``.compute_pumping``) and derives every channel's beat sequence
+  and tensors. Each core owns its folding factors (``compute.<core>.pe``,
+  ``.simd``, ``.compute_pumping``) and derives every port's beat sequence
   from its schedule.
 - Where the weights come from is the weight channel's ``source``, not MatMul's.
 - The activation channel's plan replays each dense row and frames each
   reduction; the channel's adapter carries that out.
 
 Its ``module`` (``finn.kernels.base``) merges its children's netlists; placed
-alone, without its channels, its interfaces are idle.
+alone, without its tensors, its interfaces are idle.
 """
 
 from __future__ import annotations
@@ -79,36 +82,38 @@ from finn.core.space import (
     derived,
     reject,
     requires,
+    selected,
+    supplied,
     view,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
+    is_ordinary_integer,
     ordinary_integer_bounds,
 )
 from finn.dataflow.gemm import Form, Window
-from finn.dataflow.tensor import Tensor
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.base import PORT_END, Kernel, PortEnd
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.values.domains import admit_element, range_dtype, values_within
+from finn.kernels.values.domains import (
+    admit_element,
+    range_dtype,
+    stored_element,
+    values_within,
+)
 from finn.kernels.values.semantics import (
+    INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerTensorValue,
     integer_columns,
+    integer_range,
     integer_shape,
     integers,
 )
 from finn.platform.capabilities import Platform
-
-_CARRIED = (
-    ("x_channel", "activation_tensor"),
-    ("w_channel", "weight_tensor"),
-    ("y_channel", "result_tensor"),
-)
-"""Each channel MatMul sits on, and its view of the tensor the channel carries."""
 
 
 def datatype_range(
@@ -161,7 +166,7 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
 
 
 class MatMulKernel(Kernel):
-    """Operation facts, and the kernels and Decisions over kernels on its channels."""
+    """Operation facts, and the kernels and Decisions over kernels on its tensors."""
 
     id = "finn.matmul"
     version = 1
@@ -230,12 +235,13 @@ class MatMulKernel(Kernel):
 
     @derived
     def result_range(self) -> tuple[int, int] | Rejected:
-        """The results' least and greatest value: with a value on the weight channel, its
-        columns' over the activation datatype (``column_range``, per output column); without
-        one, every dot product of the two datatypes' values (``datatype_range``)."""
+        """The results' least and greatest value: with known weights, their columns' over
+        the activation datatype (``column_range``, per output column, of what the weight
+        channel stores); without, every dot product of the two datatypes' values
+        (``datatype_range``)."""
         try:
             if self.stored:
-                return column_range(self.activation_dtype, self.w_channel.contents)
+                return column_range(self.activation_dtype, self.w_stored)
             return datatype_range(self.k, self.activation_dtype, self.weights_dtype)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
@@ -265,7 +271,7 @@ class MatMulKernel(Kernel):
             )
         return True
 
-    # The tensors the channels carry.
+    # MatMul's own views of its tensors: its facts and realization, never a port.
 
     def _tensor(
         self,
@@ -295,8 +301,8 @@ class MatMulKernel(Kernel):
 
     @view
     def weight_tensor(self) -> Tensor | Rejected:
-        """(K, N) as the datapath reads it, in the weights' datatype: the weight channel's
-        values must be values of it, in whatever encoding its owner states."""
+        """(K, N) as the datapath reads it, in the weights' datatype: the weights' values
+        must be values of it, in whatever encoding their owner states."""
         return self._tensor((self.datapath_k, self.n), self.weights_dtype)
 
     @view
@@ -304,45 +310,80 @@ class MatMulKernel(Kernel):
         """(M, N), the result type over the result range."""
         return self._tensor((self.m, self.n), self.result_type, self.result_range)
 
-    # The channels it sits on, supplied by its parent.
-    x_channel: Channel = Param(required=False)
-    w_channel: Channel = Param(required=False)
-    y_channel: Channel = Param(required=False)
+    # The tensors its ports read and write, and the known weights: facts its parent gives.
+    x_tensor: Tensor = Param(required=False)
+    w_tensor: Tensor = Param(required=False)
+    y_tensor: Tensor = Param(required=False)
+    w_contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
+    # Whether the weights are known, which the weight channel's source stores.
+    stored = supplied(w_contents)
 
     @derived
-    def stored(self) -> bool:
-        """Whether the weight channel carries a known value, which its source stores."""
-        return self.present(MatMulKernel.w_channel) and self.w_channel.valued
+    def weighted(self) -> bool:
+        """Whether its weights are placed: known, or a weight tensor given."""
+        return self.stored or self.present(MatMulKernel.w_tensor)
+
+    @view(when=stored, semantics=INTEGER_TENSOR)
+    def w_stored(self) -> IntegerTensor:
+        """The known weights as the datapath reads them, which the weight channel's source
+        stores: block-diagonal when a depthwise operation is realized densely."""
+        weights = self.w_contents
+        return block_diagonal(weights) if self.dense_view else weights
+
+    @view(when=weighted)
+    def w_carried(self) -> Tensor | Rejected:
+        """The tensor the weight channel carries, which the cores read: with known weights,
+        ``weight_tensor``'s shape over the stored values' range, narrowed to it
+        (``stored_element``); otherwise ``w_tensor``."""
+        if not self.stored:
+            tensor: Tensor = self.w_tensor
+            return tensor
+        dtype, shape = self.weights_dtype, self.weight_tensor.shape
+        if not is_ordinary_integer(dtype):
+            return Tensor(shape, ScalarEncoding(dtype))
+        least, greatest = integer_range(self.w_stored)
+        low, high = ordinary_integer_bounds(dtype)
+        if not low <= least <= greatest <= high:
+            return reject(
+                "dtype-storage", f"every weight must be an integer admitted by {dtype.name}"
+            )
+        return Tensor(shape, stored_element(dtype, (least, greatest)))
 
     @constraint
     def carried(self) -> bool | Rejected:
-        """Each supplied channel carries a tensor of the shape MatMul derives for it.
+        """Each given tensor is of the shape MatMul derives for it.
 
-        On the results channel MatMul's values fit the channel's element; on a
-        channel it consumes, activations or weights, the channel's values are
-        values of MatMul's, in any integer encoding (``values_within``): the owner of
-        known weights states them narrowed to their values.
+        Its results fit the results' tensor; the activations and the weights the
+        cores read are values of MatMul's, in any integer encoding
+        (``values_within``): the owner of known weights states them narrowed to
+        their values.
         """
-        for reference, tensor in _CARRIED:
-            if not self.present(getattr(MatMulKernel, reference)):
-                continue
-            supplied, derived_ = getattr(self, reference).tensor, getattr(self, tensor)
-            produced = reference == "y_channel"
+        given: list[tuple[str, Tensor, str]] = []
+        if self.present(MatMulKernel.x_tensor):
+            given.append(("x_tensor", self.x_tensor, "activation_tensor"))
+        if self.weighted:
+            weights = "w_carried" if self.stored else "w_tensor"
+            given.append((weights, self.w_carried, "weight_tensor"))
+        if self.present(MatMulKernel.y_tensor):
+            given.append(("y_tensor", self.y_tensor, "result_tensor"))
+        for name, supplied_, tensor in given:
+            derived_ = getattr(self, tensor)
+            produced = name == "y_tensor"
             if produced:
-                fits = derived_.element.fits(supplied.element)
+                fits = derived_.element.fits(supplied_.element)
             else:
-                fits = values_within(supplied.element, derived_.element)
-            if supplied.shape != derived_.shape or not fits:
+                fits = values_within(supplied_.element, derived_.element)
+            if supplied_.shape != derived_.shape or not fits:
                 return reject(
                     "matmul-tensor",
-                    f"{reference} carries {supplied.shape} {supplied.element}; "
+                    f"{name} is {supplied_.shape} {supplied_.element}; "
                     f"MatMul's {tensor} is {derived_.shape} {derived_.element}, "
                     f"which {'must fit it' if produced else 'it must fit'}",
                 )
         return True
 
     # The compute cores. Each refuses what its core cannot build and owns its
-    # folding factors; ``packed`` names the entry, so references reach through it.
+    # folding factors; ``packed`` names the entry.
     packed = PackedDotpKernel()
     compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
         {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
@@ -351,18 +392,37 @@ class MatMulKernel(Kernel):
         window=window,
         result_range=result_range,
         platform=platform,
-        x_channel=x_channel,
-        w_channel=w_channel,
-        y_channel=y_channel,
+        x_tensor=x_tensor,
+        w_tensor=w_carried,
+        y_tensor=y_tensor,
     )
+    compute_case = selected(compute)
+
+    def _served(self, end: PortEnd) -> PortEnd:
+        """The selected core's ``end``, labelled below MatMul (``compute.packed.x``)."""
+        return end.under(f"compute.{self.compute_case}")
+
+    @view(semantics=PORT_END)
+    def x_end(self) -> PortEnd:
+        """The activations' interface: the selected core's ``x``."""
+        return self._served(self.compute.x_end)
+
+    @view(semantics=PORT_END)
+    def w_end(self) -> PortEnd:
+        """The weights' interface: the selected core's ``w``."""
+        return self._served(self.compute.w_end)
+
+    @view(semantics=PORT_END)
+    def y_end(self) -> PortEnd:
+        """The results' interface: the selected core's ``y``."""
+        return self._served(self.compute.y_end)
 
     @constraint
     def realization_supported(self) -> bool | Rejected:
         if self.dense_view and not self.stored:
             return reject(
                 "matmul-realization",
-                "a dense realization reads block-diagonal weights, so it needs a value on "
-                "its weight channel",
+                "a dense realization reads block-diagonal weights, so it needs known weights",
             )
         return True
 

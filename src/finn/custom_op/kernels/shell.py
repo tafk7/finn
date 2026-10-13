@@ -12,17 +12,23 @@ and budgets.
 - **channels**, one per ONNX tensor, in node order, each declared from the graph
   before any kernel is placed: a node's graph inputs, the parameter channels it owns
   (named after the initializer), its outputs. A channel's tensor is the graph's
-  value_info and annotation; a parameter channel's is the initializer's over its
-  values' range, and its contents the node's value of it (``Facts.values``), which its
-  source stores; every channel's platform is the model's target's. Only the nodes'
-  ONNX inputs and outputs are boundaries, named by the shell's convention
-  ``s_axis_<i>`` and ``m_axis_<j>``. A channel has one consumer, so a tensor read
-  more than once is refused by name before any owner is chosen (``tensor-fan-out``):
-  read by two of the nodes (an edge, or a parameter both own), or read by one and an
-  output boundary too (a graph output, or read outside the nodes). Fan-out waits for
-  a channel that forks;
+  value_info and annotation; a parameter channel's is what its kernel states it
+  carries (MatMul's ``w_carried``: the initializer over its values' range), and its
+  contents what the kernel states its source stores (``w_stored``), from the node's
+  value of it (``Facts.values``); every channel's platform is the model's target's.
+  Only the nodes' ONNX inputs and outputs are boundaries, named by the shell's
+  convention ``s_axis_<i>`` and ``m_axis_<j>``. A channel has one consumer, so a
+  tensor read more than once is refused by name before any owner is chosen
+  (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own),
+  or read by one and an output boundary too (a graph output, or read outside the
+  nodes). Fan-out waits for a channel that forks;
 - **kernels**, one per node: its op's placement (``KernelOp.place``, the one its node
-  root is generated from) with literal formals, on these channels;
+  root is generated from) with literal formals, its ports' tensors the channels'
+  declared ones and its held initializers' values literals;
+- **wiring**, by ordinary edges: each channel takes as its ends the ones its producing
+  and consuming nodes' kernels present at their ports' interfaces (the op's
+  ``wiring``; ``finn.kernels.channels.end_of``, members named ``<channel>-producer``
+  and ``<channel>-consumer``, a name no graph name gives);
 - **members**, named as the graph: channels by tensor and kernels by node (``\\W`` as
   ``_``), in the order input boundary channels, the other channels, the kernels,
   output boundary channels (``Reshape_0_out0``, ``MatMul_0``, ``MatMul_0_out0``); two
@@ -100,7 +106,7 @@ from __future__ import annotations
 import re
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from onnx import NodeProto
 from qonnx.core.metadata import MetadataError
@@ -139,13 +145,13 @@ from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
 from finn.custom_op.kernels.replay import committed, refusal, typed_choices
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.kernels.base import Kernel
-from finn.kernels.channels import Channel
+from finn.kernels.base import Kernel, PortEnd
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import chosen, member_of, undecided
 from finn.kernels.ends import END, EndContract, EndOffer
 from finn.kernels.explore import Seam
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
-from finn.kernels.values.semantics import IntegerTensorValue
+from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue
 from finn.platform.capabilities import Platform, Resources
 from finn.platform.shells import ShellRow, shell_row
 
@@ -274,15 +280,19 @@ class Declared:
     def channel(
         self,
         platform: Platform,
-        contents: IntegerTensorValue | None = None,
+        ends: Mapping[str, PortEnd],
+        carried: tuple[Tensor, IntegerTensor] | None = None,
         end_offer: tuple[EndOffer, ...] = (),
     ) -> Channel:
-        """The channel on the target's ``platform``, carrying ``contents`` (an owned
-        parameter's value) when given, its free side offered the ends ``end_offer``
-        when any."""
-        settings: dict[str, Any] = {"tensor": self.tensor}
-        if contents is not None:
-            settings["contents"] = contents
+        """The channel on the target's ``platform`` taking ``ends`` (its ``producer`` and
+        ``consumer``, each a member's end), carrying its declared tensor or, for an owned
+        parameter, ``carried``: the tensor and contents its kernel states for it; its free
+        side offered the ends ``end_offer`` when any."""
+        settings: dict[str, Any] = dict(ends)
+        if carried is None:
+            settings["tensor"] = self.tensor
+        else:
+            settings["tensor"], settings["contents"] = carried
         if end_offer:
             settings["end_offer"] = end_offer
         if self.port is not None:
@@ -391,8 +401,9 @@ def _channels(
     ports: Mapping[str, str],
 ) -> dict[str, Declared]:
     """The root's channels by tensor, in node order: a node's inputs on an edge or the
-    boundary, the parameter channels it owns (the initializer's tensor; its value, the
-    contents, is bound when the class is built), its outputs."""
+    boundary, the parameter channels it owns (the initializer's tensor, its kernel's
+    fact; the channel carries what the kernel states for it, bound when the class is
+    built), its outputs."""
     parameters = {tensor for tensors in owned for tensor in tensors.values()}
     channels: dict[str, Declared] = {}
 
@@ -469,24 +480,47 @@ def _class(
     facts: list[Facts],
     owned: list[dict[str, str]],
 ) -> type[Shell]:
-    """The shell root's class: its channels as ``key`` declares them (an owned
-    parameter's with its node's value as contents, a boundary channel's offered
-    ``key.offers``) and each node's kernel placed on them from its ``facts``; members
-    in the order input boundary channels, the other channels, the kernels, output
-    boundary channels."""
+    """The shell root's class: each node's kernel placed from its ``facts`` on the
+    tensors ``key`` declares (an owned parameter's value given too); its channels as
+    ``key`` declares them (an owned parameter's carrying what its kernel states for it,
+    a boundary channel's offered ``key.offers``), each taking its nodes' kernels' ends;
+    members in the order input boundary channels, the other channels, the kernels,
+    output boundary channels."""
+    tensors = {tensor: each.tensor for tensor, each in key.channels}
     contents: dict[str, IntegerTensorValue] = {}
-    for each, tensors in zip(facts, owned):
-        if tensors:
+    for each, held in zip(facts, owned):
+        if held:
             values = each.values()
-            contents |= {tensor: values[port] for port, tensor in tensors.items()}
+            contents |= {tensor: values[port] for port, tensor in held.items()}
+    kernels: dict[str, Kernel] = {}
+    ends: dict[str, dict[str, PortEnd]] = {}
+    carried: dict[str, tuple[Tensor, IntegerTensor]] = {}
+    forwarders: dict[str, PortEnd] = {}
+    for node, op, each, held in zip(nodes, ops, facts, owned):
+        name = member(node.name)
+        kernel = kernels[name] = op.place(each, tensors, contents)
+        sides = [("consumer", port, tensor) for port, tensor in op.inputs().items()]
+        sides += [("producer", port, tensor) for port, tensor in zip(op.outputs, node.output)]
+        for side, port, tensor in sides:
+            wiring = op.wiring[port]
+            forwarder = f"{member(tensor)}-{side}"
+            forwarders[forwarder] = end_of(name, wiring.end)
+            ends.setdefault(tensor, {})[side] = forwarders[forwarder]
+            if port in held:
+                carried[tensor] = (
+                    getattr(kernel, cast(str, wiring.carried)),
+                    getattr(kernel, cast(str, wiring.stored)),
+                )
     channels: dict[str, Channel] = {
-        tensor: each.channel(key.platform, contents.get(tensor), key.offers if each.port else ())
+        tensor: each.channel(
+            key.platform,
+            ends.get(tensor, {}),
+            carried.get(tensor),
+            key.offers if each.port else (),
+        )
         for tensor, each in key.channels
     }
     ports = {tensor: each.port or "" for tensor, each in key.channels}
-    kernels = {
-        member(node.name): op.place(each, channels) for node, op, each in zip(nodes, ops, facts)
-    }
 
     def on(side: str) -> dict[str, Channel]:
         """The channels at the ports ``<side><i>`` (``""``: no port, none on the boundary)."""
@@ -496,7 +530,7 @@ def _class(
             if ports[tensor].rstrip("0123456789") == side
         }
 
-    members = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
+    members = {**forwarders, **on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
     return composite(key.name, members, base=Shell)
 
 

@@ -22,13 +22,12 @@ import finn.kernels.explore as explore_module
 from finn.core.space import (
     Finding,
     FindingKind,
-    derived,
     design_space,
     finding_record,
     finding_text,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
     Accepted,
@@ -49,10 +48,10 @@ from finn.kernels.explore import (
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
-from finn.kernels.values.domains import stored_element
+from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
 from kernels import chain
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, Root
+from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, Root, view_of
 
 MEMBERS = ("x", "w1", "hidden", "levels", "w2", "y", "first", "activate", "second")
 
@@ -290,22 +289,18 @@ def test_target_cycles_states_the_bottleneck_of_the_settled_point_where_it_leave
 def dsp58_matmul() -> tuple[Seam, Any]:
     """The Chain's first MatMul alone, on a DSP58 platform: its core an open choice."""
 
-    class Single(Root):
-        @derived
-        def y_tensor(self) -> Tensor:
-            return self.first.result_tensor
+    x_tensor = Tensor((chain.ROWS, chain.INPUTS), ScalarEncoding(chain.A))
 
-        x = Channel(
-            platform=FULL_DSP58,
-            tensor=Tensor((chain.ROWS, chain.INPUTS), ScalarEncoding(chain.A)),
-            port="s_axis_0",
-        )
-        w = Channel(
-            tensor=Tensor((chain.INPUTS, chain.HIDDEN), stored_element(chain.W, (-3, 3))),
-            contents=chain.W1,
-            platform=FULL_DSP58,
-        )
-        y = Channel(tensor=y_tensor, port="m_axis_0", platform=FULL_DSP58)
+    class Single(Root):
+        y_tensor = view_of("first", "result_tensor")
+        w_tensor = view_of("first", "w_carried")
+        w_contents: IntegerTensor = view_of("first", "w_stored", INTEGER_TENSOR)
+        x_end = end_of("first", "x_end")
+        w_end = end_of("first", "w_end")
+        y_end = end_of("first", "y_end")
+        x = Channel(platform=FULL_DSP58, tensor=x_tensor, port="s_axis_0", consumer=x_end)
+        w = Channel(tensor=w_tensor, contents=w_contents, consumer=w_end, platform=FULL_DSP58)
+        y = Channel(tensor=y_tensor, port="m_axis_0", producer=y_end, platform=FULL_DSP58)
         first = MatMulKernel(
             m=chain.ROWS,
             n=chain.HIDDEN,
@@ -313,9 +308,9 @@ def dsp58_matmul() -> tuple[Seam, Any]:
             activation_dtype=chain.A,
             weights_dtype=chain.W,
             platform=FULL_DSP58,
-            x_channel=x,
-            w_channel=w,
-            y_channel=y,
+            x_tensor=x_tensor,
+            y_tensor=y_tensor,
+            w_contents=chain.W1,
         )
 
     return Seam(("x", "w", "y", "first"), platform=FULL_DSP58), design_space(Single())

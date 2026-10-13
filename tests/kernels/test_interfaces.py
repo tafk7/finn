@@ -20,7 +20,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, end_of
 from finn.kernels.control import ControlBus
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -47,16 +47,28 @@ LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 class Activated(Root):
     """dotp, then thresholding: a padded child result feeding a child."""
 
-    activations = Channel(tensor=X, port="in0_V", platform=FULL_DSP48E2)
-    weights = Channel(tensor=WEIGHT_TENSOR, port="in1_V", platform=FULL_DSP48E2)
-    results = Channel(tensor=RESULT_TENSOR, platform=FULL_DSP48E2)
-    levels = Channel(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
+    activations_end = end_of("compute", "x_end")
+    weights_end = end_of("compute", "w_end")
+    results_producer = end_of("compute", "y_end")
+    results_consumer = end_of("activate", "input_end")
+    levels_end = end_of("activate", "output_end")
+    activations = Channel(tensor=X, port="in0_V", consumer=activations_end, platform=FULL_DSP48E2)
+    weights = Channel(
+        tensor=WEIGHT_TENSOR, port="in1_V", consumer=weights_end, platform=FULL_DSP48E2
+    )
+    results = Channel(
+        tensor=RESULT_TENSOR,
+        producer=results_producer,
+        consumer=results_consumer,
+        platform=FULL_DSP48E2,
+    )
+    levels = Channel(tensor=LEVEL_TENSOR, port="out0_V", producer=levels_end, platform=FULL_DSP48E2)
     config = ControlBus(port="s_axilite")
     compute = PackedDotpKernel(
         result_range=ordinary_integer_bounds(R),
-        x_channel=activations,
-        w_channel=weights,
-        y_channel=results,
+        x_tensor=X,
+        w_tensor=WEIGHT_TENSOR,
+        y_tensor=RESULT_TENSOR,
         platform=FULL_DSP48E2,
     )
     activate = ThresholdingAxiKernel(
@@ -67,8 +79,8 @@ class Activated(Root):
         pe=1,
         ram_style="auto",
         ultra_stages=0,
-        input_channel=results,
-        output_channel=levels,
+        input_tensor=RESULT_TENSOR,
+        output_tensor=LEVEL_TENSOR,
         control=config,
         platform=FULL_DSP48E2,
     )
@@ -138,8 +150,8 @@ def test_writable_thresholds_without_a_control_bus_are_not_offered():
             pe=1,
             ram_style="auto",
             ultra_stages=0,
-            input_channel=Activated.results,
-            output_channel=Activated.levels,
+            input_tensor=RESULT_TENSOR,
+            output_tensor=LEVEL_TENSOR,
             platform=FULL_DSP48E2,
         )
 
@@ -197,11 +209,8 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     selectors = Tensor((REPETITIONS * HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
-    class Selected(Space):
-        values = Channel(tensor=RESULT_TENSOR, port="in0_V", platform=FULL_DSP48E2)
-        sets = Channel(tensor=selectors, port="in1_V", platform=FULL_DSP48E2)
-        levels = Channel(tensor=LEVEL_TENSOR, port="out0_V", platform=FULL_DSP48E2)
-        activate = ThresholdingAxiKernel(
+    def thresholding(sets: Tensor) -> ThresholdingAxiKernel:
+        return ThresholdingAxiKernel(
             input_dtype=R,
             threshold_dtype=R,
             thresholds=two_sets,
@@ -209,11 +218,24 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             pe=1,
             ram_style="auto",
             ultra_stages=0,
-            input_channel=values,
-            output_channel=levels,
-            set_channel=sets,
+            input_tensor=RESULT_TENSOR,
+            output_tensor=LEVEL_TENSOR,
+            set_tensor=sets,
             platform=FULL_DSP48E2,
         )
+
+    class Selected(Space):
+        values_end = end_of("activate", "input_end")
+        sets_end = end_of("activate", "set_end")
+        levels_end = end_of("activate", "output_end")
+        values = Channel(
+            tensor=RESULT_TENSOR, port="in0_V", consumer=values_end, platform=FULL_DSP48E2
+        )
+        sets = Channel(tensor=selectors, port="in1_V", consumer=sets_end, platform=FULL_DSP48E2)
+        levels = Channel(
+            tensor=LEVEL_TENSOR, port="out0_V", producer=levels_end, platform=FULL_DSP48E2
+        )
+        activate = thresholding(selectors)
 
     point = with_direct_transports(design_space(Selected())).with_choices(
         {Selected.activate.use_axilite: False, Selected.activate.deep_pipeline: False}
@@ -224,7 +246,10 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
 
     class Short(Selected):
-        sets = Channel(tensor=short, port="in1_V", platform=FULL_DSP48E2)
+        sets = Channel(
+            tensor=short, port="in1_V", consumer=Selected.sets_end, platform=FULL_DSP48E2
+        )
+        activate = thresholding(short)
 
     refused = with_direct_transports(design_space(Short())).sets.query(Channel.netlist)
     assert isinstance(refused, Rejected)
