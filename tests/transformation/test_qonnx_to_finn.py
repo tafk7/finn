@@ -40,6 +40,8 @@ from onnx import TensorProto, helper
 from pkgutil import get_data
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.ranges import TensorRange
+from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup
@@ -50,6 +52,7 @@ import finn.core.onnx_exec as oxe
 from finn.core.reporting.findings import Refusal
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.fold_quant_weights import FoldQuantWeights
+from finn.transformation.qonnx.qonnx_activation_handlers import computed_datatype
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
     ConvertQuantActToMultiThreshold,
 )
@@ -309,3 +312,100 @@ def test_QONNX_to_FINN_unsupported_channel_axis():
         model.transform(ConvertQONNXtoFINN())
     ((code, owner),) = [(each.code, each.owner) for each in refused.value.findings]
     assert (code, owner) == ("multithreshold-channel-axis", "ConvertQuantActToMultiThreshold")
+
+
+def _activation_model(activation, quantizer, scale, bits=None, signed=False, narrow=False):
+    """global_in -> ``activation`` (None for none) -> ``quantizer`` (Quant with ``bits``,
+    ``signed`` and ``narrow``, or BipolarQuant) -> global_out, over a [1, 4] tensor."""
+    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, [1, 4])
+    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, [1, 4])
+    nodes = []
+    quant_in = "global_in"
+    if activation is not None:
+        nodes.append(helper.make_node(activation, ["global_in"], ["act_out"]))
+        quant_in = "act_out"
+    inits = [nph.from_array(np.asarray(scale, dtype=np.float32), "scale")]
+    if quantizer == "Quant":
+        inits += [
+            nph.from_array(np.asarray(0.0, dtype=np.float32), "zeropt"),
+            nph.from_array(np.asarray(float(bits), dtype=np.float32), "bitwidth"),
+        ]
+        nodes.append(
+            helper.make_node(
+                "Quant",
+                [quant_in, "scale", "zeropt", "bitwidth"],
+                ["global_out"],
+                domain="qonnx.custom_op.general",
+                signed=int(signed),
+                narrow=int(narrow),
+                rounding_mode="ROUND",
+            )
+        )
+    else:
+        nodes.append(
+            helper.make_node(
+                "BipolarQuant",
+                [quant_in, "scale"],
+                ["global_out"],
+                domain="qonnx.custom_op.general",
+            )
+        )
+    graph = helper.make_graph(nodes, "activation", [gi], [go], initializer=inits)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.opset_import.append(helper.make_opsetid("qonnx.custom_op.general", 1))
+    return ModelWrapper(model).transform(InferShapes()).transform(InferDataTypes())
+
+
+@pytest.mark.transform
+@pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
+@pytest.mark.parametrize(
+    "activation, quantizer, scale, bits, signed, narrow, expected",
+    [
+        (None, "Quant", 0.5, 2, True, True, "UINT2"),  # [0, 2], then -1
+        (None, "Quant", 0.5, 2, True, False, "UINT2"),  # [0, 3], then -2
+        (None, "Quant", 0.25, 8, True, False, "UINT8"),  # [0, 255], then -128
+        (None, "Quant", 0.5, 4, False, False, "UINT4"),  # [0, 15], no bias
+        ("Relu", "Quant", 0.5, 3, False, False, "UINT3"),
+        ("Selu", "Quant", 0.5, 2, True, False, "UINT2"),  # [0, 3], then -2
+        (None, "BipolarQuant", 1.0, None, None, None, "BIPOLAR"),  # 2 * [0, 1] - 1
+    ],
+)
+def test_a_multithreshold_is_annotated_with_what_it_computes(
+    activation, quantizer, scale, bits, signed, narrow, expected
+):
+    """The MultiThreshold a quantized activation becomes is annotated with the datatype
+    of what it computes itself, ``out_bias + out_scale * [0, N]``, and states that range
+    with it, not the Quant's datatype, which holds the values after the Add and Mul
+    behind it."""
+    model = _activation_model(activation, quantizer, scale, bits, signed, narrow)
+    converted = model.transform(ConvertQONNXtoFINN())
+    (node,) = [node for node in converted.graph.node if node.op_type == "MultiThreshold"]
+    mt = getCustomOp(node)
+    assert mt.get_nodeattr("out_dtype") == expected
+    assert converted.get_tensor_datatype(node.output[0]) == DataType[expected]
+    if expected != "FLOAT32":
+        steps = converted.get_initializer(node.input[1]).shape[-1]
+        least = int(mt.get_nodeattr("out_bias"))
+        greatest = least + int(mt.get_nodeattr("out_scale")) * steps
+        assert converted.get_tensor_range(node.output[0]) == TensorRange(least, greatest)
+    x = np.random.default_rng(0).uniform(-4.0, 4.0, size=(1, 4)).astype(np.float32)
+    expected_out = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    out = oxe.execute_onnx(converted, {"global_in": x})["global_out"]
+    assert np.allclose(out, expected_out, atol=1e-6)
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize(
+    "out_bias, out_scale, steps, expected",
+    [
+        (0, 1, 2, "UINT2"),
+        (0, 1, 1, "BINARY"),
+        (-1, 2, 1, "BIPOLAR"),
+        (-1, 1, 2, "INT2"),
+        (-128, 1, 255, "INT8"),
+        (0, 0.5, 1, "FLOAT32"),
+        (-0.5, 1, 1, "FLOAT32"),
+    ],
+)
+def test_computed_datatype_holds_the_multithresholds_values(out_bias, out_scale, steps, expected):
+    assert computed_datatype(out_bias, out_scale, steps) == expected

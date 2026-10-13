@@ -46,9 +46,24 @@ def _refused(owner, code, node, message):
     return Refusal([Finding(FindingKind.REJECTION, code, owner, message, details)])
 
 
+def _least_behind(model, mt_node, consumer):
+    """The least value of ``mt_node``'s output, ``out_bias + out_scale * [0, N]``, with
+    the constant its ``consumer`` adds if that is an Add."""
+    mt_inst = getCustomOp(mt_node)
+    steps = model.get_initializer(mt_node.input[1]).shape[-1]
+    out_bias = mt_inst.get_nodeattr("out_bias")
+    least = out_bias + min(0.0, mt_inst.get_nodeattr("out_scale") * steps)
+    if consumer.op_type == "Add":
+        bias = model.get_initializer(consumer.input[1])
+        if bias is not None:
+            least += float(np.min(bias))
+    return least
+
+
 def _get_signed_from_upstream(model, trunc_node):
     """Whether the input of ``trunc_node`` is signed: its datatype's, else the first
-    known datatype up the graph through sign-preserving nodes."""
+    known datatype up the graph through sign-preserving nodes (a MultiThreshold's
+    values with the bias behind it)."""
     node = trunc_node
     signed = None
     inp_dt = model.get_tensor_datatype(node.input[0])
@@ -70,17 +85,16 @@ def _get_signed_from_upstream(model, trunc_node):
                     "missing upstream ndoes."
                 )
             next_node = next_node[0]
+            # A MultiThreshold's datatype is that of its own values, before the bias
+            # the Add behind it adds.
+            if next_node.op_type == "MultiThreshold":
+                signed = _least_behind(model, next_node, curr_node) < 0
+                break
             out_dt = model.get_tensor_datatype(next_node.output[0])
             if out_dt is not None and out_dt != DataType["FLOAT32"]:
                 signed = out_dt.signed()
                 break
-            # Special cases where the node has an internal or intrinsic datatype.
-            if next_node.op_type == "MultiThreshold":
-                mt_inst = getCustomOp(next_node, onnx_opset_version=9)
-                out_dt = DataType[mt_inst.get_nodeattr("out_dtype")]
-                if out_dt is not None and out_dt != DataType["FLOAT32"]:
-                    signed = out_dt.signed()
-                    break
+            # Special cases where the node has an intrinsic datatype.
             if next_node.op_type == "BipolarQuant":
                 signed = True
                 break

@@ -47,7 +47,7 @@ from finn.util.basic import make_build_dir
 @pytest.mark.brevitas_export
 @pytest.mark.parametrize("kernel_size", [2, 3])
 @pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("signed", [True])  # TODO: Add unsigned test case
+@pytest.mark.parametrize("signed", [True, False])
 @pytest.mark.parametrize("bit_width", [2, 4])
 @pytest.mark.parametrize("input_bit_width", [4, 8, 16])
 @pytest.mark.parametrize("channels", [2, 4])

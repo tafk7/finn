@@ -43,9 +43,10 @@ from finn.util.basic import resolve_resize_param_input
 
 class AbsorbScalarBiasIntoMultiThreshold(Transformation):
     """Absorb a scalar bias that follows a MultiThreshold (an Add) into its out_bias,
-    and derive the output datatype again. A bias can widen the output datatype: it is
-    absorbed only where the output grows by at most ``max_bitwidth_increase`` bits
-    (by default none), trading a wider output for one Add fewer."""
+    and derive the output datatype again, with its range. A bias can widen the output
+    datatype: it is absorbed only where the output grows by at most
+    ``max_bitwidth_increase`` bits (by default none) over the MultiThreshold's own
+    datatype before it, trading a wider output for one Add fewer."""
 
     def __init__(self, max_bitwidth_increase=0):
         super().__init__()
@@ -125,20 +126,20 @@ class AbsorbScalarBiasIntoMultiThreshold(Transformation):
                         )
                         continue
 
-                    if odt.name != old_odt:
+                    if bitwidth_increase > 0:
                         warnings.warn(
                             f"{self.__class__.__name__}: Output datatype for"
-                            f" {node.name} changing from {old_odt} to {odt}"
+                            f" {node.name} growing from {old_odt} to {odt.name}"
                         )
 
                     threshold_op.set_nodeattr("out_bias", out_bias)
                     threshold_op.set_nodeattr("out_dtype", odt.name)
                     node.output[0] = consumer.output[0]
                     graph.node.remove(consumer)
-                    model.set_tensor_datatype(node.output[0], odt)
 
                     graph_modified = True
                     break
+        # The MultiThreshold states its new datatype with its range.
         model = model.transform(InferDataTypes())
         model = model.transform(InferShapes())
         return model, graph_modified

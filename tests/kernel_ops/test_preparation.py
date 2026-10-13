@@ -140,6 +140,8 @@ def tfc_directory(tfc_export: Path, tmp_path: Path) -> Path:
     return directory
 
 
+# Every writer's range is held by its datatype: no contradiction on the way.
+@pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
 def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     tfc_directory: Path, tfc_streamlined: Path
 ) -> None:
@@ -266,6 +268,19 @@ def test_cnv_prepared_is_its_export_up_to_the_declared_deviations_and_sound(
     reference_graph = reference(export, cnv_export.parent)
     checked = made.analysis(equivalence_with(reference_graph, EXPLAINS))
     assert checked == {"runs": 12, "findings": ()}
+    # The input's INT8, then INT2 activations, each stating [-1, 1]; each MatMul's exact
+    # range as qonnx's interval rule states it.
+    thresholds = [node.output[0] for node in made.graph.node if node.op_type == "MultiThreshold"]
+    assert [made.get_tensor_datatype(t) for t in thresholds] == [
+        DataType["INT8"],
+        *[DataType["INT2"]] * 8,
+    ]
+    assert all(made.get_tensor_range(t) == TensorRange(-1, 1) for t in thresholds[1:])
+    matmuls = [node.output[0] for node in made.graph.node if node.op_type == "MatMul"]
+    assert [made.get_tensor_datatype(t).name for t in matmuls] == [
+        *["INT13", "INT11", "INT11", "INT12", "INT12", "INT13"],
+        *["INT9", "INT10", "INT10"],
+    ]
     held = made.analysis(annotated_initializers)
     weights = [node.input[1] for node in made.graph.node if node.op_type == "MatMul"]
     assert len(weights) == 9 and sorted(held["checked"]) == sorted(weights)
