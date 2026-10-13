@@ -38,12 +38,6 @@ class Initializers(TypedDict):
     findings: tuple[Finding, ...]
 
 
-def _value(value: np.generic) -> int | float:
-    """A stored value as a finding's detail: an int where it is an integer."""
-    number = float(value)
-    return int(number) if number.is_integer() else number
-
-
 def annotated_initializers(model: ModelWrapper) -> Initializers:
     """Every integer-annotated initializer of ``model`` against its annotation."""
     checked, found = [], []
@@ -58,7 +52,8 @@ def annotated_initializers(model: ModelWrapper) -> Initializers:
         values = np.asarray(model.get_initializer(name)).reshape(-1)
         unheld = values[~np.asarray(datatype.allowed(values), dtype=bool)]
         if unheld.size:
-            example = _value(unheld[0])
+            first = float(unheld[0])
+            example = int(first) if first.is_integer() else first
             found.append(
                 Finding(
                     FindingKind.BLOCKER,

@@ -23,11 +23,6 @@ from finn.toolchain import vivado
 from finn.toolchain.launcher import ToolUnavailable
 
 
-def _warning(code: str, message: str, place: str) -> Finding:
-    """A limitation: logged as a warning, and the build runs."""
-    return config_finding(code, message, place, FindingKind.LIMITATION)
-
-
 def required_vivado(target: Target) -> tuple[int, int] | None:
     """The Vivado release the target's board requires (``Board.vivado``), if any."""
     return None if target.board is None else BOARDS[target.board].vivado
@@ -86,5 +81,6 @@ def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target)
     for name in sorted(name for name in cfg.settings if name not in read):
         readers = ", ".join(plan.settings[name].readers)
         message = f"only {readers} read it, and start_step/stop_step leave them out"
-        findings.append(_warning("setting-unread", message, f"configuration.{name}"))
+        place = f"configuration.{name}"
+        findings.append(config_finding("setting-unread", message, place, FindingKind.LIMITATION))
     return findings

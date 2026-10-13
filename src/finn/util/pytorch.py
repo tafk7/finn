@@ -39,27 +39,20 @@ class Normalize(Module):
 
     def forward(self, x):
         x = x - torch.tensor(self.mean, device=x.device).reshape(1, self.channels, 1, 1)
-        x = x / self.std
-        return x
+        return x / self.std
 
 
 class ToTensor(Module):
-    def __init__(self):
-        super(ToTensor, self).__init__()
-
     def forward(self, x):
-        x = x / 255
-        return x
+        return x / 255
 
 
 class NormalizePreProc(Module):
     def __init__(self, mean, std, channels):
         super(NormalizePreProc, self).__init__()
         self.features = Sequential()
-        scaling = ToTensor()
-        self.features.add_module("scaling", scaling)
-        normalize = Normalize(mean, std, channels)
-        self.features.add_module("normalize", normalize)
+        self.features.add_module("scaling", ToTensor())
+        self.features.add_module("normalize", Normalize(mean, std, channels))
 
     def forward(self, x):
         return self.features(x)

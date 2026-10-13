@@ -68,7 +68,7 @@ class AbsorbScalarBiasIntoMultiThreshold(Transformation):
         # Keep track of whether the graph has been modified
         graph_modified = False
         # Iterate all nodes in the graph keeping track of the index
-        for index, node in enumerate(graph.node):
+        for node in graph.node:
             # Only non-branching threshold operations are supported
             if (
                 node.op_type == "MultiThreshold"

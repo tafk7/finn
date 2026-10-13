@@ -27,19 +27,12 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import numpy as np
-import onnx
-import onnx.numpy_helper as nph
-from importlib import resources as importlib
-from pkgutil import get_data
 
-
-def get_test_model(netname, wbits, abits, pretrained):
-    """Returns the model specified by input arguments from the Brevitas BNN-PYNQ
-    test networks. Pretrained weights loaded if pretrained is True."""
+def get_test_model_trained(netname, wbits, abits):
+    """The Brevitas BNN-PYNQ test network ``netname`` (``TFC``, ``CNV``, ...) at ``wbits``
+    weight and ``abits`` activation bits, its pretrained weights loaded, in eval mode."""
     from brevitas_examples import bnn_pynq, imagenet_classification  # noqa: PLC0415
 
-    # map of (wbits,abits) -> model
     example_map = {
         ("CNV", 1, 1): bnn_pynq.cnv_1w1a,
         ("CNV", 1, 2): bnn_pynq.cnv_1w2a,
@@ -54,49 +47,7 @@ def get_test_model(netname, wbits, abits, pretrained):
         ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
         ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
     }
-    model_cfg = (netname, wbits, abits)
-    model_def_fxn = example_map[model_cfg]
-    fc = model_def_fxn(pretrained)
-    return fc.eval()
-
-
-def get_test_model_trained(netname, wbits, abits):
-    "get_test_model with pretrained=True"
-    return get_test_model(netname, wbits, abits, pretrained=True)
-
-
-def get_test_model_untrained(netname, wbits, abits):
-    "get_test_model with pretrained=False"
-    return get_test_model(netname, wbits, abits, pretrained=False)
-
-
-def get_example_input(topology):
-    "Get example numpy input tensor for given topology."
-
-    if "fc" in topology:
-        raw_i = get_data("qonnx.data", "onnx/mnist-conv/test_data_set_0/input_0.pb")
-        onnx_tensor = onnx.load_tensor_from_string(raw_i)
-        return nph.to_array(onnx_tensor)
-    elif topology == "cnv":
-        ref = importlib.files("finn.qnn-data") / "cifar10/cifar10-test-data-class3.npz"
-        with importlib.as_file(ref) as fn:
-            input_tensor = np.load(fn)["arr_0"].astype(np.float32)
-        return input_tensor
-    else:
-        raise Exception("Unknown topology, can't return example input")
-
-
-def get_trained_network_and_ishape(topology, wbits, abits):
-    "Return (trained_model, shape) for given BNN-PYNQ test config."
-
-    topology_to_ishape = {
-        "tfc": (1, 1, 28, 28),
-        "lfc": (1, 1, 28, 28),
-        "cnv": (1, 3, 32, 32),
-    }
-    ishape = topology_to_ishape[topology]
-    model = get_test_model_trained(topology.upper(), wbits, abits)
-    return (model, ishape)
+    return example_map[(netname, wbits, abits)](True).eval()
 
 
 def resize_smaller_side(target_pixels, img):

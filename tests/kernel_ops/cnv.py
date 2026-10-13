@@ -37,6 +37,6 @@ def exported(directory: Path) -> ModelWrapper:
     directory.mkdir(parents=True, exist_ok=True)
     trained = get_test_model_trained("CNV", 2, 2)  # type: ignore[no-untyped-call]
     export_qonnx(trained, torch.randn(SHAPE), network, opset_version=13)
-    preprocessing = ToTensor()  # type: ignore[no-untyped-call]
+    preprocessing = ToTensor()
     export_qonnx(preprocessing, torch.randn(SHAPE), directory / PREPROCESSING, opset_version=13)
     return ModelWrapper(str(network))

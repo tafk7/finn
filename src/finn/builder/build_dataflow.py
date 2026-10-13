@@ -107,20 +107,6 @@ def _log_failure(step: str, error: BaseException) -> str:
     return kind
 
 
-def resolve_step_filename(step_name: str, cfg: DataflowBuildConfig, step_delta: int = 0):
-    """The intermediate model file of the step ``step_delta`` places after ``step_name``
-    (for a phase, its first step) in the build's plan (finn.builder.build_dataflow_plan)."""
-    plan = resolve_plan(cfg)
-    return _intermediate_model(cfg, plan, plan.index(step_name) + step_delta)
-
-
-def _intermediate_model(cfg: DataflowBuildConfig, plan: Plan, index: int) -> str:
-    """The intermediate model file of the plan's step at ``index``."""
-    if not 0 <= index < len(plan.steps):
-        raise ValueError(f"no step at {index} of this build's {len(plan.steps)} steps")
-    return cfg.output_dir + "/intermediate_models/%s.onnx" % plan.steps[index].name
-
-
 def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Manifest):
     """Run the plan's steps in order, each with its settings and each log record stamped
     with its step, and record each step's start and end, and the outcome, in the
@@ -143,10 +129,9 @@ def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Mani
                     os.makedirs(intermediate_model_dir, exist_ok=True)
                     model.save("%s/%s.onnx" % (intermediate_model_dir, step.name))
                 manifest.step_ended("completed", time.time() - started)
-            except:  # noqa
-                extype, value, tb = sys.exc_info()
-                kind = _log_failure(step.name, value)
-                manifest.failed(step.name, kind, value)
+            except BaseException as error:
+                kind = _log_failure(step.name, error)
+                manifest.failed(step.name, kind, error)
                 manifest.step_ended("failed", time.time() - started)
                 # The postmortem debugger only where someone can answer it: with stdin not
                 # a terminal (pytest, a batch job) pdb's read would fail and report itself
@@ -156,7 +141,7 @@ def _run_build_steps(model, cfg: DataflowBuildConfig, plan: Plan, manifest: Mani
                 elif sys.stdin is None or not sys.stdin.isatty():
                     _LOG.info("enable_build_pdb_debug set, but stdin is not a terminal, exiting...")
                 else:
-                    pdb.post_mortem(tb)
+                    pdb.post_mortem(error.__traceback__)
                 _LOG.error("Build failed")
                 return -1
     manifest.completed()
@@ -298,7 +283,8 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
                 if cfg.start_step is None:
                     source = model_filename
                 else:
-                    source = _intermediate_model(cfg, plan, plan.run.start - 1)
+                    before = plan.steps[plan.run.start - 1].name
+                    source = cfg.output_dir + "/intermediate_models/%s.onnx" % before
                 _LOG.info("Building dataflow accelerator from %s", source)
                 model = ModelWrapper(source)
                 manifest.identify(model=os.path.abspath(source))

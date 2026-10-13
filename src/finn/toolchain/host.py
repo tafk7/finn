@@ -106,12 +106,6 @@ def settings(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     return {key: value for key, value in values.items() if value}
 
 
-def license_file(values: Mapping[str, str]) -> str | None:
-    """XILINXD_LICENSE_FILE as FlexLM spells it, from a host and a port."""
-    host, port = values.get("FINN_LICENSE_HOST"), values.get("FINN_LICENSE_PORT")
-    return "%s@%s" % (port, host) if host and port else None
-
-
 def license_for(environment: Mapping[str, str], values: Mapping[str, str]) -> str | None:
     """The XILINXD_LICENSE_FILE that ``environment`` lacks, from ``values``, or None.
 
@@ -120,4 +114,5 @@ def license_for(environment: Mapping[str, str], values: Mapping[str, str]) -> st
     """
     if any(environment.get(name) for name in LICENSE_VARIABLES):
         return None
-    return license_file(values)
+    host, port = values.get("FINN_LICENSE_HOST"), values.get("FINN_LICENSE_PORT")
+    return "%s@%s" % (port, host) if host and port else None

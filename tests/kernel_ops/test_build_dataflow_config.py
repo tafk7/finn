@@ -25,7 +25,6 @@ from finn.builder.build_dataflow import (
     build_dataflow_cfg,
     build_dataflow_directory,
     read_build_config,
-    resolve_step_filename,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
@@ -444,15 +443,20 @@ def names(cfg: DataflowBuildConfig) -> list[str]:
     return [step.name for step in plan.steps[plan.run]]
 
 
+def saved_before_start(cfg: DataflowBuildConfig) -> str:
+    """The step whose saved model ``cfg``'s build starts from."""
+    plan = resolve_plan(cfg)
+    name: str = plan.steps[plan.run.start - 1].name
+    return name
+
+
 def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     """A step inside a phase, or a phase: its first step to start from, its last to
     stop after; the build starts from the model the step before saved."""
     inside = {**STATED, "start_step": "step_size_fifos", "stop_step": "step_package_partition"}
     cfg = DataflowBuildConfig.from_json(json.dumps(inside))
     assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
-    assert resolve_step_filename("step_size_fifos", cfg, -1) == (
-        "out/intermediate_models/step_create_dataflow_partition.onnx"
-    )
+    assert saved_before_start(cfg) == "step_create_dataflow_partition"
     phases = {
         **STATED,
         "start_step": "phase_optimize_hardware",
@@ -460,9 +464,7 @@ def test_a_build_starts_and_stops_at_any_step_or_phase() -> None:
     }
     cfg = DataflowBuildConfig.from_json(json.dumps(phases))
     assert names(cfg) == ["step_size_fifos", "step_verify_partition", "step_package_partition"]
-    assert resolve_step_filename("phase_optimize_hardware", cfg, -1) == (
-        "out/intermediate_models/step_create_dataflow_partition.onnx"
-    )
+    assert saved_before_start(cfg) == "step_create_dataflow_partition"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_prepare_model"}))
     assert names(cfg) == [step.__name__ for step in build_dataflow_phases["phase_prepare_model"]]
 
@@ -477,9 +479,7 @@ def test_a_name_the_build_does_not_have_is_refused_naming_its_steps_and_phases()
     )
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding), finding.message) == ("step-absent", "start_step", message)
-    with pytest.raises(ConfigurationRefused) as refused:
-        resolve_step_filename("step_size_fifos", cfg, -1)
-    assert str(refused.value) == f"step-absent: start_step: {message}"
+    assert str(refusal(cfg)) == f"step-absent: start_step: {message}"
     cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "stop_step": "phase_kernel"}))
     (finding,) = refusal(cfg).findings
     assert (finding.code, place(finding)) == ("step-absent", "stop_step")

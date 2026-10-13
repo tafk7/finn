@@ -299,14 +299,14 @@ class Manifest:
     def failed(self, step: str, kind: str, error: BaseException) -> None:
         """Record that the build failed in ``step`` with ``error`` of ``kind``, with a
         refusal's findings by code."""
-        findings = [finding_record(each) for each in getattr(error, "findings", ())]
+        codes = Counter(each.code for each in getattr(error, "findings", ()))
         with self._lock:
             self.state["outcome"] = {
                 "status": "failed",
                 "step": step,
                 "kind": kind,
                 "error": {"type": type(error).__name__, "message": str(error)},
-                "findings": findings_by_code({"findings": findings}),
+                "findings": dict(sorted(codes.items())),
             }
             self.write()
 
