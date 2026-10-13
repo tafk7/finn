@@ -68,7 +68,7 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import design_digest, partition_body
 from finn.core.space import Finding, FindingKind, finding_record
-from finn.platform import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
+from finn.platform.shells import VIVADO_BLOCK_DESIGN, ShellRow, shell_row
 from finn.shells.pynq import iodma, templates
 from finn.shells.pynq.ipgen import (
     create_stitched_ip,

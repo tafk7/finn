@@ -63,7 +63,7 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.configure import describe
-from finn.kernels.target import Target
+from finn.platform.target import Target
 
 if TYPE_CHECKING:
     from onnx import NodeProto

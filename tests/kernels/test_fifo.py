@@ -15,7 +15,7 @@ from finn.core.space import Available, QueryResult, Rejected, Unresolved, design
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
-from finn.kernels.utilization import Fabric
+from finn.platform.capabilities import Fabric
 from kernels.helpers import FULL_DSP48E2
 
 T = TypeVar("T")

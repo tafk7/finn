@@ -156,7 +156,7 @@ whether an UltraRAM takes initial contents) is the rule for Vivado's
 does not have is refused, `unknown-part`, with close names and none chosen.
 
 ```python
-from finn.platform import device, part
+from finn.platform.catalog import device, part
 
 found = part("xcvu9p-flga2104-2L-e")
 found.device.resources      # the device's totals: the sum of its SLRs'

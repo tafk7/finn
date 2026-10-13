@@ -133,8 +133,8 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, member_of
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import Sized, size
-from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCE_NAMES, Resources, binding, over, ratio, total
+from finn.kernels.utilization import binding, over, ratio, total
+from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
 
 S = TypeVar("S", bound=Space)
 T = TypeVar("T")

@@ -46,8 +46,7 @@ sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.target import DspBlock, Platform
-from finn.kernels.utilization import Fabric
+from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.base import Kernel
@@ -81,6 +80,7 @@ from qonnx.core.datatype import DataType
 assert (installed / "finn/kernels/py.typed").is_file()
 assert (installed / "finn/core/space/py.typed").is_file()
 assert (installed / "finn/dataflow/py.typed").is_file()
+assert (installed / "finn/platform/py.typed").is_file()
 assert "finn.dataflow.datatypes" in sys.modules
 PLATFORM = Platform(
     period_ns=5.0,
@@ -279,6 +279,7 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
             "finn/kernels/py.typed",
             "finn/core/space/py.typed",
             "finn/dataflow/py.typed",
+            "finn/platform/py.typed",
             "finn/dataflow/datatypes.py",
             "finn/dataflow/traversal.py",
             "finn/kernels/artifacts/module.py",

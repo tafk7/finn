@@ -45,9 +45,9 @@ from finn.harness.reference import (
     observe,
     platform_rows,
 )
-from finn.kernels.target import DspBlock
-from finn.platform import IP, PYNQ, shell_row
 from finn.platform.architectures import RULES
+from finn.platform.capabilities import DspBlock
+from finn.platform.shells import IP, PYNQ, shell_row
 from finn.util.draws import drawn_inputs
 from kernel_ops.models import TARGET
 from kernel_ops.specs import SPECS, matmul, thresholding

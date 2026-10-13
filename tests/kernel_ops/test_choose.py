@@ -27,7 +27,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.configure import undecided
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
-from finn.kernels.target import Target
+from finn.platform.target import Target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,

@@ -39,7 +39,7 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
-from finn.platform import resolve_target
+from finn.platform.resolve import resolve_target
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.driver import (
     DRIVER_DIR,

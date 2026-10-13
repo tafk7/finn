@@ -6,7 +6,7 @@
 Every exploration and packaging of KernelOps reads one root, built by
 ``shell_root(model, nodes)`` straight from the nodes and the model's target, which
 changes no graph. Its shell is the target's (``read_target``): the root reads that
-shell's row for the target's board (``finn.platform.shell_row``), which states its ends
+shell's row for the target's board (``finn.platform.shells.shell_row``), which states its ends
 and budgets.
 
 - **channels**, one per ONNX tensor, in node order, each declared from the graph
@@ -144,10 +144,10 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, member_of, undecided
 from finn.kernels.ends import END, EndContract, EndOffer
 from finn.kernels.explore import Seam
-from finn.kernels.target import Platform
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
+from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.kernels.values.semantics import IntegerTensorValue
-from finn.platform import ShellRow, shell_row
+from finn.platform.capabilities import Platform, Resources
+from finn.platform.shells import ShellRow, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper

@@ -26,9 +26,13 @@ finn.core.space, the draws, the executors  <-  finn.analysis  <-  the flow
 finn.kernels, finn.platform, finn.toolchain, finn.util  <-  finn.platform.generate (the
                                                             catalog generator; nothing
                                                             imports it)
+finn.platform.capabilities  <-  finn.kernels, and every row above them
 ```
 
-Each row imports every row to its left: FINN's view of the ONNX model (finn.core.graph:
+Each row imports every row to its left. The platform's capabilities
+(finn.platform.capabilities: what a target gives kernels, plain data) sit beside the
+engine and the values, below the kernels; the rest of finn.platform, the registry with
+the build's target, sits above them. FINN's view of the ONNX model (finn.core.graph:
 its metadata, the facts a graph states of a tensor, the walks over its dataflow) reads
 the kernels' values and types, the XSim testbench
 (finn.core.rtlsim_bench, with finn.core.rtlsim_pacing) builds and simulates a kernel
@@ -89,10 +93,10 @@ class Layer:
     also: tuple[str, ...] = ()
 
 
-# The kernel stack: the engine, the values, the module build values, the kernels.
-# The engine and the values are independent: the kernels are the first layer to
-# use both.
-_KERNEL_STACK = ("space", "dataflow", "kernels.artifacts", "kernels")
+# The kernel stack: the engine, the values, the module build values, the platform's
+# capabilities, the kernels. The engine and the values are independent: the kernels are
+# the first layer to use both.
+_KERNEL_STACK = ("space", "dataflow", "kernels.artifacts", "platform.capabilities", "kernels")
 
 LAYERS: tuple[Layer, ...] = (
     # The generic Space engine: the standard library and its native dependency.
@@ -102,21 +106,31 @@ LAYERS: tuple[Layer, ...] = (
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
     Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
+    # What a target gives kernels: its clock, DSP block, fabric and resource units. Plain
+    # data, the standard library only.
+    Layer("platform.capabilities", ("finn.platform.capabilities",), (), (), "tests/kernels"),
     # Kernels bound to RTL/HLS sources. They never read an ONNX graph. One module of
     # util: the resource store (standard library only), where an input_gen's buffer
     # is read from FinnLib's RTL as FINN resolves FinnLib (decision FS6).
     Layer(
         "kernels",
         ("finn.kernels",),
-        ("space", "dataflow", "kernels.artifacts"),
+        ("space", "dataflow", "kernels.artifacts", "platform.capabilities"),
         ("qonnx.core.datatype", "numpy", "pyslang"),
         "tests/kernels",
         also=("finn.resources",),
     ),
-    # The platform registry: parts, boards and shell rows, resolved to the capabilities
-    # kernels read. The shell root reads its shell's row. A refusal carries its finding
-    # (the engine's reason type).
-    Layer("platform", ("finn.platform",), ("space", "kernels"), (), "tests/kernel_ops"),
+    # The platform registry: parts, boards and shell rows, resolved to the build's target
+    # (finn.platform.target), the capabilities kernels read with the part, shell and
+    # board. The shell root reads its shell's row. A refusal carries its finding (the
+    # engine's reason type).
+    Layer(
+        "platform",
+        ("finn.platform",),
+        ("space", "platform.capabilities", "kernels"),
+        (),
+        "tests/kernel_ops",
+    ),
     # What is read of a partition and what a build made of it (finn.outputs): below both
     # its writers (the cut, PackagePartition) and its readers (the channel's annotation,
     # whose choices a partition's body states; the builder, the integration export, the
@@ -198,7 +212,7 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "platform.generate",
         ("finn.platform.generate",),
-        ("kernels", "platform", "toolchain", "util"),
+        ("platform.capabilities", "kernels", "platform", "toolchain", "util"),
         (),
         "tests/kernel_ops",
     ),

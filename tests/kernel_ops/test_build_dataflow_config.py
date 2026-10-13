@@ -45,7 +45,8 @@ from finn.builder.build_dataflow_steps import (
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.space import Finding, FindingKind
-from finn.platform import TargetRequest, resolve_target
+from finn.platform.request import TargetRequest
+from finn.platform.resolve import resolve_target
 from finn.toolchain import launcher
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config

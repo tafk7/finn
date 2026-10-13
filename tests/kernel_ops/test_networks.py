@@ -37,7 +37,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.harness.ops import check_parity
 from finn.harness.reference import OpSpec
-from finn.platform import TargetRequest
+from finn.platform.request import TargetRequest
 from finn.util.draws import boundary_inputs, graph_inputs
 from kernel_ops.models import TARGET
 from kernel_ops.specs import conv, matmul, thresholding

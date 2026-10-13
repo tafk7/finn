@@ -81,7 +81,7 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
-from finn.platform import refuse_drift
+from finn.platform.resolve import refuse_drift
 from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile

@@ -76,7 +76,9 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.explore import Ranked
-from finn.platform import TargetRefused, TargetRequest, resolve_target
+from finn.platform.refusal import TargetRefused
+from finn.platform.request import TargetRequest
+from finn.platform.resolve import resolve_target
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.ipgen import prepare_ip
 from finn.shells.pynq.runner import (

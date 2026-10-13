@@ -48,8 +48,9 @@ from finn.kernels.explore import (
 )
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.utilization import RESOURCE_NAMES, Resources, total
+from finn.kernels.utilization import total
 from finn.kernels.values.domains import stored_element
+from finn.platform.capabilities import RESOURCE_NAMES, Resources
 from kernels import chain
 from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, Root
 

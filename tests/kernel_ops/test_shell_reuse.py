@@ -33,7 +33,8 @@ from finn.custom_op.kernels.shell import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.configure import commit
-from finn.platform import resolve_target, shell_row
+from finn.platform.resolve import resolve_target
+from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import (
     INT3,

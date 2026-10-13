@@ -24,7 +24,7 @@ from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
 from finn.dataflow.gemm import Form
 from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.abi import abi_pins
-from finn.kernels.target import DspBlock
+from finn.platform.capabilities import DspBlock
 from finn.toolchain.launcher import host_toolchain
 from kernels.helpers import WeightDelivery, full_platform, matmul_assembly
 from kernels.sweeps.rtl_transport import drive_observed

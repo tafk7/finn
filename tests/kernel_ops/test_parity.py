@@ -66,7 +66,8 @@ from finn.harness.ops import Disagreement, check_parity
 from finn.harness.points import Covering, covering
 from finn.harness.reference import platform_rows
 from finn.kernels.configure import commit
-from finn.kernels.target import DspBlock, Target
+from finn.platform.capabilities import DspBlock
+from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.cut import BaselineChoices
 from finn.util.draws import Integers, boundary_inputs, graph_inputs

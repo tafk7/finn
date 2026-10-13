@@ -105,7 +105,7 @@ from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.configure import member_of
 from finn.kernels.ends import EndContract
-from finn.kernels.utilization import Resources
+from finn.platform.capabilities import Resources
 from finn.resources import finnlib_root
 from finn.toolchain import vivado, xsim
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain

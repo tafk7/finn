@@ -2,17 +2,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The one resolution of a build target: a part or a board, a clock period and a shell
-to the ``finn.kernels.target.Target`` its kernels are built for."""
+to the ``finn.platform.target.Target`` its kernels are built for."""
 
 from __future__ import annotations
 
 from dataclasses import fields
 
-from finn.kernels.target import Platform, Target
 from finn.platform.boards import BOARDS
+from finn.platform.capabilities import Platform
 from finn.platform.catalog import part as catalog_part
 from finn.platform.refusal import TargetRefused
 from finn.platform.shells import IP, built_shell, shell_row
+from finn.platform.target import Target
 
 
 def resolve_target(

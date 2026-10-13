@@ -72,15 +72,13 @@ from finn.kernels.artifacts.module import Held
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
-    Fabric,
     Fit,
-    Resources,
     auto_unstated,
     memory,
     memory_styles,
+    uram_requirements,
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
@@ -93,6 +91,7 @@ from finn.kernels.values.semantics import (
     integer_shape,
     row_major,
 )
+from finn.platform.capabilities import Fabric, Platform, Resources
 
 LANE = Index("lane")
 """The lanes of a stored word, one per lane of the consumer's form."""

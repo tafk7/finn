@@ -25,8 +25,8 @@ from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.custom_op.kernels.shell import ShellRoot, persist, save_channels, shell_root
 from finn.kernels.configure import undecided
-from finn.kernels.target import Target
-from finn.platform import resolve_target
+from finn.platform.resolve import resolve_target
+from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
 DOMAIN = "finn.custom_op.kernels"

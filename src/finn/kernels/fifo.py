@@ -37,8 +37,8 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
-from finn.kernels.target import Platform, uram_requirements
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fabric, Resources, lutram, memory
+from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_requirements
+from finn.platform.capabilities import Fabric, Platform, Resources
 
 
 @dataclass(frozen=True)

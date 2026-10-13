@@ -70,11 +70,11 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Reorder
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.input_generator import GeometryError, InputGeneratorKernel, nest_geometry
-from finn.kernels.target import Platform
 from finn.kernels.transport import StreamContract
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Resources, total
+from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 from finn.kernels.vpc import VpcKernel
+from finn.platform.capabilities import Platform, Resources
 
 
 @dataclass(frozen=True)

@@ -92,7 +92,6 @@ from finn.dataflow.traversal import require_positive
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.target import Platform
 from finn.kernels.values.domains import admit_element, range_dtype, values_within
 from finn.kernels.values.semantics import (
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -102,6 +101,7 @@ from finn.kernels.values.semantics import (
     integer_shape,
     integers,
 )
+from finn.platform.capabilities import Platform
 
 _CARRIED = (
     ("x_channel", "activation_tensor"),

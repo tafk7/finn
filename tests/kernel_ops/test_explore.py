@@ -41,8 +41,8 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
-from finn.kernels.utilization import Resources
-from finn.platform import resolve_target
+from finn.platform.capabilities import Resources
+from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
     InferKernelTensors,

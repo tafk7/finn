@@ -48,10 +48,10 @@ from finn.kernels.artifacts.hls import axis_type
 from finn.kernels.base import Kernel, factor_domain
 from finn.kernels.channels import Channel
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform
 from finn.kernels.transport import AxisSpelling
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.platform.capabilities import Platform
 
 oh, ow, c, kh, kw = (Index(name) for name in ("oh", "ow", "c", "kh", "kw"))
 

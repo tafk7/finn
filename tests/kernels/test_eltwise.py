@@ -14,7 +14,7 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.target import DspBlock, Platform
+from finn.platform.capabilities import DspBlock, Platform
 from kernels.helpers import eltwise
 from kernels.specs.eltwise import computed
 from kernels.sweeps import eltwise_numeric

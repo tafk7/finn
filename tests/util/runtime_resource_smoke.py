@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from finn.platform import resolve_target
+from finn.platform.resolve import resolve_target
 from finn.shells.pynq import templates
 from finn.shells.pynq.driver import write_pynq_driver_support
 from finn.shells.pynq.ipgen import data_path as shell_data_path

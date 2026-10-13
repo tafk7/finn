@@ -77,10 +77,10 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
-from finn.kernels.target import DspBlock, Platform, dsp_widths
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit, Resources
+from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.kernels.values.domains import Integer, range_dtype
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
+from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
 # FINN's DSP58 chain timing model (rtl/matrixvectoractivation_rtl.py).

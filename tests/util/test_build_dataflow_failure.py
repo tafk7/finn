@@ -24,7 +24,7 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.core.space import Finding, FindingKind
-from finn.platform import TargetRequest
+from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import SELECTED_BY, ToolFailed, ToolUnavailable
 from finn.util.basic import make_build_dir
 

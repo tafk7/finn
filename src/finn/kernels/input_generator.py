@@ -58,18 +58,17 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel
 from finn.kernels.port import WordPort
-from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.transport import MarkerKind, StreamMarker
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
-    Fabric,
     Fit,
-    Resources,
     auto_unstated,
     memory,
     memory_styles,
+    uram_requirements,
 )
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
+from finn.platform.capabilities import Fabric, Platform, Resources
 
 SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",))
 

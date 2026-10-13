@@ -97,14 +97,12 @@ from finn.kernels.base import CLOCK, RESET, Kernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.target import Platform, uram_requirements
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
-    Fabric,
     Fit,
-    Resources,
     auto_unstated,
     memory,
+    uram_requirements,
 )
 from finn.kernels.values.domains import Integer, set_index_dtype
 from finn.kernels.values.semantics import (
@@ -112,6 +110,7 @@ from finn.kernels.values.semantics import (
     THRESHOLD_TABLE,
     ThresholdTable,
 )
+from finn.platform.capabilities import Fabric, Platform, Resources
 
 c = Index("c")
 

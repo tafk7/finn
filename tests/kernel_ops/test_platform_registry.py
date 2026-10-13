@@ -16,21 +16,16 @@ from finn.core.space import FindingKind, Rejected, design_space
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import DspBlock, Platform, Target
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.utilization import Fabric, Resources
-from finn.platform import (
-    BOARDS,
-    ROWS,
-    TargetRefused,
-    TargetRequest,
-    part,
-    refuse_drift,
-    resolve_target,
-    shell_row,
-)
 from finn.platform.architectures import rule
-from finn.platform.shells import PYNQ_CONTROL_BUDGET, ZYNQ_STATIC_REGION
+from finn.platform.boards import BOARDS
+from finn.platform.capabilities import DspBlock, Fabric, Platform, Resources
+from finn.platform.catalog import part
+from finn.platform.refusal import TargetRefused
+from finn.platform.request import TargetRequest
+from finn.platform.resolve import refuse_drift, resolve_target
+from finn.platform.shells import PYNQ_CONTROL_BUDGET, ROWS, ZYNQ_STATIC_REGION, shell_row
+from finn.platform.target import Target
 from finn.shells.pynq.templates import custom_zynq_shell_template
 
 #: Each PYNQ board's part, DSP block and native AXI port width, as the deleted HWCustomOp

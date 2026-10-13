@@ -17,9 +17,9 @@ from finn.dataflow.traversal import Traversal
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.target import Platform
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
+from finn.platform.capabilities import Platform
 from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
 
 ELEMENT = ScalarEncoding(DataType["INT4"])

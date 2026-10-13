@@ -40,8 +40,8 @@ from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root, shell_root
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
-from finn.kernels.utilization import Resources
-from finn.platform import TargetRequest
+from finn.platform.capabilities import Resources
+from finn.platform.request import TargetRequest
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
     RECORDS,
