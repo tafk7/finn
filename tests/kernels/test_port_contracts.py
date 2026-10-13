@@ -251,8 +251,9 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
     assert codes(point.query("w", NETLIST)) == {"dtype-family"}
 
 
-def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
-    """An ADD between boundary channels: lhs (3, 4), rhs of ``rhs_shape``, PE 2."""
+def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4", pe: int | None = 2) -> Any:
+    """An ADD between boundary channels: lhs (3, 4), rhs of ``rhs_shape``, its PE ``pe``
+    (committed where given)."""
     int4 = DataType["INT4"]
 
     lhs_tensor = Tensor((3, 4), ScalarEncoding(int4))
@@ -281,7 +282,6 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
             ),
             "add": EltwiseKernel(
                 operation="ADD",
-                pe=2,
                 b_scale=1.0,
                 platform=FULL_DSP58,
                 lhs_tensor=lhs_tensor,
@@ -289,7 +289,7 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4") -> Any:
             ),
         }
     )
-    return with_direct_transports(network)
+    return with_direct_transports(network if pe is None else choose(network, {"add.pe": pe}))
 
 
 def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
@@ -308,7 +308,7 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
 
 def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     # A channel vector of another length disagrees with lhs on the channels.
-    misshaped = eltwise_between((3,))
+    misshaped = eltwise_between((3,), pe=None)  # no PE divides what the extents refuse
     refused = misshaped.member("add").query(EltwiseKernel.extents)
     assert isinstance(refused, Rejected)
     assert {(finding.code, finding.message) for finding in refused.findings} == {

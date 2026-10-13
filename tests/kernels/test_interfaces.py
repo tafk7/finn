@@ -74,9 +74,6 @@ class Activated(Root):
         threshold_dtype=R,
         thresholds=THRESHOLDS,
         bias=0,
-        pe=1,
-        ram_style="auto",
-        ultra_stages=0,
         input_tensor=RESULT_TENSOR,
         control=config,
         platform=FULL_DSP48E2,
@@ -91,6 +88,9 @@ def activated(*, writable: bool):
                 Activated.compute.simd: SIMD,
                 Activated.compute.compute_pumping: False,
                 Activated.compute.reducer: "tree",
+                Activated.activate.pe: 1,
+                Activated.activate.ultra_stages: 0,
+                Activated.activate.ram_style: "auto",
                 Activated.activate.use_axilite: writable,
                 Activated.activate.deep_pipeline: False,
             }
@@ -143,9 +143,6 @@ def test_writable_thresholds_without_a_control_bus_are_not_offered():
             threshold_dtype=R,
             thresholds=THRESHOLDS,
             bias=0,
-            pe=1,
-            ram_style="auto",
-            ultra_stages=0,
             input_tensor=RESULT_TENSOR,
             platform=FULL_DSP48E2,
         )
@@ -209,9 +206,6 @@ def test_several_threshold_sets_take_a_set_selector_stream():
             threshold_dtype=R,
             thresholds=two_sets,
             bias=0,
-            pe=1,
-            ram_style="auto",
-            ultra_stages=0,
             input_tensor=RESULT_TENSOR,
             set_tensor=sets,
             platform=FULL_DSP48E2,
@@ -231,7 +225,13 @@ def test_several_threshold_sets_take_a_set_selector_stream():
         activate = thresholding(selectors)
 
     point = with_direct_transports(design_space(Selected())).with_choices(
-        {Selected.activate.use_axilite: False, Selected.activate.deep_pipeline: False}
+        {
+            Selected.activate.pe: 1,
+            Selected.activate.ultra_stages: 0,
+            Selected.activate.ram_style: "auto",
+            Selected.activate.use_axilite: False,
+            Selected.activate.deep_pipeline: False,
+        }
     )
     assert isinstance(point.sets.query(Channel.netlist), Available)
     assert point.sets.endpoints.sink.transport.name == "s_axis_set"
@@ -244,6 +244,9 @@ def test_several_threshold_sets_take_a_set_selector_stream():
         )
         activate = thresholding(short)
 
-    refused = with_direct_transports(design_space(Short())).sets.query(Channel.netlist)
+    short_point = with_direct_transports(design_space(Short())).with_choices(
+        {Short.activate.pe: 1, Short.activate.ultra_stages: 0, Short.activate.ram_style: "auto"}
+    )
+    refused = short_point.sets.query(Channel.netlist)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"threshold-set-channel"}

@@ -506,16 +506,18 @@ def eltwise(
     shape: tuple[int, ...] = (2, 6),
 ) -> EltwiseKernel:
     """An elementwise kernel's design space on two ``shape`` operands, on a platform of
-    ``target``."""
-    return design_space(
-        EltwiseKernel(
-            operation=operation,
-            pe=pe,
-            lhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(lhs))),
-            rhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(rhs))),
-            b_scale=scale,
-            platform=full_platform(target),
-        )
+    ``target``, its ``pe`` committed."""
+    return commit(
+        design_space(
+            EltwiseKernel(
+                operation=operation,
+                lhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(lhs))),
+                rhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(rhs))),
+                b_scale=scale,
+                platform=full_platform(target),
+            )
+        ),
+        {"pe": pe},
     )
 
 

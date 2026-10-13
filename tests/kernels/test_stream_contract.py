@@ -536,7 +536,6 @@ def eltwise_with_constant(form=None):
             ),
             "add": EltwiseKernel(
                 operation="ADD",
-                pe=PE,
                 b_scale=1.0,
                 platform=FULL_DSP58,
                 lhs_tensor=x_tensor,
@@ -544,7 +543,9 @@ def eltwise_with_constant(form=None):
             ),
         }
     )
-    chosen = choose(network, {"rhs.ram_style": "distributed", "rhs.pumped_memory": False})
+    chosen = choose(
+        network, {"add.pe": PE, "rhs.ram_style": "distributed", "rhs.pumped_memory": False}
+    )
     return with_direct_transports(chosen)
 
 

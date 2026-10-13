@@ -76,8 +76,8 @@ Y_TENSOR = result(W2, LEVELS)
 
 
 def network(hidden: Tensor = HIDDEN_TENSOR) -> Network:
-    """The Chain, nothing chosen (``members``)."""
-    return Network(members(hidden))
+    """The Chain (``members``), nothing chosen but the thresholding's fixed ``PE``."""
+    return choose(Network(members(hidden)), {"activate.pe": PE})
 
 
 def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
@@ -131,7 +131,6 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
                 threshold_dtype=THRESHOLD_DTYPE,
                 thresholds=THRESHOLDS,
                 bias=0,
-                pe=PE,
                 input_tensor=hidden,
                 platform=platform,
             ),
@@ -139,6 +138,9 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
         }
     )
 
+
+HELD = {("activate", "pe"): PE}
+"""The thresholding's fixed PE, which a test's seam holds: no strategy folds it."""
 
 LAYERS = (("first", "w1"), ("second", "w2"))
 """Each MatMul of the Chain and its weight channel."""
