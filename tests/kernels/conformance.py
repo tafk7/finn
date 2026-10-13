@@ -6,12 +6,13 @@
 ``conformance`` checks one kernel over sampled folding configurations. For
 each sample it
 
-1. places the kernel in a generated ``Root`` between boundary channels, one
+1. places the kernel (``kernel``) in a network between boundary channels, one
    per stream interface: a channel named ``<interface>_channel`` carries the
    tensor given to the kernel as ``<interface>_tensor`` and takes the end it
    presents, ``<interface>_end``. It commits the sample's factors and the pinned
-   ``choices``, and the memories of the adapter chains (each chain forced);
-2. checks each of the kernel's leaves in the root's module (the kernel, or
+   ``choices``, then the channels' transports and the memories of the adapter
+   chains (each chain forced). The module is named ``finn_<kernel>conformance``;
+2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources
    under the declared parameter binding (``artifacts.rtl.extract``, then the
    comparison ``check_abi`` makes, on the one extraction): a refusal fails; a
@@ -63,10 +64,12 @@ that element all the same.
 
 ``reference`` maps named input arrays to named output arrays.
 
-A fact given as a ``ControlPort`` is a ``ControlBus`` the root declares on that
-port, given to the kernel's input of the fact's name: the kernel's control bus
-is presented at the top, and in simulation written with what the kernel's
-configuration declares (its register map) before any stream starts.
+A fact given as a ``ControlPort`` is a ``ControlBus`` on that port, given to the
+kernel's input of the fact's name: the kernel's control bus is presented at the
+top, and in simulation written with what the kernel's configuration declares (its
+register map) before any stream starts. A network does not place a control bus
+yet, so such a sample is one ``Root``, its bus, its channels and its kernel, until a
+kernel presents its control itself.
 
 ``known`` names the (sample label, mode) simulations a known defect makes fail,
 each with its reason. It is strict: one of them passing fails the check, as
@@ -96,7 +99,6 @@ from finn.core.space import (
     Param,
     QueryResult,
     RequestError,
-    Space,
     design_space,
     inspection,
 )
@@ -123,10 +125,19 @@ from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit, describe, undecided
 from finn.kernels.control import ControlBus
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import Interface, Network, dotted, wire
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import StreamContract
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, Root, with_adapter_memories, with_direct_transports
+from kernels.helpers import (
+    FULL_DSP48E2,
+    Root,
+    choose,
+    cycles_of,
+    module_of,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 KERNEL, SOURCE = "kernel", "source"
 MODES = ("free", "stalled")
@@ -190,7 +201,7 @@ def conformance(
         point = place(
             space_type, sample, inputs, outputs, choices=choices, facts=facts, values=values
         )
-        module = _value(point.query(type(point).module), space_type, sample)
+        module = _value(design_module(point, space_type), space_type, sample)
         with tempfile.TemporaryDirectory() as scratch:
             for label, leaf in _kernel_leaves(module):
                 _check_rtl(space_type, sample, label, leaf, Path(scratch) / label, xsim is not None)
@@ -266,15 +277,32 @@ def _label(config: Mapping[str, object]) -> str:
     return ", ".join(f"{key}={short(value)}" for key, value in config.items()) or "defaults"
 
 
-def _candidates(point: Space, key: str) -> tuple[object, ...]:
-    reference = {info.key: info.reference for info in inspection.decisions(point)}[key]
-    found = point.field(reference).candidates()
+def _candidates(point: Any, key: str) -> tuple[object, ...]:
+    """The candidates of the kernel's Decision ``key`` (``kernel.<key>``) on a design."""
+    if isinstance(point, Network):
+        kernel, key = point.member(KERNEL), key[len(KERNEL) + 1 :]
+    else:
+        kernel = point
+    reference = {info.key: info.reference for info in inspection.decisions(kernel)}[key]
+    found = kernel.field(reference).candidates()
     assert isinstance(found, Available) and found.value, f"{key} has no candidates: {found}"
     return tuple(found.value)
 
 
+def _keys(base: Any) -> tuple[set[str], list[str], list[str]]:
+    """A design's selectors, its open choices in rank order, and the kernel's undecided
+    choices, each by ``member.key``."""
+    if isinstance(base, Network):
+        selectors = {dotted(key) for key, info in base.decisions().items() if info.selector}
+        ranked = [dotted(key) for key, _ in base.viable()]
+        open_ = [dotted(key) for key in base.undecided() if key[0] == KERNEL]
+        return selectors, ranked, open_
+    selectors = {info.key for info in inspection.decisions(base) if info.selector}
+    return selectors, [item.key for item in inspection.viable(base)], undecided(base, f"{KERNEL}.*")
+
+
 def _enumerated(
-    base: Space, factors: str, choices: Mapping[str, object]
+    base: Any, factors: str, choices: Mapping[str, object]
 ) -> list[tuple[str, dict[str, object]]]:
     """Configurations of the kernel's open scalar Decisions, each committed in turn.
 
@@ -282,10 +310,9 @@ def _enumerated(
     cases read another, as pumping reads SIMD, is committed after it); a pinned choice is
     not part of a configuration.
     """
-    selectors = {info.key for info in inspection.decisions(base) if info.selector}
-    ranked = [item.key for item in inspection.viable(base)]
+    selectors, ranked, open_ = _keys(base)
     keys = sorted(
-        (key for key in undecided(base, f"{KERNEL}.*") if key not in selectors),
+        (key for key in open_ if key not in selectors),
         key=lambda key: ranked.index(key) if key in ranked else len(ranked),
     )
     local = len(KERNEL) + 1
@@ -295,7 +322,7 @@ def _enumerated(
         for key in keys:
             pinned = key[local:] in choices
             value = choices[key[local:]] if pinned else choose(_candidates(point, key))
-            point = commit(point, {key: value})
+            point = _chosen(point, {key: value})
             if not pinned:
                 config[key[local:]] = value
         return config
@@ -308,16 +335,16 @@ def _enumerated(
         ]
     every: list[dict[str, object]] = []
 
-    def walk(point: Space, config: dict[str, object], rest: list[str]) -> None:
+    def walk(point: Any, config: dict[str, object], rest: list[str]) -> None:
         if not rest:
             every.append(config)
             return
         key = rest[0][local:]
         if key in choices:
-            walk(commit(point, {rest[0]: choices[key]}), config, rest[1:])
+            walk(_chosen(point, {rest[0]: choices[key]}), config, rest[1:])
             return
         for value in _candidates(point, rest[0]):
-            walk(commit(point, {rest[0]: value}), {**config, key: value}, rest[1:])
+            walk(_chosen(point, {rest[0]: value}), {**config, key: value}, rest[1:])
 
     walk(base, {}, keys)
     return [(_label(config), config) for config in every]
@@ -348,6 +375,11 @@ def _ports(space_type: type[Kernel]) -> dict[str, str]:
     return found
 
 
+def _stem(space_type: type[Kernel]) -> str:
+    """A sample's module's stem: ``<kernel>conformance``, lower case."""
+    return f"{space_type.__name__}Conformance".lower()
+
+
 def _design(
     space_type: type[Kernel],
     inputs: Mapping[str, Tensor],
@@ -355,8 +387,49 @@ def _design(
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """A root of the kernel on one channel per tensor, each taking the kernel's end at
-    its interface; ``fed``'s channel from a memory."""
+    """A network of the kernel on one channel per tensor, each taking the kernel's end at
+    its interface; ``fed``'s channel from a memory (``source``). With a ``ControlPort``
+    fact, a ``Root`` (``_rooted``)."""
+    if any(isinstance(value, ControlPort) for value in facts.values()):
+        return _rooted(space_type, inputs, outputs, facts, fed)
+    members: dict[str, Any] = {}
+    tensors = {**inputs, **outputs}
+    for name, tensor in tensors.items():
+        side = "consumer" if name in inputs else "producer"
+        settings: dict[str, Any] = {side: Interface(KERNEL, f"{_interface(name)}_end")}
+        if fed is not None and fed[0] == name:
+            settings["producer"] = Interface(SOURCE, "output_end")
+        else:
+            settings["port"] = name
+        members[name] = wire(tensor=tensor, platform=FULL_DSP48E2, **settings)
+    given = {f"{_interface(name)}_tensor": tensor for name, tensor in tensors.items()}
+    members[KERNEL] = space_type(**facts, **given)
+    if fed is not None:
+        name, form, contents = fed
+        members[SOURCE] = _source(tensors[name], form, contents)
+    return Network(members)
+
+
+def _source(tensor: Tensor, form: Traversal, contents: object) -> MemStreamKernel:
+    """The memory that feeds the adapter sample's first input."""
+    return MemStreamKernel(
+        dtype=tensor.element.dtype,
+        form=form,
+        contents=contents,
+        output_tensor=tensor,
+        platform=FULL_DSP48E2,
+    )
+
+
+def _rooted(
+    space_type: type[Kernel],
+    inputs: Mapping[str, Tensor],
+    outputs: Mapping[str, Tensor],
+    facts: Mapping[str, object],
+    fed: tuple[str, Traversal, object] | None = None,
+) -> Any:
+    """A ``Root`` of the kernel on one channel per tensor and on the ``ControlBus`` each
+    ``ControlPort`` fact names: a network places no control bus yet."""
     namespace: dict[str, object] = {}
     # A node is placed once: each design declares its own control bus.
     facts = {
@@ -379,20 +452,54 @@ def _design(
     namespace[KERNEL] = space_type(**facts, **given)
     if fed is not None:
         name, form, contents = fed
-        namespace[SOURCE] = MemStreamKernel(
-            dtype=tensors[name].element.dtype,
-            form=form,
-            contents=contents,
-            output_tensor=tensors[name],
-            platform=FULL_DSP48E2,
-        )
+        namespace[SOURCE] = _source(tensors[name], form, contents)
     return design_space(type(f"{space_type.__name__}Conformance", (Root,), namespace)())
+
+
+def design_member(design: Any, name: str) -> Any:
+    """Member ``name`` of a design: a network's, or a root's."""
+    return design.member(name) if isinstance(design, Network) else getattr(design, name)
+
+
+def design_module(design: Any, space_type: type[Kernel]) -> QueryResult[Any]:
+    """A design's module, ``finn_<kernel>conformance``."""
+    if isinstance(design, Network):
+        return module_of(design, _stem(space_type))
+    found: QueryResult[Any] = design.query(type(design).module)
+    return found
+
+
+def design_cycles(design: Any) -> QueryResult[Any]:
+    """The most cycles a frame a member of a design takes."""
+    if isinstance(design, Network):
+        return cycles_of(design)
+    found: QueryResult[Any] = design.query(type(design).cycles)
+    return found
+
+
+def kernel_space(design: Any) -> tuple[Any, str, str]:
+    """Where a design's kernel's own Decisions are read: a network's kernel, every key its
+    own, named ``kernel.<key>`` (the prefix); or a root, its keys ``kernel.*``."""
+    if isinstance(design, Network):
+        return design.member(KERNEL), "*", f"{KERNEL}."
+    return design, f"{KERNEL}.*", ""
+
+
+def configured(design: Any, choices: Mapping[str, object]) -> Any:
+    """A design with ``choices`` (``member.key``) committed, its channels' transports and
+    adapters' memories then given their baselines."""
+    return with_adapter_memories(with_direct_transports(_chosen(design, choices)))
+
+
+def _chosen(design: Any, choices: Mapping[str, object]) -> Any:
+    """A design with ``choices`` (``member.key``) committed."""
+    return choose(design, choices) if isinstance(design, Network) else commit(design, choices)
 
 
 def _user(point: Any, name: str) -> str:
     """The path below the kernel of the port on channel ``name``: a member of a leaf
     kernel (``input``), or a child's below a kernel with children (``compute.packed.x``)."""
-    ends = getattr(point, name).endpoints
+    ends = design_member(point, name).endpoints
     for owner in (ends.source_owner, ends.sink_owner):
         if owner is not None and owner.startswith(f"{KERNEL}."):
             return str(owner[len(KERNEL) + 1 :])
@@ -425,7 +532,7 @@ def _stated(
         probe = _design(space_type, inputs, {}, facts)
     except DefinitionError as error:
         raise ValueError(f"{space_type.__name__} is not built without {name}; {hint}") from error
-    node = getattr(getattr(probe, KERNEL), port)
+    node = getattr(design_member(probe, KERNEL), port)
     found = node.query(type(node).element)
     if not isinstance(found, Available):
         raise ValueError(
@@ -475,7 +582,7 @@ def _committed(
     keys = {f"{KERNEL}.{key}": value for key, value in chosen.items()}
     if fed is not None:
         keys |= {f"{SOURCE}.ram_style": "auto", f"{SOURCE}.pumped_memory": False}
-    return with_direct_transports(commit(point, keys))
+    return with_direct_transports(_chosen(point, keys))
 
 
 def unchosen(
@@ -527,7 +634,7 @@ def place(
     name = next(iter(inputs))
     tensor = inputs[name]
     lanes = _value(
-        getattr(plain, name).query(Channel.endpoints), space_type, sample
+        design_member(plain, name).query(Channel.endpoints), space_type, sample
     ).sink.form.lanes
     assert values is not None, "the adapter sample streams the first input's values"
     contents = _nested(values[name].tolist())
@@ -539,7 +646,7 @@ def place(
         point = with_adapter_memories(
             _committed(space_type, sample.factors, inputs, outputs, choices, facts, fed)
         )
-        stream = getattr(point, name)
+        stream = design_member(point, name)
         found = stream.query(Channel.plan)
         if isinstance(found, Available) and Step.WIDTH in found.value.steps:
             return point
@@ -613,7 +720,7 @@ def _ends(
     """The contract the kernel presents on each channel."""
     found: dict[str, StreamContract] = {}
     for name in names:
-        ends = _value(getattr(point, name).query(Channel.endpoints), space_type, sample)
+        ends = _value(design_member(point, name).query(Channel.endpoints), space_type, sample)
         owner = f"{KERNEL}.{_user(point, name)}"
         if ends.sink_owner == owner:
             found[name] = ends.sink
@@ -635,7 +742,7 @@ def _check_model(
     outputs: Outputs,
 ) -> None:
     where = _where(space_type, sample)
-    kernel = getattr(point, KERNEL)
+    kernel = design_member(point, KERNEL)
     fed = next(iter(inputs)) if sample.adapter else None
     for name, end in _ends(point, space_type, sample, [*inputs, *outputs]).items():
         path = _user(point, name)
@@ -649,7 +756,7 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            ends = _value(getattr(point, name).query(Channel.endpoints), space_type, sample)
+            ends = _value(design_member(point, name).query(Channel.endpoints), space_type, sample)
             boundary = ends.source if ends.source_owner is None else ends.sink
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (
@@ -672,7 +779,9 @@ def _check_unplaced_outputs(
     never its own output channel: a compiler infers output types node by node.
     """
     where = _where(space_type, sample)
-    probe = getattr(_committed(space_type, sample.factors, inputs, EMPTY, choices, facts), KERNEL)
+    probe = design_member(
+        _committed(space_type, sample.factors, inputs, EMPTY, choices, facts), KERNEL
+    )
     placed = _ends(point, space_type, sample, list(outputs))
     for name in outputs:
         path = _user(point, name)
@@ -740,12 +849,12 @@ def _simulate(
             raise AssertionError(f"{name}: the harness streams integers only") from error
         assert low <= array.min() and array.max() <= high, f"{name} leaves {end.element}"
         checked[name] = _words(end.form, array.astype(np.int64), end.element)
-    module = point.module
+    module = _value(design_module(point, space_type), space_type, sample)
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
         ends[name].repetition is Repetition.CYCLIC for name in produced
     )
-    cycles = point.query(type(point).cycles)
+    cycles = design_cycles(point)
     failures = []
     for mode in MODES:
         (directory / mode).mkdir(parents=True)
@@ -781,13 +890,18 @@ def _simulate(
 def _stream(point: Any, name: str, form: Traversal, end: StreamContract) -> Stream:
     """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
     by the port's index expressions where it reads one per axis."""
-    index = getattr(_node(getattr(point, KERNEL), _user(point, name)), "index", ())
+    index = getattr(_node(design_member(point, KERNEL), _user(point, name)), "index", ())
     axes = tuple(map(repr, index)) if len(index) == len(form.shape) else ()
     return Stream(form, end.element.bits, axes)
 
 
 __all__ = [
     "ALL",
+    "configured",
+    "kernel_space",
+    "design_cycles",
+    "design_member",
+    "design_module",
     "ControlPort",
     "NonConformance",
     "RtlDeclined",

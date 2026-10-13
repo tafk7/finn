@@ -37,7 +37,8 @@ from kernels.adapted import (
 )
 from kernels.helpers import (
     FULL_DSP48E2,
-    Root,
+    built,
+    choose,
     labels,
 )
 
@@ -45,32 +46,33 @@ from kernels.helpers import (
 def stage_parameters(point):
     """Each stage of ``x``, by its name below its chain, and its module's parameters."""
     return [
-        (stage.label.rsplit(".", 1)[-1], dict(stage.module.parameters)) for stage in point.x.stages
+        (stage.label.rsplit(".", 1)[-1], dict(stage.module.parameters))
+        for stage in point.member("x").stages
     ]
 
 
 def test_the_same_order_connects_directly():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 4)
-    assert not point.x.plan and not point.x.adapting
-    assert point.x.stages == ()
-    assert labels(point.module) == ["producer", "activate"]
+    assert not point.member("x").plan and not point.member("x").adapting
+    assert point.member("x").stages == ()
+    assert labels(built(point, "adapted")) == ["producer", "activate"]
 
 
 @pytest.mark.parametrize("before,after,vector", [(2, 3, 6), (4, 2, 4), (3, 12, 12), (6, 4, 12)])
 def test_other_lanes_are_a_vpc(before, after, vector):
     point = adapted(vector_major((ROWS, CHANNELS), before), after)
-    assert point.x.plan.steps == (Step.WIDTH,)
+    assert point.member("x").plan.steps == (Step.WIDTH,)
     ((name, vpc),) = stage_parameters(point)
     assert name == "vpc" and (vpc["PI"], vpc["PO"], vpc["N"]) == (before, after, vector)
     # The stage sits below the channel, at its place in the root's netlist.
-    assert labels(point.module) == ["x.output_adapter.vpc.vpc", "producer", "activate"]
+    assert labels(built(point, "adapted")) == ["x.output_adapter.vpc.vpc", "producer", "activate"]
 
 
 def test_a_vpc_converts_whole_vectors_that_span_rows():
     """Both sides of a width conversion carry the same elements in whole beats, so the
     stream is whole lcm vectors, wherever rows end: 4 lanes into a transpose taking 3
     of its (6, 4) matrices' flat order converts vectors of 12, three rows each."""
-    consumer = transposed(6, 4, 3).shuffle.input.presented
+    consumer = transposed(6, 4, 3).member("shuffle").input.presented
     steps = plan(BeatSequence(vector_major((2, 6, 4), 4)), consumer)
     assert steps.steps == (Step.WIDTH,)
     (stage,) = realize(steps)
@@ -81,7 +83,7 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
 
 def test_another_beat_order_is_an_input_gen():
     point = adapted(columns_first(ROWS, CHANNELS, 4), 4)
-    assert point.x.plan.steps == (Step.REORDER,)
+    assert point.member("x").plan.steps == (Step.REORDER,)
     ((name, generator),) = stage_parameters(point)
     # Per frame of every beat, each row's channel folds in order.
     assert name == "input_gen"
@@ -94,19 +96,22 @@ def test_another_beat_order_is_an_input_gen():
 
 def test_lanes_and_order_together_are_a_chain():
     point = adapted(columns_first(ROWS, CHANNELS, 4), 2)
-    assert point.x.plan.steps == (Step.WIDTH, Step.REORDER)
+    assert point.member("x").plan.steps == (Step.WIDTH, Step.REORDER)
     assert [name for name, _ in stage_parameters(point)] == ["vpc", "input_gen"]
     # The width conversion before the transport, the reorder after it.
-    assert labels(point.module)[:2] == ["x.output_adapter.vpc.vpc", "x.adapter.input_gen.input_gen"]
+    assert labels(built(point, "adapted"))[:2] == [
+        "x.output_adapter.vpc.vpc",
+        "x.adapter.input_gen.input_gen",
+    ]
 
 
 def test_another_lane_axis_regroups_through_the_common_lane_count():
     # Three rows of one channel a beat: the lanes run along the rows.
     rows_as_lanes = Traversal.over((ROWS, CHANNELS), ((1, CHANNELS, 1),), ((0, ROWS, 1),))
     point = adapted(rows_as_lanes, 2)
-    assert point.x.plan.steps == (Step.WIDTH, Step.REORDER, Step.WIDTH)
+    assert point.member("x").plan.steps == (Step.WIDTH, Step.REORDER, Step.WIDTH)
     # The first vpc before the transport; the reorder and its vpc after it.
-    assert [stage.label for stage in point.x.stages] == [
+    assert [stage.label for stage in point.member("x").stages] == [
         "output_adapter.vpc.vpc",
         "adapter.input_gen_vpc.input_gen",
         "adapter.input_gen_vpc.vpc",
@@ -126,31 +131,31 @@ def test_exactly_one_candidate_a_side_carries_out_each_plan():
             {"x.output_adapter": "vpc", "x.adapter": "input_gen"},
         ),
     ):
-        point = adapted(source, pe, commit_all=False)
+        x = adapted(source, pe, commit_all=False).member("x")
         # The one chain a side that carries out its plan is forced.
-        forced = {item.key: item for item in inspection.forced(point)}
+        forced = {f"x.{item.key}": item for item in inspection.forced(x)}
         assert {key: forced[key].value for key in forced if key.endswith("adapter")} == sides
     # Every other candidate refuses its side's plan.
     assert all("adapter-plan" in why for why in forced["x.adapter"].refused.values())
-    chosen = commit(point, {"x.adapter": "input_gen_vpc"})
-    refused = inspection.admission(chosen.x.adapter)
+    chosen = commit(x, {"adapter": "input_gen_vpc"})
+    refused = inspection.admission(chosen.adapter)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"adapter-plan"}
 
 
 def test_a_stream_admitting_no_adapter_refuses_its_plan():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
-    refused = point.x.query(Channel.netlist)
+    refused = point.member("x").query(Channel.netlist)
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert plan and "width_conversion" in plan[0].message
     # Its adapter Decision does not apply.
-    assert not point.x.adapting
+    assert not point.member("x").adapting
 
 
 def test_a_fifo_sits_between_the_two_sides():
     point = adapted(columns_first(ROWS, CHANNELS, 4), 2)
-    point = commit(
+    point = choose(
         point,
         {
             "x.transport": "fifo",
@@ -158,54 +163,48 @@ def test_a_fifo_sits_between_the_two_sides():
             "x.transport.fifo.buffer.ram_style": "auto",
         },
     )
-    assert [stage.label for stage in point.x.stages] == [
+    assert [stage.label for stage in point.member("x").stages] == [
         "output_adapter.vpc.vpc",
         "transport.fifo.buffer",
         "adapter.input_gen.input_gen",
     ]
     # It carries what the vpc presents: two lanes of four bits a word.
-    assert dict(point.x.stages[1].module.parameters)["DATA_WIDTH"] == 8
-    _ = point.module
+    assert dict(point.member("x").stages[1].module.parameters)["DATA_WIDTH"] == 8
+    _ = built(point, "adapted")
 
 
 def test_a_fifo_refuses_what_carries_markers():
     framed = BeatSequence(vector_major((ROWS, CHANNELS), 4), markers=(LevelEnd(3),))
 
-    class Carried(Root):
-        fifo = ChannelFifo(
-            tensor=Tensor((ROWS, CHANNELS), ELEMENT), arriving=framed, platform=FULL_DSP48E2
-        )
-
-    refused = inspection.admission(design_space(Carried()).fifo)
+    carried = ChannelFifo(
+        tensor=Tensor((ROWS, CHANNELS), ELEMENT), arriving=framed, platform=FULL_DSP48E2
+    )
+    refused = inspection.admission(design_space(carried))
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"fifo-markers"}
     # A marker closing every beat is tied high after the FIFO, not carried.
     every = replace(framed, markers=(LevelEnd(1),))
 
-    class Tied(Root):
-        fifo = ChannelFifo(
-            tensor=Tensor((ROWS, CHANNELS), ELEMENT), arriving=every, platform=FULL_DSP48E2
-        )
-
-    assert not isinstance(inspection.admission(design_space(Tied()).fifo), Rejected)
+    tied = ChannelFifo(
+        tensor=Tensor((ROWS, CHANNELS), ELEMENT), arriving=every, platform=FULL_DSP48E2
+    )
+    assert not isinstance(inspection.admission(design_space(tied)), Rejected)
 
 
 def test_a_channel_s_cost_waits_on_no_memory_style():
     # The adapter's input_gen memory is left open: cost does not read it.
     point = adapted(columns_first(ROWS, CHANNELS, 4), 4, commit_all=False)
-    assert "x.adapter.input_gen.input_gen.ram_style" in {
-        item.key for item in inspection.viable(point)
-    }
+    assert ("x", "adapter.input_gen.input_gen.ram_style") in {key for key, _ in point.viable()}
     # Nine beats a frame through the input_gen, which holds its buffer of 4 x 4-bit
     # words: BUF_SIZE 16 for the transpose nest {3, 3} {1, 3} (MAX_OCCUPANCY 13), not
     # its frame of nine.
-    assert point.x.query(Channel.cycles).value == 9
-    assert point.x.query(Channel.buffering).value == 16 * 4 * 4
+    assert point.member("x").query(Channel.cycles).value == 9
+    assert point.member("x").query(Channel.buffering).value == 16 * 4 * 4
     # A FIFO's depth adds its words, and no cycles.
-    deep = commit(point, {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32})
-    assert deep.x.query(Channel.cycles).value == 9
-    assert deep.x.query(Channel.buffering).value == 16 * 4 * 4 + 32 * 4 * 4
+    deep = choose(point, {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32})
+    assert deep.member("x").query(Channel.cycles).value == 9
+    assert deep.member("x").query(Channel.buffering).value == 16 * 4 * 4 + 32 * 4 * 4
     # A channel of wires takes no cycles of its own.
     direct = adapted(vector_major((ROWS, CHANNELS), 4), 4)
-    assert direct.x.query(Channel.cycles).value == 0
-    assert direct.x.query(Channel.buffering).value == 0
+    assert direct.member("x").query(Channel.cycles).value == 0
+    assert direct.member("x").query(Channel.buffering).value == 0

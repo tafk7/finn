@@ -49,12 +49,13 @@ and budgets.
   initializer beside its value), each under the root key below the member;
 - **paths**: a key of the root is a member and the key below it
   (``MatMul_0.compute.packed.pe``, ``Reshape_0_out0.transport``): the owners, the
-  replayed choices, the dropped ones and the members whose cost a design space
-  exploration reads (``members``: channels in node order, then kernels) are all named
-  so, and a key's member is the longest member path that prefixes it
-  (``finn.kernels.configure.member_of``); its owner states the key below it
-  (``compute.packed.pe`` on the node ``MatMul_0``, ``transport`` on the tensor
-  ``Reshape_0_out0``);
+  replayed choices, the dropped ones and the members (``members``: channels in node
+  order, then kernels) are all named so, and a key's member is the longest member path
+  that prefixes it (``finn.kernels.configure.member_of``); its owner states the key below
+  it (``compute.packed.pe`` on the node ``MatMul_0``, ``transport`` on the tensor
+  ``Reshape_0_out0``). A design space exploration reads the root as a network
+  (``ShellRoot.network``, ``finn.custom_op.kernels.rooted``): its members by owner,
+  kernels first, each key a pair, the owner and the key there;
 - **replay**: every node's choices and every channel's, from its tensor, together; a
   choice the current facts refuse or make inapplicable (a key nested under a
   selector a fact change un-forced: ``compute.packed.pe`` once ``compute`` is open)
@@ -143,6 +144,7 @@ from finn.core.space import (
 from finn.custom_op.kernels.base import KernelOp, kernel_op
 from finn.custom_op.kernels.cache import Facts, LeastRecentlyUsed
 from finn.custom_op.kernels.replay import committed, refusal, typed_choices
+from finn.custom_op.kernels.rooted import Rooted
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.base import Kernel, PortEnd
@@ -561,6 +563,11 @@ class ShellRoot:
             return None
         return self.owners[path], key[len(path) + 1 :]
 
+    def network(self) -> Rooted:
+        """The configured root as the seam explores it: its members by graph name, each
+        key a pair (``finn.custom_op.kernels.rooted``, until the graph binds a network)."""
+        return Rooted(self.point, self.members, self.owners)
+
 
 def _replay(point: S, choices: Mapping[str, object]) -> tuple[S, dict[str, str]]:
     """``choices`` replayed on ``point``: together when the facts accept them all;
@@ -830,8 +837,8 @@ def baseline_choices(model: ModelWrapper) -> dict[str, str]:
     by root key, with why, as replay reports them. A required choice (a FIFO's depth)
     stays open."""
     root = shell_root(model, model.graph.node)
-    seam = Seam(root.members, root.owners, read_target(model).platform)
-    persist(model, root, seam.baseline(root.point))
+    baselined = Seam(read_target(model).platform).baseline(root.network())
+    persist(model, root, baselined.point)
     return dict(root.dropped)
 
 

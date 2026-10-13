@@ -18,17 +18,16 @@ from finn.core.space import Available, Rejected, Unresolved, inspection
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.traversal import Traversal
-from finn.kernels.base import Kernel
-from finn.kernels.configure import commit
-from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     WeightDelivery,
+    built,
+    choose,
     labels,
     matmul_assembly,
     matmul_point,
-    matmul_root,
+    module_of,
     placed,
     with_adapter_memories,
     with_direct_transports,
@@ -57,7 +56,7 @@ def point(core="int8_dsp58", **facts):
     }
     native = "native" if facts["form"] is Form.DEPTHWISE else None
     return with_direct_transports(
-        with_adapter_memories(commit(matmul_point(realization=native, **facts), choices))
+        with_adapter_memories(choose(matmul_point(realization=native, **facts), choices))
     )
 
 
@@ -67,19 +66,20 @@ def parameters(module, label):
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
+    x = configured.member("x")
     # Nothing is replayed: the channel only closes each window's frame.
-    assert configured.x.plan.steps == (Step.MARKERS,)
-    boundary = configured.x.endpoints.source
+    assert x.plan.steps == (Step.MARKERS,)
+    boundary = x.endpoints.source
     # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
     channel_tile = Traversal.over(
         (2, 9, 4), ((0, 2, 1), (2, 2, 2), (1, 3, 3)), ((1, 3, 1), (2, 2, 1))
     )
     assert boundary.transport.name == "in0_V" and boundary.form == channel_tile
-    framed = configured.x.endpoints.sink
+    framed = x.endpoints.sink
     assert framed.form == boundary.form
     assert [level.beats for level in framed.rules.values()] == [3]
-    module = configured.module
+    module = built(configured, "matmul")
     compute = parameters(module, "matmul.compute.int8_dsp58")
     # An input_gen passing three-beat frames in order, closing each.
     markers = parameters(module, "x.adapter.input_gen.input_gen")
@@ -103,13 +103,13 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
 
 def test_a_dense_form_replays_each_row_per_output_fold():
     dense = point(form=Form.DENSE)
-    assert dense.x.plan.steps == (Step.REORDER, Step.MARKERS)
-    compute = parameters(dense.module, "matmul.compute.int8_dsp58")
+    assert dense.member("x").plan.steps == (Step.REORDER, Step.MARKERS)
+    compute = parameters(built(dense, "matmul"), "matmul.compute.int8_dsp58")
     assert compute["ACTIVATION_BROADCASTING"] == 1
 
 
 def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
-    packed = point("packed").query(Kernel.module)
+    packed = module_of(point("packed"), "matmul")
     assert isinstance(packed, Rejected)
     assert "dotp-form" in {finding.code for finding in packed.findings}
     facts = {**FACTS, "pe": 2, "simd": 3}
@@ -135,14 +135,15 @@ def test_native_is_offered_only_where_a_core_reads_the_depthwise_operands(
     facts = {**FACTS, "platform": platform, "activation_dtype": DataType[activation]}
     weights = tuple(tuple((r + c) % 5 - 2 for c in range(4)) for r in range(9))
     space = matmul_point(**facts, weights=weights)
-    verdicts = {item.key: item for item in (*inspection.viable(space), *inspection.forced(space))}
-    realization = verdicts["matmul.realization"]
+    kernel = space.member("matmul")
+    verdicts = {item.key: item for item in (*inspection.viable(kernel), *inspection.forced(kernel))}
+    realization = verdicts["realization"]
     found = getattr(realization, "cases", None) or (realization.value,)
     assert found == offered
     if offered == ("dense",):
         assert "matmul-native" in realization.refused["'native'"]
         with pytest.raises(ValueError, match="matmul-native"):
-            commit(space, {"matmul.realization": "native"})
+            choose(space, {"matmul.realization": "native"})
 
 
 def test_depthwise_cyclic_weights_are_the_channel_tile():
@@ -161,47 +162,49 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
     assert (built.activation_beats, built.weight_beats, built.result_beats) == (12, 12, 4)
 
 
-def test_one_root_carries_the_weights_of_whichever_realization_is_committed():
-    # The root binds its weight channel's tensor to MatMul's weight_tensor, which
-    # follows the realization: open, the tensor waits on it.
+def test_one_network_carries_the_weights_of_whichever_realization_is_committed():
+    # The weight channel carries MatMul's view of its weights (``w_carried``), which
+    # follows the realization: open, the channel waits on it.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
     point = matmul_point(**FACTS, weights=weights)
-    pending = point.query(matmul_root(MatMulKernel).w.tensor)
-    assert isinstance(pending, Unresolved)
-    assert {finding.owner for finding in pending.findings} == {"matmul.realization"}
-    # Whether the weight channel has a value is the weights' presence, a fact: its
-    # source is forced while the value itself waits on the realization.
-    assert point.w.valued
-    assert ("w.source", "memstream") in {
-        (item.key, item.value) for item in inspection.forced(point)
-    }
+    pending = point.unbound("w")
+    assert pending is not None and isinstance(pending.result, Unresolved)
+    assert pending.member == "matmul"
+    assert {finding.owner for finding in pending.result.findings} == {"realization"}
     for realization, shape, core in (
         ("native", (9, 4), "int8_dsp58"),
         ("dense", (36, 4), "packed"),
     ):
-        committed = commit(point, {"matmul.realization": realization})
-        assert committed.w.tensor.shape == shape
-        # The realization and the source's choices commit in one batch.
-        built = with_direct_transports(
-            with_adapter_memories(
-                commit(
-                    point,
-                    {
-                        "matmul.realization": realization,
-                        "w.transport": "direct",
-                        "matmul.compute": core,
-                        f"matmul.compute.{core}.pe": 2,
-                        f"matmul.compute.{core}.simd": 3,
-                        f"matmul.compute.{core}.compute_pumping": False,
-                        **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
-                        "w.source.memstream.ram_style": "auto",
-                        "w.source.memstream.pumped_memory": False,
-                    },
-                )
-            )
-        ).query(Kernel.module)
-        assert isinstance(built, Available), built
-        assert f"matmul.compute.{core}" in labels(built.value)
+        committed = choose(point, {"matmul.realization": realization})
+        assert committed.member("matmul").w_carried.shape == shape
+        # The realization and the kernel's choices commit in one batch, the channels'
+        # once their ends are known.
+        folded = choose(
+            point,
+            {
+                "matmul.realization": realization,
+                "matmul.compute": core,
+                f"matmul.compute.{core}.pe": 2,
+                f"matmul.compute.{core}.simd": 3,
+                f"matmul.compute.{core}.compute_pumping": False,
+                **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
+            },
+        )
+        # Whether the weight channel has a value is the weights' presence, a fact: its
+        # source is forced.
+        assert folded.member("w").valued and folded.member("w").tensor.shape == shape
+        assert folded.forced(("w",))[("w", "source")] == "memstream"
+        configured = choose(
+            folded,
+            {
+                "w.transport": "direct",
+                "w.source.memstream.ram_style": "auto",
+                "w.source.memstream.pumped_memory": False,
+            },
+        )
+        module = module_of(with_direct_transports(with_adapter_memories(configured)), "matmul")
+        assert isinstance(module, Available), module
+        assert f"matmul.compute.{core}" in labels(module.value)
 
 
 # By channel, then stored (k, n): window by channel.

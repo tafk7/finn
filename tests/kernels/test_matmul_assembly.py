@@ -13,24 +13,23 @@ from finn.core.space import (
     Unresolved,
     View,
     constraint,
-    inspection,
     reject,
-    selections,
 )
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.base import Kernel
-from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from kernels.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
+    built,
+    choose,
     exact_result_dtype,
     labels,
     matmul_assembly,
     matmul_point,
+    module_of,
     placed,
 )
 
@@ -170,56 +169,52 @@ def test_invalid_configuration_fails_during_construction(changes, match):
 
 
 def test_the_core_is_forced_and_owns_its_folding_factors():
-    base = commit(
-        matmul_point(**FACTS),
-        {"x.transport": "direct", "w.transport": "direct", "y.transport": "direct"},
-    )
+    base = matmul_point(**FACTS)
     # On DSP48E2 only the packed core admits the configuration, before any folding
-    # factor: it is forced, never committed.
-    assert ("matmul.compute", "packed") in {
-        (item.key, item.value) for item in inspection.forced(base)
-    }
-    assert selections.capture(base).keys == ("w.transport", "x.transport", "y.transport")
-    point = commit(
-        base,
-        {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2},
+    # factor: it is forced, never committed. Its channels wait on its ends, which the
+    # folding decides.
+    assert base.forced(("matmul",))[("matmul", "compute")] == "packed"
+    assert base.chosen() == {} and base.unbound("x") is not None
+    point = choose(base, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2})
+    point = choose(
+        point, {"x.transport": "direct", "w.transport": "direct", "y.transport": "direct"}
     )
     # The activation channel's adapter applies once its plan is known, which the
-    # folding decides; the channel is the root's.
-    point = commit(
+    # folding decides; the channel is the network's.
+    point = choose(
         point,
         {"x.adapter": "input_gen", "x.adapter.input_gen.input_gen.ram_style": "auto"},
     )
-    compute = point.matmul.compute
+    compute = point.member("matmul").compute
     assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
-    assert isinstance(point.inspect(Kernel.module).accepted_result, Unresolved)
-    point = commit(
+    assert isinstance(module_of(point, "matmul"), Unresolved)
+    point = choose(
         point,
         {"matmul.compute.packed.compute_pumping": False, "matmul.compute.packed.reducer": "tree"},
     )
-    matmul = point.matmul
+    matmul = point.member("matmul")
     assert matmul.result_type == DataType["INT8"]
     assert matmul.inspect(MatMulKernel.admission).result == Available(True)
     assert matmul.compute.y.element.dtype == matmul.result_type
     _ = matmul.compute.module
     assert matmul.compute.y.presented.form.beats == 4
-    # The MatMul contributes its children's netlist; the root's module adds the channels.
-    # Without them, MatMul alone is no complete module: its core's inputs are the root's.
+    # The MatMul contributes its children's netlist; the network's module adds the
+    # channels. Without them, MatMul alone is no complete module: its core's inputs are
+    # the channels'.
     assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]
     alone = matmul.query(MatMulKernel.module)
     assert isinstance(alone, Rejected) and "nothing drives" in alone.findings[0].message
-    assert labels(point.module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
+    module = built(point, "matmul")
+    assert labels(module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
     # Pumping with one SIMD lane is refused where its case is declared: with SIMD 1 it
     # is forced off, and committing it is refused, so the core stays forced.
-    one = commit(base, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 1})
-    forced = {(item.key, item.value) for item in inspection.forced(one)}
-    assert {
-        ("matmul.compute", "packed"),
-        ("matmul.compute.packed.compute_pumping", False),
-    } <= forced
+    one = choose(base, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 1})
+    forced = one.forced(("matmul",))
+    assert forced[("matmul", "compute")] == "packed"
+    assert forced[("matmul", "compute.packed.compute_pumping")] is False
     with pytest.raises(ValueError, match="dotp-pumping"):
-        commit(one, {"matmul.compute.packed.compute_pumping": True})
+        choose(one, {"matmul.compute.packed.compute_pumping": True})
 
 
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))
@@ -270,7 +265,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
 
     # Substitute a fully authored Space class, without mutating declarations.
     monkeypatch.setattr("kernels.helpers.MatMulKernel", RestrictedMatMul)
-    point = commit(
+    point = choose(
         matmul_point(**FACTS),
         {
             "matmul.compute": "packed",
@@ -278,6 +273,11 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             "matmul.compute.packed.simd": 2,
             "matmul.compute.packed.compute_pumping": False,
             "matmul.compute.packed.reducer": "tree",
+        },
+    )
+    point = choose(
+        point,
+        {
             "x.adapter": "input_gen",
             "x.adapter.input_gen.input_gen.ram_style": "auto",
             "x.transport": "direct",
@@ -285,10 +285,10 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             "y.transport": "direct",
         },
     )
-    compute = point.matmul.compute
+    compute = point.member("matmul").compute
     assert isinstance(compute.query(DotpAxiKernel.codegen), Available)
     assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Rejected)
-    refused = point.query(Kernel.module)
+    refused = module_of(point, "matmul")
     assert isinstance(refused, Rejected)
     assert "test-view-only" in {finding.code for finding in refused.findings}
     # The convenience entry point takes the same accepted-view path.

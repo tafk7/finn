@@ -46,7 +46,7 @@ SPEC = KernelSpec(
             "UltraRAM on a platform without it",
             lambda: placed(transpose(), platform=replace(FULL_DSP48E2, uram=False)),
             frozenset({"uram-absent"}),
-            {"kernel.ram_style": "ultra"},
+            {"ram_style": "ultra"},
         ),
     ),
     sweeps=(SweepCases("kernels.sweeps.adapter_numeric", ("TRANSPOSES",), ("sweep-adapters",)),),

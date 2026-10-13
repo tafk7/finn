@@ -10,14 +10,14 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, DefinitionError, Rejected, Unresolved, design_space
+from finn.core.space import Available, DefinitionError, Rejected, Unresolved
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus
-from finn.kernels.channels import Channel, end_of
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue
-from kernels.helpers import FULL_DSP48E2, THRESHOLDS, Root, controlled, threshold_base
+from kernels.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
 
@@ -148,22 +148,32 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
     x_tensor = Tensor(shape, ScalarEncoding(DataType["INT8"]))
     y_tensor = Tensor(shape, ScalarEncoding(DataType["INT3"]))
 
-    class Placed(Root):
-        x_end = end_of("activate", "input_end")
-        y_end = end_of("activate", "output_end")
-        x = Channel(tensor=x_tensor, port="x", consumer=x_end, platform=FULL_DSP48E2)
-        y = Channel(tensor=y_tensor, port="y", producer=y_end, platform=FULL_DSP48E2)
-        activate = ThresholdingAxiKernel(
-            input_dtype=DataType["INT8"],
-            threshold_dtype=DataType["INT5"],
-            thresholds=table,
-            bias=-1,
-            input_tensor=x_tensor,
-            output_tensor=y_tensor,
-            platform=FULL_DSP48E2,
-        )
-
-    kernel: ThresholdingAxiKernel = design_space(Placed()).activate
+    network = Network(
+        {
+            "x": wire(
+                tensor=x_tensor,
+                port="x",
+                consumer=Interface("activate", "input_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "y": wire(
+                tensor=y_tensor,
+                port="y",
+                producer=Interface("activate", "output_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "activate": ThresholdingAxiKernel(
+                input_dtype=DataType["INT8"],
+                threshold_dtype=DataType["INT5"],
+                thresholds=table,
+                bias=-1,
+                input_tensor=x_tensor,
+                output_tensor=y_tensor,
+                platform=FULL_DSP48E2,
+            ),
+        }
+    )
+    kernel: ThresholdingAxiKernel = network.member("activate")
     return kernel
 
 

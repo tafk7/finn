@@ -22,6 +22,7 @@ import pytest
 from qonnx.core.datatype import DataType
 
 from finn.core.rtlsim_bench import measure
+from finn.core.space import Available
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import pack, unreplayed
 from finn.harness.hls import c_simulate
@@ -30,7 +31,17 @@ from finn.kernels.artifacts.module import Leaf
 from finn.kernels.pool import PoolKernel, element_type
 from finn.toolchain import hls
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
-from kernels.conformance import KERNEL, Sample, _ends, _values, _words, place
+from kernels.conformance import (
+    KERNEL,
+    Sample,
+    _ends,
+    _values,
+    _words,
+    design_cycles,
+    design_member,
+    design_module,
+    place,
+)
 from kernels.specs.pool import max_pool, pool
 from kernels.xsim import requires_hls
 
@@ -45,7 +56,9 @@ def placed(case: dict[str, Any], pe: int) -> Any:
 
 
 def kernel_leaf(point: Any) -> Leaf:
-    (leaf,) = (leaf for label, leaf in point.module.fragment.instances if label == KERNEL)
+    module = design_module(point, PoolKernel)
+    assert isinstance(module, Available)
+    (leaf,) = (leaf for label, leaf in module.value.fragment.instances if label == KERNEL)
     assert isinstance(leaf, Leaf)
     return leaf
 
@@ -67,7 +80,7 @@ def test_the_input_presents_each_window_whole_and_closes_it() -> None:
     output = ends["output_channel"]
     assert (output.form.beats, output.form.lanes) == (2 * 3 * 2, 3)
     assert output.element == ScalarEncoding(DataType["INT4"])
-    assert point.query(type(point).cycles).value == 2 * 3 * 2 * 4
+    assert design_cycles(point) == Available(2 * 3 * 2 * 4)
 
 
 def test_a_strided_window_counts_the_windows_that_fit_and_drops_the_rest() -> None:
@@ -158,9 +171,14 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
     window = ends["input_channel"]
     x = values["input_channel"]
     expected = case["reference"](input_channel=x)["output_channel"]
-    beats = getattr(point, KERNEL).schedule.beat_count
+    beats = design_member(point, KERNEL).schedule.beat_count
+    module = design_module(point, PoolKernel)
+    assert isinstance(module, Available)
+    found = design_cycles(point)
+    assert isinstance(found, Available)
+    cycles = found.value
     measured = measure(
-        point.module,
+        module.value,
         tmp_path,
         inputs={"input_channel": _words(unreplayed(window.form), x, window.element)},
         outputs={
@@ -169,10 +187,10 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
             )
         },
         frames=4,
-        cycles=point.cycles,
+        cycles=cycles,
         toolchain=host_toolchain(),
     )
     core = f"{KERNEL}.s_axis_TDATA"
     assert measured.per_frame(core) == beats == 48
     assert measured.busy(core)[-1] == beats
-    assert measured.interval() == point.cycles
+    assert measured.interval() == cycles

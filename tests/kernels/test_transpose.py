@@ -13,15 +13,15 @@ from typing import Any
 import numpy as np
 import pytest
 
-from finn.core.space import Rejected, Space, inspection
+from finn.core.space import Rejected, Space
 from finn.dataflow.plan import Step, plan
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
-from finn.kernels.configure import commit
+from finn.kernels.network import dotted
 from finn.kernels.transpose import TransposeKernel
 from kernels.conformance import KERNEL, unchosen
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, choose
 from kernels.specs.base import placed
 from kernels.specs.thresholding import tensor
 from kernels.specs.transpose import MATRICES, transpose
@@ -47,13 +47,13 @@ def test_its_simd_is_any_divisor_of_the_rows_and_its_pages_any_memory() -> None:
     it, and 4, which divides J and not I, is not a case. The pages' explicit styles come first,
     ordered by the bits they hold, then ``auto``."""
     base = unchosen(**transpose())
-    viable = {item.key: item.cases for item in inspection.viable(base)}
+    viable = {dotted(key): item.cases for key, item in base.viable()}
     assert viable == {
         f"{KERNEL}.simd": (1, 2, 3, 6),
         f"{KERNEL}.ram_style": ("distributed", "block", "ultra", "auto"),
     }
     with pytest.raises(ValueError, match="domain-membership"):
-        commit(base, {f"{KERNEL}.simd": 4})
+        choose(base, {f"{KERNEL}.simd": 4})
 
 
 @pytest.mark.parametrize("simd", SIMDS)
@@ -86,7 +86,7 @@ def test_its_output_must_read_the_inputs_matrices() -> None:
     another shape is refused, naming the axis."""
     transposed = (BATCHES, COLS, ROWS)
     case = {**transpose(), "outputs": {"output_channel": transposed}}
-    refused = unchosen(**case).kernel.query(TransposeKernel.extents)
+    refused = unchosen(**case).member(KERNEL).query(TransposeKernel.extents)
     assert isinstance(refused, Rejected)
     assert [(f.code, f.message) for f in refused.findings] == [
         ("kernel-extents", f"i is {ROWS} (given) and {COLS} (output axis 1)")
@@ -99,7 +99,7 @@ def test_a_tensor_of_one_axis_is_no_matrix() -> None:
         "inputs": {"input_channel": tensor((ROWS,), "INT4")},
         "outputs": {"output_channel": (ROWS,)},
     }
-    kernel: Space = unchosen(**case).kernel
+    kernel: Space = unchosen(**case).member(KERNEL)
     assert rejected(kernel) == {"kernel-extents"}
 
 
@@ -111,7 +111,7 @@ def test_it_admits_the_two_pages_its_rtl_counts_and_no_more() -> None:
         "inputs": {"input_channel": tensor((1 << 15, 1 << 16), "INT4")},
         "outputs": {"output_channel": (1 << 15, 1 << 16)},
     }
-    assert rejected(unchosen(**case).kernel) == {"transpose-depth"}
+    assert rejected(unchosen(**case).member(KERNEL)) == {"transpose-depth"}
 
 
 def test_its_ultra_pages_need_ultraram_but_no_initial_contents() -> None:

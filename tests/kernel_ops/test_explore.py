@@ -30,6 +30,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.space import FindingKind, finding_record, inspection
 from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.rooted import Rooted
 from finn.custom_op.kernels.shell import configured_root, save_channels, shell_root
 from finn.kernels.explore import (
     Accepted,
@@ -61,47 +62,40 @@ VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 
 def seam_of(model: ModelWrapper) -> tuple[Seam, Any]:
     root = shell_root(model, model.graph.node)
-    return Seam(root.members, root.owners, read_target(model).platform), root.point
+    return Seam(read_target(model).platform), root.network()
 
 
-def test_a_choice_names_the_node_or_tensor_that_persists_it() -> None:
-    explorer, point = seam_of(kernel_model())
-    offered = {choice.key: choice for choice in explorer.choices(point)}
+def test_a_choice_is_keyed_by_the_node_or_tensor_that_persists_it() -> None:
+    explorer, network = seam_of(kernel_model())
+    offered = {choice.key: choice for choice in explorer.choices(network)}
     # A kernel's choice is its node's (stored there at conversion); a channel's is its
     # tensor's: an edge's, a graph output's alike (open on a body no cut created).
-    assert "first.compute.packed.pe" not in offered
-    assert explorer.owner("first.compute.packed.pe") == ("first", "compute.packed.pe")
-    assert offered["levels.transport"].owner == ("levels", "transport")
-    assert offered["y.transport"].owner == ("y", "transport")
-    assert explorer.key("levels", "transport") == "levels.transport"
-    assert explorer.key("second", "compute.packed.pe") == "second.compute.packed.pe"
-    assert explorer.key("y", "transport") == "y.transport"
-    assert explorer.key("nobody", "transport") is None
-    # A key's member is the longest member path that prefixes it, at a segment.
-    assert explorer.member_of("levels.transport") == "levels"
-    assert explorer.member_of("y.transport.fifo.buffer.depth") == "y"
-    assert explorer.member_of("levelsx.transport") is None
-    assert explorer.member_of("partition") is None
+    assert ("first", "compute.packed.pe") not in offered
+    assert ("first", "compute.packed.pe") in explorer.chosen(network)
+    assert ("levels", "transport") in offered and ("y", "transport") in offered
+    # Kernels rank first, then the channels.
+    assert network.members[:3] == ("first", "activate", "second")
+    assert set(network.channels) == {"x", "w1", "hidden", "levels", "w2", "y"}
 
 
-def test_the_seam_reads_each_member_at_its_path() -> None:
-    """Cost and refusals read the root's members by path, and an attempt checks the
+def test_the_seam_reads_each_member_by_name() -> None:
+    """Cost and refusals read the network's members by name, and a change checks the
     members its keys belong to. A kernel's cycles are known from conversion on (its own
     choices at their baselines); a channel's wait on its transport on a body no cut
     created."""
-    explorer, point = seam_of(kernel_model())
-    cost = explorer.cost(point)
-    assert set(cost.waiting) | set(cost.cycles) == set(explorer.members)
+    explorer, network = seam_of(kernel_model())
+    cost = explorer.cost(network)
+    assert set(cost.waiting) | set(cost.cycles) == set(network.members)
     assert "first" in cost.cycles
     assert [(f.code, f.owner) for f in cost.unstated["levels"]] == [
         ("decision-unassigned", "levels.transport")
     ]
-    hidden = explorer.cost(point, ("hidden",))
+    hidden = explorer.cost(network, ("hidden",))
     assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
-    assert explorer.refusals(point) == {}
-    outcome = explorer.attempt(point, {"first.compute.packed.pe": 1})
+    assert explorer.refusals(network) == {}
+    outcome = explorer.set(network, {("first", "compute.packed.pe"): 1})
     assert isinstance(outcome, Accepted)
-    folded = explorer.cost(outcome.point, ("first",))
+    folded = explorer.cost(outcome.network, ("first",))
     assert "first" in folded.cycles or "first" in folded.waiting
 
 
@@ -112,7 +106,7 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     assert saved["first"]["compute.packed.pe"] == 2 and saved["levels"]["transport"] == "direct"
     report = explored.report
     assert report["bottleneck"] == {
-        "members": ["x", "levels", "first", "second"],
+        "members": ["first", "second", "x", "levels"],
         "cycles": 12,
     }
     # levels: the replay of a frame of two beats of two 2-bit levels, in input_gen's
@@ -181,14 +175,14 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     folding) says so, and the seam states no total from the others: a partial sum is
     never a total. Baselined, every member states its own. On a body no cut created, the
     kernels state theirs (their choices stored at conversion) and the channels wait."""
-    seam, point = seam_of(kernel_model())
-    cost = seam.cost(point)
+    seam, network = seam_of(kernel_model())
+    cost = seam.cost(network)
     assert cost.used is None and set(cost.resources) == {"first", "activate", "second"}
     assert [(f.code, f.owner) for f in cost.unstated["x"]] == [
         ("decision-unassigned", "x.transport")
     ]
     assert "activate" not in cost.unstated
-    based = seam.cost(seam.baseline(point))
+    based = seam.cost(seam.baseline(network))
     assert based.unstated == {}
     assert based.used == sum(based.resources.values(), Resources())
 
@@ -250,11 +244,10 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
     # Nothing is left open, where it is explored or generated.
     assert report["open"] == []
     point, _ = configured_root(model, "the chain")
-    seam = seam_of(model)[0]
+    root = shell_root(model, model.graph.node)
     assert {
         f"{node}.{attribute}": value
-        for key, value in seam.chosen(point).items()
-        for node, attribute in [seam.owner(key) or ("", key)]
+        for (node, attribute), value in Rooted(point, root.members, root.owners).chosen().items()
     } == values
     assert inspection.viable(explored.point) == ()
     # Explored again, the body is the same and nothing is baselined.

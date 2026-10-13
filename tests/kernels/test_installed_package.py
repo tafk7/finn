@@ -49,10 +49,8 @@ from finn.kernels.matmul import MatMulKernel
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.base import Kernel
-from finn.kernels.configure import commit
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
+from finn.kernels.network import Fact, Interface, Network, wire
+from finn.kernels.artifacts.module import ProducerIdentity
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
@@ -97,27 +95,22 @@ X2 = Tensor((1, 2), ScalarEncoding(DataType["INT3"]))
 W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
 Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
 
-class PlacedDotp(Space):
-    x_end = end_of("compute", "x_end")
-    w_end = end_of("compute", "w_end")
-    y_end = end_of("compute", "y_end")
-    x = Channel(tensor=X2, port="in0_V", consumer=x_end, platform=PLATFORM)
-    w = Channel(tensor=W2, port="in1_V", consumer=w_end, platform=PLATFORM)
-    y = Channel(tensor=Y2, port="out0_V", producer=y_end, platform=PLATFORM)
-    compute = PackedDotpKernel(
+placed_dotp = Network({
+    "x": wire(tensor=X2, port="in0_V", consumer=Interface("compute", "x_end"), platform=PLATFORM),
+    "w": wire(tensor=W2, port="in1_V", consumer=Interface("compute", "w_end"), platform=PLATFORM),
+    "y": wire(tensor=Y2, port="out0_V", producer=Interface("compute", "y_end"), platform=PLATFORM),
+    "compute": PackedDotpKernel(
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
         w_tensor=W2,
         y_tensor=Y2,
         platform=PLATFORM,
-    )
-
-
-dotp = commit(
-    design_space(PlacedDotp()),
-    {"compute.pe": 2, "compute.simd": 2, "compute.compute_pumping": False,
-     "compute.reducer": "tree"},
-).compute
+    ),
+})
+dotp = placed_dotp.with_choices(
+    {("compute", "pe"): 2, ("compute", "simd"): 2, ("compute", "compute_pumping"): False,
+     ("compute", "reducer"): "tree"},
+).member("compute")
 answer = dotp.module
 assert isinstance(answer, built.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
@@ -155,8 +148,7 @@ def materialize(module, expected):
     return directory / (emitted.entry_point + ".sv")
 
 materialize(answer, dotp_sources)
-class Root(Kernel):
-    id = "test.root"
+TEST = ProducerIdentity("test.root", "1")
 
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
@@ -165,10 +157,11 @@ for memory in ("none", "memstream"):
         platform=PLATFORM,
     )
     choices = {
-        "x.transport": "direct",
-        "w.transport": "direct",
-        "y.transport": "direct",
-        "matmul.compute": "packed",
+        ("x", "transport"): "direct",
+        ("w", "transport"): "direct",
+        ("y", "transport"): "direct",
+        ("x", "adapter"): "input_gen",
+        ("x", "adapter.input_gen.input_gen.ram_style"): "auto",
     }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     # Unknown weights: the datatypes' result, INT8. Stored ones: their columns', INT7.
@@ -181,54 +174,48 @@ for memory in ("none", "memstream"):
         }
         bits = 7
         choices |= {
-            "w.source.memstream.ram_style": "auto",
-            "w.source.memstream.pumped_memory": False,
+            ("w", "source.memstream.ram_style"): "auto",
+            ("w", "source.memstream.pumped_memory"): False,
         }
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
 
     x_tensor = Tensor((3, 4), INT3)
     y_tensor = Tensor((3, 4), ScalarEncoding(DataType[f"INT{bits}"]))
 
-    # The MatMul in a root that declares its streams; the weight channel carries what
-    # MatMul states for it.
-    class Placed(Root):
-        known: bool = Param()
-        x_end = end_of("matmul", "x_end")
-        w_end = end_of("matmul", "w_end")
-        y_end = end_of("matmul", "y_end")
-
-        @derived
-        def w_tensor(self) -> Tensor:
-            return self.matmul.w_carried
-
-        @derived(when=known, semantics=INTEGER_TENSOR)
-        def w_contents(self) -> IntegerTensor:
-            return self.matmul.w_stored
-
-        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=PLATFORM)
-        w = Channel(
-            tensor=w_tensor, contents=w_contents, port="in1_V", consumer=w_end, platform=PLATFORM
-        )
-        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=PLATFORM)
-        matmul = MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights)
-
-    root = commit(design_space(Placed(known=memory == "memstream")), choices)
-    root = commit(root, {
-        "matmul.compute.packed.pe": 2,
-        "matmul.compute.packed.simd": 2,
-        "matmul.compute.packed.compute_pumping": False,
-        "matmul.compute.packed.reducer": "tree",
-        "x.adapter": "input_gen",
-        "x.adapter.input_gen.input_gen.ram_style": "auto",
+    # The MatMul in a network of its streams; the weight channel carries what MatMul
+    # states for it.
+    root = Network({
+        "x": wire(
+            tensor=x_tensor, port="in0_V", consumer=Interface("matmul", "x_end"), platform=PLATFORM
+        ),
+        "w": wire(
+            tensor=Fact("matmul", "w_carried"),
+            contents=Fact("matmul", "w_stored"),
+            port="in1_V",
+            consumer=Interface("matmul", "w_end"),
+            platform=PLATFORM,
+        ),
+        "y": wire(
+            tensor=y_tensor, port="out0_V", producer=Interface("matmul", "y_end"), platform=PLATFORM
+        ),
+        "matmul": MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights),
     })
-    matmul = root.matmul
+    root = root.with_choices({
+        ("matmul", "compute"): "packed",
+        ("matmul", "compute.packed.pe"): 2,
+        ("matmul", "compute.packed.simd"): 2,
+        ("matmul", "compute.packed.compute_pumping"): False,
+        ("matmul", "compute.packed.reducer"): "tree",
+    })
+    root = root.with_choices(choices)
+    matmul = root.member("matmul")
     beats = (
-        root.x.ends.source.sequence.form.beats,
+        root.member("x").ends.source.sequence.form.beats,
         matmul.compute.w.presented.form.beats,
         matmul.compute.y.presented.form.beats,
     )
     assert beats == (6, 12, 6), beats
-    composed = root.module
+    composed = root.module(TEST, "finn_placed").value
     # A memory image ships as generated data, named by its contents.
     expected |= {item.path for _, leaf in composed.fragment.instances for item in leaf.data}
     wrapper = materialize(composed, expected).read_text()
@@ -236,7 +223,7 @@ for memory in ("none", "memstream"):
     assert ".olst(n__u_x_adapter_input_gen_input_gen__olst)" in wrapper
     if memory == "memstream":
         assert '.INIT_FILE("memstream_' in wrapper
-        assert root.w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
+        assert root.member("w").source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
 
 # Catch namespace or editable-install leakage even if the import was permitted.
 for name, module in tuple(sys.modules.items()):

@@ -49,11 +49,11 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, pack
 from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
+from finn.kernels.channels import Channel
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP58, Root, with_direct_transports
+from kernels.helpers import FULL_DSP58, built, choose, with_direct_transports
 from kernels.specs.eltwise import computed
 from kernels.sweeps.rtl_transport import drive_observed
 
@@ -114,19 +114,23 @@ def placed(case: Case) -> Any:
         "rhs": Tensor(case.rhs_shape, ScalarEncoding(rhs)),
         "result": Tensor(case.lhs_shape, ScalarEncoding(result)),
     }
-    ends = {name: end_of("arithmetic", f"{name}_end") for name in tensors}
-    namespace: dict[str, Any] = {f"{name}_end": end for name, end in ends.items()}
+    members: dict[str, Any] = {}
     for name, tensor in tensors.items():
-        side: dict[str, Any] = {"producer" if name == "result" else "consumer": ends[name]}
-        namespace[name] = Channel(tensor=tensor, port=PORTS[name], platform=FULL_DSP58, **side)
-    namespace["arithmetic"] = EltwiseKernel(
+        end = Interface("arithmetic", f"{name}_end")
+        side: dict[str, Any] = {"producer" if name == "result" else "consumer": end}
+        members[name] = wire(tensor=tensor, port=PORTS[name], platform=FULL_DSP58, **side)
+    members["arithmetic"] = EltwiseKernel(
         **facts,
         lhs_tensor=tensors["lhs"],
         rhs_tensor=tensors["rhs"],
         result_tensor=tensors["result"],
     )
-    space = type(f"Eltwise_{case.label}", (Root,), namespace)
-    return with_direct_transports(commit(design_space(space()), {"arithmetic.pe": case.pe}))
+    return with_direct_transports(choose(Network(members), {"arithmetic.pe": case.pe}))
+
+
+def stem(case: Case) -> str:
+    """The stem of a case's module: ``finn_eltwise_<label>``."""
+    return f"Eltwise_{case.label}".lower()
 
 
 def operand(case: Case, name: str, rng: np.random.Generator) -> npt.NDArray[Any]:
@@ -163,7 +167,7 @@ def as_values(found: npt.NDArray[np.int64], dtype: str) -> npt.NDArray[Any]:
 
 def run(case: Case, evidence: Path) -> None:
     point = placed(case)
-    kernel = point.arithmetic
+    kernel = point.member("arithmetic")
     bits = {
         "lhs": kernel.lhs_dtype.bitwidth(),
         "rhs": kernel.rhs_dtype.bitwidth(),
@@ -172,7 +176,7 @@ def run(case: Case, evidence: Path) -> None:
     # Each boundary presents what the kernel's port reads: rhs replayed, once per lhs row.
     forms: dict[str, Traversal] = {}
     for name in PORTS:
-        ends = getattr(point, name).query(Channel.endpoints).value
+        ends = point.member(name).query(Channel.endpoints).value
         assert ends.source.form == ends.sink.form, (case.label, name, ends)
         forms[name] = ends.source.form
     assert forms["result"].lanes == case.pe, (case.label, forms["result"])
@@ -197,7 +201,7 @@ def run(case: Case, evidence: Path) -> None:
     stimulus = {PORTS[name]: packed(name, inputs[name]) for name in inputs}
     wanted = packed("result", expected)
     top, sources, data = materialize(
-        point.module, evidence / case.label, toolchain=host_toolchain()
+        built(point, stem(case)), evidence / case.label, toolchain=host_toolchain()
     )
     mask = (1 << (case.pe * bits["result"])) - 1
     for stalled in (False, True):

@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import pytest
 from kernels import chain
-from kernels.helpers import Lanes, labels
+from kernels.helpers import Lanes, built, labels
 from kernels.xsim import requires_xsim
 from qonnx.transformation.infer_shapes import InferShapes
 
@@ -57,10 +57,10 @@ from kernel_ops.models import (
 def test_the_root_of_the_chains_nodes_is_the_chain() -> None:
     model = kernel_model()
     root, point = configure_partition(model)
-    reference = chain.chain()
-    assert labels(point.module) == labels(reference.module)
-    assert point.module.fragment == reference.module.fragment
-    assert point.module.abi == reference.module.abi
+    reference = built(chain.chain(), chain.STEM)
+    assert labels(point.module) == labels(reference)
+    assert point.module.fragment == reference.fragment
+    assert point.module.abi == reference.abi
     assert root.boundary == (("x", "s_axis_0"), ("y", "m_axis_0"))
 
 

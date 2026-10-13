@@ -16,7 +16,6 @@ hardware; FinnLib's ``replay_buffer`` is not wrapped.
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import inspection
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding
@@ -24,12 +23,13 @@ from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.network import dotted
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
 from kernels.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    choose,
     matmul_assembly,
     matmul_point,
     placed,
@@ -62,9 +62,9 @@ CHOICES = choices()
 
 
 def test_the_activation_stream_plans_the_replay_and_its_frame():
-    point = commit(matmul_point(**FACTS), CHOICES)
-    # The channel into the core is the root's: its plan and adapter are the edge's.
-    stream = point.x
+    point = choose(matmul_point(**FACTS), CHOICES)
+    # The channel into the core is the network's: its plan and adapter are the edge's.
+    stream = point.member("x")
     assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
     (reorder, _) = stream.plan.hops
     assert reorder.reorder is not None
@@ -73,16 +73,16 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
         (2, 2),
         (0, 1),
     )
-    keys = {item.key for item in inspection.decisions(point)}
+    keys = {dotted(key) for key in point.decisions()}
     assert {"x.adapter", "x.adapter.input_gen.input_gen.ram_style"} <= keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
     # A depthwise row passes once: the plan is the frame marker alone.
     facts = {**FACTS, "platform": FULL_DSP58, "form": Form.DEPTHWISE}
-    depthwise = commit(
+    depthwise = choose(
         matmul_point(realization="native", **facts),
         choices("int8_dsp58"),
     )
-    assert depthwise.x.plan.steps == (Step.MARKERS,)
+    assert depthwise.member("x").plan.steps == (Step.MARKERS,)
 
 
 def test_the_input_gen_replays_each_row_and_closes_each_fold_group():
@@ -144,9 +144,9 @@ def test_a_replay_with_one_beat_frames_ties_the_frame_marker_high():
 
 
 def test_the_adapter_s_memory_is_a_choice_of_the_stream():
-    point = commit(matmul_point(**FACTS), CHOICES)
+    point = choose(matmul_point(**FACTS), CHOICES)
     configured = with_direct_transports(with_adapter_memories(point, ram_style="distributed"))
-    (generator,) = [stage for stage in configured.x.stages]
+    (generator,) = [stage for stage in configured.member("x").stages]
     assert generator.module is not None
     assert dict(generator.module.parameters)["RAM_STYLE"] == '"distributed"'
 

@@ -16,15 +16,15 @@ from collections.abc import Mapping
 
 from qonnx.core.datatype import DataType
 
-from finn.core.space import Available, Param, Space, derived, design_space
+from finn.core.space import Available, Param, derived, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.module import Held, Leaf
 from finn.kernels.base import Clocking, Kernel, interface
-from finn.kernels.channels import Channel, end_of
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
 from kernels.helpers import FULL_DSP48E2, codes
 
@@ -66,12 +66,19 @@ class Probe(Kernel):
 
 
 def probe(**facts: object) -> Probe:
-    class Placed(Space):
-        x_end = end_of("kernel", "x_end")
-        edge = Channel(tensor=TENSOR, port="in0_V", consumer=x_end, platform=FULL_DSP48E2)
-        kernel = Probe(tensor=TENSOR, **facts)  # type: ignore[arg-type]
-
-    return design_space(Placed()).kernel
+    network = Network(
+        {
+            "edge": wire(
+                tensor=TENSOR,
+                port="in0_V",
+                consumer=Interface("kernel", "x_end"),
+                platform=FULL_DSP48E2,
+            ),
+            "kernel": Probe(tensor=TENSOR, **facts),  # type: ignore[arg-type]
+        }
+    )
+    kernel: Probe = network.member("kernel")
+    return kernel
 
 
 def test_a_leaf_holds_or_presents_every_input_that_is_no_ports() -> None:

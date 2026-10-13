@@ -41,9 +41,8 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
 from finn.kernels.transport import AxisBeat
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
-from finn.core.space import Param, derived
+from finn.kernels.network import Fact, Interface, Network, wire
+from finn.kernels.artifacts.module import ProducerIdentity
 from qonnx.core.datatype import DataType
 
 PLATFORM = Platform(
@@ -54,45 +53,35 @@ PLATFORM = Platform(
     uram_init=True,
     resources=None,
 )
+TEST = ProducerIdentity("test.root", "1")
 
 
 X2 = Tensor((1, 2), ScalarEncoding(DataType["INT3"]))
 W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
 Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
 
-
-class Placed(Space):
-    x_end = end_of("compute", "x_end")
-    w_end = end_of("compute", "w_end")
-    y_end = end_of("compute", "y_end")
-    x = Channel(tensor=X2, port="in0_V", consumer=x_end, platform=PLATFORM)
-    w = Channel(tensor=W2, port="in1_V", consumer=w_end, platform=PLATFORM)
-    y = Channel(tensor=Y2, port="out0_V", producer=y_end, platform=PLATFORM)
-    compute = PackedDotpKernel(
+placed = Network({
+    "x": wire(tensor=X2, port="in0_V", consumer=Interface("compute", "x_end"), platform=PLATFORM),
+    "w": wire(tensor=W2, port="in1_V", consumer=Interface("compute", "w_end"), platform=PLATFORM),
+    "y": wire(tensor=Y2, port="out0_V", producer=Interface("compute", "y_end"), platform=PLATFORM),
+    "compute": PackedDotpKernel(
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
         w_tensor=W2,
         y_tensor=Y2,
         platform=PLATFORM,
-    )
-
-
-point = commit(
-    design_space(Placed()),
-    {
-        "compute.pe": 2,
-        "compute.simd": 2,
-        "compute.compute_pumping": False,
-        "compute.reducer": "tree",
-    },
-).compute
+    ),
+})
+point = placed.with_choices({
+    ("compute", "pe"): 2,
+    ("compute", "simd"): 2,
+    ("compute", "compute_pumping"): False,
+    ("compute", "reducer"): "tree",
+}).member("compute")
 answer = point.module
 assert isinstance(answer, Leaf)
 assert isinstance(point.x.axis, AxisBeat)
 assert point.x.axis.payload_bits == 6
-class Root(Kernel):
-    id = "test.root"
-
 
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
@@ -112,54 +101,46 @@ for memory in ("none", "memstream"):
         weights = {"w_contents": ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))}
         result = INT3
     x_tensor, y_tensor = Tensor((2, 4), INT3), Tensor((2, 4), result)
-
     # The weight channel carries what MatMul states for it.
-    class Placed(Root):
-        known: bool = Param()
-        x_end = end_of("matmul", "x_end")
-        w_end = end_of("matmul", "w_end")
-        y_end = end_of("matmul", "y_end")
-
-        @derived
-        def w_tensor(self) -> Tensor:
-            return self.matmul.w_carried
-
-        @derived(when=known, semantics=INTEGER_TENSOR)
-        def w_contents(self) -> IntegerTensor:
-            return self.matmul.w_stored
-
-        x = Channel(tensor=x_tensor, port="in0_V", consumer=x_end, platform=PLATFORM)
-        w = Channel(
-            tensor=w_tensor, contents=w_contents, port="in1_V", consumer=w_end, platform=PLATFORM
-        )
-        y = Channel(tensor=y_tensor, port="out0_V", producer=y_end, platform=PLATFORM)
-        matmul = MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights)
-
+    network = Network({
+        "x": wire(
+            tensor=x_tensor, port="in0_V", consumer=Interface("matmul", "x_end"), platform=PLATFORM
+        ),
+        "w": wire(
+            tensor=Fact("matmul", "w_carried"),
+            contents=Fact("matmul", "w_stored"),
+            port="in1_V",
+            consumer=Interface("matmul", "w_end"),
+            platform=PLATFORM,
+        ),
+        "y": wire(
+            tensor=y_tensor, port="out0_V", producer=Interface("matmul", "y_end"), platform=PLATFORM
+        ),
+        "matmul": MatMulKernel(**facts, x_tensor=x_tensor, y_tensor=y_tensor, **weights),
+    })
+    network = network.with_choices({
+        ("matmul", "compute"): "packed",
+        ("matmul", "compute.packed.pe"): 2,
+        ("matmul", "compute.packed.simd"): 2,
+        ("matmul", "compute.packed.compute_pumping"): False,
+        ("matmul", "compute.packed.reducer"): "tree",
+    })
     choices = {
-        "x.transport": "direct",
-        "w.transport": "direct",
-        "y.transport": "direct",
-        "matmul.compute": "packed",
+        ("x", "transport"): "direct",
+        ("w", "transport"): "direct",
+        ("y", "transport"): "direct",
+        ("x", "adapter"): "input_gen",
+        ("x", "adapter.input_gen.input_gen.ram_style"): "auto",
     }
     if memory == "memstream":
         choices |= {
-            "w.source.memstream.ram_style": "auto",
-            "w.source.memstream.pumped_memory": False,
+            ("w", "source.memstream.ram_style"): "auto",
+            ("w", "source.memstream.pumped_memory"): False,
         }
-    root = commit(design_space(Placed(known=memory == "memstream")), choices)
-    root = commit(
-        root,
-        {
-            "matmul.compute.packed.pe": 2,
-            "matmul.compute.packed.simd": 2,
-            "matmul.compute.packed.compute_pumping": False,
-            "matmul.compute.packed.reducer": "tree",
-            "x.adapter": "input_gen",
-            "x.adapter.input_gen.input_gen.ram_style": "auto",
-        },
-    )
-    assert root.matmul.result_type == result.dtype
-    assert isinstance(root.module, Composed) and root.module.fragment.instances
+    network = network.with_choices(choices)
+    assert network.member("matmul").result_type == result.dtype
+    module = network.module(TEST, "finn_placed")
+    assert isinstance(module.value, Composed) and module.value.fragment.instances
 """
     result = subprocess.run([sys.executable, "-c", script], text=True, capture_output=True)
     assert result.returncode == 0, result.stdout + result.stderr

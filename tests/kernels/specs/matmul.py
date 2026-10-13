@@ -86,7 +86,7 @@ SPEC = KernelSpec(
             "a native depthwise realization no core of the platform reads",
             lambda: placed(depthwise()),
             frozenset({"matmul-native"}),
-            {"kernel.realization": "native"},
+            {"realization": "native"},
         ),
         # Its activations are then the window's image, which the channel does not carry.
         Probe(

@@ -22,7 +22,6 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 
-from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
@@ -33,7 +32,7 @@ from finn.kernels.values.semantics import (
     integers,
     row_major,
 )
-from kernels.helpers import FULL_DSP48E2, matmul_point
+from kernels.helpers import FULL_DSP48E2, choose, matmul_point
 
 WEIGHTS = ((1, -2, 3), (4, 5, -6))
 
@@ -163,18 +162,16 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
         weights=weights,
     )
     # The weight channel's tensor is stated over the value's range, in the encoding it
-    # needs (INT2); MatMul reads INT3.
-    assert base.w.tensor == Tensor((4, 4), ScalarEncoding(DataType["INT2"], (-1, 1)))
-    assert base.matmul.weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
-    handles = {item.key: item.reference for item in inspection.decisions(base)}
-    point = base.with_choices({handles["matmul.compute"]: "packed"})
-    point = point.with_choices({handles["w.source.memstream.ram_style"]: "block"})
-    assert point.w.tensor.element.value_range == (-1, 1)
-    assert point.w.source.value_range == (-1, 1)
+    # needs (INT2); MatMul reads INT3. Its ends wait on MatMul's core and folding.
+    assert base.member("matmul").weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
+    point = choose(base, {"matmul.compute": "packed"})
+    folded = choose(point, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2})
+    folded = choose(folded, {"w.source.memstream.ram_style": "block"})
+    w = folded.member("w")
+    assert w.tensor == Tensor((4, 4), ScalarEncoding(DataType["INT2"], (-1, 1)))
+    assert w.source.value_range == (-1, 1)
     # The result's range read the columns (over INT3 activations: [-11, 11]), once.
-    assert point.matmul.result_tensor.element == ScalarEncoding(DataType["INT5"], (-11, 11))
+    matmul = folded.member("matmul")
+    assert matmul.result_tensor.element == ScalarEncoding(DataType["INT5"], (-11, 11))
     assert loads == [1]
-    folded = point.with_choices(
-        {handles["matmul.compute.packed.pe"]: 2, handles["matmul.compute.packed.simd"]: 2}
-    )
-    assert folded.w.source.image and loads == [1]
+    assert w.source.image and loads == [1]

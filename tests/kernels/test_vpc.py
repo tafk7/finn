@@ -21,7 +21,7 @@ from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.vpc import VpcKernel
-from kernels.conformance import unchosen
+from kernels.conformance import KERNEL, unchosen
 from kernels.specs.stages import STAGED, vpc
 
 CONVERSIONS = vpc()["factors"]
@@ -36,7 +36,7 @@ def _vpc(element_bits: int, lanes_in: int, lanes_out: int) -> VpcKernel:
 
 def _staged(conversion: dict[str, Any]) -> Any:
     """The spec's case at one of its conversions, placed between its two channels."""
-    return unchosen(**{**vpc(), "factors": (conversion,)}).kernel
+    return unchosen(**{**vpc(), "factors": (conversion,)}).member(KERNEL)
 
 
 @pytest.mark.parametrize(

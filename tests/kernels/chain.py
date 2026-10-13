@@ -1,16 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Chain: a root of two MatMuls and a thresholding on its channels.
+"""The Chain: a network of two MatMuls and a thresholding on their channels.
 
-It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads the root's tensors and
-presents its ends on the root's channels; the root declares every channel, taking
-each end from its kernel (``end_of``) and the tensor of a MatMul's results from the
-MatMul's view (``result_tensor``). The weights are the root's, given to each MatMul
+It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and presents
+its ends on the network's channels; each channel takes its ends from its kernels
+(``Interface``), and the tensor of a MatMul's results is the MatMul's own view of it
+(``result_tensor``), read before it is placed. The weights are given to each MatMul
 (``w_contents``): each weight channel carries what its MatMul states for it, its
 contents (``w_stored``) and its tensor over their range (``w_carried``). ``chain()``
 is the Chain configured as the kernel tests, the KernelOp partition tests and the
-XSim harness use it.
+XSim harness use it; its module is named ``finn_chain`` (``STEM``).
 """
 
 from __future__ import annotations
@@ -21,16 +21,13 @@ from qonnx.core.datatype import DataType
 
 from finn.core.space import design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.channels import Channel, end_of
-from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel, column_range
+from finn.kernels.network import Fact, Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
-from finn.kernels.values.semantics import INTEGER_TENSOR, IntegerTensor
 from kernels.helpers import (
     FULL_DSP48E2,
-    Root,
-    view_of,
+    choose,
     with_adapter_memories,
     with_direct_transports,
 )
@@ -50,10 +47,18 @@ H = range_dtype(*column_range(A, W1))
 Y = range_dtype(*column_range(T, W2))
 X_TENSOR = Tensor((ROWS, INPUTS), ScalarEncoding(A))
 LEVELS = Tensor((ROWS, HIDDEN), ScalarEncoding(T))
+STEM = "chain"
+"""The Chain's module's stem: ``finn_chain``."""
+
+MEMBERS = ("first", "activate", "second", "x", "w1", "hidden", "levels", "w2", "y")
+"""The Chain's members, ranked: its kernels, then its channels."""
 
 
-def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any, y_tensor: Any) -> MatMulKernel:
+def matmul(
+    k: int, n: int, dtype: Any, weights: Any, x_tensor: Any, y_tensor: Any = None
+) -> MatMulKernel:
     """A MatMul of ``k`` by ``n`` known ``weights`` on activations of ``dtype``."""
+    tensors = {} if y_tensor is None else {"y_tensor": y_tensor}
     return MatMulKernel(
         m=ROWS,
         n=n,
@@ -62,82 +67,104 @@ def matmul(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any, y_tensor: An
         weights_dtype=W,
         platform=FULL_DSP48E2,
         x_tensor=x_tensor,
-        y_tensor=y_tensor,
         w_contents=weights,
+        **tensors,
     )
 
 
-class Chain(Root):
-    # The input is the root's to state, and the thresholding's output too: a leaf
-    # binds its extents from its own ports, so its output tensor is not read from it.
-    # Each MatMul's results are its view, which reads only its facts and its weights,
-    # and each weight channel carries what its MatMul states for it.
-    hidden_tensor = view_of("first", "result_tensor")
-    y_tensor = view_of("second", "result_tensor")
-    w1_tensor = view_of("first", "w_carried")
-    w1_contents: IntegerTensor = view_of("first", "w_stored", INTEGER_TENSOR)
-    w2_tensor = view_of("second", "w_carried")
-    w2_contents: IntegerTensor = view_of("second", "w_stored", INTEGER_TENSOR)
-    x_consumer = end_of("first", "x_end")
-    w1_consumer = end_of("first", "w_end")
-    hidden_producer = end_of("first", "y_end")
-    hidden_consumer = end_of("activate", "input_end")
-    levels_producer = end_of("activate", "output_end")
-    levels_consumer = end_of("second", "x_end")
-    w2_consumer = end_of("second", "w_end")
-    y_producer = end_of("second", "y_end")
+def result(k: int, n: int, dtype: Any, weights: Any, x_tensor: Any) -> Tensor:
+    """The tensor of a MatMul's results: its own view, which reads its facts and weights."""
+    found: Tensor = design_space(matmul(k, n, dtype, weights, x_tensor)).result_tensor
+    return found
 
-    x = Channel(platform=FULL_DSP48E2, tensor=X_TENSOR, port="s_axis_0", consumer=x_consumer)
-    w1 = Channel(
-        tensor=w1_tensor, contents=w1_contents, consumer=w1_consumer, platform=FULL_DSP48E2
+
+HIDDEN_TENSOR = result(INPUTS, HIDDEN, A, W1, X_TENSOR)
+Y_TENSOR = result(HIDDEN, OUTPUTS, T, W2, LEVELS)
+
+
+def network() -> Network:
+    """The Chain, nothing chosen. The input is the network's to state, and the
+    thresholding's output too: a leaf binds its extents from its own ports, so its output
+    tensor is not read from it. Each MatMul's results are its view, which reads only its
+    facts and its weights, and each weight channel carries what its MatMul states for
+    it."""
+    platform = FULL_DSP48E2
+    return Network(
+        {
+            "x": wire(
+                platform=platform,
+                tensor=X_TENSOR,
+                port="s_axis_0",
+                consumer=Interface("first", "x_end"),
+            ),
+            "w1": wire(
+                tensor=Fact("first", "w_carried"),
+                contents=Fact("first", "w_stored"),
+                consumer=Interface("first", "w_end"),
+                platform=platform,
+            ),
+            "hidden": wire(
+                tensor=HIDDEN_TENSOR,
+                producer=Interface("first", "y_end"),
+                consumer=Interface("activate", "input_end"),
+                platform=platform,
+            ),
+            "levels": wire(
+                tensor=LEVELS,
+                producer=Interface("activate", "output_end"),
+                consumer=Interface("second", "x_end"),
+                platform=platform,
+            ),
+            "w2": wire(
+                tensor=Fact("second", "w_carried"),
+                contents=Fact("second", "w_stored"),
+                consumer=Interface("second", "w_end"),
+                platform=platform,
+            ),
+            "y": wire(
+                tensor=Y_TENSOR,
+                port="m_axis_0",
+                producer=Interface("second", "y_end"),
+                platform=platform,
+            ),
+            "first": matmul(INPUTS, HIDDEN, A, W1, X_TENSOR, HIDDEN_TENSOR),
+            "activate": ThresholdingAxiKernel(
+                input_dtype=H,
+                threshold_dtype=THRESHOLD_DTYPE,
+                thresholds=THRESHOLDS,
+                bias=0,
+                pe=PE,
+                input_tensor=HIDDEN_TENSOR,
+                output_tensor=LEVELS,
+                platform=platform,
+            ),
+            "second": matmul(HIDDEN, OUTPUTS, T, W2, LEVELS, Y_TENSOR),
+        }
     )
-    hidden = Channel(
-        tensor=hidden_tensor,
-        producer=hidden_producer,
-        consumer=hidden_consumer,
-        platform=FULL_DSP48E2,
-    )
-    levels = Channel(
-        tensor=LEVELS, producer=levels_producer, consumer=levels_consumer, platform=FULL_DSP48E2
-    )
-    w2 = Channel(
-        tensor=w2_tensor, contents=w2_contents, consumer=w2_consumer, platform=FULL_DSP48E2
-    )
-    y = Channel(tensor=y_tensor, port="m_axis_0", producer=y_producer, platform=FULL_DSP48E2)
-    first = matmul(INPUTS, HIDDEN, A, W1, X_TENSOR, hidden_tensor)
-    activate = ThresholdingAxiKernel(
-        input_dtype=H,
-        threshold_dtype=THRESHOLD_DTYPE,
-        thresholds=THRESHOLDS,
-        bias=0,
-        pe=PE,
-        input_tensor=hidden_tensor,
-        output_tensor=LEVELS,
-        platform=FULL_DSP48E2,
-    )
-    second = matmul(HIDDEN, OUTPUTS, T, W2, LEVELS, y_tensor)
 
 
 LAYERS = (("first", "w1"), ("second", "w2"))
 """Each MatMul of the Chain and its weight channel."""
 
 
-def configure_chain(root: Root, **choices: object) -> Any:
-    """``root`` (a Chain) with ``choices`` and each MatMul's packed core configured."""
-    choices = choices | {f"{stream}.transport": "direct" for _, stream in LAYERS}
-    point = with_adapter_memories(commit(with_direct_transports(design_space(root)), choices))
-    # The Decisions inside the candidates just selected, each keyed by its owner.
-    nested: dict[str, object] = {}
+def configure_chain(chain: Network, **choices: object) -> Network:
+    """``chain`` (the Chain) with ``choices`` and each MatMul's packed core configured,
+    then its channels: each weight's memory, each transport direct."""
+    folding: dict[str, object] = dict(choices)
+    weights: dict[str, object] = {}
     for layer, stream in LAYERS:
-        nested |= {
+        folding |= {
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
             f"{layer}.compute.packed.reducer": "tree",
+        }
+        weights |= {
             f"{stream}.source.memstream.ram_style": "distributed",
             f"{stream}.source.memstream.pumped_memory": False,
         }
-    return with_adapter_memories(commit(point, nested))
+    configured = with_direct_transports(choose(chain, folding))
+    return with_adapter_memories(choose(configured, weights))
 
 
 # The thresholding's choices: no AXI-Lite, no deep pipeline, its memories in their
@@ -152,6 +179,6 @@ ACTIVATE = {
 }
 
 
-def chain() -> Any:
+def chain() -> Network:
     """The Chain, configured."""
-    return configure_chain(Chain(), **ACTIVATE)
+    return configure_chain(network(), **ACTIVATE)
