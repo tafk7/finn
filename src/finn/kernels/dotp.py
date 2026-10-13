@@ -73,9 +73,9 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Affine, Index, Schedule
+from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import CLOCK2X, Clocking, Kernel, extent_of, interface
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit

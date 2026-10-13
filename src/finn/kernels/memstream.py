@@ -56,7 +56,7 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
 )
 from finn.dataflow.schedule import Index
-from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
     Repetition,
@@ -72,7 +72,6 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, interface
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort

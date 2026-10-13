@@ -21,11 +21,11 @@ from typing import Any
 from finn.core.space import Param, derived
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.plan import plan
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, Generate, RealizedStage, realize
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.module import Held
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import NATIVE_CLOCKING, interface
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel

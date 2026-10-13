@@ -86,6 +86,7 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import (
@@ -95,7 +96,6 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held, RegisterMap
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import CLOCK, RESET, Kernel, extent_of, interface
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.port import AxiStreamPort

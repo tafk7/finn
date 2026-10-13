@@ -42,10 +42,10 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Affine, Index, Schedule
+from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel, factor_domain, interface
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import AxisSpelling

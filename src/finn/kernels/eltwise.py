@@ -31,9 +31,9 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.dataflow.tensor import Tensor
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, Kernel, factor_domain, interface
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.values.domains import Integer
