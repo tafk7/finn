@@ -233,6 +233,10 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert [report["path"] for report in indexed["step_size_fifos"]["reports"]] == [
         "report/step_size_fifos.json"
     ]
+    # The partition's choices, by graph name, listed under the step that wrote them.
+    assert indexed["step_verify_partition"]["reports"] == [
+        {"path": "kernel_choices.json", "findings": {}}
+    ]
 
     # The target, stated from the configuration; the nodes a KernelOp binds rewritten.
     converted = seen["step_convert_to_hw"]

@@ -11,7 +11,6 @@ from finn.builder.build_dataflow_config import (
     OUTPUT_NEEDS,
     SHELL_OUTPUTS,
     DataflowBuildConfig,
-    DataflowOutputType,
     config_finding,
 )
 from finn.builder.build_dataflow_plan import Plan
@@ -57,7 +56,7 @@ def configuration_findings(cfg: DataflowBuildConfig, plan: Plan, target: Target)
             "its outputs are the packaged IP's (stitched_ip, ooc_synth)"
         )
         findings.append(config_finding("shell-outputs", message, "configuration.generate_outputs"))
-    asked = {DataflowOutputType(output) for output in cfg.generate_outputs}
+    asked = set(cfg.generate_outputs)
     for output, needs in OUTPUT_NEEDS.items():
         missing = [need.value for need in needs if output in asked and need not in asked]
         if missing:

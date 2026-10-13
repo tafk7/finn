@@ -385,13 +385,31 @@ def test_a_build_for_a_board_that_requires_no_release_never_asks_vivado(
 
 
 def test_an_output_the_build_does_not_make_is_refused() -> None:
-    for output in ("rtlsim_performance", "estimate_reports", "cpp_driver"):
-        with pytest.raises(ValueError, match=output):
-            DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": [output]}))
+    refused = "configuration.generate_outputs[0]: 'bitstream'; one of ['stitched_ip',"
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        DataflowBuildConfig.from_json(json.dumps({**STATED, "generate_outputs": ["bitstream"]}))
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        named: Any = ["bitstream"]
+        DataflowBuildConfig(
+            output_dir="out", target=TargetRequest(period_ns=5.0), generate_outputs=named
+        )
     stated = {**STATED, "generate_outputs": ["stitched_ip", "ooc_synth"]}
     assert DataflowBuildConfig.from_json(json.dumps(stated)).generate_outputs == [
         DataflowOutputType.STITCHED_IP,
         DataflowOutputType.OOC_SYNTH,
+    ]
+
+
+def test_a_configuration_made_in_python_names_its_outputs_as_json_does() -> None:
+    """Each name becomes its output, so the checks read a configuration made in Python
+    as one read from JSON: here the driver, asked on the ip shell without its bitfile."""
+    target = TargetRequest(period_ns=5.0, board="Ultra96")
+    named: Any = ["pynq_driver"]
+    cfg = DataflowBuildConfig(output_dir="out", target=target, generate_outputs=named)
+    assert cfg.generate_outputs == [DataflowOutputType.PYNQ_DRIVER]
+    assert [(finding.code, place(finding)) for finding in checked(cfg)] == [
+        ("shell-outputs", "configuration.generate_outputs"),
+        ("output-needs", "configuration.generate_outputs"),
     ]
 
 

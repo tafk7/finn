@@ -23,7 +23,6 @@ resources report in finn.builder.build_dataflow_resources, and the logging of th
 reports and verdicts the build's manifest collects in
 finn.builder.build_dataflow_manifest."""
 
-import json
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -388,10 +387,8 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     step_pin_choices pins). Then check the partition before a shell builds it: its
     choices are complete and current, its ports match its graph's inputs and outputs in
     order (configured_root), and its target is the configuration's (refuse_drift)."""
-    output = Path(cfg.output_dir)
     node, body, _ = partition_body(model)
-    output.mkdir(parents=True, exist_ok=True)
-    (output / KERNEL_CHOICES_FILE).write_text(json.dumps(kernel_choices_config(body), indent=2))
+    write_report(Path(cfg.output_dir) / KERNEL_CHOICES_FILE, kernel_choices_config(body))
     configured_root(body, node.name)
     refuse_drift(read_target(body), cfg.resolved_target, "build")
     return model

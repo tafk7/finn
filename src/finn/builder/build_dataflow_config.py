@@ -41,7 +41,7 @@ from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
 from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
-from finn.util.typed_json import decoded_fields, encoded
+from finn.util.typed_json import decoded, decoded_fields, encoded
 
 #: The owner of the findings about a build's configuration.
 OWNER = "finn.builder"
@@ -182,6 +182,10 @@ class DataflowBuildConfig:
         clashing = sorted(set(self.settings) & _FIELDS)
         if clashing:
             raise ValueError(f"configuration.settings: {clashing} are fields, not settings")
+        # Python may name the outputs as JSON does.
+        self.generate_outputs = decoded(
+            list[DataflowOutputType], self.generate_outputs, "configuration.generate_outputs"
+        )
         if self.base_dir is None:
             return
         # Absolute, so that joining again (dataclasses.replace) changes nothing.
