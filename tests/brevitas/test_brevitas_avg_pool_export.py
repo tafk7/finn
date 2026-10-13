@@ -34,6 +34,7 @@ from brevitas.export import export_qonnx
 from brevitas.nn import QuantIdentity, QuantReLU, TruncAvgPool2d
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import gen_finn_dt_tensor
@@ -47,7 +48,7 @@ from finn.util.basic import make_build_dir
 @pytest.mark.brevitas_export
 @pytest.mark.parametrize("kernel_size", [2, 3])
 @pytest.mark.parametrize("stride", [1, 2])
-@pytest.mark.parametrize("signed", [True])  # TODO: Add unsigned test case
+@pytest.mark.parametrize("signed", [True, False])
 @pytest.mark.parametrize("bit_width", [2, 4])
 @pytest.mark.parametrize("input_bit_width", [4, 8, 16])
 @pytest.mark.parametrize("channels", [2, 4])
@@ -103,6 +104,10 @@ def test_brevitas_avg_pool_export(
     model = model.transform(ConvertQONNXtoFINN())
     model = model.transform(InferShapes())
     model = model.transform(InferDataTypes())
+    # The Trunc's sign is that of the activation's values, after the bias behind its
+    # MultiThreshold.
+    (pool,) = model.get_nodes_by_op_type("QuantAvgPool2d")
+    assert getCustomOp(pool).get_nodeattr("signed") == int(signed)
 
     # reference brevitas output
     ref_output_array = model_brevitas(input_tensor).detach().numpy()

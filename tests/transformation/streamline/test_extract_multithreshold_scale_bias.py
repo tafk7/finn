@@ -11,6 +11,7 @@ import pytest
 import numpy as np
 import onnx.helper as oh
 from onnx import TensorProto
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
@@ -41,7 +42,7 @@ def test_extract_multithreshold_scale_bias(extract_scale, extract_bias):
         ["inp", "thres"],
         ["outp"],
         domain="qonnx.custom_op.general",
-        out_dtype="UINT4",
+        out_dtype="UINT5",  # holds [1, 16]
         out_scale=out_scale,
         out_bias=out_bias,
     )
@@ -85,6 +86,10 @@ def test_extract_multithreshold_scale_bias(extract_scale, extract_bias):
     mt_inst = getCustomOp(mt_node_transformed)
     assert mt_inst.get_nodeattr("out_scale") == 1.0
     assert mt_inst.get_nodeattr("out_bias") == 0.0
+    # Its datatype is that of what it computes alone, [0, 15].
+    expected = "UINT4" if extract_scale or extract_bias else "UINT5"
+    assert mt_inst.get_nodeattr("out_dtype") == expected
+    assert new_model.get_tensor_datatype(mt_node_transformed.output[0]) == DataType[expected]
 
     # Verify node types in correct order
     if extract_scale and extract_bias:

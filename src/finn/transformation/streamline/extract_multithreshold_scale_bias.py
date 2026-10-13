@@ -17,7 +17,7 @@ from onnx import helper as oh
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.general import GiveUniqueParameterTensors, SortGraph
-from qonnx.transformation.infer_datatypes import InferDataTypes
+from qonnx.transformation.infer_datatypes import InferDataTypes, int_type_holding
 from qonnx.transformation.remove import RemoveIdentityOps
 
 
@@ -80,6 +80,12 @@ class ExtractMultiThresholdScaleBias(Transformation):
                     mt_inst.set_nodeattr("out_bias", 0.0)
 
                 if extract_scale or extract_bias:
+                    # The MultiThreshold now computes [0, N] alone, the Mul and Add the
+                    # values its datatype held: it takes the datatype of its own.
+                    computed = mt_inst.output_range(model)
+                    if computed is not None:
+                        odt = int_type_holding(computed.least, computed.greatest)
+                        mt_inst.set_nodeattr("out_dtype", odt.name)
                     # The new nodes were appended: sort the graph again.
                     model = model.transform(SortGraph())
                     model = model.transform(RemoveIdentityOps())

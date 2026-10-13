@@ -35,6 +35,7 @@ from abc import ABC, abstractmethod
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from qonnx.transformation.infer_datatypes import int_type_holding
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
@@ -48,6 +49,18 @@ def refused(code, node, message):
 
 
 np_default_dtype = np.float32
+
+
+def computed_datatype(out_bias, out_scale, steps):
+    """The datatype of what a MultiThreshold with ``steps`` thresholds per channel
+    computes, ``out_bias + out_scale * [0, steps]``: BIPOLAR for -1 and 1 alone, the
+    smallest integer type holding an integer range, else FLOAT32."""
+    ends = sorted((out_bias, out_bias + out_scale * steps))
+    if steps == 1 and ends == [-1, 1]:
+        return "BIPOLAR"
+    if any(int(end) != end for end in ends):
+        return "FLOAT32"
+    return int_type_holding(int(ends[0]), int(ends[1])).name
 
 
 class QuantActBaseHandler(ABC):
@@ -91,13 +104,6 @@ class QuantActBaseHandler(ABC):
     def _remove_activation_node(self, multi_threshold_node):
         """Remove the activation node in front of the Quant node."""
         raise NotImplementedError()
-
-    def _extract_output_datatype(self):
-        """The MultiThreshold's output datatype."""
-        q_inst = getCustomOp(self._q_node)
-        dtype = q_inst.get_integer_datatype(self._model)
-        dtype = dtype.name
-        return dtype
 
     def _get_channel_axis(self, tensor_name):
         """The channel axis of ``tensor_name`` the Quant's scale applies along: its one
@@ -144,10 +150,8 @@ class QuantActBaseHandler(ABC):
         )
 
     def calculate_node_parameters(self):
-        """The MultiThreshold's output datatype and thresholds, and the bias and scale
-        behind it."""
+        """The MultiThreshold's thresholds, and the bias and scale behind it."""
         return {
-            "out_dtype": self._extract_output_datatype(),
             "thresholds": self._calculate_thresholds(),
             "adder_bias": self._calculate_act_bias(),
             "mul_scale": self._calculate_act_scale(),
@@ -165,7 +169,7 @@ class QuantActBaseHandler(ABC):
 
         parameter_dict = self.calculate_node_parameters()
         thresholds = parameter_dict["thresholds"]
-        out_dtype = parameter_dict["out_dtype"]
+        steps = thresholds.shape[-1]
         adder_bias = parameter_dict["adder_bias"]
         mul_scale = parameter_dict["mul_scale"]
 
@@ -203,7 +207,8 @@ class QuantActBaseHandler(ABC):
             mt_inst.set_nodeattr("data_layout", data_layout)
 
         # A BipolarQuant's scalar scale and bias are the MultiThreshold's attributes;
-        # otherwise an Add and a Mul behind it.
+        # otherwise an Add and a Mul behind it. Either way the MultiThreshold's datatype
+        # is that of what it computes itself; the Quant's is the last node's.
         bias_scalar = adder_bias.shape == (1,) or len(adder_bias.shape) == 0
         scale_scalar = mul_scale.shape == (1,) or len(mul_scale.shape) == 0
         if scale_scalar and bias_scalar and self._q_node.op_type == "BipolarQuant":
@@ -211,14 +216,14 @@ class QuantActBaseHandler(ABC):
             adder_bias = np.atleast_1d(adder_bias)
 
             # ONNX attributes take Python floats, not numpy's.
-            mt_inst.set_nodeattr("out_scale", mul_scale[0].item())
+            out_scale = mul_scale[0].item()
             # The MultiThreshold scales, then biases: the other order from Brevitas's.
-            finn_bias = adder_bias[0].item() * mul_scale[0].item()
-            mt_inst.set_nodeattr("out_bias", finn_bias)
-
-            mt_inst.set_nodeattr("out_dtype", out_dtype)
+            out_bias = adder_bias[0].item() * out_scale
+            mt_inst.set_nodeattr("out_scale", out_scale)
+            mt_inst.set_nodeattr("out_bias", out_bias)
+            mt_inst.set_nodeattr("out_dtype", computed_datatype(out_bias, out_scale, steps))
         else:
-            mt_inst.set_nodeattr("out_dtype", out_dtype)
+            mt_inst.set_nodeattr("out_dtype", computed_datatype(0, 1, steps))
 
             up_stream_node = mt_node
 
