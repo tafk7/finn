@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Graph preparation (the builder's ``phase_prepare_model``): the export to the
-streamlined graph the kernel path converts.
+streamlined graph the build converts.
 
 TFC_W2A2 through the builder's phase from its export: the graph its fixture reads,
 equivalent to the export with its inputs and outputs stated (``kernel_ops.tfc.reference``,
@@ -142,7 +142,7 @@ def test_tfc_prepares_through_the_builder_into_the_graph_its_fixture_reads(
     assert build_dataflow_cfg(str(tfc_directory / EXPORT), cfg) == 0
     output = Path(cfg.output_dir)
     made = ModelWrapper(str(output / "intermediate_models" / "step_convert_to_channels_last.onnx"))
-    # The graph the kernel path's fixtures read, byte for byte.
+    # The graph the TFC fixtures read, byte for byte.
     assert made.model.SerializeToString() == Path(tfc_streamlined).read_bytes()
     # Each step's graph is its intermediate model: the export's eight Quant nodes lowered
     # with the preprocessing's Div merged ahead and the label select appended.
