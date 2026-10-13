@@ -39,7 +39,7 @@ from finn.builder.build_dataflow_config import (
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import Plan, Step, resolve_plan
-from finn.builder.build_dataflow_steps import default_steps, step_cleanup, step_tidy_up
+from finn.builder.build_dataflow_steps import default_steps, step_cleanup
 from finn.core.space import FindingKind
 from finn.platform.request import TargetRequest
 
@@ -109,6 +109,12 @@ def step_needs(model: ModelWrapper, cfg: DataflowBuildConfig, *, target_fps: flo
     return model
 
 
+def step_unique_names(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """A Transformation wrapped in a step function."""
+    named: ModelWrapper = model.transform(GiveUniqueNodeNames())  # type: ignore[no-untyped-call]
+    return named
+
+
 def config(**fields: Any) -> DataflowBuildConfig:
     return DataflowBuildConfig(**{"output_dir": "out", "target": TARGET, **fields})
 
@@ -150,43 +156,31 @@ def identity_model() -> ModelWrapper:
 # -- entries ---------------------------------------------------------------------------------
 
 
-def test_an_entry_is_a_phase_a_step_an_import_path_or_in_python_the_object() -> None:
-    """Each entry's name is the step's function's, or the Transformation's class's; a
-    phase stands for its steps."""
+def test_an_entry_is_a_named_list_a_step_an_import_path_or_in_python_a_function() -> None:
+    """Each entry's name is its step function's; a phase stands for its steps."""
     entries: list[StepEntry] = [
         "phase_create_accelerator",
         "step_size_fifos",
         f"{__name__}.step_scaled",
-        "qonnx.transformation.general.GiveUniqueNodeNames",
-        functools.partial(step_tidy_up),
-        GiveReadableTensorNames(),
-        GiveUniqueNodeNames,
+        step_unique_names,
     ]
     plan = build_plan(config(steps=entries))
     assert names(plan) == [
         "step_create_dataflow_partition",
         "step_size_fifos",
         "step_scaled",
-        "GiveUniqueNodeNames",
-        "step_tidy_up",
-        "GiveReadableTensorNames",
-        "GiveUniqueNodeNames",
+        "step_unique_names",
     ]
-    # A Transformation runs on the model and has no settings.
-    model = identity_model()
-    named = ran(plan.steps[3], model, config())
+    named = ran(plan.steps[3], identity_model(), config())
     assert [node.name for node in named.graph.node] == ["Identity_0"]
     assert plan.steps[3].settings == {}
 
 
-def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
-    """A keyword a partial binds is not a setting; the step runs with it."""
-    bound = functools.partial(step_typed, scale=3.0, mode=Mode.SMALL)
-    plan = build_plan(config(steps=[bound], settings={"count": 2}))
-    assert "scale" not in plan.settings and "mode" not in plan.settings
-    ran(plan.steps[0], identity_model(), config())
-    assert (RAN["step_typed"]["scale"], RAN["step_typed"]["mode"]) == (3.0, Mode.SMALL)
-    assert RAN["step_typed"]["count"] == 2
+#: A Transformation's refusal, with the step function to write instead.
+WRAP = (
+    "step-invalid: steps[1]: {0} is a Transformation, not a step function; wrap it in one: "
+    "def step_name(model, cfg): return model.transform({0}(...))"
+)
 
 
 @pytest.mark.parametrize(
@@ -206,7 +200,18 @@ def test_a_partial_keeps_what_it_binds_and_declares_the_rest() -> None:
             "step-import: steps[1]: 'finn.builder.build_dataflow_steps.step_size_fifo': "
             "finn.builder.build_dataflow_steps has no 'step_size_fifo'",
         ),
-        ("pathlib.Path", "step-invalid: steps[1]: Path is a class, not a Transformation"),
+        ("qonnx.transformation.general.GiveUniqueNodeNames", WRAP.format("GiveUniqueNodeNames")),
+        (GiveUniqueNodeNames, WRAP.format("GiveUniqueNodeNames")),
+        (GiveReadableTensorNames(), WRAP.format("GiveReadableTensorNames")),
+        (
+            "pathlib.Path",
+            "step-invalid: steps[1]: <class 'pathlib.Path'> is no step: the name of a step or "
+            "named list, an import path of a step function, or a function",
+        ),
+        (
+            functools.partial(step_scaled, scale=2.0),
+            "step-invalid: steps[1]: functools.partial(<function step_scaled",
+        ),
         (3, "step-invalid: steps[1]: 3 is no step: the name of a step or named list, an"),
     ],
 )
@@ -243,16 +248,14 @@ def test_a_list_made_from_the_default_one_is_the_list() -> None:
     """A Python caller changes the default list and gives it as ``steps``: a step inserted,
     replaced or removed where the caller puts it."""
     steps: list[StepEntry] = list(default_steps())
-    steps.insert(
-        steps.index("step_streamline") + 1, "qonnx.transformation.general.GiveUniqueNodeNames"
-    )
-    steps[steps.index("step_size_fifos")] = GiveReadableTensorNames()
+    steps.insert(steps.index("step_streamline") + 1, f"{__name__}.step_unique_names")
+    steps[steps.index("step_size_fifos")] = step_scaled
     steps.remove("step_verify_partition")
     assert names(build_plan(config(steps=steps))) == [
         *DEFAULT[:5],
-        "GiveUniqueNodeNames",
+        "step_unique_names",
         *DEFAULT[5:8],
-        "GiveReadableTensorNames",
+        "step_scaled",
         *DEFAULT[10:],
     ]
 
@@ -261,7 +264,7 @@ def test_a_phase_names_its_steps_in_the_list_and_at_start_and_stop() -> None:
     """In ``steps``, a phase is its steps; as ``start_step`` its first step, as
     ``stop_step`` its last, wherever the list places them."""
     cfg = config(
-        steps=[step_scaled, "phase_optimize_hardware", GiveUniqueNodeNames],
+        steps=[step_scaled, "phase_optimize_hardware", step_unique_names],
         start_step="phase_optimize_hardware",
         stop_step="phase_optimize_hardware",
     )
@@ -270,7 +273,7 @@ def test_a_phase_names_its_steps_in_the_list_and_at_start_and_stop() -> None:
         "step_scaled",
         "step_size_fifos",
         "step_verify_partition",
-        "GiveUniqueNodeNames",
+        "step_unique_names",
     ]
     assert names(plan) == ["step_size_fifos", "step_verify_partition"]
     inside = config(steps=["step_size_fifos", step_scaled, "step_verify_partition", "step_tidy_up"])
@@ -446,14 +449,14 @@ def test_the_manifest_records_the_plan_its_steps_and_each_setting_with_its_reade
     onnx.save(identity_model().model, model)
     cfg = config(
         output_dir=str(tmp_path / "output"),
-        steps=[step_scaled, "qonnx.transformation.general.GiveUniqueNodeNames", step_typed],
+        steps=[step_scaled, f"{__name__}.step_unique_names", step_typed],
         settings={"scale": 2, "table": "t.json", "mode": "small"},
         enable_build_pdb_debug=False,
     )
     assert build_dataflow_cfg(str(model), cfg) == 0
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
     plan = manifest["plan"]
-    assert plan["steps"] == ["step_scaled", "GiveUniqueNodeNames", "step_typed"]
+    assert plan["steps"] == ["step_scaled", "step_unique_names", "step_typed"]
     assert plan["settings"]["table"]["value"] == "t.json"
     assert plan["settings"]["mode"]["value"] == "small"
     assert plan["settings"]["scale"] == {
@@ -464,11 +467,11 @@ def test_the_manifest_records_the_plan_its_steps_and_each_setting_with_its_reade
     assert plan["settings"]["count"] == {"value": 0, "given": False, "readers": ["step_typed"]}
     assert [step["name"] for step in manifest["steps"]] == [
         "step_scaled",
-        "GiveUniqueNodeNames",
+        "step_unique_names",
         "step_typed",
     ]
     saved = sorted(path.name for path in (tmp_path / "output" / "intermediate_models").iterdir())
-    assert saved == ["GiveUniqueNodeNames.onnx", "step_scaled.onnx", "step_typed.onnx"]
+    assert saved == ["step_scaled.onnx", "step_typed.onnx", "step_unique_names.onnx"]
 
 
 def test_a_refused_plan_is_the_builds_outcome_before_its_first_step(tmp_path: Path) -> None:

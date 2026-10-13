@@ -7,7 +7,6 @@ them, and built through the one ``build_dataflow`` entry."""
 
 from __future__ import annotations
 
-import functools
 import json
 import re
 import shutil
@@ -19,7 +18,6 @@ import onnx
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.transformation.general import GiveUniqueNodeNames
 
 from finn.builder.build_dataflow import (
     build_dataflow_cfg,
@@ -117,7 +115,7 @@ def test_a_configuration_holds_through_json() -> None:
         ),
         steps=[
             "phase_optimize_hardware",
-            "qonnx.transformation.general.GiveUniqueNodeNames",
+            "finn.builder.build_dataflow_steps.step_tidy_up",
             "step_package_partition",
         ],
         start_step="step_size_fifos",
@@ -141,7 +139,7 @@ def test_a_configuration_holds_through_json() -> None:
     assert "settings" not in stated and "base_dir" not in stated
     assert stated["steps"] == [
         "phase_optimize_hardware",
-        "qonnx.transformation.general.GiveUniqueNodeNames",
+        "finn.builder.build_dataflow_steps.step_tidy_up",
         "step_package_partition",
     ]
     # How many runs Vivado launches at once is the toolchain's, a machine setting.
@@ -224,14 +222,6 @@ def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written()
         "configuration.steps[1]: step_mine is a Python object; JSON names a step by its name "
         "or import path"
     )
-    partial = DataflowBuildConfig(
-        output_dir="out", target=target, steps=[functools.partial(step_mine)]
-    )
-    with pytest.raises(ValueError, match=r"configuration.steps\[0\]: partial is"):
-        partial.to_json()
-    replaced = GiveUniqueNodeNames()  # type: ignore[no-untyped-call]
-    with pytest.raises(ValueError, match=r"configuration.steps\[0\]: GiveUniqueNodeNames is"):
-        DataflowBuildConfig(output_dir="out", target=target, steps=[replaced]).to_json()
 
 
 @pytest.mark.parametrize(

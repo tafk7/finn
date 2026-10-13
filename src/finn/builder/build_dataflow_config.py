@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any, Union
 
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.transformation.base import Transformation
 
 from finn.core.space import Finding, FindingKind
 from finn.platform.request import TargetRequest
@@ -64,11 +63,9 @@ class ConfigurationRefused(ValueError):
 #: A step: a function ``(model, cfg, *, settings...) -> model``.
 StepFunction = Callable[..., ModelWrapper]
 
-#: An entry of ``steps``: the name of a phase or of one of the build's steps, an import
-#: path (``package.module.name``) of a step function or a qonnx Transformation class, or
-#: in Python the object itself: a function (a ``functools.partial`` too), a
-#: Transformation instance or class.
-StepEntry = Union[str, StepFunction, Transformation, type[Transformation]]
+#: An entry of ``steps``: the name of a named list or of one of the build's steps, an
+#: import path (``package.module.name``) of a step function, or in Python a step function.
+StepEntry = Union[str, StepFunction]
 
 
 @dataclass
@@ -162,7 +159,7 @@ class DataflowBuildConfig:
         them. JSON names a step by its name or import path, so a Python object in
         ``steps`` is refused."""
         for index, entry in enumerate(self.steps or ()):
-            if callable(entry) or isinstance(entry, Transformation):
+            if callable(entry):
                 name = getattr(entry, "__name__", type(entry).__name__)
                 raise ValueError(
                     f"configuration.steps[{index}]: {name} is a Python object; JSON names a "

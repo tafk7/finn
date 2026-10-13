@@ -617,13 +617,13 @@ export to an output, each the first four phases' steps, then:
 
 `steps` is the list the build runs in place of the default one: names of phases or
 premade lists (each its steps), step names, import paths (`package.module.name`) of a
-step function or of a qonnx `Transformation` class, run with its defaults, or in Python
-the function, `functools.partial` or `Transformation` itself. A list names a phase for
-the steps it does not change, as above; a premade list stands alone (`"steps":
-["list_ip"]`); in Python, `finn.builder.build_dataflow_steps.default_steps()` is the
-default list by step name, to change and give as `steps`. `start_step` and `stop_step`
-name a step once in the list, or a phase or premade list: its first step to start from,
-its last to stop after.
+step function, or in Python the step function itself. A qonnx `Transformation` runs in a
+step function of its own (`def step_name(model, cfg): return model.transform(...)`). A
+list names a phase for the steps it does not change, as above; a premade list stands
+alone (`"steps": ["list_ip"]`); in Python,
+`finn.builder.build_dataflow_steps.default_steps()` is the default list by step name, to
+change and give as `steps`. `start_step` and `stop_step` name a step once in the list,
+or a phase or premade list: its first step to start from, its last to stop after.
 
 The configuration's fields say how the build runs (`output_dir`, `target`, `toolchain`,
 `steps`, `start_step`, `stop_step`, `save_intermediate_models`, `enable_build_pdb_debug`,
