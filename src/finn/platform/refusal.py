@@ -7,9 +7,6 @@ from __future__ import annotations
 
 from finn.core.space import Finding, FindingKind
 
-OWNER = "finn.platform"
-"""The owner of a target refusal's finding."""
-
 
 class TargetRefused(ValueError):
     """A part, board, shell or clock the resolution refuses: its one finding
@@ -18,7 +15,7 @@ class TargetRefused(ValueError):
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(f"{code}: {message}")
-        self.findings = (Finding(FindingKind.REJECTION, code, OWNER, message),)
+        self.findings = (Finding(FindingKind.REJECTION, code, "finn.platform", message),)
 
 
 __all__ = ["TargetRefused"]

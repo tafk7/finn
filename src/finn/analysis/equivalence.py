@@ -50,9 +50,6 @@ from finn.util.draws import Integers, drawn_inputs
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-OWNER = "preparation equivalence"
-"""The owner of the equivalence check's findings."""
-
 #: Preparation's declared deviations, by code: where the prepared graph computes
 #: otherwise than the export, on purpose, each stating what differs and where it is
 #: exact. Every one may change an output's value; each one's predicate (where it
@@ -115,7 +112,7 @@ def _unsanitized() -> Iterator[None]:
 
 
 def _finding(kind: FindingKind, code: str, message: str, **details: object) -> Finding:
-    return Finding(kind, code, OWNER, message, tuple(details.items()))
+    return Finding(kind, code, "preparation equivalence", message, tuple(details.items()))
 
 
 def observe(

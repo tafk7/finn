@@ -25,9 +25,6 @@ from finn.core.space import Finding, FindingKind
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-OWNER = "initializer annotations"
-"""The owner of the analysis's findings."""
-
 
 class Initializers(TypedDict):
     """The analysis's result: the integer-annotated initializers, by name, in graph order
@@ -58,7 +55,7 @@ def annotated_initializers(model: ModelWrapper) -> Initializers:
                 Finding(
                     FindingKind.BLOCKER,
                     "annotation-unsound",
-                    OWNER,
+                    "initializer annotations",
                     f"{name} is annotated {datatype.name} and stores {unheld.size} of its "
                     f"{values.size} values outside it, {example} the first",
                     (

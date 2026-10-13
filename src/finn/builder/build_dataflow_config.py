@@ -43,16 +43,14 @@ from finn.platform.target import Target
 from finn.toolchain.launcher import Selection, Toolchain, host_selection
 from finn.util.typed_json import decoded, decoded_fields, encoded
 
-#: The owner of the findings about a build's configuration.
-OWNER = "finn.builder"
-
 
 def config_finding(
     code: str, message: str, place: str | None = None, kind: FindingKind = FindingKind.REJECTION
 ) -> Finding:
     """A finding about the configuration, a rejection unless ``kind`` says otherwise; its
     ``place`` in the configuration, where it has one, is its detail of that name."""
-    return Finding(kind, code, OWNER, message, () if place is None else (("place", place),))
+    details = () if place is None else (("place", place),)
+    return Finding(kind, code, "finn.builder", message, details)
 
 
 def finding_line(finding: Finding) -> str:
@@ -269,7 +267,6 @@ _FIELDS = frozenset(item.name for item in fields(DataflowBuildConfig)) - {"setti
 
 __all__ = [
     "OUTPUT_NEEDS",
-    "OWNER",
     "SHELL_OUTPUTS",
     "ConfigurationRefused",
     "DataflowBuildConfig",
