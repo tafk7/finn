@@ -236,6 +236,12 @@ def _log_refusal(error: BaseException) -> None:
     _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
 
 
+def _refused(manifest: Manifest, error: BaseException) -> None:
+    """Log a build stopped before its first step and record it as ``refused``."""
+    _log_refusal(error)
+    manifest.refused(error)
+
+
 def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
     """Build a dataflow accelerator from the ONNX model ``model_filename`` as ``cfg``
     says. Returns 0, or -1 for a failed step.
@@ -266,8 +272,7 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
                 model = ModelWrapper(source)
                 manifest.identify(model=os.path.abspath(source))
             except Exception as error:
-                _log_refusal(error)
-                manifest.refused(error)
+                _refused(manifest, error)
                 raise
             return _run_build_steps(model, cfg, plan, manifest)
 
@@ -277,44 +282,50 @@ def _refused_in(output_dir: str, refused: ConfigurationRefused) -> None:
     decoded, replacing the manifest an earlier build left there."""
     with log_run(os.path.join(output_dir, LOG_FILE), runner=_LOG.name):
         manifest = Manifest(output_dir, _identity(output_dir, None, None))
-        _log_refusal(refused)
         manifest.configured(list(refused.findings))
-        manifest.refused(refused)
+        _refused(manifest, refused)
+
+
+def _stated_output_dir(path_to_cfg_dir: str) -> str | None:
+    """The output directory a build directory's configuration states, as JSON states it,
+    joined to the directory; None where it states none as a string."""
+    try:
+        with open(os.path.join(path_to_cfg_dir, CONFIG_FILE)) as f:
+            stated = json.load(f)
+    except (OSError, ValueError):
+        return None
+    output_dir = stated.get("output_dir") if isinstance(stated, dict) else None
+    return os.path.join(path_to_cfg_dir, output_dir) if isinstance(output_dir, str) else None
 
 
 def read_build_config(path_to_cfg_dir: str) -> DataflowBuildConfig:
     """A build directory's configuration (``CONFIG_FILE``), its relative paths naming
-    files in the directory. A configuration that does not decode is refused; where it
-    states its output directory as a string, the refusal is logged and recorded there
-    first, as the build's."""
-    directory = os.path.abspath(path_to_cfg_dir)
-    path = os.path.join(directory, CONFIG_FILE)
+    files in the directory."""
+    path = os.path.join(path_to_cfg_dir, CONFIG_FILE)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"{path_to_cfg_dir}: a build directory states {CONFIG_FILE}")
     with open(path) as f:
-        text = f.read()
-    try:
-        stated = json.loads(text)
-    except ValueError:
-        stated = None
-    output_dir = stated.get("output_dir") if isinstance(stated, dict) else None
-    try:
-        return DataflowBuildConfig.from_json(text, directory)
-    except ConfigurationRefused as refused:
-        if isinstance(output_dir, str):
-            _refused_in(os.path.join(directory, output_dir), refused)
-        raise
+        return DataflowBuildConfig.from_json(f.read(), os.path.abspath(path_to_cfg_dir))
 
 
 def build_dataflow_directory(path_to_cfg_dir: str):
     """Build the directory's ``model.onnx`` as its ``dataflow_build_config.json`` says, in
     this process and without changing the working directory (a relative FINN_BUILD_DIR
-    stays the caller's). Returns build_dataflow_cfg's result."""
+    stays the caller's). Returns build_dataflow_cfg's result. A configuration that does
+    not decode is refused in the output directory it states as a string, its log and a
+    new manifest, as the build's; otherwise with nothing written."""
     path_to_cfg_dir = os.path.abspath(path_to_cfg_dir)
     assert os.path.isdir(path_to_cfg_dir), "Directory not found: " + path_to_cfg_dir
     onnx_filename = path_to_cfg_dir + "/model.onnx"
     assert os.path.isfile(onnx_filename), "ONNX not found: " + onnx_filename
-    return build_dataflow_cfg(onnx_filename, read_build_config(path_to_cfg_dir))
+    try:
+        cfg = read_build_config(path_to_cfg_dir)
+    except ConfigurationRefused as refused:
+        output_dir = _stated_output_dir(path_to_cfg_dir)
+        if output_dir is not None:
+            _refused_in(output_dir, refused)
+        raise
+    return build_dataflow_cfg(onnx_filename, cfg)
 
 
 def main():

@@ -722,8 +722,20 @@ def test_a_build_directorys_configuration_that_does_not_decode_is_refused_in_its
 def test_a_configuration_without_an_output_directory_is_refused_on_the_console_only(
     tmp_path: Path,
 ) -> None:
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "output_dir": 3}))
     with pytest.raises(ConfigurationRefused, match=r"configuration.output_dir: a str, not 3"):
+        build_dataflow_directory(str(tmp_path))
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "dataflow_build_config.json",
+        "model.onnx",
+    ]
+
+
+def test_reading_a_configuration_that_does_not_decode_writes_nothing(tmp_path: Path) -> None:
+    stated = {**STATED, "target": {"period_ns": 5.0, "boards": "Ultra96"}}
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
+    with pytest.raises(ConfigurationRefused, match=r"configuration.target: keys TargetRequest"):
         read_build_config(str(tmp_path))
     assert [path.name for path in tmp_path.iterdir()] == ["dataflow_build_config.json"]
 
