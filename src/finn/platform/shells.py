@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from finn.core.reporting.findings import Finding, FindingKind
+from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
+from finn.kernels.artifacts.module import Abi
 from finn.kernels.ends import ENDS, IODMA_HLS, EndOffer, iodma_hls
 from finn.kernels.utilization import SHELL_CHARACTERISED, Fit
 from finn.platform.boards import BOARDS
@@ -123,6 +126,48 @@ class ShellRow:
             raise ValueError(f"no end of kind {', '.join(unknown)} (one of {sorted(ENDS)})")
         if len(set(kinds)) != len(kinds):
             raise ValueError(f"a shell offers each kind of end once, not {kinds}")
+
+
+def bus_counts(abi: Abi) -> tuple[int, int, bool]:
+    """What a module's pins ask of a shell: the AXI-Lite buses it presents, the AXI memory
+    ports it initiates (a bus beside its streams that it initiates), and whether it takes
+    an aligned doubled clock."""
+    buses = [pin for pin in abi.pins if isinstance(pin, Bus)]
+    control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
+    memory = sum(
+        bus.protocol is not StandardProtocol.AXIS and bus.endpoint is Endpoint.INITIATOR
+        for bus in buses
+    )
+    return control, memory, bool(abi.clock_alignments)
+
+
+def budgets(row: ShellRow, counts: tuple[int, int, bool], ends: int) -> tuple[Finding, ...]:
+    """Why ``row`` refuses a module of these ``counts`` (``bus_counts``) whose ends
+    present ``ends`` AXI-Lite buses: its budgets (``ShellRow``), each by code;
+    none where it admits it."""
+    control, memory, doubled = counts
+    refused: tuple[str, str] | None = None
+    if row.control_budget is not None and control + ends > row.control_budget:
+        refused = (
+            "interface-budget-exceeded",
+            f"the {row.shell!r} shell takes {row.control_budget} AXI-Lite buses; the "
+            f"partition presents {control} and its ends {ends}",
+        )
+    elif row.memory_ports is not None and memory > row.memory_ports:
+        refused = (
+            "interface-budget-exceeded",
+            f"the {row.shell!r} shell gives a partition {row.memory_ports} memory "
+            f"ports; it initiates {memory}",
+        )
+    elif doubled and not row.clk2x:
+        refused = (
+            "clock-unavailable",
+            f"the partition takes an aligned doubled clock (ap_clk2x), which the "
+            f"{row.shell!r} shell does not supply",
+        )
+    if refused is None:
+        return ()
+    return (Finding(FindingKind.REJECTION, refused[0], "budgets", refused[1]),)
 
 
 IP_ROW = ShellRow(
@@ -275,6 +320,8 @@ __all__ = [
     "VIVADO_BLOCK_DESIGN",
     "XRT",
     "ZYNQ_STATIC_REGION",
+    "budgets",
     "built_shell",
+    "bus_counts",
     "shell_row",
 ]

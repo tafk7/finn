@@ -34,7 +34,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import network, persist, save_channels
+from finn.custom_op.kernels.network import network, persist, save_channels
 from finn.kernels.channels import Channel
 from finn.kernels.explore import ExploreError, Pinned, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config

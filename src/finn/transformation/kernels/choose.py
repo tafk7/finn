@@ -9,9 +9,9 @@ KernelOps the build's cut made (``CutKernelPartition``; ``explore_partition``, w
 the build's strategy steps run, opens it through the parent graph's node,
 ``partition_body``, and saves it in its file), so which KernelOps go together is the
 cut's alone: a model holding any other node is refused. It binds the body's network
-(``shell.network``: their kernels, the channels between them and the channels on its
-boundary, members named as the graph, ``MatMul_0``; the nodes' and the channels' saved
-choices replayed, a stale one dropped with why), which its ``Seam``
+(``finn.custom_op.kernels.network``: their kernels, the channels between them and the
+channels on its boundary, members named as the graph, ``MatMul_0``; the nodes' and the
+channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
 (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
 tensor, and the key there; holds the pins the body records (``HELD``), gives every
 choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
@@ -75,9 +75,9 @@ limitation (``resources-over-part``, in the result's and the resources' ``findin
 naming the binding resource, whichever strategy chose it: the report ranks and states
 it, and refuses nothing (RC5).
 
-The shell is the model's target's (``shell.network``): its row offers the boundary
-channels its ends (none: the ``ip`` shell). Where a channel has an end, the report
-has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
+The shell is the model's target's (``finn.custom_op.kernels.network``): its row offers the
+boundary channels its ends (none: the ``ip`` shell). Where a channel has an end, the
+report has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
 """
 
@@ -97,14 +97,9 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available
-from finn.custom_op.kernels import shell
-from finn.custom_op.kernels.shell import (
-    Partition,
-    ShellResources,
-    admission_refusal,
-    persist,
-    shell_resources,
-)
+from finn.custom_op.kernels.network import Partition, persist
+from finn.custom_op.kernels.network import network as graph_network
+from finn.custom_op.kernels.shell import ShellResources, admission_refusal, shell_resources
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
@@ -402,7 +397,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         )
     nodes = list(model.graph.node)
     started = time.perf_counter()
-    bound = shell.network(model, nodes)
+    bound = graph_network(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
     seam.held.update(seam.keyed(network, held_choices(model), HELD.entry))
@@ -540,7 +535,7 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
     """The slowest members of a partition model of KernelOps' network, ends included,
     and their cycles a frame, its saved choices replayed (None where a member's cycles
     wait on a choice left open)."""
-    bound = shell.network(model, model.graph.node)
+    bound = graph_network(model, model.graph.node)
     return Seam(read_target(model).platform).cost(bound).bottleneck
 
 

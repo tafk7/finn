@@ -28,7 +28,8 @@ from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Available
-from finn.custom_op.kernels.shell import configured_root, network, save_channels
+from finn.custom_op.kernels.network import network, save_channels
+from finn.custom_op.kernels.shell import configured_root
 from finn.transformation.kernels.cut import CutKernelPartition
 from kernel_ops.models import configure_partition, kernel_model
 

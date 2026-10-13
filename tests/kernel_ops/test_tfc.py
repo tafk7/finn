@@ -32,7 +32,8 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.explore import Ranked
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition

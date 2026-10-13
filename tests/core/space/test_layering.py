@@ -114,10 +114,10 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         # stack, the executors and the flow; the partition node runs its body with the
         # executors, which never import the node.
         ("graph.partition", "finn.core.onnx_exec.execute_onnx"),
-        ("graph.partition", "finn.custom_op.kernels.shell.PARTITION"),
+        ("graph.partition", "finn.custom_op.kernels.network.PARTITION"),
         ("graph.partition", "finn.core.graph.annotations.channel.CHANNEL"),
         ("graph.partition", "finn.kernels.channels.Channel"),
-        ("custom_op.partition", "finn.custom_op.kernels.shell.PARTITION"),
+        ("custom_op.partition", "finn.custom_op.kernels.network.PARTITION"),
         ("executors", "finn.custom_op.partition.StreamingDataflowPartition"),
         ("tests.kernels", "finn.custom_op.kernels.base"),
         ("tests.kernels", "finn.core.onnx_exec"),

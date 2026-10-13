@@ -144,7 +144,7 @@ T = TypeVar("T")
 
 class Composition(Protocol):
     """What the seam explores: a ``finn.kernels.network.Network`` (the graph's binds one,
-    ``finn.custom_op.kernels.shell.network``, in its shell). Its members by name, ranked,
+    ``finn.custom_op.kernels.network.network``, in its shell). Its members by name, ranked,
     its channels among them, and per member its point, its exports, its Decisions, what
     of them is viable, open, forced and stored, its admission, and a change (``trial``);
     what it uses beside its members (``own_resources``)."""

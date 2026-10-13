@@ -22,7 +22,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.custom_op.kernels.cache import BIND_CACHE
-from finn.custom_op.kernels.shell import network, persist
+from finn.custom_op.kernels.network import network, persist
 from finn.kernels.network import _bound
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors

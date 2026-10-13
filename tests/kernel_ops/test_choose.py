@@ -23,7 +23,8 @@ from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
 from finn.kernels.network import dotted
 from finn.platform.target import Target

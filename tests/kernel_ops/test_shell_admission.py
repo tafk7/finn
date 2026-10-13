@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell's admission (``shell.budgets``): what the module presents, within what
-its shell's row takes.
+"""The shell's admission (``finn.platform.shells.budgets``): what the module presents,
+within what its shell's row takes.
 
 The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its ends'
 together (each ``IODMA_hls`` end presents one), gives a partition no memory port of its
@@ -25,16 +25,17 @@ import pytest
 from kernels.helpers import built, choose, with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
-import finn.custom_op.kernels.shell as shell
+import finn.custom_op.kernels.network as graph_network
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import budgets, bus_counts, configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_root
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.platform.shells import IP_ROW, ShellRow, shell_row
+from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from kernel_ops.models import MATMUL, configure_partition, kernel_model
 from kernel_ops.tfc import ULTRA96
@@ -134,7 +135,7 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
     configured_root(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        patched.setattr(graph_network, "shell_row", lambda *_: narrow)
         bound = network(model, model.graph.node, name="chain")
         assert bound.row == narrow
         with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:

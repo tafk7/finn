@@ -37,7 +37,7 @@ from finn.core.graph.annotations.platform import (
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import save_channels
+from finn.custom_op.kernels.network import save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import ToKernelOps

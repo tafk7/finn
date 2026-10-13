@@ -25,18 +25,12 @@ from kernels.helpers import built as module_built
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-import finn.custom_op.kernels.shell as shell
+import finn.custom_op.kernels.network as graph_network
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.partition import partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
-from finn.custom_op.kernels.shell import (
-    Partition,
-    ShellResources,
-    configured_root,
-    network,
-    persist,
-    shell_resources,
-)
+from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -418,7 +412,7 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     end narrowed."""
     _, wide = explored(tfc, 3e6)
     with monkeypatch.context() as patched:
-        patched.setattr(shell, "shell_row", lambda *row: narrowed(shell_row(*row)))
+        patched.setattr(graph_network, "shell_row", lambda *row: narrowed(shell_row(*row)))
         _, narrow = explored(tfc, 3e6)
     end = narrow["ends"]["Reshape_0_out0"]
     assert (end["memory_width"], end["words"]) == (64, 98)

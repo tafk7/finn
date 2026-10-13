@@ -55,12 +55,8 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import design_digest, partition_body
-from finn.custom_op.kernels.shell import (
-    ShellResources,
-    configured_root,
-    member,
-    shell_resources,
-)
+from finn.custom_op.kernels.network import member
+from finn.custom_op.kernels.shell import ShellResources, configured_root, shell_resources
 from finn.kernels.utilization import SHELL_CHARACTERISED
 from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row

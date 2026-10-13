@@ -35,7 +35,7 @@ from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 from finn.core.graph.annotations.channel import CHANNEL, clear_channel_choices, refuse_outside_body
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, PARTITION_DOMAIN, PARTITION_OP
-from finn.custom_op.kernels.shell import PARTITION, baseline_choices
+from finn.custom_op.kernels.network import PARTITION, baseline_choices
 from finn.transformation.kernels.convert import between_kernel_ops
 
 #: The partition PartitionFromLambda puts the KernelOps in; every other node stays on
@@ -50,7 +50,7 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
 class BaselineChoices(Transformation):
     """What the cut does to the body it makes, for a body made by hand: every open
     choice at its baseline, and the nodes' stored choices checked in context
-    (``shell.baseline_choices``). ``dropped`` lists those reset, by root key, with
+    (``network.baseline_choices``). ``dropped`` lists those reset, by root key, with
     why."""
 
     def __init__(self) -> None:

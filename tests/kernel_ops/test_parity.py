@@ -63,7 +63,8 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_pacing import FREE
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network, persist
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import configured_root
 from finn.harness.ops import Disagreement, check_parity
 from finn.harness.points import Covering, covering
 from finn.harness.reference import platform_rows

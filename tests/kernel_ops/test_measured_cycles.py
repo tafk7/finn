@@ -21,7 +21,8 @@ from kernels.xsim import requires_xsim
 from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import measure
-from finn.custom_op.kernels.shell import configured_root, member, network
+from finn.custom_op.kernels.network import member, network
+from finn.custom_op.kernels.shell import configured_root
 from finn.toolchain.launcher import host_toolchain
 from kernel_ops.measure_cycles import schedule_of
 from kernel_ops.models import configure_partition, kernel_model

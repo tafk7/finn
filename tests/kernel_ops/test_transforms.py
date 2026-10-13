@@ -27,7 +27,7 @@ from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target
 from finn.core.graph.errors import FactUnstated, KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import save_channels
+from finn.custom_op.kernels.network import save_channels
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config

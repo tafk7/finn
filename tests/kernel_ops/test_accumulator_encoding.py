@@ -42,7 +42,8 @@ from qonnx.util.basic import qonnx_make_model
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_root, network
+from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.shell import configured_root
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.explore import Pinned, Ranked
 from finn.kernels.matmul import column_range
