@@ -134,7 +134,7 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     # choices stand; the graph's y is stale, and the node root's output channel, which
     # carries it, refuses the kernel's results until inference, run again, states it.
     assert streamed.verify_node() == []
-    folded = commit(streamed.point(), {"matmul.compute.packed.simd": 2})
+    folded: Any = commit(streamed.point(), {"matmul.compute.packed.simd": 2})
     refused = folded.y.query(Channel.well_formed)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"channel-tensor"}
