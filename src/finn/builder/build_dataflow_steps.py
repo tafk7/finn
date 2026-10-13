@@ -9,13 +9,11 @@ runs every phase's steps in order.
 
 The steps prepare a Brevitas export into a streamlined graph; convert its nodes to
 KernelOps and cut them into one partition; choose the partition's parameters, one
-strategy step at a time; and make the outputs the configuration asks for. The checks
-(``VERIFYING_STEPS``) are in no phase: a build asks for one by listing its step. Each
-step only calls the transformations that do its work.
+strategy step at a time; and make the outputs the configuration asks for. Each step only
+calls the transformations that do its work.
 """
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 
 from onnx import helper
@@ -44,23 +42,16 @@ from finn.builder.build_dataflow_config import (
     DataflowOutputType,
     StepFunction,
 )
-from finn.builder.build_dataflow_manifest import reported, verdict, write_report
+from finn.builder.build_dataflow_manifest import reported, write_report
 from finn.builder.build_dataflow_resources import (
     RESOURCES_FILE,
     built_reports,
     shell_resources_report,
 )
-from finn.builder.build_dataflow_testbench import (
-    TESTBENCH_DIR,
-    run_testbench,
-    testbench_frame,
-    write_testbench,
-)
-from finn.builder.build_dataflow_verification import VERIFICATION_DIR, verify_partition_python
+from finn.builder.build_dataflow_testbench import TESTBENCH_DIR, generated_frame, write_testbench
 from finn.core.graph.annotations.choices import OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
-from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.shell import configured_root
 from finn.kernels.explore import (
     DebugPlaceholder,
@@ -75,7 +66,6 @@ from finn.platform.resolve import refuse_drift
 from finn.shells.pynq.deploy import MakePynqDeployment
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT, MakePynqDriver
 from finn.shells.pynq.runner import REPORTS, BuildPynqBitfile
-from finn.toolchain.launcher import ToolFailed
 from finn.transformation.kernels import (
     Explored,
     ToKernelOps,
@@ -87,11 +77,7 @@ from finn.transformation.kernels import (
     refuse_host_between,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from finn.transformation.kernels.package import (
-    ElaboratePartition,
-    PackagePartition,
-    partition_utilization_report,
-)
+from finn.transformation.kernels.package import PackagePartition, partition_utilization_report
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.qonnx.quant_act_to_multithreshold import (
     default_filter_function_generator,
@@ -362,53 +348,6 @@ def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     return model
 
 
-def _saved_before(cfg: DataflowBuildConfig, name: str) -> Path:
-    """The model the build saved before the step ``name``, once in its list."""
-    from finn.builder.build_dataflow_plan import resolve_plan  # noqa: PLC0415 (it imports this)
-
-    plan = resolve_plan(cfg)
-    before = plan.steps[plan.index(name) - 1].name
-    return Path(cfg.output_dir) / "intermediate_models" / f"{before}.onnx"
-
-
-def step_verify_partition_python(
-    model: ModelWrapper, cfg: DataflowBuildConfig, *, verify_input_npy: Path = Path("input.npy")
-) -> ModelWrapper:
-    """Check the partition in Python: execute the parent graph on each input of
-    ``verify_input_npy`` (an .npy file, one input a row) and compare its outputs with
-    the model the build saved before step_convert_to_hw. Records its verdict; on
-    ``fail`` the build continues."""
-    reference = _saved_before(cfg, "step_convert_to_hw")
-    passed = verify_partition_python(model, reference, verify_input_npy, Path(cfg.output_dir))
-    verdict("step_verify_partition_python", passed)
-    return model
-
-
-def _concluded(name: str, check: Callable[[], object]) -> None:
-    """Run the RTL check ``check`` of the step ``name`` and record its verdict: ``fail``
-    where a tool or the simulation fails, and the step fails with that error. An
-    unavailable tool concludes nothing."""
-    try:
-        check()
-    except (ToolFailed, SimulationFailed):
-        verdict(name, False)
-        raise
-    verdict(name, True)
-
-
-def step_elaborate_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Compile and elaborate the partition's RTL in XSim, into
-    verification_output/partition_elaboration, and record the verdict; a failure fails
-    the build."""
-    _, body, _ = partition_body(model)
-    elaborating = ElaboratePartition(
-        directory=Path(cfg.output_dir) / VERIFICATION_DIR / "partition_elaboration",
-        toolchain=cfg.step_toolchain("step_elaborate_partition"),
-    )
-    _concluded("step_elaborate_partition", lambda: body.transform(elaborating))
-    return model
-
-
 def _refuse_drift(
     model: ModelWrapper, cfg: DataflowBuildConfig, output: DataflowOutputType
 ) -> None:
@@ -417,17 +356,15 @@ def _refuse_drift(
     refuse_drift(read_target(body), cfg.resolved_target, f"{output.value} build")
 
 
-def step_package_partition(
-    model: ModelWrapper, cfg: DataflowBuildConfig, *, verify_input_npy: Path = Path("input.npy")
-) -> ModelWrapper:
+def step_package_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Package the partition as an IP named ``partition`` into ``stitched_ip/``, with its
     interface description (``interface.json``), if STITCHED_IP or OOC_SYNTH is asked.
     The partition's body records the IP, so a shell's integration reuses it.
 
     With OOC_SYNTH, the IP is synthesized out of context, and its utilization report
     listed under this step. With STITCHED_IP, an XSim testbench is written into
-    ``stitched_ip/testbench``: it streams the partition's inputs for the first frame of
-    ``verify_input_npy`` if that file exists, else a generated frame."""
+    ``stitched_ip/testbench``: it streams a frame of the partition's inputs drawn from
+    their datatypes."""
     stitched = DataflowOutputType.STITCHED_IP in cfg.generate_outputs
     ooc = DataflowOutputType.OOC_SYNTH in cfg.generate_outputs
     if not (stitched or ooc):
@@ -449,19 +386,11 @@ def step_package_partition(
     if ooc:
         reported(partition_utilization_report(directory))
     if stitched:
-        frame, stimulus = testbench_frame(model, body, verify_input_npy)
         testbench = directory / TESTBENCH_DIR
-        write_testbench(body, testbench, frame, toolchain=toolchain, label=node.name)
-        _LOG.info(f"XSim testbench on {stimulus} written into {testbench} (run.sh runs it)")
-    return model
-
-
-def step_run_testbench(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Run the XSim testbench step_package_partition writes with STITCHED_IP, in the
-    build's toolchain, and record the verdict; a mismatch fails the build."""
-    testbench = Path(cfg.output_dir) / STITCHED_IP_DIR / TESTBENCH_DIR
-    toolchain = cfg.step_toolchain("step_run_testbench")
-    _concluded("step_run_testbench", lambda: run_testbench(testbench, toolchain=toolchain))
+        write_testbench(
+            body, testbench, generated_frame(body), toolchain=toolchain, label=node.name
+        )
+        _LOG.info(f"XSim testbench on a generated frame written into {testbench} (run.sh runs it)")
     return model
 
 
@@ -598,19 +527,11 @@ FOLDING_STEPS: tuple[StepFunction, ...] = (
 )
 FIFO_SIZING_STEPS: tuple[StepFunction, ...] = (step_size_fifos,)
 
-#: The steps that check the partition, in no phase: a list asks for each by name.
-VERIFYING_STEPS: list[StepFunction] = [
-    step_verify_partition_python,
-    step_elaborate_partition,
-    step_run_testbench,
-]
-
 #: The build's steps by name.
 build_dataflow_step_lookup: dict[str, StepFunction] = {
     step.__name__: step
     for step in [
         *(step for steps in build_dataflow_phases.values() for step in steps),
         *KERNEL_STRATEGY_STEPS,
-        *VERIFYING_STEPS,
     ]
 }

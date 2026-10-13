@@ -36,7 +36,6 @@ from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import default_steps, resolve_plan
 from finn.builder.build_dataflow_steps import (
     KERNEL_STRATEGY_STEPS,
-    VERIFYING_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
     step_add_pre_post_processing,
@@ -87,7 +86,6 @@ def test_a_build_targets_ip_and_sizes_fifos_by_default() -> None:
         "topk": None,
         "fifo_margin": 0,
         "fifo_ram_style": None,
-        "verify_input_npy": Path("input.npy"),
         "hw_debug": False,
     }
     assert not any(setting.given for setting in settings.values())
@@ -106,7 +104,6 @@ SETTINGS: dict[str, Any] = {
     "fifo_ram_style": "block",
     "hw_debug": True,
     "target_fps": 1_000_000,
-    "verify_input_npy": "frames.npy",
 }
 
 
@@ -172,7 +169,7 @@ def test_a_key_no_step_declares_is_refused_naming_the_settings_the_steps_read() 
     assert finding.message == (
         "no step of this build declares it; the settings its steps read: fifo_margin, "
         "fifo_ram_style, hw_debug, input_datatype, max_multithreshold_bit_width, "
-        "override_inpsize, preprocessing, topk, verify_input_npy"
+        "override_inpsize, preprocessing, topk"
     )
 
 
@@ -415,12 +412,10 @@ def test_a_configuration_made_in_python_names_its_outputs_as_json_does() -> None
 
 def test_the_default_list_and_the_lookup_are_the_phase_tables() -> None:
     """Both derived from the one table: every phase's steps in order, and every step
-    once, by its name, the strategy steps no phase runs by default after the phases', then
-    the verifying steps, which no phase runs."""
+    once, by its name, the strategy steps no phase runs by default after the phases'."""
     in_phases = [step for steps in build_dataflow_phases.values() for step in steps]
     assert default_steps() == [step.__name__ for step in in_phases]
     others = [step for step in KERNEL_STRATEGY_STEPS if step not in in_phases]
-    others += VERIFYING_STEPS
     assert list(build_dataflow_step_lookup.values()) == [*in_phases, *others]
     assert all(name == step.__name__ for name, step in build_dataflow_step_lookup.items())
     assert len(set(in_phases)) == len(in_phases)
@@ -439,7 +434,6 @@ def test_the_steps_declare_their_settings_each_with_a_default() -> None:
         "max_multithreshold_bit_width": ("step_qonnx_to_finn",),
         "fifo_margin": ("step_size_fifos",),
         "fifo_ram_style": ("step_size_fifos",),
-        "verify_input_npy": ("step_package_partition",),
         "hw_debug": ("step_build_bitfile",),
     }
 

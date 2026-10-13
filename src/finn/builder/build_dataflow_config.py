@@ -76,8 +76,7 @@ class DataflowOutputType(str, Enum):
     ``ooc_synth`` work on any shell; the rest need a shell that integrates the partition
     (``SHELL_OUTPUTS``), so not ``ip``."""
 
-    #: the packaged IP, with its interface description and an XSim testbench, which
-    #: step_run_testbench runs
+    #: the packaged IP, with its interface description and an XSim testbench
     STITCHED_IP = "stitched_ip"
     #: the IP synthesized out of context, with its resources per member of the shell
     OOC_SYNTH = "ooc_synth"

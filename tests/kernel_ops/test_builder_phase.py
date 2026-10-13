@@ -57,6 +57,7 @@ from finn.builder.build_dataflow_steps import (
     step_target_throughput,
     step_verify_partition,
 )
+from finn.builder.build_dataflow_verification import verify_partition_python
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
@@ -202,11 +203,10 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     np.save(tmp_path / "expected_output.npy", np.concatenate(labels))
     cfg = config(
         tmp_path,
-        settings={**io_settings(tmp_path / "export"), "verify_input_npy": tmp_path / "input.npy"},
+        settings=io_settings(tmp_path / "export"),
         steps=[
             "phase_prepare_model",
             *(each for name in STEPS for each in (name, recorder(name))),
-            "step_verify_partition_python",
         ],
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
@@ -217,15 +217,13 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     )
     assert prepared.model.SerializeToString() == source.model.SerializeToString()
     # The run, as its manifest indexes it: every step of the four phases, in order, each
-    # completed (the recorders after each aside), then the Python check, passed.
+    # completed (the recorders after each aside).
     manifest = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())
     assert manifest["outcome"] == {"status": "completed"}
-    assert manifest["verifications"] == {"step_verify_partition_python": "pass"}
     ran = [step for step in manifest["steps"] if not step["name"].startswith("seen_")]
     assert [step["name"] for step in ran] == [
         *[step.__name__ for step in build_dataflow_phases["phase_prepare_model"]],
         *STEPS,
-        "step_verify_partition_python",
     ]
     assert {step["status"] for step in manifest["steps"]} == {"completed"}
     indexed = {step["name"]: step for step in ran}
@@ -318,22 +316,13 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert {row["transport"] for row in sizing["channels"].values()} == {"direct"}
     assert len(sizing["channels"]) == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
-    # The Python check, through the partition node: on each of the three inputs, the
-    # partition's own output (the last MatMul's INT8 logits, not the parent's label), the
-    # parent graph executed with it, equals the streamlined model's, the one the build
-    # saved before conversion.
-    verified = sorted((output / "verification_output").glob("verify_partition_python_*"))
-    assert [path.name for path in verified] == [
-        f"verify_partition_python_{index}_SUCCESS.npz" for index in range(3)
-    ]
-    for index, path in enumerate(verified):
-        (name,) = [item.name for item in built.graph.output]
-        saved = np.load(path)
-        assert list(saved) == [name] == ["MatMul_3_out0"]
-        reference = execute_onnx(source, {source.graph.input[0].name: images[index][None]}, True)
-        expected = reference[name]
-        assert expected is not None and np.array_equal(saved[name], expected)
-        assert saved[name].shape == (1, 10)
+    # The Python check over the finished build's output directory, through the partition
+    # node: on each of the three inputs, the partition's own output (the last MatMul's INT8
+    # logits, not the parent's label), the parent graph executed with it, equals the
+    # streamlined model's, the one the build saved before conversion.
+    assert verify_partition_python(output, tmp_path / "input.npy") == {"runs": 3, "findings": ()}
+    (name,) = [item.name for item in built.graph.output]
+    assert name == "MatMul_3_out0"
 
 
 @pytest.mark.slow

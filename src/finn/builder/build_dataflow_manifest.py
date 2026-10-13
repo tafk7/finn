@@ -19,22 +19,18 @@ step uses; the manifest indexes the run:
   ``failed``), its ``seconds``, the ``reports`` it wrote (each with its findings by
   code), and its tool runs (``tools``: each with its transcript, status, seconds, exit
   status and messages by severity);
-- ``verifications``: the verdict each verifying step that concluded recorded
-  (``verdict``; FINN's are finn.builder.build_dataflow_steps.VERIFYING_STEPS), by its
-  name: ``pass`` or ``fail``;
 - ``outcome``: None while the build runs; then ``completed``; ``failed``, with the
   step, the error's ``kind`` (``refusal``, ``tool-unavailable``, ``tool-failed``,
-  ``verdict``, ``bug``), its type and message, and a refusal's findings by code; or
+  ``bug``), its type and message, and a refusal's findings by code; or
   ``refused`` before the first step, with the error (a refused configuration's findings
   are its ``configuration_findings``).
 
 The file is replaced whole whenever it changes, so a build stopped at any point leaves
 the last state it reached; a killed build's step stays ``running``. Steps report what
 they did in log records of one logger, ``finn.toolchain.launcher.RECORDS``, which the
-build's ``ManifestHandler`` collects: a report written (``reported``, ``write_report``),
-a verdict (``verdict``), a tool run (``finn.toolchain.launcher.TOOL_RUN``). Of a report,
-only its findings' counts are copied. Paths inside the output directory are relative to
-it.
+build's ``ManifestHandler`` collects: a report written (``reported``, ``write_report``)
+and a tool run (``finn.toolchain.launcher.TOOL_RUN``). Of a report, only its findings'
+counts are copied. Paths inside the output directory are relative to it.
 """
 
 from __future__ import annotations
@@ -59,10 +55,6 @@ MANIFEST_FILE = "report/build.json"
 
 #: The ``extra`` key of a log record for a report a step wrote: its path.
 REPORT = "finn_report"
-#: The ``extra`` key of a log record for a check's verdict: ``{"name", "passed"}``.
-VERIFICATION = "finn_verification"
-
-PASS, FAIL = "pass", "fail"
 
 
 def reported(path: str | os.PathLike[str]) -> None:
@@ -75,16 +67,6 @@ def write_report(path: Path, stated: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(stated, indent=2))
     reported(path)
-
-
-def verdict(name: str, passed: bool) -> None:
-    """Log the verdict of the check ``name``, a failure as a warning; the manifest
-    records it."""
-    stated = {VERIFICATION: {"name": name, "passed": passed}}
-    if passed:
-        RECORDS.info(f"Verification for {name} : SUCCESS", extra=stated)
-    else:
-        RECORDS.warning(f"Verification for {name} : FAIL", extra=stated)
 
 
 @functools.cache
@@ -178,7 +160,6 @@ class Manifest:
             "plan": None,
             "configuration_findings": None,
             "steps": [],
-            "verifications": {},
             "outcome": None,
         }
         self.write()
@@ -252,12 +233,6 @@ class Manifest:
             step["reports"].append(entry)
             self.write()
 
-    def verification(self, name: str, verdict: str) -> None:
-        """Record a verification's verdict."""
-        with self._lock:
-            self.state["verifications"][name] = verdict
-            self.write()
-
     def tool_run(self, fields: Mapping[str, Any]) -> None:
         """Record a tool run's start or end in the running step; at its end, with its
         messages by severity."""
@@ -311,7 +286,7 @@ class Manifest:
 
 
 class ManifestHandler(logging.Handler):
-    """Collects into ``manifest`` the reports, verdicts and tool runs the records of
+    """Collects into ``manifest`` the reports and tool runs the records of
     ``finn.toolchain.launcher.RECORDS`` carry."""
 
     def __init__(self, manifest: Manifest) -> None:
@@ -323,9 +298,6 @@ class ManifestHandler(logging.Handler):
             path = getattr(record, REPORT, None)
             if path is not None:
                 self.manifest.report(path)
-            verdict = getattr(record, VERIFICATION, None)
-            if verdict is not None:
-                self.manifest.verification(verdict["name"], PASS if verdict["passed"] else FAIL)
             run = getattr(record, TOOL_RUN, None)
             if run is not None:
                 self.manifest.tool_run(run)
@@ -334,16 +306,12 @@ class ManifestHandler(logging.Handler):
 
 
 __all__ = [
-    "FAIL",
     "MANIFEST_FILE",
-    "PASS",
     "REPORT",
-    "VERIFICATION",
     "Manifest",
     "ManifestHandler",
     "finn_revision",
     "findings_by_code",
     "reported",
-    "verdict",
     "write_report",
 ]

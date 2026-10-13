@@ -21,22 +21,19 @@ holds everything the testbench needs and nothing from the build machine:
 
 ``write_testbench`` simulates nothing: the testbench is an output, and a build does not
 re-verify the partition's computation. ``run_testbench`` runs ``run.sh`` as a user
-would, in a toolchain's environment: the build's step_run_testbench, which a build runs
-only where its list asks for it, and which fails on a mismatch. ``run.sh`` holds the
-same commands ``finn.core.rtlsim_bench.simulate`` runs (``finn.toolchain.xsim.script``),
-with the directory's own paths.
+would, in a toolchain's environment: a utility a test or a user calls, not a step, which
+fails on a mismatch. ``run.sh`` holds the same commands
+``finn.core.rtlsim_bench.simulate`` runs (``finn.toolchain.xsim.script``), with the
+directory's own paths.
 
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
-each beat's elements, packed with lane zero lowest. The frame holds the partition's
-inputs (``testbench_frame``): ``partition_frame`` executes the parent graph on a source
-input (the first in ``verify_input_npy``), or, without that file, ``generated_frame``
-draws each input from its datatype.
+each beat's elements, packed with lane zero lowest. The build's frame draws each of the
+partition's inputs from its datatype (``generated_frame``).
 """
 
 from __future__ import annotations
 
-import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -46,7 +43,6 @@ import numpy as np
 from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.graph.partition import partition_body
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_root
@@ -105,34 +101,6 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
         low, high = int(datatype.min()), int(datatype.max())
         frame[name] = rng.integers(low, high + 1, size=shape, dtype=np.int64)
     return frame
-
-
-def partition_frame(parent: ModelWrapper, source_input: NDArray[Any]) -> dict[str, NDArray[Any]]:
-    """The partition's inputs for ``source_input``, one frame of the source model's
-    input reshaped to the parent graph's input: the parent graph is executed, its
-    partition node running its body (``finn.core.graph.partition.partition_body``)."""
-    node, body, _ = partition_body(parent)
-    shape = parent.get_tensor_shape(parent.graph.input[0].name)
-    if shape is None:
-        raise ValueError(f"{node.name}: the parent graph's input states no shape")
-    frame = source_input.reshape(shape)
-    context = execute_onnx(
-        parent, {parent.graph.input[0].name: frame}, return_full_exec_context=True
-    )
-    return {name: context[name] for name in graph_inputs(body)}
-
-
-def testbench_frame(
-    parent: ModelWrapper, body: ModelWrapper, inputs_file: str | os.PathLike[str]
-) -> tuple[dict[str, NDArray[Any]], str]:
-    """The frame the testbench of the parent graph ``parent``'s partition, ``body``,
-    streams, and what it is: the partition's inputs for the first input of
-    ``inputs_file`` if that file exists (``partition_frame``), else a frame drawn from
-    the body's input datatypes (``generated_frame``)."""
-    if os.path.isfile(inputs_file):
-        frame = partition_frame(parent, np.load(inputs_file)[0])
-        return frame, f"the first input of {os.fspath(inputs_file)}"
-    return generated_frame(body), "a generated frame"
 
 
 def _run_script(top: str, sources: Sequence[str]) -> str:
@@ -194,7 +162,8 @@ def write_testbench(
 
 
 def run_testbench(directory: Path, *, toolchain: Toolchain) -> str:
-    """Run the testbench ``write_testbench`` wrote into ``directory``: its ``run.sh``, in
+    """Run the testbench ``write_testbench`` wrote into ``directory`` (a build's is
+    ``stitched_ip/testbench`` in its output directory): its ``run.sh``, in
     ``toolchain``'s environment with the selected command directory first on ``PATH``.
     Its output goes to a transcript as it runs: in the toolchain's log directory if it
     has one (``Toolchain.transcript``), else beside ``run.sh`` (``run.sh.stdout.log``,
@@ -251,8 +220,6 @@ __all__ = [
     "TESTBENCH_DIR",
     "boundary_words",
     "generated_frame",
-    "partition_frame",
     "run_testbench",
-    "testbench_frame",
     "write_testbench",
 ]

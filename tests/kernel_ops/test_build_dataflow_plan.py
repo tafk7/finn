@@ -30,13 +30,12 @@ from finn.builder.build_dataflow_checks import configuration_findings
 from finn.builder.build_dataflow_config import (
     ConfigurationRefused,
     DataflowBuildConfig,
-    DataflowOutputType,
     StepEntry,
     finding_line,
 )
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_plan import Plan, Step, default_steps, resolve_plan
-from finn.builder.build_dataflow_steps import VERIFYING_STEPS, step_cleanup, step_tidy_up
+from finn.builder.build_dataflow_steps import step_cleanup, step_tidy_up
 from finn.core.space import FindingKind
 from finn.platform.request import TargetRequest
 
@@ -567,84 +566,6 @@ def test_a_target_throughput_without_its_target_is_refused_when_the_plan_resolve
     plan = resolve_plan(config(steps=cut, settings={"target_fps": 1000}))
     assert plan.settings["target_fps"].value == 1000.0
     assert plan.settings["target_fps"].readers == ("step_target_throughput",)
-
-
-# -- the verifying steps -----------------------------------------------------------------------
-
-
-def listed(after: str, check: str) -> list[str]:
-    """The default list with ``check`` after the step ``after``."""
-    steps = default_steps()
-    steps.insert(steps.index(after) + 1, check)
-    return steps
-
-
-STITCHED_IP = [DataflowOutputType.STITCHED_IP]
-
-
-def test_a_check_is_asked_by_listing_its_step() -> None:
-    """No phase holds a verifying step, so the default list runs none; a list asks for
-    each by name. The Python check and the packaging, which writes the testbench, read
-    verify_input_npy, a path in the build directory by default."""
-    assert not {step.__name__ for step in VERIFYING_STEPS} & set(default_steps())
-    steps = listed("step_verify_partition", "step_verify_partition_python")
-    steps.insert(steps.index("step_verify_partition_python") + 1, "step_elaborate_partition")
-    steps.insert(steps.index("step_package_partition") + 1, "step_run_testbench")
-    cfg = config(steps=steps, generate_outputs=STITCHED_IP)
-    plan = resolve_plan(cfg)
-    assert names(plan)[9:14] == [
-        "step_verify_partition",
-        "step_verify_partition_python",
-        "step_elaborate_partition",
-        "step_package_partition",
-        "step_run_testbench",
-    ]
-    asked = plan.settings["verify_input_npy"]
-    assert (asked.value, asked.given) == (Path("input.npy"), False)
-    assert asked.readers == ("step_verify_partition_python", "step_package_partition")
-    in_directory = resolve_plan(replace(cfg, base_dir="/build")).settings["verify_input_npy"]
-    assert in_directory.value == Path("/build/input.npy")
-    # A build resumed after the conversion checks against the model an earlier run saved.
-    resumed = replace(cfg, start_step="step_size_fifos")
-    assert names(resolve_plan(resumed))[:3] == [
-        "step_size_fifos",
-        "step_verify_partition",
-        "step_verify_partition_python",
-    ]
-
-
-def test_a_check_whose_input_no_earlier_step_makes_is_refused() -> None:
-    """The Python check reads the model saved before step_convert_to_hw: the list has
-    that step once, after another, before the check, and intermediate models are saved.
-    The testbench's run reads the testbench a step_package_partition before it writes
-    with stitched_ip. A check the run leaves out is not checked."""
-    uncut = ["phase_create_accelerator", "phase_optimize_hardware"]
-    assert refused(config(steps=[*uncut, "step_verify_partition_python"])) == (
-        "check-order: step_verify_partition_python (step 4 of the run) reads the model "
-        "saved before step_convert_to_hw: the list needs that step once, after another step "
-        "and before the check"
-    )
-    first = ["step_convert_to_hw", "step_verify_partition_python"]
-    assert refused(config(steps=first)).startswith("check-order: step_verify_partition_python")
-    checked = listed("step_verify_partition", "step_verify_partition_python")
-    assert refused(config(steps=checked, save_intermediate_models=False)) == (
-        "intermediate-models-off: configuration.save_intermediate_models: "
-        "step_verify_partition_python (step 11 of the run) reads the model saved before "
-        "step_convert_to_hw"
-    )
-    early = default_steps()
-    early.insert(early.index("step_package_partition"), "step_run_testbench")
-    assert refused(config(steps=early, generate_outputs=STITCHED_IP)) == (
-        "check-order: step_run_testbench (step 11 of the run) runs the testbench "
-        "step_package_partition writes, and no step_package_partition comes before it"
-    )
-    unasked = listed("step_package_partition", "step_run_testbench")
-    assert refused(config(steps=unasked)) == (
-        "testbench-output: configuration.generate_outputs: step_run_testbench (step 12 of "
-        "the run) runs the testbench stitched_ip writes, which is not asked"
-    )
-    left_out = config(steps=unasked, stop_step="step_package_partition")
-    assert names(resolve_plan(left_out))[-1] == "step_package_partition"
 
 
 def test_every_rejection_of_the_settings_and_the_run_is_raised_together() -> None:
