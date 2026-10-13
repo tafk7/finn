@@ -334,8 +334,14 @@ def test_a_pinned_file_is_committed_held_in_the_body_and_the_rest_explored(
     with pytest.raises(ExploreError, match="first.compute.packed.pe: .*domain-membership"):
         kernel_model().transform(ExploreKernelChoices(Pinned(pinned)))
     pinned.write_text(json.dumps({"nobody": {"pe": 1}}))
-    with pytest.raises(ExploreError, match="nobody.pe"):
+    with pytest.raises(ExploreError, match="nobody.pe") as unknown:
         kernel_model().transform(ExploreKernelChoices(Pinned(pinned)))
+    assert [(f.code, f.owner) for f in unknown.value.findings] == [("member-unknown", str(pinned))]
+    # A file that is not JSON is refused, owned by the file.
+    pinned.write_text("{")
+    with pytest.raises(ExploreError) as unread:
+        Pinned(pinned)
+    assert [(f.code, f.owner) for f in unread.value.findings] == [("pins-invalid", str(pinned))]
 
 
 #: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the

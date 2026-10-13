@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from finn import resources
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.hls import stage_hls
 from finn.kernels.artifacts.module import Composed, Leaf, Module
@@ -35,9 +36,14 @@ from finn.toolchain.hls import HlsProduct, synthesize
 from finn.toolchain.launcher import Toolchain
 
 
-class HlsAbiRefused(ValueError):
-    """An HLS product's top contradicts its leaf's declared pins, or cannot be read: a
-    refusal, as every refusal of what a build is asked to build is a ``ValueError``."""
+class HlsAbiRefused(Refusal):
+    """An HLS product's top contradicts its leaf's declared pins (``hls-abi-contradicted``),
+    or cannot be read (``hls-abi-unread``): one rejection, owned by the ABI check
+    (``check_abi``), naming the leaf in its details."""
+
+    def __init__(self, code: str, leaf: str, message: str) -> None:
+        details = (("leaf", leaf),)
+        super().__init__((Finding(FindingKind.REJECTION, code, "check_abi", message, details),))
 
 
 def hls_requests(module: Module) -> tuple[tuple[Leaf, HlsSource], ...]:
@@ -57,9 +63,17 @@ def _verified(leaf: Leaf, product: HlsProduct) -> Path:
     files = sorted(path for path in product.verilog.iterdir() if path.suffix == ".v")
     checked = check_abi(leaf.abi.pins, files, leaf.name)
     if isinstance(checked, Declined):
-        raise HlsAbiRefused(f"{leaf.name}: the RTL checker cannot read the product: {checked}")
+        raise HlsAbiRefused(
+            "hls-abi-unread",
+            leaf.name,
+            f"{leaf.name}: the RTL checker cannot read the product: {checked}",
+        )
     if checked:
-        raise HlsAbiRefused(f"{leaf.name} refuses its declared pins: " + "; ".join(checked))
+        raise HlsAbiRefused(
+            "hls-abi-contradicted",
+            leaf.name,
+            f"{leaf.name} refuses its declared pins: " + "; ".join(checked),
+        )
     return product.verilog
 
 

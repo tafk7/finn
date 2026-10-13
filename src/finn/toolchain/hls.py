@@ -75,11 +75,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.resources import home, tree_digest
 from finn.resources._store import complete, locked, publish
 
 # Modules, not names: the launcher imports this module in turn (``FRONTENDS``).
-from finn.toolchain import host, launcher
+from finn.toolchain import launcher
 
 if TYPE_CHECKING:
     from finn.toolchain.launcher import Toolchain
@@ -121,8 +122,9 @@ def command(
     toolchain: Toolchain, script: str, timeout: float | None = None
 ) -> tuple[str, list[str]]:
     """The selected HLS frontend and its arguments to run ``script``, probing it within
-    ``timeout`` (``finn.toolchain.launcher.PROBE_TIMEOUT`` by default). Raises
-    ``ValueError`` if the probed release does not match the frontend."""
+    ``timeout`` (``finn.toolchain.launcher.PROBE_TIMEOUT`` by default). Refuses a
+    frontend the probed release does not match (``hls-frontend-mismatch``, owned by the
+    selection's ``hls_frontend``)."""
     timeout = launcher.PROBE_TIMEOUT if timeout is None else timeout
     frontend = selected_frontend(toolchain)
     version = toolchain.probe(frontend, timeout)
@@ -134,10 +136,14 @@ def command(
         "vitis-run": version >= (2025, 1),
     }[frontend]
     if not supported:
-        raise ValueError(
+        message = (
             f"FINN HLS frontend {frontend} is incompatible with {version}; "
             "select the matching frontend explicitly"
         )
+        mismatch = Finding(
+            FindingKind.REJECTION, "hls-frontend-mismatch", "toolchain.hls_frontend", message
+        )
+        raise Refusal((mismatch,))
     capability = toolchain.probe_key("hls-capability", frontend)
     if frontend == "vitis-run" and capability not in _CAPABLE:
         # A capability probe keeps no transcript, as a version probe keeps none.
@@ -155,13 +161,16 @@ def host_frontend(environ: Mapping[str, str] | None = None) -> str:
     """The HLS frontend of the release the host file selects
     (``FINN_XILINX_VERSION``, which the environment may override): ``vitis-run``
     from 2025.1, else ``vitis_hls``, which is also the frontend when it names no
-    release. ``ValueError`` when the release is not ``YEAR.MINOR``."""
-    version = host.settings(environ).get("FINN_XILINX_VERSION")
+    release. A release that is not ``YEAR.MINOR`` is refused (``host-setting-invalid``,
+    owned by the setting)."""
+    version = launcher.host_settings(environ).get("FINN_XILINX_VERSION")
     if version is None:
         return "vitis_hls"
     match = re.fullmatch(r"(20\d{2})\.(\d+)", version)
     if match is None:
-        raise ValueError(f"FINN_XILINX_VERSION={version} is not a release (YEAR.MINOR)")
+        raise launcher.setting_refused(
+            "FINN_XILINX_VERSION", f"{version} is not a release (YEAR.MINOR)"
+        )
     return "vitis-run" if tuple(map(int, match.groups())) >= (2025, 1) else "vitis_hls"
 
 

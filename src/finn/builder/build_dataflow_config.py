@@ -173,9 +173,10 @@ class DataflowBuildConfig:
         for index, entry in enumerate(self.steps or ()):
             if callable(entry):
                 name = getattr(entry, "__name__", type(entry).__name__)
-                raise ValueError(
-                    f"configuration.steps[{index}]: {name} is a Python object; JSON names a "
-                    "step by its name or import path"
+                message = f"{name} is a Python object; JSON names a step by its name or import path"
+                place = f"configuration.steps[{index}]"
+                raise ConfigurationRefused(
+                    [config_finding("configuration-invalid", message, place)]
                 )
         stated = {
             item.name: encoded(getattr(self, item.name), f"configuration.{item.name}")

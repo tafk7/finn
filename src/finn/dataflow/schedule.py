@@ -68,11 +68,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import prod
 
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.dataflow.traversal import LevelEnd, Loop, Traversal, axis_strides, require_positive
 
 
-class Refused(ValueError):
-    """A schedule or expression that the requested beat sequence cannot be derived from."""
+class Refused(Refusal):
+    """A schedule or expression that the requested beat sequence cannot be derived from:
+    one ``schedule-refused`` rejection, owned by ``Schedule``, whose rules refuse it."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            (Finding(FindingKind.REJECTION, "schedule-refused", "Schedule", message),),
+            message,
+        )
 
 
 @dataclass(frozen=True, order=True)

@@ -12,7 +12,8 @@ step function. A step is named by its function's name.
 
 **Settings.** A step's keyword-only parameters are its settings, none named like a field
 of the configuration. Each setting given must be declared by a step of the list, and is
-decoded by that step's annotation; each path in it, given or by default, is joined to
+decoded by that step's annotation, to a value JSON can state (the manifest records it);
+each path in it, given or by default, is joined to
 the configuration's ``base_dir``. Steps that declare one name share its value, so they
 must agree on its annotation and default. A setting without a default must be given.
 
@@ -236,6 +237,7 @@ def _settings(
         if name in cfg.settings:
             try:
                 value = decoded(kind, cfg.settings[name], place)
+                encoded(value, place)
             except ValueError as invalid:
                 refused.append(undecoded("setting-invalid", invalid))
                 continue

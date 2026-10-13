@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
 from finn.core.space import Rejected, design_space, inspection
 from finn.custom_op.kernels import matmul as matmul_op
@@ -26,6 +27,7 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -138,6 +140,24 @@ def test_a_node_alone_is_a_network_of_its_kernel_and_its_boundaries() -> None:
     activate = kernel_op(thresholding, thresholding.graph.node[0]).network()
     assert activate.order == ("x", "activate", "y")  # thresholds: a fact, no channel
     assert activate.wiring("x").facts["port"] == "in0_V"
+
+
+def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Where the node alone has no baseline, conversion's admission is the exploration's
+    refusal, owned by the refusing Decision's key, the node in its details."""
+    model = matmul_model()
+    op = kernel_op(model, model.graph.node[0])
+
+    def refuse(self: Seam, network: object) -> object:
+        raise ExploreError("decision-no-viable-case", "compute", "no case is viable: none")
+
+    monkeypatch.setattr(Seam, "baseline", refuse)
+    with pytest.raises(KernelOpError, match="first: no baseline: compute: decision-no-viable"):
+        op.baselined()
+    ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in op.admission()]
+    assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})
 
 
 def facts(digest: str, *, size: int = 4) -> Facts:

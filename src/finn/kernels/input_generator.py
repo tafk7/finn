@@ -51,6 +51,7 @@ from math import prod
 from pathlib import Path
 
 from finn import resources
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -321,8 +322,16 @@ class InputGeneratorKernel(LeafKernel):
 # -- the buffer, as the RTL derives it -------------------------------------------------------
 
 
-class GeometryError(ValueError):
-    """A nest whose buffer could not be read from the RTL: slang declined, named."""
+class GeometryError(Refusal):
+    """A nest whose buffer could not be read from the RTL: slang declined, named. One
+    ``input-generator-geometry`` rejection, owned by ``input_gen``, the RTL module whose
+    elaboration declined."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            (Finding(FindingKind.REJECTION, "input-generator-geometry", "input_gen", message),),
+            message,
+        )
 
 
 @dataclass(frozen=True)

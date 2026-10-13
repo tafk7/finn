@@ -413,12 +413,25 @@ def bitfile_directory(model: ModelWrapper) -> Path | None:
     return Path(bitfile).parents[len(BITFILE.parts) - 1]
 
 
+#: The transformation that makes each output the ``pynq`` shell builds, by the output's
+#: name: who refuses to make it.
+MAKERS = {
+    "bitfile": "BuildPynqBitfile",
+    "pynq_driver": "MakePynqDriver",
+    "deployment_package": "MakePynqDeployment",
+}
+
+
 class PynqRefused(Refusal):
     """An output the ``pynq`` shell refuses to make: its one finding (``findings``), owned
-    by the output asked, its message saying what to change."""
+    by who refused, the transformation making the output (``MAKERS``) unless ``owner``
+    names another (the configuration's field to change), the output in its details,
+    its message saying what to change."""
 
-    def __init__(self, output: str, code: str, message: str) -> None:
-        super().__init__((Finding(FindingKind.REJECTION, code, output, message),))
+    def __init__(self, output: str, code: str, message: str, owner: str | None = None) -> None:
+        refuser = MAKERS[output] if owner is None else owner
+        details = (("output", output),)
+        super().__init__((Finding(FindingKind.REJECTION, code, refuser, message, details),))
 
 
 def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
@@ -435,6 +448,7 @@ def pynq_row(model: ModelWrapper, output: str) -> ShellRow:
             "shell-integrates-nothing",
             f"the {target.shell!r} shell does not integrate the partition; "
             "state a shell that does (pynq, for a board)",
+            owner="configuration.target.shell",
         )
     if row.integration != VIVADO_BLOCK_DESIGN:
         raise PynqRefused(
@@ -603,6 +617,7 @@ __all__ = [
     "BITFILE",
     "DELIVERED_CLOCK",
     "HWH",
+    "MAKERS",
     "REPORTS",
     "BuildPynqBitfile",
     "InstanceIP",

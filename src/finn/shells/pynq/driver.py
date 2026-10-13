@@ -243,7 +243,12 @@ def write_driver(export: Integration, directory: str, fclk_mhz: float, bitfile: 
     write_pynq_driver_support(directory)
     host_runtime = export.host_runtime
     if host_runtime is None:
-        raise ValueError(f"the {export.shell!r} shell states no host runtime to drive")
+        raise PynqRefused(
+            "pynq_driver",
+            "host-runtime-absent",
+            f"the {export.shell!r} shell states no host runtime to drive",
+            owner="configuration.target.shell",
+        )
     with open(os.path.join(directory, "driver.py"), "w") as f:
         f.write(pynq_driver_text(host_runtime, driver_shapes(export), fclk_mhz, bitfile))
 
@@ -300,7 +305,9 @@ def delivered_mhz(directory: Path) -> float:
     clock = json.loads(report.read_text())
     if "delivered_mhz" not in clock:
         known = "; ".join(finding["message"] for finding in clock.get("findings", ()))
-        raise ValueError(f"pynq_driver: the bitfile's clock is not known: {known}")
+        raise PynqRefused(
+            "pynq_driver", "clock-unknown", f"the bitfile's clock is not known: {known}"
+        )
     return float(clock["delivered_mhz"])
 
 

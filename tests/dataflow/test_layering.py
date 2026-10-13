@@ -17,11 +17,12 @@ def test_imports_follow_the_layer_table(layer: Layer) -> None:
     assert not violations(layer)
 
 
-def test_the_values_import_no_other_layer() -> None:
-    """``finn.dataflow`` is engine-free: its row names no layer, so an import of
-    ``finn.core.space`` (or any other FINN layer) is a violation."""
+def test_the_values_import_only_the_findings() -> None:
+    """``finn.dataflow`` is engine-free: its row names only the findings its refusals
+    carry, so an import of ``finn.core.space`` (or any other FINN layer) is a
+    violation."""
 
-    assert BY_NAME["dataflow"].imports == ()
+    assert BY_NAME["dataflow"].imports == ("reporting",)
     assert BY_NAME["tests.dataflow"].imports == (
         "dataflow",
         "tests.layering",

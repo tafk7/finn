@@ -57,6 +57,7 @@ from finn.shells.pynq.runner import (
     BuildPynqBitfile,
     InstanceIP,
     PynqOptions,
+    PynqRefused,
     bitfile_directory,
     block_design,
     build_pynq,
@@ -522,9 +523,11 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
     vivado = FakeVivado()
     building = BuildPynqBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado))
     with pytest.raises(
-        ValueError, match="bitfile: shell-integrates-nothing: the 'ip' shell does not integrate"
-    ):
+        PynqRefused,
+        match="configuration.target.shell: shell-integrates-nothing: the 'ip' shell does not",
+    ) as refused:
         parent.transform(building)
+    assert [dict(each.details) for each in refused.value.findings] == [{"output": "bitfile"}]
     assert not (tmp_path / "output").exists() and vivado.runs == []
 
 
@@ -697,7 +700,7 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     _, body, _ = partition_body(parent)
     parent.set(OUTPUT_BITFILE, str(output / BITFILE))
     parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
-    with pytest.raises(ValueError, match="pynq_driver: clock-absent: no delivered clock"):
+    with pytest.raises(PynqRefused, match="MakePynqDriver: clock-absent: no delivered clock"):
         parent.transform(MakePynqDriver(output))
     assert not output.exists()
     (output / DELIVERED_CLOCK).parent.mkdir(parents=True)
@@ -731,7 +734,8 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     configure_partition(model)
     on_ip = model.transform(CutKernelPartition(tmp_path / "ip"))
     with pytest.raises(
-        ValueError, match="pynq_driver: shell-integrates-nothing: the 'ip' shell does not integrate"
+        PynqRefused,
+        match="configuration.target.shell: shell-integrates-nothing: the 'ip' shell does not",
     ):
         on_ip.transform(MakePynqDriver(tmp_path / "ip_output"))
     assert not (tmp_path / "ip_output").exists()

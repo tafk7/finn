@@ -229,11 +229,11 @@ def test_json_names_steps_so_a_python_object_in_a_list_is_refused_when_written()
     in_steps = DataflowBuildConfig(
         output_dir="out", target=target, steps=["phase_prepare_model", step_mine]
     )
-    with pytest.raises(ValueError) as refused:
+    with pytest.raises(ConfigurationRefused) as refused:
         in_steps.to_json()
     assert str(refused.value) == (
-        "configuration.steps[1]: step_mine is a Python object; JSON names a step by its name "
-        "or import path"
+        "configuration.steps[1]: configuration-invalid: step_mine is a Python object; JSON "
+        "names a step by its name or import path"
     )
 
 

@@ -5,7 +5,8 @@
 
 ``finn.dataflow`` holds canonical logical values. Its import statements are
 checked against the layer table (``tests/layering.py``): QONNX's datatype
-module, numpy and the standard library, no engine.
+module, numpy, the standard library and the findings its refusals carry
+(``finn.core.reporting``), no engine.
 """
 
 from __future__ import annotations
@@ -29,9 +30,10 @@ def test_dataflow_loads_no_engine_or_kernels_at_runtime() -> None:
             "bad = sorted(",
             "    name for name in sys.modules",
             "    if name.startswith(",
-            "        ('finn.core', 'finn.kernels', 'finn.custom_op',",
+            "        ('finn.core.', 'finn.kernels', 'finn.custom_op',",
             "         'onnx', 'greenlet')",
             "    )",
+            "    and not name.startswith('finn.core.reporting')",
             "    or (",
             "        name.startswith('qonnx.')",
             "        and name not in ('qonnx.core', 'qonnx.core.datatype')",

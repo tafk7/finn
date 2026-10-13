@@ -44,6 +44,7 @@ from numpy.typing import NDArray
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.onnx_exec import execute_onnx
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
 from finn.custom_op.kernels.shell import configured_root
 from finn.dataflow.traversal import pack
@@ -90,13 +91,19 @@ def boundary_words(
 def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]]:
     """One frame of the partition's inputs, each drawn uniformly (seeded) from its
     datatype's integers, as int64: FINN executes the body on integers as they are
-    (``finn.core.onnx_exec``)."""
+    (``finn.core.onnx_exec``). An input that is not an integer is refused
+    (``input-not-integer``)."""
     rng = np.random.default_rng(seed)
     frame: dict[str, NDArray[Any]] = {}
     for name in graph_inputs(body):
         datatype = body.get_tensor_datatype(name)
         if not datatype.is_integer():
-            raise ValueError(f"{name}: a {datatype.name} input; the testbench streams integers")
+            message = f"{name}: a {datatype.name} input; the testbench streams integers"
+            details = (("tensor", name),)
+            refused = Finding(
+                FindingKind.REJECTION, "input-not-integer", "generated_frame", message, details
+            )
+            raise Refusal((refused,))
         shape = body.get_tensor_shape(name)
         low, high = int(datatype.min()), int(datatype.max())
         frame[name] = rng.integers(low, high + 1, size=shape, dtype=np.int64)

@@ -22,7 +22,7 @@ from pathlib import Path
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE, finn_revision
-from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.reporting.manifest import RECORDS, note, reported
 from finn.platform.request import TargetRequest
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
@@ -158,10 +158,16 @@ def raising(error):
     return step_fails
 
 
-class Refused(ValueError):
+class Refused(Refusal):
     def __init__(self, findings):
-        super().__init__(f"{len(findings)} reasons")
-        self.findings = tuple(findings)
+        super().__init__(findings, f"{len(findings)} reasons")
+
+
+def untyped(findings):
+    """A plain ValueError carrying findings: a bug, since a refusal is told by its type."""
+    error = ValueError(f"{len(findings)} reasons")
+    error.findings = tuple(findings)
+    return error
 
 
 @pytest.mark.parametrize(
@@ -171,6 +177,7 @@ class Refused(ValueError):
         (ToolFailed("vivado", 1, "/logs/package.sh.stdout.log", ("ERROR: no",)), "tool-failed"),
         (ToolUnavailable("vivado", "not on the route"), "tool-unavailable"),
         (AssertionError("unreachable"), "bug"),
+        (untyped([blocker("odd")]), "bug"),
     ],
 )
 def test_a_failed_step_is_the_outcome_by_its_kind(tmp_path, error, kind):

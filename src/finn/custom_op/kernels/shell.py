@@ -244,7 +244,7 @@ def _fan_out(
         else:
             continue
         details = (("tensor", tensor),)
-        found.append(Finding(FindingKind.LIMITATION, "tensor-fan-out", "fan_out", message, details))
+        found.append(Finding(FindingKind.REJECTION, "tensor-fan-out", "fan_out", message, details))
     return found
 
 

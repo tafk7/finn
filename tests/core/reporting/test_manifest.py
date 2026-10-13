@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.reporting.log import running_step
 from finn.core.reporting.manifest import (
     RECORDS,
@@ -87,12 +87,13 @@ def test_a_step_lists_its_reports_tool_runs_and_noted_findings(
 
 
 def test_a_failed_step_is_the_outcome_with_its_refusals_findings_by_code(tmp_path: Path) -> None:
-    class Refused(ValueError):
-        findings = (limitation("odd"), limitation("odd"), limitation("x"))
+    class Refused(Refusal):
+        pass
 
+    refused = Refused((limitation("odd"), limitation("odd"), limitation("x")), "no")
     manifest = Manifest(tmp_path / "run.json", tmp_path, {})
     manifest.step_started("probe")
-    manifest.failed("probe", "refusal", Refused("no"))
+    manifest.failed("probe", "refusal", refused)
     manifest.step_ended("failed", 0.0)
     stated = read(manifest)
     assert stated["outcome"] == {
