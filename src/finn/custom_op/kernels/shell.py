@@ -401,8 +401,9 @@ def _channels(
     ports: Mapping[str, str],
 ) -> dict[str, Declared]:
     """The root's channels by tensor, in node order: a node's inputs on an edge or the
-    boundary, the parameter channels it owns (the initializer's tensor; its value, the
-    contents, is bound when the class is built), its outputs."""
+    boundary, the parameter channels it owns (the initializer's tensor, its kernel's
+    fact; the channel carries what the kernel states for it, bound when the class is
+    built), its outputs."""
     parameters = {tensor for tensors in owned for tensor in tensors.values()}
     channels: dict[str, Declared] = {}
 

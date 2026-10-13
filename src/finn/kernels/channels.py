@@ -110,7 +110,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import cast
 
 from finn.core.space import (
     ConstraintGroup,
@@ -749,7 +748,7 @@ def end_of(member: str, interface: str) -> PortEnd:
         found: PortEnd = getattr(getattr(self, member), interface)
         return found.under(member)
 
-    return cast(PortEnd, derived(semantics=PORT_END)(end))
+    return derived(semantics=PORT_END)(end)
 
 
 def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
