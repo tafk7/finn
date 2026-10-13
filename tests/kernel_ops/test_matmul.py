@@ -201,10 +201,10 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     assert op(model).verify_node() == []
     # The weights' columns change from 4 to 6: pe = 4 no longer divides them.
     model.set_initializer("w", np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32))
-    # Until inference states y again, the node root carries the graph's stale y,
-    # which the kernel's extents refuse.
+    # The kernel states its results from its inputs, never from the graph's y: the stale
+    # choice is refused at once, before inference states y again.
     stale = op(model).verify_node()
-    assert len(stale) == 1 and "kernel-extents: n is 6 (w axis 1) and 4 (y axis 1)" in stale[0]
+    assert len(stale) == 1 and "compute.packed.pe: " in stale[0]
     model = model.transform(InferKernelTensors())
     problems = op(model).verify_node()
     assert len(problems) == 1 and "compute.packed.pe: " in problems[0]

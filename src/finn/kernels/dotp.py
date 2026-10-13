@@ -519,8 +519,16 @@ class PackedDotpKernel(DotpAxiKernel):
         return True
 
     @constraint
-    def accumulator_width_supported(self) -> bool:
-        """Any width: the packed lanes resolve the sum modulo ``2**ACCU_WIDTH``."""
+    def accumulator_width_supported(self) -> bool | Rejected:
+        """Any width of a bit or more (FinnLib ``229b35f``: ``ACCU_WIDTH >= 1``): the packed
+        lanes resolve the sum modulo ``2**ACCU_WIDTH``."""
+        bits = self.y.element.bits
+        if bits < 1:
+            return reject(
+                "dotp-accumulator-width",
+                "the packed core's ACCU_WIDTH is at least 1 (FinnLib dotp.sv)",
+                values={"actual_bits": bits, "minimum_bits": 1},
+            )
         return True
 
     admission = ConstraintGroup(
