@@ -6,10 +6,13 @@
 Datatype Space semantics are covered in tests/kernels.
 """
 
+import math
+from fractions import Fraction
 from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
+from qonnx.core.ranges import TensorRange
 
 from finn.dataflow.datatypes import (
     DatatypeError,
@@ -129,36 +132,61 @@ def test_a_tensor_holds_the_one_immutable_datatype_value() -> None:
         setattr(supplied, "name", "INT9")  # the frozen value refuses any write
     # The element holds the value itself, so its equality, hash and repr are the value's.
     assert tensor.element == ScalarEncoding(DataType["INT8"])
-    assert repr(tensor.element) == "ScalarEncoding(dtype=INT8, value_range=(-128, 127))"
+    assert repr(tensor.element) == (
+        "ScalarEncoding(dtype=INT8, value_range=TensorRange(least=-128, greatest=127, nan=False))"
+    )
     assert tensor.element.dtype.name == "INT8" and tensor.element.bits == 8
 
 
 def test_an_element_is_a_datatype_and_the_range_of_its_values() -> None:
     plain = ScalarEncoding(DataType["INT8"])
-    assert plain.value_range == (-128, 127)
+    assert plain.value_range == TensorRange(-128, 127) and not plain.stated
     # Normalized: the datatype's own range stated is the plain element.
-    full = ScalarEncoding(DataType["INT8"], (-128, 127))
+    full = ScalarEncoding(DataType["INT8"], TensorRange(-128, 127))
     assert full == plain and hash(full) == hash(plain)
-    narrow = ScalarEncoding(DataType["INT8"], (-127, 127))
-    assert narrow != plain
+    narrow = ScalarEncoding(DataType["INT8"], TensorRange(-127, 127))
+    assert narrow != plain and narrow.stated
     assert (str(plain), str(narrow)) == ("INT8", "INT8 over [-127, 127]")
-    assert ScalarEncoding(DataType["UINT2"]).value_range == (0, 3)
-    # A non-integer encoding carries its datatype alone.
-    assert ScalarEncoding(DataType["FLOAT32"]).value_range is None
+    assert ScalarEncoding(DataType["UINT2"]).value_range == TensorRange(0, 3)
     assert str(ScalarEncoding(DataType["BIPOLAR"])) == "BIPOLAR"
 
 
+def test_any_numeric_element_carries_a_range() -> None:
+    """A float's own range is unbounded, with NaN (``qonnx.core.ranges.full``); a range
+    stated of it may be narrower, with dyadic ends, and without NaN."""
+    floats = ScalarEncoding(DataType["FLOAT32"])
+    assert floats.value_range == TensorRange(-math.inf, math.inf, nan=True)
+    assert str(floats) == "FLOAT32"
+    clipped = ScalarEncoding(DataType["FLOAT32"], TensorRange(0, Fraction(3, 4)))
+    assert str(clipped) == "FLOAT32 over [0, 3*2^-2]"
+    assert clipped.fits(floats) and not floats.fits(clipped)
+    fixed = ScalarEncoding(DataType["FIXED<8,4>"], TensorRange(Fraction(-1, 2), 1))
+    assert fixed.stated and fixed.fits(ScalarEncoding(DataType["FIXED<8,4>"]))
+
+
 @pytest.mark.parametrize(
-    ("name", "bounds"),
-    (("INT3", (-5, 3)), ("INT3", (2, 1)), ("UINT4", (0, 16)), ("FLOAT32", (0, 1))),
+    ("name", "stated"),
+    (
+        ("INT3", TensorRange(-5, 3)),
+        ("UINT4", TensorRange(0, 16)),
+        ("INT8", TensorRange(0, Fraction(1, 2))),  # not integers
+        ("INT8", TensorRange(0, 1, nan=True)),
+        ("FIXED<8,4>", TensorRange(0, math.inf)),
+    ),
 )
-def test_a_range_must_be_one_the_datatype_holds(name: str, bounds: tuple[int, int]) -> None:
+def test_a_range_must_be_one_the_datatype_holds(name: str, stated: TensorRange) -> None:
     with pytest.raises(ValueError):
-        ScalarEncoding(DataType[name], bounds)
+        ScalarEncoding(DataType[name], stated)
+
+
+def test_a_range_is_a_tensor_range() -> None:
+    with pytest.raises(TypeError):
+        ScalarEncoding(DataType["INT3"], cast(TensorRange, (-1, 1)))
 
 
 def test_an_element_fits_another_with_its_datatype_and_a_range_around_its_own() -> None:
-    int4, narrow = ScalarEncoding(DataType["INT4"]), ScalarEncoding(DataType["INT4"], (-7, 7))
+    int4 = ScalarEncoding(DataType["INT4"])
+    narrow = ScalarEncoding(DataType["INT4"], TensorRange(-7, 7))
     assert narrow.fits(int4) and not int4.fits(narrow)
     assert narrow.fits(narrow) and int4.fits(int4)
     assert not ScalarEncoding(DataType["INT3"]).fits(int4)  # another datatype, whatever its range

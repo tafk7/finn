@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from qonnx.core.datatype import DataType
+from qonnx.core.ranges import TensorRange
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Available, Rejected, design_space
@@ -109,9 +110,9 @@ def hidden_on(element: ScalarEncoding) -> object:
 def test_a_matmuls_results_fit_their_channels_tensor():
     """MatMul's results (``y_tensor``: H over its columns' range) fit a plainly stated
     channel of their type, not one of another type or a tighter range."""
-    assert chain().member("first").y_tensor.element == ScalarEncoding(H, (-28, 28))
+    assert chain().member("first").y_tensor.element == ScalarEncoding(H, TensorRange(-28, 28))
     assert hidden_on(ScalarEncoding(H)) == Available(True)
-    for element in (ScalarEncoding(DataType["INT32"]), ScalarEncoding(H, (0, 1))):
+    for element in (ScalarEncoding(DataType["INT32"]), ScalarEncoding(H, TensorRange(0, 1))):
         refused = hidden_on(element)
         assert isinstance(refused, Rejected)
         assert {finding.code for finding in refused.findings} == {"channel-tensor"}
@@ -136,14 +137,14 @@ def carried(
 
 def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_produces():
     plain_a, plain_w = ScalarEncoding(A), ScalarEncoding(W)
-    tight = ScalarEncoding(A, (-3, 3))  # INT3 without -4
+    tight = ScalarEncoding(A, TensorRange(-3, 3))  # INT3 without -4
     accepted = Available(True)
     # Consumed: the activations' datatype is their tensor's, at any range.
     assert carried(tight, plain_w) == accepted
     assert carried(plain_a, plain_w) == accepted
     # Weights are consumed: known, MatMul states their tensor over their range, in the
     # datatype they are declared in; streamed, their datatype is their tensor's.
-    assert carried(plain_a, ScalarEncoding(W, (-3, 3))) == accepted
+    assert carried(plain_a, ScalarEncoding(W, TensorRange(-3, 3))) == accepted
     assert carried(plain_a, tight, known=False) == accepted
     assert carried(plain_a, ScalarEncoding(DataType["INT4"]), known=False) == accepted
     # A datatype stated twice is refused: streamed weights' is their tensor's.

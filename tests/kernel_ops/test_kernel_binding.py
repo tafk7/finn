@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from qonnx.core.ranges import TensorRange
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
@@ -84,7 +85,7 @@ def test_the_views_answer_from_facts() -> None:
             platform=TARGET.platform, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3))
         )
     )
-    assert streamed.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), (-48, 64)))
+    assert streamed.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), TensorRange(-48, 64)))
     owned = design_space(
         MatMulKernel(
             platform=TARGET.platform,
@@ -93,10 +94,10 @@ def test_the_views_answer_from_facts() -> None:
             weights_dtype=INT3,
         )
     )
-    assert owned.y_tensor == Tensor((1, 3, 4), ScalarEncoding(dtype("INT5"), (-11, 11)))
+    assert owned.y_tensor == Tensor((1, 3, 4), ScalarEncoding(dtype("INT5"), TensorRange(-11, 11)))
     # MatMul reads its weights' declared datatype; the channel carries their range.
     assert owned.weight_tensor == Tensor((4, 4), ScalarEncoding(INT3))
-    assert owned.w_carried == Tensor((4, 4), ScalarEncoding(dtype("INT2"), (-1, 1)))
+    assert owned.w_carried == Tensor((4, 4), ScalarEncoding(dtype("INT2"), TensorRange(-1, 1)))
     table = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(4)),)
     facts: dict[str, Any] = dict(
         threshold_dtype=dtype("INT8"), thresholds=table, bias=0, platform=TARGET.platform

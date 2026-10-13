@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from qonnx.core.datatype import DataType
+from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
     Available,
@@ -384,7 +385,7 @@ def test_each_core_accumulates_in_the_ranges_own_encoding(space_type, result_ran
         space_type, **facts, result_dtype=DataType[accumulator], result_range=result_range
     )
     assert point.accumulator == DataType[accumulator]
-    assert point.y.element == ScalarEncoding(DataType[accumulator], result_range)
+    assert point.y.element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
     assert dict(point.module.parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
 
 

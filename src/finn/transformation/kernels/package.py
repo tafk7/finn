@@ -177,7 +177,7 @@ def boundary_facts(
             "tensor": tensor,
             "shape": list(shape(model, tensor, label)),
             "element": element.dtype.name,
-            "range": None if element.value_range is None else list(element.value_range),
+            "range": list(element.value_range.span) if element.value_range.is_integer() else None,
             "lanes": int(side.form.lanes),
             "beats": int(side.form.beats),
             "tdata": int(side.transport.data_width),

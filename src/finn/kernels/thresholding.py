@@ -20,7 +20,8 @@ channels. The input and output walk one schedule row-major, ``c`` split by PE
 innermost; the input's tensor binds the extents, and the table has one row or one
 row a channel (``threshold-rows``). The input's element is its tensor's
 (``input_dtype``, WI). The output, the kernel's statement (``output_tensor``), is the
-input's shape in the counts plus bias (``result_dtype``). The set port indexes
+input's shape in the counts plus bias (``result_dtype``), over their range, ``[bias,
+bias + N]``. The set port indexes
 beats, which no index of a tensor expresses, so it presents a given sequence.
 
 The threshold memories are the kernel's choice of resource, by pipeline stage.
@@ -61,6 +62,8 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 from __future__ import annotations
 
 from collections.abc import Sequence
+
+from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
     ConstraintGroup,
@@ -490,11 +493,13 @@ class ThresholdingAxiKernel(LeafKernel):
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
-        """Its output: the input's shape, in the counts plus bias (``result_dtype``)."""
+        """Its output: the input's shape, in the counts plus bias (``result_dtype``), over
+        their range, ``[bias, bias + N]``."""
         shape = self.spanned(self.indices)
         if isinstance(shape, Rejected):
             return shape
-        element = admit_element(self.result_dtype, None)
+        _, _, count = self.shape
+        element = admit_element(self.result_dtype, TensorRange(self.bias, self.bias + count))
         if isinstance(element, Rejected):
             return element
         return Tensor(shape, element)

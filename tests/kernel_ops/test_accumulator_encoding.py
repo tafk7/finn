@@ -85,7 +85,7 @@ class Case:
 
 def _unsigned() -> Case:
     w1 = tuple(tuple((n + 2 * k) % 4 for n in range(4)) for k in range(8))
-    hidden = range_dtype(*column_range(DataType["UINT2"], w1))
+    hidden = range_dtype(*column_range(ScalarEncoding(DataType["UINT2"]), w1))
     thresholds = tuple((3 + c, 20 + 2 * c, 40 - c) for c in range(4))
     w2 = tuple(tuple((3 * n + k) % 7 - 3 for n in range(2)) for k in range(4))
     assert hidden.name == "UINT6"  # column sums up to 16, over [0, 3]: [0, 48]

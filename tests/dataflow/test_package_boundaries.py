@@ -4,9 +4,9 @@
 """The value layer at runtime: what importing it loads, and its package root.
 
 ``finn.dataflow`` holds canonical logical values. Its import statements are
-checked against the layer table (``tests/layering.py``): QONNX's datatype
-module, numpy, the standard library and the findings its refusals carry
-(``finn.core.reporting``), no engine.
+checked against the layer table (``tests/layering.py``): QONNX's datatype and
+range modules (values, which load no ONNX), numpy, the standard library and the
+findings its refusals carry (``finn.core.reporting``), no engine.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def test_dataflow_loads_no_engine_or_kernels_at_runtime() -> None:
             "    and not name.startswith('finn.core.reporting')",
             "    or (",
             "        name.startswith('qonnx.')",
-            "        and name not in ('qonnx.core', 'qonnx.core.datatype')",
+            "        and name not in ('qonnx.core', 'qonnx.core.datatype', 'qonnx.core.ranges')",
             "    )",
             ")",
             "raise SystemExit('loaded: ' + ', '.join(bad) if bad else 0)",

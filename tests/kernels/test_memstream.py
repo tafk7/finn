@@ -12,6 +12,7 @@ through in2_V.
 
 import pytest
 from qonnx.core.datatype import DataType
+from qonnx.core.ranges import TensorRange
 
 from finn.core.space import Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
@@ -102,7 +103,7 @@ def test_the_output_element_carries_the_range_of_every_set():
     # Several sets: the range spans them all.
     sets = (narrow, tuple(tuple(min(value, 1) for value in row) for row in narrow))
     several = memory(contents=sets, sets=2)
-    assert several.element == ScalarEncoding(DataType["INT3"], (-3, 3))
+    assert several.element == ScalarEncoding(DataType["INT3"], TensorRange(-3, 3))
     refused = memory(contents=((4,) * 4,) * 4).query(MemStreamKernel.element)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"memstream-values"}
