@@ -235,7 +235,7 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     levels = explored.member("levels")
     labels = [stage.label for stage in levels.stages]
     assert labels.index("transport.fifo.buffer") < labels.index("adapter.input_gen.input_gen")
-    word = levels.transport.word_bits
+    word = levels.transport.buffer.word_bits
     assert explorer.cost(explored).buffering["levels"] >= 16 * word
 
 

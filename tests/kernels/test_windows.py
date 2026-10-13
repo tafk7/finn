@@ -33,9 +33,8 @@ from finn.kernels.adapters import ADAPTERS, Stage
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.configure import commit
-from finn.kernels.input_generator import InputGeneratorKernel
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2
+from kernels.helpers import FULL_DSP48E2, generator_node
 from kernels.xsim import requires_xsim
 
 ELEMENT = ScalarEncoding(DataType["INT8"])
@@ -121,13 +120,7 @@ def test_a_three_by_three_window_steps_rows_pixels_and_channel_beats() -> None:
 def test_the_reviews_flat_probe_is_the_adapters_module() -> None:
     # A flat 3 x 3 window over a 4 x 4 map, as the kernel-system review built it by hand.
     flat = design_space(
-        InputGeneratorKernel(
-            word_bits=8,
-            frame_words=16,
-            dims=(2, 2, 3, 3),
-            strides=(4, 1, 4, 1),
-            platform=FULL_DSP48E2,
-        )
+        generator_node(bits=8, frame=16, dims=(2, 2, 3, 3), strides=(4, 1, 4, 1))
     ).with_choices(ram_style="auto")
     stage = adapter(*three_by_three(4, 4, 1, 1))
     module = flat.module

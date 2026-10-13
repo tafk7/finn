@@ -12,13 +12,14 @@ Every folding factor is a Decision (dotp's and MatMul's PE and SIMD sampled;
 thresholding's and eltwise's PE and transpose's SIMD given as configurations);
 memstream's ``form``, a fact of its consumer, is given.
 
-A channel stage's ports are opaque words, and the channel's adapter states what
-they carry (``finn.kernels.adapters.realize``). Its case places the stage on
-two channels (``kernels.specs.stages``'s ``StagedFifo``, ``StagedVpc``,
-``StagedInputGenerator``: its module, its native pins, ports presenting what its
-realization gives them), so XSim checks that the RTL walks the realization: a
-FIFO in each storage its RTL implements, width conversions, and input_gen's
-reorders (a transpose, and a replay). MatMul's activations are replayed and
+A channel stage presents on its ports the beat sequences the channel's adapter
+gives it (``finn.kernels.adapters.realize``), and derives its generics from them.
+Its case places the stage on two channels (``kernels.specs.stages``'s
+``StagedFifo``, ``StagedVpc``, ``StagedInputGenerator``: the stage under the
+harness's id, its ports presenting what its realization gives them, its generics
+checked), so XSim checks that the RTL walks the realization: a FIFO in each storage
+its RTL implements, width conversions, and input_gen's reorders (a transpose, and a
+replay). MatMul's activations are replayed and
 framed by its channel's adapter.
 
 The harness's reason to exist: a thresholding kernel that declares an order

@@ -5,12 +5,13 @@
 between.
 
 No KernelOp reaches a channel stage: a channel's adapter places it (``finn.kernels.
-adapters.realize``). Its ports are opaque words, and its realization states what they
-carry; its case places it on two channels (``StagedFifo``, ``StagedVpc``,
-``StagedInputGenerator``: its module, its native pins, ports presenting what its
-realization gives them, and their ends), so XSim checks that the RTL walks the
-realization. Its
-test-side reference is the identity: a stage moves elements, it computes none.
+adapters.realize``), giving it its tensor and the beat sequences its ports present. Its
+case places the stage itself on two channels, its ports presenting what its realization
+gives them, so XSim checks that the RTL walks the realization; each configuration states
+the generics the stage derives from them, which the harness checks. Each case's class is
+its stage under the harness's own id (``StagedFifo``, ``StagedVpc``,
+``StagedInputGenerator``), which seeds its stimulus. Its test-side reference is the
+identity: a stage moves elements, it computes none.
 """
 
 from __future__ import annotations
@@ -18,17 +19,15 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from finn.core.space import Param, derived
+from finn.core.space import derived
 from finn.dataflow.plan import plan
-from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
-from finn.kernels.adapters import Convert, Generate, RealizedStage, realize
+from finn.kernels.adapters import Convert, RealizedStage, realize
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, interface
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.input_generator import Generate, InputGeneratorKernel
+from finn.kernels.port import native_stream
 from finn.kernels.vpc import VpcKernel
 from kernels.adapted import columns_first
 from kernels.helpers import FULL_DSP48E2
@@ -36,105 +35,33 @@ from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
 from kernels.specs.thresholding import tensor
 
 
-def stage_ports(
-    input_tensor: Any, output_tensor: Any, arriving: Any, leaving: Any
-) -> tuple[AxiStreamPort, AxiStreamPort]:
-    """A channel stage's native pins on the tensor the harness gives and the one it moves
-    it to, presenting the beat sequences its realization gives them (``arriving``,
-    ``leaving``).
-
-    On a channel a stage's ports are opaque words (``WordPort``) and its adapter states
-    what they carry (``finn.kernels.adapters.realize``); here the ports take tensors,
-    present exactly that, and their ends sit on the harness's channels, so XSim checks
-    that the RTL walks it.
-    """
-    input = AxiStreamPort(
-        name="input",
-        endpoint=Endpoint.TARGET,
-        tensor=input_tensor,
-        sequence=arriving,
-        signals=("idat", "ivld", "irdy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
-    )
-    output = AxiStreamPort(
-        name="output",
-        endpoint=Endpoint.INITIATOR,
-        tensor=output_tensor,
-        sequence=leaving,
-        signals=("odat", "ovld", "ordy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
-    )
-    return input, output
-
-
 class StagedFifo(FifoKernel):
-    """FifoKernel between two tensors: what arrives leaves unchanged."""
+    """FifoKernel under the harness's id: what arrives leaves unchanged."""
 
     id = "test.staged.fifo"
-    input_tensor: Tensor = Param(required=False)
-    arriving: BeatSequence = Param()
-    leaving: BeatSequence = Param()
-
-    @derived
-    def output_tensor(self) -> Tensor:
-        """What it moves its input to: the same tensor."""
-        tensor: Tensor = self.input_tensor
-        return tensor
-
-    # On tensors, in place of the stage's opaque word ports (WordPort).
-    input, output = stage_ports(  # type: ignore[assignment]
-        input_tensor, output_tensor, arriving, leaving
-    )
-    input_end = interface("input")
-    output_end = interface("output")
 
 
 class StagedVpc(VpcKernel):
-    """VpcKernel between two tensors: a width conversion."""
+    """VpcKernel under the harness's id: a width conversion."""
 
     id = "test.staged.vpc"
-    input_tensor: Tensor = Param(required=False)
-    arriving: BeatSequence = Param()
-    leaving: BeatSequence = Param()
-
-    @derived
-    def output_tensor(self) -> Tensor:
-        """What it moves its input to: the same tensor."""
-        tensor: Tensor = self.input_tensor
-        return tensor
-
-    # On tensors, in place of the stage's opaque word ports (WordPort).
-    input, output = stage_ports(  # type: ignore[assignment]
-        input_tensor, output_tensor, arriving, leaving
-    )
-    input_end = interface("input")
-    output_end = interface("output")
 
 
 class StagedInputGenerator(InputGeneratorKernel):
-    """InputGeneratorKernel between two tensors: a reorder. ``olst``, its loop-completion
-    marker, is left unused: the harness's boundaries carry no marker. The dotp and MatMul
-    cases check it, as the TLAST that frames their activations."""
+    """InputGeneratorKernel under the harness's id: a reorder. ``olst``, its loop-completion
+    marker, is left unused: the harness's boundaries carry no marker, so its output
+    presents ``leaving`` on its ready/valid pins alone, and ``olst`` is a pin it holds
+    unused. The dotp and MatMul cases check it, as the TLAST that frames their
+    activations."""
 
     id = "test.staged.input_generator"
-    input_tensor: Tensor = Param(required=False)
-    arriving: BeatSequence = Param()
-    leaving: BeatSequence = Param()
 
-    @derived
-    def output_tensor(self) -> Tensor:
-        """What it moves its input to: the same tensor."""
-        tensor: Tensor = self.input_tensor
-        return tensor
-
-    # On tensors, in place of the stage's opaque word ports (WordPort).
-    input, output = stage_ports(  # type: ignore[assignment]
-        input_tensor, output_tensor, arriving, leaving
+    output = native_stream(
+        "output",
+        Endpoint.INITIATOR,
+        InputGeneratorKernel.output_tensor,
+        InputGeneratorKernel.leaving,
     )
-    input_end = interface("input")
-    output_end = interface("output")
 
     @derived
     def other_pins(self) -> tuple[Pin, ...]:
@@ -188,7 +115,8 @@ def fifo() -> dict[str, Any]:
 
 
 def vpc() -> dict[str, Any]:
-    """The same elements in the same order, at another lane count."""
+    """The same elements in the same order, at another lane count; W, the element's bits,
+    is the tensor's (INT4)."""
 
     def converting(lanes_in: int, lanes_out: int) -> dict[str, object]:
         stage = realized(vector_major(STAGED, lanes_in), vector_major(STAGED, lanes_out))
@@ -201,7 +129,6 @@ def vpc() -> dict[str, Any]:
         outputs={"output_channel": STAGED},
         reference=lambda input_channel: {"output_channel": input_channel},
         factors=(converting(1, 3), converting(2, 3), converting(3, 2), converting(6, 1)),
-        facts={"element_bits": 4},
     )
 
 
@@ -299,7 +226,6 @@ __all__ = [
     "fifo",
     "input_gen",
     "realized",
-    "stage_ports",
     "staged",
     "vpc",
 ]

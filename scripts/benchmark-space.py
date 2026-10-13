@@ -551,6 +551,8 @@ def kernel_fixtures(api):
     Fabric = target.Fabric
     tensor = importlib.import_module("finn.dataflow.tensor")
     Tensor, ScalarEncoding = tensor.Tensor, tensor.ScalarEncoding
+    traversal = importlib.import_module("finn.dataflow.traversal")
+    BeatSequence, vector_major = traversal.BeatSequence, traversal.vector_major
     dtype = importlib.import_module("finn.dataflow.datatypes").resolve_qonnx_datatype_name
     platform = target.Platform(
         period_ns=5.0,
@@ -561,6 +563,8 @@ def kernel_fixtures(api):
         resources=None,
     )
     int3, int8 = dtype("INT3"), dtype("INT8")
+    # The FIFO's words: 32 of 16 bits, in order.
+    words = Tensor((32, 1), ScalarEncoding(dtype("INT16")))
 
     # A dot-product core on three tensors.
     dotp_tensors = (
@@ -580,7 +584,12 @@ def kernel_fixtures(api):
 
     return {
         "fifo": (
-            FifoKernel(word_bits=16, depth=32, platform=platform),
+            FifoKernel(
+                input_tensor=words,
+                arriving=BeatSequence(vector_major((32, 1), 1)),
+                depth=32,
+                platform=platform,
+            ),
             lambda point, index: point.with_choices(ram_style=("block", "distributed")[index % 2]),
             "module",
         ),

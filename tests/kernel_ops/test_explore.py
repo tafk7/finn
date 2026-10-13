@@ -81,15 +81,16 @@ def test_a_choice_is_keyed_by_the_node_or_tensor_that_persists_it() -> None:
 def test_the_seam_reads_each_member_by_name() -> None:
     """Cost and refusals read the network's members by name, and a change checks the
     members its keys belong to. A kernel's cycles are known from conversion on (its own
-    choices at their baselines); a channel's wait on its transport on a body no cut
-    created."""
+    choices at their baselines); a channel's resources wait on its open members' choices
+    (its transport, its adapter's memory) on a body no cut created."""
     explorer, network = seam_of(kernel_model())
     cost = explorer.cost(network)
     assert set(cost.waiting) | set(cost.cycles) == set(network.members)
     assert "first" in cost.cycles
-    assert [(f.code, f.owner) for f in cost.unstated["levels"]] == [
-        ("decision-unassigned", "levels.transport")
-    ]
+    assert {(f.code, f.owner) for f in cost.unstated["levels"]} == {
+        ("decision-unassigned", "levels.transport"),
+        ("decision-unassigned", "levels.adapter.input_gen.input_gen.ram_style"),
+    }
     hidden = explorer.cost(network, ("hidden",))
     assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
     assert explorer.refusals(network) == {}
@@ -178,9 +179,10 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     seam, network = seam_of(kernel_model())
     cost = seam.cost(network)
     assert cost.used is None and set(cost.resources) == {"first", "activate", "second"}
-    assert [(f.code, f.owner) for f in cost.unstated["x"]] == [
-        ("decision-unassigned", "x.transport")
-    ]
+    assert {(f.code, f.owner) for f in cost.unstated["x"]} == {
+        ("decision-unassigned", "x.transport"),
+        ("decision-unassigned", "x.adapter.input_gen.input_gen.ram_style"),
+    }
     assert "activate" not in cost.unstated
     based = seam.cost(seam.baseline(network))
     assert based.unstated == {}

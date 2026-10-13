@@ -1,19 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The input generator: its loop geometry, its replay and its end-of-loop markers."""
+"""The input generator: its loop geometry, derived from the sequences it is given, its
+replay and its end-of-loop markers."""
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
-from finn.core.space import DefinitionError, Rejected
+from finn.core.space import Rejected, design_space
+from finn.dataflow.plan import Unrealizable
+from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Signal
-from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.values.semantics import IntegerVector
-from kernels.helpers import generator
+from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
+from kernels.helpers import FULL_DSP48E2, generator, nested, stage_tensor
 
 
 def test_generator_states_zero_stride_replay_and_multibit_markers() -> None:
@@ -38,21 +38,40 @@ def test_generator_states_zero_stride_replay_and_multibit_markers() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("dims", "strides"),
-    (((), ()), ((3, 6), (1,)), ((2, 6), (1, 1)), ((3, 6), (-1, 1)), ((0, 6), (0, 1))),
-)
-def test_generator_refuses_invalid_loop_geometry(
-    dims: IntegerVector, strides: IntegerVector
-) -> None:
-    assert isinstance(
-        generator(dims=dims, strides=strides).inspect(InputGeneratorKernel.module).accepted_result,
-        Rejected,
+def test_its_nest_is_the_reorder_between_its_sequences_closing_each_marker_required() -> None:
+    """The nest is ``classify``'s reorder between the two orders, split where a marker it
+    must make closes no level; its output presents every level it closes there."""
+    arriving, leaving = nested(6, (3, 6), (0, 1))
+    assert generated(arriving, leaving) == Generate(6, (3, 6), (0, 1))
+    # A marker every 2 beats: the inner loop split, its bit closing every second beat.
+    marked = BeatSequence(leaving.form, markers=(LevelEnd(2),))
+    assert generated(arriving, marked) == Generate(6, (3, 3, 2), (0, 2, 1))
+    point = design_space(
+        InputGeneratorKernel(
+            input_tensor=stage_tensor(13), arriving=arriving, leaving=marked, platform=FULL_DSP48E2
+        )
+    ).with_choices(ram_style="auto")
+    assert point.output.presented.markers == (LevelEnd(18), LevelEnd(6), LevelEnd(2))
+    assert dict(point.output.contract.markers) == {
+        "olst[0]": LevelEnd(18),
+        "olst[1]": LevelEnd(6),
+        "olst[2]": LevelEnd(2),
+    }
+    # The same order with markers to make: identity frames as long as the widest.
+    same = BeatSequence(vector_major((6, 1), 1))
+    framed = BeatSequence(same.form, markers=(LevelEnd(6), LevelEnd(3)))
+    assert generated(same, framed) == Generate(6, (2, 3), (3, 1))
+
+
+def test_a_generator_with_nothing_to_do_is_refused() -> None:
+    same = BeatSequence(vector_major((6, 1), 1))
+    with pytest.raises(Unrealizable, match="nothing for an input_gen to do"):
+        generated(same, same)
+    point = design_space(
+        InputGeneratorKernel(
+            input_tensor=stage_tensor(13), arriving=same, leaving=same, platform=FULL_DSP48E2
+        )
     )
-
-
-@pytest.mark.parametrize("bad", ([3, 6], (3, True), (3, [6])))
-def test_generator_requires_exact_immutable_integer_vectors(bad: object) -> None:
-    # A bad literal is refused at the node call.
-    with pytest.raises(DefinitionError, match="integer vector"):
-        generator(dims=cast(IntegerVector, bad))
+    refused = point.query(InputGeneratorKernel.nest)
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"input-generator-nest"}

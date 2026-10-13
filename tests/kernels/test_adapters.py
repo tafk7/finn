@@ -77,7 +77,9 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
     assert steps.steps == (Step.WIDTH,)
     (stage,) = realize(steps)
     assert stage.module == Convert(4, 3)
-    vpc = VpcKernel(element_bits=4, lanes_in=4, lanes_out=3)
+    vpc = VpcKernel(
+        input_tensor=Tensor((2, 6, 4), ELEMENT), arriving=stage.source, leaving=stage.sink
+    )
     assert dict(design_space(vpc).module.parameters)["N"] == 12
 
 

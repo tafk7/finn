@@ -31,31 +31,46 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import integer_shape
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, controlled, point_for
+from kernels.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    controlled,
+    in_order,
+    nested,
+    point_for,
+    stage_tensor,
+)
 from kernels.xsim import requires_xsim
 
 FINNLIB = finnlib_root()
 SOURCE_ROOTS = {"finnlib": FINNLIB}
 
 
+def fifo_facts(word_bits=13, depth=8):
+    """A FIFO's facts: a tensor of ``word_bits``-bit words, in order, and its depth."""
+    tensor = stage_tensor(word_bits)
+    return dict(input_tensor=tensor, arriving=in_order(tensor), depth=depth)
+
+
+def generator_facts(frame=6, dims=(3, 6), strides=(0, 1)):
+    """An input generator's facts: 13-bit words, and the sequences of its nest (``nested``)."""
+    arriving, leaving = nested(frame, dims, strides)
+    return dict(input_tensor=stage_tensor(13, frame), arriving=arriving, leaving=leaving)
+
+
 def fifo(**changes):
-    facts = dict(word_bits=13, depth=8, platform=FULL_DSP48E2)
-    facts.update(changes)
+    facts = {**fifo_facts(**changes), "platform": FULL_DSP48E2}
     return point_for(FifoKernel, facts, ram_style="auto")
 
 
 def generator(**changes):
-    facts = dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1), platform=FULL_DSP48E2)
-    facts.update(changes)
+    facts = {**generator_facts(**changes), "platform": FULL_DSP48E2}
     return point_for(InputGeneratorKernel, facts, ram_style="auto")
 
 
 @pytest.mark.parametrize(
     "space_type,facts",
-    (
-        (FifoKernel, dict(word_bits=13, depth=8)),
-        (InputGeneratorKernel, dict(word_bits=13, frame_words=6, dims=(3, 6), strides=(0, 1))),
-    ),
+    ((FifoKernel, fifo_facts()), (InputGeneratorKernel, generator_facts())),
 )
 def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
     without = design_space(space_type(**facts, platform=replace(FULL_DSP48E2, uram=False)))
@@ -160,7 +175,7 @@ def native_ports(requirements, tmp_path):
         fifo,
         lambda: fifo(depth=64, word_bits=17),
         generator,
-        lambda: generator(frame_words=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
+        lambda: generator(frame=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2)),
         eltwise,
         lambda: eltwise(operation="SUB", lhs=DataType["UINT7"], rhs=DataType["UINT7"]),
         lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"]),
@@ -199,12 +214,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
 @pytest.mark.parametrize(
     "factory",
     [
-        lambda: fifo(word_bits=0),
         lambda: fifo(depth=1),
-        lambda: generator(dims=()),
-        lambda: generator(strides=(1,)),
-        lambda: generator(dims=(2, 6), strides=(1, 1)),
-        lambda: generator(strides=(-1, 1)),
         lambda: eltwise(operation="DIV"),
         lambda: eltwise(lhs=DataType["INT4"]),
         lambda: eltwise(lhs=DataType["BIPOLAR"]),
@@ -246,10 +256,6 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     invalid_scale = eltwise(b_scale=float("nan"))
     assert isinstance(invalid_scale.query(EltwiseKernel.native_scale), Rejected)
     assert isinstance(invalid_scale.inspect(EltwiseKernel.module).accepted_result, Rejected)
-    # A mistyped formal is refused at the node call.
-    for bad in ([3, 6], (3, True), (3, [6])):
-        with pytest.raises(DefinitionError):
-            generator(dims=bad)
     # A table is an integer tensor: a nonempty rectangular nest of int tuples.
     for bad in ((([-2, 0, 3],),), (), (((0,), (0, 1)),)):
         with pytest.raises(DefinitionError):
@@ -335,7 +341,7 @@ def flow_case(case):
             ".clk, .rst, .idat(adat), .ivld(avld), .irdy(ardy), .odat, .ovld, .ordy",
         )
     if case == "generator":
-        point = generator(frame_words=4, dims=(2, 4), strides=(0, 1))
+        point = generator(frame=4, dims=(2, 4), strides=(0, 1))
         inputs = [10, 20, 30, 40, 50, 60, 70, 80]
         outputs = []
         for frame in (inputs[:4], inputs[4:]):

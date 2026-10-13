@@ -20,7 +20,7 @@ import pytest
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
-from finn.dataflow.traversal import vector_major
+from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.base import RESOURCES
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
@@ -57,7 +57,9 @@ from kernels.helpers import (
     FULL_DSP58,
     choose,
     eltwise,
+    in_order,
     placed_dotp,
+    stage_tensor,
     threshold_base,
     with_direct_transports,
 )
@@ -246,14 +248,14 @@ def table(elements: int) -> Any:
 
 
 def buffer(frame_words: int) -> Any:
-    """An input generator streaming a frame of 32-bit words once, its style open."""
+    """An input generator streaming a frame of 32-bit words once, closing each frame (its
+    nest: the frame, once), its style open."""
+    tensor = stage_tensor(32, frame_words)
+    arriving = in_order(tensor)
+    framed = BeatSequence(arriving.form, markers=(LevelEnd(frame_words),))
     return design_space(
         InputGeneratorKernel(
-            word_bits=32,
-            frame_words=frame_words,
-            dims=(frame_words,),
-            strides=(1,),
-            platform=FULL_DSP48E2,
+            input_tensor=tensor, arriving=arriving, leaving=framed, platform=FULL_DSP48E2
         )
     )
 

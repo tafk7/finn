@@ -52,9 +52,11 @@ configuration of the kernel's scalar Decisions that ``choices`` leaves open,
 each folding factor's candidates read from ``point.field(<factor>).candidates()`` with the
 factors before it committed, and deduplicates them; ``ALL`` takes every
 combination. Explicit configurations name the kernel's own members: a Decision
-is committed, a Param is given (a folding factor that is still a Param). A
-Decision below a child is named by its key below the kernel
-(``compute.packed.pe``). The adapter sample reuses the middle configuration.
+is committed, a Param is given (a folding factor that is still a Param), and a
+derived member is checked: the kernel must derive that value (a channel stage's
+generics, from the sequences it is given). A Decision below a child is named by its
+key below the kernel (``compute.packed.pe``). The adapter sample reuses the middle
+configuration.
 
 An output given as a shape takes its element from the kernel: the element of the
 tensor it states at that interface (``<interface>_tensor``), read before any output
@@ -94,6 +96,7 @@ from finn.core.rtlsim_bench import WordsDiffer, materialize, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import (
     Available,
+    Derived,
     Param,
     QueryResult,
     RequestError,
@@ -539,7 +542,8 @@ def _committed(
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """Placed, with the configuration's Params given and its Decisions and ``choices`` committed."""
+    """Placed, with the configuration's Params given, its Decisions and ``choices``
+    committed and its derived members checked."""
     # A configuration's key is a member (``pe``), or a Decision below a child
     # (``compute.packed.pe``), which is never a Param.
     given = {
@@ -547,15 +551,31 @@ def _committed(
         for key, value in config.items()
         if isinstance(getattr(space_type, key, None), Param)
     }
+    stated = {
+        key: value
+        for key, value in config.items()
+        if isinstance(getattr(space_type, key, None), Derived)
+    }
     known = {**facts, **given}
     tensors = _tensors(space_type, inputs, outputs, known)
     placed = {name: tensors[name] for name in outputs}
     point = _design(space_type, inputs, placed, known, fed)
-    chosen = {**choices, **{key: value for key, value in config.items() if key not in given}}
+    chosen = {
+        **choices,
+        **{key: value for key, value in config.items() if key not in given and key not in stated},
+    }
     keys = {f"{KERNEL}.{key}": value for key, value in chosen.items()}
     if fed is not None:
         keys |= {f"{SOURCE}.ram_style": "auto", f"{SOURCE}.pumped_memory": False}
-    return with_direct_transports(_chosen(point, keys))
+    point = with_direct_transports(_chosen(point, keys))
+    kernel = design_member(point, KERNEL)
+    for key, value in stated.items():
+        found = getattr(kernel, key)
+        if found != value:
+            raise AssertionError(
+                f"{space_type.__name__} derives {key}={found!r}; the configuration states {value!r}"
+            )
+    return point
 
 
 def unchosen(

@@ -4,8 +4,13 @@
 """FinnLib's ``vpc``: the same elements in the same order, another number a beat.
 
 It regroups ``lanes_in`` elements a beat into ``lanes_out``, through vectors of
-their least common multiple. Words are opaque on FinnLib's native pins. On a
-channel, ``vpc`` is a stage of the channel's adapter (``finn.kernels.adapters``).
+their least common multiple. It presents the sequences it is given on its two ports
+(``arriving``, ``leaving``: the same elements of its tensor, ``input_tensor``, in the
+same order), as memstream presents its given sequence, and derives its generics from
+them: ``lanes_in`` and ``lanes_out`` their lanes, ``W`` the tensor's element. Words
+are opaque on FinnLib's native pins. On a channel, ``vpc`` is a stage of the
+channel's adapter (``finn.kernels.adapters``), which gives it the two sides of its
+width conversion.
 
 FinnLib's ``N`` is the vector the RTL converts independently, padding its last
 beats when ``N`` is no multiple of a lane count (``vpc.sv``: ``1 + (N-1)/PI``
@@ -20,18 +25,13 @@ from __future__ import annotations
 
 from math import lcm
 
-from finn.core.space import (
-    ConstraintGroup,
-    Param,
-    Rejected,
-    constraint,
-    derived,
-    reject,
-)
+from finn.core.space import ConstraintGroup, Param, derived
+from finn.dataflow.tensor import Tensor
+from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel
-from finn.kernels.port import WordPort
+from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
+from finn.kernels.port import native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.platform.capabilities import Resources
 
@@ -49,24 +49,50 @@ _VPC_FF = Fit(6.8, (1.0,))
 
 
 class VpcKernel(LeafKernel):
+    """FinnLib ``vpc``: its tensor's elements in the order they arrive, at another lane
+    count; see the module docstring."""
+
     id = "finnlib.vpc"
     version = 1
     rtl_module = "vpc"
 
-    element_bits: int = Param()
-    lanes_in: int = Param()
-    lanes_out: int = Param()
+    # The tensor whose elements it regroups, a fact, and the two sides of the conversion.
+    input_tensor: Tensor = Param(required=False)
+    arriving: BeatSequence = Param()
+    leaving: BeatSequence = Param()
 
-    @constraint
-    def geometry_supported(self) -> bool | Rejected:
-        if min(self.element_bits, self.lanes_in, self.lanes_out) < 1:
-            return reject("vpc-geometry", "element width and lane counts must be positive")
-        return True
+    @derived
+    def output_tensor(self) -> Tensor:
+        """What it moves its input to: the same tensor."""
+        tensor: Tensor = self.input_tensor
+        return tensor
 
-    admission = ConstraintGroup(geometry_supported)
+    input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
+    output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
+    input_end = interface("input")
+    output_end = interface("output")
 
-    input = WordPort(name="input", endpoint=Endpoint.TARGET, bits=lanes_in * element_bits)
-    output = WordPort(name="output", endpoint=Endpoint.INITIATOR, bits=lanes_out * element_bits)
+    @derived
+    def element_bits(self) -> int:
+        """W: the bits of its tensor's element."""
+        bits: int = self.input.element.bits
+        return bits
+
+    @derived
+    def lanes_in(self) -> int:
+        """PI: the elements a beat its input presents."""
+        lanes: int = self.input.lane_count
+        return lanes
+
+    @derived
+    def lanes_out(self) -> int:
+        """PO: the elements a beat its output presents."""
+        lanes: int = self.output.lane_count
+        return lanes
+
+    # Its lanes and element come from its ports, positive by construction: the RTL
+    # refuses nothing they present.
+    admission = ConstraintGroup()
 
     @derived
     def clocking(self) -> Clocking:
