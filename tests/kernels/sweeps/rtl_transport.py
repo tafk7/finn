@@ -508,27 +508,36 @@ def _private_copy(request: dict[str, Any], run: Path, *, toolchain: Toolchain) -
     """The design compiled into ``request["compiled"]`` (by this run if it is the first),
     copied to ``run``: the directory and the ``.so`` to load.
 
+    ``compiled`` only ever holds a finished compilation: xelab runs in a fresh directory
+    beside it, renamed to it once the ``.so`` and its record are written, so a failed or
+    interrupted compile leaves no ``compiled`` (the next run compiles again). No two runs
+    of a design run at once (each sweep runs them in turn, and parallel sweep jobs have
+    their own ``--output``); if they did, the second rename would refuse, not mix.
     A compilation is reused only as its ``.so``'s record states it: these sources,
     unchanged, elaborated by this toolchain's xelab."""
+
+    def place_data(directory: Path) -> None:  # where the simulation resolves them (its cwd)
+        for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
+            (directory / name).write_text(contents)
+
     compiled = Path(request["compiled"])
     so_rel = f"xsim.dir/{request['top_module']}/xsimk.so"
-    if (compiled / f"{so_rel}.finn.json").is_file():
+    if compiled.exists():
         tool = identity(toolchain, "xelab")
         record = validate_record(compiled / so_rel, kind="design", tool=tool, check_abi=False)
         sources = [*request["sources"], vivado.glbl(toolchain)]
         if set(record["sources"]) != {str(Path(source).resolve()) for source in sources}:
             raise ValueError(f"{compiled} holds another design's compilation")
     else:
-        compiled.mkdir(parents=True, exist_ok=False)
-        for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
-            (compiled / name).write_text(contents)
+        compiled.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f"{compiled.name}.", dir=compiled.parent))
+        place_data(staging)
         compile_sim_obj(
-            request["top_module"], request["sources"], compiled, behav=True, toolchain=toolchain
+            request["top_module"], request["sources"], staging, behav=True, toolchain=toolchain
         )
+        staging.rename(compiled)
     shutil.copytree(compiled, run)
-    # The run's own data files, where the simulation resolves them (its working directory).
-    for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
-        (run / name).write_text(contents)
+    place_data(run)
     return str(run), so_rel
 
 

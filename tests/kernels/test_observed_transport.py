@@ -172,7 +172,8 @@ def test_the_xsi_output_driver_pauses_after_each_burst():
 
 def test_a_design_is_compiled_once_and_each_run_simulates_its_own_copy(monkeypatch, tmp_path):
     """The first run compiles into the design's ``compiled``; every run copies it (XSI
-    writes into the snapshot), and a compilation is reused only as its record states it."""
+    writes into the snapshot); a failed compile leaves no ``compiled``; and a compilation
+    is reused only as its record states it."""
     glbl = tmp_path / "glbl.v"
     glbl.write_text("module glbl; endmodule\n")
     source = tmp_path / "top.sv"
@@ -181,6 +182,9 @@ def test_a_design_is_compiled_once_and_each_run_simulates_its_own_copy(monkeypat
 
     def compile_sim_obj(top, sources, directory, *, behav, toolchain):
         compiles.append(top)
+        (directory / "xelab.log").write_text("started")
+        if len(compiles) == 1:  # the first fails, part-way
+            raise RuntimeError("xelab failed")
         so = directory / "xsim.dir" / top / "xsimk.so"
         so.parent.mkdir(parents=True)
         so.write_bytes(b"elaborated")
@@ -192,18 +196,21 @@ def test_a_design_is_compiled_once_and_each_run_simulates_its_own_copy(monkeypat
     request = {
         "top_module": "top",
         "sources": [str(source)],
-        "compiled": str(tmp_path / "compiled"),
+        "compiled": str(tmp_path / "design/compiled"),
         "data_files": {"weights.dat": "0f\n"},
     }
+    with pytest.raises(RuntimeError, match="xelab failed"):
+        rtl_transport._private_copy(request, tmp_path / "failed", toolchain=STUB)
+    assert not (tmp_path / "design/compiled").exists() and not (tmp_path / "failed").exists()
     runs = [tmp_path / mode for mode in ("free", "stalled")]
     for run in runs:
         directory, so = rtl_transport._private_copy(request, run, toolchain=STUB)
         assert (directory, so) == (str(run), "xsim.dir/top/xsimk.so")
         assert (run / so).read_bytes() == b"elaborated"
         assert (run / "weights.dat").read_text() == "0f\n"
-    assert compiles == ["top"]
+    assert compiles == ["top", "top"]
     (runs[0] / "xsim.dir/top/xsimkernel.log").write_text("written by a run")
-    assert not (tmp_path / "compiled/xsim.dir/top/xsimkernel.log").exists()
+    assert not (tmp_path / "design/compiled/xsim.dir/top/xsimkernel.log").exists()
     assert not (runs[1] / "xsim.dir/top/xsimkernel.log").exists()
 
     other = tmp_path / "other.sv"
@@ -215,4 +222,4 @@ def test_a_design_is_compiled_once_and_each_run_simulates_its_own_copy(monkeypat
     source.write_text("module top; wire changed; endmodule\n")
     with pytest.raises(ValueError, match="input changed"):
         rtl_transport._private_copy(request, tmp_path / "changed", toolchain=STUB)
-    assert compiles == ["top"]
+    assert compiles == ["top", "top"]
