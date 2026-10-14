@@ -3,11 +3,12 @@
 
 """The network of KernelOp nodes a graph binds, and its choices written back.
 
-``network(model, nodes)`` binds a ``finn.kernels.network.Network`` straight from the
-graph, for any selection of KernelOp nodes (a partition's body, a slice of it, one node),
-and changes no graph. Its shell is the model's target's (``read_target``): the
-target's board's row of that shell (``finn.platform.shells.shell_row``) states the ends
-it offers and its budgets.
+``network(model, nodes, ends=...)`` binds a ``finn.kernels.network.Network`` straight
+from the graph, for any selection of KernelOp nodes (a partition's body, a slice of it, one
+node), and changes no graph. The ends offered on its boundary (``ends``, each an
+``finn.kernels.ends.EndOffer``; none by default) are a fact its caller gives: a shell's
+row offers them, and ``finn.custom_op.kernels.shell`` binds a partition's network in the
+shell of the model's target (``in_shell``).
 
 - **kernels**, one per node, named as the node: its kernel bound from its facts by the
   bind cache, one binding per node (``KernelOp.bound``);
@@ -19,8 +20,8 @@ it offers and its budgets.
   wiring.stored)``), its ends (``Interface(node, wiring.end)``, from the op's
   ``wiring``), and the target's platform. Only the selection's ONNX inputs and outputs
   are boundaries, named by the shell's convention ``s_axis_<i>`` and ``m_axis_<j>``, each
-  offered the ends the row offers (``ShellRow.ends``; ``Channel.end``: one offered is
-  forced, so nothing is persisted). A channel has one consumer, so a tensor read more
+  offered the ends given (``ends``; ``Channel.end``: one offered is forced, so nothing is
+  persisted). A channel has one consumer, so a tensor read more
   than once is refused by name before anything is bound (``tensor-fan-out``): read by
   two of the nodes (an edge, or a parameter both own), or read by one and at an output
   boundary too (a graph output, or read outside the nodes). Fan-out waits for a channel
@@ -47,10 +48,10 @@ it offers and its budgets.
   after the partition (its stem ``finn_<name>``) and identified as the partition's IP
   (``PRODUCER``), since an end is integrated beside the IP, not in it.
 
-``baseline_choices`` gives every choice a body leaves open its baseline and persists it
-(the cut's, and ``BaselineChoices``' for a body made by hand); ``save_channels`` states
-channels' choices on their tensors, checked by binding the network, which alone holds
-both of a channel's ends. The shell's admission and resources over a network are
+A partition's resources (``Partition.own_resources``) are its members'. The shell's
+admission and resources over a network (its members', its ends' and its static region's),
+and the body's choices stated by hand (``save_channels``) or given their baselines
+(``baseline_choices``), each on the network in its shell, are
 ``finn.custom_op.kernels.shell``'s.
 """
 
@@ -58,7 +59,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from onnx import NodeProto
 from qonnx.core.metadata import MetadataError
@@ -74,15 +75,16 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, QueryResult, Space
-from finn.custom_op.kernels.base import KernelOp, kernel_op, refusal, typed, why
+from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
+from finn.custom_op.kernels.base import KernelOp, kernel_op, typed, why
 from finn.custom_op.kernels.cache import Facts
 from finn.kernels.artifacts.module import Composed, ProducerIdentity
+from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Seam
+from finn.kernels.ends import EndOffer
 from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
+from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-from finn.platform.shells import ShellRow, shell_row
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
@@ -103,17 +105,16 @@ def member(name: str) -> str:
 
 
 class Partition(Network):
-    """A network bound from a graph's nodes, in its shell (see the module docstring): its
-    ``name`` (its module's), its shell's ``row``, its ``boundary`` (each boundary tensor
-    and its port, inputs then outputs), the boundary channels offered ends (``ends``), the
-    stored choices dropped as stale where it was bound, by key, with why (``stale``), and
-    whether it holds every KernelOp of its model (``whole``). Immutable, as a network: a
-    change returns another, which keeps these."""
+    """A network bound from a graph's nodes (see the module docstring): its ``name`` (its
+    module's), its ``boundary`` (each boundary tensor and its port, inputs then outputs),
+    the boundary channels offered ends (``ends``), the stored choices dropped as stale
+    where it was bound, by key, with why (``stale``), and whether it holds every KernelOp
+    of its model (``whole``). Immutable, as a network: a change returns another, which
+    keeps these."""
 
-    __slots__ = ("_memo", "boundary", "ends", "name", "row", "stale", "whole")
+    __slots__ = ("_memo", "boundary", "ends", "name", "stale", "whole")
 
     name: str
-    row: ShellRow
     boundary: tuple[tuple[str, str], ...]
     ends: tuple[str, ...]
     stale: Mapping[str, str]
@@ -125,15 +126,15 @@ class Partition(Network):
         members: Mapping[str, Space | Wire],
         *,
         name: str,
-        row: ShellRow,
+        ends: tuple[EndOffer, ...],
         boundary: tuple[tuple[str, str], ...],
         stored: Mapping[Key, object],
         stray: Mapping[str, str],
         whole: bool,
     ) -> None:
         super().__init__(members, stored=stored, nodes={each: member(each) for each in members})
-        self.name, self.row, self.boundary, self.whole = name, row, boundary, whole
-        self.ends = tuple(tensor for tensor, _ in boundary) if row.ends else ()
+        self.name, self.boundary, self.whole = name, boundary, whole
+        self.ends = tuple(tensor for tensor, _ in boundary) if ends else ()
         self.stale = {dotted(key): why(found) for key, found in self.dropped.items()} | dict(stray)
         self._memo = {}
 
@@ -155,13 +156,30 @@ class Partition(Network):
         return found
 
     def own_resources(self) -> QueryResult[Resources]:
-        """What the shell uses: its members', its ends' and its static region's sum
-        (``shell_resources``)."""
-        # The shell imports the network, so its resources are read through it here.
-        from finn.custom_op.kernels.shell import _resources, _together  # noqa: PLC0415
+        """What its members use, their own statements' sum; or what they wait on, or why
+        one is refused. A shell adds its ends' and its static region's
+        (``finn.custom_op.kernels.shell``)."""
 
-        found = _resources(self)
-        return Available(found.value.total) if isinstance(found, Available) else _together([found])
+        def read() -> QueryResult[Resources]:
+            used = [self.query(name, RESOURCES) for name in self.members]
+            missing = [each for each in used if not isinstance(each, Available)]
+            if missing:
+                return _together(missing)
+            return Available(total(each.value for each in used if isinstance(each, Available)))
+
+        found: QueryResult[Resources] = self._read("members' resources", read)
+        return found
+
+
+def _together(results: Iterable[QueryResult[Any]]) -> Rejected | Unresolved:
+    """Results that are not available, as one: refused where one is, else waiting."""
+    held = list(results)
+    findings = tuple(
+        dict.fromkeys(finding for each in held for finding in getattr(each, "findings", ()))
+    )
+    if any(isinstance(each, Rejected) for each in held):
+        return Rejected(findings)
+    return Unresolved(findings)
 
 
 # -- binding the network from the graph ----------------------------------------------------
@@ -313,12 +331,22 @@ def _stale(
         raise KernelOpError("; ".join(map(str, findings)), findings=tuple(findings))
 
 
-def network(model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = PARTITION) -> Partition:
+def network(
+    model: ModelWrapper,
+    nodes: Iterable[NodeProto],
+    *,
+    name: str = PARTITION,
+    ends: tuple[EndOffer, ...] = (),
+) -> Partition:
     """The network of ``nodes``, KernelOp nodes of ``model``, its module the partition
-    ``name``'s IP, in the shell of the model's target: its row's ends offered on the
-    boundary channels; see the module docstring. A tensor read more than once is refused
-    (``tensor-fan-out``), and so is a stale output (``tensor-stale``)."""
-    return _network(model, list(nodes), name, {})
+    ``name``'s IP, on the platform of the model's target: ``ends`` offered on the boundary
+    channels (none by default; a shell's row offers them, ``in_shell``); see the module
+    docstring. A tensor read more than once is refused (``tensor-fan-out``), and so is a
+    stale output (``tensor-stale``)."""
+    return _network(model, list(nodes), name, {}, ends, Partition)
+
+
+P = TypeVar("P", bound=Partition)
 
 
 def _network(
@@ -326,9 +354,12 @@ def _network(
     nodes: list[NodeProto],
     name: str,
     stating: Mapping[str, Mapping[str, object]],
-) -> Partition:
-    """``network``, each tensor of ``stating`` replayed with the channel choices it gives
-    in place of those the tensor states."""
+    ends: tuple[EndOffer, ...],
+    kind: Callable[..., P],
+) -> P:
+    """``network``, made by ``kind`` (``Partition``, or a shell's network over it), each
+    tensor of ``stating`` replayed with the channel choices it gives in place of those the
+    tensor states."""
     ops = [kernel_op(model, node) for node in nodes]
     facts: list[Facts] = [op.facts() for op in ops]
     owned = [op.owned(each) for op, each in zip(ops, facts)]
@@ -345,8 +376,7 @@ def _network(
     inside = {id(node) for node in nodes}
     whole = all(id(node) in inside for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN)
     stored, stray = _stored(model, nodes, ops, tensors, stating, whole)
-    target = read_target(model)
-    row = shell_row(target.shell, target.board)
+    platform = read_target(model).platform
     settings: dict[str, dict[str, object]] = {tensor: {} for tensor in tensors}
     readers: dict[str, str] = {}
     for node, op, held in zip(nodes, ops, owned):
@@ -367,9 +397,9 @@ def _network(
         boundary_port = ports.get(tensor)
         if boundary_port is not None:
             facts_of["port"] = boundary_port
-            if row.ends:
-                facts_of["end_offer"] = row.ends
-        wires[tensor] = wire(platform=target.platform, **facts_of)
+            if ends:
+                facts_of["end_offer"] = ends
+        wires[tensor] = wire(platform=platform, **facts_of)
 
     def on(side: str) -> dict[str, Wire]:
         """The channels at the ports ``<side><i>`` (``""``: no port, none on the boundary)."""
@@ -382,10 +412,10 @@ def _network(
     kernels: dict[str, Space] = {node.name: op.bound() for node, op in zip(nodes, ops)}
     members: dict[str, Space | Wire] = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
     try:
-        bound = Partition(
+        bound = kind(
             members,
             name=name,
-            row=row,
+            ends=ends,
             boundary=tuple(ports.items()),
             stored=stored,
             stray=stray,
@@ -420,50 +450,6 @@ def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, objec
     model.clear(CHANNEL, tensor=tensor)
     for key, value in sorted(choices.items()):
         model.set(CHANNEL_KEYS[key], value, tensor=tensor)
-
-
-def save_channels(model: ModelWrapper, choices: Mapping[str, Mapping[str, object | None]]) -> None:
-    """Commit ``choices`` (made on purpose), by tensor, over those each tensor's channel
-    states (``CHANNEL``), in a partition's body, ``model``: replayed with every other
-    choice of the network of its KernelOps, which alone holds both of a channel's ends,
-    and written only if replay keeps each of them; ``None`` clears a choice. A key
-    ``CHANNEL`` does not declare, a value it does not admit, a tensor that is no channel
-    of the network, a channel whose ends wait on a kernel's open choices (its choices
-    cannot be checked yet) and a model that is not a partition's body are refused, by
-    name. Public API on purpose, though only tests call it: the checked way to state a
-    channel's choices by hand."""
-    refuse_outside_body(model, list(choices))
-    merged: dict[str, dict[str, object]] = {}
-    for tensor, given in choices.items():
-        _encoded(tensor, {key: value for key, value in given.items() if value is not None})
-        merged[tensor] = {
-            key: value
-            for key, value in {**channel_choices(model, tensor), **given}.items()
-            if value is not None
-        }
-    bound = _network(model, list(model.graph.node), PARTITION, merged)
-    for tensor in merged:
-        if tensor not in bound.channels:
-            raise KernelOpError(
-                f"{tensor}: no channel of the partition (a stream between its kernels, or "
-                "on its boundary, or a parameter a kernel owns)",
-                (tensor,),
-            )
-        waiting = bound.unbound(tensor)
-        if waiting is not None:
-            raise KernelOpError(
-                f"{tensor}: its channel's ends wait on {waiting.member}'s open choices ("
-                + "; ".join(map(str, waiting.result.findings))
-                + f"), so its choices cannot be checked: save {waiting.member}'s first",
-                (tensor,),
-            )
-        refused = {
-            key: why(found) for (owner, key), found in bound.dropped.items() if owner == tensor
-        }
-        if refused:
-            raise refusal(tensor, refused)
-    for tensor, values in merged.items():
-        _write_channel(model, tensor, values)
 
 
 def persist(model: ModelWrapper, network: Partition) -> dict[str, dict[str, object]]:
@@ -508,28 +494,11 @@ def _channel_write(
     return lambda: _write_channel(model, tensor, values)
 
 
-def baseline_choices(model: ModelWrapper) -> dict[str, str]:
-    """Every choice of a partition's body, ``model``, at its baseline where the body
-    leaves it open, and persisted, each owner's whole (``persist``): the network of its
-    KernelOps bound, their stored choices replayed in context, and every open choice
-    with cases that is not required given its first viable case the seam accepts, in
-    rank order (``Seam.baseline``). The channels' choices are created here (a channel has
-    both its ends only in the network), and the nodes' own are re-checked: one replay
-    drops as stale is re-baselined. Returns the dropped choices, by key, with why, as
-    replay reports them. A required choice (a FIFO's depth) stays open."""
-    bound = network(model, model.graph.node)
-    baselined = Seam(read_target(model).platform).baseline(bound)
-    persist(model, baselined)
-    return dict(bound.stale)
-
-
 __all__ = [
     "PARTITION",
     "PRODUCER",
     "Partition",
-    "baseline_choices",
     "member",
     "network",
     "persist",
-    "save_channels",
 ]

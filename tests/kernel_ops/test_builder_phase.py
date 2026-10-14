@@ -33,6 +33,7 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 
+import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps
 from finn.builder.build_dataflow import build_dataflow_cfg, build_plan
 from finn.builder.build_dataflow_checks import configuration_findings
@@ -78,7 +79,9 @@ from finn.core.reporting.manifest import FINDING, RECORDS
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
+from finn.kernels.channels import Channel
 from finn.kernels.explore import Ranked, TargetThroughput
+from finn.kernels.fifo_sizing import Sized
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
@@ -403,53 +406,80 @@ def test_a_pin_holds_across_a_later_folding_step(tmp_path: Path) -> None:
         assert strategy_report(pinned, step)["held"] == CHAIN_PINS
 
 
-#: A FIFO pinned on the Chain's activations, so that its partition holds one.
-CHAIN_FIFO = {"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}}
-
-
 def step_fold_my_way(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """A user's own folding step: a target throughput no step of the build names."""
     explore_partition(model, TargetThroughput(CHAIN_FPS))
     return model
 
 
-def test_a_users_folding_step_after_the_fifo_sizing_is_refused_at_packaging(
-    tmp_path: Path,
+def _is_levels(channel: Channel) -> bool:
+    """The Chain's activations (activate's output)."""
+    return str(channel.endpoints.source_owner).startswith("activate.")
+
+
+def _levels_need(period: int) -> int:
+    """The words a double of the model says ``levels`` needs at the bottleneck ``period``
+    (the Chain needs no FIFO at any folding): 5 at the baseline folding's, 16 once the
+    Chain is folded to 6 cycles a frame."""
+    return 16 if period <= 6 else 5
+
+
+def _levels_sized(channel: Channel, period: int, **options: Any) -> Sized:
+    """A double of the per-channel sizing, by ``_levels_need``."""
+    if _is_levels(channel):
+        need = _levels_need(period)
+        return Sized(need, f"least {need} words", 8, need)
+    return Sized(0, "direct absorbs it", 8, 0)
+
+
+def _levels_holds(channel: Channel, period: int, words: int) -> bool:
+    """A double of the seam's check, by ``_levels_need``."""
+    return not _is_levels(channel) or words >= _levels_need(period)
+
+
+def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_packaging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A folding step of the user's own after the last FIFO sizing leaves the partition's
-    FIFO sized at another folding: packaging refuses it, saying where to size them, and
-    the manifest records a refusal. Sized after it, the partition is packaged."""
-    pins = tmp_path / "pins.json"
-    pins.write_text(json.dumps(CHAIN_FIFO))
+    """A folding step of the user's own after the last FIFO sizing leaves the FIFO sized
+    at the baseline's period too small for its stream at the period it reaches: the step
+    drops its depth and leaves it open, and packaging refuses the open depth, saying where
+    to size it, the manifest recording the refusal. Sized after it, the partition is
+    packaged."""
+    monkeypatch.setattr(explore_module, "size", _levels_sized)
+    monkeypatch.setattr(explore_module, "holds", _levels_holds)
     model_file = tmp_path / "chain.onnx"
     kernel_model().save(str(model_file))
     for name, strategies, status in (
-        ("stale", ["step_pin_choices", "step_size_fifos", step_fold_my_way], -1),
-        ("sized", ["step_pin_choices", step_fold_my_way, "step_size_fifos"], 0),
+        ("stale", ["step_size_fifos", step_fold_my_way], -1),
+        ("sized", [step_fold_my_way, "step_size_fifos"], 0),
     ):
         cfg = config(
             tmp_path / name,
             target=CHAIN_TARGET,
             steps=["step_create_dataflow_partition", *strategies, "step_package_partition"],
-            settings={"kernel_choices_file": str(pins)},
         )
         cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
         assert build_dataflow_cfg(str(model_file), cfg) == status, name
         outcome = json.loads((Path(cfg.output_dir) / MANIFEST_FILE).read_text())["outcome"]
         if status == 0:
             assert outcome["status"] == "completed"
+            assert (
+                strategy_report(cfg, "step_size_fifos")["strategy"]["channels"]["levels"]["depth"]
+                == 16
+            )
             continue
-        assert {key: outcome[key] for key in ("status", "step", "kind", "findings")} == {
+        assert (
+            strategy_report(cfg, "step_size_fifos")["strategy"]["channels"]["levels"]["depth"] == 5
+        )
+        assert {key: outcome[key] for key in ("status", "step", "kind")} == {
             "status": "failed",
             "step": "step_package_partition",
             "kind": "refusal",
-            "findings": {"fifos-stale": 1},
         }
-        assert outcome["error"] == {
-            "type": "KernelOpError",
-            "message": "partition: its FIFOs were sized at another folding than its own; size "
-            "them again after the last step that may change the folding (step_size_fifos)",
-        }
+        assert outcome["error"]["message"] == (
+            "partition: open choices, refused at emission: levels.transport.fifo.buffer.depth "
+            "(required: run step_size_fifos or step_placeholder_choices)"
+        )
 
 
 def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Path) -> None:
@@ -793,12 +823,15 @@ def test_a_choice_stale_at_the_cut_is_noted(
     assert "domain-membership" in finding.message
 
 
-def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
+def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every step that may change the folding other than the target throughput (a pin, a
-    maximum throughput, going back to the baselines) removes the body's objective: the
-    bitfile states no target its final folding was not explored for."""
+    """A step after the target throughput that changes a kernel's choice removes the body's
+    objective, whatever its strategy, and one that changes none keeps it: the bitfile
+    states no target its final folding was not explored for. On the Chain in the Zynq
+    shell the ends bound the period at 16 cycles a frame: the target's folding is already
+    the fastest within it, so the maximum throughput changes nothing there, while the pin
+    and the baselines move it."""
     monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
@@ -816,12 +849,15 @@ def test_a_folding_after_the_target_throughput_leaves_the_bitfile_no_objective(
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
     others: list[StepFunction] = [step_pin_choices, step_max_throughput, step_baseline_choices]
     for folding in others:
-        parent = step_target_throughput(parent, cfg, target_fps=1000.0)
+        parent = step_target_throughput(parent, cfg, target_fps=CHAIN_FPS)
         parent = folding(parent, cfg, **settings[folding.__name__])
+        changed = strategy_report(cfg, folding.__name__)["strategy"]["changed"]
+        moved = any(key.split(".")[0] in ("first", "activate", "second") for key in changed)
+        assert moved == (folding is not step_max_throughput), folding.__name__
         _, body, _ = partition_body(parent)
-        assert body.get(OBJECTIVE_FPS) is None, folding.__name__
+        assert body.get(OBJECTIVE_FPS) == (None if moved else CHAIN_FPS), folding.__name__
         step_build_bitfile(parent, cfg)
-    assert ObjectiveSeen.seen == [None] * len(others)
+    assert ObjectiveSeen.seen == [None, CHAIN_FPS, None]
 
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:

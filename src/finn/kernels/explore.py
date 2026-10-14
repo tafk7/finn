@@ -52,10 +52,14 @@ The strategies, each an objective and its constraints searched through the seam:
   only (a FIFO's depth) is refused, by name;
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
-A strategy that changes folding after the last ``SizeFifos`` leaves its depths stale:
-the engine keeps a stored depth valid when its ends' folding changes, so a partition's
-body records it, and packaging refuses the body
-(``finn.transformation.kernels.choose``).
+A FIFO's depth is sized at one bottleneck period, and a fold anywhere in the network may
+change the period or its ends after it. Nothing records what it was sized against: each
+stored transport is checked against its stream again (``check_fifos``: sizing's own model
+at the network's period), at the end of each exploration (``checked``,
+``finn.transformation.kernels.choose``) and at emission. A FIFO that no longer keeps its
+producer within its idle time is dropped, named and left open, where it is not held; a
+held one is kept and named (a limitation), and so is a ``direct`` that throttles its
+producer.
 """
 
 from __future__ import annotations
@@ -81,7 +85,7 @@ from finn.core.space import (
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
 from finn.kernels.fifo import FifoKernel
-from finn.kernels.fifo_sizing import Sized, size
+from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
 from finn.kernels.network import Key, Trial, dotted
 from finn.kernels.utilization import binding, over, ratio, total
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
@@ -91,7 +95,7 @@ T = TypeVar("T")
 
 class Composition(Protocol):
     """What the seam explores: a ``finn.kernels.network.Network`` (the graph's binds one,
-    ``finn.custom_op.kernels.network.network``, in its shell). Its members by name, ranked,
+    ``finn.custom_op.kernels.shell.in_shell``, in its shell). Its members by name, ranked,
     its channels among them, and per member its point, its exports, its Decisions, what
     of them is viable, open, forced and stored, its admission, and a change (``trial``);
     its own statement of what it uses, where it makes one (``own_resources``)."""
@@ -187,6 +191,34 @@ class Accepted(Generic[S]):
 
     network: S
     dropped: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
+
+
+@dataclass
+class FifoCheck:
+    """What checking a network's stored transports against their streams found
+    (``Seam.check_fifos``): the bottleneck ``period`` they were checked at (None: a
+    member's cycles are not known, so none was); each FIFO not held that no longer keeps
+    its producer within its idle time, by its depth's key, with why (``stale``,
+    ``fifo-stale``); the limitations (``findings``): a held FIFO that no longer does
+    (``fifo-held-stale``) and a ``direct`` that throttles its producer
+    (``direct-throttles``); each channel whose transport was checked (``checked``), and
+    each one the model does not read, with why (``not_modelled``)."""
+
+    period: int | None
+    stale: dict[Key, tuple[Finding, ...]] = field(default_factory=dict)
+    findings: tuple[Finding, ...] = ()
+    checked: tuple[str, ...] = ()
+    not_modelled: dict[str, str] = field(default_factory=dict)
+
+    def report(self) -> dict[str, object]:
+        """As a report states it (JSON's values)."""
+        return {
+            "period": self.period,
+            "checked": list(self.checked),
+            "not_modelled": dict(self.not_modelled),
+            "stale": [dotted(key) for key in self.stale],
+            "findings": [finding.record() for finding in self.findings],
+        }
 
 
 @dataclass
@@ -640,6 +672,107 @@ class Seam:
                 return path
         return None
 
+    def check_fifos(self, network: Composition) -> FifoCheck:
+        """Each stored transport of ``network`` checked against its stream at the network's
+        bottleneck period (``Cost.bottleneck``, as ``SizeFifos`` reads it): one simulation
+        of its channel's ends with the words it holds (``finn.kernels.fifo_sizing.holds``:
+        a FIFO's storage capacity, ``direct`` none). Nothing is recorded: a depth is stale
+        when sizing's own model says it no longer keeps its producer within its idle time,
+        whatever changed. A FIFO whose depth is not held is then ``stale``; a held one
+        (``held``) and a ``direct`` are limitations (``FifoCheck``). A transport whose
+        depth or style is open, or whose channel's ends the model does not read, is not
+        checked; nor is any where a member's cycles are not known."""
+        bottleneck = self.cost(network).bottleneck
+        if bottleneck is None:
+            return FifoCheck(None)
+        period = bottleneck.cycles
+        chosen = self.chosen(network)
+        declared = self.declared(network)
+        stale: dict[Key, tuple[Finding, ...]] = {}
+        findings: list[Finding] = []
+        checked: list[str] = []
+        not_modelled: dict[str, str] = {}
+        for transport, fifo in self.transports(network).items():
+            owner = transport[0]
+            if transport not in chosen:
+                continue
+            depth: Key | None = None
+            words: int | None = 0
+            if chosen[transport] == fifo:
+                prefix = f"{transport[1]}.{fifo}."
+                depth = next(
+                    (
+                        key
+                        for key in chosen
+                        if key[0] == owner
+                        and key[1].startswith(prefix)
+                        and key[1].endswith(".depth")
+                        and declared.get(key) is FifoKernel
+                    ),
+                    None,
+                )
+                # Its depth open (a required choice emission refuses), or its storage
+                # not stated (its style open, or refused): nothing to check.
+                words = None if depth is None else _fifo_words(network, depth)
+            if words is None:
+                continue
+            try:
+                kept = holds(network.member(owner), period, words)
+            except NotModelled as error:
+                not_modelled[owner] = str(error)
+                continue
+            checked.append(owner)
+            if kept:
+                continue
+            idle = f"its producer within its idle time at the bottleneck's {period} cycles a frame"
+            details = (("tensor", owner), ("words", words), ("period", period))
+            if depth is None:
+                findings.append(
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "direct-throttles",
+                        dotted(transport),
+                        f"direct does not keep {idle}: its producer is throttled (SizeFifos "
+                        "places a FIFO)",
+                        details,
+                    )
+                )
+            elif depth in self.held:
+                findings.append(
+                    Finding(
+                        FindingKind.LIMITATION,
+                        "fifo-held-stale",
+                        dotted(depth),
+                        f"held at {chosen[depth]} ({words} words), which no longer keeps "
+                        f"{idle}: built as held, its producer throttled",
+                        details,
+                    )
+                )
+            else:
+                stale[depth] = (
+                    Finding(
+                        FindingKind.REJECTION,
+                        "fifo-stale",
+                        dotted(depth),
+                        f"depth {chosen[depth]} ({words} words) no longer keeps {idle}: size it "
+                        "again (SizeFifos)",
+                        details,
+                    ),
+                )
+        return FifoCheck(period, stale, tuple(findings), tuple(checked), not_modelled)
+
+    def checked(self, network: S) -> tuple[S, FifoCheck]:
+        """``network`` with each stale FIFO's depth dropped (``check_fifos``): cleared and
+        left open, a required choice no strategy set, so emission refuses it until
+        ``SizeFifos`` sizes it again; what else the clear reaches is settled back to its
+        value. With what the check found."""
+        found = self.check_fifos(network)
+        if not found.stale:
+            return network, found
+        prior = {key: value for key, value in network.chosen().items() if key not in found.stale}
+        opened, reopened = self.reopen(network, found.stale)
+        return self._settle(opened, prior, keys=reopened).network, found
+
     def refusals(
         self, network: Composition, members: Iterable[str] | None = None
     ) -> dict[str, tuple[Finding, ...]]:
@@ -756,6 +889,18 @@ def explore(seam: Seam, network: S, explorers: Iterable[Explorer]) -> S:
     for explorer in explorers:
         network = explorer.explore(seam, network)
     return network
+
+
+def _fifo_words(network: Composition, depth: Key) -> int | None:
+    """The words the FIFO whose depth is ``depth`` accepts (its storage's capacity), or
+    None where it states none (its style open, or its storage refused)."""
+    owner, key = depth
+    found: Any = network.member(owner)
+    for name in key.split(".")[:-1]:
+        # A selector's case names no attribute: the selector's value is the case's Space.
+        found = getattr(found, name, found)
+    storage = found.query(FifoKernel.storage)
+    return storage.value.capacity if isinstance(storage, Available) else None
 
 
 def _unheld(seam: Seam, network: Composition) -> list[Key]:
@@ -1802,8 +1947,9 @@ class SizeFifos:
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
     batch is attempted again.
 
-    ``method`` is ``"analytical"``, the only one; ``frames`` the frames the
-    model runs to reach its periodic state.
+    ``method`` is ``"analytical"``, the only one. The model runs ``FRAMES`` frames to
+    reach its periodic state, as the seam's check (``Seam.check_fifos``) does, so every
+    transport it sizes passes the check at the period it sized it at.
     """
 
     strategy = "size_fifos"
@@ -1813,7 +1959,6 @@ class SizeFifos:
         method: str = "analytical",
         margin: int = 0,
         ram_style: str | None = None,
-        frames: int = 16,
     ) -> None:
         if method != "analytical":
             raise ExploreError(
@@ -1825,14 +1970,9 @@ class SizeFifos:
             raise ExploreError(
                 "sizing-invalid", self.strategy, f"a margin of {margin} words is none"
             )
-        if frames < 1:
-            raise ExploreError(
-                "sizing-invalid", self.strategy, f"a model of {frames} frames is none"
-            )
         self.method = method
         self.margin = margin
         self.ram_style = ram_style
-        self.frames = frames
         self.period: int | None = None
         self.proposals: dict[str, _Proposal] = {}
 
@@ -1873,7 +2013,6 @@ class SizeFifos:
                 bottleneck.cycles,
                 margin=self.margin,
                 ram_style="auto" if self.ram_style is None else self.ram_style,
-                frames=self.frames,
             )
             # A FIFO case the channel refuses before any attempt is a refusal only where
             # a FIFO is needed.
@@ -1919,7 +2058,7 @@ class SizeFifos:
             "method": self.method,
             "margin": self.margin,
             "ram_style": self.ram_style,
-            "frames": self.frames,
+            "frames": FRAMES,
             "period": self.period,
             "fifo_bits": sum(each.sized.bits for each in proposals if each.placed),
             "channels": self.channels(),
@@ -2026,6 +2165,7 @@ __all__ = [
     "DebugPlaceholder",
     "ExploreError",
     "Explorer",
+    "FifoCheck",
     "MaxThroughput",
     "Pinned",
     "RankPolicy",

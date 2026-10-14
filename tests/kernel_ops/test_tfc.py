@@ -32,8 +32,7 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.explore import Ranked
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
@@ -131,7 +130,7 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
     # A second frame that repeated the first's logits would not show the first one left
     # nothing behind.
     assert not np.array_equal(*expected)
-    bound = network(body, body.graph.node)
+    bound = in_shell(body, body.graph.node)
     assert bound.undecided() == () and not bound.stale
     assert bound.boundary == ((body.graph.input[0].name, "s_axis_0"), (LOGITS, "m_axis_0"))
     point, boundary = configured_network(body, "partition")
@@ -244,7 +243,7 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
     model: its weight and adapter memories cannot be UltraRAM, and none is pumped (the
     shell drives no 2x clock)."""
     _, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
-    bound = network(body, body.graph.node)
+    bound = in_shell(body, body.graph.node)
     weights = [
         node.input[1]
         for node in body.graph.node

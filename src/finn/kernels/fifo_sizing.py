@@ -21,16 +21,16 @@ partition's bottleneck period ``P`` (its ``CYCLES``):
   frees words as its nest passes them, and presents each beat once the word it
   reads arrived, at the consumer's spacing.
 
-``simulate`` runs both over ``frames`` frames with a FIFO of ``depth`` words
-between them (``0``: direct, a handshake) and gives the producer's lateness each
-frame. FinnLib's FIFO, as XSim measures it: a word is presented two cycles after
-it is accepted (``FIFO_LATENCY``), and a slot taken is free the cycle after. The
+``simulate`` runs both over ``frames`` frames (``FRAMES``, the model's) with a FIFO of
+``depth`` words between them (``0``: direct, a handshake) and gives the producer's
+lateness each frame. FinnLib's FIFO, as XSim measures it: a word is presented two cycles
+after it is accepted (``FIFO_LATENCY``), and a slot taken is free the cycle after. The
 lateness is how far its last word of the frame left after its unthrottled time. A
 producer may be late by its idle time a period (``P`` minus its span) without
-starting its next frame late; ``least_depth`` is the least depth for which it
-never is later than that, by bisection. A kernel's pipeline latency is a constant
-shift of an end's times, and the acceptance follows the supply's data, so they do
-not change the depth.
+starting its next frame late; ``keeps`` says whether a FIFO of so many words keeps it
+within that, and ``least_depth`` is the least depth that does, by bisection. A kernel's
+pipeline latency is a constant shift of an end's times, and the acceptance follows the
+supply's data, so they do not change the depth.
 
 ``size`` reads a channel's ends from its contracts and gives its ``Sized``: a
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
@@ -45,6 +45,12 @@ reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
 The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim
 check is evidence outside it.
+
+``holds`` checks a channel's transport, a FIFO of so many words or ``direct``, against
+its stream again (``keeps``, one simulation): a depth is sized at one bottleneck period,
+and a fold anywhere in the network may change the period, or the ends, after it. Nothing
+records what it was sized against; the seam checks it at the end of each exploration and
+at emission (``Seam.check_fifos``).
 """
 
 from __future__ import annotations
@@ -193,21 +199,37 @@ def simulate(
     return Flow(tuple(left), tuple(taken), tuple(late))
 
 
+#: The frames the model runs to reach its periodic state: sizing's and the check's, so a
+#: depth sizing proposes is one the check keeps.
+FRAMES = 16
+
+
 def within(late: Sequence[int], supply: Pattern, period: int) -> bool:
     """The producer starts every frame on time: late by no more than its idle time."""
     return all(each <= period - supply.beats for each in late)
 
 
-def least_depth(supply: Pattern, accept: Acceptance, period: int, frames: int = 16) -> int | None:
+def keeps(
+    supply: Pattern, accept: Acceptance, period: int, words: int, frames: int = FRAMES
+) -> bool:
+    """A FIFO of ``words`` words (0: direct) keeps the producer, throttled only by a full
+    FIFO, within its idle time a period over ``frames`` frames (``within``); the ends
+    deadlocking do not."""
+    flow = simulate(supply, accept, period, words, frames)
+    return flow is not None and within(flow.late, supply, period)
+
+
+def least_depth(
+    supply: Pattern, accept: Acceptance, period: int, frames: int = FRAMES
+) -> int | None:
     """The least FIFO depth (0: direct) for which the producer, throttled only by a full
-    FIFO, is never later than its idle time a period; ``None`` when none up to
+    FIFO, is never later than its idle time a period (``keeps``); ``None`` when none up to
     ``frames`` frames of words is."""
     if supply.beats > period:
         raise ValueError(f"a producer of {supply.beats} beats cannot keep a period of {period}")
 
     def meets(depth: int) -> bool:
-        flow = simulate(supply, accept, period, depth, frames)
-        return flow is not None and within(flow.late, supply, period)
+        return keeps(supply, accept, period, depth, frames)
 
     if meets(0):
         return 0
@@ -287,14 +309,7 @@ class Sized:
         return self.depth * self.word_bits
 
 
-def size(
-    channel: Channel,
-    period: int,
-    *,
-    margin: int = 0,
-    ram_style: str = "auto",
-    frames: int = 16,
-) -> Sized:
+def size(channel: Channel, period: int, *, margin: int = 0, ram_style: str = "auto") -> Sized:
     """``channel``'s FIFO at the bottleneck ``period``: the least DEPTH whose storage
     holds the least words plus ``margin`` (``least_depth_holding``: a FIFO of two words
     or more), or direct where none is needed, none helps, or the ends are not
@@ -304,16 +319,26 @@ def size(
         supply, accept = ends(channel)
     except NotModelled as error:
         return Sized(0, str(error), word_bits)
-    least = least_depth(supply, accept, period, frames)
+    least = least_depth(supply, accept, period)
     if least is None:
-        return Sized(0, f"no depth up to {frames} frames keeps the producer's period", word_bits)
+        return Sized(0, f"no depth up to {FRAMES} frames keeps the producer's period", word_bits)
     if least == 0:
         return Sized(0, "direct absorbs it", word_bits, 0)
     depth = least_depth_holding(least + margin, word_bits, ram_style, channel.platform.uram)
     return Sized(depth, f"least {least} words", word_bits, least)
 
 
+def holds(channel: Channel, period: int, words: int) -> bool:
+    """Whether ``channel``'s transport, a FIFO of ``words`` words (its storage's capacity;
+    0: direct), keeps its producer within its idle time at the bottleneck ``period``
+    (``keeps``, one simulation of its ends): the test ``size`` sizes it by, at the words it
+    holds. ``NotModelled`` where the model does not read its ends (``ends``)."""
+    supply, accept = ends(channel)
+    return keeps(supply, accept, period, words)
+
+
 __all__ = [
+    "FRAMES",
     "Acceptance",
     "Flow",
     "NotModelled",
@@ -322,6 +347,8 @@ __all__ = [
     "Sized",
     "converted",
     "ends",
+    "holds",
+    "keeps",
     "least_depth",
     "simulate",
     "size",

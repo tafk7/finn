@@ -3,8 +3,9 @@
 
 """The ends a shell offers on its boundary channels (``finn.kernels.ends``).
 
-A partition's network reads its target's shell row (``finn.platform.shells``), whose offer places
-an ``IODMA_hls`` end on each free side that meets the host: forced, so nothing is
+A partition's network in its shell (``in_shell``) reads its target's shell row
+(``finn.platform.shells``), whose offer places an ``IODMA_hls`` end on each free side that
+meets the host: forced, so nothing is
 persisted; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
 both boundaries through it; its resources by its widths are the shell's, which
@@ -25,12 +26,18 @@ from kernels.helpers import built as module_built
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-import finn.custom_op.kernels.network as graph_network
+import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.partition import partition_body
 from finn.core.space import Available, Rejected, design_space, inspection
-from finn.custom_op.kernels.network import Partition, network, persist
-from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import (
+    InShell,
+    ShellResources,
+    configured_network,
+    in_shell,
+    shell_resources,
+)
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import Traversal, tile, vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -186,17 +193,35 @@ def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
 # -- on the Chain --------------------------------------------------------------------------
 
 
-def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> Partition:
-    """The Chain's network for ``target`` (its model's target, restated)."""
+def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
+    """The Chain's network in the shell of ``target`` (its model's target, restated)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    return network(model, model.graph.node, name="chain")
+    return in_shell(model, model.graph.node, name="chain")
 
 
-def test_the_network_reads_its_targets_shell_row() -> None:
+def test_the_network_in_its_shell_reads_its_targets_shell_row() -> None:
     bound = chain_network()
     assert bound.row == shell_row("pynq", "Ultra96") and bound.row.ends == (iodma_hls(128),)
     assert chain_network(TARGET).row == IP_ROW
+
+
+def test_the_network_takes_the_ends_it_is_offered_and_states_its_members_resources() -> None:
+    """The network reads no shell: its ends are the ones it is given (none by default),
+    and what it uses is its members' sum; the shell adds its ends' and static region's."""
+    model = kernel_model()
+    configure_partition(model)
+    write_target(model, ULTRA96)
+    plain = network(model, model.graph.node, name="chain")
+    assert plain.ends == () and not plain.member("x").ended
+    offered = network(model, model.graph.node, name="chain", ends=(iodma_hls(128),))
+    shelled = in_shell(model, model.graph.node, name="chain")
+    assert offered.ends == shelled.ends == ("x", "y")
+    assert offered.chosen() == shelled.chosen()
+    split = shell_resources(shelled)
+    assert isinstance(split, ShellResources) and split.ends and split.static_region
+    assert offered.own_resources() == Available(split.partition)
+    assert shelled.own_resources() == Available(split.total)
 
 
 def test_an_offer_places_a_forced_end_on_each_free_side() -> None:
@@ -409,11 +434,11 @@ def test_at_3e6_fps_a_64_bit_memory_port_binds_and_128_bits_do_not(
     max(beats, 98) + 13 = 111, the bottleneck that fold reaches (TargetCycles as
     built: the report states the budget relaxed to and the cycles reached).
 
-    No board's row has a 64-bit port: the partition's network reads Ultra96's row with
+    No board's row has a 64-bit port: the partition's network in its shell reads Ultra96's row with
     its end narrowed."""
     _, wide = explored(tfc, 3e6)
     with monkeypatch.context() as patched:
-        patched.setattr(graph_network, "shell_row", lambda *row: narrowed(shell_row(*row)))
+        patched.setattr(shell, "shell_row", lambda *row: narrowed(shell_row(*row)))
         _, narrow = explored(tfc, 3e6)
     end = narrow["ends"]["Reshape_0_out0"]
     assert (end["memory_width"], end["words"]) == (64, 98)

@@ -32,7 +32,8 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Available
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network, persist, save_channels
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import save_channels
 from finn.kernels.explore import Ranked, SizeFifos
 from finn.kernels.network import dotted
 from finn.toolchain.launcher import host_toolchain

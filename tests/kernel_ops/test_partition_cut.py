@@ -32,8 +32,7 @@ from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, wri
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.explore import Seam
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -377,6 +376,6 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     channels = {name: held for name, held in config.items() if name not in converted}
     assert (len(channels), sum(map(len, channels.values()))) == (13, 25)
     assert {held["transport"] for held in channels.values()} == {"direct"}
-    bound = network(body, body.graph.node)
+    bound = in_shell(body, body.graph.node)
     assert bound.stale == {}
     assert Seam().choices(bound) == ()

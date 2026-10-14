@@ -32,8 +32,7 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.network import save_channels
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, save_channels
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
 from finn.toolchain.vivado import hierarchical_utilization

@@ -8,10 +8,10 @@ time, and saving them.
 KernelOps the build's cut made (``CutKernelPartition``; ``explore_partition``, which
 the build's strategy steps run, opens it through the parent graph's node,
 ``partition_body``, and saves it in its file), so which KernelOps go together is the
-cut's alone: a model holding any other node is refused. It binds the body's network
-(``finn.custom_op.kernels.network``: their kernels, the channels between them and the
-channels on its boundary, members named as the graph, ``MatMul_0``; the nodes' and the
-channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
+cut's alone: a model holding any other node is refused. It binds the body's network in
+its shell (``finn.custom_op.kernels.shell.in_shell``: their kernels, the channels between
+them and the channels on its boundary, members named as the graph, ``MatMul_0``; the nodes'
+and the channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
 (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
 tensor, and the key there; holds the pins the body records (``HELD``), gives every
 choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
@@ -19,6 +19,11 @@ does, a no-op on a body the cut created; on a body made by hand, or for a choice
 dropped as stale, the report names what it baselined), runs the strategy, which reopens
 the choices it decides, explores and settles, and then:
 
+- checks each stored transport against its stream at the bottleneck period
+  (``Seam.checked``): a FIFO that no longer keeps its producer within its idle time is
+  dropped, named with why and left open (a required choice: emission refuses it until FIFO
+  sizing sizes it again), unless it is held; a held one, and a ``direct`` that throttles
+  its producer, is a limitation;
 - refuses a network a member refuses (``Seam.refusals``) or its shell does not admit
   (``admission_refusal``: its AXI-Lite buses, memory ports and doubled clock against
   the shell's row), by name (a ``KernelOpError`` carrying their findings);
@@ -29,10 +34,8 @@ the choices it decides, explores and settles, and then:
 - records the pins held, those the body recorded and those the strategy pinned, in the
   body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
   the body holds them: a pin holds for the build, and re-baselining keeps it; and a
-  target throughput's frames a second (``OBJECTIVE_FPS``), which another strategy that
-  may change the folding removes (``FOLDING``); and whether its FIFOs are stale
-  (``FIFOS_STALE``): set by any strategy but FIFO sizing and the debug placeholder where
-  the body holds a FIFO, removed by FIFO sizing;
+  target throughput's frames a second (``OBJECTIVE_FPS``), which a later exploration
+  whose strategy changes any kernel's choice removes;
 - keeps what it found (``explored``): the network, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
@@ -42,17 +45,18 @@ the choices it decides, explores and settles, and then:
   or the strategy); the keys held; the choices left open (a required one named so); each
   FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
   (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
-  sized; the dropped choices with why, per member cycles, buffering and resources, the
-  bottleneck, and the shell's resources against the platform's, ``resources``), so an
-  outer search can compare; and every limitation it found (``findings``: the
-  strategy's and the resources'), in the report where each was found. Who set a value
-  is logged in the report, never stored in the model.
+  sized; the dropped choices with why (``dropped``: replay's and the check's), what the
+  check of the transports found (``fifo_check``), per member cycles, buffering and
+  resources, the bottleneck, and the shell's resources against the platform's,
+  ``resources``), so an outer search can compare; and every limitation it found
+  (``findings``: the strategy's, the check's and the resources'), in the report where
+  each was found. Who set a value is logged in the report, never stored in the model.
 
 ``exploration_summary`` gives an exploration's lines for a build's log.
 
-Pins go first, and FIFO sizing after the last strategy that changes the folding: the
-engine keeps a stored FIFO depth valid when its ends' folding changes, so a FIFO sized
-before it is marked stale (``FIFOS_STALE``), and packaging refuses the body.
+Pins go first, and FIFO sizing after the last strategy that changes the folding: a FIFO
+sized before a fold that leaves it too small for its stream is dropped at the end of
+that exploration, and emission refuses its open depth.
 
 The resources are the shell's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
@@ -75,7 +79,7 @@ limitation (``resources-over-part``, in the result's and the resources' ``findin
 naming the binding resource, whichever strategy chose it: the report ranks and states
 it, and refuses nothing.
 
-The shell is the model's target's (``finn.custom_op.kernels.network``): its row offers the
+The shell is the model's target's (``finn.custom_op.kernels.shell``): its row offers the
 boundary channels its ends (none: the ``ip`` shell). Where a channel has an end, the
 report has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
@@ -91,25 +95,28 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn.core.graph.annotations.choices import FIFOS_STALE, HELD, OBJECTIVE_FPS, held_choices
+from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_choices
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available
+from finn.custom_op.kernels.base import why
 from finn.custom_op.kernels.network import Partition, persist
-from finn.custom_op.kernels.network import network as graph_network
-from finn.custom_op.kernels.shell import ShellResources, admission_refusal, shell_resources
+from finn.custom_op.kernels.shell import (
+    InShell,
+    ShellResources,
+    admission_refusal,
+    in_shell,
+    shell_resources,
+)
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     Bottleneck,
     Cost,
-    DebugPlaceholder,
     Explorer,
-    MaxThroughput,
     Pinned,
-    Rebaseline,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -123,15 +130,6 @@ from finn.platform.catalog import part_report
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-#: The strategies other than a target throughput that may change the kernels' folding:
-#: each removes the body's ``OBJECTIVE_FPS``, which no longer names the throughput its
-#: folding was explored for.
-FOLDING = (Pinned, MaxThroughput, Rebaseline)
-
-#: The strategies that keep the kernels' folding; any other, a user's own included, may
-#: change it.
-_KEEPS_FOLDING = (SizeFifos, DebugPlaceholder)
-
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
 
@@ -140,9 +138,10 @@ _ABSENT = object()
 class Explored:
     """An exploration's result: the body's network (every value, settled after the
     strategy), its cost, the report (JSON values), and every limitation it found
-    (``findings``: the strategy's, then the resources'), never a refusal."""
+    (``findings``: the strategy's, the check's of the transports, then the resources'),
+    never a refusal."""
 
-    network: Partition
+    network: InShell
     cost: Cost
     report: Mapping[str, Any]
     findings: tuple[Finding, ...] = ()
@@ -397,7 +396,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         )
     nodes = list(model.graph.node)
     started = time.perf_counter()
-    bound = graph_network(model, nodes)
+    bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
     seam.held.update(seam.keyed(network, held_choices(model), HELD.entry))
@@ -410,6 +409,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     # Who set each value: the body (``saved``), the baseline, or the strategy.
     set_by = {key: "saved" if key in saved else "baseline" for key in values}
     entry: dict[str, object] | None = None
+    changed: list[Key] = []
     if strategy is not None:
         attempts, began = seam.attempts, time.perf_counter()
         before = seam.chosen(network)
@@ -439,6 +439,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         }
         if isinstance(strategy, Pinned):
             entry["held"] = [dotted(key) for key in strategy.held]
+    # Every FIFO checked against its stream at the period the exploration reached.
+    network, fifos = seam.checked(network)
     refused = seam.refusals(network)
     if refused:
         raise KernelOpError(
@@ -460,13 +462,9 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         model.set(HELD, _by_owner(seam.held))
     if isinstance(strategy, TargetThroughput):
         model.set(OBJECTIVE_FPS, strategy.fps)
-    elif isinstance(strategy, FOLDING):
+    elif any(owner in network.kernels for owner, _ in changed):
+        # The folding is no longer the one the target throughput explored.
         model.delete(OBJECTIVE_FPS)
-    if isinstance(strategy, SizeFifos):
-        model.delete(FIFOS_STALE)
-    elif strategy is not None and not isinstance(strategy, _KEEPS_FOLDING):
-        if _placed(seam, network):
-            model.set(FIFOS_STALE, True)
     left = [
         dotted(choice.key) + (" (required)" if choice.required else "")
         for choice in seam.choices(network)
@@ -492,13 +490,17 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         "open": left,
         "fifo_storage": _fifo_storage(seam, network),
         "fifos": _fifos(strategy, entry, placed),
-        "dropped": dict(bound.stale),
+        "dropped": {
+            **bound.stale,
+            **{dotted(key): why(found) for key, found in fifos.stale.items()},
+        },
+        "fifo_check": fifos.report(),
         **_cost_report(network, cost, resources),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
     found = tuple(getattr(strategy, "findings", ()))
-    return Explored(network, cost, explored, (*found, *over_part))
+    return Explored(network, cost, explored, (*found, *fifos.findings, *over_part))
 
 
 def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
@@ -535,7 +537,7 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
     """The slowest members of a partition model of KernelOps' network, ends included,
     and their cycles a frame, its saved choices replayed (None where a member's cycles
     wait on a choice left open)."""
-    bound = graph_network(model, model.graph.node)
+    bound = in_shell(model, model.graph.node)
     return Seam(read_target(model).platform).cost(bound).bottleneck
 
 

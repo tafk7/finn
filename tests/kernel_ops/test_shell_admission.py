@@ -25,13 +25,12 @@ import pytest
 from kernels.helpers import built, choose, with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
 
-import finn.custom_op.kernels.network as graph_network
+import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -135,8 +134,8 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
     configured_network(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
     with pytest.MonkeyPatch.context() as patched:
-        patched.setattr(graph_network, "shell_row", lambda *_: narrow)
-        bound = network(model, model.graph.node, name="chain")
+        patched.setattr(shell, "shell_row", lambda *_: narrow)
+        bound = in_shell(model, model.graph.node, name="chain")
         assert bound.row == narrow
         with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:
             explore_kernel_choices(model)
@@ -162,7 +161,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
     write_target(model, ULTRA96)
-    assert not network(model, model.graph.node, name="chain").row.clk2x
+    assert not in_shell(model, model.graph.node, name="chain").row.clk2x
     with pytest.raises(
         KernelOpError,
         match="clock-unavailable: the partition takes an aligned doubled clock "

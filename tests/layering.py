@@ -145,7 +145,7 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The platform registry: parts, boards and shell rows, resolved to the build's target
     # (finn.platform.target), the capabilities kernels read with the part, shell and
-    # board. A partition's network reads its shell's row, whose budgets a module's pins
+    # board. A partition's network in its shell reads its row, whose budgets a module's pins
     # (finn.kernels.artifacts) are held to. A refusal carries its finding
     # (finn.core.reporting).
     Layer(

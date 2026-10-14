@@ -697,13 +697,15 @@ channel from both ends' beat patterns at the bottleneck (`direct` where none is
 needed), `fifo_margin` words added to a FIFO it places. The default phase is
 `[step_size_fifos, step_verify_partition]`: the baseline folding, its FIFOs sized; a
 target throughput is `step_target_throughput` listed before it, with `target_fps` (the
-example above). FIFO depths are sized at the folding before them: a step that may
-change the folding (any strategy step but the FIFO sizing and the debug placeholder, a
-step of your own included) marks a partition that holds a FIFO as sized at another
-folding (`finn.choices/fifos_stale`), `step_size_fifos` clears the mark, and packaging
-refuses a partition still marked: run `step_size_fifos` after the last step that may
-change the folding. A required choice left open (a FIFO's depth) is refused by name
-when the partition is built.
+example above). FIFO depths are sized at the folding before them: run `step_size_fifos`
+after the last step that may change the folding. Each strategy step ends by checking every
+FIFO against its stream at the bottleneck it reached (the model `step_size_fifos` sizes
+by): a FIFO that no longer keeps its producer within its idle time (a fold anywhere may
+shorten the bottleneck) has its depth dropped, named in the step's report (`dropped`) and
+left open, unless you pinned it, which keeps it with a warning; a `direct` that throttles
+its producer is a warning. Packaging checks the same, so a depth edited by hand is
+refused there. A required choice left open (a FIFO's depth) is refused by name when the
+partition is built.
 
 Each strategy step writes its report, `report/<step>.json`, listed under it in the
 build's manifest: its strategy with the values it changed, reopened, kept and
