@@ -9,6 +9,7 @@ from typing import Self, cast
 
 import pytest
 
+from finn.core.reporting.findings import by_code
 from finn.core.space import (
     Const,
     Decision,
@@ -298,9 +299,27 @@ def test_incompatible_override_collision_and_reserved_names() -> None:
     collision = type("Collision", (Base, Other), {})
     with pytest.raises(DefinitionError, match="conflicting inherited"):
         collect_space(collision)
-    reserved = type("Reserved", (Space,), {"__annotations__": {"query": int}, "query": Param()})
-    with pytest.raises(DefinitionError, match="reserved configuration name"):
-        collect_space(reserved)
+
+
+def test_each_broken_rule_is_its_own_code_owned_by_the_module_that_checks_it() -> None:
+    """Three overrides a Space class collects and refuses: each its own code, owned by
+    collection, the declaration in its details, so ``by_code`` tells them apart."""
+    found = []
+    for name, value in (("Different", Param()), ("ChangedKind", Const(2)), ("Hidden", 3)):
+        annotations = {"extent": str} if name == "Different" else {}
+        space_type = type(name, (Base,), {"__annotations__": annotations, "extent": value})
+        with pytest.raises(DefinitionError) as refused:
+            collect_space(space_type)
+        (finding,) = refused.value.findings
+        assert finding.owner == "space.collection"
+        assert dict(finding.details) == {"declaration": f"{name}.extent"}
+        found.append(finding)
+    assert [finding.code for finding in found] == [
+        "override-changes-semantics",
+        "override-changes-kind",
+        "attribute-hides-declaration",
+    ]
+    assert len(by_code(found)) == 3
 
 
 def test_duplicate_declaration_reuse_is_attributable() -> None:

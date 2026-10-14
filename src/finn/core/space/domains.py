@@ -35,6 +35,8 @@ from .results import (
 )
 from .semantics import ValueSemantics, default_semantics, unrecognized
 
+_OWNER = "space.domains"
+
 T = TypeVar("T")
 
 
@@ -94,16 +96,24 @@ class Domain(Generic[T]):
     def __post_init__(self) -> None:
         names = tuple(name for name, _ in self.dependencies)
         if len(set(names)) != len(names):
-            raise DefinitionError("domain dependency names must be unique")
+            raise DefinitionError.broken(
+                "domain-dependencies-duplicate", _OWNER, "domain dependency names must be unique"
+            )
         if any(not name.isidentifier() or name == "candidate" for name in names):
-            raise DefinitionError(
-                "domain dependency names must be identifiers other than candidate"
+            raise DefinitionError.broken(
+                "domain-dependency-name-invalid",
+                _OWNER,
+                "domain dependency names must be identifiers other than candidate",
             )
         object.__setattr__(self, "dependencies", tuple(self.dependencies))
         if not callable(self.accepts):
-            raise DefinitionError("domain membership must be callable")
+            raise DefinitionError.broken(
+                "domain-membership-not-callable", _OWNER, "domain membership must be callable"
+            )
         if self.candidates is not None and not callable(self.candidates):
-            raise DefinitionError("domain enumeration must be callable")
+            raise DefinitionError.broken(
+                "domain-enumeration-not-callable", _OWNER, "domain enumeration must be callable"
+            )
 
     def with_semantics(self, semantics: ValueSemantics[T]) -> Domain[T]:
         """Bind finite values to their Decision's declared snapshot and equality."""
@@ -112,7 +122,11 @@ class Domain(Generic[T]):
             self.value_semantics is not None
             and self.value_semantics.type_token is not semantics.type_token
         ):
-            raise DefinitionError("domain and decision have incompatible value semantics")
+            raise DefinitionError.broken(
+                "domain-semantics-incompatible",
+                _OWNER,
+                "domain and decision have incompatible value semantics",
+            )
         if self._finite_values is not None:
             bound = finite(self._finite_values, semantics, ordered=self.ordered)
             return replace(bound, requirements=self.requirements)
@@ -203,8 +217,10 @@ def finite(
 
     def accepts(*, candidate: T) -> bool:
         if semantics is None:
-            raise DefinitionError(
-                "a finite domain must be bound to value semantics before evaluation"
+            raise DefinitionError.broken(
+                "domain-semantics-unbound",
+                _OWNER,
+                "a finite domain must be bound to value semantics before evaluation",
             )
         return _contains(listed, candidate, semantics)
 
@@ -271,7 +287,11 @@ def requires(
     cases=("ultra",))``)."""
     code, _, message = finding.partition(":")
     if not code.strip() or not message.strip():
-        raise DefinitionError("a requirement's finding is written 'code: message'")
+        raise DefinitionError.broken(
+            "requirement-finding-malformed",
+            _OWNER,
+            "a requirement's finding is written 'code: message'",
+        )
     return Requirement(fact, code.strip(), message.strip(), cases)
 
 

@@ -33,6 +33,8 @@ from .ir import Argument
 from .references import resolve_reference
 from .semantics import ValueSemantics
 
+_OWNER = "space.names"
+
 
 def _attribute(name: str) -> Callable[..., object]:
     def attribute(*, value: object) -> object:
@@ -82,8 +84,11 @@ class Names:
 
     def check_view(self, scope: int, key: ViewKey[object], target: int) -> None:
         if self.table.nodes[target].kind != "view":
-            raise DefinitionError(
-                f"{self.table.drafts[scope].name or '<root>'}: member {key.name} must be a view"
+            raise DefinitionError.broken(
+                "member-not-view",
+                _OWNER,
+                f"{self.table.drafts[scope].name or '<root>'}: member {key.name} must be a view",
+                declaration=self.table.drafts[scope].name or "<root>",
             )
 
     def fresh_number(self, owner: str) -> int:
@@ -98,7 +103,12 @@ class Names:
         decision = source.path[-1]
         index = self.table.drafts[target].choices.get(decision)
         if index is None:
-            raise DefinitionError(f"{owner}: the Decision over nodes is not placed here")
+            raise DefinitionError.broken(
+                "node-decision-not-placed",
+                _OWNER,
+                f"{owner}: the Decision over nodes is not placed here",
+                declaration=owner,
+            )
         choice = self.table.choice_drafts[index]
         if source.member in choice.members:
             return choice.members[source.member]
@@ -122,8 +132,11 @@ class Names:
                 if source.member in effective.members
             ]
             if not choice.never or not declared:
-                raise DefinitionError(
-                    f"{owner}: no candidate of {choice.key} has a member {source.member}"
+                raise DefinitionError.broken(
+                    "candidate-member-absent",
+                    _OWNER,
+                    f"{owner}: no candidate of {choice.key} has a member {source.member}",
+                    declaration=owner,
                 )
             # Never applicable here: the selection reads inapplicable, typed as declared.
             semantics = semantics or declared[0]
@@ -149,9 +162,12 @@ class Names:
                 continue
             child = draft.children.get(record)
             if child is None:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "reference-not-placed",
+                    _OWNER,
                     f"{owner}: {getattr(record, 'describe', lambda: record.name)()} is not "
-                    f"placed in {self.table.drafts[scope].name or '<root>'}"
+                    f"placed in {self.table.drafts[scope].name or '<root>'}",
+                    declaration=owner,
                 )
             scope = child
         return scope
@@ -168,7 +184,12 @@ class Names:
             target = self.descend(scope, source.path[:-1], owner=owner)
             index = self.table.drafts[target].choices.get(source.path[-1])
             if index is None:
-                raise DefinitionError(f"{owner}: the Decision over nodes is not placed here")
+                raise DefinitionError.broken(
+                    "node-decision-not-placed",
+                    _OWNER,
+                    f"{owner}: the Decision over nodes is not placed here",
+                    declaration=owner,
+                )
             return self.table.choice_drafts[index].selector
         if isinstance(source, MemberRef) and source.owner is None:
             target = self.descend(scope, source.path, owner=owner)
@@ -176,25 +197,36 @@ class Names:
             try:
                 return self.table.drafts[target].members[member]
             except (KeyError, TypeError) as cause:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "reference-names-no-member",
+                    _OWNER,
                     f"{owner}: {source!r} names no member of "
-                    f"{self.table.drafts[target].effective.space_type.__qualname__}"
+                    f"{self.table.drafts[target].effective.space_type.__qualname__}",
+                    declaration=owner,
                 ) from cause
         try:
             return self.table.drafts[scope].members[source]
         except (KeyError, TypeError):
             pass
         if isinstance(source, Declaration) and source.owner is None and source.origin:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "reference-not-in-scope",
+                _OWNER,
                 f"{owner}: {type(source).__name__}{at(source.origin)} is not a member of "
-                "this scope; name it as a class attribute, or supply a formal with it"
+                "this scope; name it as a class attribute, or supply a formal with it",
+                declaration=owner,
             )
         try:
             # Choices freeze after lowering, which still links their members: none is
             # reachable here.
             return resolve_reference(self.table.nodes, self.table.scopes, (), scope, source)
         except (RequestError, IndexError) as cause:
-            raise DefinitionError(f"{owner}: reference is not a member of this scope") from cause
+            raise DefinitionError.broken(
+                "reference-not-in-scope",
+                _OWNER,
+                f"{owner}: reference is not a member of this scope",
+                declaration=owner,
+            ) from cause
 
     def projection(self, scope: int, source: Projection[object], *, owner: str) -> int:
         """``spec.payload_bits``: a derived node reading one attribute of a value."""
@@ -203,9 +235,12 @@ class Names:
         if cached is not None:
             return cached
         if source.semantics is None:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "projection-unannotated",
+                _OWNER,
                 f"{owner}: {source._describe()} is not annotated with a class; read it in a "
-                "@derived method instead"
+                "@derived method instead",
+                declaration=owner,
             )
         index = self.table.reserve(
             scope,

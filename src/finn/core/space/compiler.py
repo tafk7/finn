@@ -40,6 +40,8 @@ from .errors import DefinitionError, RequestError
 from .ir import LinkedModel
 from .references import ValueHandle, resolve_decision, resolve_reference
 
+_OWNER = "space.compiler"
+
 S = TypeVar("S", bound=Space)
 
 
@@ -106,13 +108,19 @@ def _validate_constructors(space_types: tuple[type[Space], ...]) -> None:
                 continue
             checked.add(base)
             if "__init__" in base.__dict__:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "instance-constructor-custom",
+                    _OWNER,
                     f"{base.__qualname__}: custom instance __init__ is unsupported; "
-                    "use declarations and ordinary helper methods"
+                    "use declarations and ordinary helper methods",
+                    declaration=base.__qualname__,
                 )
             if "__new__" in base.__dict__:
-                raise DefinitionError(
-                    f"{base.__qualname__}: custom instance __new__ is unsupported"
+                raise DefinitionError.broken(
+                    "instance-constructor-custom",
+                    _OWNER,
+                    f"{base.__qualname__}: custom instance __new__ is unsupported",
+                    declaration=base.__qualname__,
                 )
 
 
@@ -149,12 +157,16 @@ def compile_model(space_type: type[S]) -> Model[S]:
     """The canonical model of a Space class whose formals are all runtime inputs."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
-        raise DefinitionError("compile_model requires a Space subclass")
+        raise DefinitionError.broken(
+            "not-a-space", _OWNER, "compile_model requires a Space subclass"
+        )
     with _PREPARATION_LOCK:
         cached = space_type.__dict__.get("_space_prepared_model")
         if cached is not None:
             if not isinstance(cached, Model) or cached.space_type is not space_type:
-                raise DefinitionError("invalid prepared-model cache on Space class")
+                raise DefinitionError.broken(
+                    "model-cache-invalid", _OWNER, "invalid prepared-model cache on Space class"
+                )
             return cached
         model = _publish(space_type, link_space(space_type))
         type.__setattr__(space_type, "_space_prepared_model", model)
@@ -175,10 +187,13 @@ def root_record(node: object) -> NodeDecl:
         )
     structural = structural_settings(record)
     if structural:
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "root-structural-formal",
+            _OWNER,
             f"design_space() of {record.describe()}: a root supplies plain values for its "
             f"value formals, and {', '.join(structural)} supplies structure (a reference "
-            "or a Decision); write a subclass, or build one with composite()"
+            "or a Decision); write a subclass, or build one with composite()",
+            declaration=record.describe(),
         )
     return record
 
@@ -225,8 +240,11 @@ def design_space(node: S) -> S:
         for name in unsupplied_formals(record)
     ]
     if missing:
-        raise DefinitionError(
-            f"{'; '.join(missing)}; while opening the design space of {record.describe()}"
+        raise DefinitionError.broken(
+            "formal-unsupplied",
+            _OWNER,
+            f"{'; '.join(missing)}; while opening the design space of {record.describe()}",
+            declaration=record.describe(),
         )
     try:
         model = cast(Model[Space], compile_model(record.space_type))

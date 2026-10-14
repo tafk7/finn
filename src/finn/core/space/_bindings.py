@@ -15,6 +15,8 @@ from ._nodes import NodeDecision, NodeDecl
 from .declarations import Const, Decision, Param, ValueRef, View
 from .errors import DefinitionError
 
+_OWNER = "space.bindings"
+
 BindingKind = Literal["literal", "reference", "local-decision"]
 
 
@@ -44,13 +46,19 @@ def classify(slot: Slot) -> tuple[BindingKind, object]:
     """
     value = slot.supplier
     if isinstance(value, Param) and value.owner is None:
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "inline-param-supplies-member",
+            _OWNER,
             f"{slot.key}: an inline Param cannot supply a member; declare the "
-            "formal on the enclosing Space class and bind it"
+            "formal on the enclosing Space class and bind it",
+            declaration=slot.key,
         )
     if isinstance(value, NodeDecl):
-        raise DefinitionError(
-            f"{slot.key}: a node or a Decision over nodes is not a value; bind one of its members"
+        raise DefinitionError.broken(
+            "node-not-value",
+            _OWNER,
+            f"{slot.key}: a node or a Decision over nodes is not a value; bind one of its members",
+            declaration=slot.key,
         )
     if isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision):
         return "local-decision", value

@@ -24,6 +24,8 @@ from .collection import collect_space
 from .declarations import ViewKey, local_name
 from .errors import DefinitionError
 
+_OWNER = "space.extensions"
+
 S = TypeVar("S", bound=Space)
 
 
@@ -67,7 +69,12 @@ def composite(
 
     local_name(name, "composite Space class name")
     if not isinstance(base, type) or not issubclass(base, Space):
-        raise DefinitionError(f"{name}: composite requires a Space base class")
+        raise DefinitionError.broken(
+            "composite-base-not-space",
+            _OWNER,
+            f"{name}: composite requires a Space base class",
+            declaration=name,
+        )
     for member in members:
         local_name(member, f"{name} member name")
     frame = sys._getframe(1)
@@ -76,7 +83,12 @@ def composite(
     if annotations is not None:
         unknown = sorted(annotations.keys() - members.keys())
         if unknown:
-            raise DefinitionError(f"{name}: annotations name no member {unknown}")
+            raise DefinitionError.broken(
+                "composite-annotation-unknown",
+                _OWNER,
+                f"{name}: annotations name no member {unknown}",
+                declaration=name,
+            )
         namespace["__annotations__"] = dict(annotations)
     if exports is not None:
         namespace["exports"] = dict(exports)

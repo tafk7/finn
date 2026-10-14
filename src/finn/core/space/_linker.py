@@ -26,6 +26,8 @@ from ._ordering import dependency_order
 from .errors import DefinitionError
 from .ir import LinkedModel
 
+_OWNER = "space.linker"
+
 
 def link_space(space_type: type[Space]) -> LinkedModel:
     table = allocate(space_type)
@@ -40,7 +42,7 @@ def link_space(space_type: type[Space]) -> LinkedModel:
     nodes = tuple(table.nodes)
     keys = {node.key: node.index for node in nodes}
     if len(keys) != len(nodes):
-        raise DefinitionError("generated node names collide")
+        raise DefinitionError.broken("node-names-collide", _OWNER, "generated node names collide")
     return LinkedModel(
         nodes,
         table.scopes,

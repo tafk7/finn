@@ -38,6 +38,8 @@ from .declarations import (
 from .errors import DefinitionError
 from .semantics import ValueSemantics
 
+_OWNER = "space.collection"
+
 _RESERVED = frozenset(
     {
         "inspect",
@@ -98,15 +100,21 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
     for key, record in decision.candidates.items():
         if record is None:
             if type(None) not in options:
-                raise DefinitionError(
-                    f"{label}: candidate {key!r} is None, so the annotation must include None"
+                raise DefinitionError.broken(
+                    "choice-annotation-excludes-none",
+                    _OWNER,
+                    f"{label}: candidate {key!r} is None, so the annotation must include None",
+                    declaration=label,
                 )
         elif not any(
             isinstance(option, type) and issubclass(record.space_type, option) for option in options
         ):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "choice-annotation-excludes-candidate",
+                _OWNER,
                 f"{label}: candidate {key!r} is a {record.space_type.__qualname__} node, which the "
-                f"annotation {annotation!r} does not admit"
+                f"annotation {annotation!r} does not admit",
+                declaration=label,
             )
 
 
@@ -127,34 +135,50 @@ def _collect_members(
             if declaration is not None:
                 local_name(name, "declaration name")
                 if name in _RESERVED or name.startswith("__"):
-                    raise DefinitionError(
-                        f"{base.__qualname__}.{name}: reserved configuration name"
+                    raise DefinitionError.broken(
+                        "name-reserved",
+                        _OWNER,
+                        f"{base.__qualname__}.{name}: reserved configuration name",
+                        declaration=f"{base.__qualname__}.{name}",
                     )
                 record = node_record(value)
                 if record is not None and record.candidate_of is not None:
                     # A handle naming a candidate of a Decision in this body.
                     decision = record.candidate_of
                     if decision.owner is not base:
-                        raise DefinitionError(
+                        raise DefinitionError.broken(
+                            "candidate-member-foreign",
+                            _OWNER,
                             f"{base.__qualname__}.{name}: names a candidate of a Decision "
-                            f"that is not declared in {base.__qualname__}{at(record.origin)}"
+                            f"that is not declared in {base.__qualname__}{at(record.origin)}",
+                            declaration=f"{base.__qualname__}.{name}",
                         )
                     continue
                 if declaration.owner is not base or declaration.name != name:
-                    raise DefinitionError(
-                        f"{base.__qualname__}.{name}: declaration was not bound at class creation"
+                    raise DefinitionError.broken(
+                        "declaration-unbound",
+                        _OWNER,
+                        f"{base.__qualname__}.{name}: declaration was not bound at class creation",
+                        declaration=f"{base.__qualname__}.{name}",
                     )
                 previous_name = aliases.get(declaration)
                 if previous_name is not None and previous_name != name:
-                    raise DefinitionError(
-                        f"{space_type.__qualname__}.{name}: declaration also named {previous_name}"
+                    raise DefinitionError.broken(
+                        "declaration-named-twice",
+                        _OWNER,
+                        f"{space_type.__qualname__}.{name}: declaration also named {previous_name}",
+                        declaration=f"{space_type.__qualname__}.{name}",
                     )
                 inherited.setdefault(name, []).append(declaration)
                 aliases[declaration] = name
                 members[name] = declaration
             elif name in members:
-                raise DefinitionError(
-                    f"{base.__qualname__}.{name}: ordinary attribute hides an inherited declaration"
+                raise DefinitionError.broken(
+                    "attribute-hides-declaration",
+                    _OWNER,
+                    f"{base.__qualname__}.{name}: ordinary attribute hides an inherited "
+                    "declaration",
+                    declaration=f"{base.__qualname__}.{name}",
                 )
     return members, aliases, inherited
 
@@ -181,7 +205,12 @@ def _collect_semantics(
         ]
         if len(nearest) > 1:
             names = ", ".join(base.__qualname__ for base in nearest)
-            raise DefinitionError(f"{owner}: conflicting inherited declarations from {names}")
+            raise DefinitionError.broken(
+                "inherited-declarations-conflict",
+                _OWNER,
+                f"{owner}: conflicting inherited declarations from {names}",
+                declaration=owner,
+            )
         function = _function(declaration)
         if function is not None:
             function_decl = cast("Derived[object] | Constraint | View[object]", declaration)
@@ -196,7 +225,12 @@ def _collect_semantics(
             ):
                 continue  # a node or choice may be replaced by another structural member
             if type(prior) is not type(declaration):
-                raise DefinitionError(f"{owner}: override changes declaration kind")
+                raise DefinitionError.broken(
+                    "override-changes-kind",
+                    _OWNER,
+                    f"{owner}: override changes declaration kind",
+                    declaration=owner,
+                )
             old_semantics = getattr(prior, "semantics", None)
             if old_semantics is None and isinstance(prior, (Derived, View)):
                 prior_function = prior.function
@@ -208,7 +242,12 @@ def _collect_semantics(
                 and current is not None
                 and not old_semantics.is_compatible_with(current)
             ):
-                raise DefinitionError(f"{owner}: override changes value semantics")
+                raise DefinitionError.broken(
+                    "override-changes-semantics",
+                    _OWNER,
+                    f"{owner}: override changes value semantics",
+                    declaration=owner,
+                )
     return semantics
 
 
@@ -241,7 +280,12 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
         guard = resolve_source(declaration.when, effective, owner)
         guard_semantics = source_semantics(guard, effective)
         if guard_semantics is not None and guard_semantics.type_token is not bool:
-            raise DefinitionError(f"{owner}: when= requires Boolean value semantics")
+            raise DefinitionError.broken(
+                "guard-not-boolean",
+                _OWNER,
+                f"{owner}: when= requires Boolean value semantics",
+                declaration=owner,
+            )
         guards[declaration] = cast(ValueRef[bool], guard)
     return MappingProxyType(guards)
 
@@ -251,16 +295,29 @@ def _exported_view(
 ) -> View[object]:
     space_type, members = effective.space_type, effective.members
     if not isinstance(declaration, Declaration) or declaration not in effective.aliases:
-        raise DefinitionError(f"{space_type.__qualname__}: export {label} is not a member")
+        raise DefinitionError.broken(
+            "export-not-member",
+            _OWNER,
+            f"{space_type.__qualname__}: export {label} is not a member",
+            declaration=space_type.__qualname__,
+        )
     resolved = members[effective.aliases[declaration]]
     if not isinstance(resolved, View):
-        raise DefinitionError(f"{space_type.__qualname__}: export {label} has the wrong kind")
+        raise DefinitionError.broken(
+            "export-kind-invalid",
+            _OWNER,
+            f"{space_type.__qualname__}: export {label} has the wrong kind",
+            declaration=space_type.__qualname__,
+        )
     exported_semantics = effective.semantics.get(resolved)
     if exported_semantics is None and resolved.source is not None:
         exported_semantics = source_semantics(resolved.source, effective)
     if exported_semantics is not None and not key.semantics.is_compatible_with(exported_semantics):
-        raise DefinitionError(
-            f"{space_type.__qualname__}: export {label} has incompatible semantics"
+        raise DefinitionError.broken(
+            "export-semantics-incompatible",
+            _OWNER,
+            f"{space_type.__qualname__}: export {label} has incompatible semantics",
+            declaration=space_type.__qualname__,
         )
     return resolved
 
@@ -272,15 +329,28 @@ def _collect_exports(
     space_type = effective.space_type
     exports: dict[ViewKey[object], Declaration] = {}
     if not isinstance(declared_exports, Mapping):
-        raise DefinitionError(
-            f"{space_type.__qualname__}: exports must map typed keys to declarations"
+        raise DefinitionError.broken(
+            "exports-invalid",
+            _OWNER,
+            f"{space_type.__qualname__}: exports must map typed keys to declarations",
+            declaration=space_type.__qualname__,
         )
     export_names: set[str] = set()
     for key, declaration in declared_exports.items():
         if not isinstance(key, ViewKey):
-            raise DefinitionError(f"{space_type.__qualname__}: an export needs a ViewKey")
+            raise DefinitionError.broken(
+                "view-key-required",
+                _OWNER,
+                f"{space_type.__qualname__}: an export needs a ViewKey",
+                declaration=space_type.__qualname__,
+            )
         if key.name in export_names:
-            raise DefinitionError(f"{space_type.__qualname__}: duplicate export key {key.name}")
+            raise DefinitionError.broken(
+                "export-key-duplicate",
+                _OWNER,
+                f"{space_type.__qualname__}: duplicate export key {key.name}",
+                declaration=space_type.__qualname__,
+            )
         export_names.add(key.name)
         exports[key] = _exported_view(effective, key, declaration, key.name)
     return MappingProxyType(exports)
@@ -289,7 +359,9 @@ def _collect_exports(
 def collect_space(space_type: type[Space]) -> EffectiveSpace:
     """Collect one scope and snapshot its signatures; child linking is separate."""
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
-        raise DefinitionError("collect_space expects a Space subclass")
+        raise DefinitionError.broken(
+            "not-a-space", _OWNER, "collect_space expects a Space subclass"
+        )
     namespace = class_namespace(space_type)
     annotation_namespace = _annotation_namespace(space_type)
     hint_cache: dict[int, dict[str, object]] = {}

@@ -51,6 +51,8 @@ from .results import (
 if TYPE_CHECKING:
     from .references import DecisionHandle
 
+_OWNER = "space.configuration"
+
 T = TypeVar("T")
 
 
@@ -132,9 +134,12 @@ class SpaceMeta(type):
 
         def __call__(cls, *args: object, **keywords: object) -> Space:
             if args:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "formals-by-keyword",
+                    _OWNER,
                     f"{cls.__qualname__}: formals are bound by keyword, as in "
-                    f"{cls.__qualname__}(name=value)"
+                    f"{cls.__qualname__}(name=value)",
+                    declaration=cls.__qualname__,
                 )
             from ._nodes import declare_node
 
@@ -146,8 +151,11 @@ class SpaceMeta(type):
         ):
             existing = cls.__dict__.get(name, getattr(cls, name, None))
             if name == "exports" or _structural(existing) or _structural(value):
-                raise DefinitionError(
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized"
+                raise DefinitionError.broken(
+                    "structure-finalized",
+                    _OWNER,
+                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized",
+                    declaration=f"{cls.__qualname__}.{name}",
                 )
         super().__setattr__(name, value)
 
@@ -155,8 +163,11 @@ class SpaceMeta(type):
         if cls.__dict__.get("_space_definition_finalized", False):
             existing = cls.__dict__.get(name)
             if name == "exports" or _structural(existing):
-                raise DefinitionError(
-                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized"
+                raise DefinitionError.broken(
+                    "structure-finalized",
+                    _OWNER,
+                    f"{cls.__qualname__}.{name}: prepared declaration structure is finalized",
+                    declaration=f"{cls.__qualname__}.{name}",
                 )
         super().__delattr__(name)
 
@@ -198,9 +209,12 @@ class Space(metaclass=SpaceMeta):
     def __set_name__(self, owner: type[object], name: str) -> None:
         path = declared_path(self)
         if path is None or len(path) != 1:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "space-holds-non-node",
+                _OWNER,
                 f"{owner.__qualname__}.{name}: only a node declaration can be placed in a Space "
-                "class"
+                "class",
+                declaration=f"{owner.__qualname__}.{name}",
             )
         from ._nodes import NodeDecl, place_in_class
 
