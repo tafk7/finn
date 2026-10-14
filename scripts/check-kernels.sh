@@ -45,6 +45,7 @@ gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/graph \
     src/finn/builder/build_dataflow_steps.py src/finn/builder/build_dataflow_verification.py \
     scripts/benchmark-space.py scripts/emitted_text.py tests/xsim_sweep tests/oracle
 # finn.toolchain.launcher: the toolchain packaging takes (PackagePartition's toolchain=);
+# finn.toolchain.ip: the packaged-IP store PackagePartition packages through;
 # finn.toolchain.xsim: XSim's driver, which the testbench and packaging's elaboration run.
 # finn.shells.pynq's runner, driver and deployment package; its IODMA and IP generation
 # are annotated, not strictly checked: frozen extractions of the HWCustomOp flow's.
@@ -58,7 +59,7 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.core.executor -m finn.core.rtlsim_bench -m finn.core.rtlsim_exec \
     -m finn.core.rtlsim_pacing -m finn.core.onnx_exec \
     -m finn.shells.pynq.runner -m finn.shells.pynq.driver -m finn.shells.pynq.deploy \
-    -m finn.toolchain.launcher \
+    -m finn.toolchain.launcher -m finn.toolchain.ip \
     -m finn.toolchain.xsim \
     -m finn.builder.build_dataflow_config -m finn.builder.build_dataflow_plan \
     -m finn.builder.build_dataflow_steps -m finn.builder.build_dataflow_testbench \

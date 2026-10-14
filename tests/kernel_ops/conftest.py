@@ -3,19 +3,33 @@
 
 """TFC_W2A2 (``kernel_ops.tfc``) and CNV_W2A2 (``kernel_ops.cnv``) for the tests that only
 read them, built once a run and saved: a test loads its own copy
-(``ModelWrapper(str(path))``), a module its own (``tfc``)."""
+(``ModelWrapper(str(path))``), a module its own (``tfc``). Each test packages into a
+store of its own (``ip_store``)."""
 
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.toolchain import ip
 from kernel_ops import cnv
 from kernel_ops.tfc import EXPORT, built, exported, kernel_ops, prepared
+
+
+@pytest.fixture(autouse=True)
+def ip_store(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """A packaged-IP store of the test's own (``finn.toolchain.ip.ip_store``), empty, not
+    ``$FINN_HOME/ip``: a toolchain double's IP is no build's, and a test that packages
+    runs its toolchain."""
+    store = tmp_path_factory.mktemp("ip_store")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ip, "ip_store", lambda: store)
+        yield store
 
 
 @pytest.fixture(scope="session")

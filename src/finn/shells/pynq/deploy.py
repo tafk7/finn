@@ -23,7 +23,12 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 
-from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_HWH, OUTPUT_IP
+from finn.core.graph.annotations.outputs import (
+    OUTPUT_BITFILE,
+    OUTPUT_HWH,
+    OUTPUT_IP,
+    OUTPUT_IP_KEY,
+)
 from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.pynq.driver import DRIVER_DIR, DRIVER_REPORT
 from finn.shells.pynq.runner import BITFILE, PynqRefused, pynq_row, refuse_stale_bitfile
@@ -65,8 +70,9 @@ class MakePynqDeployment(Transformation):
     (``pynq_row``). It ships the bitfile and the driver this output directory's own
     builds made: a parent graph that states no bitfile, or another directory's, an
     output directory without the driver's description, and a bitfile or driver made from
-    another design than the partition's now are refused, by name. The parent graph is
-    unchanged."""
+    another design than the partition's now, or for another IP than its body states, are
+    refused, by name, from what the graphs and the description record. The parent graph
+    is unchanged."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -102,14 +108,23 @@ class MakePynqDeployment(Transformation):
             )
         refuse_stale_bitfile(model, _OUTPUT)
         _, body, _ = partition_body(model)
-        made_from = json.loads((output / DRIVER_REPORT).read_text()).get("made_from")
-        now = design_digest(body)
+        described = json.loads((output / DRIVER_REPORT).read_text())
+        made_from, now = described.get("made_from"), design_digest(body)
         if made_from != now:
             raise PynqRefused(
                 _OUTPUT,
                 "driver-stale",
                 f"the driver in this output directory ({output / DRIVER_DIR}) was made from "
                 f"the design {made_from}, and the partition's design is now {now}; make the "
+                "driver again (step_make_driver)",
+            )
+        driven, ip = described.get("ip_key"), body.get(OUTPUT_IP_KEY)
+        if driven != ip:
+            raise PynqRefused(
+                _OUTPUT,
+                "driver-ip-stale",
+                f"the driver in this output directory ({output / DRIVER_DIR}) was made for "
+                f"the IP of the key {driven}, and the partition's IP is now {ip}; make the "
                 "driver again (step_make_driver)",
             )
         deploy = output / DEPLOY_DIR

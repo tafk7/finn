@@ -19,12 +19,14 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
+    OUTPUT_BITFILE_IP_KEY,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
     OUTPUT_HWH,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
-    OUTPUT_MADE_FROM,
+    OUTPUT_IP_KEY,
+    OUTPUT_IP_OPTIONS,
     OUTPUT_VLNV,
 )
 from finn.core.graph.annotations.platform import (
@@ -210,9 +212,11 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         OUTPUT_IP: "/build/stitch/ip",
         OUTPUT_VLNV: "xilinx_finn:finn:partition:1.0",
         OUTPUT_INTERFACES: {"clk": ["ap_clk"], "s_axis": [["s_axis_0", 32]], "axilite": []},
-        OUTPUT_MADE_FROM: DIGEST,
+        OUTPUT_IP_KEY: DIGEST,
+        OUTPUT_IP_OPTIONS: {"run_synth": False},
         OUTPUT_BITFILE: "/out/bitfile/finn-accel.bit",
         OUTPUT_BITFILE_MADE_FROM: DIGEST,
+        OUTPUT_BITFILE_IP_KEY: DIGEST,
         OUTPUT_BITFILE_OPTIONS: {"hw_debug": False},
         OUTPUT_HWH: "/out/bitfile/finn-accel.hwh",
     }
@@ -228,8 +232,10 @@ def test_what_a_build_made_is_typed_in_finn_outputs() -> None:
         (OUTPUT_IP, ""),
         (OUTPUT_INTERFACES, ["ap_clk"]),
         (OUTPUT_HWH, ""),
-        (OUTPUT_MADE_FROM, "sha1:" + "0" * 40),
+        (OUTPUT_IP_KEY, "sha1:" + "0" * 40),
+        (OUTPUT_IP_OPTIONS, ["run_synth"]),
         (OUTPUT_BITFILE_MADE_FROM, DIGEST.upper()),
+        (OUTPUT_BITFILE_IP_KEY, ""),
         (OUTPUT_BITFILE_OPTIONS, ["hw_debug"]),
     ):
         with pytest.raises(MetadataError, match=f"{key.entry}: cannot store"):
@@ -259,12 +265,12 @@ def test_the_design_digest_is_stable_across_save_and_load(tmp_path: Path) -> Non
 
 def test_the_design_digest_ignores_what_a_build_made_and_changes_nothing() -> None:
     """finn.outputs is what a build made of the design, not the design: stating an IP,
-    its digest or a bitfile leaves the digest as it was, and the digest leaves the
+    its key or a bitfile leaves the digest as it was, and the digest leaves the
     model's own entries in place."""
     model = chain()
     digest = design_digest(model)
     model.set(OUTPUT_IP, "/build/stitch/ip")
-    model.set(OUTPUT_MADE_FROM, digest)
+    model.set(OUTPUT_IP_KEY, digest)
     model.set(OUTPUT_BITFILE, "/out/bitfile/finn-accel.bit")
     stated = entries(model)
     assert design_digest(model) == digest

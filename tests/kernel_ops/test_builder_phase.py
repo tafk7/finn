@@ -63,10 +63,12 @@ from finn.builder.build_dataflow_verification import verify_partition_python
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
+    OUTPUT_BITFILE_IP_KEY,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_INTERFACES,
     OUTPUT_IP,
-    OUTPUT_MADE_FROM,
+    OUTPUT_IP_KEY,
+    OUTPUT_IP_OPTIONS,
     OUTPUT_VLNV,
     OUTPUTS,
 )
@@ -636,6 +638,10 @@ def test_a_shells_outputs_are_refused_at_their_steps_on_a_shell_without_one(
     )
 
 
+#: The keys of two packaged IPs, as a body or a bitfile states them.
+IP_KEY, OTHER_IP_KEY = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+
+
 def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -> None:
     """The driver sets the clock its bitfile delivers, and the deployment ships the bitfile
     and the driver: listed without them before, each passes the checks and is refused
@@ -661,11 +667,12 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
 
 def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path: Path) -> None:
     """The deployment ships the bitfile the parent graph states, this output directory's,
-    and the driver this output directory holds, made from the same design: a parent
-    graph stating no bitfile, or another directory's, an output directory with no
-    driver's description (its driver step never ran), and a driver made from another
-    design are refused by name before anything is copied, whatever an earlier build left
-    in driver/, each a refusal of the deployment with its code."""
+    and the driver this output directory holds, made from the same design and for the
+    same IP: a parent graph stating no bitfile, or another directory's, an output
+    directory with no driver's description (its driver step never ran), and a driver made
+    from another design or for another IP are refused by name before anything is copied,
+    whatever an earlier build left in driver/, each a refusal of the deployment with its
+    code."""
     model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
@@ -689,11 +696,15 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     with pytest.raises(PynqRefused, match="no driver in this output directory") as refused:
         step_deployment_package(parent, cfg)
     found.append(refused.value.findings)
-    _, body, _ = partition_body(parent)
+    _, body, body_file = partition_body(parent)
+    body.set(OUTPUT_IP_KEY, IP_KEY)
+    body.save(body_file)
     parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
+    parent.set(OUTPUT_BITFILE_IP_KEY, IP_KEY)
     earlier = "sha256:" + "0" * 64
     (output / "report").mkdir()
-    (output / "report" / "driver.json").write_text(json.dumps({"made_from": earlier}))
+    described = {"made_from": earlier, "ip_key": IP_KEY}
+    (output / "report" / "driver.json").write_text(json.dumps(described))
     with pytest.raises(PynqRefused) as refused:
         step_deployment_package(parent, cfg)
     assert str(refused.value) == (
@@ -703,9 +714,20 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
         f"{design_digest(body)}; make the driver again (step_make_driver)"
     )
     found.append(refused.value.findings)
+    described = {"made_from": design_digest(body), "ip_key": OTHER_IP_KEY}
+    (output / "report" / "driver.json").write_text(json.dumps(described))
+    with pytest.raises(PynqRefused) as refused:
+        step_deployment_package(parent, cfg)
+    assert str(refused.value) == (
+        f"MakePynqDeployment: driver-ip-stale: the driver in this output directory "
+        f"({output / 'driver'}) was made for the IP of the key {OTHER_IP_KEY}, and the "
+        f"partition's IP is now {IP_KEY}; make the driver again (step_make_driver)"
+    )
+    found.append(refused.value.findings)
+    codes = ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
     assert [(each.code, each.owner, each.kind, dict(each.details)) for (each,) in found] == [
         (code, "MakePynqDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
-        for code in ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
+        for code in (*codes, "driver-ip-stale")
     ]
     assert not (output / "deploy").exists()
 
@@ -1367,14 +1389,23 @@ def test_the_runner_generates_z0s_iodmas_for_tfc(
     z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each end's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
-    generation runs no tool), is Z0's code, text for text."""
+    generation runs no tool), is Z0's code, text for text, staged as an HLS request whose
+    script names no path of the build and no part: it reads both."""
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
     export = integration(z0_tfc)
     for end in export.ends:
-        model = prepare_ip(iodma_model(end), export.part, export.period_ns)
+        model = prepare_ip(iodma_model(end), export.period_ns)
         (node,) = model.graph.node
-        code = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")))
-        assert (code / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[end.instance]
+        request = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen"))) / "request"
+        assert sorted(path.name for path in request.iterdir()) == [
+            "script.tcl",
+            f"top_{node.name}.cpp",
+        ]
+        assert (request / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[end.instance]
+        script = (request / "script.tcl").read_text()
+        assert str(tmp_path) not in script and export.part not in script
+        assert 'set config_proj_part "$part"\n' in script
+        assert 'set config_bnnlibdir "$hlslib"\n' in script
 
 
 #: TFC's bottleneck at Z0's choices on its partition's network, ends included: the input end's 196
@@ -1418,7 +1449,8 @@ def tool_recorders(tmp_path: Path) -> dict[str, object]:
             model.set(OUTPUT_IP, str(tmp_path / "packaged" / "ip"))
             model.set(OUTPUT_VLNV, f"xilinx_finn:finn:{self.name}:1.0")
             model.set(OUTPUT_INTERFACES, {"axilite": []})
-            model.set(OUTPUT_MADE_FROM, design_digest(model))
+            model.set(OUTPUT_IP_KEY, IP_KEY)
+            model.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
             return model, False
 
     def unchanged(model: ModelWrapper, *args: object, **kwargs: object) -> ModelWrapper:
@@ -1494,8 +1526,9 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     # the run's are its manifest's.
     assert reread.namespace(OUTPUTS) == {
         "bitfile": str(output / "bitfile" / "finn-accel.bit"),
-        # The bitfile was built from the body's IP, made from its design as it is now.
+        # The bitfile was built from the body's design as it is now, and its IP.
         "bitfile_made_from": design_digest(body),
+        "bitfile_ip_key": IP_KEY,
         "bitfile_options": {"hw_debug": False},
         "hwh": str(output / "bitfile" / "finn-accel.hwh"),
     }
@@ -1505,7 +1538,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         f"top_{name}_0_utilization_synth.rpt" for name in ("idma0", "partition", "smartconnect_0")
     ]
     assert body.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
-    assert body.get(OUTPUT_MADE_FROM) == design_digest(body)
+    assert body.get(OUTPUT_IP_KEY) == IP_KEY
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
@@ -1592,6 +1625,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         "returns": [{"name": "MatMul_3_out0", "element": "INT7", "shape": [1, 10], "dma": "odma0"}],
         "host": {"before": ["Reshape_0"], "after": ["TopK_0"]},
         "made_from": design_digest(body),
+        "ip_key": IP_KEY,
     }
     # The deployment: bitfile, driver, description, and the host's model.
     deploy = output / "deploy"
@@ -1618,11 +1652,14 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
         assert set(model.namespace(OUTPUTS)) <= {
             "vlnv",
             "interfaces",
-            "made_from",
+            "ip_key",
+            "ip_options",
             "bitfile_made_from",
+            "bitfile_ip_key",
             "bitfile_options",
         }
-    assert shipped.get(OUTPUT_BITFILE_MADE_FROM) == shipped_body.get(OUTPUT_MADE_FROM)
+    assert shipped.get(OUTPUT_BITFILE_MADE_FROM) == design_digest(shipped_body)
+    assert shipped.get(OUTPUT_BITFILE_IP_KEY) == shipped_body.get(OUTPUT_IP_KEY)
     image = np.random.default_rng(5).integers(0, 256, size=SHAPE).astype(np.float32)
     name = source.graph.input[0].name
     expected = execute_onnx(source, {name: image})[source.graph.output[0].name]
@@ -1669,7 +1706,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
         (step_deployment_package, "deployment_package", "MakePynqDeployment"),
     ],
 )
-def test_a_bitfile_built_from_another_design_is_refused_by_name(
+def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     tmp_path: Path,
     step: Callable[[ModelWrapper, DataflowBuildConfig], ModelWrapper],
     output: str,
@@ -1677,8 +1714,9 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
 ) -> None:
     """The driver and the deployment run the bitfile on the partition the model states: a
     bitfile that states no design it was built from, or another than the partition's
-    now (a choice changed since it was built), is refused, naming the bitfile, the
-    partition and both designs, before anything is written."""
+    now (a choice changed since it was built), or that was built from another IP than the
+    one the partition's body states (packaged again since), is refused, naming the
+    bitfile, the partition and both designs or keys, before anything is written."""
     model = kernel_model()
     write_target(model, ULTRA96)
     configure_partition(model)
@@ -1714,5 +1752,17 @@ def test_a_bitfile_built_from_another_design_is_refused_by_name(
         f"the design "
         f"{built_from}, and the partition {node.name}'s design is now {now}; build the "
         "bitfile again (step_build_bitfile)"
+    )
+    parent.set(OUTPUT_BITFILE_MADE_FROM, now)
+    parent.set(OUTPUT_BITFILE_IP_KEY, OTHER_IP_KEY)
+    body.set(OUTPUT_IP_KEY, IP_KEY)
+    body.save(body_file)
+    with pytest.raises(PynqRefused) as refused:
+        step(parent, cfg)
+    assert [each.code for each in refused.value.findings] == ["bitfile-ip-stale"]
+    assert str(refused.value) == (
+        f"{maker}: bitfile-ip-stale: the model's bitfile ({bitfile}) was built from the IP "
+        f"of the key {OTHER_IP_KEY}, and the partition {node.name}'s IP is now {IP_KEY}; "
+        "build the bitfile again (step_build_bitfile)"
     )
     assert not (output_dir / "driver").exists() and not (output_dir / "deploy").exists()

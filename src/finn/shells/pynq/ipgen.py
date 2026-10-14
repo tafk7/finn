@@ -4,9 +4,9 @@
 
 """An end's IODMA as the IP the pynq shell's block design instantiates: its scratch model
 of one ``IODMA_hls`` node (``finn.shells.pynq.iodma``) through code generation
-(``prepare_ip``), Vitis HLS (``hls_synth_ip``) and a block design of its own, packaged
-(``create_stitched_ip``, on the Tcl ``stitched_ip_tcl`` writes), whose IP repositories
-``ip_repositories`` names.
+(``prepare_ip``), Vitis HLS through the HLS cache (``hls_synth_ip``) and a block design
+of its own, packaged (``create_stitched_ip``, on the Tcl ``stitched_ip_tcl`` writes),
+whose IP repositories ``ip_repositories`` names.
 
 This is a frozen extraction of the HWCustomOp flow's ``PrepareIP``, ``HLSSynthIP`` and
 ``CreateStitchedIP`` (and ``ReplaceVerilogRelPaths``, ``collect_ip_dirs``) for one IODMA
@@ -53,20 +53,21 @@ def _iodma(model: ModelWrapper) -> IODMA_hls:
     return op
 
 
-def prepare_ip(model: ModelWrapper, fpgapart: str, clk: float) -> ModelWrapper:
-    """The IODMA's HLS code and Vitis HLS script, for ``fpgapart`` at ``clk`` ns, in a new
-    build directory its node states (``code_gen_dir_ipgen``)."""
+def prepare_ip(model: ModelWrapper, clk: float) -> ModelWrapper:
+    """The IODMA's HLS code and Vitis HLS script, at ``clk`` ns, staged as an HLS request
+    in a new build directory its node states (``code_gen_dir_ipgen``)."""
     op = _iodma(model)
     code_gen_dir = make_build_dir(prefix="code_gen_ipgen_" + str(op.onnx_node.name) + "_")
     op.set_nodeattr("code_gen_dir_ipgen", code_gen_dir)
-    op.code_generation_ipgen(model, fpgapart, clk)
+    op.code_generation_ipgen(model, clk)
     return model
 
 
-def hls_synth_ip(model: ModelWrapper, *, toolchain: Toolchain) -> ModelWrapper:
-    """The IODMA's IP, by Vitis HLS run in ``toolchain`` on the script ``prepare_ip``
-    wrote; its node states the project, the IP and its VLNV."""
-    _iodma(model).ipgen_singlenode_code(toolchain=toolchain)
+def hls_synth_ip(model: ModelWrapper, fpgapart: str, *, toolchain: Toolchain) -> ModelWrapper:
+    """The IODMA's IP for ``fpgapart``, by Vitis HLS run in ``toolchain`` on the request
+    ``prepare_ip`` staged, unless the HLS cache holds it; its node states the project, the
+    IP and its VLNV."""
+    _iodma(model).ipgen_singlenode_code(fpgapart, toolchain=toolchain)
     return model
 
 

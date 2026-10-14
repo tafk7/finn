@@ -43,7 +43,7 @@ from finn.builder.build_dataflow_testbench import (
     run_testbench,
 )
 from finn.core.graph.annotations.choices import HELD
-from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
@@ -208,28 +208,42 @@ def test_out_of_context_resources_are_stated_per_member_of_the_network(
     assert found["unreported_instances"] == ["second.compute.packed"]
 
 
+class SynthesizedByStub(PackagedByStub):
+    """``PackagedByStub``, and with ``run_synth`` the hierarchical utilization report the
+    script writes beside the IP (``REPORT``)."""
+
+    def run(
+        self, tool: str, args: object, *, cwd: Path, **options: object
+    ) -> subprocess.CompletedProcess[bytes]:
+        if "launch_runs synth_1" in (Path(cwd) / "package.tcl").read_text():
+            (Path(cwd) / "finn_partition_partition_util.rpt").write_text(REPORT)
+        return super().run(tool, args, cwd=cwd, **options)
+
+
 def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
     tmp_path: Path,
 ) -> None:
     """The out-of-context column of the packaged partition is the synthesis report beside
-    the IP its body states, made from the body's design as it is: none before packaging,
-    none packaged without synthesis, none once the design changed; packaging again
-    removes an earlier synthesis's report."""
+    the IP its body states, packaged with synthesis and of the key the body has now: none
+    before packaging, none packaged without synthesis, none once the key changed;
+    packaging again removes an earlier synthesis's report."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
-    assert "ooc_synth" not in built_reports(parent)
+    stub = cast(Toolchain, SynthesizedByStub())
+    assert "ooc_synth" not in built_reports(parent, toolchain=stub)
     node, body, body_file = partition_body(parent)
     project = tmp_path / "stitched_ip"
-    stub = cast(Toolchain, PackagedByStub())
     packaged = body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
     packaged.save(body_file)
-    assert "ooc_synth" not in built_reports(parent)
-    # What Vivado's synthesis would leave beside the IP.
+    assert "ooc_synth" not in built_reports(parent, toolchain=stub)
+    synthesized = body.transform(
+        PackagePartition(node.name, run_synth=True, directory=project, toolchain=stub)
+    )
+    synthesized.save(body_file)
     report = project / "finn_partition_partition_util.rpt"
-    report.write_text(REPORT)
-    assert built_reports(parent)["ooc_synth"] == report
-    packaged.set(OUTPUT_MADE_FROM, "sha256:" + "0" * 64)
-    packaged.save(body_file)
-    assert "ooc_synth" not in built_reports(parent)
+    assert built_reports(parent, toolchain=stub)["ooc_synth"] == report
+    synthesized.set(OUTPUT_IP_KEY, "sha256:" + "0" * 64)
+    synthesized.save(body_file)
+    assert "ooc_synth" not in built_reports(parent, toolchain=stub)
     body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
     assert not report.exists()
 
@@ -327,7 +341,7 @@ def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> 
 def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: Path) -> None:
     """step_package_partition passes the build's toolchain down with its log directory,
     ``output_dir/logs/step_package_partition``: packaging's Vivado writes its transcript
-    there, not beside its replay in the packaging project."""
+    there, not beside its replay in the packaging project (nor in the store's entry)."""
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "vivado").write_text(
@@ -340,7 +354,9 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
         output_dir=str(output),
         target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
     )
-    cfg.prepared_toolchain = Toolchain(Selection(command_dir=str(tools)), {"PATH": os.defpath})
+    cfg.prepared_toolchain = Toolchain(
+        Selection(command_dir=str(tools)), {"PATH": os.defpath, "XILINX_VIVADO": str(tools)}
+    )
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "p"))
     step_package_partition(parent, cfg)
     logs = output / "logs" / "step_package_partition"

@@ -936,7 +936,8 @@ def emit_package(out: Path, work: Path) -> int:
     """What PackagePartition writes for the Chain and the TFC partition, Vivado stubbed.
 
     PackagePartition runs for real except for the Vivado call: the toolchain is a
-    stub that writes ip/component.xml. Per partition (the Chain also with
+    stub that writes ip/component.xml, and a checkout that stores packaged IPs
+    (``finn.toolchain.ip``) stores them under ``work``. Per partition (the Chain also with
     run_synth): package.tcl, what packaging states of the IP (``packaged_ip``), the
     partition's top-level module as emitted (``<name>.top.sv``: every instance's
     parameters, every net's width) and the digest of each memory image beside it
@@ -951,9 +952,22 @@ def emit_package(out: Path, work: Path) -> int:
     from finn.transformation.kernels import PackagePartition  # noqa: PLC0415
 
     class StubToolchain:
-        def run(self, tool: str, args: Any, *, cwd: Path, replay: Any = None, **_: Any) -> None:
+        # An installation directory, for the store's key (an older checkout reads none).
+        environment = {"XILINX_VIVADO": str(work)}
+
+        def run(
+            self, tool: str, args: Any, *, cwd: Path, replay: Any = None, **_: Any
+        ) -> subprocess.CompletedProcess[bytes]:
             (Path(cwd) / "ip").mkdir(parents=True, exist_ok=True)
             (Path(cwd) / "ip" / "component.xml").write_text("<stub/>")
+            return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    try:
+        import finn.toolchain.ip as store  # noqa: PLC0415
+    except ImportError:
+        store = None
+    if store is not None:
+        store.ip_store = lambda: work / "ip-store"
 
     emitted: list[Any] = []
     emit_module = packaging.emit_module
@@ -981,9 +995,12 @@ def emit_package(out: Path, work: Path) -> int:
         top = f"{module.entry_point}.sv"
         if top not in module.sources:
             raise RuntimeError(f"{name}: the top {module.entry_point} is no file of its own")
-        text = (module.directory / top).read_text()
+        # As packaged: a checkout that stages the project in a scratch directory copies
+        # it into the project.
+        packaged = dataclasses.replace(module, directory=project / "src")
+        text = (packaged.directory / top).read_text()
         (out / f"{name}.top.sv").write_text(text)
-        (out / f"{name}.images.txt").write_text(package_images(module, text))
+        (out / f"{name}.images.txt").write_text(package_images(packaged, text))
 
     out.mkdir(parents=True, exist_ok=True)
     work = work.resolve()

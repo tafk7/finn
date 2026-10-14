@@ -3,11 +3,13 @@
 
 """What a build made of a partition of KernelOps: the ``finn.outputs`` namespace.
 
-On the partition's body: the packaged IP and the digest of the design it was made from.
-On the parent graph: the bitfile, its hardware handoff, and the digest and shell options
-it was built with. A reader compares a recorded digest with the body's current one
-(``finn.core.graph.partition.design_digest``), so an artifact is never cleared when the
-design changes.
+On the partition's body: the packaged IP, its key and the options it was packaged with.
+On the parent graph: the bitfile, its hardware handoff, the digest of the design and the
+key of the IP it was built from, and its shell options. Two ties, two facts: a design
+digest (``finn.core.graph.partition.design_digest``) says which design an artifact
+describes, an IP key (``finn.toolchain.ip.packaging_key``) which packaged IP it holds. A
+reader compares a recorded value with the current one, so an artifact is never cleared
+when the design changes.
 
 It imports only qonnx, so the builder and the partition's readers use it without
 loading the kernels.
@@ -51,11 +53,16 @@ OUTPUT_INTERFACES = OUTPUTS.key(
     expect="interface names by kind (clk, rst, s_axis, m_axis, axilite, ...)",
 )
 """The packaged IP's interface names, by kind."""
-OUTPUT_MADE_FROM = OUTPUTS.key(
-    "made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
+OUTPUT_IP_KEY = OUTPUTS.key(
+    "ip_key", str, check=_digest, expect="an IP key (sha256:<64 hex digits>)"
 )
-"""The digest of the design the packaged IP was made from (``design_digest`` of the
-body it was packaged from)."""
+"""The packaged IP's key: what Vivado was given to package it, Vivado and ``run_synth``
+(``finn.toolchain.ip.packaging_key``)."""
+OUTPUT_IP_OPTIONS = OUTPUTS.key(
+    "ip_options", JSON, check=_options, expect="the packaging options by name"
+)
+"""The options the IP was packaged with (``run_synth``), so a reader can ask for the key
+the body has now."""
 OUTPUT_BITFILE = OUTPUTS.key("bitfile", str, check=_named, expect="a file")
 """The bitfile the shell's integration made."""
 OUTPUT_HWH = OUTPUTS.key("hwh", str, check=_named, expect="a file")
@@ -63,8 +70,13 @@ OUTPUT_HWH = OUTPUTS.key("hwh", str, check=_named, expect="a file")
 OUTPUT_BITFILE_MADE_FROM = OUTPUTS.key(
     "bitfile_made_from", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
 )
-"""The digest of the design of the partition's IP the bitfile was built from (the body's
-``made_from`` when the shell's build ran)."""
+"""The digest of the design the bitfile was built from (``design_digest`` of the
+partition's body when the shell's build ran)."""
+OUTPUT_BITFILE_IP_KEY = OUTPUTS.key(
+    "bitfile_ip_key", str, check=_digest, expect="an IP key (sha256:<64 hex digits>)"
+)
+"""The key of the partition's IP the bitfile was built from (the body's ``ip_key`` when
+the shell's build ran)."""
 OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
     "bitfile_options", JSON, check=_options, expect="the shell's build options by name"
 )
@@ -74,11 +86,13 @@ OUTPUT_BITFILE_OPTIONS = OUTPUTS.key(
 __all__ = [
     "OUTPUTS",
     "OUTPUT_BITFILE",
+    "OUTPUT_BITFILE_IP_KEY",
     "OUTPUT_BITFILE_MADE_FROM",
     "OUTPUT_BITFILE_OPTIONS",
     "OUTPUT_HWH",
     "OUTPUT_INTERFACES",
     "OUTPUT_IP",
-    "OUTPUT_MADE_FROM",
+    "OUTPUT_IP_KEY",
+    "OUTPUT_IP_OPTIONS",
     "OUTPUT_VLNV",
 ]

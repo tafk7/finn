@@ -35,7 +35,9 @@ commit is 1b02563de) as the shell's frozen extraction:
   (finn.transformation.fpgadataflow.templates), filled by ``runner.project_script``;
 - ``ipgen_template`` and ``ipgentcl_template``: an IODMA's HLS top and its Vitis HLS
   script (finn.custom_op.fpgadataflow.templates), filled by ``iodma.IODMA_hls``; the
-  script names no custom HLS directory, which no IODMA includes from;
+  script names no custom HLS directory, which no IODMA includes from, and is filled to
+  read its sources from its own directory and the part and finn-hlslib from Tcl
+  variables;
 - ``pynq_driver_template``: the PYNQ driver
   (finn.transformation.fpgadataflow.template_driver), filled by
   ``driver.pynq_driver_text``.

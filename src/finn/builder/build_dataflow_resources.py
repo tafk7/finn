@@ -52,9 +52,9 @@ from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_IP_OPTIONS
 from finn.core.graph.annotations.platform import read_target
-from finn.core.graph.partition import design_digest, partition_body
+from finn.core.graph.partition import partition_body
 from finn.custom_op.kernels.network import member
 from finn.custom_op.kernels.shell import ShellResources, configured_network, shell_resources
 from finn.kernels.utilization import SHELL_CHARACTERISED
@@ -62,9 +62,10 @@ from finn.platform.capabilities import Resources
 from finn.platform.shells import shell_row
 from finn.shells.pynq.runner import REPORTS, STATIC_INSTANCES, bitfile_directory
 from finn.toolchain import vivado
-from finn.toolchain.launcher import ToolFailed
+from finn.toolchain.launcher import Toolchain, ToolFailed
 from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
+    ip_key,
     ooc_member_resources,
     partition_utilization_report,
     resources_of,
@@ -138,23 +139,26 @@ def _members(split: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def built_reports(parent: ModelWrapper) -> dict[str, Path]:
+def built_reports(parent: ModelWrapper, *, toolchain: Toolchain) -> dict[str, Path]:
     """The reports the build made that ``shell_resources_report`` reads, by name: those
     collected beside the bitfile the parent graph ``parent`` states (``placed``,
     ``out_of_context``; none without a bitfile), and the utilization report of the IP
-    its partition's body states, packaged with ``ooc_synth`` from the body's design as it
-    is (``ooc_synth``; none when the body states no such IP, or it was not synthesized)."""
+    its partition's body states, packaged with ``ooc_synth`` and of the key the body has
+    now (``ip_key``, staged in ``toolchain``) (``ooc_synth``; none when the body states
+    no such IP)."""
     reports: dict[str, Path] = {}
     built = bitfile_directory(parent)
     if built is not None:
         reports.update({name: built / REPORTS[name] for name in ("placed", "out_of_context")})
-    _, body, _ = partition_body(parent)
-    ip = body.get(OUTPUT_IP)
-    if ip is not None and body.get(OUTPUT_MADE_FROM) == design_digest(body):
+    node, body, _ = partition_body(parent)
+    ip, packaging = body.get(OUTPUT_IP), body.get(OUTPUT_IP_OPTIONS)
+    if ip is None or packaging is None or not packaging["run_synth"]:
+        return reports
+    if body.get(OUTPUT_IP_KEY) == ip_key(body, node.name, run_synth=True, toolchain=toolchain):
         try:
             reports["ooc_synth"] = partition_utilization_report(Path(ip).parent)
         except ToolFailed:
-            pass  # packaged without synthesis: the column is absent
+            pass  # no report: the column is absent
     return reports
 
 

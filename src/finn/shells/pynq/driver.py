@@ -40,7 +40,7 @@ from qonnx.util.basic import gen_finn_dt_tensor
 
 import finn.util
 import finn.util.data_packing
-from finn.core.graph.annotations.outputs import OUTPUT_BITFILE
+from finn.core.graph.annotations.outputs import OUTPUT_BITFILE, OUTPUT_BITFILE_IP_KEY
 from finn.core.graph.partition import design_digest, partition_body
 from finn.shells.pynq import templates
 from finn.shells.pynq.ipgen import data_path
@@ -334,12 +334,12 @@ class MakePynqDriver(Transformation):
     the choices the partition saves; PL0 set to the clock the bitfile delivers
     (``delivered_mhz``, report/delivered_clock.json under ``directory``); the bitfile the
     parent graph states (finn.outputs) its default, relative to driver/. A bitfile built
-    from another design than the partition's now is refused, named
-    (``refuse_stale_bitfile``). report/driver.json states that bitfile, what the driver
-    takes and returns, by name, element and shape, and the host's nodes before and after
-    it (``driver_description``), and the digest of the design the driver was made from
-    (``made_from``: the partition's, which its bitfile was built from). ``description``
-    holds it."""
+    from another design than the partition's now, or another IP than its body states, is
+    refused, named (``refuse_stale_bitfile``). report/driver.json states that bitfile,
+    what the driver takes and returns, by name, element and shape, and the host's nodes
+    before and after it (``driver_description``), the digest of the design the driver was
+    made from (``made_from``: the partition's, which its bitfile was built from) and the
+    key of the IP its bitfile holds (``ip_key``). ``description`` holds it."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -361,6 +361,7 @@ class MakePynqDriver(Transformation):
         self.description = {
             **driver_description(export, fclk_mhz, str(bitfile), names[:index], names[index + 1 :]),
             "made_from": design_digest(body),
+            "ip_key": model.get(OUTPUT_BITFILE_IP_KEY),
         }
         report = self.directory / DRIVER_REPORT
         report.parent.mkdir(parents=True, exist_ok=True)

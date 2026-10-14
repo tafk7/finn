@@ -311,8 +311,9 @@ a FINN revision was validated against; fetching it needs SSH access, and
 ### Caches
 
 FINN keeps its per-user state under `FINN_HOME` (default `~/.finn`): fetched
-resources in `resources/`, the `finn_xsi` builds in `xsi/`, and, natively, the
-build directory in `build/`. `docker/run` and the Dev Container set `FINN_HOME`
+resources in `resources/`, the `finn_xsi` builds in `xsi/`, HLS products in `hls/`,
+packaged IPs in `ip/` (each keyed by what the tool is given and the tool, and copied
+into the build that asks for it), and, natively, the build directory in `build/`. `docker/run` and the Dev Container set `FINN_HOME`
 inside their build directory, which outlives the container.
 
 Resources are looked up in two places; the first complete copy wins:
@@ -508,9 +509,9 @@ goes, so a build that stopped says where. Its reports, tool runs and noted findi
 reach it as records of one logger, `finn.core.reporting.manifest`, whose level
 the build sets: a caller that quiets another of FINN's loggers keeps them. The model
 records only what a later step consumes, in `finn.outputs`: the packaged IP (`ip`,
-`vlnv`, `interfaces`, `made_from`) on the partition's body, the bitfile (`bitfile`,
-`hwh`, `bitfile_made_from`, `bitfile_options`) on the parent graph; the bitfile's
-reports are beside it under `report/`.
+`vlnv`, `interfaces`, `ip_key`, `ip_options`) on the partition's body, the bitfile
+(`bitfile`, `hwh`, `bitfile_made_from`, `bitfile_ip_key`, `bitfile_options`) on the
+parent graph; the bitfile's reports are beside it under `report/`.
 
 What a build logs, at which level, and what reaches the console
 (`finn.core.reporting.log`):
