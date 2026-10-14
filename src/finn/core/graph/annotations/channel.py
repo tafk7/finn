@@ -38,7 +38,9 @@ def value_type(item: inspection.DecisionInfo[object]) -> str:
     """A decision's value type by its semantics' name (``int``, ``bool``, ``str``)."""
     semantics = item.reference.semantics
     if semantics is None:
-        raise KernelOpError(f"{item.key} has no value semantics")
+        raise KernelOpError.refused(
+            "channel-key-untyped", "value_type", f"{item.key} has no value semantics"
+        )
     return semantics.name
 
 
@@ -68,7 +70,9 @@ def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:
     hosts = [
         node.name or node.op_type for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN
     ]
-    raise KernelOpError(
+    raise KernelOpError.refused(
+        "channel-choices-outside-body",
+        "refuse_outside_body",
         f"{', '.join(named)}: channel choices ({CHANNEL.name}) are stated in a partition's "
         f"body only, not on a graph with nodes on the host ({', '.join(hosts) or 'none'}): "
         "state them through kernel_choices.json (Pinned), which exploration applies to the "
@@ -83,10 +87,13 @@ def channel_choices(model: ModelWrapper, tensor: str) -> dict[str, object]:
     try:
         stated: dict[str, object] = model.namespace(CHANNEL, tensor=tensor)
     except MetadataError as error:
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "channel-choices-unreadable",
+            "channel_choices",
             f"{tensor}: its channel choices are not {CHANNEL.name}'s: {error}; explore the "
             "partition again",
             (tensor,),
+            tensor=tensor,
         ) from error
     if stated:
         refuse_outside_body(model, [tensor])

@@ -115,19 +115,32 @@ class Conv(MatMul):
         for name in GEOMETRY:
             pair = _pair(self.get_nodeattr(name))
             if pair is None:
-                raise KernelOpError(f"{label}: {name} is not two positive integers")
+                raise KernelOpError.refused(
+                    "geometry-invalid",
+                    self.op_type,
+                    f"{label}: {name} is not two positive integers",
+                    node=label,
+                )
             found[name] = pair
         try:
             return Window((image[1], image[2]), found["window"], found["stride"], found["dilation"])
         except ValueError as error:
-            raise KernelOpError(f"{label}: {error}") from error
+            raise KernelOpError.refused(
+                "window-invalid", self.op_type, f"{label}: {error}", node=label
+            ) from error
 
     def image(self) -> tuple[int, int, int, int]:
         """The image's (1, H, W, C)."""
         x, label = self.onnx_node.input[0], self.label
         dims = shape(self.model(), x, label)
         if len(dims) != 4 or dims[0] != 1:
-            raise KernelOpError(f"{label}: the image {x} is {dims}, not one (1, H, W, C)")
+            raise KernelOpError.refused(
+                "image-not-nhwc",
+                self.op_type,
+                f"{label}: the image {x} is {dims}, not one (1, H, W, C)",
+                node=label,
+                tensor=x,
+            )
         return dims[0], dims[1], dims[2], dims[3]
 
     def shaped(self) -> dict[str, object]:
@@ -137,9 +150,13 @@ class Conv(MatMul):
         channels, window = self.image()[3], self.window()
         k, _ = self.weights()
         if k != window.tap_count * channels:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "weights-not-window",
+                self.op_type,
                 f"{label}: the weights {w} have {k} rows, not the {window.size} window's "
-                f"{window.tap_count} taps of the {channels} channels of {x}"
+                f"{window.tap_count} taps of the {channels} channels of {x}",
+                node=label,
+                tensor=w,
             )
         return {"window": window}
 

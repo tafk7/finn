@@ -259,10 +259,13 @@ def configured_network(
     by hand included); or graph inputs and outputs out of port order refuse, named."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "choices-stale",
+            "configured_network",
             f"{label}: stale choices, refused by the partition: "
             + "; ".join(f"{key}: {reason}" for key, reason in bound.stale.items()),
             tuple(bound.stale),
+            node=label,
         )
     open_keys = bound.undecided()
     if open_keys:
@@ -280,9 +283,12 @@ def configured_network(
             else f"{dotted(key)} (not created: BaselineChoices)"
             for key in open_keys
         ]
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "choices-open",
+            "configured_network",
             f"{label}: open choices, refused at emission: " + "; ".join(named),
             tuple(dotted(key) for key in open_keys),
+            node=label,
         )
     unadmitted = admission_refusal(bound)
     if unadmitted:
@@ -325,9 +331,12 @@ def configured_network(
     expected = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
     expected |= {item.name: f"m_axis_{index}" for index, item in enumerate(model.graph.output)}
     if ports != expected:
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "ports-out-of-order",
+            "configured_network",
             f"{label}: the partition's ports {ports} are not its graph's inputs and"
-            f" outputs in order {expected}"
+            f" outputs in order {expected}",
+            node=label,
         )
     slowest = max(each.value for each in cycles.values() if isinstance(each, Available))
     return Configured(bound, module.value, slowest), bound.boundary
@@ -359,24 +368,30 @@ def save_channels(model: ModelWrapper, choices: Mapping[str, Mapping[str, object
     bound = _bound(model, list(model.graph.node), PARTITION, merged)
     for tensor in merged:
         if tensor not in bound.channels:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "channel-unknown",
+                "save_channels",
                 f"{tensor}: no channel of the partition (a stream between its kernels, or "
                 "on its boundary, or a parameter a kernel owns)",
                 (tensor,),
+                tensor=tensor,
             )
         waiting = bound.unbound(tensor)
         if waiting is not None:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "channel-unbound",
+                "save_channels",
                 f"{tensor}: its channel's ends wait on {waiting.member}'s open choices ("
                 + "; ".join(map(str, waiting.result.findings))
                 + f"), so its choices cannot be checked: save {waiting.member}'s first",
                 (tensor,),
+                tensor=tensor,
             )
         refused = {
             key: why(found) for (owner, key), found in bound.dropped.items() if owner == tensor
         }
         if refused:
-            raise refusal(tensor, refused)
+            raise refusal("save_channels", tensor, refused, tensor=tensor)
     for tensor, values in merged.items():
         _write_channel(model, tensor, values)
 

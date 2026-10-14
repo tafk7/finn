@@ -36,6 +36,7 @@ from finn.core.graph.annotations.platform import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
+from finn.core.reporting.findings import by_code
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import save_channels
 from finn.platform.resolve import resolve_target
@@ -154,8 +155,15 @@ def test_the_old_shape_is_refused_naming_the_keys_it_states() -> None:
         )
     with pytest.raises(
         KernelOpError, match="finn.platform: shell, board, fabric, resources missing"
-    ):
+    ) as unstated:
         read_target(model)
+    # Two refusals of the reader, each its own code: by_code tells them apart.
+    found = (*refused.value.findings, *unstated.value.findings)
+    assert [(each.owner, each.code) for each in found] == [
+        ("read_target", "target-unreadable"),
+        ("read_target", "target-unrecorded"),
+    ]
+    assert len(by_code(found)) == 2
 
 
 @pytest.mark.parametrize(

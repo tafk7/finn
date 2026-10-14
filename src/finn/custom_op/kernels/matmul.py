@@ -41,13 +41,18 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 
-def _integers(label: str, tensor: str, values: Any) -> npt.NDArray[Any]:
-    """``values`` as int64 integers; values that are not integers are refused."""
+def _integers(owner: str, label: str, tensor: str, values: Any) -> npt.NDArray[Any]:
+    """``values`` as int64 integers; values that are not integers are refused, by
+    ``owner``."""
     found = np.asarray(values)
     if found.dtype.kind == "f":
         if not np.array_equal(np.rint(found), found):
-            raise KernelOpError(
-                f"{label}: {tensor} is annotated an integer and holds values that are not integers"
+            raise KernelOpError.refused(
+                "values-not-integer",
+                owner,
+                f"{label}: {tensor} is annotated an integer and holds values that are not integers",
+                node=label,
+                tensor=tensor,
             )
         found = np.rint(found)
     return found.astype(np.int64)
@@ -98,9 +103,13 @@ class MatMul(KernelOp):
         b = self.onnx_node.input[1]
         weights_shape = shape(model, b, label)
         if len(weights_shape) != 2:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "weights-not-matrix",
+                self.op_type,
                 f"{label}: the weights {b} are {weights_shape}, not (k, n): not a MatMul "
-                "(its pattern refuses them, matmul-batched)"
+                "(its pattern refuses them, matmul-batched)",
+                node=label,
+                tensor=b,
             )
         k, n = weights_shape
         return k, n
@@ -113,7 +122,12 @@ class MatMul(KernelOp):
         k = shape(model, a, label)[-1]
         k_b, _ = self.weights()
         if k != k_b:
-            raise KernelOpError(f"{label}: {a} has {k} columns and {b} {k_b} rows")
+            raise KernelOpError.refused(
+                "operands-mismatched",
+                self.op_type,
+                f"{label}: {a} has {k} columns and {b} {k_b} rows",
+                node=label,
+            )
         return {}
 
     def facts(self) -> Facts:
@@ -148,7 +162,7 @@ class MatMul(KernelOp):
                 np.asarray(x).astype(held), np.asarray(w).astype(held)
             )
             return floats
-        x, w = _integers(label, a, x), _integers(label, b, w)
+        x, w = _integers(self.op_type, label, a, x), _integers(self.op_type, label, b, w)
         largest = int(np.abs(x).max(initial=0)) * int(np.abs(w).sum(axis=0).max(initial=0))
         if largest >= 1 << 63:  # int64 might not hold a sum: Python's integers
             x, w = x.astype(object), w.astype(object)

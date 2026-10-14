@@ -77,19 +77,34 @@ class CutKernelPartition(Transformation):
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         if model.get_nodes_by_op_type(PARTITION_OP):
-            raise KernelOpError("the model holds a partition already: a build cuts once")
+            raise KernelOpError.refused(
+                "partition-present",
+                CutKernelPartition.__name__,
+                "the model holds a partition already: a build cuts once",
+            )
         host = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
         if len(host) == len(model.graph.node):
-            raise KernelOpError("the model holds no KernelOps: there is nothing to cut")
+            raise KernelOpError.refused(
+                "kernel-ops-absent",
+                CutKernelPartition.__name__,
+                "the model holds no KernelOps: there is nothing to cut",
+            )
         between = between_kernel_ops(model)
         if between:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "host-between",
+                CutKernelPartition.__name__,
                 f"{len(between)} host nodes sit between KernelOps, so a partition of the "
-                f"KernelOps would depend on itself: {', '.join(between)}"
+                f"KernelOps would depend on itself: {', '.join(between)}",
             )
         refuse_outside_body(model, model.tensors_stating(CHANNEL))
         if PARTITION in host:
-            raise KernelOpError(f"a host node is named {PARTITION!r}, the partition's name")
+            raise KernelOpError.refused(
+                "partition-name-taken",
+                CutKernelPartition.__name__,
+                f"a host node is named {PARTITION!r}, the partition's name",
+                node=PARTITION,
+            )
         self.directory.mkdir(parents=True, exist_ok=True)
         cut = Path(tempfile.mkdtemp(prefix="cut_", dir=self.directory))
         partitioning = PartitionFromLambda(  # type: ignore[no-untyped-call]

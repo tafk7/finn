@@ -159,12 +159,24 @@ def why(findings: Iterable[Finding]) -> str:
     return "; ".join(map(str, found))
 
 
-def refusal(label: str, found: Mapping[str, str]) -> KernelOpError:
-    """The error for choices replay refused: each one, by name, with why."""
-    return KernelOpError(
+def refusal(
+    owner: str,
+    label: str,
+    found: Mapping[str, str],
+    *,
+    node: str | None = None,
+    tensor: str | None = None,
+) -> KernelOpError:
+    """The error for choices replay refused (``choices-refused``, by ``owner``): each
+    one, by name, with why."""
+    return KernelOpError.refused(
+        "choices-refused",
+        owner,
         f"{label}: refused choices: "
         + "; ".join(f"{name}: {reason}" for name, reason in sorted(found.items())),
         tuple(sorted(found)),
+        node=node,
+        tensor=tensor,
     )
 
 
@@ -274,7 +286,12 @@ class KernelOp(CustomOp):
         """The model this op is attached to."""
         model = self._model
         if model is None:
-            raise KernelOpError(f"{self.label}: no model attached (use get_customop_wrapper)")
+            raise KernelOpError.refused(
+                "model-unattached",
+                self.op_type,
+                f"{self.label}: no model attached (use get_customop_wrapper)",
+                node=self.label,
+            )
         return model
 
     def target(self) -> Target:
@@ -282,7 +299,10 @@ class KernelOp(CustomOp):
         try:
             return read_target(self.model())
         except KernelOpError as error:
-            raise KernelOpError(f"{self.label}: {error}") from error
+            raise KernelOpError(
+                f"{self.label}: {error}",
+                findings=tuple(finding.about(node=self.label) for finding in error.findings),
+            ) from error
 
     def facts(self) -> Facts:
         """What binding this node's kernel reads, from the attached model (``binding``)."""
@@ -337,10 +357,13 @@ class KernelOp(CustomOp):
             if name in self.semantic:
                 continue
             if name not in schema:
-                raise KernelOpError(
+                raise KernelOpError.refused(
+                    "choice-unknown",
+                    self.op_type,
                     f"{self.label}: {name} is not a choice of {self.op_type}"
                     + self._channel_hint([name]),
                     (name,),
+                    node=self.label,
                 )
             found[name] = attribute.s.decode() if schema[name][0] == "s" else int(attribute.i)
         return found
@@ -359,7 +382,12 @@ class KernelOp(CustomOp):
         its kernel as a network replays a member's stored choices (``configured``)."""
         found = configured(self.facts(), typed(type(self).kernel, choices))
         if found.dropped:
-            raise refusal(self.label, {key: why(each) for key, each in found.dropped.items()})
+            raise refusal(
+                self.op_type,
+                self.label,
+                {key: why(each) for key, each in found.dropped.items()},
+                node=self.label,
+            )
         point: Kernel = found.point  # type: ignore[assignment]
         return point
 
@@ -377,10 +405,13 @@ class KernelOp(CustomOp):
         schema = self.schema()
         unknown = sorted(set(choices) - set(schema))
         if unknown:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "choice-unknown",
+                self.op_type,
                 f"{self.label}: {unknown} are not choices of {self.op_type}"
                 + self._channel_hint(unknown),
                 tuple(unknown),
+                node=self.label,
             )
         merged: dict[str, int | str] = {}
         for name, value in {**self.choices(), **choices}.items():
@@ -388,10 +419,13 @@ class KernelOp(CustomOp):
                 continue
             kind, cases = schema[name]
             if not _is_choice_value(value, kind, cases):
-                raise KernelOpError(
+                raise KernelOpError.refused(
+                    "choice-value-invalid",
+                    self.op_type,
                     f"{self.label}: {name} = {value!r} is not an {kind!r} value"
                     + (f" among {list(cases)}" if cases else ""),
                     (name,),
+                    node=self.label,
                 )
             merged[name] = value
         self._replayed(merged)  # refuses before any write; a cleared choice is not replayed
@@ -465,7 +499,9 @@ class KernelOp(CustomOp):
         try:
             return Network(members)
         except NetworkError as error:
-            raise KernelOpError(f"{label}: {error}") from error
+            raise KernelOpError.refused(
+                "network-invalid", "Network", f"{label}: {error}", node=label
+            ) from error
 
     # -- inference ------------------------------------------------------------------------
 
@@ -600,7 +636,12 @@ def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:
     refused."""
     op = model.get_customop_wrapper(node)
     if not isinstance(op, KernelOp):
-        raise KernelOpError(f"{node.name or node.op_type}: {node.op_type} is not a KernelOp")
+        raise KernelOpError.refused(
+            "not-a-kernel-op",
+            "kernel_op",
+            f"{node.name or node.op_type}: {node.op_type} is not a KernelOp",
+            node=node.name or node.op_type,
+        )
     return op
 
 

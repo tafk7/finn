@@ -38,7 +38,13 @@ def kernel_choices_config(model: ModelWrapper) -> dict[str, dict[str, object]]:
     entry. A tensor stating choices that is named like a node is refused, by name."""
     stating = set(model.tensors_stating(CHANNEL))
     if clash := sorted(stating & {node.name for node in model.graph.node}):
-        raise KernelOpError(f"{clash[0]}: a node and a tensor are both named {clash[0]}")
+        raise KernelOpError.refused(
+            "name-shared",
+            "kernel_choices_config",
+            f"{clash[0]}: a node and a tensor are both named {clash[0]}",
+            node=clash[0],
+            tensor=clash[0],
+        )
     config: dict[str, dict[str, object]] = {}
     written: set[str] = set()
 

@@ -129,9 +129,11 @@ def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
     if not _stated_datatype(model, tensor):
         produced = model.find_producer(tensor) is not None
         raise FactUnstated(
+            "datatype",
             f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32"
             + ("; InferKernelTensors states each node's outputs in order)" if produced else ")"),
             tensor,
+            label,
         )
     return canonical_qonnx_datatype(tensor_ranges.datatype(model, tensor))
 
@@ -149,7 +151,9 @@ def shape(model: ModelWrapper, tensor: str, label: str) -> tuple[int, ...]:
     """The shape of ``tensor``; one not known yet is refused."""
     found = known_shape(model, tensor)
     if found is None:
-        raise FactUnstated(f"{label}: {tensor} has no shape yet (run InferKernelTensors)", tensor)
+        raise FactUnstated(
+            "shape", f"{label}: {tensor} has no shape yet (run InferKernelTensors)", tensor, label
+        )
     return found
 
 
@@ -162,7 +166,9 @@ def element(model: ModelWrapper, tensor: str, label: str) -> ScalarEncoding:
         found = tensor_ranges.stated(model, tensor)
         return ScalarEncoding(dtype, found)
     except (MetadataError, ValueError) as error:
-        raise KernelOpError(f"{label}: {tensor}: {error}") from error
+        raise KernelOpError.refused(
+            "range-invalid", "element", f"{label}: {tensor}: {error}", node=label, tensor=tensor
+        ) from error
 
 
 def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
@@ -197,24 +203,52 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
     allows."""
     stored = initializer(model, tensor)
     if stored is None:
-        raise KernelOpError(f"{label}: {tensor} is not an initializer")
+        raise KernelOpError.refused(
+            "initializer-absent",
+            "admitted",
+            f"{label}: {tensor} is not an initializer",
+            node=label,
+            tensor=tensor,
+        )
     try:
         summary = summarize_tensor_values(stored)
     except UnsupportedTensorValueError as error:
-        raise KernelOpError(f"{label}: {tensor}: {error}") from error
+        raise KernelOpError.refused(
+            "initializer-unsupported",
+            "admitted",
+            f"{label}: {tensor}: {error}",
+            node=label,
+            tensor=tensor,
+        ) from error
     try:
         low, high = ordinary_integer_bounds(dtype)
     except DatatypeError:
         # Not an ordinary integer (FLOAT32 holds 0.5): no contradiction, the kernel refuses it.
         return
     if not summary.is_integral:
-        raise KernelOpError(f"{label}: {tensor} holds values that are not integers")
+        raise KernelOpError.refused(
+            "initializer-not-integer",
+            "admitted",
+            f"{label}: {tensor} holds values that are not integers",
+            node=label,
+            tensor=tensor,
+        )
     if summary.minimum is None or summary.maximum is None:  # integral with no range: empty
-        raise KernelOpError(f"{label}: {tensor} is empty: it holds no values")
+        raise KernelOpError.refused(
+            "initializer-empty",
+            "admitted",
+            f"{label}: {tensor} is empty: it holds no values",
+            node=label,
+            tensor=tensor,
+        )
     observed = (int(summary.minimum), int(summary.maximum))
     if not low <= observed[0] <= observed[1] <= high:
-        raise KernelOpError(
-            f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"
+        raise KernelOpError.refused(
+            "initializer-out-of-datatype",
+            "admitted",
+            f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}",
+            node=label,
+            tensor=tensor,
         )
 
 

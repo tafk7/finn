@@ -290,14 +290,20 @@ def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
     found = check_abi(abi.pins, files, emitted.entry_point, abi.parameters)
     seconds = time.perf_counter() - started
     if isinstance(found, Declined):
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "top-unelaborated",
+            "check_elaborates",
             f"{label}: the emitted top {emitted.entry_point} is refused before packaging:"
-            f" {found.reason}\n" + "\n".join(found.details)
+            f" {found.reason}\n" + "\n".join(found.details),
+            node=label,
         )
     if found:
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "top-contradicts-pins",
+            "check_elaborates",
             f"{label}: the emitted top {emitted.entry_point} contradicts its pins:\n"
-            + "\n".join(found)
+            + "\n".join(found),
+            node=label,
         )
     _LOG.info(
         f"{label}: slang elaborated {emitted.entry_point} under {len(abi.parameters)} "

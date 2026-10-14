@@ -70,14 +70,18 @@ def read_target(model: ModelWrapper) -> Target:
     try:
         stated = model.namespace(PLATFORM)
     except MetadataError as error:
-        raise KernelOpError(
-            f"the model's target is not one: {error}; run ToKernelOps to state it again"
+        raise KernelOpError.refused(
+            "target-unreadable",
+            "read_target",
+            f"the model's target is not one: {error}; run ToKernelOps to state it again",
         ) from error
     missing = [name for name in PLATFORM_KEYS if name not in stated]
     if missing:
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "target-unrecorded",
+            "read_target",
             f"the model states no target (finn.platform: {', '.join(missing)} missing; "
-            "run ToKernelOps)"
+            "run ToKernelOps)",
         )
     values = {name: stated[name] for name in PLATFORM_FIELDS}
     if values["resources"] is not None:
@@ -92,7 +96,11 @@ def write_target(model: ModelWrapper, target: Target) -> None:
     """Store the build target in the model's ``finn.platform`` metadata, every key."""
     platform = target.platform
     if platform.dsp is None:
-        raise KernelOpError("a target states its DSP block (finn.platform.resolve.resolve_target)")
+        raise KernelOpError.refused(
+            "target-dsp-unstated",
+            "write_target",
+            "a target states its DSP block (finn.platform.resolve.resolve_target)",
+        )
     values: dict[str, object] = dict(
         part=target.part,
         shell=target.shell,
@@ -105,7 +113,9 @@ def write_target(model: ModelWrapper, target: Target) -> None:
         for name, key in PLATFORM_KEYS.items():
             key.encode(values[name])  # every key checked before any is written
     except MetadataError as error:
-        raise KernelOpError(f"the target is not one: {error}") from error
+        raise KernelOpError.refused(
+            "target-invalid", "write_target", f"the target is not one: {error}"
+        ) from error
     for name, key in PLATFORM_KEYS.items():
         model.set(key, values[name])
 
