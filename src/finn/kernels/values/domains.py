@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from qonnx.core.ranges import TensorRange, holds
+
 from finn.core.space import Rejected, reject
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -28,7 +30,7 @@ from finn.dataflow.datatypes import (
     qonnx_datatype_width,
     resolve_qonnx_datatype_name,
 )
-from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, within
 
 
 def set_index_dtype(sets: int) -> QONNXDataType:
@@ -84,23 +86,34 @@ def stored_element(declared: QONNXDataType, value_range: tuple[int, int]) -> Sca
     signed = declared.signed()
     width = qonnx_datatype_width(declared)
     bits = min(width, max(STORED_MIN_BITS, _width(least, greatest, signed)))
-    return ScalarEncoding(_integer_dtype(bits, signed), value_range)
+    return ScalarEncoding(_integer_dtype(bits, signed), TensorRange(least, greatest))
 
 
 def values_within(inner: ScalarEncoding, outer: ScalarEncoding) -> bool:
-    """Every value of ``inner`` is a value of ``outer``: ``fits``, or two integer encodings
-    (a stored value's narrowed one in its graph type's, say) with ``inner``'s range
-    within ``outer``'s."""
+    """Every value of ``inner`` is a value of ``outer``: ``fits``, or ``inner``'s range
+    exact (integers, as a stored value's narrowed encoding in its graph type's), held by
+    ``outer``'s datatype and within ``outer``'s range. Across two datatypes, a range
+    that is not exact is not compared: a float's precision is not modelled yet."""
     if inner.fits(outer):
         return True
-    mine, theirs = inner.value_range, outer.value_range
-    if mine is None or theirs is None:
-        return False
-    return theirs[0] <= mine[0] and mine[1] <= theirs[1]
+    mine = inner.value_range
+    return mine.is_integer() and holds(outer.dtype, mine) and within(mine, outer.value_range)
+
+
+def integer_bounds(element: ScalarEncoding) -> tuple[int, int]:
+    """The least and greatest value of ``element``, an element whose range is exact
+    integers (``TensorRange.is_integer``: every integer datatype's); ``ValueError`` for
+    any other, which a kernel of integer arithmetic refuses."""
+    found = element.value_range
+    if not found.is_integer():
+        raise ValueError(f"{element} has no integer range")
+    least, greatest = found.least, found.greatest
+    assert isinstance(least, int) and isinstance(greatest, int)  # is_integer
+    return least, greatest
 
 
 def admit_element(
-    dtype: QONNXDataType, value_range: tuple[int, int] | None = None
+    dtype: QONNXDataType, value_range: TensorRange | None = None
 ) -> ScalarEncoding | Rejected:
     """The element, or a ``dtype-storage`` refusal (a zero width, a range it cannot hold)."""
     try:
@@ -155,5 +168,6 @@ __all__ = [
     "range_dtype",
     "set_index_dtype",
     "stored_element",
+    "integer_bounds",
     "values_within",
 ]

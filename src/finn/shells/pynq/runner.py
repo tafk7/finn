@@ -169,8 +169,9 @@ def iodma_model(end: IntegratedEnd) -> ModelWrapper:
             opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(IODMA_DOMAIN, 1)],
         )
     )
+    element = end.contract.element
     for each in (source, sink):
-        model.set_tensor_datatype(each.name, end.contract.element.dtype)
+        model.set_tensor_datatype(each.name, element.dtype, element.value_range)
     return model
 
 

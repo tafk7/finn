@@ -573,7 +573,12 @@ def kernel_fixtures(api):
     matmul_tensors = (
         Tensor((2, 4), ScalarEncoding(int3)),
         Tensor((4, 4), ScalarEncoding(int3)),
-        Tensor((2, 4), ScalarEncoding(range_dtype(*datatype_range(4, int3, int3)))),
+        Tensor(
+            (2, 4),
+            ScalarEncoding(
+                range_dtype(*datatype_range(4, ScalarEncoding(int3), ScalarEncoding(int3)))
+            ),
+        ),
     )
 
     return {

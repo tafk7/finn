@@ -41,6 +41,8 @@ from __future__ import annotations
 from dataclasses import replace
 from math import ceil, prod
 
+from qonnx.core.ranges import TensorRange
+
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -171,7 +173,7 @@ class MemStreamKernel(LeafKernel):
         if isinstance(admitted, Rejected):
             return admitted
         low, high = self.value_range
-        return admit_element(self.dtype, (low, high))
+        return admit_element(self.dtype, TensorRange(low, high))
 
     @derived
     def output_tensor(self) -> Tensor:

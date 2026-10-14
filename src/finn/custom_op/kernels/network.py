@@ -38,8 +38,8 @@ it offers and its budgets.
   a tensor states that is no channel of it are stale too. Nothing is written: ``persist``
   writes a network's choices back, each owner's whole;
 - **its outputs**: each node's output is its kernel's product. Where the graph's
-  annotation of an output (its shape's element count and last axis, its datatype)
-  differs from what its producer states, the graph is stale, refused by name
+  annotation of an output (its shape's element count and last axis, its datatype and
+  its range) differs from what its producer states, the graph is stale, refused by name
   (``tensor-stale``: "run InferKernelTensors"), before any channel's own
   ``channel-tensor`` is read;
 - **its module** is the partition's IP, the cut's (``PARTITION``): its members'
@@ -281,8 +281,8 @@ def _stale(
     model: ModelWrapper, network: Network, nodes: list[NodeProto], ops: list[KernelOp]
 ) -> None:
     """Refuse a graph whose annotation of an output differs from what its producer
-    states (its element count, its last axis or its datatype), by name: the graph is
-    stale (``tensor-stale``)."""
+    states (its element count, its last axis, or its element: the datatype and its
+    range), by name: the graph is stale (``tensor-stale``)."""
     findings: list[Finding] = []
     for node, op in zip(nodes, ops):
         kernel = network.member(node.name)
@@ -295,7 +295,7 @@ def _stale(
             if (
                 graph.size == produced.size
                 and graph.shape[-1] == produced.shape[-1]
-                and graph.element.dtype == produced.element.dtype
+                and graph.element == produced.element
             ):
                 continue
             findings.append(
@@ -303,9 +303,9 @@ def _stale(
                     FindingKind.REJECTION,
                     "tensor-stale",
                     "stale_outputs",
-                    f"the graph states {tensor} {list(graph.shape)} "
-                    f"{graph.element.dtype.name}, its producer {node.name} {list(produced.shape)} "
-                    f"{produced.element.dtype.name}: run InferKernelTensors",
+                    f"the graph states {tensor} {list(graph.shape)} {graph.element}, "
+                    f"its producer {node.name} {list(produced.shape)} {produced.element}: "
+                    "run InferKernelTensors",
                     (("tensor", tensor), ("node", node.name)),
                 )
             )

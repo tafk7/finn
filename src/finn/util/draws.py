@@ -4,7 +4,8 @@
 """A graph's inputs drawn from their annotations, as int64 integers.
 
 A draw gives each graph input that is no initializer (``graph_inputs``) integers of its
-annotation, an ordinary integer type (INT<n>, UINT<n>, BINARY), as int64 (``Integers``).
+annotation, an ordinary integer type (INT<n>, UINT<n>, BINARY), over the range it states
+with it (its datatype's when it states none), as int64 (``Integers``).
 ``boundary_inputs`` draws them at random, seeded, the first row (the last axis's vector)
 all the type's least value and the second all its greatest; one row holds both.
 ``drawn_inputs`` makes three draws a seed: those, the same without the extremes, and each
@@ -39,11 +40,16 @@ def graph_inputs(model: ModelWrapper) -> list[str]:
 
 
 def _bounds(model: ModelWrapper, tensor: str) -> tuple[int, int]:
-    """The least and greatest integer of ``tensor``'s annotation; an input without one is
-    refused (qonnx reads it as FLOAT32, which is not a statement)."""
+    """The least and greatest integer of ``tensor``'s annotation, over the range it states
+    with it (a graph input's range is read as stated: the hardware is built for it); an
+    input without one is refused (qonnx reads it as FLOAT32, which is not a statement)."""
     if not model.has_tensor_datatype(tensor):
         raise ValueError(f"{tensor} has no datatype annotation")
-    return ordinary_integer_bounds(model.get_tensor_datatype(tensor))
+    ordinary_integer_bounds(model.get_tensor_datatype(tensor))  # refuses another encoding
+    stated = model.get_tensor_range(tensor)
+    least, greatest = stated.least, stated.greatest
+    assert isinstance(least, int) and isinstance(greatest, int)  # an integer datatype's
+    return least, greatest
 
 
 def boundary_inputs(model: ModelWrapper, seed: int) -> dict[str, Integers]:

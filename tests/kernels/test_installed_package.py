@@ -38,7 +38,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
         if any(fullname == name or fullname.startswith(name + ".") for name in forbidden):
             raise AssertionError("forbidden dependency: " + fullname)
         if fullname.startswith("qonnx") and fullname not in (
-            "qonnx", "qonnx.core", "qonnx.core.datatype"
+            "qonnx", "qonnx.core", "qonnx.core.datatype", "qonnx.core.ranges"
         ):
             raise AssertionError("QONNX graph dependency: " + fullname)
 

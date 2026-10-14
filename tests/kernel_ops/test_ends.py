@@ -371,8 +371,9 @@ def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrappe
         "cycles": 200,
         "cycles_16_frames_a_call": 197,
     }
+    # The logits INT7 (the last MatMul's range), one a beat in a byte: the same words.
     assert (rows["MatMul_3_out0"]["element"], rows["MatMul_3_out0"]["memory_width"]) == (
-        "INT8",
+        "INT7",
         16,
     )
     assert report["memory_latency"] == MEMORY_LATENCY
@@ -484,6 +485,7 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_ends(
     ]
     assert on_zynq["used"] == {key: sum(each[key] for each in summed) for key in on_ip["used"]}
     # The module TFC in the Zynq shell was packaged as before the shells had rows (its
-    # thresholds a data file, THRESHOLDS_FILE).
-    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__c909af9fb6b548ee"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__c909af9fb6b548ee"
+    # thresholds a data file, THRESHOLDS_FILE; its MatMuls after the first INT7, reading each
+    # thresholding's range).
+    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__023b52bd70edebcc"
+    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__023b52bd70edebcc"

@@ -60,7 +60,7 @@ def dotp(
         facts={
             "platform": full_platform(dsp),
             "form": form,
-            "result_range": datatype_range(reduction, a, w),
+            "result_range": datatype_range(reduction, ScalarEncoding(a), ScalarEncoding(w)),
         },
     )
 

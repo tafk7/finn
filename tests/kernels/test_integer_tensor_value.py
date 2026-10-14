@@ -21,6 +21,7 @@ from typing import cast
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
+from qonnx.core.ranges import TensorRange
 
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.values.semantics import (
@@ -168,10 +169,10 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
     folded = choose(point, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2})
     folded = choose(folded, {"w.source.memstream.ram_style": "block"})
     w = folded.member("w")
-    assert w.tensor == Tensor((4, 4), ScalarEncoding(DataType["INT2"], (-1, 1)))
+    assert w.tensor == Tensor((4, 4), ScalarEncoding(DataType["INT2"], TensorRange(-1, 1)))
     assert w.source.value_range == (-1, 1)
     # The result's range read the columns (over INT3 activations: [-11, 11]), once.
     matmul = folded.member("matmul")
-    assert matmul.y_tensor.element == ScalarEncoding(DataType["INT5"], (-11, 11))
+    assert matmul.y_tensor.element == ScalarEncoding(DataType["INT5"], TensorRange(-11, 11))
     assert loads == [1]
     assert w.source.image and loads == [1]

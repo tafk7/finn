@@ -116,13 +116,14 @@ LAYERS: tuple[Layer, ...] = (
     Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
     # The generic Space engine: the standard library and its native dependency.
     Layer("space", ("finn.core.space",), ("reporting",), ("greenlet",), "tests/core/space"),
-    # Canonical logical values: QONNX's datatypes and numpy, no engine; the findings
+    # Canonical logical values: QONNX's datatypes and their ranges (a tensor's range is
+    # part of its datatype fact, qonnx.core.ranges) and numpy, no engine; the findings
     # their refusals carry.
     Layer(
         "dataflow",
         ("finn.dataflow",),
         ("reporting",),
-        ("qonnx.core.datatype", "numpy"),
+        ("qonnx.core.datatype", "qonnx.core.ranges", "numpy"),
         "tests/dataflow",
     ),
     # Module build values and their emission, below every Space; pyslang checks
@@ -138,7 +139,7 @@ LAYERS: tuple[Layer, ...] = (
         "kernels",
         ("finn.kernels",),
         ("reporting", "space", "dataflow", "kernels.artifacts", "platform.capabilities"),
-        ("qonnx.core.datatype", "numpy", "pyslang"),
+        ("qonnx.core.datatype", "qonnx.core.ranges", "numpy", "pyslang"),
         "tests/kernels",
         also=("finn.resources",),
     ),
@@ -416,7 +417,7 @@ LAYERS: tuple[Layer, ...] = (
         "tests.dataflow",
         ("dataflow",),
         ("dataflow", "tests.layering", "tests.value_classes"),
-        ("pytest", "qonnx.core.datatype"),
+        ("pytest", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/dataflow",
     ),
     # The kernel tests need no graph either: the kernel stack, the harness and the
@@ -438,7 +439,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.core.space",
             "tests.oracle",
         ),
-        ("pytest", "numpy", "pyslang", "qonnx.core.datatype"),
+        ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/kernels",
     ),
 )

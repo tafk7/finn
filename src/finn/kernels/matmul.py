@@ -58,14 +58,16 @@ core reads its weights from ``w_carried``: its weight width, and the packed
 core's ``NARROW_WEIGHTS``. A dense realization of a depthwise operation reads
 block-diagonal weights, so it needs known weights (``matmul-realization``).
 
-The result's range is derived from the weights: known, the exact range of each
-output column's dot products over the activation datatype (``column_range``),
-unioned over the columns; otherwise, every dot product of the two datatypes'
-values. The result's type is the range's smallest encoding, ``UINT`` when no
-value is negative (``range_dtype``, ``result_type``), whatever core computes it;
-the result element states the range (``y_tensor``). Each core derives its
-accumulator from the range (the core's ``result_range``) and states its results'
-tensor over it, which its ``y`` port writes.
+The result's range is derived from the weights and the activations' range (their
+tensor's element: their datatype's, or the narrower range their producer states,
+``operand_range``): known weights, the exact range of each output column's dot
+products over the activations' range (``column_range``), unioned over the columns;
+otherwise, every dot product of the two tensors' values. The result's type is the
+range's smallest encoding, ``UINT`` when no value is negative (``range_dtype``,
+``result_type``), whatever core computes it; the result element states the range
+(``y_tensor``), which inference writes on the graph with the type, so the next kernel
+reads it. Each core derives its accumulator from the range (the core's
+``result_range``) and states its results' tensor over it, which its ``y`` port writes.
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and tensors. Each core owns its folding factors (``compute.<core>.pe``,
@@ -82,6 +84,8 @@ from __future__ import annotations
 
 from math import prod
 
+from qonnx.core.ranges import TensorRange
+
 from finn.core.space import (
     ConstraintGroup,
     Decision,
@@ -97,7 +101,6 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
-    canonical_qonnx_datatype,
     is_ordinary_integer,
     ordinary_integer_bounds,
 )
@@ -108,6 +111,7 @@ from finn.kernels.base import PORT_END, ComposedKernel, PortEnd
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.values.domains import (
     admit_element,
+    integer_bounds,
     range_dtype,
     stored_element,
     values_within,
@@ -125,27 +129,39 @@ from finn.kernels.values.semantics import (
 from finn.platform.capabilities import Platform
 
 
+def operand_range(element: ScalarEncoding) -> tuple[int, int]:
+    """The least and greatest value an operand of ``element`` takes in a dot product: its
+    range (``integer_bounds``), widened to hold 0, so that every partial sum lies within
+    the range of the whole (a term's range holds 0). Every integer datatype's own range
+    holds 0 already; a narrower stated range may not (``[1, 3]``). An encoding that is not
+    an ordinary integer is refused, as the cores refuse it (``ordinary_integer_bounds``)."""
+    ordinary_integer_bounds(element.dtype)
+    least, greatest = integer_bounds(element)
+    return min(least, 0), max(greatest, 0)
+
+
 def datatype_range(
-    vector_length: int, activation_dtype: QONNXDataType, weights_dtype: QONNXDataType
+    vector_length: int, activations: ScalarEncoding, weights: ScalarEncoding
 ) -> tuple[int, int]:
-    """The least and greatest dot product of ``vector_length`` values of each datatype."""
+    """The least and greatest dot product of ``vector_length`` values of each element (its
+    datatype over its range, ``operand_range``)."""
     require_positive(vector_length, "vector_length")
-    activation = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
-    weights = ordinary_integer_bounds(canonical_qonnx_datatype(weights_dtype))
-    products = tuple(a * w for a in activation for w in weights)
+    activation, weight = operand_range(activations), operand_range(weights)
+    products = tuple(a * w for a in activation for w in weight)
     return vector_length * min(products), vector_length * max(products)
 
 
-def column_range(activation_dtype: QONNXDataType, weights: IntegerTensor) -> tuple[int, int]:
+def column_range(activations: ScalarEncoding, weights: IntegerTensor) -> tuple[int, int]:
     """The least and greatest dot product of any column of ``weights`` (``(..., k, n)``,
-    reduced over ``k``) with activations of ``activation_dtype``.
+    reduced over ``k``) with activations of ``activations`` (an element: its datatype
+    over its range, ``operand_range``).
 
     A column whose positive weights sum to P and negative ones to N meets activations
-    in [lo, hi] (an ordinary integer type: lo <= 0 <= hi) over [lo * P + hi * N,
+    in [lo, hi] (lo <= 0 <= hi, ``operand_range``) over [lo * P + hi * N,
     hi * P + lo * N], each term taking its extremes independently. Every partial sum
     lies within it too, since each term's range holds 0.
     """
-    low, high = ordinary_integer_bounds(canonical_qonnx_datatype(activation_dtype))
+    low, high = operand_range(activations)
     columns = integer_columns(weights)
     return (
         min(low * positive + high * negative for positive, negative in columns),
@@ -311,13 +327,14 @@ class MatMulKernel(ComposedKernel):
     @derived
     def result_range(self) -> tuple[int, int] | Rejected:
         """The results' least and greatest value: with known weights, their columns' over
-        the activation datatype (``column_range``, per output column, of what the weight
-        channel stores); without, every dot product of the two datatypes' values
-        (``datatype_range``)."""
+        the activations' range (``column_range``, per output column, of what the weight
+        channel stores); without, every dot product of the two tensors' values
+        (``datatype_range``). Each operand's range is its tensor's element's: its
+        datatype's, or the narrower one its producer states."""
         try:
             if self.stored:
-                return column_range(self.activation_dtype, self.w_stored)
-            return datatype_range(self.k, self.activation_dtype, self.weights_type)
+                return column_range(self.x_tensor.element, self.w_stored)
+            return datatype_range(self.k, self.x_tensor.element, self.w_tensor.element)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
 
@@ -358,7 +375,7 @@ class MatMulKernel(ComposedKernel):
         self,
         shape: tuple[int, ...],
         dtype: QONNXDataType,
-        value_range: tuple[int, int] | None = None,
+        value_range: TensorRange | None = None,
     ) -> Tensor | Rejected:
         element = admit_element(dtype, value_range)
         if isinstance(element, Rejected):
@@ -404,7 +421,8 @@ class MatMulKernel(ComposedKernel):
     def y_tensor(self) -> Tensor | Rejected:
         """Its results: ``(..., N)``, the activations' leading axes (``leading``) and N, in
         the result type over the result range."""
-        return self._tensor((*self.leading, self.n), self.result_type, self.result_range)
+        least, greatest = self.result_range
+        return self._tensor((*self.leading, self.n), self.result_type, TensorRange(least, greatest))
 
     @derived
     def weighted(self) -> bool:
@@ -519,4 +537,5 @@ __all__ = [
     "block_diagonal",
     "column_range",
     "datatype_range",
+    "operand_range",
 ]

@@ -40,6 +40,8 @@ from enum import Enum
 from fnmatch import fnmatchcase
 from typing import Any, TypeVar, cast
 
+from qonnx.core.ranges import TensorRange
+
 from finn.core.space import (
     Constraint,
     Decision,
@@ -113,7 +115,11 @@ def exact_result_dtype(
     """The smallest encoding of every full-range integer dot product of ``vector_length``
     values of each datatype (``range_dtype`` of ``matmul.datatype_range``): the result
     type a test states for a MatMul whose weights are not known."""
-    return range_dtype(*datatype_range(vector_length, activation_dtype, weights_dtype))
+    return range_dtype(
+        *datatype_range(
+            vector_length, ScalarEncoding(activation_dtype), ScalarEncoding(weights_dtype)
+        )
+    )
 
 
 def point_for(kernel: Callable[..., S], facts: Mapping[str, object], **choices: object) -> S:
@@ -214,9 +220,11 @@ def placed_dotp(
     platform = cast(Platform, facts.get("platform", FULL_DSP48E2))
 
     x_tensor = Tensor(x_shape, ScalarEncoding(activation_dtype))
-    w_tensor = Tensor((k, n), ScalarEncoding(weights_dtype, weights_range))
+    w_range = None if weights_range is None else TensorRange(*weights_range)
+    w_tensor = Tensor((k, n), ScalarEncoding(weights_dtype, w_range))
     # The results' channel's tensor: the graph's statement of what the core produces.
-    y_tensor = Tensor((rows, n), ScalarEncoding(result_dtype, result_range))
+    y_range = None if result_range is None else TensorRange(*result_range)
+    y_tensor = Tensor((rows, n), ScalarEncoding(result_dtype, y_range))
     network = Network(
         {
             "x": wire(

@@ -6,13 +6,15 @@
 qonnx's inference passes ask every node at once, but a KernelOp can answer only once
 its inputs are known. This pass visits the nodes in order instead (``infer_node``):
 
-- a KernelOp computes its outputs' shapes and datatypes from its kernel. It overwrites
-  what was there, so a change upstream (weights replaced, or made a graph input) reaches
-  the nodes after it on the next run;
+- a KernelOp computes its outputs' shapes, datatypes and ranges from its kernel (its
+  statement, ``KernelOp.output_tensors``), each range written with its datatype
+  (``finn.core.graph.facts.state``), and reads its inputs' ranges as the nodes before it
+  stated them. It overwrites what was there, so a change upstream (weights replaced, or
+  made a graph input) reaches the nodes after it on the next run;
 - another custom op uses its shape stand-in and its own datatype rule;
 - a standard op uses ONNX's per-node shape inference, given its initializers' values (a
-  Reshape's target shape), and qonnx's datatype rule. An output whose shape ONNX cannot
-  infer keeps the one it had.
+  Reshape's target shape), and qonnx's datatype rule, which states the range with the
+  datatype. An output whose shape ONNX cannot infer keeps the one it had.
 
 The KernelOps' qonnx hooks answer from their kernels too, so qonnx's passes agree once
 this one has run. ``ToKernelOps`` runs the same step on each node as it converts; this
@@ -30,6 +32,7 @@ from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import infer_node_datatype
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.facts import state
 from finn.custom_op.kernels.base import KernelOp
 
 if TYPE_CHECKING:
@@ -87,9 +90,9 @@ def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tup
         refused = op.admission()
         if refused:
             return refused
-    for name, (dims, dtype) in op.infer_output_tensors(model).items():
-        model.set_tensor_shape(name, list(dims))
-        model.set_tensor_datatype(name, dtype)
+    for name, tensor in op.infer_output_tensors(model).items():
+        model.set_tensor_shape(name, list(tensor.shape))
+        state(model, name, tensor.element)
     return ()
 
 

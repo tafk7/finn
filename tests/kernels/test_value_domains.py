@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 from qonnx.core.datatype import DataType
+from qonnx.core.ranges import TensorRange
 
 from finn.core.space import Rejected
 from finn.dataflow.tensor import ScalarEncoding
@@ -14,17 +15,22 @@ from finn.kernels.values.domains import admit_element
 
 
 def test_an_admitted_element_is_the_encoding() -> None:
-    assert admit_element(DataType["INT4"], (-7, 7)) == ScalarEncoding(DataType["INT4"], (-7, 7))
+    narrow = TensorRange(-7, 7)
+    assert admit_element(DataType["INT4"], narrow) == ScalarEncoding(DataType["INT4"], narrow)
     assert admit_element(DataType["FLOAT32"]) == ScalarEncoding(DataType["FLOAT32"])
 
 
 @pytest.mark.parametrize(
-    ("name", "bounds"),
-    (("INT3", (-5, 3)), ("INT3", (2, 1)), ("UINT4", (0, 16)), ("FLOAT32", (0, 1))),
+    ("name", "stated"),
+    (
+        ("INT3", TensorRange(-5, 3)),
+        ("UINT4", TensorRange(0, 16)),
+        ("INT8", TensorRange(0, 1, nan=True)),
+    ),
 )
 def test_an_element_the_datatype_cannot_hold_is_refused_as_storage(
-    name: str, bounds: tuple[int, int]
+    name: str, stated: TensorRange
 ) -> None:
-    refused = admit_element(DataType[name], bounds)
+    refused = admit_element(DataType[name], stated)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"dtype-storage"}

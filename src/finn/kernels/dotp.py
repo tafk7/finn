@@ -41,6 +41,8 @@ from __future__ import annotations
 from math import ceil, floor, prod
 from typing import ClassVar
 
+from qonnx.core.ranges import TensorRange
+
 from finn.core.space import (
     Constraint,
     ConstraintGroup,
@@ -68,7 +70,7 @@ from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.base import CLOCK2X, Clocking, LeafKernel, extent_of, interface
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
-from finn.kernels.values.domains import Integer, admit_element, range_dtype
+from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
 
@@ -281,7 +283,7 @@ class DotpAxiKernel(LeafKernel):
         """The results: ``(m, n)``, a window's ``(OH * OW, n)`` (``(1, OH, OW, n)`` over an
         image at the graph's rank), rows read through a view ``(..., n)`` at the
         activations' rank; in the core's accumulator over ``result_range``."""
-        element = admit_element(self.accumulator, self.result_range)
+        element = admit_element(self.accumulator, TensorRange(*self.result_range))
         if isinstance(element, Rejected):
             return element
         shape = self.spanned(self.y_index)
@@ -506,9 +508,11 @@ class PackedDotpKernel(DotpAxiKernel):
     def narrow_weights(self) -> bool:
         """No weight its tensor holds is its type's minimum."""
         element = self.w.element
-        if element.value_range is None:
-            return False  # not an integer encoding: the weight port refuses it
-        return element.value_range[0] > ordinary_integer_bounds(element.dtype)[0]
+        try:
+            least = ordinary_integer_bounds(element.dtype)[0]
+        except DatatypeError:
+            return False  # not an ordinary integer encoding: the weight port refuses it
+        return integer_bounds(element)[0] > least
 
     @constraint
     def core_supported(self) -> bool | Rejected:

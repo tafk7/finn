@@ -47,8 +47,9 @@ FRAMES = 2
 """Images streamed through the partition in XSim, back to back."""
 # The partition's boundary, the ends' facts in the Zynq shell:
 # 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
-# with no width converter; ten INT8 logits (the last MatMul's columns, K7) in one beat of
-# 80 bits, which an IODMA_hls writes through a converter to a 16-bit port.
+# with no width converter; ten INT7 logits over [-61, 61] (the last MatMul's columns over its
+# activations' range, [-1, 1], K7) in one beat of 72 bits, which an IODMA_hls writes through
+# a converter to an 8-bit port, nine words.
 END = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
 FACTS = (
     [
@@ -76,16 +77,16 @@ FACTS = (
             "port": "m_axis_0",
             "tensor": LOGITS,
             "shape": [1, 10],
-            "element": "INT8",
-            "range": [-128, 127],
+            "element": "INT7",
+            "range": [-61, 61],
             "lanes": 10,
             "beats": 1,
-            "tdata": 80,
+            "tdata": 72,
             "end": {
                 **END,
                 "direction": "out",
-                "memory_width": 16,
-                "words": 5,
+                "memory_width": 8,
+                "words": 9,
                 "converter": True,
                 "call_cycles": 4,
             },
@@ -194,7 +195,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
     body = body.transform(PackagePartition(sdp.name, directory=project))
     assert body.get(OUTPUT_VLNV) == f"xilinx_finn:finn:{sdp.name}:1.0"
     names = body.get(OUTPUT_INTERFACES)
-    assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 80]])
+    assert (names["s_axis"], names["m_axis"]) == ([["s_axis_0", 128]], [["m_axis_0", 72]])
     spirit = "{http://www.spiritconsortium.org/XMLSchema/SPIRIT/1685-2009}"
     root = ET.parse(project / "ip" / "component.xml").getroot()
     widths = {
@@ -204,7 +205,7 @@ def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
         }.get("TDATA_NUM_BYTES")
         for bus in root.iter(f"{spirit}busInterface")
     }
-    assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "10")
+    assert (widths["s_axis_0"], widths["m_axis_0"]) == ("16", "9")
     point, boundary = configured_network(body, sdp.name)
     assert boundary_facts(body, point, boundary, sdp.name) == FACTS
     assert "-part xczu3eg-sbva484-1-e" in (project / "package.tcl").read_text()

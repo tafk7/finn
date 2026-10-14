@@ -315,7 +315,9 @@ def test_a_pumped_module_gets_its_doubled_clock_aligned(tmp_path: Path) -> None:
         facts={
             "platform": full_platform(DspBlock.DSP58),
             "form": Form.DENSE,
-            "result_range": datatype_range(6, DataType["INT8"], DataType["INT8"]),
+            "result_range": datatype_range(
+                6, ScalarEncoding(DataType["INT8"]), ScalarEncoding(DataType["INT8"])
+            ),
         },
     )
     found = design_module(point, Int8Dsp58DotpKernel)

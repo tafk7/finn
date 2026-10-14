@@ -399,7 +399,7 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     # (Z0's choices), not test_tfc's 16 lanes by hand.
     assert [(s["name"], s["tdata"], s["element"]) for s in described["streams"]] == [
         ("s_axis_0", 32, "UINT8"),
-        ("m_axis_0", 8, "INT8"),
+        ("m_axis_0", 8, "INT7"),
     ]
     # The testbench runs from its own directory with Vivado's tools on PATH and
     # XILINX_VIVADO set, nothing else of the machine.

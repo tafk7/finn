@@ -9,13 +9,15 @@ The plan between the ends is ``test_plan``'s; a channel's refusals
 
 from __future__ import annotations
 
+from qonnx.core.ranges import TensorRange
+
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.ends import End, Ends, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 
 INT4 = ScalarEncoding(resolve_qonnx_datatype_name("INT4"))
-NARROW = ScalarEncoding(resolve_qonnx_datatype_name("INT4"), (-7, 7))
+NARROW = ScalarEncoding(resolve_qonnx_datatype_name("INT4"), TensorRange(-7, 7))
 ROWS = BeatSequence(vector_major((3, 8), 2))
 
 
