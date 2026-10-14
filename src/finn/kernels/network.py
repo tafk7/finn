@@ -59,12 +59,12 @@ member's netlist under its node (its name, unless the network is given another,
 from __future__ import annotations
 
 import functools
-import weakref
+from bisect import bisect_left
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Generic, Self, TypeVar
+from typing import Any, Generic, Self, TypeVar, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
@@ -273,62 +273,24 @@ def _rejection(code: str, owner: str, message: str) -> tuple[Finding, ...]:
     return (Finding(FindingKind.REJECTION, code, owner, message),)
 
 
-# -- per class and per point: what never changes is read once ---------------------------
+# -- a member's Decisions ---------------------------------------------------------------
 
 
-_MODELS: dict[int, tuple[object, Mapping[str, inspection.DecisionInfo[object]]]] = {}
-
-
-def _decisions(subject: Space | type[Space]) -> Mapping[str, inspection.DecisionInfo[object]]:
-    """Every Decision of a point's compiled model, or a Space class's, by key: one reading
-    per compiled model (one per Space class)."""
-    model = inspection.model(subject)
-    held = _MODELS.get(id(model))
-    if held is None or held[0] is not model:
-        found = MappingProxyType({item.key: item for item in inspection.decisions(model)})
-        held = _MODELS[id(model)] = (model, found)
-    return held[1]
-
-
-_READS: weakref.WeakKeyDictionary[Space, dict[str, object]] = weakref.WeakKeyDictionary()
-"""What has been read of a point, by question: a point is immutable, so each is read once."""
-
-
-def _read(point: Space, question: str, answer: Callable[[Space], T]) -> T:
-    """``answer(point)``, read once per point."""
-    reads = _READS.get(point)
-    if reads is None:
-        reads = _READS[point] = {}
-    if question not in reads:
-        reads[question] = answer(point)
-    found: T = reads[question]  # type: ignore[assignment]
-    return found
-
-
-def _viable(point: Space) -> tuple[inspection.Viable, ...]:
-    return _read(point, "viable", inspection.viable)
-
-
-def _open(point: Space) -> tuple[inspection.Open, ...]:
-    return _read(point, "open", inspection.open)
+def _decision(subject: Space | type[Space], key: str) -> inspection.DecisionInfo[object] | None:
+    """The Decision ``key`` of a point or a Space class, or None: found in the engine's
+    table of its compiled model, sorted by key."""
+    found = inspection.decisions(subject)
+    at = bisect_left(found, key, key=lambda item: item.key)
+    return found[at] if at < len(found) and found[at].key == key else None
 
 
 def _forced(point: Space) -> dict[str, object]:
-    return _read(
-        point, "forced", lambda at: {item.key: item.value for item in inspection.forced(at)}
-    )
-
-
-def _chosen(point: Space) -> dict[str, object]:
-    return _read(point, "chosen", chosen)
+    return {item.key: item.value for item in inspection.forced(point)}
 
 
 def _admission(point: Space) -> tuple[Finding, ...]:
-    def admitted(at: Space) -> tuple[Finding, ...]:
-        found = inspection.admission(at)
-        return found.findings if isinstance(found, Rejected) else ()
-
-    return _read(point, "admission", admitted)
+    found = inspection.admission(point)
+    return found.findings if isinstance(found, Rejected) else ()
 
 
 def _refusals(point: Space, report: Any, keys: Collection[str]) -> dict[str, tuple[Finding, ...]]:
@@ -355,17 +317,18 @@ def _commit(
 ) -> Space | dict[str, tuple[Finding, ...]]:
     """``point`` with ``values`` committed and ``clear`` cleared, atomically, or each key
     refused with why."""
-    handles = _decisions(point)
-    unknown = [key for key in (*values, *clear) if key not in handles]
+    handles = {key: _decision(point, key) for key in (*values, *clear)}
+    unknown = [key for key, item in handles.items() if item is None]
     if unknown:
         return {
             key: _rejection("not-a-decision", key, "not a Decision of this member")
             for key in unknown
         }
+    found = cast(dict[str, inspection.DecisionInfo[object]], handles)
     try:
         report = point.try_with_choices(
-            {handles[key].reference: value for key, value in values.items()},
-            *(point.field(handles[key].reference).clear() for key in clear),
+            {found[key].reference: value for key, value in values.items()},
+            *(point.field(found[key].reference).clear() for key in clear),
         )
     except (RequestError, ConfigurationError) as error:
         return {key: _rejection("request-refused", key, str(error)) for key in (*values, *clear)}
@@ -512,6 +475,7 @@ class Network:
     the module docstring. Immutable: ``trial`` and ``with_choices`` return another."""
 
     __slots__ = (
+        "_asked",
         "_dropped",
         "_facts",
         "_kernels",
@@ -534,6 +498,7 @@ class Network:
     _unbound: Mapping[str, Unbound]
     _facts: Mapping[str, FactsKey]
     _dropped: Mapping[Key, tuple[Finding, ...]]
+    _asked: dict[tuple[str, str], object]
 
     def __init__(
         self,
@@ -610,6 +575,7 @@ class Network:
         self._unbound = MappingProxyType(unbound)
         self._facts = MappingProxyType(facts)
         self._dropped = MappingProxyType(dropped)
+        self._asked = {}
 
     def _made(
         self,
@@ -626,6 +592,11 @@ class Network:
                 if hasattr(self, slot):
                     object.__setattr__(made, slot, getattr(self, slot))
         made._points = MappingProxyType(dict(points))
+        made._asked = {
+            key: answer
+            for key, answer in self._asked.items()
+            if points.get(key[1]) is self._points.get(key[1])
+        }
         made._unbound = MappingProxyType(dict(unbound))
         made._facts = MappingProxyType(dict(facts))
         made._dropped = MappingProxyType({})
@@ -731,7 +702,7 @@ class Network:
         found: dict[Key, inspection.DecisionInfo[object]] = {}
         for name in self._ranked:
             subject = Channel if name in self._unbound else self._points[name]
-            found |= {(name, key): info for key, info in _decisions(subject).items()}
+            found |= {(name, item.key): item for item in inspection.decisions(subject)}
         return found
 
     def _wanted(self, names: Iterable[str] | None) -> Sequence[str]:
@@ -753,7 +724,7 @@ class Network:
         return tuple(
             ((name, item.key), item)
             for name, point in self._bound_members(names)
-            for item in _viable(point)
+            for item in inspection.viable(point)
         )
 
     def open(self, names: Iterable[str] | None = None) -> tuple[tuple[Key, inspection.Open], ...]:  # noqa: A003 - the inspection's name
@@ -762,7 +733,7 @@ class Network:
         return tuple(
             ((name, item.key), item)
             for name, point in self._bound_members(names)
-            for item in _open(point)
+            for item in inspection.open(point)
         )
 
     def forced(self, names: Iterable[str] | None = None) -> dict[Key, object]:
@@ -774,13 +745,22 @@ class Network:
             for key, value in _forced(point).items()
         }
 
+    def _answer(self, name: str, question: str, answer: Callable[[Space], T]) -> T:
+        """``answer`` of bound member ``name``'s point, read once of this network, and kept
+        by a network a change makes where the member's point is the same."""
+        key = (question, name)
+        if key not in self._asked:
+            self._asked[key] = answer(self._points[name])
+        found: T = self._asked[key]  # type: ignore[assignment]
+        return found
+
     def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
         """Every choice stored (of ``names`` only, where named), by key, ranked: each bound
         member's committed Decisions, and the choices an unbound channel holds."""
         found: dict[Key, object] = {}
         for name in self._wanted(names):
             held = self._unbound.get(name)
-            values = held.stored if held is not None else _chosen(self._points[name])
+            values = held.stored if held is not None else self._answer(name, "chosen", chosen)
             found |= {(name, key): value for key, value in values.items()}
         return found
 
@@ -788,9 +768,9 @@ class Network:
         """The Decision ``key`` names, or None."""
         name, below = key
         if name in self._unbound:
-            return _decisions(Channel).get(below)
+            return _decision(Channel, below)
         point = self._points.get(name)
-        return None if point is None else _decisions(point).get(below)
+        return None if point is None else _decision(point, below)
 
     def undecided(self) -> tuple[Key, ...]:
         """Every applicable Decision neither committed nor forced, by key, ranked: the
@@ -799,7 +779,7 @@ class Network:
         return tuple(
             (name, key)
             for name, point in self._bound_members(None)
-            for key in _read(point, "undecided", lambda at: tuple(undecided(at, "*")))
+            for key in self._answer(name, "undecided", lambda at: tuple(undecided(at, "*")))
         )
 
     def admission(self, name: str) -> tuple[Finding, ...]:
@@ -846,7 +826,7 @@ class Network:
 
     def _stored(self, name: str) -> Mapping[str, object]:
         held = self._unbound.get(name)
-        return held.stored if held is not None else _chosen(self._points[name])
+        return held.stored if held is not None else self._answer(name, "chosen", chosen)
 
     def trial(
         self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
@@ -932,7 +912,7 @@ class Network:
         its key) or the member's ``admission`` (by ``(name, "")``)."""
         refused: dict[Key, tuple[Finding, ...]] = {}
         for name in members:
-            for item in _viable(self.member(name)):
+            for item in inspection.viable(self.member(name)):
                 if not item.cases:
                     detail = "; ".join(f"{case}: {why}" for case, why in item.refused.items())
                     refused[(name, item.key)] = _rejection(

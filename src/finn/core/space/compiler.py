@@ -21,7 +21,7 @@ on, assignment is refused.
 # ruff: noqa: PLC0415
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock
 from typing import Generic, TypeVar, cast
 
@@ -45,10 +45,15 @@ S = TypeVar("S", bound=Space)
 
 @dataclass(frozen=True, slots=True)
 class Model(Generic[S]):
-    """A compiled declaration: its structure, with no inputs, choices or caches."""
+    """A compiled declaration: its structure, with no inputs or choices. What
+    inspection reads of its structure alone (its Decisions below a scope) is kept
+    with it (``read``)."""
 
     space_type: type[S]
     linked: LinkedModel
+    _read: dict[tuple[str, int], object] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def resolve(self, scope: int, reference: object) -> int:
         """Resolve a declaration in this exact scope without consulting its class."""

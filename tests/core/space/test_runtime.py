@@ -200,3 +200,28 @@ def test_generic_container_outputs_infer_nominal_snapshot_semantics() -> None:
     first.append(99)
     assert point.materialized == [0, 1, 2]
     assert point.query(Collections.materialized) == Available([0, 1, 2])
+
+
+def test_immutable_values_are_read_as_they_are_and_a_mutable_one_held_is_copied() -> None:
+    class Held(Space):
+        count: int = Param()
+
+        @derived
+        def name(*, count: int) -> str:
+            return "x" * count
+
+        @derived
+        def nested(*, count: int) -> tuple[tuple[int, ...], str]:
+            return (tuple(range(count)), "y")
+
+        @derived
+        def holding(*, count: int) -> tuple[list[int], ...]:
+            return ([count],)
+
+    point = design_space(Held(count=300))
+    assert point.name is point.name
+    assert point.nested is point.nested
+    first = point.holding
+    assert first is not point.holding
+    first[0].append(1)
+    assert point.holding == ([300],)

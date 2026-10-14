@@ -49,7 +49,7 @@ class ValueSemantics(Generic[T]):
             name=name or value_type.__qualname__,
             recognizes=lambda value: type(value) is value_type,
             equal=lambda left, right: left == right,
-            snapshot=lambda value: value,
+            snapshot=_itself,
         )
 
     def accepts(self, value: object) -> bool:
@@ -84,29 +84,60 @@ class ValueSemantics(Generic[T]):
 def default_semantics(value_type: type[T]) -> ValueSemantics[T]:
     """Nominal Python values with detached snapshots and structural equality.
 
-    An instance of a frozen dataclass is its own snapshot, shared by every read:
-    its fields cannot be rebound, and the contract is that a frozen value class
-    holds immutable values; one that holds a mutable field states its own
-    semantics. Anything else is deep-copied.
+    An immutable value is its own snapshot, shared by every read: an immutable
+    builtin (an int, a str, ...), a tuple or frozenset of immutable values, and an
+    instance of a frozen dataclass, whose fields cannot be rebound (the contract is
+    that a frozen value class holds immutable values; one that holds a mutable field
+    states its own semantics). Anything else is deep-copied.
     """
 
-    params = getattr(value_type, "__dataclass_params__", None)
-    frozen = params is not None and params.frozen
+    snapshot: Callable[[T], T]
+    if value_type in _ATOMS or _frozen(value_type):
+        snapshot = _itself
+    elif value_type in (tuple, frozenset):
+        snapshot = _detached
+    else:
+        snapshot = deepcopy
     return ValueSemantics(
         type_token=value_type,
         name=value_type.__qualname__,
         recognizes=lambda value: type(value) is value_type,
         equal=lambda left, right: left == right,
-        snapshot=_itself if frozen else deepcopy,
+        snapshot=snapshot,
     )
 
 
-BOOL = cast(ValueSemantics[object], default_semantics(bool))
-STRING = cast(ValueSemantics[object], default_semantics(str))
+_ATOMS: frozenset[type] = frozenset(
+    (bool, int, float, complex, str, bytes, type(None), type(Ellipsis), range)
+)
+
+
+def _frozen(value_type: type) -> bool:
+    params = getattr(value_type, "__dataclass_params__", None)
+    return params is not None and bool(params.frozen)
+
+
+def _immutable(value: object) -> bool:
+    kind = type(value)
+    if kind in _ATOMS or _frozen(kind):
+        return True
+    if kind is tuple or kind is frozenset:
+        return all(_immutable(item) for item in cast("tuple[object, ...]", value))
+    return False
+
+
+def _detached(value: T) -> T:
+    """A tuple or frozenset as it is where everything it holds is immutable, else a deep
+    copy."""
+    return value if _immutable(value) else deepcopy(value)
 
 
 def _itself(value: T) -> T:
     return value
+
+
+BOOL = cast(ValueSemantics[object], default_semantics(bool))
+STRING = cast(ValueSemantics[object], default_semantics(str))
 
 
 def unrecognized(semantics: ValueSemantics[T]) -> str:
@@ -120,7 +151,11 @@ def recognize(semantics: ValueSemantics[T], value: object, *, owner: str, role: 
 
 
 def snapshot(semantics: ValueSemantics[T], value: object, *, owner: str, role: str) -> T:
-    """``semantics``' detached snapshot of ``value``; any failure fails ``owner``."""
+    """``semantics``' detached snapshot of ``value``; any failure fails ``owner``. A value
+    of the nominal type of semantics whose snapshot is the value itself is returned as
+    it is: no adapter runs for it."""
+    if semantics.snapshot is _itself and type(value) is semantics.type_token:
+        return cast(T, value)
     return _owned(lambda: semantics.freeze(value), owner, role)
 
 

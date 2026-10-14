@@ -388,17 +388,13 @@ class Seam:
         self.attempts = 0
         self.held: dict[Key, object] = {}
         self.runs: list[Run] = []
-        self._declared: dict[Key, type[Space] | None] | None = None
-        self._transports: dict[Key, str] | None = None
 
     def declared(self, network: Composition) -> Mapping[Key, type[Space] | None]:
         """Every Decision of the network by key, open or not, applicable or not (one nested
         under a selector's case that is not selected), with the Space class that
-        declares it: what lies under a choice's cases, found by structure. Every network
-        of an exploration has its members, so they are read once."""
-        if self._declared is None:
-            self._declared = {key: info.space_type for key, info in network.decisions().items()}
-        return self._declared
+        declares it: what lies under a choice's cases, found by structure (each member's
+        from the engine's table of its class)."""
+        return {key: info.space_type for key, info in network.decisions().items()}
 
     # -- the three questions --------------------------------------------------------------
 
@@ -658,19 +654,7 @@ class Seam:
         """Every transport the network declares, by key, with its FIFO case: a Decision
         of a ``Channel`` member one of whose cases nests a ``FifoKernel``'s ``depth`` and
         ``ram_style``, found by structure, whatever its state."""
-        if self._transports is None:
-            self._transports = _declared_transports(self, network)
-        return self._transports
-
-    def transport_of(self, network: Composition, key: Key) -> Key | None:
-        """The transport ``key`` is or lies under, or None."""
-        found = self.transports(network)
-        owner, parts = key[0], key[1].split(".")
-        for end in range(len(parts), 0, -1):
-            path = (owner, ".".join(parts[:end]))
-            if path in found:
-                return path
-        return None
+        return _declared_transports(self, network)
 
     def check_fifos(self, network: Composition) -> FifoCheck:
         """Each stored transport of ``network`` checked against its stream at the network's
@@ -908,13 +892,25 @@ def _unheld(seam: Seam, network: Composition) -> list[Key]:
     return [key for key in seam.chosen(network) if key not in seam.held]
 
 
+def _transport_of(transports: Mapping[Key, str], key: Key) -> Key | None:
+    """The transport of ``transports`` (``Seam.transports``) ``key`` is or lies under, or
+    None."""
+    owner, parts = key[0], key[1].split(".")
+    for end in range(len(parts), 0, -1):
+        path = (owner, ".".join(parts[:end]))
+        if path in transports:
+            return path
+    return None
+
+
 def _folding(seam: Seam, network: Composition) -> list[Key]:
     """The scope of a strategy that folds: every stored key not held and not a
     transport's (a transport, or a FIFO's choice under it, is ``SizeFifos``')."""
+    transports = seam.transports(network)
     return [
         key
         for key in seam.chosen(network)
-        if key not in seam.held and seam.transport_of(network, key) is None
+        if key not in seam.held and _transport_of(transports, key) is None
     ]
 
 
@@ -1987,10 +1983,11 @@ class SizeFifos:
     def scope(self, seam: Seam, network: Composition) -> list[Key]:
         """What it reopens: every stored transport not held, and the FIFO choices under
         it."""
+        transports = seam.transports(network)
         return [
             key
             for key in seam.chosen(network)
-            if key not in seam.held and seam.transport_of(network, key) is not None
+            if key not in seam.held and _transport_of(transports, key) is not None
         ]
 
     def search(self, seam: Seam, network: S) -> S:

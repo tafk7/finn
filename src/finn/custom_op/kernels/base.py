@@ -63,7 +63,6 @@ kernel's views, ``Fact``) and its end from the kernel (``Interface``).
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, cast
@@ -140,18 +139,12 @@ def refused(owner: str, code: str, message: str, **details: object) -> Finding:
     return Finding(FindingKind.REJECTION, code, owner, message, tuple(details.items()))
 
 
-@functools.cache
-def _bools(space_type: type[Space]) -> frozenset[str]:
-    """The keys of ``space_type``'s ``bool`` Decisions, read once per class."""
-    return frozenset(
-        item.key for item in inspection.decisions(space_type) if value_type(item) == "bool"
-    )
-
-
 def typed(space_type: type[Space], choices: Mapping[str, object]) -> dict[str, object]:
     """``choices``, by decision key of ``space_type``, as its Decisions take them: an ONNX
     ``i`` attribute of a ``bool`` decision becomes a bool."""
-    bools = _bools(space_type)
+    if not choices:
+        return {}
+    bools = {item.key for item in inspection.decisions(space_type) if value_type(item) == "bool"}
     return {key: bool(value) if key in bools else value for key, value in choices.items()}
 
 
@@ -214,7 +207,6 @@ class KernelOp(CustomOp):
     parameters: ClassVar[tuple[str, ...]] = ()
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
     anchor: ClassVar[tuple[str, str]]
-    _schemas: ClassVar[dict[type[KernelOp], dict[str, tuple[str, tuple[str, ...]]]]] = {}
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -261,14 +253,11 @@ class KernelOp(CustomOp):
     @classmethod
     def schema(cls) -> dict[str, tuple[str, tuple[str, ...]]]:
         """The choice attributes: name -> (ONNX type, a selector's cases), its kernel
-        class's decision keys, read once per process."""
-        if cls not in KernelOp._schemas:
-            found: dict[str, tuple[str, tuple[str, ...]]] = {}
-            for item in inspection.decisions(cls.kernel):
-                kind = ONNX_TYPES[value_type(item)]
-                found[item.key] = (kind, item.cases if item.selector else ())
-            KernelOp._schemas[cls] = dict(sorted(found.items()))
-        return KernelOp._schemas[cls]
+        class's decision keys, in key order."""
+        return {
+            item.key: (ONNX_TYPES[value_type(item)], item.cases if item.selector else ())
+            for item in inspection.decisions(cls.kernel)
+        }
 
     def get_nodeattr_types(self) -> dict[str, tuple[Any, ...]]:
         types: dict[str, tuple[Any, ...]] = dict(self.semantic)
