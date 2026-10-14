@@ -45,6 +45,7 @@ import atexit
 import json
 import os
 from bisect import bisect_left
+from collections import Counter
 from collections.abc import Callable, Collection, Hashable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -265,17 +266,27 @@ def _verifying() -> bool:
     return os.environ.get(VERIFY, "0") not in ("", "0")
 
 
-_COUNTS = {"hits verified": 0, "mismatches": 0}
+_COUNTS = {"member hits verified": 0, "network hits verified": 0, "mismatches": 0}
 
 
 class MemberCache:
-    """The configured members of one build, by key (the module docstring), unbounded. In
-    the verifying mode, each hit is configured again and compared (``verify``)."""
+    """The configured members of one build, by key (the module docstring), unbounded, and
+    the graph's networks bound (``finn.custom_op.kernels.network``). In the verifying
+    mode, each hit is configured again and compared (``verify``). ``counts``: the hits
+    and the entries made, by kind; ``hits`` and ``misses`` are the members'."""
 
     def __init__(self, *, verify: bool | None = None) -> None:
         self.verify = _verifying() if verify is None else verify
         self.entries: dict[Hashable, object] = {}
-        self.hits = self.misses = 0
+        self.counts: Counter[tuple[str, str]] = Counter()
+
+    @property
+    def hits(self) -> int:
+        return self.counts["member", "hits"]
+
+    @property
+    def misses(self) -> int:
+        return self.counts["member", "misses"]
 
     def get(
         self,
@@ -283,29 +294,31 @@ class MemberCache:
         make: Callable[[], Any],
         again: Callable[[], Any],
         observed: Callable[[Any], object],
+        kind: str = "member",
     ) -> Any:
         """The entry of key ``found``, made on a miss (``make``); on a hit in the verifying
         mode, made again without the cache (``again``) and compared by ``observed``. A make
-        that raises keeps nothing."""
+        that raises keeps nothing, and is not counted."""
         entry = self.entries.get(found)
         if entry is None:
-            self.misses += 1
-            entry = self.entries[found] = make()
+            entry = make()
+            self.entries[found] = entry
+            self.counts[kind, "misses"] += 1
             return entry
-        self.hits += 1
+        self.counts[kind, "hits"] += 1
         if self.verify:
-            check(found, observed(entry), observed(again()))
+            check(found, observed(entry), observed(again()), kind)
         return entry
 
 
-def check(found: Hashable, hit: object, again: object) -> None:
+def check(found: Hashable, hit: object, again: object, kind: str = "member") -> None:
     """Count a verified hit; raise ``MemberCacheMismatch`` naming the key where ``hit``
     differs from ``again``."""
-    _COUNTS["hits verified"] += 1
+    _COUNTS[f"{kind} hits verified"] += 1
     if hit != again:
         _COUNTS["mismatches"] += 1
         raise MemberCacheMismatch(
-            f"the member cache's hit differs from the member configured again, key {found!r}: "
+            f"the member cache's {kind} hit differs from the {kind} made again, key {found!r}: "
             f"hit {hit!r}, again {again!r}"
         )
 
@@ -404,7 +417,8 @@ def _configured(
 
 
 def verification_counts() -> dict[str, int]:
-    """The verifying mode's counts in this process: the hits verified, the mismatches."""
+    """The verifying mode's counts in this process: the hits verified, by kind, and the
+    mismatches."""
     return dict(_COUNTS)
 
 

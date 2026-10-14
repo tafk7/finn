@@ -229,15 +229,15 @@ def test_a_hit_loads_no_held_value() -> None:
 
 
 def test_the_verifying_mode_configures_each_hit_again_and_names_a_mismatch() -> None:
-    before = verification_counts()["hits verified"]
+    before = verification_counts()["member hits verified"]
     with member_cache(verify=True) as cache:
         first = configured(facts())
         assert configured(facts()) is first
-        assert verification_counts()["hits verified"] == before + 1
+        assert verification_counts()["member hits verified"] == before + 1
         # An entry kept under another member's key is found out.
         (found,) = cache.entries
         cache.entries[found] = configured(facts(), {"compute": "packed"})
-        with pytest.raises(MemberCacheMismatch, match="the member cache's hit differs"):
+        with pytest.raises(MemberCacheMismatch, match="the member cache's member hit differs"):
             configured(facts())
 
 

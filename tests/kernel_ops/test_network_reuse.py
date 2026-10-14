@@ -7,25 +7,49 @@ changed misses, and choices are never shared.
 ``network`` configures each node's kernel and each channel from its facts through the
 build's member cache (``finn.kernels.members``; each test opens one), so a network of the
 same facts binds nothing again; the stored choices are replayed on each network as it is
-bound, and a replay is kept by them too.
+bound, and a replay is kept by them too. The network bound is kept too, by its model's
+design and the nodes selected; a refusal never is.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 import pytest
 from kernels.helpers import choose
+from onnx import GraphProto
 from qonnx.core.datatype import DataType
+from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.graph.annotations.platform import write_target
+import finn.custom_op.kernels.shell as shell
+from finn.core.graph.annotations.outputs import OUTPUT_IP
+from finn.core.graph.annotations.platform import PLATFORM, write_target
 from finn.core.graph.errors import KernelOpError
-from finn.custom_op.kernels.network import network, persist
-from finn.kernels.members import MemberCache, current
+from finn.core.graph.partition import design_digest
+from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.shell import InShell, in_shell
+from finn.kernels.members import (
+    MemberCache,
+    MemberCacheMismatch,
+    current,
+    member_cache,
+    uncached,
+    verification_counts,
+)
 from finn.platform.resolve import resolve_target
+from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import TARGET, WEIGHTS, kernel_model, matmul_model, open_memories
+from kernel_ops.models import (
+    TARGET,
+    WEIGHTS,
+    configure_partition,
+    kernel_model,
+    matmul_model,
+    open_memories,
+)
+from kernel_ops.tfc import ULTRA96
 
 
 def cache() -> MemberCache:
@@ -119,3 +143,109 @@ def test_a_tensor_read_more_than_once_is_refused_before_any_binding() -> None:
     with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: hidden is read by activate"):
         network(model, model.graph.node, name="chain")
     assert cache().misses == misses
+
+
+def networks(cache: MemberCache) -> tuple[int, int]:
+    return cache.counts["network", "hits"], cache.counts["network", "misses"]
+
+
+def test_a_network_is_kept_by_its_design_and_selection() -> None:
+    model, other = kernel_model(), kernel_model()
+    first = network(model, model.graph.node, name="chain")
+    hits, misses = networks(cache())
+    # The same design, read again (its outputs aside): the network kept.
+    other.set(OUTPUT_IP, "elsewhere")
+    assert network(other, other.graph.node, name="chain") is first
+    assert networks(cache()) == (hits + 1, misses)
+    # Another name, selection or channel choice given is another network.
+    assert network(model, model.graph.node, name="other") is not first
+    assert network(model, model.graph.node[:1], name="chain") is not first
+    assert networks(cache()) == (hits + 1, misses + 2)
+    # A choice persisted changes the design: bound again, the members kept.
+    _, styles = open_memories(first)
+    persist(model, choose(first, dict.fromkeys(styles, "auto")))
+    members = cache().misses
+    assert network(model, model.graph.node, name="chain") is not first
+    assert networks(cache()) == (hits + 1, misses + 3)
+    assert cache().misses == members + len(styles)
+
+
+def test_a_refused_network_is_not_kept() -> None:
+    model = kernel_model()
+    hidden = model.get_tensor_valueinfo("hidden")
+    model.graph.value_info.remove(hidden)
+    model.graph.output.append(hidden)
+    counted, entries = networks(cache()), len(cache().entries)
+    for _ in range(2):
+        with pytest.raises(KernelOpError, match="tensor-fan-out"):
+            network(model, model.graph.node, name="chain")
+    assert networks(cache()) == counted and len(cache().entries) == entries
+
+
+def test_the_verifying_mode_binds_a_network_hit_again() -> None:
+    before = verification_counts()["network hits verified"]
+    model = kernel_model()
+    with member_cache(verify=True) as held:
+        first = network(model, model.graph.node, name="chain")
+        assert network(model, model.graph.node, name="chain") is first
+        assert verification_counts()["network hits verified"] == before + 1
+        # A network kept under another's key is found out.
+        (found,) = [key for key in held.entries if key[0] == "network"]  # type: ignore[index]
+        held.entries[found] = network(model, model.graph.node[:1], name="chain")
+        with pytest.raises(MemberCacheMismatch, match="the member cache's network hit differs"):
+            network(model, model.graph.node, name="chain")
+
+
+def test_a_body_s_inherited_target_is_in_its_network_s_key() -> None:
+    """Two bodies of one design, each opened inside a parent of another target, read
+    their parents' targets: two networks."""
+    bodies = []
+    for parent in (matmul_model(), retargeted(matmul_model())):
+        graph = GraphProto()
+        graph.CopyFrom(parent.graph)
+        clear(graph.metadata_props, PLATFORM)
+        bodies.append(parent.make_subgraph_modelwrapper(graph))
+    assert design_digest(bodies[0]) == design_digest(bodies[1])
+    first, second = (network(body, body.graph.node) for body in bodies)
+    assert first is not second
+    assert first.member("first").platform != second.member("first").platform
+
+
+def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
+    """One body bound in one cache, in the verifying mode, three ways: plain (no ends
+    offered), in Ultra96's shell (its row offers an end) and in a row of the same ends
+    with no static region of its own. Each is its own entry, as it is bound without the
+    cache, and binding each again is its own entry's hit, verified."""
+    model = kernel_model()
+    configure_partition(model)
+    write_target(model, ULTRA96)
+    nodes = list(model.graph.node)
+    row = shell_row("pynq", "Ultra96")
+    bare = replace(row, static_region=None)
+    assert row.ends and row.static_region is not None
+
+    def bound() -> tuple[Partition, InShell, InShell]:
+        plain = network(model, nodes, name="chain")
+        shelled = in_shell(model, nodes, name="chain")
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(shell, "shell_row", lambda *_: bare)
+            stripped = in_shell(model, nodes, name="chain")
+        return plain, shelled, stripped
+
+    with uncached():
+        fresh = bound()
+    before = verification_counts()
+    with member_cache(verify=True) as held:
+        first = bound()
+        assert networks(held) == (0, 3)
+        assert bound() == first
+        assert networks(held) == (3, 3)
+    after = verification_counts()
+    assert after["network hits verified"] == before["network hits verified"] + 3
+    assert after["mismatches"] == before["mismatches"]
+    plain, shelled, stripped = first
+    assert type(plain) is Partition and plain.ends == ()
+    assert shelled.row == row and stripped.row == bare and shelled.ends == stripped.ends
+    resources = [each.own_resources() for each in first]
+    assert len(set(map(repr, resources))) == 3
+    assert resources == [each.own_resources() for each in fresh]
