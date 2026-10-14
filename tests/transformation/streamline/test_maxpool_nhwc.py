@@ -95,3 +95,46 @@ def test_maxpool_nhwc(ifm_dim, ifm_ch, kernel_shape, pads, strides, ceil_mode, i
 
     # compare outputs
     assert (expected == output).all()
+
+
+@pytest.mark.streamline
+@pytest.mark.parametrize("nhwc_input", [False, True])
+def test_maxpool_nhwc_with_a_forking_output(nhwc_input):
+    """A MaxPool whose output feeds a Transpose to NHWC and a second node too: the
+    Transpose is not pulled ahead of the pool, which would leave the second node reading
+    the unpooled tensor. Fed by a Transpose to NCHW (``nhwc_input``), the pool becomes a
+    MaxPoolNHWC ahead of that Transpose, which both branches read."""
+    nhwc = [1, 8, 8, 3]
+    nchw = [1, 3, 8, 8]
+    nodes = []
+    pool_in = "inp"
+    if nhwc_input:
+        nodes.append(oh.make_node("Transpose", ["inp"], ["inp_nchw"], perm=[0, 3, 1, 2]))
+        pool_in = "inp_nchw"
+    nodes += [
+        oh.make_node("MaxPool", [pool_in], ["pooled"], kernel_shape=[2, 2], strides=[2, 2]),
+        oh.make_node("Transpose", ["pooled"], ["outp"], perm=[0, 2, 3, 1]),
+        oh.make_node("Relu", ["pooled"], ["outp2"]),
+    ]
+    graph = oh.make_graph(
+        nodes=nodes,
+        name="maxpool_fork",
+        inputs=[oh.make_tensor_value_info("inp", TensorProto.FLOAT, nhwc if nhwc_input else nchw)],
+        outputs=[
+            oh.make_tensor_value_info("outp", TensorProto.FLOAT, [1, 4, 4, 3]),
+            oh.make_tensor_value_info("outp2", TensorProto.FLOAT, [1, 3, 4, 4]),
+        ],
+    )
+    model = ModelWrapper(qonnx_make_model(graph, producer_name="maxpool_fork"))
+    model = model.transform(InferShapes())
+    idt = DataType["INT4"]
+    input_dict = {"inp": gen_finn_dt_tensor(idt, nhwc if nhwc_input else nchw)}
+    expected = oxe.execute_onnx(model, input_dict)
+
+    transformed = model.transform(MakeMaxPoolNHWC())
+
+    got = oxe.execute_onnx(transformed, input_dict)
+    assert (got["outp"] == expected["outp"]).all()
+    assert (got["outp2"] == expected["outp2"]).all()
+    pools = [n.op_type for n in transformed.graph.node if n.op_type.startswith("MaxPool")]
+    assert pools == (["MaxPoolNHWC"] if nhwc_input else ["MaxPool"])

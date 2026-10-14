@@ -568,7 +568,14 @@ class MakeMaxPoolNHWC(Transformation):
             if n.op_type == "MaxPool":
                 consumer = model.find_consumer(n.output[0])
                 producer = model.find_producer(n.input[0])
-                if consumer is not None and consumer.op_type == "Transpose":
+                # The consumer path rewires one consumer: with the pool's output a fork,
+                # the other branches would read the unpooled tensor. The producer path
+                # keeps every consumer.
+                if (
+                    consumer is not None
+                    and consumer.op_type == "Transpose"
+                    and not model.is_fork_node(n)
+                ):
                     perms = list(get_by_name(consumer.attribute, "perm").ints)
                     if perms == [0, 2, 3, 1]:
                         ceil_mode = get_by_name(n.attribute, "ceil_mode")
@@ -787,6 +794,70 @@ class MoveLinearPastFork(MoveOpPastFork):
 class MoveTransposePastFork(MoveOpPastFork):
     def __init__(self):
         super().__init__(["Transpose"])
+
+
+class MoveTransposePastEltwise(Transformation):
+    """Moves a Transpose past the Add or Mul that follows it when the other input is a
+    constant, transposing the constant by the inverse permutation:
+    transpose(x) + a == transpose(x + transpose(a, inverse)). Opposite Transposes can
+    then meet and cancel (AbsorbConsecutiveTransposes). A constant of lower rank is
+    first given leading unit axes, as broadcasting does, and a constant of all ones is
+    left as it is. A constant that other nodes also read is copied, not changed. A
+    Transpose that forks or joins, and an Add or Mul without a constant input, are left
+    alone (MoveTransposePastFork, MoveTransposePastJoinAdd)."""
+
+    def apply(self, model):
+        graph = model.graph
+        for node in graph.node:
+            if node.op_type != "Transpose":
+                continue
+            if model.is_fork_node(node) or model.is_join_node(node):
+                continue
+            successors = model.find_direct_successors(node)
+            if successors is None or successors[0].op_type not in {"Add", "Mul"}:
+                continue
+            eltwise = successors[0]
+            inp, mid, out = node.input[0], node.output[0], eltwise.output[0]
+            const = eltwise.input[1] if eltwise.input[0] == mid else eltwise.input[0]
+            value = model.get_initializer(const)
+            if value is None:
+                continue
+            perm = get_by_name(node.attribute, "perm")
+            if perm is not None:
+                perm = list(perm.ints)
+            else:
+                in_shape = model.get_tensor_shape(inp)
+                if in_shape is None:
+                    continue
+                perm = list(reversed(range(len(in_shape))))
+            # A constant of higher rank widens the output; the Transpose could not
+            # follow it.
+            if value.ndim > len(perm):
+                continue
+            if any(d != 1 for d in value.shape):
+                value = value.reshape((1,) * (len(perm) - value.ndim) + value.shape)
+                value = value.transpose(np.argsort(perm))
+                if len(model.find_consumers(const)) > 1:
+                    shared = const
+                    const = model.make_new_valueinfo_name()
+                    model.set_tensor_datatype(const, model.get_tensor_datatype(shared))
+                model.set_initializer(const, value)
+            eltwise.input[:] = [inp, const]
+            eltwise.output[0] = mid
+            node.input[0] = mid
+            node.output[0] = out
+            graph.node.remove(node)
+            graph.node.insert(list(graph.node).index(eltwise) + 1, node)
+            # mid now holds the elementwise result before the Transpose: the values of
+            # out, in the input's order.
+            model.set_tensor_shape(mid, None)
+            model.set_tensor_datatype(mid, model.get_tensor_datatype(out))
+            in_layout = model.get_tensor_layout(inp)
+            if in_layout is not None:
+                model.set_tensor_layout(mid, in_layout)
+            model = model.transform(InferShapes())
+            return (model, True)
+        return (model, False)
 
 
 def permute_shape(shape, perm):
@@ -1238,7 +1309,7 @@ class MoveTransposePastJoinAdd(MoveIdenticalOpPastJoinOp):
         first_perm = get_by_name(producers[0].attribute, "perm").ints
         for producer in producers:
             if first_perm != get_by_name(producer.attribute, "perm").ints:
-                False
+                return False
         return True
 
 
@@ -1324,7 +1395,7 @@ class MoveTransposePastJoinConcat(MoveIdenticalOpPastJoinOp):
         first_perm = get_by_name(producers[0].attribute, "perm").ints
         for producer in producers:
             if first_perm != get_by_name(producer.attribute, "perm").ints:
-                False
+                return False
         return True
 
     def move_node(self, model, n, producers):
