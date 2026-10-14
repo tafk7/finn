@@ -228,6 +228,7 @@ def run(
             {},
             pacing=Pacing(outputs=(backpressure,)) if stalled else FREE,
             directory=case_directory / ("stalled" if stalled else "free"),
+            compiled=case_directory / "compiled",
         )
         actual = _unpack(case, measured["outputs"]["out0_V"], result_type.bitwidth())
         if not np.array_equal(actual, expected):

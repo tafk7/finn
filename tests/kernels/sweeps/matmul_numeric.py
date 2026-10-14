@@ -337,6 +337,7 @@ def run(
             observations,
             pacing=OUTPUTS_STALLED if stalled else FREE,
             directory=directory / ("stalled" if stalled else "free"),
+            compiled=directory / "compiled",
             data_files=data_files,
         )
         actual = [word & result_mask for word in measured["outputs"]["out0_V"]]

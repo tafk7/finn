@@ -156,6 +156,7 @@ def run(case: Case, evidence: Path) -> None:
             {},
             pacing=STALLED if stalled else FREE,
             directory=evidence / case.label / ("stalled" if stalled else "free"),
+            compiled=evidence / case.label / "compiled",
             data_files=data,
             registers=configuration,
         )
