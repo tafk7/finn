@@ -367,13 +367,12 @@ class AbsorbTransposeIntoMultiThreshold(Transformation):
                         mt_cand.input[0] = n.input[0]
                         intermediate_tensor_name = model.make_new_valueinfo_name()
                         intermediate_tensor_shape = model.get_tensor_shape(n.input[0])
-                        intermediate_tensor_finn_dtype = model.get_tensor_datatype(
-                            mt_cand.output[0]
-                        )
                         model.set_tensor_shape(intermediate_tensor_name, intermediate_tensor_shape)
                         model.set_tensor_layout(intermediate_tensor_name, DataLayout.NHWC)
                         model.set_tensor_datatype(
-                            intermediate_tensor_name, intermediate_tensor_finn_dtype
+                            intermediate_tensor_name,
+                            model.get_tensor_datatype(mt_cand_orig_output),
+                            model.get_tensor_range(mt_cand_orig_output),
                         )
                         mt_cand.output[0] = intermediate_tensor_name
                         graph.node.remove(n)

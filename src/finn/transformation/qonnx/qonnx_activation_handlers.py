@@ -287,7 +287,10 @@ class QuantActBaseHandler(ABC):
                     mul_shape,
                 )
                 graph.value_info.append(mul_tensor)
-                model.set_initializer(mul_tensor.name, mul_scale)
+                # Float32, as declared: a 1-bit Quant's doubled scale comes out float64.
+                model.set_initializer(
+                    mul_tensor.name, np.asarray(mul_scale, dtype=np_default_dtype)
+                )
 
                 output_shape = model.get_tensor_shape(n.output[0])
                 act_mul_tensor = helper.make_tensor_value_info(
@@ -349,7 +352,16 @@ class QuantReluHandler(QuantActBaseHandler):
                         "for Relu activations.",
                     )
         elif self._q_node.op_type == "BipolarQuant":
-            return
+            # A BipolarQuant gives its scale for every input >= 0, so after a Relu it is a
+            # constant: only a threshold of -inf over the Relu's input computes it.
+            act_node = self._model.find_direct_predecessors(self._q_node)[0]
+            if act_node.op_type == "Relu":
+                raise refused(
+                    "relu-bipolar-quant",
+                    self._q_node,
+                    "A BipolarQuant after a Relu gives its scale for every input, a "
+                    "constant that no MultiThreshold with finite thresholds computes.",
+                )
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
 
@@ -400,6 +412,10 @@ class QuantReluHandler(QuantActBaseHandler):
                 for t in range(num_thresholds):
                     thresholds[c][t] = min_threshold[c] + step[c] * t
 
+        elif self._q_node.op_type == "BipolarQuant":
+            # After a Selu, whose sign is its input's: the one threshold is 0.
+            thresholds = np.zeros((1, 1), dtype=np.float64)
+
         elif act_node.op_type == "Selu":
             q_inst = getCustomOp(self._q_node)
             narrow = q_inst.get_nodeattr("narrow")
@@ -444,8 +460,10 @@ class QuantReluHandler(QuantActBaseHandler):
 
     def _calculate_act_scale(self):
         quant_scale = self._model.get_initializer(self._q_node.input[1])
-        scale = quant_scale
-        return scale
+        if self._q_node.op_type == "BipolarQuant":
+            # The MultiThreshold's 0 and 1, less the bias 0.5, times this: -scale and scale.
+            return quant_scale * np.float32(2)
+        return quant_scale
 
     def _remove_activation_node(self, multi_threshold_node):
         act_node = self._model.find_direct_predecessors(self._q_node)

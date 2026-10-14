@@ -22,16 +22,25 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pytest
 from kernels.xsim import requires_xsim
+from onnx import TensorProto, helper
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.ranges import TensorRange
 
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_resources import built_reports
 from finn.builder.build_dataflow_steps import step_package_partition
-from finn.builder.build_dataflow_testbench import RUN_SCRIPT, TESTBENCH_DIR, run_testbench
+from finn.builder.build_dataflow_testbench import (
+    RUN_SCRIPT,
+    TESTBENCH_DIR,
+    generated_frame,
+    run_testbench,
+)
 from finn.core.graph.annotations.choices import FIFOS_STALE
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.errors import KernelOpError
@@ -114,6 +123,19 @@ def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> N
         (stream["name"], stream["tensor"], stream["beats"], stream["order"]["passes"])
         for stream in described["streams"]
     ] == [("s_axis_0", "x", 6, 1), ("s_axis_1", "w2", 12, 3), ("m_axis_0", "y", 6, 1)]
+
+
+def test_the_frame_draws_each_input_from_its_range() -> None:
+    """An input stating a range is drawn from it; one stating none, from its datatype's."""
+    inputs = [helper.make_tensor_value_info(name, TensorProto.FLOAT, [1, 512]) for name in "ab"]
+    out = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 512])
+    graph = helper.make_graph([helper.make_node("Add", ["a", "b"], ["y"])], "g", inputs, [out])
+    body = ModelWrapper(helper.make_model(graph))
+    body.set_tensor_datatype("a", DataType["INT8"], TensorRange(-3, 2))
+    body.set_tensor_datatype("b", DataType["UINT4"])
+    frame = generated_frame(body)
+    assert set(np.unique(frame["a"]).tolist()) == set(range(-3, 3))
+    assert set(np.unique(frame["b"]).tolist()) == set(range(16))
 
 
 #: Vivado's hierarchical utilization table, an UltraScale+ part (its columns, Vivado

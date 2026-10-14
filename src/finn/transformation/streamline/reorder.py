@@ -851,7 +851,9 @@ class MoveTransposePastEltwise(Transformation):
             # mid now holds the elementwise result before the Transpose: the values of
             # out, in the input's order.
             model.set_tensor_shape(mid, None)
-            model.set_tensor_datatype(mid, model.get_tensor_datatype(out))
+            model.set_tensor_datatype(
+                mid, model.get_tensor_datatype(out), model.get_tensor_range(out)
+            )
             in_layout = model.get_tensor_layout(inp)
             if in_layout is not None:
                 model.set_tensor_layout(mid, in_layout)
@@ -896,7 +898,9 @@ class MoveScalarLinearPastSplit(Transformation):
                         new_mul_node = deepcopy(producer)
                         new_split_output = model.make_new_valueinfo_name()
                         model.set_tensor_datatype(
-                            new_split_output, model.get_tensor_datatype(producer.input[0])
+                            new_split_output,
+                            model.get_tensor_datatype(producer.input[0]),
+                            model.get_tensor_range(producer.input[0]),
                         )
 
                         model.set_tensor_shape(
@@ -943,7 +947,9 @@ class MoveTransposePastSplit(Transformation):
                         new_split_output = model.make_new_valueinfo_name()
                         old_split_output_shape = model.get_tensor_shape(old_split_output)
                         model.set_tensor_datatype(
-                            new_split_output, model.get_tensor_datatype(producer.input[0])
+                            new_split_output,
+                            model.get_tensor_datatype(producer.input[0]),
+                            model.get_tensor_range(producer.input[0]),
                         )
 
                         model.set_tensor_shape(

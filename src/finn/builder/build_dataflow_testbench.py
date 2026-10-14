@@ -29,7 +29,7 @@ directory's own paths.
 The words are the partition's boundary values as each boundary channel's end presents
 them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
 each beat's elements, packed with lane zero lowest. The build's frame draws each of the
-partition's inputs from its datatype (``generated_frame``).
+partition's inputs from its range (``generated_frame``).
 """
 
 from __future__ import annotations
@@ -89,10 +89,10 @@ def boundary_words(
 
 
 def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]]:
-    """One frame of the partition's inputs, each drawn uniformly (seeded) from its
-    datatype's integers, as int64: FINN executes the body on integers as they are
-    (``finn.core.onnx_exec``). An input that is not an integer is refused
-    (``input-not-integer``)."""
+    """One frame of the partition's inputs, each drawn uniformly (seeded) from the
+    integers of its range (its datatype's where it states none), as int64: FINN executes
+    the body on integers as they are (``finn.core.onnx_exec``). An input that is not an
+    integer is refused (``input-not-integer``)."""
     rng = np.random.default_rng(seed)
     frame: dict[str, NDArray[Any]] = {}
     for name in graph_inputs(body):
@@ -105,7 +105,8 @@ def generated_frame(body: ModelWrapper, seed: int = 0) -> dict[str, NDArray[Any]
             )
             raise Refusal((refused,))
         shape = body.get_tensor_shape(name)
-        low, high = int(datatype.min()), int(datatype.max())
+        stated = body.get_tensor_range(name)
+        low, high = int(stated.least), int(stated.greatest)
         frame[name] = rng.integers(low, high + 1, size=shape, dtype=np.int64)
     return frame
 
