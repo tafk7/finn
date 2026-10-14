@@ -56,7 +56,7 @@ from finn.builder.build_dataflow_steps import (
     build_dataflow_step_lookup,
     default_steps,
 )
-from finn.core.reporting.findings import Finding, FindingKind, Refusal, by_code
+from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.reporting.log import FILE_ONLY, running_step
 from finn.core.reporting.manifest import note, recorded_run
 from finn.platform.refusal import TargetRefused
@@ -90,15 +90,16 @@ def _failure_kind(error: BaseException) -> str:
 
 
 def _log_failure(step: str, error: BaseException) -> str:
-    """Log a failed step's error by its kind, and return the kind. The traceback goes to
+    """Log a failed step's error by its kind, and return the kind. A refusal is logged
+    one line per finding, without its message (those same lines). The traceback goes to
     the log file, and for a bug to the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
     if isinstance(error, Refusal):
         findings = error.findings
-        _LOG.error("%s refused: %d findings: %s: %s", step, len(findings), name, error)
-        for line in by_code(findings):
-            _LOG.error("  %s", line)
+        _LOG.error("%s refused: %d findings (%s)", step, len(findings), name)
+        for finding in findings:
+            _LOG.error("  %s", finding)
     elif kind != "bug":
         _LOG.error("%s: %s: %s", step, name, error)
     else:
