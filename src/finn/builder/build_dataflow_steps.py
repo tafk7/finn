@@ -429,12 +429,14 @@ def step_build_bitfile(
 ) -> ModelWrapper:
     """Build the target's shell around the partition to a bitfile in the output
     directory; only the pynq shell has a bitfile build, and on another this step is
-    refused. The shell's build packages the partition itself unless step_package_partition
-    packaged it from its design as it is. Refuses a partition built for another target
-    than the configuration's. The model records the bitfile and its hardware handoff,
-    what it was built from and with which options; the build's reports are collected
-    under report/. A shortfall of the delivered clock is noted as a warning, against the
-    throughput step_target_throughput folded to, where the partition's body records one.
+    refused. The shell's build packages the partition itself unless the IP
+    step_package_partition packaged has the key the partition has now (its sources and
+    package.tcl, Vivado and run_synth; package.ip_key). Refuses a partition built for
+    another target than the configuration's. The model records the bitfile and its
+    hardware handoff, what it was built from (the design and the IP) and with which
+    options; the build's reports are collected under report/. A shortfall of the
+    delivered clock is noted as a warning, against the throughput step_target_throughput
+    folded to, where the partition's body records one.
 
     ``hw_debug``: insert integrated logic analyzers on the ends' streams."""
     _refuse_shell(cfg, "step_build_bitfile")
@@ -459,8 +461,9 @@ def step_make_driver(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
     """Write the PYNQ driver into driver/ and its description into report/driver.json.
     The driver sets PL0 to the clock the bitfile delivers, and loads the build's bitfile
     by default: step_build_bitfile comes before it. Refuses a shell without a bitfile
-    build, a missing bitfile, one built from another design than the current partition,
-    and a partition built for another target than the configuration's."""
+    build, a missing bitfile, one built from another design than the current partition or
+    from another IP than its body states, and a partition built for another target than
+    the configuration's."""
     _refuse_shell(cfg, "step_make_driver")
     _refuse_drift(model, cfg, "pynq_driver")
     making = MakePynqDriver(Path(cfg.output_dir))
@@ -483,8 +486,8 @@ def step_deployment_package(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mo
     into deploy/, written afresh. Ships what this output directory's own steps made
     (step_build_bitfile and step_make_driver come before it): refuses a shell without a
     bitfile build, a missing or foreign bitfile or driver, one made from another design
-    than the current partition, and a partition built for another target than the
-    configuration's."""
+    than the current partition or for another IP than its body states, and a partition
+    built for another target than the configuration's."""
     _refuse_shell(cfg, "step_deployment_package")
     _refuse_drift(model, cfg, "deployment_package")
     return model.transform(MakePynqDeployment(Path(cfg.output_dir)))
@@ -494,7 +497,8 @@ def step_resources_report(model: ModelWrapper, cfg: DataflowBuildConfig) -> Mode
     """Write report/resources.json: the resources of each member of the shell and their
     total, as modelled, as synthesized out of context and as placed, from the reports
     the steps before it made. A column the build did not make is marked absent."""
-    stated = shell_resources_report(model, built_reports(model))
+    toolchain = cfg.step_toolchain("step_resources_report")
+    stated = shell_resources_report(model, built_reports(model, toolchain=toolchain))
     report = Path(cfg.output_dir) / RESOURCES_FILE
     write_report(report, stated)
     absent = ", ".join(f"{column} ({why})" for column, why in stated["absent"].items())

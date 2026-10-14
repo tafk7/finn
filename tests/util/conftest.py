@@ -8,8 +8,8 @@ from pathlib import Path
 
 #: Vivado, xelab, Vitis HLS and vitis-run in one script: each notes its name in
 #: the calls.log beside it and leaves what its caller checks for. Vivado answers
-#: its version probe; xelab leaves a simulation library; the HLS frontends an IP
-#: and its Verilog.
+#: its version probe; xelab leaves a simulation library; the HLS frontends a
+#: solution's exported Verilog, reports and IP.
 FAKE_TOOL = """
 import os, sys
 tool = os.path.basename(sys.argv[0])
@@ -25,11 +25,9 @@ elif tool == "xelab":
     os.makedirs(f"xsim.dir/{top}")
     open(f"xsim.dir/{top}/xsimk.so", "w").close()
 elif tool in ("vitis_hls", "vitis-run"):
-    script = args[args.index("--tcl") + 1] if "--tcl" in args else args[1]
-    name = os.path.basename(script)[len("hls_syn_") : -len(".tcl")]
-    os.makedirs(f"project_{name}/sol1/impl/ip")
-    os.makedirs(f"project_{name}/sol1/impl/verilog")
-    open(f"project_{name}/sol1/impl/verilog/{name}.v", "w").close()
+    for made in ("syn/verilog", "syn/report", "impl/ip"):
+        os.makedirs(f"project/sol1/{made}")
+    open("project/sol1/syn/verilog/top.v", "w").close()
 """
 
 

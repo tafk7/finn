@@ -28,31 +28,31 @@
 
 
 """What FINN knows of HLS: its frontends and installation, the command that runs a
-script, the pynq shell's ``CallHLS``, and the kernel system's ``synthesize``.
+script, and ``synthesize``, which every HLS synthesis goes through: the kernel system's
+HLS leaves and the pynq shell's IODMAs.
 
 A selection names its frontend (``FRONTENDS``; the machine's comes from
 ``host_frontend``), and ``command`` refuses one that does not match its probed release.
 ``installation`` is where the HLS C++ headers and C simulation libraries are.
 
-``CallHLS`` runs an IODMA's generated Tcl script where the pynq shell's IP generation
-wrote it (``finn.shells.pynq.iodma``), with ``ipgen.sh`` as its replay script. Its
-transcript is ``Toolchain.run``'s: in a build, in the step's log directory; else beside
-``ipgen.sh``.
-
 HLS prints messages in the form Vivado's tools use (``SEVERITY: [HLS N-M] text``), so
 both read them with ``finn.toolchain.vivado.messages``.
 
-``synthesize`` builds a staged HLS request (``finn.kernels.artifacts.hls``: a directory
-holding ``script.tcl``, the top and its headers, by relative paths) for one part with
-the toolchain's HLS frontend, and caches the product under ``$FINN_HOME/hls``
-(``hls_cache``) the way the resource store does (``finn.resources``). The product is
-built in a temporary directory beside the entry, marked with its full key and renamed
-into place under the entry's lock, so a failed or concurrent build never publishes a
-partial product, and a second caller waits for the first. The key is the request's
-content, the part and the HLS installation (``finn.toolchain.launcher.identity`` of the
+``synthesize`` builds a staged HLS request (a directory holding ``script.tcl`` and the
+files it reads, by relative paths: ``finn.kernels.artifacts.hls`` stages a leaf's, the
+pynq shell's IODMA writes its own) for one part with the toolchain's HLS frontend, and
+caches the product under ``$FINN_HOME/hls`` (``hls_cache``) the way the resource store
+does (``finn.resources``). The script reads the part from the Tcl variable ``part``, and
+each library it reads in place (finn-hlslib, for an IODMA) from a variable of the
+library's name. The product is built in a temporary directory beside the entry, marked
+with its full key and renamed into place under the entry's lock, so a failed or
+concurrent build never publishes a partial product, and a second caller waits for the
+first. The key is the request's content, the part, each library's content (never its
+location) and the HLS installation (``finn.toolchain.launcher.identity`` of the
 frontend); a cache hit runs nothing. A product (``HlsProduct``) holds the exported
 Verilog with its memory images (``verilog/``), the synthesis reports (``report/``), the
-request it was built from (``request/``), and the run's replay script with its
+IP a script exports into the IP catalog (``ip/``, ``export_design -format ip_catalog``),
+the request it was built from (``request/``), and the run's replay script with its
 transcript (``synthesize.sh``, ``.stdout.log``, ``.stderr.log``). The transcript stays
 with the product even in a build, since every build shares the product. A failed build
 is kept beside the entry (``<entry>.failed``), and the ``ToolFailed`` it raises names
@@ -65,7 +65,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -185,9 +184,13 @@ def hls_cache() -> Path:
     return home() / "hls"
 
 
-def synthesis_key(request: Path, part: str, identity: str) -> str:
-    """The key of a request's product: its staged content, the part and the HLS tool."""
-    preimage = "\0".join(("hls-synthesis-v1", tree_digest(request), part, identity))
+def synthesis_key(
+    request: Path, part: str, identity: str, libraries: Mapping[str, Path] | None = None
+) -> str:
+    """The key of a request's product: its staged content, the part, the HLS tool and
+    each library's content, by its name."""
+    read = [f"{name}={tree_digest(path)}" for name, path in sorted((libraries or {}).items())]
+    preimage = "\0".join(("hls-synthesis-v1", tree_digest(request), part, identity, *read))
     return hashlib.sha256(preimage.encode()).hexdigest()
 
 
@@ -207,6 +210,11 @@ class HlsProduct:
         """The synthesis reports (``csynth.xml``, ``<top>_csynth.xml``, ...)."""
         return self.directory / "report"
 
+    @property
+    def ip(self) -> Path:
+        """The IP the script exported into the IP catalog; none unless it exported one."""
+        return self.directory / "ip"
+
 
 def _exported(work: Path) -> Path | None:
     """The one solution's ``syn`` directory below the run's directory; None unless
@@ -222,18 +230,21 @@ def synthesize(
     name: str,
     toolchain: Toolchain,
     cache: Path | None = None,
+    libraries: Mapping[str, Path] | None = None,
 ) -> HlsProduct:
     """The product of the staged ``request`` for ``part``, synthesized unless cached.
 
     ``name`` names the entry, ``<name>-<key16>`` under ``cache`` (``hls_cache()`` by
-    default); ``toolchain`` runs the frontend. Raises
+    default); ``toolchain`` runs the frontend; ``libraries`` are the directories the
+    script reads in place, each by a Tcl variable of its name. Raises
     ``ToolFailed`` when the tool fails or leaves no exported RTL, ``ToolUnavailable``
     when the toolchain has no HLS installation or frontend to run."""
     cache = hls_cache() if cache is None else cache
+    libraries = dict(libraries or {})
     if not (Path(request) / REQUEST_SCRIPT).is_file():
         raise ValueError(f"{request} holds no {REQUEST_SCRIPT}: it is not a staged request")
     key = synthesis_key(
-        Path(request), part, launcher.identity(toolchain, selected_frontend(toolchain))
+        Path(request), part, launcher.identity(toolchain, selected_frontend(toolchain)), libraries
     )
     entry_name = f"{name}-{key[:16]}"
     with locked(cache, entry_name) as entry:
@@ -242,7 +253,7 @@ def synthesize(
         work = Path(tempfile.mkdtemp(dir=cache, prefix=f".{entry_name}."))
         failed = cache / f"{entry_name}.failed"
         try:
-            _build(Path(request), part, work, toolchain, kept=failed)
+            _build(Path(request), part, libraries, work, toolchain, kept=failed)
         except BaseException:
             shutil.rmtree(failed, ignore_errors=True)
             work.rename(failed)
@@ -251,13 +262,25 @@ def synthesize(
     return HlsProduct(entry)
 
 
-def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: Path) -> None:
+def _build(
+    request: Path,
+    part: str,
+    libraries: Mapping[str, Path],
+    work: Path,
+    toolchain: Toolchain,
+    *,
+    kept: Path,
+) -> None:
     """Run the request in ``work/request`` and collect its product into ``work``; a
     failure names the build where it is ``kept`` (``work``, once moved there)."""
     run = work / "request"
     shutil.copytree(request, run)
     driver = run / "synthesize.tcl"
-    driver.write_text(f"set part {{{part}}}\nsource {REQUEST_SCRIPT}\n")
+    variables = {"part": part, **{name: str(path) for name, path in libraries.items()}}
+    driver.write_text(
+        "".join(f"set {name} {{{value}}}\n" for name, value in variables.items())
+        + f"source {REQUEST_SCRIPT}\n"
+    )
     frontend, args = command(toolchain, driver.name)
     replay = work / "synthesize.sh"
     # The transcript is the product's, beside its replay, in a build too: the product
@@ -299,39 +322,9 @@ def _build(request: Path, part: str, work: Path, toolchain: Toolchain, *, kept: 
     )
     shutil.copytree(syn / "verilog", work / "verilog")
     shutil.copytree(syn / "report", work / "report")
+    if (syn.parent / "impl" / "ip").is_dir():
+        shutil.copytree(syn.parent / "impl" / "ip", work / "ip")
     # The request alone stays: the project's intermediate files are the tool's.
     for item in run.iterdir():
         if item.is_dir() and any(item.glob("*/syn")):
             shutil.rmtree(item)
-
-
-class CallHLS:
-    """Run HLS build Tcl scripts with the frontend ``toolchain`` selects, in that
-    toolchain's environment."""
-
-    def __init__(self, toolchain: Toolchain):
-        self.toolchain = toolchain
-        self.tcl_script = ""
-        self.ipgen_path = ""
-        self.code_gen_dir = ""
-        self.ipgen_script = ""
-
-    def append_tcl(self, tcl_script):
-        self.tcl_script = tcl_script
-
-    def set_ipgen_path(self, path):
-        self.ipgen_path = path
-
-    def build(self, code_gen_dir):
-        toolchain = self.toolchain
-        self.code_gen_dir = os.path.abspath(code_gen_dir)
-        frontend, args = command(toolchain, self.tcl_script)
-        self.ipgen_script = str(Path(self.code_gen_dir) / "ipgen.sh")
-        # The replay requires the selected tool's environment, but holds neither
-        # secrets nor an environment snapshot. What the tool prints is its transcript
-        # (Toolchain.run), not this process's output.
-        result = toolchain.run(
-            frontend, args, cwd=self.code_gen_dir, check=False, replay=self.ipgen_script
-        )
-        if result.returncode != 0:
-            raise launcher.ToolFailed.of_run(frontend, result, what=f"{self.tcl_script}")

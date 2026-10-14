@@ -15,6 +15,13 @@ cell and its interface names. It generates the code that op generates, byte for 
 IODMA becomes an HLS kernel. Each end's IP is generated from a scratch model of one node
 of this op (``runner.iodma_model``, ``ipgen``).
 
+The code and the script are a staged HLS request (``request/`` in the node's code
+generation directory), synthesized through the HLS cache
+(``finn.toolchain.hls.synthesize``): the script names its directory by a relative path,
+and reads the part and finn-hlslib's location from Tcl variables, so the request is the
+same in every build directory and for every part, and the cache's key holds the part
+and finn-hlslib's content. The build's copy of the exported IP is its own.
+
 qonnx resolves this domain by importing it and reads its op classes from ``__all__``.
 """
 
@@ -22,7 +29,8 @@ from __future__ import annotations
 
 import logging
 import math
-import os
+import shutil
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -33,9 +41,11 @@ from qonnx.util.basic import roundup_to_integer_multiple
 
 from finn import resources
 from finn.shells.pynq import templates
-from finn.toolchain.hls import CallHLS
+from finn.toolchain.hls import synthesize
 from finn.toolchain.launcher import Toolchain
-from finn.toolchain.vivado import tcl_quote
+
+#: The staged HLS request's directory, in the node's code generation directory.
+REQUEST_DIR = "request"
 
 opset_version = 1
 
@@ -336,9 +346,12 @@ class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
             raise ValueError("Invalid IODMA direction, please set to in or out")
         self.code_gen_dict["$PRAGMAS$"].append("#pragma HLS DATAFLOW")
 
-    def code_generation_ipgen(self, model: ModelWrapper, fpgapart: str, clk: float) -> None:
-        """Generates c++ code and tcl script for ip generation."""
+    def code_generation_ipgen(self, model: ModelWrapper, clk: float) -> None:
+        """The HLS top and its Vitis HLS script for a clock of ``clk`` ns, staged as an
+        HLS request in ``request/`` of the node's code generation directory."""
         node = self.onnx_node
+        request = Path(self.get_nodeattr("code_gen_dir_ipgen")) / REQUEST_DIR
+        request.mkdir(parents=True, exist_ok=True)
 
         # generate top cpp file for ip generation
         self.code_gen_dict["$AP_INT_MAX_W$"] = [str(self.get_ap_int_max_w())]
@@ -354,30 +367,26 @@ class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
             # transform list into long string separated by '\n'
             code_gen_line = "\n".join(self.code_gen_dict[key])
             template = template.replace(key, code_gen_line)
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        with open(os.path.join(code_gen_dir, "top_{}.cpp".format(node.name)), "w") as f:
-            f.write(template)
+        (request / "top_{}.cpp".format(node.name)).write_text(template)
         self.code_gen_dict.clear()
 
-        # generate tcl script for ip generation
+        # The script reads the part and finn-hlslib's location from the variables the
+        # synthesis sets (finn.toolchain.hls.synthesize).
         self.code_gen_dict["$PROJECTNAME$"] = ["project_{}".format(node.name)]
-        self.code_gen_dict["$HWSRCDIR$"] = [code_gen_dir]
-        self.code_gen_dict["$FPGAPART$"] = [fpgapart]
+        self.code_gen_dict["$HWSRCDIR$"] = ["."]
+        self.code_gen_dict["$FPGAPART$"] = ["$part"]
+        self.code_gen_dict["$HLSLIB$"] = ["$hlslib"]
         self.code_gen_dict["$TOPFXN$"] = [node.name]
         self.code_gen_dict["$CLKPERIOD$"] = [str(clk)]
         self.code_gen_dict["$DEFAULT_DIRECTIVES$"] = self.ipgen_default_directives()
         self.code_gen_dict["$EXTRA_DIRECTIVES$"] = []
 
-        template = templates.ipgentcl_template.replace(
-            "$HLSLIB$", tcl_quote(resources.path("hlslib"))[1:-1]
-        )
-
+        template = templates.ipgentcl_template
         for key in self.code_gen_dict:
             # transform list into long string separated by '\n'
             code_gen_line = "\n".join(self.code_gen_dict[key])
             template = template.replace(key, code_gen_line)
-        with open(os.path.join(code_gen_dir, "hls_syn_{}.tcl".format(node.name)), "w") as f:
-            f.write(template)
+        (request / "script.tcl").write_text(template)
         self.code_gen_dict.clear()
 
     def ipgen_default_directives(self) -> list[str]:
@@ -392,24 +401,29 @@ class IODMA_hls(CustomOp):  # noqa: N801 (the op type, as the HWCustomOp flow's)
         ]
         return default_directives
 
-    def ipgen_singlenode_code(self, *, toolchain: Toolchain) -> None:
-        """Builds the bash script for IP generation using the CallHLS utility, and runs
-        it in ``toolchain``."""
+    def ipgen_singlenode_code(self, fpgapart: str, *, toolchain: Toolchain) -> None:
+        """The IODMA's IP for ``fpgapart``: its staged request synthesized by HLS in
+        ``toolchain`` unless the HLS cache holds it, and the exported IP copied to
+        ``project_<node>/sol1/impl/ip`` in the node's code generation directory, where the
+        HWCustomOp flow's HLS run left it."""
         node = self.onnx_node
-        code_gen_dir = self.get_nodeattr("code_gen_dir_ipgen")
-        builder = CallHLS(toolchain=toolchain)
-        builder.append_tcl(code_gen_dir + "/hls_syn_{}.tcl".format(node.name))
-        builder.set_ipgen_path(code_gen_dir + "/project_{}".format(node.name))
-        builder.build(code_gen_dir)
-        ipgen_path = builder.ipgen_path
-        assert os.path.isdir(ipgen_path), "IPGen failed: %s not found" % (ipgen_path)
-        self.set_nodeattr("ipgen_path", ipgen_path)
-        ip_path = ipgen_path + "/sol1/impl/ip"
-        assert os.path.isdir(ip_path), "IPGen failed: %s not found. Check log under %s" % (
-            ip_path,
-            code_gen_dir,
+        code_gen_dir = Path(self.get_nodeattr("code_gen_dir_ipgen"))
+        product = synthesize(
+            code_gen_dir / REQUEST_DIR,
+            fpgapart,
+            name=node.name,
+            toolchain=toolchain,
+            libraries={"hlslib": Path(resources.path("hlslib"))},
         )
-        self.set_nodeattr("ip_path", ip_path)
+        if not product.ip.is_dir():
+            raise RuntimeError(f"{node.name}: its HLS product exports no IP ({product.directory})")
+        ipgen_path = code_gen_dir / "project_{}".format(node.name)
+        ip_path = ipgen_path / "sol1" / "impl" / "ip"
+        shutil.rmtree(ipgen_path, ignore_errors=True)
+        # A copy, not the cache's files: the stitched IP's generation rewrites its Verilog.
+        shutil.copytree(product.ip, ip_path)
+        self.set_nodeattr("ipgen_path", str(ipgen_path))
+        self.set_nodeattr("ip_path", str(ip_path))
         vlnv = "xilinx.com:hls:%s:1.0" % node.name
         self.set_nodeattr("ip_vlnv", vlnv)
 

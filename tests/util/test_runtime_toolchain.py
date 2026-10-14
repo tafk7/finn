@@ -13,7 +13,6 @@ import time
 from pathlib import Path
 
 from finn.toolchain import hls
-from finn.toolchain.hls import CallHLS
 from finn.toolchain.launcher import (
     Selection,
     Toolchain,
@@ -287,23 +286,30 @@ def test_hls_build_uses_selected_frontend(tmp_path, frontend, version):
         "import json,os,sys\n"
         f'if "-version" in sys.argv or "--version" in sys.argv: print("AMD {version}")\n'
         'elif "--help" in sys.argv: print("--mode hls")\n'
-        'else: open("operation.json", "w").write(json.dumps(sys.argv[1:]))\n',
+        "else:\n"
+        '    open("operation.json", "w").write(json.dumps(sys.argv[1:]))\n'
+        '    os.makedirs("project/sol1/syn/verilog")\n'
+        '    os.makedirs("project/sol1/syn/report")\n',
     )
-    tc = Selection(command_dir=str(tmp_path), hls_frontend=frontend).prepare({})
-    build = tmp_path / "build with spaces"
-    build.mkdir()
+    (tmp_path / "hls").mkdir()
+    tc = Selection(command_dir=str(tmp_path), hls_frontend=frontend).prepare(
+        {"XILINX_HLS": str(tmp_path / "hls")}
+    )
+    request = tmp_path / "request"
+    request.mkdir()
+    (request / "script.tcl").write_text("exit\n")
     cwd = os.getcwd()
-    caller = CallHLS(tc)
-    caller.append_tcl("source with spaces.tcl")
-    caller.build(str(build))
-    assert os.getcwd() == cwd
-    args = json.loads((build / "operation.json").read_text())
-    assert args == (
-        ["--mode", "hls", "--tcl", "source with spaces.tcl"]
-        if frontend == "vitis-run"
-        else ["-f", "source with spaces.tcl"]
+    product = hls.synthesize(
+        request, "xc7z020clg400-1", name="top", toolchain=tc, cache=tmp_path / "with spaces"
     )
-    assert "$FINN_ROOT" not in Path(caller.ipgen_script).read_text()
+    assert os.getcwd() == cwd
+    args = json.loads((product.directory / "request" / "operation.json").read_text())
+    assert args == (
+        ["--mode", "hls", "--tcl", "synthesize.tcl"]
+        if frontend == "vitis-run"
+        else ["-f", "synthesize.tcl"]
+    )
+    assert "$FINN_ROOT" not in (product.directory / "synthesize.sh").read_text()
 
 
 def test_frontend_availability_does_not_override_compatibility(tmp_path):

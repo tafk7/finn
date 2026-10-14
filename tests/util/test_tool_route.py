@@ -29,7 +29,6 @@ from finn.shells.pynq import ipgen
 from finn.shells.pynq.iodma import IODMA_hls
 from finn.shells.pynq.runner import BuildPynqBitfile, build_pynq
 from finn.toolchain import hls, launcher
-from finn.toolchain.hls import CallHLS
 from finn.toolchain.launcher import Selection, host_selection, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.transformation.kernels.package import ElaboratePartition, PackagePartition
@@ -106,17 +105,17 @@ HLS_CALLS = {"2024.2": ["vitis_hls"] * 2, "2025.2": ["vitis-run"] * 3}
 def test_hls_synthesis_runs_the_machine_releases_frontend_under_the_site_directory(
     fake_tools, monkeypatch, tmp_path, version
 ):
-    """CallHLS given the machine's toolchain, as the pynq shell's build gives it: the
+    """HLS synthesis given the machine's toolchain, as the pynq shell's build gives it: the
     frontend the machine's release names, from the site directory."""
     site = fake_tools("site", machine=True)
     monkeypatch.setenv("FINN_XILINX_ENV", "")
     monkeypatch.setenv("FINN_XILINX_VERSION", version)
-    build = tmp_path / "iodma"
-    build.mkdir()
-    (build / "hls_syn_idma0.tcl").write_text("exit\n")
-    caller = CallHLS(host_toolchain())
-    caller.append_tcl(str(build / "hls_syn_idma0.tcl"))
-    caller.build(str(build))
+    request = tmp_path / "iodma"
+    request.mkdir()
+    (request / "script.tcl").write_text("exit\n")
+    hls.synthesize(
+        request, "xc7z020clg400-1", name="idma0", toolchain=host_toolchain(), cache=tmp_path / "c"
+    )
     assert site.calls == HLS_CALLS[version]
 
 
@@ -130,7 +129,6 @@ DRIVERS = [
     rtlsim_bench.stream_out,
     rtlsim_bench.measure,
     hls.synthesize,
-    CallHLS,
     built_hls,
     ipgen.hls_synth_ip,
     ipgen.create_stitched_ip,
@@ -158,7 +156,7 @@ def test_a_function_that_runs_a_tool_requires_a_toolchain(driver):
 def test_a_driver_called_without_a_toolchain_is_refused_by_name(tmp_path):
     for call in (
         lambda: rtlsim_bench.simulate([], "", tmp_path),
-        lambda: CallHLS(),
+        lambda: hls.synthesize(tmp_path, "", name=""),
         lambda: xsi_compile.get_simkernel_so(),
         lambda: xsi_setup.ensure_built(),
     ):

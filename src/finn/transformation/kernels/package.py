@@ -9,7 +9,9 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
 
 - an IP at ``<vivado_stitch_proj>/ip``, self-contained (its sources and data
   files imported), named after the partition node: Vitis and SLASH take the
-  IP's name as the kernel type;
+  IP's name as the kernel type. Vivado packages it in the packaged-IP store
+  (``finn.toolchain.ip``), unless the store holds it already, and the stored
+  project is copied into the build's directory;
 - its bus interfaces declared from the module's ABI, none left to Vivado's
   inference: ``ap_clk``, ``ap_clk2x`` when an instance is pumped, ``ap_rst_n``,
   each boundary channel's AXI-Stream ``s_axis_<i>``/``m_axis_<j>``, each presented AXI-Lite
@@ -17,9 +19,16 @@ the shells (MakeZYNQProject; CreateVitisXO and VitisLink; SlashLink):
   a ``register`` block);
 - on the partition model, its directory, VLNV and interface names, typed
   (``finn.outputs``: ``OUTPUT_IP``, ``OUTPUT_VLNV``, ``OUTPUT_INTERFACES``), as the
-  shells read them, and the digest of the design it was made from (``OUTPUT_MADE_FROM``,
-  ``design_digest`` of the partition model): a shell reuses the IP only while the
-  partition's digest is still that one.
+  shells read them, its key and the options it was packaged with (``OUTPUT_IP_KEY``,
+  ``OUTPUT_IP_OPTIONS``): a shell reuses the IP only while the key the partition has now
+  (``ip_key``) is still that one.
+
+The key is the store's (``finn.toolchain.ip.packaging_key``): the project as Vivado is
+given it (``staged_project``: the emitted sources and ``package.tcl``, whose IP name,
+part and clock are inside it), Vivado's identity and ``run_synth``. So FinnLib's bytes,
+the emitter's output and each HLS product are in it, and no revision has to be kept
+beside it. The interface description reads the boundary facts, which the key does not
+cover: it is written from the partition model on every packaging, stored or not.
 
 The Tcl, the VLNV and the interface names are emitted by
 ``finn.kernels.artifacts.ipxact`` from the module's pins; this module supplies
@@ -79,8 +88,10 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -89,13 +100,13 @@ from qonnx.transformation.base import Transformation
 from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
-    OUTPUT_MADE_FROM,
+    OUTPUT_IP_KEY,
+    OUTPUT_IP_OPTIONS,
     OUTPUT_VLNV,
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
-from finn.core.graph.partition import design_digest
 from finn.custom_op.kernels.shell import Configured, configured_network
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
@@ -106,8 +117,9 @@ from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
 from finn.kernels.ends import EndContract
 from finn.platform.capabilities import Resources
-from finn.resources import finnlib_root
+from finn.resources import finnlib_root, scratch
 from finn.toolchain import vivado, xsim
+from finn.toolchain.ip import PACKAGE_SCRIPT, packaged, packaging_key, place
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
@@ -312,12 +324,57 @@ def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
     )
 
 
+@contextmanager
+def staged_project(
+    model: ModelWrapper, point: Configured, ip_name: str, *, run_synth: bool, toolchain: Toolchain
+) -> Iterator[Path]:
+    """The project Vivado is given to package the configured network ``point`` of the
+    partition model ``model`` as ``ip_name``, in a new directory of the build directory,
+    removed on exit: the module's sources (``src/``, each HLS leaf's product synthesized
+    for the model's part unless cached) checked by slang (``check_elaborates``), and
+    ``package.tcl``."""
+    built = read_target(model)
+    module = point.module
+    root: Path = scratch()  # type: ignore[no-untyped-call]
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=root, prefix="package_") as staging:
+        project = Path(staging)
+        emitted = emit_module(
+            module,
+            project / "src",
+            roots={"finnlib": finnlib_root()},
+            built=built_hls(module, built.part, toolchain=toolchain),
+        )
+        check_elaborates(emitted, module.abi, ip_name)
+        (project / PACKAGE_SCRIPT).write_text(
+            package_tcl(
+                emitted,
+                module.abi.pins,
+                part=built.part,
+                clock_ns=built.platform.period_ns,
+                ip_name=ip_name,
+                run_synth=run_synth,
+            )
+        )
+        yield project
+
+
+def ip_key(model: ModelWrapper, ip_name: str, *, run_synth: bool, toolchain: Toolchain) -> str:
+    """The key ``PackagePartition(ip_name, run_synth=run_synth)`` gives the partition model
+    ``model``'s IP as it is now: its project staged (``staged_project``) and discarded,
+    Vivado not run. An HLS leaf's product comes from the HLS cache, or is synthesized."""
+    point, _ = configured_network(model, ip_name)
+    with staged_project(model, point, ip_name, run_synth=run_synth, toolchain=toolchain) as staged:
+        return packaging_key(staged, run_synth=run_synth, toolchain=toolchain)
+
+
 class PackagePartition(Transformation):
     """Package a partition model of KernelOps as the shells' IP; see the module docstring.
 
     ``ip_name`` is the partition node's name; the part and the clock period are the
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
-    build directory by default; ``toolchain`` the prepared toolchain Vivado and HLS run
+    build directory by default: the stored project is copied there, replacing what it
+    holds of the same names; ``toolchain`` the prepared toolchain Vivado and HLS run
     in (a flow passes its own, so that one build runs Vivado by one route), by default
     the machine's (``finn.toolchain.launcher.host_toolchain``), prepared once, here.
     """
@@ -337,9 +394,7 @@ class PackagePartition(Transformation):
         self.toolchain = host_toolchain() if toolchain is None else toolchain
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        built = read_target(model)
         point, boundary = configured_network(model, self.ip_name)
-        module = point.module
         project = Path(
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
         ).resolve()
@@ -347,47 +402,19 @@ class PackagePartition(Transformation):
         # An earlier packaging's synthesis report is not this IP's.
         for report in project.glob(UTILIZATION_REPORTS):
             report.unlink()
-        toolchain = self.toolchain
-        emitted = emit_module(
-            module,
-            project / "src",
-            roots={"finnlib": finnlib_root()},
-            built=built_hls(module, built.part, toolchain=toolchain),
-        )
-        check_elaborates(emitted, module.abi, self.ip_name)
-        pins = module.abi.pins
-        script = project / "package.tcl"
-        script.write_text(
-            package_tcl(
-                emitted,
-                pins,
-                part=built.part,
-                clock_ns=built.platform.period_ns,
-                ip_name=self.ip_name,
-                run_synth=self.run_synth,
-            )
-        )
-        log = project / "package.log"
-        # A run that fails is ToolFailed, naming its transcript (in a build, the step's
-        # log directory; else beside package.sh).
-        ran = toolchain.run(
-            "vivado",
-            ["-mode", "batch", "-nojournal", "-log", log.name, "-source", "package.tcl"],
-            cwd=project,
-            replay=project / "package.sh",
-        )
-        if not (project / "ip" / "component.xml").is_file():
-            raise ToolFailed.of(
-                "vivado",
-                transcript=getattr(ran, "transcript", None) or log,
-                what=f"{self.ip_name}: no IP packaged",
-            )
+        run_synth, toolchain = self.run_synth, self.toolchain
+        with staged_project(
+            model, point, self.ip_name, run_synth=run_synth, toolchain=toolchain
+        ) as staged:
+            stored = packaged(staged, name=self.ip_name, run_synth=run_synth, toolchain=toolchain)
+        place(stored.directory, project)
         described = interface_description(model, point, boundary, self.ip_name)
         (project / INTERFACE_FILE).write_text(json.dumps(described, indent=2) + "\n")
         model.set(OUTPUT_IP, str(project / "ip"))
         model.set(OUTPUT_VLNV, vlnv(self.ip_name))
-        model.set(OUTPUT_INTERFACES, interface_names(pins))
-        model.set(OUTPUT_MADE_FROM, design_digest(model))
+        model.set(OUTPUT_INTERFACES, interface_names(point.module.abi.pins))
+        model.set(OUTPUT_IP_KEY, stored.key)
+        model.set(OUTPUT_IP_OPTIONS, {"run_synth": run_synth})
         return model, False
 
 
@@ -442,7 +469,9 @@ __all__ = [
     "ElaboratePartition",
     "PackagePartition",
     "boundary_facts",
+    "ip_key",
     "ooc_member_resources",
     "partition_utilization_report",
     "resources_of",
+    "staged_project",
 ]

@@ -36,6 +36,10 @@ from finn.kernels.artifacts.abi import (
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import PackagePartition
 
+#: A toolchain double's environment: a Vivado installation directory with no Vivado in
+#: it, whose identity the packaged-IP store's key reads as unstated.
+NO_VIVADO = {"XILINX_VIVADO": str(Path(__file__).parent)}
+
 
 class ReachedVivado(Exception):
     """Raised by ``NoVivado`` when packaging gets as far as running a tool."""
@@ -44,6 +48,8 @@ class ReachedVivado(Exception):
 class NoVivado:
     """A toolchain double (packaging calls ``run`` only): it records the first tool
     packaging runs, and stops there."""
+
+    environment = NO_VIVADO
 
     def __init__(self) -> None:
         self.ran: list[str] = []
@@ -151,6 +157,8 @@ class FakeVivado:
     (unless ``makes`` is False), each file naming itself, the routed timing summary
     ``timing`` if given. ``selection`` is the toolchain's (``Selection.vivado_jobs``)."""
 
+    environment = NO_VIVADO
+
     def __init__(self, makes: bool = True, timing: str | None = None) -> None:
         self.runs: list[tuple[str, list[str], str]] = []
         self.makes = makes
@@ -241,13 +249,18 @@ class PackagedByStub:
     """A toolchain double for Vivado's packaging: it writes ``ip/component.xml``, as the
     emitted-text tool's stub does, so PackagePartition completes without Vivado."""
 
+    environment = NO_VIVADO
+
     def transcripts_in(self, directory: object) -> PackagedByStub:
         """Itself: its runs keep no transcript."""
         return self
 
-    def run(self, tool: str, args: object, *, cwd: Path, **options: object) -> None:
+    def run(
+        self, tool: str, args: object, *, cwd: Path, **options: object
+    ) -> subprocess.CompletedProcess[bytes]:
         (Path(cwd) / "ip").mkdir(parents=True, exist_ok=True)
         (Path(cwd) / "ip" / "component.xml").write_text("<stub/>")
+        return subprocess.CompletedProcess([tool], 0, b"", b"")
 
 
 def read_back(described: dict[str, Any], pins: Sequence[Pin], period_ns: float) -> None:

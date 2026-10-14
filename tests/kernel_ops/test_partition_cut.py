@@ -12,6 +12,7 @@ weights streamed, so two inputs cross the boundary. No Vivado.
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,8 @@ from finn.core.graph.annotations.channel import CHANNEL
 from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
-    OUTPUT_MADE_FROM,
+    OUTPUT_IP_KEY,
+    OUTPUT_IP_OPTIONS,
     OUTPUT_VLNV,
 )
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target, write_target
@@ -50,13 +52,14 @@ from finn.transformation.kernels.integration import (
     integration,
     wire_one_bus_each,
 )
-from finn.transformation.kernels.package import boundary_facts
+from finn.transformation.kernels.package import boundary_facts, ip_key
 from kernel_ops.models import (
     ROW_MAJOR_W2,
     configure_partition,
     kernel_model,
     streamed_w2_model,
 )
+from kernel_ops.packaging import NO_VIVADO
 from kernel_ops.tfc import ULTRA96
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls end at a 128-bit port.
@@ -308,9 +311,14 @@ class PackagedHere:
     """A toolchain double for PackagePartition: Vivado "packages" by writing the IP's
     component.xml where package.tcl puts it."""
 
-    def run(self, tool: str, args: list[str], *, cwd: Path, **options: object) -> None:
+    environment = NO_VIVADO
+
+    def run(
+        self, tool: str, args: list[str], *, cwd: Path, **options: object
+    ) -> subprocess.CompletedProcess[bytes]:
         (Path(cwd) / "ip").mkdir()
         (Path(cwd) / "ip" / "component.xml").write_text("<component/>")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
 
 
 def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) -> None:
@@ -333,10 +341,15 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         "finn.outputs/ip",
         "finn.outputs/vlnv",
         "finn.outputs/interfaces",
-        "finn.outputs/made_from",
+        "finn.outputs/ip_key",
+        "finn.outputs/ip_options",
     }
-    # The design the IP was made from: the body's, which packaging leaves unchanged.
-    assert packaged.get(OUTPUT_MADE_FROM) == design_digest(body) == design_digest(packaged)
+    assert packaged.get(OUTPUT_IP_KEY) == ip_key(
+        body, "partition", run_synth=False, toolchain=toolchain
+    )
+    assert packaged.get(OUTPUT_IP_OPTIONS) == {"run_synth": False}
+    # Packaging leaves the design as it was.
+    assert design_digest(body) == design_digest(packaged)
     # Typed metadata is the graph's; a flat key would be the model's.
     assert list(packaged.model.metadata_props) == []
 

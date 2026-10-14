@@ -9,15 +9,16 @@ The runner (``build_pynq``):
 
 - generates each end's ``IODMA_hls`` IP in a scratch model of its one node, configured
   as the export states it (``IntegratedEnd.iodma``), through code generation and Vitis
-  HLS (``ipgen.prepare_ip``, ``ipgen.hls_synth_ip``), and packages it as the block
-  design instantiates it (``ipgen.create_stitched_ip``, named as the end's instance:
-  ``xilinx_finn:finn:<instance>:1.0`` with the pins ``IODMA_PINS`` names);
+  HLS (``ipgen.prepare_ip``, ``ipgen.hls_synth_ip``, through the HLS cache), and
+  packages it as the block design instantiates it (``ipgen.create_stitched_ip``, named
+  as the end's instance: ``xilinx_finn:finn:<instance>:1.0`` with the pins
+  ``IODMA_PINS`` names);
 - packages the partition (``PackagePartition``: its body states its IP in
-  ``finn.outputs``), unless its body already states an IP made from the body's design
-  as it is now (``made_from`` equal to ``design_digest`` of the body: the packaging step
-  packaged it earlier in the build, and the partition is packaged once);
-  an IP made from another design (a choice, a fact or a weight changed since) is
-  packaged again, and the build says so;
+  ``finn.outputs``), unless its body already states an IP whose key is the one the body
+  has now with the options it was packaged with (``ip_key``: the packaging step
+  packaged it earlier in the build, and the partition is packaged once); an IP of
+  another key (a choice, a fact or a weight changed since, or FinnLib, FINN's emitter or
+  Vivado) is packaged again, into a new directory, and the build says so;
 - writes the block design (``block_design``) from the export's instances and
   connections into ``templates.custom_zynq_shell_template``, unchanged; the
   template's own debug block names nets of the HWCustomOp flow's partitions and stays
@@ -26,16 +27,17 @@ The runner (``build_pynq``):
 - runs Vivado on it and collects what it made (``PynqBuilt``): the bitfile, its
   hardware handoff, the routed timing report, the template's ``impl_1`` hierarchical
   utilization report and each IP's out-of-context synthesis report, with the digest of
-  the partition's design its IP was made from.
+  the partition's design and the key of its IP.
 
 ``BuildPynqBitfile`` is the build as a transformation of the parent graph:
 it reads the shell, board, part and clock from the target its partition's body states
 (``pynq_row`` refuses a shell without this build), runs ``build_pynq``, collects the
 bitfile and its reports into the output directory it is given, and records the bitfile
 and its hardware handoff in the parent graph (``finn.outputs``) with what the bitfile was
-made from; its reports are found beside it (``bitfile_directory``, ``REPORTS``).
-``refuse_stale_bitfile`` refuses a bitfile made from another design than the partition's
-now. Both refusals, the driver's of a missing bitfile, and the deployment's are a
+made from: the design and the IP; its reports are found beside it
+(``bitfile_directory``, ``REPORTS``). ``refuse_stale_bitfile`` refuses a bitfile made
+from another design than the partition's now, or from another IP than the one its body
+states. Both refusals, the driver's of a missing bitfile, and the deployment's are a
 ``PynqRefused``.
 
 The driver its host runtime runs is ``driver``'s.
@@ -59,11 +61,13 @@ from qonnx.util.basic import qonnx_make_model
 from finn import resources
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
+    OUTPUT_BITFILE_IP_KEY,
     OUTPUT_BITFILE_MADE_FROM,
     OUTPUT_BITFILE_OPTIONS,
     OUTPUT_HWH,
     OUTPUT_IP,
-    OUTPUT_MADE_FROM,
+    OUTPUT_IP_KEY,
+    OUTPUT_IP_OPTIONS,
     OUTPUT_VLNV,
 )
 from finn.core.graph.annotations.platform import read_target
@@ -81,7 +85,7 @@ from finn.toolchain.launcher import Toolchain, host_toolchain
 from finn.toolchain.vivado import PL_CLOCKS, delivered_clock, tcl_quote, vivado_jobs
 from finn.transformation.kernels.choose import shell_bottleneck
 from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
-from finn.transformation.kernels.package import PackagePartition
+from finn.transformation.kernels.package import PackagePartition, ip_key
 from finn.util.basic import make_build_dir
 
 _LOG = logging.getLogger(__name__)
@@ -127,8 +131,9 @@ class PynqBuilt:
     ``bitfile``, its hardware handoff (``hwh``), the routed ``timing`` summary, the
     template's ``impl_1`` hierarchical utilization report (``placed``), each IP's
     out-of-context synthesis utilization report by its run (``out_of_context``,
-    ``top_<instance>_0`` for the instances), and the digest of the partition's design
-    its IP was made from (``made_from``, ``design_digest``)."""
+    ``top_<instance>_0`` for the instances), the digest of the partition's design
+    (``made_from``, ``design_digest``) and the key of the partition's IP
+    (``ip_key``)."""
 
     project: str
     bitfile: str
@@ -136,6 +141,7 @@ class PynqBuilt:
     timing: str
     placed: str
     made_from: str
+    ip_key: str
     out_of_context: dict[str, str] = field(default_factory=dict)
 
 
@@ -179,11 +185,11 @@ def generate_end_ip(
     end: IntegratedEnd, part: str, period_ns: float, directory: Path, toolchain: Toolchain
 ) -> InstanceIP:
     """``end``'s IP: its scratch model (``iodma_model``, saved in ``directory``) through
-    code generation and Vitis HLS, packaged as ``end.instance`` (``ipgen``), every tool
-    run through ``toolchain``."""
+    code generation and Vitis HLS (cached), packaged as ``end.instance`` (``ipgen``),
+    every tool run through ``toolchain``."""
     model = iodma_model(end)
-    model = prepare_ip(model, part, period_ns)
-    model = hls_synth_ip(model, toolchain=toolchain)
+    model = prepare_ip(model, period_ns)
+    model = hls_synth_ip(model, part, toolchain=toolchain)
     model = create_stitched_ip(model, part, period_ns, end.instance, toolchain=toolchain)
     directory.mkdir(parents=True, exist_ok=True)
     model.save(str(directory / f"{end.instance}.onnx"))
@@ -303,10 +309,10 @@ def project_script(export: Integration, design: str, jobs: int | None = None) ->
     )
 
 
-def collect(project: str, made_from: str) -> PynqBuilt:
-    """What Vivado made in ``project`` (the template's project), from the partition's IP
-    made from the design ``made_from``; a bitfile or hardware handoff not there is
-    refused, pointing at the project's logs."""
+def collect(project: str, made_from: str, packaged_key: str) -> PynqBuilt:
+    """What Vivado made in ``project`` (the template's project), from the partition's
+    design ``made_from`` and its IP of the key ``packaged_key``; a bitfile or hardware
+    handoff not there is refused, pointing at the project's logs."""
     root = Path(project)
     runs = root / f"{PROJECT}.runs"
     bitfile = runs / "impl_1" / "top_wrapper.bit"
@@ -330,6 +336,7 @@ def collect(project: str, made_from: str) -> PynqBuilt:
         timing=str(runs / "impl_1" / "top_wrapper_timing_summary_routed.rpt"),
         placed=str(root / "synth_report.xml"),
         made_from=made_from,
+        ip_key=packaged_key,
         out_of_context=out_of_context,
     )
 
@@ -346,28 +353,34 @@ def build_pynq(
     """Build the parent graph ``model`` in the Zynq block design of its
     integration export ``export`` (see the module docstring): the ends' IPs (their
     scratch models saved in ``directory``) and the partition's (its body saved with
-    its IP stated, or the IP the body states already when it was made from the body's
-    design as it is now), the project (a new build directory), Vivado run on it, and
+    its IP stated, or the IP the body states already when its key is the one the body
+    has now), the project (a new build directory), Vivado run on it, and
     what it made collected. ``toolchain`` is the
     prepared toolchain every tool runs through; ``jobs`` the
     runs Vivado launches at once; ``options`` the shell's build options."""
     node, body, body_file = partition_body(model)
-    made_from = design_digest(body)
     ips: dict[str, InstanceIP] = {}
+    packaged_key = None
     for instance in _instances(export):
         if instance == export.partition:
-            stated, earlier = body.get(OUTPUT_MADE_FROM), body.get(OUTPUT_IP)
-            if earlier is None or stated != made_from:
+            stated, earlier = body.get(OUTPUT_IP_KEY), body.get(OUTPUT_IP)
+            packaging = body.get(OUTPUT_IP_OPTIONS)
+            now = (
+                None
+                if earlier is None or packaging is None
+                else ip_key(body, node.name, run_synth=packaging["run_synth"], toolchain=toolchain)
+            )
+            if now is None or stated != now:
                 if earlier is not None:
                     _LOG.info(
-                        f"{node.name}: its IP ({earlier}) was made from the design "
-                        f"{stated or '(not stated)'}, the partition's is now {made_from}: "
-                        "packaging it again"
+                        f"{node.name}: its IP ({earlier}) has the key {stated or '(not stated)'},"
+                        f" the partition's is now {now or '(unknown)'}: packaging it again"
                     )
                 body = body.transform(PackagePartition(node.name, toolchain=toolchain))
                 body.save(body_file)
             vlnv, ip = body.get(OUTPUT_VLNV), body.get(OUTPUT_IP)
-            if vlnv is None or ip is None:
+            packaged_key = body.get(OUTPUT_IP_KEY)
+            if vlnv is None or ip is None or packaged_key is None:
                 raise RuntimeError(f"{node.name}: its body states no packaged IP")
             ips[instance] = InstanceIP(vlnv, (ip,))
         else:
@@ -385,7 +398,8 @@ def build_pynq(
         cwd=project,
         replay=project + "/synth_project.sh",
     )
-    return collect(project, made_from)
+    assert packaged_key is not None  # the partition is one of the instances
+    return collect(project, design_digest(body), packaged_key)
 
 
 #: Where ``BuildPynqBitfile`` collects what the build made, under the output directory
@@ -518,10 +532,10 @@ class BuildPynqBitfile(Transformation):
     ``ends/`` beside the body's file.
 
     The parent graph states the bitfile and its hardware handoff (``finn.outputs``; the
-    reports beside them: ``bitfile_directory``), the digest of the partition's design its
-    IP was made from
-    (``bitfile_made_from``; the runner packages the partition again when the IP the body
-    states was made from another design) and the shell options it was built with
+    reports beside them: ``bitfile_directory``), the digest of the partition's design
+    (``bitfile_made_from``) and the key of the partition's IP (``bitfile_ip_key``; the
+    runner packages the partition again when the IP the body states has another key than
+    the body's now) it was built from, and the shell options it was built with
     (``bitfile_options``). ``toolchain`` runs every tool, by default the machine's
     (``host_toolchain``), prepared once, when the transformation is made;
     Vivado launches as many runs at once as its selection says (``vivado_jobs``).
@@ -584,6 +598,7 @@ class BuildPynqBitfile(Transformation):
         reports["delivered_clock"].write_text(json.dumps(self.clock, indent=2))
         model.set(OUTPUT_BITFILE, str(self.bitfile))
         model.set(OUTPUT_BITFILE_MADE_FROM, built.made_from)
+        model.set(OUTPUT_BITFILE_IP_KEY, built.ip_key)
         model.set(OUTPUT_BITFILE_OPTIONS, dataclasses.asdict(self.options))
         model.set(OUTPUT_HWH, str(hwh))
         return model, False
@@ -591,8 +606,12 @@ class BuildPynqBitfile(Transformation):
 
 def refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
     """Refuse, for ``output``, a bitfile the parent graph states that was not built from
-    its partition's design as it is now: the digest it states (``bitfile_made_from``)
-    is not ``design_digest`` of the body, or it states none."""
+    its partition's design as it is now, or not from the IP its body states, each read
+    from what the graphs record (no tool, nothing staged). The design: the digest it
+    states (``bitfile_made_from``) is not ``design_digest`` of the body, or it states
+    none. The IP: the key it states (``bitfile_ip_key``) is not the one the body states
+    (``ip_key``). Whether the body's IP is current with FinnLib, the emitter and Vivado is
+    the runner's question, asked when it packages or reuses the IP."""
     node, body, _ = partition_body(model)
     bitfile: str | None = model.get(OUTPUT_BITFILE)
     stated, now = model.get(OUTPUT_BITFILE_MADE_FROM), design_digest(body)
@@ -611,6 +630,15 @@ def refuse_stale_bitfile(model: ModelWrapper, output: str) -> None:
             f"the model's bitfile ({bitfile}) is stale: it was "
             f"built from the design {stated}, and the partition {node.name}'s design is now "
             f"{now}; build the bitfile again (step_build_bitfile)",
+        )
+    built_ip, ip = model.get(OUTPUT_BITFILE_IP_KEY), body.get(OUTPUT_IP_KEY)
+    if built_ip is None or built_ip != ip:
+        raise PynqRefused(
+            output,
+            "bitfile-ip-stale",
+            f"the model's bitfile ({bitfile}) was built from the IP of the key "
+            f"{built_ip or '(not stated)'}, and the partition {node.name}'s IP is now "
+            f"{ip or '(not stated)'}; build the bitfile again (step_build_bitfile)",
         )
 
 

@@ -27,19 +27,30 @@ from kernels.xsim import requires_vivado
 from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,
     OUTPUT_IP,
-    OUTPUT_MADE_FROM,
+    OUTPUT_IP_KEY,
+    OUTPUT_IP_OPTIONS,
     OUTPUT_VLNV,
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.custom_op.kernels.shell import configured_network, save_channels
 from finn.kernels.artifacts import build
-from finn.toolchain.launcher import Selection, Toolchain, ToolFailed, ToolUnavailable
+from finn.toolchain.launcher import (
+    Selection,
+    Toolchain,
+    ToolFailed,
+    ToolUnavailable,
+    host_toolchain,
+)
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
 from finn.transformation.kernels.cut import BaselineChoices
 from finn.transformation.kernels.hls import HlsAbiRefused
-from finn.transformation.kernels.package import ElaboratePartition, partition_utilization_report
+from finn.transformation.kernels.package import (
+    ElaboratePartition,
+    ip_key,
+    partition_utilization_report,
+)
 from kernel_ops.models import configure_partition, kernel_model
 from kernel_ops.packaging import NoVivado, reaches_vivado
 
@@ -138,11 +149,13 @@ def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
 
 @requires_vivado
 def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
+    """The Chain packaged by Vivado, then into a second directory from the store: the
+    same files, linked, and no path of the directory it was packaged in."""
     configure_partition(model := kernel_model())
     project = tmp_path / "vivado_stitch_proj"
-    made_from = design_digest(model)
+    key = ip_key(model, "sdp_1", run_synth=False, toolchain=host_toolchain())
     model = model.transform(PackagePartition("sdp_1", directory=project))
-    assert model.get(OUTPUT_MADE_FROM) == made_from
+    assert model.get(OUTPUT_IP_KEY) == key
     # What packaging states of the IP, typed; no flat key.
     assert model.get(OUTPUT_IP) == str(project.resolve() / "ip")
     assert model.get(OUTPUT_VLNV) == "xilinx_finn:finn:sdp_1:1.0"
@@ -193,6 +206,14 @@ def test_the_chain_packages_as_the_shells_ip(tmp_path: Path) -> None:
     for memory in ("memstream_", "thresholds_"):
         assert any(name.startswith(memory) and name.endswith(".dat") for name in files)
     assert any(name.startswith("finn_partition__") for name in files)
+    # Movable: every path the IP names is its own, relative.
+    assert str(tmp_path) not in (project / "ip" / "component.xml").read_text()
+    second = tmp_path / "second"
+    configure_partition(again := kernel_model())
+    again = again.transform(PackagePartition("sdp_1", directory=second))
+    assert again.get(OUTPUT_IP_KEY) == key
+    component = second / "ip" / "component.xml"
+    assert component.samefile(project / "ip" / "component.xml")
 
 
 # -- what the tools do: ToolUnavailable, ToolFailed (finn.toolchain.launcher) -----------
@@ -219,46 +240,72 @@ def _tools(tmp_path: Path, scripts: dict[str, str], *, vivado: bool = True) -> T
 NO_LICENCE = "ERROR: [Common 17-345] A valid license was not found for feature 'Synthesis'"
 
 
-def test_a_failed_packaging_run_is_vivados_failure_naming_its_transcript(tmp_path: Path) -> None:
-    """Outside a build the transcript is beside the replay (``package.sh``); in a build's
-    step, in its log directory."""
+def test_a_failed_packaging_run_is_vivados_failure_naming_its_transcript(
+    tmp_path: Path, ip_store: Path
+) -> None:
+    """Outside a build the transcript is beside the replay (``package.sh``), in the run
+    the store keeps beside its entry; in a build's step, in its log directory."""
     configure_partition(model := kernel_model())
     project = tmp_path / "project"
     toolchain = _tools(tmp_path, {"vivado": f'echo "{NO_LICENCE}" | tee package.log\nexit 1\n'})
     logs = tmp_path / "out" / "logs" / "step_package_partition"
-    for tools, transcript in (
-        (toolchain, project / "package.sh.stdout.log"),
-        (toolchain.transcripts_in(logs), logs / "package.sh.stdout.log"),
-    ):
+    for tools in (toolchain, toolchain.transcripts_in(logs)):
         with pytest.raises(ToolFailed) as failed:
             model.transform(PackagePartition("sdp_1", directory=project, toolchain=tools))
+        (kept,) = ip_store.glob("sdp_1-*.failed")
+        transcript = (kept if tools is toolchain else logs) / "package.sh.stdout.log"
         assert (failed.value.tool, failed.value.status) == ("vivado", 1)
         assert failed.value.transcript == transcript
         assert transcript.read_text() == NO_LICENCE + "\n"
         assert (failed.value.code, failed.value.errors) == ("licence-unavailable", (NO_LICENCE,))
+    assert not (project / "ip").exists()
 
 
-def test_packaging_states_the_design_its_ip_was_made_from(tmp_path: Path) -> None:
-    """Beside the IP, the partition states the digest of the design it was made from: the
-    partition's as it was packaged, which is the same after packaging (finn.outputs is
-    not the design)."""
+def test_packaging_states_its_ips_key_and_a_second_packaging_is_the_stores(
+    tmp_path: Path,
+) -> None:
+    """Beside the IP, the partition states its key and the options it was packaged with:
+    the key ``ip_key`` gives the partition (finn.outputs is not the design, so packaging
+    leaves it as it was). A second packaging into another directory runs no Vivado: the
+    store's entry, copied."""
     configure_partition(model := kernel_model())
+    runs = tmp_path / "runs"
+    toolchain = _tools(
+        tmp_path, {"vivado": f"echo ran >> {runs}\nmkdir -p ip && touch ip/component.xml\n"}
+    )
+    key = ip_key(model, "sdp_1", run_synth=False, toolchain=toolchain)
     made_from = design_digest(model)
-    toolchain = _tools(tmp_path, {"vivado": "mkdir -p ip && touch ip/component.xml\n"})
     packaged = model.transform(
         PackagePartition("sdp_1", directory=tmp_path / "project", toolchain=toolchain)
     )
     assert packaged.get(OUTPUT_IP) == str((tmp_path / "project" / "ip").resolve())
-    assert packaged.get(OUTPUT_MADE_FROM) == made_from == design_digest(packaged)
+    assert packaged.get(OUTPUT_IP_KEY) == key
+    assert packaged.get(OUTPUT_IP_OPTIONS) == {"run_synth": False}
+    assert design_digest(packaged) == made_from
+    again = packaged.transform(
+        PackagePartition("sdp_1", directory=tmp_path / "again", toolchain=toolchain)
+    )
+    assert again.get(OUTPUT_IP_KEY) == key
+    assert runs.read_text() == "ran\n"
+    for name in ("package.tcl", "ip/component.xml"):
+        assert (tmp_path / "again" / name).samefile(tmp_path / "project" / name)
+    assert (tmp_path / "again" / "interface.json").is_file()
+    # Another Vivado is another key.
+    (tmp_path / "other").mkdir()
+    other = _tools(tmp_path / "other", {})
+    (Path(other.environment["XILINX_VIVADO"]) / "data" / "version.dat").write_text("2099.1\n")
+    assert ip_key(model, "sdp_1", run_synth=False, toolchain=other) != key
+    assert ip_key(model, "sdp_1", run_synth=True, toolchain=toolchain) != key
 
 
-def test_a_run_that_packages_no_ip_is_vivados_failure(tmp_path: Path) -> None:
+def test_a_run_that_packages_no_ip_is_vivados_failure(tmp_path: Path, ip_store: Path) -> None:
     configure_partition(model := kernel_model())
     project = tmp_path / "project"
     toolchain = _tools(tmp_path, {"vivado": "echo done > package.log\n"})
     with pytest.raises(ToolFailed, match="sdp_1: no IP packaged") as failed:
         model.transform(PackagePartition("sdp_1", directory=project, toolchain=toolchain))
-    transcript = project / "package.sh.stdout.log"
+    (kept,) = ip_store.glob("sdp_1-*.failed")
+    transcript = kept / "package.sh.stdout.log"
     assert (failed.value.status, failed.value.transcript) == (None, transcript)
     # Nor is a missing or empty utilization report a refusal of the partition.
     with pytest.raises(ToolFailed, match="one hierarchical utilization report"):
