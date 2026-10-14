@@ -12,13 +12,16 @@ network of its kernel and a channel on each ONNX input and output (conversion's)
 
 from __future__ import annotations
 
+import json
 from contextvars import Context
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 from qonnx.core.ranges import TensorRange
 
+import finn.kernels.members as members
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
 from finn.core.space import Rejected, design_space, inspection
@@ -30,6 +33,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.members import (
+    VERIFY,
     Facts,
     MemberCacheMismatch,
     configured,
@@ -37,6 +41,7 @@ from finn.kernels.members import (
     member_cache,
     typed,
     verification_counts,
+    write_counts,
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -228,7 +233,12 @@ def test_a_hit_loads_no_held_value() -> None:
     assert value._array is None
 
 
-def test_the_verifying_mode_configures_each_hit_again_and_names_a_mismatch() -> None:
+def test_the_verifying_mode_configures_each_hit_again_and_names_a_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Counted apart: this test's mismatch is written to its own directory, never the run's.
+    monkeypatch.setattr(members, "_COUNTS", dict.fromkeys(verification_counts(), 0))
+    monkeypatch.setenv(VERIFY, str(tmp_path))
     before = verification_counts()["member hits verified"]
     with member_cache(verify=True) as cache:
         first = configured(facts())
@@ -239,6 +249,9 @@ def test_the_verifying_mode_configures_each_hit_again_and_names_a_mismatch() -> 
         cache.entries[found] = configured(facts(), {"compute": "packed"})
         with pytest.raises(MemberCacheMismatch, match="the member cache's member hit differs"):
             configured(facts())
+    write_counts()
+    (written,) = tmp_path.glob("*.json")
+    assert json.loads(written.read_text())["mismatches"] == 1
 
 
 def test_a_fact_changed_is_another_binding() -> None:

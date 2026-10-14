@@ -13,8 +13,10 @@ design and the nodes selected; a refusal never is.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from kernels.helpers import choose
@@ -24,6 +26,7 @@ from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.custom_op.kernels.shell as shell
+import finn.kernels.members as members
 from finn.core.graph.annotations.outputs import OUTPUT_IP
 from finn.core.graph.annotations.platform import PLATFORM, write_target
 from finn.core.graph.errors import KernelOpError
@@ -31,12 +34,14 @@ from finn.core.graph.partition import design_digest
 from finn.custom_op.kernels.network import Partition, network, persist
 from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.kernels.members import (
+    VERIFY,
     MemberCache,
     MemberCacheMismatch,
     current,
     member_cache,
     uncached,
     verification_counts,
+    write_counts,
 )
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
@@ -182,7 +187,12 @@ def test_a_refused_network_is_not_kept() -> None:
     assert networks(cache()) == counted and len(cache().entries) == entries
 
 
-def test_the_verifying_mode_binds_a_network_hit_again() -> None:
+def test_the_verifying_mode_binds_a_network_hit_again(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Counted apart: this test's mismatch is written to its own directory, never the run's.
+    monkeypatch.setattr(members, "_COUNTS", dict.fromkeys(verification_counts(), 0))
+    monkeypatch.setenv(VERIFY, str(tmp_path))
     before = verification_counts()["network hits verified"]
     model = kernel_model()
     with member_cache(verify=True) as held:
@@ -194,6 +204,9 @@ def test_the_verifying_mode_binds_a_network_hit_again() -> None:
         held.entries[found] = network(model, model.graph.node[:1], name="chain")
         with pytest.raises(MemberCacheMismatch, match="the member cache's network hit differs"):
             network(model, model.graph.node, name="chain")
+    write_counts()
+    (written,) = tmp_path.glob("*.json")
+    assert json.loads(written.read_text())["mismatches"] == 1
 
 
 def test_a_body_s_inherited_target_is_in_its_network_s_key() -> None:
