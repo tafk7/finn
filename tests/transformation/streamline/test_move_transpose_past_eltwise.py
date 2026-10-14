@@ -3,9 +3,11 @@
 
 import pytest
 
+import numpy as np
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.ranges import TensorRange
 from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
@@ -154,3 +156,21 @@ def test_move_transpose_past_eltwise_fork_noop():
     model_transformed = model.transform(MoveTransposePastEltwise())
 
     assert [n.op_type for n in model_transformed.graph.node] == ["Transpose", "Add", "Add"]
+
+
+@pytest.mark.streamline
+def test_the_moved_eltwise_output_keeps_its_range():
+    """The elementwise op's output, now ahead of the Transpose, states the datatype and range
+    its values had after it: an INT8 input over [-3, 5] plus [0, 2] gives INT4 over [-3, 7]."""
+    in_shape = [1, 8, 4, 4]
+    model = make_model(in_shape, [0, 2, 3, 1], "Add", [[8]])
+    model.set_initializer("a0", np.array([0, 1, 2, 0, 1, 2, 0, 1], dtype=np.float32))
+    model.set_tensor_datatype("a0", DataType["UINT2"])
+    model.set_tensor_datatype("inp", DataType["INT8"], TensorRange(-3, 5))
+    model = model.transform(InferDataTypes())
+    assert model.get_tensor_range("outp0") == TensorRange(-3, 7)
+
+    model = model.transform(MoveTransposePastEltwise())
+    (add,) = [node for node in model.graph.node if node.op_type == "Add"]
+    assert model.get_tensor_datatype(add.output[0]) == DataType["INT4"]
+    assert model.get_tensor_range(add.output[0]) == TensorRange(-3, 7)

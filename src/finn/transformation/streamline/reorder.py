@@ -851,7 +851,9 @@ class MoveTransposePastEltwise(Transformation):
             # mid now holds the elementwise result before the Transpose: the values of
             # out, in the input's order.
             model.set_tensor_shape(mid, None)
-            model.set_tensor_datatype(mid, model.get_tensor_datatype(out))
+            model.set_tensor_datatype(
+                mid, model.get_tensor_datatype(out), model.get_tensor_range(out)
+            )
             in_layout = model.get_tensor_layout(inp)
             if in_layout is not None:
                 model.set_tensor_layout(mid, in_layout)
