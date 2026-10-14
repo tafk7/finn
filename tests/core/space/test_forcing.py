@@ -92,6 +92,16 @@ def test_one_viable_case_reads_as_that_case_and_is_never_committed() -> None:
     assert set(item.refused) == {"packed"} and "packed-width" in item.refused["packed"]
 
 
+def test_inspection_answers_are_read_once_per_configuration_and_model() -> None:
+    point = design_space(Unit(width=128))
+    assert inspection.forced(point) is inspection.forced(point)
+    assert inspection.viable(point) is inspection.viable(point)
+    assert inspection.admission(point.compute) is inspection.admission(point.compute)
+    assert inspection.decisions(point) is inspection.decisions(Unit)
+    other = design_space(Unit(width=8))
+    assert inspection.forced(other) == () and inspection.forced(point) != ()
+
+
 def test_several_viable_cases_stay_open_and_none_is_a_refusal_naming_each_case() -> None:
     both = design_space(Unit(width=8))
     answer = both.query(Unit.compute)

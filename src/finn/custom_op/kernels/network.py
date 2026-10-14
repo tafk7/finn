@@ -5,13 +5,14 @@
 
 ``network(model, nodes, ends=...)`` binds a ``finn.kernels.network.Network`` straight
 from the graph, for any selection of KernelOp nodes (a partition's body, a slice of it, one
-node), and changes no graph. The ends offered on its boundary (``ends``, each an
+node), and changes no graph: it reads the graph once, its tensors from one index
+(``finn.core.graph.facts.reading``). The ends offered on its boundary (``ends``, each an
 ``finn.kernels.ends.EndOffer``; none by default) are a fact its caller gives: a shell's
 row offers them, and ``finn.custom_op.kernels.shell`` binds a partition's network in the
 shell of the model's target (``in_shell``).
 
-- **kernels**, one per node, named as the node: its kernel bound from its facts by the
-  bind cache, one binding per node (``KernelOp.bound``);
+- **kernels**, one per node, named as the node: its kernel's facts, read once
+  (``KernelOp.facts``), configured through the build's member cache;
 - **channels**, one per ONNX tensor, named as the tensor, in node order: a node's graph
   inputs, the parameter channels it owns (named after the initializer), its outputs.
   Each is a ``Wire`` of the facts a ``Channel`` takes: its tensor (the graph's,
@@ -48,6 +49,15 @@ shell of the model's target (``in_shell``).
   after the partition (its stem ``finn_<name>``) and identified as the partition's IP
   (``PRODUCER``), since an end is integrated beside the IP, not in it.
 
+**Kept per build:** a network bound is kept in the build's member cache
+(``finn.kernels.members``), keyed by the model's ``design_digest`` (all but
+``finn.outputs``, which a bind does not read), the orders the digest makes canonical and a
+bind reads (each node's attributes, the metadata's and the annotations' keys), the target
+the model states (a body opened inside its parent inherits it), the end offers given, what
+the network is made as (``Partition``, or a shell's ``InShell`` with its row), the nodes
+selected (by position), the name and the channel choices given. A refusal is never kept.
+In the verifying mode a hit is bound again with no cache open and compared.
+
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
 admission and resources over a network (its members', its ends' and its static region's),
 and the body's choices stated by hand (``save_channels``) or given their baselines
@@ -58,11 +68,12 @@ and the body's choices stated by hand (``save_channels``) or given their baselin
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, Any, TypeVar
+from collections.abc import Callable, Hashable, Iterable, Mapping
+from functools import partial
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from onnx import NodeProto
-from qonnx.core.metadata import MetadataError
+from qonnx.core.metadata import SEPARATOR, MetadataError
 
 from finn.core.graph.annotations.channel import (
     CHANNEL,
@@ -70,18 +81,20 @@ from finn.core.graph.annotations.channel import (
     channel_choices,
     refuse_outside_body,
 )
-from finn.core.graph.annotations.platform import read_target
+from finn.core.graph.annotations.outputs import OUTPUTS
+from finn.core.graph.annotations.platform import PLATFORM, read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor
-from finn.core.graph.partition import KERNEL_OPS_DOMAIN
+from finn.core.graph.facts import edge_tensor, initializer, reading
+from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed, why
-from finn.custom_op.kernels.cache import Facts
 from finn.kernels.artifacts.module import Composed, ProducerIdentity
 from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
 from finn.kernels.ends import EndOffer
+from finn.kernels.members import Configured, Facts, current, observed, uncached
+from finn.kernels.members import typed as key_part
 from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -123,7 +136,7 @@ class Partition(Network):
 
     def __init__(
         self,
-        members: Mapping[str, Space | Wire],
+        members: Mapping[str, Space | Facts | Wire],
         *,
         name: str,
         ends: tuple[EndOffer, ...],
@@ -197,7 +210,7 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
     inputs = [
         tensor
         for tensor in dict.fromkeys(t for node in nodes for t in node.input)
-        if tensor not in produced and tensor not in owned and model.get_initializer(tensor) is None
+        if tensor not in produced and tensor not in owned and initializer(model, tensor) is None
     ]
     outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
@@ -216,7 +229,7 @@ def _fan_out(
     readers: dict[str, list[str]] = {}
     for node, tensors in zip(nodes, owned):
         for tensor in node.input:
-            if tensor in tensors.values() or model.get_initializer(tensor) is None:
+            if tensor in tensors.values() or initializer(model, tensor) is None:
                 readers.setdefault(tensor, []).append(node.name)
     found = []
     for tensor, names in readers.items():
@@ -240,7 +253,7 @@ def _tensors(model: ModelWrapper, nodes: list[NodeProto], owned: list[dict[str, 
     found: dict[str, None] = {}
     for node, tensors in zip(nodes, owned):
         for tensor in node.input:
-            if tensor not in parameters and model.get_initializer(tensor) is None:
+            if tensor not in parameters and initializer(model, tensor) is None:
                 found.setdefault(tensor)
         for tensor in tensors.values():
             found.setdefault(tensor)
@@ -359,10 +372,129 @@ def _network(
 ) -> P:
     """``network``, made by ``kind`` (``Partition``, or a shell's network over it), each
     tensor of ``stating`` replayed with the channel choices it gives in place of those the
-    tensor states."""
+    tensor states: kept in the build's member cache (the module docstring)."""
+    cache = current()
+    found = None if cache is None else _key(model, nodes, name, stating, ends, kind)
+    if cache is None or found is None:
+        return _read(model, nodes, name, stating, ends, kind)
+
+    def again() -> P:
+        with uncached():
+            return _read(model, nodes, name, stating, ends, kind)
+
+    return cast(
+        P,
+        cache.get(
+            found,
+            lambda: _read(model, nodes, name, stating, ends, kind),
+            again,
+            _observed,
+            "network",
+        ),
+    )
+
+
+def _made_as(kind: Callable[..., Partition]) -> Hashable:
+    """What a network is made as, for its key: its class, and what a ``partial`` gives it
+    (a shell's row)."""
+    if isinstance(kind, partial):
+        return (kind.func, key_part(kind.args), key_part(kind.keywords))
+    return kind
+
+
+def _key(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    name: str,
+    stating: Mapping[str, Mapping[str, object]],
+    ends: tuple[EndOffer, ...],
+    kind: Callable[..., Partition],
+) -> Hashable | None:
+    """The network's key in the build's cache (the module docstring), or None where a
+    node is not the model's or its target is not stated as one (the bind names why)."""
+    graph = model.graph
+    positions = {id(node): index for index, node in enumerate(graph.node)}
+    selected = tuple(positions.get(id(node)) for node in nodes)
+    if None in selected:
+        return None
+    try:
+        stated = model.namespace(PLATFORM)
+    except MetadataError:
+        return None
+    outputs = OUTPUTS.name + SEPARATOR
+    orders = (
+        tuple(tuple(attribute.name for attribute in node.attribute) for node in graph.node),
+        tuple(prop.key for prop in graph.metadata_props if not prop.key.startswith(outputs)),
+        tuple(prop.key for prop in model.model.metadata_props),
+        tuple(
+            (item.tensor_name, tuple(prop.key for prop in item.quant_parameter_tensor_names))
+            for item in graph.quantization_annotation
+        ),
+    )
+    found = (
+        "network",
+        design_digest(model),
+        orders,
+        key_part(stated),
+        key_part(ends),
+        _made_as(kind),
+        selected,
+        name,
+        key_part({tensor: dict(values) for tensor, values in stating.items()}),
+    )
+    try:
+        hash(found)
+    except TypeError:
+        return None
+    return found
+
+
+def _observed(bound: Partition) -> object:
+    """What is read of a network bound, to compare in the verifying mode: its class, its
+    ends and shell (a shell's row, its resources), its members, their order, wiring and
+    nodes, each member's point as the member cache compares one, what replay dropped and
+    why each unbound channel waits."""
+    points = {
+        each: observed(Configured(bound.member(each)))
+        for each in bound.members
+        if bound.unbound(each) is None
+    }
+    return (
+        type(bound),
+        (bound.name, bound.boundary, bound.ends, dict(bound.stale), bound.whole),
+        (getattr(bound, "row", None), bound.own_resources()),
+        (bound.order, bound.members, {each: bound.node(each) for each in bound.members}),
+        {each: bound.wiring(each) for each in bound.channels},
+        {each: bound.facts(each) for each in points if each in bound.channels},
+        dict(bound.dropped),
+        {each: bound.unbound(each) for each in bound.members if each not in points},
+        points,
+    )
+
+
+def _read(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    name: str,
+    stating: Mapping[str, Mapping[str, object]],
+    ends: tuple[EndOffer, ...],
+    kind: Callable[..., P],
+) -> P:
+    """The network bound, the graph's tensors read from one index."""
+    with reading(model):
+        return _bound(model, nodes, name, stating, ends, kind)
+
+
+def _bound(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    name: str,
+    stating: Mapping[str, Mapping[str, object]],
+    ends: tuple[EndOffer, ...],
+    kind: Callable[..., P],
+) -> P:
     ops = [kernel_op(model, node) for node in nodes]
-    facts: list[Facts] = [op.facts() for op in ops]
-    owned = [op.owned(each) for op, each in zip(ops, facts)]
+    owned = [op.owned() for op in ops]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
     fanned = _fan_out(model, nodes, owned, ports)
     if fanned:
@@ -409,8 +541,8 @@ def _network(
             if ports.get(tensor, "").rstrip("0123456789") == side
         }
 
-    kernels: dict[str, Space] = {node.name: op.bound() for node, op in zip(nodes, ops)}
-    members: dict[str, Space | Wire] = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
+    kernels: dict[str, Facts] = {node.name: op.facts() for node, op in zip(nodes, ops)}
+    members: dict[str, Facts | Wire] = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
     try:
         bound = kind(
             members,

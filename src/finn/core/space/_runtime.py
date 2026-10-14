@@ -102,7 +102,8 @@ class Snapshot:
     successor's cache starts from what its base and its trial evaluated that the
     change does not reach, and ``admissions`` holds the Decisions each assignment's
     admission read, which a later trial reuses where the change does not reach them
-    (``_TrialSnapshot``).
+    (``_TrialSnapshot``). ``answers`` holds what inspection answered of it, by
+    question and scope (``inspection``), where the answer shares its values.
     """
 
     model: Model[Space]
@@ -113,6 +114,7 @@ class Snapshot:
     verdicts: Mapping[int, object] = field(default_factory=dict, repr=False)
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
+    answers: dict[tuple[str, int], object] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
     found: object = field(default=None, init=False, repr=False)
 

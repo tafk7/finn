@@ -56,6 +56,7 @@ from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
 from finn.kernels.ends import END, EndContract
 from finn.kernels.explore import Seam
+from finn.kernels.members import Facts
 from finn.kernels.network import Wire, dotted
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -92,7 +93,9 @@ class InShell(Partition):
 
     row: ShellRow
 
-    def __init__(self, members: Mapping[str, Space | Wire], *, row: ShellRow, **given: Any) -> None:
+    def __init__(
+        self, members: Mapping[str, Space | Facts | Wire], *, row: ShellRow, **given: Any
+    ) -> None:
         super().__init__(members, **given)
         self.row = row
 

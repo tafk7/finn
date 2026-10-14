@@ -10,18 +10,27 @@ A tensor's range is part of its datatype fact (``qonnx.core.ranges``, stored on 
 model by ``qonnx.core.tensor_ranges``): written with the datatype in one call
 (``ModelWrapper.set_tensor_datatype``), so that a datatype stated without its range
 clears it. A tensor that states none reads as its datatype's full range.
+
+Inside ``reading(model)`` (a network's bind), the model's tensors are read from one index,
+built once: its value infos, its initializers (each converted to an array once, shared
+and read-only) and, through ``qonnx.core.tensor_ranges.one_pass``, its annotations.
+Nothing is kept after it, and the model must not change inside it.
 """
 
 from __future__ import annotations
 
 from array import array
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
+from onnx import numpy_helper
 from qonnx.analysis.tensor_value_summary import (
     UnsupportedTensorValueError,
-    initializer_value_summary,
+    summarize_tensor_values,
 )
 from qonnx.core import tensor_ranges
 from qonnx.core.metadata import MetadataError
@@ -39,26 +48,98 @@ from finn.kernels.values.domains import stored_element
 from finn.kernels.values.semantics import IntegerTensorValue, integer_bytes, integer_digest
 
 if TYPE_CHECKING:
+    from onnx import TensorProto, ValueInfoProto
     from qonnx.core.modelwrapper import ModelWrapper
+
+
+class _Index:
+    """A model's value infos and initializers by name, each initializer's array once."""
+
+    def __init__(self, model: ModelWrapper) -> None:
+        graph = model.graph
+        self.model = model
+        self.infos: dict[str, ValueInfoProto] = {}
+        self.repeated: set[str] = set()
+        for info in [*graph.input, *graph.output, *graph.value_info]:
+            if info.name in self.infos:
+                self.repeated.add(info.name)
+            self.infos[info.name] = info
+        self.protos: dict[str, TensorProto] = {item.name: item for item in graph.initializer}
+        self.arrays: dict[str, npt.NDArray[Any]] = {}
+
+
+_INDEX: ContextVar[_Index | None] = ContextVar("finn_graph_facts_index", default=None)
+
+
+@contextmanager
+def reading(model: ModelWrapper) -> Iterator[None]:
+    """Read ``model``'s tensors from one index while inside (see the module docstring)."""
+    with tensor_ranges.one_pass(model):
+        token = _INDEX.set(_Index(model))
+        try:
+            yield
+        finally:
+            _INDEX.reset(token)
+
+
+def _index(model: ModelWrapper) -> _Index | None:
+    current = _INDEX.get()
+    return current if current is not None and current.model is model else None
+
+
+def initializer(model: ModelWrapper, tensor: str) -> npt.NDArray[Any] | None:
+    """The values of the initializer ``tensor``, or None if it is none
+    (``ModelWrapper.get_initializer``); inside ``reading``, one read-only array."""
+    index = _index(model)
+    if index is None:
+        return model.get_initializer(tensor)
+    if tensor not in index.arrays:
+        proto = index.protos.get(tensor)
+        if proto is None:
+            return None
+        found = numpy_helper.to_array(proto)
+        found.setflags(write=False)
+        index.arrays[tensor] = found
+    return index.arrays[tensor]
+
+
+def _shape(model: ModelWrapper, tensor: str) -> list[int] | None:
+    """``ModelWrapper.get_tensor_shape``, by the index inside ``reading``."""
+    index = _index(model)
+    if index is None or tensor in index.repeated:
+        return model.get_tensor_shape(tensor)
+    info = index.infos.get(tensor)
+    if info is not None:
+        return [dim.dim_value for dim in info.type.tensor_type.shape.dim]
+    stored = initializer(model, tensor)
+    return None if stored is None else list(stored.shape)
+
+
+def _stated_datatype(model: ModelWrapper, tensor: str) -> bool:
+    """``ModelWrapper.has_tensor_datatype``, by qonnx's index inside ``reading``."""
+    found = tensor_ranges.annotation(model, tensor)
+    return found is not None and any(
+        entry.key == "finn_datatype" for entry in found.quant_parameter_tensor_names
+    )
 
 
 def datatype(model: ModelWrapper, tensor: str, label: str) -> QONNXDataType:
     """The datatype annotation of ``tensor``. A tensor without one is refused, not read
     as FLOAT32 as qonnx would."""
-    if not model.has_tensor_datatype(tensor):
+    if not _stated_datatype(model, tensor):
         produced = model.find_producer(tensor) is not None
         raise FactUnstated(
             f"{label}: {tensor} has no datatype annotation (absent is not FLOAT32"
             + ("; InferKernelTensors states each node's outputs in order)" if produced else ")"),
             tensor,
         )
-    return canonical_qonnx_datatype(model.get_tensor_datatype(tensor))
+    return canonical_qonnx_datatype(tensor_ranges.datatype(model, tensor))
 
 
 def known_shape(model: ModelWrapper, tensor: str) -> tuple[int, ...] | None:
     """The shape of ``tensor``, or None if the graph has none (qonnx gives an empty
     list) or one with an unknown extent."""
-    found = model.get_tensor_shape(tensor)
+    found = _shape(model, tensor)
     if not found or any(type(dim) is not int or dim < 1 for dim in found):
         return None
     return tuple(found)
@@ -91,7 +172,7 @@ def edge_tensor(model: ModelWrapper, tensor: str, label: str) -> Tensor:
     statement, as inference wrote it). For an initializer of integers, the datatype is
     narrowed to its values' range (``stored_element``: INT8-typed ternary weights become
     INT2 over [-1, 1])."""
-    stored = model.get_initializer(tensor)
+    stored = initializer(model, tensor)
     if stored is None:
         found = element(model, tensor, label)
     else:
@@ -111,20 +192,21 @@ def state(model: ModelWrapper, tensor: str, stated: ScalarEncoding) -> None:
     model.set_tensor_datatype(tensor, stated.dtype, stated.value_range)
 
 
-def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
+def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> None:
     """Check that the initializer ``tensor`` holds integers its datatype ``dtype``
-    allows, and return its content digest, which keys the node's binding."""
+    allows."""
+    stored = initializer(model, tensor)
+    if stored is None:
+        raise KernelOpError(f"{label}: {tensor} is not an initializer")
     try:
-        summary = initializer_value_summary(model, tensor)
+        summary = summarize_tensor_values(stored)
     except UnsupportedTensorValueError as error:
         raise KernelOpError(f"{label}: {tensor}: {error}") from error
-    if summary is None:
-        raise KernelOpError(f"{label}: {tensor} is not an initializer")
     try:
         low, high = ordinary_integer_bounds(dtype)
     except DatatypeError:
         # Not an ordinary integer (FLOAT32 holds 0.5): no contradiction, the kernel refuses it.
-        return str(summary.content_digest)
+        return
     if not summary.is_integral:
         raise KernelOpError(f"{label}: {tensor} holds values that are not integers")
     if summary.minimum is None or summary.maximum is None:  # integral with no range: empty
@@ -134,7 +216,6 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         raise KernelOpError(
             f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"
         )
-    return str(summary.content_digest)
 
 
 def integer_tensor(values: npt.NDArray[Any]) -> IntegerTensorValue:
@@ -157,8 +238,10 @@ __all__ = [
     "datatype",
     "edge_tensor",
     "element",
+    "initializer",
     "integer_tensor",
     "known_shape",
+    "reading",
     "shape",
     "state",
 ]

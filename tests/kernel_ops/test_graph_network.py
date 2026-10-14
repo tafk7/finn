@@ -132,7 +132,7 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     lift(model, "w")
     model.set_tensor_datatype("w", INT3)
     streamed = kernel_op(model, model.graph.node[0])
-    assert streamed.facts().owned == ()
+    assert streamed.owned() == {}
     # The output was inferred from the stored weights' columns; unknown, they give the
     # datatypes' wider range. The kernel states its results from its new facts, so its
     # choices stand; the graph's y is stale, and the network refuses it by name until

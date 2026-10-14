@@ -14,9 +14,11 @@ Three terms, used throughout the package:
   kernel's formals, its input tensors as values (``edge_tensor``: each at the graph's
   rank, a tensor stated once), the values of the initializers it holds (weights,
   thresholds) and the build target (``read_target``);
-- its *kernel*: its kernel class bound to its facts, nothing chosen (``bound``), one
-  binding per node, cached by its facts by value (``cache``);
+- its *kernel*: its kernel class bound to its facts, nothing chosen (``bound``);
 - its *point*: its kernel with the node's stored choices committed (``point``).
+
+Both are kept by the facts, by value, in the build's member cache
+(``finn.kernels.members``): a node's kernel is bound once a build.
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
@@ -63,8 +65,7 @@ kernel's views, ``Fact``) and its end from the kernel (``Interface``).
 
 from __future__ import annotations
 
-import functools
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, cast
 
@@ -75,14 +76,14 @@ from qonnx.util.basic import get_by_name
 from finn.core.graph.annotations.channel import CHANNEL, value_type
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor, state
+from finn.core.graph.facts import edge_tensor, initializer, reading, state
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Rejected, Space, inspection
-from finn.custom_op.kernels.cache import BIND_CACHE, Facts
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
 from finn.kernels.configure import describe
 from finn.kernels.explore import ExploreError, Seam
+from finn.kernels.members import Facts, configured
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
@@ -140,18 +141,12 @@ def refused(owner: str, code: str, message: str, **details: object) -> Finding:
     return Finding(FindingKind.REJECTION, code, owner, message, tuple(details.items()))
 
 
-@functools.cache
-def _bools(space_type: type[Space]) -> frozenset[str]:
-    """The keys of ``space_type``'s ``bool`` Decisions, read once per class."""
-    return frozenset(
-        item.key for item in inspection.decisions(space_type) if value_type(item) == "bool"
-    )
-
-
 def typed(space_type: type[Space], choices: Mapping[str, object]) -> dict[str, object]:
     """``choices``, by decision key of ``space_type``, as its Decisions take them: an ONNX
     ``i`` attribute of a ``bool`` decision becomes a bool."""
-    bools = _bools(space_type)
+    if not choices:
+        return {}
+    bools = {item.key for item in inspection.decisions(space_type) if value_type(item) == "bool"}
     return {key: bool(value) if key in bools else value for key, value in choices.items()}
 
 
@@ -214,7 +209,6 @@ class KernelOp(CustomOp):
     parameters: ClassVar[tuple[str, ...]] = ()
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
     anchor: ClassVar[tuple[str, str]]
-    _schemas: ClassVar[dict[type[KernelOp], dict[str, tuple[str, tuple[str, ...]]]]] = {}
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -261,14 +255,11 @@ class KernelOp(CustomOp):
     @classmethod
     def schema(cls) -> dict[str, tuple[str, tuple[str, ...]]]:
         """The choice attributes: name -> (ONNX type, a selector's cases), its kernel
-        class's decision keys, read once per process."""
-        if cls not in KernelOp._schemas:
-            found: dict[str, tuple[str, tuple[str, ...]]] = {}
-            for item in inspection.decisions(cls.kernel):
-                kind = ONNX_TYPES[value_type(item)]
-                found[item.key] = (kind, item.cases if item.selector else ())
-            KernelOp._schemas[cls] = dict(sorted(found.items()))
-        return KernelOp._schemas[cls]
+        class's decision keys, in key order."""
+        return {
+            item.key: (ONNX_TYPES[value_type(item)], item.cases if item.selector else ())
+            for item in inspection.decisions(cls.kernel)
+        }
 
     def get_nodeattr_types(self) -> dict[str, tuple[Any, ...]]:
         types: dict[str, tuple[Any, ...]] = dict(self.semantic)
@@ -299,32 +290,19 @@ class KernelOp(CustomOp):
 
     def binding(
         self,
-        key: tuple[Hashable, ...],
-        formals: Callable[[], Mapping[str, object]],
-        owned: tuple[str, ...] = (),
-        values: Callable[[], Mapping[str, IntegerTensorValue]] = dict,
+        formals: Mapping[str, object],
+        values: Mapping[str, IntegerTensorValue] | None = None,
     ) -> Facts:
-        """The node's facts: its op's ``key`` and ``formals`` (the kernel arguments it reads
-        from the graph beside its tensors, given only to bind), each input port's tensor
-        (``edge_tensor``), and the ``values`` of the initializers it holds, by port
-        (``owned``), given as the kernel's contents in place of a tensor. Keyed by value: the
-        key, each tensor, and the owned values through ``key`` (their content digest)."""
+        """The node's facts: its kernel class and its arguments, the ``formals`` it reads
+        from the graph beside its tensors, each input port's tensor (``edge_tensor``), and
+        the ``values`` of the initializers it holds, by port (``owned``), given as the
+        kernel's contents in place of a tensor."""
+        held = values or {}
         tensors = {
-            self.wiring[port].tensor: tensor
-            for port, tensor in self.input_edges(skip=owned).items()
+            self.wiring[port].tensor: tensor for port, tensor in self.input_edges(skip=held).items()
         }
-
-        def arguments() -> dict[str, object]:
-            held = values()
-            contents = {cast(str, self.wiring[port].contents): held[port] for port in owned}
-            return {**formals(), **tensors, **contents}
-
-        return Facts(
-            type(self).kernel,
-            (*key, *sorted(tensors.items(), key=lambda item: item[0])),
-            arguments,
-            owned,
-        )
+        contents = {cast(str, self.wiring[port].contents): each for port, each in held.items()}
+        return Facts(type(self).kernel, {**formals, **tensors, **contents})
 
     def input_edges(self, skip: Iterable[str] = ()) -> dict[str, Tensor]:
         """The tensor of each input port, by port (``edge_tensor``), but those of ``skip``."""
@@ -336,9 +314,10 @@ class KernelOp(CustomOp):
         }
 
     def bound(self) -> Kernel:
-        """The node's kernel bound to its facts, nothing chosen: one binding per node, from
-        the bind cache (``cache``)."""
-        return BIND_CACHE.bound(self.facts())
+        """The node's kernel bound to its facts, nothing chosen (kept by them in the build's
+        member cache)."""
+        point: Kernel = configured(self.facts()).point  # type: ignore[assignment]
+        return point
 
     def _channel_hint(self, names: Iterable[str]) -> str:
         """A hint for an error that names ``names``: if one is a channel's key (named
@@ -377,17 +356,11 @@ class KernelOp(CustomOp):
 
     def _replayed(self, choices: Mapping[str, object]) -> Kernel:
         """``point``, with ``choices`` (by attribute) in place of the node's: replayed on
-        its kernel as a network replays a member's stored choices."""
-        bound = self.bound()
-        if not choices:
-            return bound
-        stored = {(self.label, key): value for key, value in typed(type(bound), choices).items()}
-        replayed = Network({self.label: bound}, stored=stored)
-        if replayed.dropped:
-            raise refusal(
-                self.label, {key: why(found) for (_, key), found in replayed.dropped.items()}
-            )
-        point: Kernel = replayed.member(self.label)
+        its kernel as a network replays a member's stored choices (``configured``)."""
+        found = configured(self.facts(), typed(type(self).kernel, choices))
+        if found.dropped:
+            raise refusal(self.label, {key: why(each) for key, each in found.dropped.items()})
+        point: Kernel = found.point  # type: ignore[assignment]
         return point
 
     def save(self, choices: Mapping[str, object | None]) -> None:
@@ -439,10 +412,13 @@ class KernelOp(CustomOp):
         """The tensor of each of this node's input channels, by port."""
         return {port: tensor for port, tensor in zip(self.ports, self.onnx_node.input) if port}
 
-    def owned(self, facts: Facts) -> dict[str, str]:
-        """The tensor of each parameter port whose initializer this node holds
-        (``facts``, the node's), by port."""
-        return {port: self.onnx_node.input[self.ports.index(port)] for port in facts.owned}
+    def owned(self) -> dict[str, str]:
+        """The tensor of each parameter port whose initializer this node holds, by port."""
+        model, node = self.model(), self.onnx_node
+        found = {port: node.input[self.ports.index(port)] for port in self.parameters}
+        return {
+            port: tensor for port, tensor in found.items() if initializer(model, tensor) is not None
+        }
 
     def network(self) -> Network:
         """The node alone, as conversion checks it: its kernel (named as the node) and a
@@ -450,11 +426,15 @@ class KernelOp(CustomOp):
         by its ONNX position (``in<i>_V``, ``out<j>_V``), on the target's platform. An
         input's carries its tensor, a parameter's the tensor and values its kernel states
         for it; an output's what its kernel states it writes. Nothing chosen."""
+        with reading(self.model()):
+            return self._network()
+
+    def _network(self) -> Network:
         facts = self.facts()
-        owned = self.owned(facts)
+        owned = self.owned()
         platform = self.target().platform
         model, label, node = self.model(), self.label, self.onnx_node
-        members: dict[str, Space | Wire] = {}
+        members: dict[str, Space | Facts | Wire] = {}
         for index, (port, tensor) in enumerate(zip(self.ports, node.input)):
             if port is None:
                 continue
@@ -473,7 +453,7 @@ class KernelOp(CustomOp):
                 platform=platform,
                 **stated,
             )
-        members[label] = BIND_CACHE.bound(facts)
+        members[label] = facts
         for index, (port, tensor) in enumerate(zip(self.outputs, node.output)):
             wiring = self.wiring[port]
             members[tensor] = wire(

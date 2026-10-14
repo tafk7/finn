@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 import pytest
+from member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from qonnx.core.modelwrapper import ModelWrapper
 
 from kernel_ops import cnv

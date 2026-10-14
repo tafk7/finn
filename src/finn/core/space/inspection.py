@@ -9,6 +9,7 @@ evaluates one query and follows only cached demanded edges for that snapshot.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar, cast, overload
 
@@ -38,6 +39,7 @@ from .results import (
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
+A = TypeVar("A")
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,16 +231,22 @@ def _decision_info(
 
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
-    """Discover all owning decisions below this scope, including inactive cases."""
+    """Discover all owning decisions below this scope, including inactive cases, sorted
+    by key. Read once per compiled model and scope."""
 
     compiled, scope = _context(subject)
-    included = _scope_set(compiled.linked, scope)
-    result = (
-        _decision_info(compiled.linked, index)
-        for index in compiled.linked.decisions
-        if compiled.linked.nodes[index].scope in included
-    )
-    return tuple(sorted(result, key=lambda item: item.key))
+    found = compiled._read.get(("decisions", scope))
+    if found is None:
+        included = _scope_set(compiled.linked, scope)
+        result = (
+            _decision_info(compiled.linked, index)
+            for index in compiled.linked.decisions
+            if compiled.linked.nodes[index].scope in included
+        )
+        found = compiled._read[("decisions", scope)] = tuple(
+            sorted(result, key=lambda item: item.key)
+        )
+    return cast(tuple[DecisionInfo[object], ...], found)
 
 
 @overload
@@ -343,6 +351,41 @@ def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
     )
 
 
+def _answered(
+    current: _runtime.Snapshot,
+    question: str,
+    scope: int,
+    answer: Callable[[_Copies], A],
+) -> A:
+    """``answer(copies)``, kept on ``current`` (an immutable configuration) once its
+    forced Decisions are found, where every value it copied is shared."""
+    key = (question, scope)
+    with current.lock:
+        if key in current.answers:
+            return cast(A, current.answers[key])
+        copies = _Copies(current)
+        found = answer(copies)
+        if copies.shared and (not current.forcing or isinstance(current.found, _forcing.Found)):
+            current.answers[key] = found
+        return found
+
+
+class _Copies:
+    """Decision values detached from a configuration's evaluations (``copy_result``),
+    and whether each copy is the value itself."""
+
+    def __init__(self, current: _runtime.Snapshot) -> None:
+        self.current = current
+        self.shared = True
+
+    def __call__(self, index: int, value: object) -> object:
+        copied = cast(
+            Available[object], _runtime.copy_result(self.current, index, Available(value))
+        ).value
+        self.shared = self.shared and copied is value
+        return copied
+
+
 def admission(candidate: Space) -> QueryResult[object] | None:
     """A candidate's own refusal of its configuration: its ``admission`` member, if any.
 
@@ -352,8 +395,8 @@ def admission(candidate: Space) -> QueryResult[object] | None:
     """
     _execution.driver_only("admission")
     current = state(candidate)
-    with current.lock:
-        return _forcing.admitted(current, candidate._scope)[0]
+    scope = candidate._scope
+    return _answered(current, "admission", scope, lambda _: _forcing.admitted(current, scope)[0])
 
 
 def forced(point: Space) -> tuple[Forced, ...]:
@@ -365,19 +408,16 @@ def forced(point: Space) -> tuple[Forced, ...]:
     found = _forcing.forced(current) if current.forcing else _forcing.NOTHING
     linked = current.linked
     included = _scope_set(linked, point._scope)
-    with current.lock:
+
+    def compute(copy: _Copies) -> tuple[Forced, ...]:
         result = [
-            Forced(
-                decision_key(linked, index),
-                cast(
-                    Available[object], _runtime.copy_result(current, index, Available(value))
-                ).value,
-                found.verdicts[index].reasons,
-            )
+            Forced(decision_key(linked, index), copy(index, value), found.verdicts[index].reasons)
             for index, value in found.values.items()
             if linked.nodes[index].scope in included
         ]
-    return tuple(sorted(result, key=lambda item: item.key))
+        return tuple(sorted(result, key=lambda item: item.key))
+
+    return _answered(current, "forced", point._scope, compute)
 
 
 def viable(point: Space) -> tuple[Viable, ...]:
@@ -392,16 +432,12 @@ def viable(point: Space) -> tuple[Viable, ...]:
     found = _forcing.forced(current) if current.forcing else _forcing.NOTHING
     linked = current.linked
     included = _scope_set(linked, point._scope)
-    with current.lock:
-        result = [
+
+    def compute(copy: _Copies) -> tuple[Viable, ...]:
+        return tuple(
             Viable(
                 decision_key(linked, index),
-                tuple(
-                    cast(
-                        Available[object], _runtime.copy_result(current, index, Available(case))
-                    ).value
-                    for case in verdict.cases
-                ),
+                tuple(copy(index, case) for case in verdict.cases),
                 verdict.reasons,
             )
             for index, verdict in sorted(
@@ -411,8 +447,9 @@ def viable(point: Space) -> tuple[Viable, ...]:
             and index not in current.assignments
             and index not in found.values
             and linked.nodes[index].scope in included
-        ]
-    return tuple(result)
+        )
+
+    return _answered(current, "viable", point._scope, compute)
 
 
 def open(point: Space) -> tuple[Open, ...]:  # noqa: A001 - the inspection's name
@@ -425,14 +462,21 @@ def open(point: Space) -> tuple[Open, ...]:  # noqa: A001 - the inspection's nam
     found = _forcing.forced(current) if current.forcing else _forcing.NOTHING
     linked = current.linked
     included = _scope_set(linked, point._scope)
-    return tuple(
-        Open(decision_key(linked, index), bool(domain and domain.ordered))
-        for index, verdict in sorted(found.verdicts.items(), key=lambda item: linked.ranks[item[0]])
-        if verdict.membership
-        and index not in current.assignments
-        and index not in found.values
-        and linked.nodes[index].scope in included
-        for domain in (linked.nodes[index].domain,)
+    return _answered(
+        current,
+        "open",
+        point._scope,
+        lambda _: tuple(
+            Open(decision_key(linked, index), bool(domain and domain.ordered))
+            for index, verdict in sorted(
+                found.verdicts.items(), key=lambda item: linked.ranks[item[0]]
+            )
+            if verdict.membership
+            and index not in current.assignments
+            and index not in found.values
+            and linked.nodes[index].scope in included
+            for domain in (linked.nodes[index].domain,)
+        ),
     )
 
 

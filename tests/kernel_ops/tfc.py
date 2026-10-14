@@ -38,6 +38,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from finn.builder.build_dataflow import build_plan
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.kernels.explore import Ranked
+from finn.kernels.members import member_cache
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
@@ -173,10 +174,11 @@ def kernel_ops(source: ModelWrapper, directory: Path) -> ModelWrapper:
 def built(path: Path, build: Callable[[Path], ModelWrapper]) -> Path:
     """``path``, the model ``build`` makes (given ``path``'s directory), saved there by the
     first process to ask for it: every process that names the same path waits on one
-    lock and reads the one build."""
+    lock and reads the one build. The build runs in a member cache of its own."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path.with_suffix(".lock"), "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not path.is_file():
-            build(path.parent).save(str(path))
+            with member_cache():
+                build(path.parent).save(str(path))
     return path

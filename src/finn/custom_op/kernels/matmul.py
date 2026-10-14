@@ -23,12 +23,18 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import admitted, datatype, integer_tensor, known_shape, shape
+from finn.core.graph.facts import (
+    admitted,
+    datatype,
+    initializer,
+    integer_tensor,
+    known_shape,
+    shape,
+)
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, Match, Wiring, refused, unstated
-from finn.custom_op.kernels.cache import Facts
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.values.semantics import IntegerTensorValue
+from finn.kernels.members import Facts
 
 if TYPE_CHECKING:
     from onnx import NodeProto
@@ -115,22 +121,14 @@ class MatMul(KernelOp):
         b = self.onnx_node.input[1]
         shaped = self.shaped()
         platform = self.target().platform
-        key = (self.op_type, self.op_version, platform, *shaped.values())
-        if model.get_initializer(b) is None:
-            streamed: dict[str, object] = dict(platform=platform, **shaped)
-            return self.binding((*key, None), lambda: streamed)
+        stored = initializer(model, b)
+        if stored is None:
+            return self.binding(dict(platform=platform, **shaped))
         # Known weights: their values, and the datatype the graph declares them in.
         weights_dtype = datatype(model, b, label)
-        common: dict[str, object] = dict(weights_dtype=weights_dtype, platform=platform, **shaped)
-        digest = admitted(model, b, weights_dtype, label)
-
-        def values() -> dict[str, IntegerTensorValue]:
-            stored = model.get_initializer(b)
-            if stored is None:
-                raise KernelOpError(f"{label}: {b} is not an initializer")
-            return {"w": integer_tensor(stored)}
-
-        return self.binding((*key, weights_dtype.name, digest), lambda: common, ("w",), values)
+        admitted(model, b, weights_dtype, label)
+        formals: dict[str, object] = dict(weights_dtype=weights_dtype, platform=platform, **shaped)
+        return self.binding(formals, {"w": integer_tensor(stored)})
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """Y = A @ B, by ``product``."""
