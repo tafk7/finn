@@ -287,7 +287,10 @@ class QuantActBaseHandler(ABC):
                     mul_shape,
                 )
                 graph.value_info.append(mul_tensor)
-                model.set_initializer(mul_tensor.name, mul_scale)
+                # Float32, as declared: a 1-bit Quant's doubled scale comes out float64.
+                model.set_initializer(
+                    mul_tensor.name, np.asarray(mul_scale, dtype=np_default_dtype)
+                )
 
                 output_shape = model.get_tensor_shape(n.output[0])
                 act_mul_tensor = helper.make_tensor_value_info(

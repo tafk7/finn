@@ -480,15 +480,18 @@ def test_a_bipolar_quant_after_a_relu_is_refused(scale):
 @pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
 def test_a_one_bit_signed_quants_multithreshold_is_binary():
     """A 1-bit signed Quant's MultiThreshold computes 0 and 1, the Add (-0.5) and Mul behind
-    it the Quant's -1 and 1: it is BINARY, not the Quant's BIPOLAR. (The converted graph's
-    scale is a float64 initializer the float32 Mul cannot execute with, so its values are
-    not compared here.)"""
+    it the Quant's -1 and 1: it is BINARY, not the Quant's BIPOLAR, and the converted graph
+    computes the Quant's values."""
     model = _activation_model(None, "Quant", 1.0, 1, True, False)
     converted = model.transform(ConvertQONNXtoFINN())
     (node,) = [node for node in converted.graph.node if node.op_type == "MultiThreshold"]
     assert getCustomOp(node).get_nodeattr("out_dtype") == "BINARY"
     assert converted.get_tensor_datatype(node.output[0]) == DataType["BINARY"]
     assert [n.op_type for n in converted.graph.node] == ["MultiThreshold", "Add", "Mul"]
+    x = np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)
+    expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    assert np.array_equal(expected, [[-1.0, -1.0, 1.0, 1.0]])
+    assert np.array_equal(oxe.execute_onnx(converted, {"global_in": x})["global_out"], expected)
 
 
 @pytest.mark.transform
