@@ -349,7 +349,16 @@ class QuantReluHandler(QuantActBaseHandler):
                         "for Relu activations.",
                     )
         elif self._q_node.op_type == "BipolarQuant":
-            return
+            # A BipolarQuant gives its scale for every input >= 0, so after a Relu it is a
+            # constant: only a threshold of -inf over the Relu's input computes it.
+            act_node = self._model.find_direct_predecessors(self._q_node)[0]
+            if act_node.op_type == "Relu":
+                raise refused(
+                    "relu-bipolar-quant",
+                    self._q_node,
+                    "A BipolarQuant after a Relu gives its scale for every input, a "
+                    "constant that no MultiThreshold with finite thresholds computes.",
+                )
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
 

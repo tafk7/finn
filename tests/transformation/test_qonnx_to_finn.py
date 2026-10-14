@@ -463,6 +463,20 @@ def test_a_multithreshold_is_annotated_with_what_it_computes(
 
 
 @pytest.mark.transform
+@pytest.mark.parametrize("scale", [0.5, 1.0])
+def test_a_bipolar_quant_after_a_relu_is_refused(scale):
+    """A BipolarQuant after a Relu gives its scale for every input, the Relu's zeros
+    included: a constant, which the conversion refuses."""
+    model = _activation_model("Relu", "BipolarQuant", scale)
+    x = np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)
+    assert np.all(oxe.execute_onnx(model, {"global_in": x})["global_out"] == scale)
+    with pytest.raises(Refusal) as refused:
+        model.transform(ConvertQONNXtoFINN())
+    ((code, owner),) = [(each.code, each.owner) for each in refused.value.findings]
+    assert (code, owner) == ("relu-bipolar-quant", "ConvertQuantActToMultiThreshold")
+
+
+@pytest.mark.transform
 @pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
 def test_a_one_bit_signed_quants_multithreshold_is_binary():
     """A 1-bit signed Quant's MultiThreshold computes 0 and 1, the Add (-0.5) and Mul behind
