@@ -58,6 +58,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from math import ceil
 
 from finn.kernels.adapters import Convert
@@ -128,12 +129,40 @@ class Flow:
     late: tuple[int, ...]
 
 
+def _events(
+    buffer: NestBuffer, read_gaps: Sequence[int]
+) -> tuple[tuple[tuple[int, int], ...], tuple[int, ...], tuple[int, ...]]:
+    """An input_gen's frame by the events its presentation can wait on: the frame's first
+    read of each word (its beat and the word), in beat order; for each freed count ``1 …``
+    the most it frees, the first beat by which the frame has freed that many; and the
+    reader's gaps summed to each beat (the gaps indexed by the buffer's beat in its frame)."""
+    seen: set[int] = set()
+    first: list[tuple[int, int]] = []
+    for beat, word in enumerate(buffer.reads):
+        if word not in seen:
+            seen.add(word)
+            first.append((beat, word))
+    reached: list[int] = []
+    for beat, freed in enumerate(buffer.freed):
+        while len(reached) < freed:
+            reached.append(beat)
+    return tuple(first), tuple(reached), tuple(accumulate(read_gaps[: len(buffer.reads)]))
+
+
 def simulate(
     supply: Pattern, accept: Acceptance, period: int, depth: int, frames: int
 ) -> Flow | None:
     """``frames`` frames from ``supply``, its frame ``k`` due from ``k * period``,
     through a FIFO of ``depth`` words (0: direct, a handshake) into ``accept``;
-    ``None`` when the ends deadlock."""
+    ``None`` when the ends deadlock.
+
+    An input_gen presents its beats in order, each once the word it reads was taken plus
+    two cycles (written, then read through its output register) and no sooner than the
+    reader's gap after the beat before. A beat re-reading a word its frame already read is
+    never held by that word: the earlier read already waited for it, and no gap is negative.
+    So only a frame's first reads can wait on the supply, or deadlock, and between them the
+    beats advance by the reader's gaps alone, a prefix sum: the presentation is simulated by
+    its first reads and the beats where its freed count rises, not beat by beat."""
     # Each pattern's gaps are read once: a frame at one lane a beat is tens of
     # thousands of words, and a model of 16 frames reads them for every word.
     words, gaps = len(supply.times), supply.gaps()
@@ -141,33 +170,46 @@ def simulate(
     left: list[int] = []  # when each word left the producer
     taken: list[int] = []  # when the input side took it
     late: list[int] = []
-    # An input_gen's presented beats, when each was presented, and its freed count.
     buffered = accept if isinstance(accept, Buffered) else None
-    shown: list[int] = []
     freed_at: list[int] = []  # the cycle at which the freed count reached each value
-    freed_count = 0
+    if buffered is not None:
+        buffer = buffered.buffer
+        frame, frame_words = len(buffer.reads), buffer.freed[-1]
+        first, reached, summed = _events(buffer, accept_gaps)
+    shown, shown_at = -1, 0  # the last first read presented: its beat and cycle
+    reading = 0  # the next first read to present, counted over every frame
+
+    def gaps_to(beat: int) -> int:
+        """The reader's gaps summed from the first beat to ``beat``."""
+        k, i = divmod(beat, frame)
+        return k * summed[-1] + summed[i]
 
     def present_until(count: int) -> bool:
         """Present beats until ``count`` words are freed; False when a beat waits on a
         word not yet taken."""
-        nonlocal freed_count
-        assert buffered is not None
-        buffer, frame = buffered.buffer, len(buffered.buffer.reads)
-        frame_words, read_gaps = buffer.freed[-1], accept_gaps
-        while freed_count < count:
-            beat = len(shown)
-            k, i = divmod(beat, frame)
-            word = k * frame_words + buffer.reads[i]
-            if word >= len(taken):
-                return False
-            at = taken[word] + 2  # written, then read through its output register
-            if shown:
-                at = max(at, shown[-1] + read_gaps[i])
-            shown.append(at)
-            now = k * frame_words + buffer.freed[i]
-            while freed_count < now:
-                freed_at.append(at)
-                freed_count += 1
+        nonlocal shown, shown_at, reading
+        while len(freed_at) < count:
+            # The beat at which the freed count reaches its next value: frame k's beats free
+            # k * frame_words words and the frame's own; the first frame whose most freed
+            # reaches the value, at its first beat that does.
+            value = len(freed_at) + 1
+            k = max(0, -((len(reached) - value) // frame_words))
+            until = k * frame + reached[value - k * frame_words - 1]
+            while True:
+                k, f = divmod(reading, len(first))
+                beat, word = first[f]
+                beat += k * frame
+                if beat > until:
+                    break
+                word += k * frame_words
+                if word >= len(taken):
+                    return False
+                at = taken[word] + 2  # written, then read through its output register
+                if shown >= 0:
+                    at = max(at, shown_at + gaps_to(beat) - gaps_to(shown))
+                shown, shown_at = beat, at
+                reading += 1
+            freed_at.append(shown_at + gaps_to(until) - gaps_to(shown))
         return True
 
     for n in range(frames * words):

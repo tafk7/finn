@@ -12,6 +12,7 @@ FIFO the seam refuses are made controllable by a double of the per-channel sizin
 
 from __future__ import annotations
 
+import random
 from math import prod
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from typing import Any
 import pytest
 
 import finn.kernels.explore as explore_module
+import finn.kernels.fifo_sizing as fifo_sizing
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.rtlsim_bench import simulate as simulate_rtl
@@ -38,7 +40,9 @@ from finn.kernels.explore import (
 )
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.fifo_sizing import (
+    FIFO_LATENCY,
     Buffered,
+    Flow,
     NotModelled,
     Pattern,
     Sized,
@@ -48,7 +52,7 @@ from finn.kernels.fifo_sizing import (
     least_depth,
     simulate,
 )
-from finn.kernels.input_generator import nest_buffer, nest_geometry
+from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
 from finn.kernels.network import Network, dotted
 from finn.toolchain.launcher import host_toolchain
 from kernels import chain
@@ -681,3 +685,175 @@ endmodule
             assert late == [0] * frames
         else:
             assert max(late) > 0
+
+
+# -- the presentation by its events, against the model beat by beat --------------------------
+
+
+def simulate_by_beat(
+    supply: Pattern, accept: Any, period: int, depth: int, frames: int
+) -> Flow | None:
+    """The reference ``simulate`` is checked against: the model as reviewed and checked in
+    XSim (``test_input_gen_accepts_its_input_at_the_cycles_its_model_predicts``), an
+    input_gen's presentation stepped beat by beat. A test oracle, nothing in ``src`` reads
+    it."""
+    words, gaps = len(supply.times), supply.gaps()
+    accept_gaps = accept.gaps() if isinstance(accept, Pattern) else accept.reads.gaps()
+    left: list[int] = []
+    taken: list[int] = []
+    late: list[int] = []
+    buffered = accept if isinstance(accept, Buffered) else None
+    shown: list[int] = []
+    freed_at: list[int] = []
+    freed_count = 0
+
+    def present_until(count: int) -> bool:
+        nonlocal freed_count
+        assert buffered is not None
+        buffer, frame = buffered.buffer, len(buffered.buffer.reads)
+        frame_words, read_gaps = buffer.freed[-1], accept_gaps
+        while freed_count < count:
+            beat = len(shown)
+            k, i = divmod(beat, frame)
+            word = k * frame_words + buffer.reads[i]
+            if word >= len(taken):
+                return False
+            at = taken[word] + 2
+            if shown:
+                at = max(at, shown[-1] + read_gaps[i])
+            shown.append(at)
+            now = k * frame_words + buffer.freed[i]
+            while freed_count < now:
+                freed_at.append(at)
+                freed_count += 1
+        return True
+
+    for n in range(frames * words):
+        k, j = divmod(n, words)
+        ready = k * period + supply.times[j]
+        if left:
+            ready = max(ready, left[-1] + gaps[j])
+        if depth and n >= depth:
+            ready = max(ready, taken[n - depth] + 1)
+        at = ready + (FIFO_LATENCY if depth else 0)
+        if taken:
+            at = max(at, taken[-1] + 1)
+        if buffered is None:
+            assert isinstance(accept, Pattern)
+            reads = accept_gaps[n % len(accept.times)]
+            if taken:
+                at = max(at, taken[-1] + reads)
+        else:
+            room = n - buffered.buffer.capacity + 1
+            if room > 0:
+                if not present_until(room):
+                    return None
+                at = max(at, freed_at[room - 1] + 1)
+        taken.append(at)
+        left.append(at if not depth else ready)
+        if j == words - 1:
+            late.append(left[-1] - (k * period + supply.times[-1]))
+    return Flow(tuple(left), tuple(taken), tuple(late))
+
+
+def _random_pattern(rng: random.Random, beats: int, slack: int) -> Pattern:
+    times = [rng.randint(0, 3)]
+    for _ in range(beats - 1):
+        times.append(times[-1] + rng.choice((0, 1, 1, 1, 2, 3, 5)))
+    return Pattern(tuple(times), times[-1] - times[0] + 1 + rng.randint(0, slack))
+
+
+def _random_buffer(rng: random.Random, frame_words: int) -> NestBuffer:
+    """A nest-like buffer: its frame's words read in passes, some re-read, each freed at or
+    after its last read; now and then freed counts out of order, or beyond the frame's own
+    words before its last beat (``simulate`` reads any)."""
+    reads = [
+        word
+        for sweep in range(rng.randint(1, 5))
+        for word in range(frame_words)
+        if sweep == 0 or rng.random() < 0.7
+    ]
+    last = {word: beat for beat, word in enumerate(reads)}
+    order = sorted(range(frame_words), key=last.__getitem__)
+    freed, count = [], 0
+    for beat in range(len(reads)):
+        while count < frame_words and last[order[count]] <= beat and rng.random() < 0.8:
+            count += 1
+        freed.append(count)
+    if rng.random() < 0.1:
+        freed = [rng.randint(0, frame_words + 2) for _ in reads]
+    freed[-1] = frame_words
+    return NestBuffer(rng.randint(1, 3 * frame_words), tuple(reads), tuple(freed))
+
+
+def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_random_ends() -> None:
+    """The same ``Flow`` (or deadlock), word for word, on random patterns and nest-like
+    buffers, a stream frame of one to three of the buffer's frames (the Chain's
+    ``levels``: three words through an input_gen frame of one)."""
+    rng = random.Random(20261014)
+    outcomes = []
+    for _ in range(1500):
+        frame_words = rng.randint(1, 24)
+        frames_a_stream = rng.choice((1, 1, 2, 3))
+        supply = _random_pattern(rng, frame_words * frames_a_stream, 30)
+        accept: Pattern | Buffered
+        if rng.random() < 0.6:
+            buffer = _random_buffer(rng, frame_words)
+            accept = Buffered(buffer, _random_pattern(rng, len(buffer.reads) * frames_a_stream, 10))
+            span = max(supply.beats, accept.reads.beats)
+        else:
+            accept = _random_pattern(rng, frame_words, 30)
+            span = max(supply.beats, accept.beats)
+        period = span + rng.randint(0, span)
+        depth = rng.choice((0, 0, 1, 2, 3, 5, 8, rng.randint(0, 3 * frame_words)))
+        frames = rng.choice((2, 4, 16))
+        flow = simulate(supply, accept, period, depth, frames)
+        assert flow == simulate_by_beat(supply, accept, period, depth, frames)
+        outcomes.append((isinstance(accept, Buffered), flow is None))
+    # Buffered ends both flowing and deadlocked were compared.
+    assert {(True, False), (True, True), (False, False)} <= set(outcomes)
+
+
+def _sizing_ends() -> list[tuple[Pattern, Pattern | Buffered, tuple[int, ...]]]:
+    """The sizing tests' patterns and ``NESTS``, each nest read every beat and every third,
+    with periods around their spans."""
+    found: list[tuple[Pattern, Pattern | Buffered, tuple[int, ...]]] = [
+        (BURST, SLOW, (16, 20, 24, 32)),
+        (Pattern(tuple(range(8)), 8), SLOW, (16,)),
+        (_burst(32), _every(2, 32), (32, 40, 48, 64)),
+        (_burst(48), _every(3, 48), (48, 64)),
+        (_burst(32), _every(1, 32), (32,)),
+    ]
+    for frame, dims, coefs in NESTS:
+        beats, buffer = prod(dims), nest_buffer(frame, dims, coefs)
+        supply = Pattern(tuple(range(frame)), frame)
+        reader = Pattern(tuple(range(beats)), beats)
+        slow = Pattern(tuple(range(0, 3 * beats, 3)), 3 * beats)
+        found.append((supply, Buffered(buffer, reader), (frame, beats, 2 * beats)))
+        found.append((supply, Buffered(buffer, slow), (3 * beats, 4 * beats)))
+    found.append(
+        (
+            Pattern(tuple(range(4, 200, 4)), 196),
+            Buffered(nest_buffer(49, (4, 49), (0, 1)), Pattern(tuple(range(196)), 196)),
+            (196, 250),
+        )
+    )
+    return found
+
+
+def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_the_sizing_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same ``Flow`` at every depth to 13 words, and the same least depth, on the
+    sizing tests' bursts and input_gen's nests."""
+    for supply, accept, periods in _sizing_ends():
+        for period in periods:
+            for depth in range(14):
+                for frames in (4, 16):
+                    expected = simulate_by_beat(supply, accept, period, depth, frames)
+                    assert simulate(supply, accept, period, depth, frames) == expected
+            if supply.beats <= period:
+                least = least_depth(supply, accept, period)
+                with monkeypatch.context() as patched:
+                    patched.setattr(fifo_sizing, "simulate", simulate_by_beat)
+                    assert least_depth(supply, accept, period) == least
