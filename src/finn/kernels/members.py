@@ -12,8 +12,9 @@ point evaluated before, so the configured member is kept.
 
 **The key** is what the computation reads: the Space class, its arguments by name, each
 by its exact type and value (``1``, ``1.0`` and ``True`` are three keys, as the engine
-tells them apart; a tuple, list, set or dict by each item's), and the choices replayed:
-those stored, and for a channel in a trial the change and the clears. A large value is
+tells them apart; a tuple, list, set or dict by each item's), and the choices replayed in
+their order: those stored, and for a channel in a trial the change and the clears (replay
+falls back to each stored choice alone, in order). A large value is
 keyed by its digest: an ``IntegerTensorValue`` is equal by its shape and integers'
 sha256, loaded only when read. A value class (a frozen dataclass, a datatype) is keyed by
 its type and its own equality. The class's code and the platform catalog are fixed for a
@@ -229,7 +230,11 @@ def typed(value: object) -> Hashable:
 
 
 def _items(values: Mapping[str, object]) -> tuple[tuple[str, Hashable], ...]:
-    return tuple(sorted((name, typed(value)) for name, value in values.items()))
+    return tuple(sorted(_ordered(values)))
+
+
+def _ordered(values: Mapping[str, object]) -> tuple[tuple[str, Hashable], ...]:
+    return tuple((name, typed(value)) for name, value in values.items())
 
 
 def key(
@@ -242,8 +247,8 @@ def key(
     found = (
         facts.space_type,
         _items(facts.arguments),
-        _items(stored),
-        _items(change),
+        _ordered(stored),
+        _ordered(change),
         tuple(sorted(clear)),
     )
     try:
@@ -323,6 +328,16 @@ def member_cache(*, verify: bool | None = None) -> Iterator[MemberCache]:
 def current() -> MemberCache | None:
     """The member cache open here, or None."""
     return _CACHE.get()
+
+
+@contextmanager
+def uncached() -> Iterator[None]:
+    """No member cache open for the block: what the verifying mode computes again."""
+    token = _CACHE.set(None)
+    try:
+        yield
+    finally:
+        _CACHE.reset(token)
 
 
 def observed(entry: Configured) -> object:
@@ -421,6 +436,7 @@ __all__ = [
     "rejection",
     "replayed",
     "typed",
+    "uncached",
     "verification_counts",
     "write_counts",
 ]
