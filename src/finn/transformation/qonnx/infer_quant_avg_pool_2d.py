@@ -42,8 +42,8 @@ from finn.transformation.qonnx.qonnx_activation_handlers import INT_QUANT_OP_TYP
 
 
 def _refused(owner, code, node, message):
-    """The refusal of ``node`` by the transformation ``owner``."""
-    details = (("node", node.name),)
+    """The refusal of ``node`` (None for the model) by the transformation ``owner``."""
+    details = () if node is None else (("node", node.name),)
     return Refusal([Finding(FindingKind.REJECTION, code, owner, message, details)])
 
 
@@ -61,10 +61,11 @@ def _least_behind(model, mt_node, consumer):
     return least
 
 
-def _get_signed_from_upstream(model, trunc_node):
+def _get_signed_from_upstream(model, trunc_node, owner):
     """Whether the input of ``trunc_node`` is signed: its datatype's, else the first
     known datatype up the graph through sign-preserving nodes (a MultiThreshold's
-    values with the bias behind it)."""
+    values with the bias behind it). Where no such walk finds it, the transformation
+    ``owner`` refuses the Trunc."""
     node = trunc_node
     signed = None
     inp_dt = model.get_tensor_datatype(node.input[0])
@@ -75,15 +76,21 @@ def _get_signed_from_upstream(model, trunc_node):
     if signed is None:
         while curr_node is not None:
             if model.is_join_node(curr_node):
-                raise RuntimeError(
-                    "Datatype Inference for the Trunc node only supports "
-                    "linear nodes in the upstream path."
+                raise _refused(
+                    owner,
+                    "trunc-sign-join",
+                    trunc_node,
+                    f"the sign of the Trunc's input is not known, and {curr_node.name} up "
+                    "its path joins several inputs: only a linear path is followed",
                 )
             next_node = model.find_direct_predecessors(curr_node)
             if next_node is None:
-                raise RuntimeError(
-                    "Could not infere the Datatype for the Trunc node due to "
-                    "missing upstream ndoes."
+                raise _refused(
+                    owner,
+                    "trunc-sign-unstated",
+                    trunc_node,
+                    f"the sign of the Trunc's input is not known, and {curr_node.name} up "
+                    "its path has no predecessor to read it from",
                 )
             next_node = next_node[0]
             # A MultiThreshold's datatype is that of its own values, before the bias
@@ -108,21 +115,22 @@ def _get_signed_from_upstream(model, trunc_node):
 
             sign_preserving_ops = ["Add", "Mul", "AveragePool", "Pad"]
             if next_node.op_type not in sign_preserving_ops:
-                raise RuntimeError(
-                    f"Could not infere the Datatype for the Trunc node, "
-                    f"because the sign of the input datatype could not be infered "
-                    f"from upstream nodes. And traversal further up the graph was "
-                    f"disallowed, since the next node type {next_node.op_type} "
-                    f"is not in the list of "
-                    f"sign preserving ops {sign_preserving_ops}."
+                raise _refused(
+                    owner,
+                    "trunc-sign-not-preserved",
+                    trunc_node,
+                    f"the sign of the Trunc's input is not known, and {next_node.name} up "
+                    f"its path ({next_node.op_type}) is not one of the sign-preserving ops "
+                    f"{sign_preserving_ops} the search passes",
                 )
             curr_node = next_node
 
     if signed is None:
-        raise RuntimeError(
-            "Could not infere the Datatype for the Trunc node, "
-            "because the sign of the input datatype could not be infered "
-            "from upstream nodes."
+        raise _refused(
+            owner,
+            "trunc-sign-unknown",
+            trunc_node,
+            "the sign of the Trunc's input is not known, nor stated up its path",
         )
 
     return signed
@@ -147,9 +155,11 @@ class AvgPoolAndTruncToQuantAvgPool(Transformation):
             model = model.transform(AvgPoolAndTruncv2ToQuantAvgPool())
             return model, False
         else:
-            raise NotImplementedError(
-                f"AvgPoolAndTruncToQuantAvgPool not implemented for "
-                f"Trunc opset version {trunc_opset}."
+            raise _refused(
+                type(self).__name__,
+                "trunc-opset",
+                None,
+                f"Trunc opset version {trunc_opset}: only versions 1 and 2 are converted",
             )
 
 
@@ -258,7 +268,7 @@ class AvgPoolAndTruncv1ToQuantAvgPool(Transformation):
 
                         # The input width whose sum over the window the Trunc narrows.
                         ibits = math.floor(math.log(2**trunc_in_bits / (k_s * k_s), 2))
-                        signed = _get_signed_from_upstream(model, t_node)
+                        signed = _get_signed_from_upstream(model, t_node, type(self).__name__)
                         data_layout = "NCHW"
 
                         scale = model.get_initializer(t_node.input[1])
@@ -435,7 +445,7 @@ class AvgPoolAndTruncv2ToQuantAvgPool(Transformation):
 
                     # The input width whose sum over the window the Trunc narrows.
                     ibits = math.floor(math.log(2**trunc_in_bits / (k_s * k_s), 2))
-                    signed = _get_signed_from_upstream(model, t_node)
+                    signed = _get_signed_from_upstream(model, t_node, type(self).__name__)
                     data_layout = "NCHW"
 
                     scale = model.get_initializer(t_node.input[1])
