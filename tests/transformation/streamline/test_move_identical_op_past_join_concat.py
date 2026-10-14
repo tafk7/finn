@@ -32,7 +32,9 @@ import numpy as np
 from onnx import TensorProto
 from onnx import helper as oh
 from os.path import join
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
@@ -181,3 +183,36 @@ def test_move_identical_op_past_join_concat(identical_op, tmp_path):
     )[0].op_type
     assert node0_input0_model != node0_input0_model_transformed
     assert node1_input1_model != node1_input1_model_transformed
+
+
+@pytest.mark.streamline
+def test_transposes_of_different_perms_stay_before_the_concat():
+    """Two Transposes into a Concat whose perms differ (equal shapes either way) are not
+    the same op: moving one Transpose past the Concat in their place would change the
+    values, so MoveTransposePastJoinConcat leaves them."""
+    shape = [1, 4, 4, 8]
+    nodes = [
+        oh.make_node("Transpose", ["in1"], ["t1"], perm=[0, 3, 1, 2]),
+        oh.make_node("Transpose", ["in2"], ["t2"], perm=[0, 3, 2, 1]),
+        oh.make_node("Concat", ["t1", "t2"], ["out"], axis=1),
+    ]
+    graph = oh.make_graph(
+        nodes=nodes,
+        name="different_perms",
+        inputs=[
+            oh.make_tensor_value_info("in1", TensorProto.FLOAT, shape),
+            oh.make_tensor_value_info("in2", TensorProto.FLOAT, shape),
+        ],
+        outputs=[oh.make_tensor_value_info("out", TensorProto.FLOAT, [1, 16, 4, 4])],
+    )
+    model = ModelWrapper(qonnx_make_model(graph, producer_name="different_perms"))
+    model = model.transform(InferShapes())
+    input_dict = {
+        "in1": gen_finn_dt_tensor(DataType["FLOAT32"], shape),
+        "in2": gen_finn_dt_tensor(DataType["FLOAT32"], shape),
+    }
+
+    model_transformed = model.transform(MoveTransposePastJoinConcat())
+
+    assert [n.op_type for n in model_transformed.graph.node] == ["Transpose", "Transpose", "Concat"]
+    assert oxe.compare_execution(model, model_transformed, input_dict)

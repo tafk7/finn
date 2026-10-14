@@ -568,7 +568,14 @@ class MakeMaxPoolNHWC(Transformation):
             if n.op_type == "MaxPool":
                 consumer = model.find_consumer(n.output[0])
                 producer = model.find_producer(n.input[0])
-                if consumer is not None and consumer.op_type == "Transpose":
+                # The consumer path rewires one consumer: with the pool's output a fork,
+                # the other branches would read the unpooled tensor. The producer path
+                # keeps every consumer.
+                if (
+                    consumer is not None
+                    and consumer.op_type == "Transpose"
+                    and not model.is_fork_node(n)
+                ):
                     perms = list(get_by_name(consumer.attribute, "perm").ints)
                     if perms == [0, 2, 3, 1]:
                         ceil_mode = get_by_name(n.attribute, "ceil_mode")
@@ -1302,7 +1309,7 @@ class MoveTransposePastJoinAdd(MoveIdenticalOpPastJoinOp):
         first_perm = get_by_name(producers[0].attribute, "perm").ints
         for producer in producers:
             if first_perm != get_by_name(producer.attribute, "perm").ints:
-                False
+                return False
         return True
 
 
@@ -1388,7 +1395,7 @@ class MoveTransposePastJoinConcat(MoveIdenticalOpPastJoinOp):
         first_perm = get_by_name(producers[0].attribute, "perm").ints
         for producer in producers:
             if first_perm != get_by_name(producer.attribute, "perm").ints:
-                False
+                return False
         return True
 
     def move_node(self, model, n, producers):
