@@ -49,7 +49,6 @@ from collections import Counter
 from collections.abc import Callable, Collection, Hashable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
@@ -71,15 +70,21 @@ VERIFY = "FINN_VERIFY_MEMBER_CACHE"
 """The environment variable that switches the verifying mode on (see the module docstring)."""
 
 
-@dataclass(frozen=True, eq=False)
 class Facts:
-    """A member as it is bound: its Space class and the arguments it is given, by name."""
+    """A member as it is bound: its Space class and the arguments it is given, by name (a
+    record, not a value class: its arguments are anything a Space takes)."""
+
+    __slots__ = ("arguments", "space_type")
 
     space_type: type[Space]
     arguments: Mapping[str, object]
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "arguments", MappingProxyType(dict(self.arguments)))
+    def __init__(self, space_type: type[Space], arguments: Mapping[str, object]) -> None:
+        self.space_type = space_type
+        self.arguments = MappingProxyType(dict(arguments))
+
+    def __repr__(self) -> str:
+        return f"Facts({self.space_type.__name__}, {dict(self.arguments)!r})"
 
     def bind(self) -> Space:
         """Its design space: the class bound to its arguments, nothing chosen."""
@@ -87,19 +92,29 @@ class Facts:
         return point
 
 
-@dataclass(frozen=True, eq=False)
 class Configured:
     """A member configured: its ``point`` (None where a change is refused), the stored
     choices replay ``dropped`` and the change's choices it ``refused``, each by key with
-    why."""
+    why (a record the cache keeps, never changed)."""
+
+    __slots__ = ("dropped", "point", "refused")
 
     point: Space | None
-    dropped: Mapping[str, tuple[Finding, ...]] = field(default_factory=dict)
-    refused: Mapping[str, tuple[Finding, ...]] = field(default_factory=dict)
+    dropped: Mapping[str, tuple[Finding, ...]]
+    refused: Mapping[str, tuple[Finding, ...]]
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "dropped", MappingProxyType(dict(self.dropped)))
-        object.__setattr__(self, "refused", MappingProxyType(dict(self.refused)))
+    def __init__(
+        self,
+        point: Space | None,
+        dropped: Mapping[str, tuple[Finding, ...]] | None = None,
+        refused: Mapping[str, tuple[Finding, ...]] | None = None,
+    ) -> None:
+        self.point = point
+        self.dropped = MappingProxyType(dict(dropped or {}))
+        self.refused = MappingProxyType(dict(refused or {}))
+
+    def __repr__(self) -> str:
+        return f"Configured({self.point!r}, {dict(self.dropped)!r}, {dict(self.refused)!r})"
 
 
 class MemberCacheMismatch(AssertionError):
