@@ -441,10 +441,10 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     tmp_path: Path, tfc_streamlined: Path
 ) -> None:
     """TFC_W2A2 through the builder on ``ip`` (Ultra96's part at 5 ns, the Z0 baseline's
-    exploration), listed to its packaged IP: the IP packages (or, the machine's store holding
-    it, is reused, as the manifest records), its description reads back against the
-    module's pins, ``run_testbench`` runs the testbench written beside it, on a generated
-    frame, in the machine's toolchain, and it prints PASS when run by its own script."""
+    exploration), listed to its packaged IP: the IP packages, its description reads back against
+    the module's pins, ``run_testbench`` runs the testbench written beside it, on a
+    generated frame, in the machine's toolchain, and it prints PASS when run by its own
+    script."""
     source_file = tmp_path / "streamlined.onnx"
     shutil.copyfile(tfc_streamlined, source_file)
     output = tmp_path / "output"
@@ -465,18 +465,10 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     )
     assert build_dataflow_cfg(str(source_file), cfg) == 0
     manifest = json.loads((output / MANIFEST_FILE).read_text())
-    # Packaged by its step, its transcript that step's; or, the machine's store holding the
-    # IP already, reused from its entry with no tool run.
+    # Packaged by its step, its transcript that step's.
     (packaged,) = [each for each in manifest["steps"] if each["name"] == "step_package_partition"]
-    (entry,) = [each for each in packaged["stored"] if each["store"] == "ip"]
-    if entry["status"] == "built":
-        tools = {Path(run["transcript"]).name: run["status"] for run in packaged["tools"]}
-        assert tools["package.sh.stdout.log"] == "completed"
-    else:
-        assert entry["status"] == "reused"
-        assert Path(entry["entry"]).name.startswith("partition-")
-        assert (Path(entry["entry"]) / "ip" / "component.xml").is_file()
-        assert packaged["tools"] == []
+    tools = {Path(run["transcript"]).name: run["status"] for run in packaged["tools"]}
+    assert tools["package.sh.stdout.log"] == "completed"
     ip = output / "stitched_ip"
     ran_by_utility = run_testbench(ip / TESTBENCH_DIR, toolchain=host_toolchain())
     assert ran_by_utility.splitlines()[-1] == "PASS"
@@ -487,10 +479,9 @@ def test_tfc_on_the_ip_shell_packages_and_its_testbench_passes_on_its_own(
     point, _ = configured_network(body, "partition")
     described = json.loads((ip / "interface.json").read_text())
     read_back(described, point.module.abi.pins, 5.0)
-    # The IP is the partition's, of its one name; the body states it, of the stored key.
+    # The IP is the partition's, of its one name; the body states it.
     assert described["ip"]["name"] == "partition"
     assert body.get(OUTPUT_IP) == str(ip / "ip")
-    assert body.get(OUTPUT_IP_KEY) == entry["key"]
     # The exploration folds the input's thresholds at 4 lanes and the last layer at 1
     # (Z0's choices), not test_tfc's 16 lanes by hand.
     assert [(s["name"], s["tdata"], s["element"]) for s in described["streams"]] == [
