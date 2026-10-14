@@ -30,8 +30,8 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import Partition, network, save_channels
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.network import Partition, network
+from finn.custom_op.kernels.shell import configured_network, save_channels
 from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,

@@ -46,8 +46,8 @@ from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.graph.annotations.channel import channel_choices
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import link_stream, measure
-from finn.custom_op.kernels.network import Partition, member, network, save_channels
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.network import Partition, member, network
+from finn.custom_op.kernels.shell import configured_network, save_channels
 from finn.harness.toolchain import print_identity
 from finn.toolchain.launcher import host_toolchain
 

@@ -22,7 +22,7 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.space import DefinitionError, Rejected, design_space
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import Partition, network, save_channels
+from finn.custom_op.kernels.shell import InShell, in_shell, save_channels
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -45,11 +45,11 @@ def op(model: ModelWrapper) -> Any:
     return kernel_op(model, model.graph.node[0])
 
 
-def folded(model: ModelWrapper) -> Partition:
-    """The MatMul folded as the Chain's first, its network bound: its channels' ends
-    known."""
+def folded(model: ModelWrapper) -> InShell:
+    """The MatMul folded as the Chain's first, its network bound in its shell: its
+    channels' ends known."""
     op(model).save(MATMUL)
-    return network(model, model.graph.node)
+    return in_shell(model, model.graph.node)
 
 
 def test_a_node_binds_the_models_platform_and_its_dsp_block() -> None:

@@ -23,7 +23,8 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp, kernel_op
-from finn.custom_op.kernels.network import Partition, network, persist, save_channels
+from finn.custom_op.kernels.network import Partition, persist
+from finn.custom_op.kernels.shell import InShell, in_shell, save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -344,12 +345,12 @@ def open_memories(bound: Partition) -> tuple[Partition, list[str]]:
     return bound, open_choices(bound, ADAPTER_RAM_STYLES)
 
 
-def configure_partition(model: ModelWrapper) -> Partition:
-    """The partition's network, its open adapter memories chosen (each its baseline) and
-    saved on their owners, bound again."""
-    bound = network(model, model.graph.node, name="chain")
+def configure_partition(model: ModelWrapper) -> InShell:
+    """The partition's network in its shell, its open adapter memories chosen (each its
+    baseline) and saved on their owners, bound again."""
+    bound = in_shell(model, model.graph.node, name="chain")
     persist(model, with_adapter_memories(bound))
-    bound = network(model, model.graph.node, name="chain")
+    bound = in_shell(model, model.graph.node, name="chain")
     _, open_styles = open_memories(bound)
     assert open_styles == [] and not bound.stale
     return bound

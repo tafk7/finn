@@ -393,7 +393,7 @@ class KernelOp(CustomOp):
     def save(self, choices: Mapping[str, object | None]) -> None:
         """Store ``choices`` as the node's attributes, over its stored ones, after
         checking them all together on a fresh point; ``None`` clears one. Channel
-        choices go through ``network.save_channels``."""
+        choices go through ``shell.save_channels``."""
         merged = self.saved(choices)
         self.write(merged)
 
