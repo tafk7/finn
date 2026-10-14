@@ -478,6 +478,32 @@ def test_a_bipolar_quant_after_a_relu_is_refused(scale):
 
 @pytest.mark.transform
 @pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
+@pytest.mark.parametrize("scale", [0.5, 1.0, [0.5, 1.0, 2.0, 0.25]])
+def test_a_bipolar_quant_after_a_selu_converts(scale):
+    """A BipolarQuant after a Selu gives the sign of the Selu's input times its scale: one
+    threshold at 0 on that input, the scale per tensor or per channel."""
+    model = _activation_model("Selu", "BipolarQuant", scale)
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert [n.op_type for n in converted.graph.node][0] == "MultiThreshold"
+    assert "Selu" not in [n.op_type for n in converted.graph.node]
+    x = np.random.default_rng(0).uniform(-4.0, 4.0, size=(1, 4)).astype(np.float32)
+    for inp in (x, np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)):
+        expected = oxe.execute_onnx(model, {"global_in": inp})["global_out"]
+        out = oxe.execute_onnx(converted, {"global_in": inp})["global_out"]
+        assert np.array_equal(out, expected)
+
+
+@pytest.mark.transform
+def test_a_bipolar_identity_with_a_scale_other_than_one_is_refused():
+    model = _activation_model(None, "BipolarQuant", 0.5)
+    with pytest.raises(Refusal) as refused:
+        model.transform(ConvertQONNXtoFINN())
+    ((code, owner),) = [(each.code, each.owner) for each in refused.value.findings]
+    assert (code, owner) == ("bipolar-identity-scale", "ConvertQuantActToMultiThreshold")
+
+
+@pytest.mark.transform
+@pytest.mark.filterwarnings("error::qonnx.core.ranges.RangeContradiction")
 def test_a_one_bit_signed_quants_multithreshold_is_binary():
     """A 1-bit signed Quant's MultiThreshold computes 0 and 1, the Add (-0.5) and Mul behind
     it the Quant's -1 and 1: it is BINARY, not the Quant's BIPOLAR, and the converted graph
