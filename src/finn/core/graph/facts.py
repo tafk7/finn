@@ -111,9 +111,9 @@ def state(model: ModelWrapper, tensor: str, stated: ScalarEncoding) -> None:
     model.set_tensor_datatype(tensor, stated.dtype, stated.value_range)
 
 
-def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> str:
+def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str) -> None:
     """Check that the initializer ``tensor`` holds integers its datatype ``dtype``
-    allows, and return its content digest, which keys the node's binding."""
+    allows."""
     try:
         summary = initializer_value_summary(model, tensor)
     except UnsupportedTensorValueError as error:
@@ -124,7 +124,7 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         low, high = ordinary_integer_bounds(dtype)
     except DatatypeError:
         # Not an ordinary integer (FLOAT32 holds 0.5): no contradiction, the kernel refuses it.
-        return str(summary.content_digest)
+        return
     if not summary.is_integral:
         raise KernelOpError(f"{label}: {tensor} holds values that are not integers")
     if summary.minimum is None or summary.maximum is None:  # integral with no range: empty
@@ -134,7 +134,6 @@ def admitted(model: ModelWrapper, tensor: str, dtype: QONNXDataType, label: str)
         raise KernelOpError(
             f"{label}: {tensor} is annotated {dtype.name} and holds values over {list(observed)}"
         )
-    return str(summary.content_digest)
 
 
 def integer_tensor(values: npt.NDArray[Any]) -> IntegerTensorValue:

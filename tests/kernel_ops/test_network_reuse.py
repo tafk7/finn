@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The graph's network reuses its bindings by value: the same facts hit, any fact
+"""The graph's network reuses its members by value: the same facts hit, any fact
 changed misses, and choices are never shared.
 
-``network`` binds each node's kernel through the bind cache, one binding per node, and
-each channel from its facts through the network's own cache (``finn.kernels.network``),
-so a class is linked once per process and a network of the same facts binds nothing
-again; the stored choices are replayed on each network as it is bound.
+``network`` configures each node's kernel and each channel from its facts through the
+build's member cache (``finn.kernels.members``; each test opens one), so a network of the
+same facts binds nothing again; the stored choices are replayed on each network as it is
+bound, and a replay is kept by them too.
 """
 
 from __future__ import annotations
@@ -21,22 +21,27 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.custom_op.kernels.cache import BIND_CACHE
 from finn.custom_op.kernels.network import network, persist
-from finn.kernels.network import _bound
+from finn.kernels.members import MemberCache, current
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors
 from kernel_ops.models import TARGET, WEIGHTS, kernel_model, matmul_model, open_memories
 
 
+def cache() -> MemberCache:
+    found = current()
+    assert found is not None
+    return found
+
+
 def test_the_same_facts_reuse_the_bindings_never_the_choices() -> None:
     model = kernel_model()
     first = network(model, model.graph.node, name="chain")
-    misses = BIND_CACHE.misses, _bound.cache_info().misses
+    misses = cache().misses
     other = kernel_model()
     again = network(other, other.graph.node, name="chain")
-    # Each kernel's binding and each channel's are found by their facts: nothing bound.
-    assert (BIND_CACHE.misses, _bound.cache_info().misses) == misses
+    # Each kernel and each channel is found by its facts and choices: nothing bound.
+    assert cache().misses == misses
     assert type(again.member("first")) is type(first.member("first"))
     # Choices are replayed on each network, never shared: saving the open memories
     # reaches the next network and leaves the first one's open.
@@ -83,9 +88,9 @@ def test_a_fact_changed_misses(change: str) -> None:
     changed = CHANGES[change]()
     assert network(changed, changed.graph.node).member("first") is not first
     # And the same facts again hit: the change is a key, not an invalidation.
-    misses = BIND_CACHE.misses
+    misses = cache().misses
     network(model, model.graph.node)
-    assert BIND_CACHE.misses == misses
+    assert cache().misses == misses
 
 
 def test_names_are_no_facts() -> None:
@@ -96,9 +101,9 @@ def test_names_are_no_facts() -> None:
     renamed = matmul_model()
     renamed.graph.node[0].name = "other"
     renamed.rename_tensor("w", "w_renamed")
-    misses = BIND_CACHE.misses
+    misses = cache().misses
     other = network(renamed, renamed.graph.node, name="another")
-    assert BIND_CACHE.misses == misses
+    assert cache().misses == misses
     assert other.member("other") is first
     assert other.module_of() != network(model, model.graph.node).module_of()
 
@@ -110,7 +115,7 @@ def test_a_tensor_read_more_than_once_is_refused_before_any_binding() -> None:
     hidden = model.get_tensor_valueinfo("hidden")
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
-    BIND_CACHE.clear()
+    misses = cache().misses
     with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: hidden is read by activate"):
         network(model, model.graph.node, name="chain")
-    assert not BIND_CACHE.entries
+    assert cache().misses == misses

@@ -10,8 +10,8 @@ node), and changes no graph. The ends offered on its boundary (``ends``, each an
 row offers them, and ``finn.custom_op.kernels.shell`` binds a partition's network in the
 shell of the model's target (``in_shell``).
 
-- **kernels**, one per node, named as the node: its kernel bound from its facts by the
-  bind cache, one binding per node (``KernelOp.bound``);
+- **kernels**, one per node, named as the node: its kernel's facts, read once
+  (``KernelOp.facts``), configured through the build's member cache;
 - **channels**, one per ONNX tensor, named as the tensor, in node order: a node's graph
   inputs, the parameter channels it owns (named after the initializer), its outputs.
   Each is a ``Wire`` of the facts a ``Channel`` takes: its tensor (the graph's,
@@ -77,11 +77,11 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed, why
-from finn.custom_op.kernels.cache import Facts
 from finn.kernels.artifacts.module import Composed, ProducerIdentity
 from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
 from finn.kernels.ends import EndOffer
+from finn.kernels.members import Facts
 from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -123,7 +123,7 @@ class Partition(Network):
 
     def __init__(
         self,
-        members: Mapping[str, Space | Wire],
+        members: Mapping[str, Space | Facts | Wire],
         *,
         name: str,
         ends: tuple[EndOffer, ...],
@@ -361,8 +361,7 @@ def _network(
     tensor of ``stating`` replayed with the channel choices it gives in place of those the
     tensor states."""
     ops = [kernel_op(model, node) for node in nodes]
-    facts: list[Facts] = [op.facts() for op in ops]
-    owned = [op.owned(each) for op, each in zip(ops, facts)]
+    owned = [op.owned() for op in ops]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
     fanned = _fan_out(model, nodes, owned, ports)
     if fanned:
@@ -409,8 +408,8 @@ def _network(
             if ports.get(tensor, "").rstrip("0123456789") == side
         }
 
-    kernels: dict[str, Space] = {node.name: op.bound() for node, op in zip(nodes, ops)}
-    members: dict[str, Space | Wire] = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
+    kernels: dict[str, Facts] = {node.name: op.facts() for node, op in zip(nodes, ops)}
+    members: dict[str, Facts | Wire] = {**on("s_axis_"), **on(""), **kernels, **on("m_axis_")}
     try:
         bound = kind(
             members,

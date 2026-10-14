@@ -66,8 +66,8 @@ def test_facts_come_from_the_model() -> None:
     facts = op(model).facts()
     # One kernel, stored or streamed: the node owns the weights when they are an
     # initializer.
-    assert facts.kernel is MatMulKernel and facts.owned == ("w",)
-    arguments = facts.arguments()
+    assert facts.space_type is MatMulKernel and op(model).owned() == {"w": "w"}
+    arguments = facts.arguments
     # Its extents and datatypes are its tensors': beside them, the platform and the known
     # weights' declared datatype. Known weights are its contents, never a tensor: the
     # weight channel carries what MatMul states over their values' range.
@@ -80,8 +80,8 @@ def test_facts_come_from_the_model() -> None:
     assert op(model).infer_output_tensors(model) == {"y": result}
     assert result.shape == (1, 3, 4)
     streamed = matmul_model(stored=False)
-    assert op(streamed).facts().kernel is MatMulKernel
-    assert op(streamed).facts().owned == ()
+    assert op(streamed).facts().space_type is MatMulKernel
+    assert op(streamed).owned() == {}
 
 
 def refusal(model: ModelWrapper) -> str:

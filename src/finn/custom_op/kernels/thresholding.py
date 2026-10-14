@@ -30,10 +30,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
-from qonnx.analysis.tensor_value_summary import (
-    UnsupportedTensorValueError,
-    initializer_value_summary,
-)
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import datatype, integer_tensor, known_shape, shape
@@ -47,13 +43,13 @@ from finn.custom_op.kernels.base import (
     refused,
     unstated,
 )
-from finn.custom_op.kernels.cache import Facts
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     ordinary_integer_bounds,
     resolve_qonnx_datatype_name,
 )
+from finn.kernels.members import Facts
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -160,35 +156,18 @@ class Thresholding(KernelOp):
             )
         if stored.size == 0:
             raise KernelOpError(f"{label}: {thresholds} is empty: it holds no thresholds")
+        if stored.dtype.kind not in "biuf":
+            raise KernelOpError(f"{label}: {thresholds} holds {stored.dtype} values, not numbers")
         if np.isnan(stored).any():
             raise KernelOpError(f"{label}: {thresholds} holds NaN, which no input compares to")
-        try:
-            summary = initializer_value_summary(model, thresholds)
-        except UnsupportedTensorValueError as error:
-            raise KernelOpError(f"{label}: {thresholds}: {error}") from error
-        assert summary is not None  # an initializer
-        input_dtype = datatype(model, x, label)
-        bias = self.bias()
-        platform = self.target().platform
-
-        def formals() -> dict[str, object]:
-            table, threshold_dtype = stored_thresholds(stored, input_dtype)
-            return dict(
-                threshold_dtype=threshold_dtype,
-                thresholds=table,
-                bias=bias,
-                platform=platform,
-            )
-
-        key = (
-            self.op_type,
-            self.op_version,
-            input_dtype.name,
-            bias,
-            platform,
-            summary.content_digest,
+        table, threshold_dtype = stored_thresholds(stored, datatype(model, x, label))
+        formals = dict(
+            threshold_dtype=threshold_dtype,
+            thresholds=table,
+            bias=self.bias(),
+            platform=self.target().platform,
         )
-        return self.binding(key, formals)
+        return self.binding(formals)
 
     def execute_node(self, context: dict[str, Any], graph: Any) -> None:
         """The reference: count(X >= T[c]) + bias, in X's element type."""

@@ -118,7 +118,7 @@ def test_a_bare_kernel_states_its_platform() -> None:
 def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
     platform = replace(URAM.platform, dsp=None)
     node = op(matmul_model())
-    arguments = {**node.facts().arguments(), "platform": platform}
+    arguments = {**node.facts().arguments, "platform": platform}
     answer = design_space(MatMulKernel(**arguments)).query(MatMulKernel.compute)
     assert isinstance(answer, Rejected)
     (finding,) = answer.findings  # no core is viable, each for the same reason

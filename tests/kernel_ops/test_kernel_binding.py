@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A node's kernel, bound from its facts, and the bind cache.
+"""A node's kernel, bound from its facts, and the member cache.
 
 A KernelOp binds its kernel class from its facts, by value: its formals, its input
 tensors at the graph's rank and the values of the initializers it holds. One binding per
@@ -12,6 +12,7 @@ network of its kernel and a channel on each ONNX input and output (conversion's)
 
 from __future__ import annotations
 
+from contextvars import Context
 from typing import Any
 
 import numpy as np
@@ -21,15 +22,22 @@ from qonnx.core.ranges import TensorRange
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
 from finn.core.space import Rejected, design_space, inspection
-from finn.custom_op.kernels import matmul as matmul_op
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.cache import BIND_CACHE, BindCache, Facts
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.members import (
+    Facts,
+    MemberCacheMismatch,
+    configured,
+    key,
+    member_cache,
+    typed,
+    verification_counts,
+)
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from kernel_ops.models import TARGET, WEIGHTS, matmul_model, thresholding_model
@@ -67,12 +75,12 @@ def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
     """Known weights are the kernel's contents, with the datatype the graph declares them
     in; streamed weights are a tensor, whose datatype is theirs."""
     stored = kernel_op(matmul_model(), matmul_model().graph.node[0])
-    arguments = stored.facts().arguments()
+    arguments = stored.facts().arguments
     assert set(arguments) == {"weights_dtype", "platform", "x_tensor", "w_contents"}
     assert arguments["x_tensor"] == Tensor((1, 3, 4), ScalarEncoding(INT3))  # whole
     streamed_model = matmul_model(stored=False)
     streamed = kernel_op(streamed_model, streamed_model.graph.node[0])
-    arguments = streamed.facts().arguments()
+    arguments = streamed.facts().arguments
     assert set(arguments) == {"platform", "x_tensor", "w_tensor"}
     assert arguments["w_tensor"] == Tensor((4, 4), ScalarEncoding(INT3))
 
@@ -161,67 +169,76 @@ def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
     assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})
 
 
-def facts(digest: str, *, size: int = 4) -> Facts:
-    weights = tuple(tuple((r + c) % 3 - 1 for c in range(size)) for r in range(size))
-    x_tensor = Tensor((3, size), ScalarEncoding(INT3))
-    return Facts(
-        MatMulKernel,
-        ("MatMul", 1, size, digest),
-        lambda: {
-            "platform": TARGET.platform,
-            "weights_dtype": INT3,
-            "x_tensor": x_tensor,
-            "w_contents": IntegerTensorValue.of(weights),
-        },
-        ("w",),
-    )
+def facts(weights: tuple[tuple[int, ...], ...] = STORED, **changed: object) -> Facts:
+    x_tensor = Tensor((3, len(weights)), ScalarEncoding(INT3))
+    arguments: dict[str, object] = {
+        "platform": TARGET.platform,
+        "weights_dtype": INT3,
+        "x_tensor": x_tensor,
+        "w_contents": IntegerTensorValue.of(weights),
+    }
+    return Facts(MatMulKernel, arguments | changed)
 
 
-def test_the_cache_keys_bindings_by_facts() -> None:
-    cache = BindCache(size=3)
-    first = cache.bound(facts("a"))
-    assert cache.bound(facts("a")) is first
-    assert (cache.hits, cache.misses) == (1, 1)
-    # Another digest is another key: nothing is invalidated, the new facts miss.
-    assert cache.bound(facts("b")) is not first
-    assert cache.misses == 2
-    cache.bound(facts("c"))
-    # The bound evicts the least recently used entry: "a" was used before "b" and "c".
-    cache.bound(facts("d"))
-    assert len(cache.entries) == 3
-    misses = cache.misses
-    cache.bound(facts("d"))
-    assert cache.misses == misses
-    cache.bound(facts("a"))
-    assert cache.misses == misses + 1
+def test_the_member_cache_keys_a_member_by_its_class_and_arguments_by_value() -> None:
+    with member_cache() as cache:
+        first = configured(facts()).point
+        assert configured(facts()).point is first
+        assert (cache.hits, cache.misses) == (1, 1)
+        # Other weights are another key: nothing is invalidated, the new arguments miss.
+        other = tuple(tuple(-value for value in row) for row in STORED)
+        assert configured(facts(other)).point is not first
+        assert cache.misses == 2
+        # Stored choices are part of the key; the replay starts from the binding's entry.
+        chosen = configured(facts(), {"compute": "packed"})
+        assert chosen.point is not first and configured(facts()).point is first
+        assert configured(facts(), {"compute": "packed"}) is chosen
+    # With no cache open (a context without one), nothing is kept.
+    assert Context().run(lambda: configured(facts()).point is not configured(facts()).point)
+
+
+def test_a_key_tells_values_apart_by_their_exact_type() -> None:
+    """1, 1.0 and True are equal in Python and three values to the engine."""
+    keys = {key(facts(), {"compute.packed.pe": value}, {}, ()) for value in (1, 1.0, True)}
+    assert len(keys) == 3
+    assert typed((1, (True,))) != typed((1, (1,)))
+    assert key(facts(), {}, {}, ()) == key(facts(), {}, {}, ())
+    unhashable = Facts(MatMulKernel, {"x_tensor": X, "bad": bytearray(b"unhashable")})
+    assert key(unhashable, {}, {}, ()) is None
 
 
 def test_a_refused_binding_caches_nothing() -> None:
-    cache = BindCache()
-    broken = Facts(MatMulKernel, ("broken",), lambda: {"x_tensor": X})  # no platform
-    with pytest.raises(Exception, match="platform"):
-        cache.bound(broken)
-    assert not cache.entries
+    broken = Facts(MatMulKernel, {"x_tensor": X})  # no platform
+    with member_cache() as cache:
+        with pytest.raises(Exception, match="platform"):
+            configured(broken)
+        assert not cache.entries
 
 
-def test_a_hit_reads_no_held_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The facts key identifies the initializer by its digest, so a binding found in the
-    cache never reads the value; a miss reads it once."""
+def test_a_hit_loads_no_held_value() -> None:
+    """An initializer is keyed by its digest, so a binding found in the cache never loads
+    the integers of the value it was asked with."""
     model = matmul_model()
-    BIND_CACHE.clear()
-    reads: list[int] = []
+    first: Any = kernel_op(model, model.graph.node[0]).bound()
+    assert first.w_contents == integer_tensor(WEIGHTS)
+    again = kernel_op(model, model.graph.node[0])
+    value = again.facts().arguments["w_contents"]
+    assert again.bound() is first
+    assert isinstance(value, IntegerTensorValue) and value._integers is None
+    assert value._array is None
 
-    def counted(values: Any) -> Any:
-        reads.append(1)
-        return integer_tensor(values)
 
-    monkeypatch.setattr(matmul_op, "integer_tensor", counted)
-    kernel_op(model, model.graph.node[0]).bound()
-    assert reads == [1]
-    kernel_op(model, model.graph.node[0]).bound()
-    assert reads == [1]
-    held: Any = kernel_op(model, model.graph.node[0]).bound()
-    assert held.w_contents == integer_tensor(WEIGHTS)
+def test_the_verifying_mode_configures_each_hit_again_and_names_a_mismatch() -> None:
+    before = verification_counts()["hits verified"]
+    with member_cache(verify=True) as cache:
+        first = configured(facts())
+        assert configured(facts()) is first
+        assert verification_counts()["hits verified"] == before + 1
+        # An entry kept under another member's key is found out.
+        (found,) = cache.entries
+        cache.entries[found] = configured(facts(), {"compute": "packed"})
+        with pytest.raises(MemberCacheMismatch, match="the member cache's hit differs"):
+            configured(facts())
 
 
 def test_a_fact_changed_is_another_binding() -> None:

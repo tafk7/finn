@@ -33,6 +33,7 @@ import pytest
 
 import numpy as np
 import random
+from member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from rng_seed import seed_from_nodeid
 
 try:

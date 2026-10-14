@@ -14,6 +14,7 @@ import pytest
 
 from finn.core.graph.facts import integer_tensor
 from finn.custom_op.kernels.base import kernel_op
+from finn.kernels.members import key
 from finn.kernels.values.semantics import IntegerTensorValue
 from kernel_ops.models import WEIGHTS, matmul_model
 
@@ -38,14 +39,15 @@ def test_integers_beyond_64_bits_are_the_same_value() -> None:
     assert integer_tensor(values) == IntegerTensorValue.of(((2**64, -1),))
 
 
-def test_equal_integers_stored_differently_are_one_value_under_two_binding_keys() -> None:
+def test_equal_integers_stored_differently_are_one_value_and_one_binding() -> None:
     """A stored operand's identity is its shape and integers (FINN's integer digest), so a
-    float32 and an int8 initializer of the same integers are one value. The bind cache
-    keys an initializer by QONNX's ``content_digest`` of the stored bytes, so each binds
-    once."""
+    float32 and an int8 initializer of the same integers are one value. The member cache
+    keys a node's kernel by its arguments, so the two bind once."""
     floats = matmul_model(infer=False)
     integers = matmul_model(infer=False)
     integers.set_initializer("w", np.asarray(WEIGHTS, dtype=np.int8))
-    facts = [kernel_op(model, model.graph.node[0]).facts() for model in (floats, integers)]
-    assert facts[0].arguments()["w_contents"] == facts[1].arguments()["w_contents"]
-    assert facts[0].key != facts[1].key
+    ops = [kernel_op(model, model.graph.node[0]) for model in (floats, integers)]
+    facts = [op.facts() for op in ops]
+    assert facts[0].arguments["w_contents"] == facts[1].arguments["w_contents"]
+    assert key(facts[0], {}, {}, ()) == key(facts[1], {}, {}, ())
+    assert ops[0].bound() is ops[1].bound()
