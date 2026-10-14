@@ -23,18 +23,16 @@ class DefinitionError(SpaceError, Refusal):
     """An authored definition cannot be compiled into a valid model: the declaration's
     code is wrong, not its input.
 
-    It carries the findings that explain it, its message the detail. ``broken`` makes
-    the error of one rule: an authoring finding owned by the engine's module that checks
-    it (``space.declarations``, ``space.names``, ...), the declaration it is about in its
-    details where the rule knows it. Where the raiser names none, one
-    ``definition-invalid`` authoring finding owned by ``Space``.
+    It carries the findings that explain it, at least one, so every refusal names its
+    rule and owner; its message is the detail. ``broken`` makes the error of one rule:
+    an authoring finding owned by whoever checks it (the engine's module, such as
+    ``space.declarations`` or ``space.names``, or a layer above it, such as ``Kernel``), the
+    declaration it is about in its details where the rule knows it. A raise that rewraps
+    another's refusal passes its ``findings``.
     """
 
-    def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
-        found = tuple(findings) or (
-            Finding(FindingKind.AUTHORING, "definition-invalid", "Space", detail),
-        )
-        super().__init__(found, detail)
+    def __init__(self, detail: str, *, findings: Iterable[Finding]) -> None:
+        super().__init__(findings, detail)
 
     @classmethod
     def broken(cls, code: str, owner: str, detail: str, *, declaration: str | None = None) -> Self:
