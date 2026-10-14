@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """FIFO sizing from both ends' beat patterns: input_gen's buffer as its RTL derives it,
-the throttle, the least depth, and the strategy proposing it through the seam.
+the throttle, the least depth, the strategy proposing it through the seam, and the
+seam's check of a stored transport against its stream.
 
 The strategy's tests run on the Chain (``kernels.chain``), as the seam's do
 (``test_explore``); the Chain needs no FIFO at any folding, so a FIFO it places and a
@@ -28,6 +29,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.explore import (
     Accepted,
     ExploreError,
+    FifoCheck,
     Refused,
     Seam,
     SizeFifos,
@@ -42,6 +44,7 @@ from finn.kernels.fifo_sizing import (
     Sized,
     converted,
     ends,
+    keeps,
     least_depth,
     simulate,
 )
@@ -364,6 +367,155 @@ def test_a_refused_fifo_falls_back_to_direct_and_says_why(monkeypatch: pytest.Mo
         "least 8 words; refused: hidden: hidden.transport.fifo: fifo-markers: what arrives "
         "carries markers"
     )
+
+
+# -- a stored transport checked against its stream ---------------------------------------
+
+#: A burst of 16 words from a kernel of ``span`` cycles a frame, and a consumer taking one
+#: word every ``gap`` cycles: the sizing tests' patterns, at a size where the period alone
+#: changes the need.
+FRAME_WORDS = 16
+
+
+def _burst(span: int) -> Pattern:
+    return Pattern(tuple(range(FRAME_WORDS)), span)
+
+
+def _every(gap: int, span: int) -> Pattern:
+    return Pattern(tuple(range(0, FRAME_WORDS * gap, gap)), max(span, FRAME_WORDS * gap))
+
+
+def test_the_check_is_sizing_s_own_test_at_the_words_a_transport_holds() -> None:
+    """``keeps`` at the least depth holds, one word less does not. The period alone moves
+    the need with the ends unchanged: none at 48 cycles a frame, 5 words at 40, 9 at 32,
+    so a depth sized at 40 fails at 32; a slower consumer needs more than the 9, a faster
+    one none."""
+    supply, accept = _burst(32), _every(2, 32)
+    sized = least_depth(supply, accept, 32)
+    assert sized == 9
+    assert keeps(supply, accept, 32, sized) and not keeps(supply, accept, 32, sized - 1)
+    assert [least_depth(supply, accept, period) for period in (48, 40, 32)] == [0, 5, 9]
+    assert keeps(supply, accept, 40, 5) and not keeps(supply, accept, 32, 5)
+    assert keeps(supply, accept, 48, 0) and not keeps(supply, accept, 40, 0)
+    assert least_depth(_burst(48), _every(3, 48), 48) == 11
+    assert not keeps(_burst(48), _every(3, 48), 48, sized)
+    assert keeps(_burst(32), _every(1, 32), 32, sized)
+
+
+def _with_fifo(depth: int = 8) -> tuple[Seam, Network]:
+    """The folded Chain with a FIFO of ``depth`` on ``levels`` (a shift register of
+    ``max(5, depth)`` words)."""
+    explorer, point = _folded()
+    placed = explorer.set(
+        point,
+        keyed(
+            {
+                "levels.transport": "fifo",
+                "levels.transport.fifo.buffer.depth": depth,
+                "levels.transport.fifo.buffer.ram_style": "auto",
+            }
+        ),
+    )
+    assert isinstance(placed, Accepted)
+    return explorer, placed.network
+
+
+def _levels_short(channel: Channel, period: int, words: int) -> bool:
+    """A double of the check (the Chain needs no FIFO at any folding): ``levels``
+    (activate's output) needs more words than its transport holds; every other channel's
+    holds."""
+    return not str(channel.endpoints.source_owner).startswith("activate.")
+
+
+DEPTH = ("levels", "transport.fifo.buffer.depth")
+
+
+def test_a_fifo_that_holds_its_stream_is_kept_and_the_check_says_what_it_read() -> None:
+    explorer, network = _with_fifo()
+    checked, found = explorer.checked(network)
+    assert checked is network
+    assert found == FifoCheck(
+        12,
+        checked=("hidden", "levels"),
+        not_modelled={
+            "x": "a boundary: not modelled",
+            "w1": "a memory source: paced by its consumer",
+            "w2": "a memory source: paced by its consumer",
+            "y": "a boundary: not modelled",
+        },
+    )
+
+
+def test_a_fifo_too_small_for_its_stream_is_dropped_named_and_left_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explorer, network = _with_fifo()
+    monkeypatch.setattr(explore_module, "holds", _levels_short)
+    checked, found = explorer.checked(network)
+    (finding,) = found.stale[DEPTH]
+    assert (finding.kind, finding.code, finding.owner) == (
+        FindingKind.REJECTION,
+        "fifo-stale",
+        "levels.transport.fifo.buffer.depth",
+    )
+    assert finding.message == (
+        "depth 8 (8 words) no longer keeps its producer within its idle time at the "
+        "bottleneck's 12 cycles a frame: size it again (SizeFifos)"
+    )
+    assert dict(finding.details) == {"tensor": "levels", "words": 8, "period": 12}
+    assert found.findings == ()
+    # Left open, a required choice; the FIFO and the rest kept, the bottleneck readable,
+    # so a later strategy folds and FIFO sizing sizes it again.
+    values = chosen(explorer, checked)
+    assert "levels.transport.fifo.buffer.depth" not in values
+    assert {k: v for k, v in chosen(explorer, network).items() if k != dotted(DEPTH)} == values
+    assert [choice.key for choice in explorer.choices(checked) if choice.required] == [DEPTH]
+    assert explorer.cost(checked).bottleneck == explorer.cost(network).bottleneck
+    sized = SizeFifos().explore(explorer, checked)
+    assert chosen(explorer, sized)["levels.transport"] == "direct"
+
+
+def test_a_held_fifo_too_small_is_kept_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    explorer, network = _with_fifo()
+    explorer.held.update(keyed({"levels.transport.fifo.buffer.depth": 8}))
+    monkeypatch.setattr(explore_module, "holds", _levels_short)
+    checked, found = explorer.checked(network)
+    assert checked is network and found.stale == {}
+    (finding,) = found.findings
+    assert (finding.kind, finding.code, finding.owner) == (
+        FindingKind.LIMITATION,
+        "fifo-held-stale",
+        "levels.transport.fifo.buffer.depth",
+    )
+    assert finding.message.startswith("held at 8 (8 words), which no longer keeps")
+
+
+def test_a_direct_that_throttles_its_producer_is_kept_and_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    explorer, network = _folded()
+    monkeypatch.setattr(explore_module, "holds", _levels_short)
+    checked, found = explorer.checked(network)
+    assert checked is network and found.stale == {}
+    (finding,) = found.findings
+    assert (finding.kind, finding.code, finding.owner) == (
+        FindingKind.LIMITATION,
+        "direct-throttles",
+        "levels.transport",
+    )
+    assert finding.message == (
+        "direct does not keep its producer within its idle time at the bottleneck's 12 "
+        "cycles a frame: its producer is throttled (SizeFifos places a FIFO)"
+    )
+
+
+def test_an_open_depth_and_unknown_cycles_are_not_checked() -> None:
+    explorer = Seam(FULL_DSP48E2)
+    assert explorer.check_fifos(chain.network()) == FifoCheck(None)
+    _, network = _with_fifo()
+    opened, _ = explorer.reopen(network, [DEPTH])
+    found = explorer.check_fifos(opened)
+    assert found.period == 12 and found.checked == ("hidden",)
 
 
 def test_only_the_analytical_method_exists() -> None:

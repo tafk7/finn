@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from onnx import NodeProto
 
 from finn.core.graph.annotations.channel import channel_choices, refuse_outside_body
+from finn.core.graph.annotations.choices import held_choices
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding, FindingKind
@@ -249,8 +250,10 @@ def configured_network(
     viable (each case's reason), a required one no strategy set ("required: run
     step_size_fifos or step_placeholder_choices"), any other one never baselined ("not
     created: BaselineChoices"); a network the shell does not admit
-    (``admission_refusal``), or whose module or cycles its members refuse; or graph
-    inputs and outputs out of port order refuse, named."""
+    (``admission_refusal``), or whose module or cycles its members refuse; a FIFO not
+    held that no longer keeps its producer within its idle time at the network's
+    bottleneck period (``Seam.check_fifos``: whatever changed since it was sized, an edit
+    by hand included); or graph inputs and outputs out of port order refuse, named."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
         raise KernelOpError(
@@ -296,6 +299,22 @@ def configured_network(
         raise KernelOpError(
             f"{label}: refused by its members: " + "; ".join(map(_about, refused)),
             findings=refused,
+        )
+    # Only which keys are held matters here, not their values (exploration checks those).
+    seam = Seam(read_target(model).platform)
+    seam.held.update(
+        {
+            (owner, key): value
+            for owner, held in held_choices(model).items()
+            for key, value in held.items()
+        }
+    )
+    stale = tuple(finding for each in seam.check_fifos(bound).stale.values() for finding in each)
+    if stale:
+        raise KernelOpError(
+            f"{label}: FIFOs too small for their streams, refused at emission (run "
+            "step_size_fifos): " + "; ".join(map(_about, stale)),
+            findings=stale,
         )
     ports = dict(bound.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}

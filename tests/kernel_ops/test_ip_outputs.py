@@ -20,7 +20,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -30,6 +30,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 
+import finn.kernels.explore as explore_module
 from finn.builder.build_dataflow import build_dataflow_cfg
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
@@ -41,14 +42,14 @@ from finn.builder.build_dataflow_testbench import (
     generated_frame,
     run_testbench,
 )
-from finn.core.graph.annotations.choices import FIFOS_STALE
+from finn.core.graph.annotations.choices import HELD
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_MADE_FROM
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, save_channels
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
@@ -251,12 +252,29 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     assert not (testbench / "xsim.log").exists()
 
 
-def test_a_body_whose_fifos_are_stale_is_refused_before_packaging(tmp_path: Path) -> None:
-    """A body whose FIFOs were sized at another folding (``FIFOS_STALE``) is refused
-    before anything is emitted, saying where to size them again."""
+def _levels_short(channel: Any, period: int, words: int) -> bool:
+    """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
+    (activate's output) needs more words than its transport holds; every other channel's
+    holds."""
+    return not str(channel.endpoints.source_owner).startswith("activate.")
+
+
+def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A FIFO, not held, that no longer keeps its producer within its idle time at the
+    network's bottleneck, however it got there (stated by hand after the cut, here), is
+    refused before anything is emitted, named, saying where to size it again; held, it is
+    built as held."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
     node, body, _ = partition_body(parent)
-    body.set(FIFOS_STALE, True)
+    fifo = {
+        "transport": "fifo",
+        "transport.fifo.buffer.depth": 8,
+        "transport.fifo.buffer.ram_style": "auto",
+    }
+    save_channels(body, {"levels": fifo})
+    monkeypatch.setattr(explore_module, "holds", _levels_short)
     packaging = PackagePartition(
         node.name, directory=tmp_path / "ip", toolchain=cast(Toolchain, PackagedByStub())
     )
@@ -265,13 +283,17 @@ def test_a_body_whose_fifos_are_stale_is_refused_before_packaging(tmp_path: Path
     (finding,) = refused.value.findings
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
-        "fifos-stale",
-        "PackagePartition",
+        "fifo-stale",
+        "levels.transport.fifo.buffer.depth",
     )
-    assert finding.message.endswith(
-        "size them again after the last step that may change the folding (step_size_fifos)"
+    assert str(refused.value).startswith(
+        f"{node.name}: FIFOs too small for their streams, refused at emission (run "
+        "step_size_fifos): levels: levels.transport.fifo.buffer.depth: fifo-stale: depth 8 "
+        "(8 words) no longer keeps its producer"
     )
     assert not (tmp_path / "ip").exists()
+    body.set(HELD, {"levels": {"transport.fifo.buffer.depth": 8}})
+    body.transform(packaging)
 
 
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:

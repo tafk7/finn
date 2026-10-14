@@ -199,7 +199,12 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert (budget["kind"], budget["code"]) == ("limitation", "resource-budget")
     assert "most of lut: lut 9882 of 7056" in budget["message"]
     assert budget["details"] == {"binding": "lut", "over": ("lut",)}
-    assert [finding.code for finding in findings][0] == "resource-budget"
+    # Before sizing, the output's direct throttles its producer: each exploration names it.
+    assert [finding.code for finding in findings] == [
+        "direct-throttles",
+        "resource-budget",
+        "direct-throttles",
+    ]
     assert [row["cycles"] for row in searched["tried"]] == [1, None]
     assert searched["fits"] is False and searched["binding"] == "lut"
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 CHOICES = Namespace("finn.choices", version=1)
-"""The namespace, on a partition's body: ``HELD``, ``OBJECTIVE_FPS`` and ``FIFOS_STALE``."""
+"""The namespace, on a partition's body: ``HELD`` and ``OBJECTIVE_FPS``."""
 
 
 def _by_owner_values(value: object) -> bool:
@@ -33,13 +33,7 @@ pinned."""
 OBJECTIVE_FPS = CHOICES.key("objective_fps", float)
 """The frames a second a target throughput explored the body to (``TargetThroughput``),
 which a shell's build reports its delivered clock against. Absent where none did, or
-where another strategy that may change the folding (``FOLDING``) explored it since."""
-
-FIFOS_STALE = CHOICES.key("fifos_stale", bool)
-"""Whether the body's FIFOs were sized at another folding than its own: set where an
-exploration that may change the folding saves a body holding a FIFO, removed where FIFO
-sizing (``SizeFifos``) saves it. Packaging refuses a body that records it. Absent
-otherwise."""
+where an exploration whose strategy changed any kernel's choice saved it since."""
 
 
 def held_choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
@@ -51,7 +45,6 @@ def held_choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
 
 __all__ = [
     "CHOICES",
-    "FIFOS_STALE",
     "HELD",
     "OBJECTIVE_FPS",
     "held_choices",

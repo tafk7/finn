@@ -24,7 +24,8 @@ from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.graph.annotations.choices import FIFOS_STALE, HELD
+import finn.kernels.explore as explore_module
+from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
@@ -457,31 +458,77 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
         explore_kernel_choices(model, Pinned(pinned))
 
 
-def test_a_fifo_sized_before_a_folding_is_marked_stale_until_sized_again(
-    tmp_path: Path,
+def _levels_short(channel: Any, period: int, words: int) -> bool:
+    """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
+    (activate's output) needs more words than its transport holds; every other channel's
+    holds."""
+    return not str(channel.endpoints.source_owner).startswith("activate.")
+
+
+LEVELS_FIFO = {"transport": "fifo", "transport.fifo.buffer.depth": 8}
+LEVELS_DEPTH = "levels.transport.fifo.buffer.depth"
+
+
+def test_each_exploration_checks_its_fifos_against_their_streams(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A strategy that may change the folding, one no build step runs included, marks a
-    body holding a FIFO as sized at another folding (``FIFOS_STALE``); FIFO sizing clears
-    it, and the debug placeholder and the baselines alone leave it. A body without a
-    FIFO, as the cut makes it, is not marked."""
+    """Nothing marks a body: each exploration ends by checking every FIFO against its
+    stream at the bottleneck it reached (``Seam.checked``). A fold that leaves a FIFO
+    holding its stream keeps it; one that does not drops its depth, names it in the
+    report's ``dropped`` and leaves it open, which emission refuses; a pinned depth is the
+    user's, kept and built, a limitation naming it."""
     model = kernel_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
-    assert model.get(FIFOS_STALE) is None
-    pinned = tmp_path / "pins.json"
-    pinned.write_text(
-        json.dumps({"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    save_channels(model, {"levels": LEVELS_FIFO})
+    folded = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 12)))
+    assert folded.report["strategy"]["changed"]
+    assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+    assert folded.report["dropped"] == {} and folded.findings == ()
+    assert folded.report["fifo_check"]["period"] == folded.report["bottleneck"]["cycles"]
+    assert "levels" in folded.report["fifo_check"]["checked"]
+    # The same FIFO too small for its stream at the next exploration's end.
+    monkeypatch.setattr(explore_module, "holds", _levels_short)
+    dropped = explore_kernel_choices(model).report
+    assert list(dropped["dropped"]) == [LEVELS_DEPTH]
+    assert dropped["dropped"][LEVELS_DEPTH].startswith(
+        f"{LEVELS_DEPTH}: fifo-stale: depth 8 (8 words) no longer keeps its producer"
     )
-    explore_kernel_choices(model, Pinned(pinned))
-    assert model.get(FIFOS_STALE) is True
+    assert dropped["fifo_check"]["stale"] == [LEVELS_DEPTH]
+    assert f"{LEVELS_DEPTH} (required)" in dropped["open"]
+    levels = choices(model)["levels"]
+    assert levels["transport"] == "fifo" and "transport.fifo.buffer.depth" not in levels
+    with pytest.raises(KernelOpError, match=f"{LEVELS_DEPTH} \\(required: run step_size_fifos"):
+        configured_network(model, "the chain")
+    # Pinned, it is kept and built as held.
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps({"levels": {"transport.fifo.buffer.depth": 8}}))
+    pinned = explore_kernel_choices(model, Pinned(pins))
+    assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+    assert [(f.kind, f.code, f.owner) for f in pinned.findings] == [
+        (FindingKind.LIMITATION, "fifo-held-stale", LEVELS_DEPTH)
+    ]
+    configured_network(model, "the chain")
+
+
+def test_the_target_s_frames_a_second_go_when_an_exploration_changes_a_kernel_s_choice(
+    tmp_path: Path,
+) -> None:
+    """A target throughput records its frames a second (``OBJECTIVE_FPS``); an exploration
+    that changes no kernel's choice (FIFO sizing, a pin of a channel's) keeps it, and one
+    that changes any (whatever its strategy) removes it."""
+    model = kernel_model()
+    explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
+    assert model.get(OBJECTIVE_FPS) == 1_000_000_000 // (5 * 6)
     explore_kernel_choices(model, SizeFifos())
-    assert model.get(FIFOS_STALE) is None
-    explore_kernel_choices(model, Ranked(Lanes(2)))
-    assert model.get(FIFOS_STALE) is True
+    pins = tmp_path / "pins.json"
+    pins.write_text(json.dumps({"levels": {"transport": "direct"}}))
+    explore_kernel_choices(model, Pinned(pins))
     explore_kernel_choices(model, DebugPlaceholder())
     explore_kernel_choices(model)
-    assert model.get(FIFOS_STALE) is True
-    explore_kernel_choices(model, SizeFifos())
-    assert model.get(FIFOS_STALE) is None
+    assert model.get(OBJECTIVE_FPS) == 1_000_000_000 // (5 * 6)
+    changed = explore_kernel_choices(model, Ranked(Lanes(2))).report["strategy"]["changed"]
+    assert any(key.startswith("first.") for key in changed)
+    assert model.get(OBJECTIVE_FPS) is None
 
 
 def int8_matmul() -> ModelWrapper:
