@@ -83,13 +83,11 @@ arbitrary float formats, which no ``except`` clause should be catching."""
 
 class DatatypeError(Refusal):
     """A value was offered as a datatype and is not one this stack can hold: one
-    ``datatype-unsupported`` rejection, owned by ``DataType``, whose rules refuse it."""
+    rejection, ``code`` by ``owner``, the function whose check refuses it, its message
+    the error's."""
 
-    def __init__(self, message: str) -> None:
-        super().__init__(
-            (Finding(FindingKind.REJECTION, "datatype-unsupported", "DataType", message),),
-            message,
-        )
+    def __init__(self, code: str, owner: str, message: str) -> None:
+        super().__init__((Finding(FindingKind.REJECTION, code, owner, message),), message)
 
 
 def is_ordinary_integer(value: QONNXDataType) -> bool:
@@ -105,10 +103,18 @@ def ordinary_integer_bounds(value: QONNXDataType) -> tuple[int, int]:
     which may use floating point for very wide types. No datatype is converted.
     """
     if not is_ordinary_integer(value):
-        raise DatatypeError(f"{value.name} is not an ordinary INT/UINT encoding")
+        raise DatatypeError(
+            "integer-not-ordinary",
+            "ordinary_integer_bounds",
+            f"{value.name} is not an ordinary INT/UINT encoding",
+        )
     bits = qonnx_datatype_width(value)
     if bits < 1:
-        raise DatatypeError("ordinary integer width must be positive")
+        raise DatatypeError(
+            "integer-width-invalid",
+            "ordinary_integer_bounds",
+            "ordinary integer width must be positive",
+        )
     if value.name.startswith("INT"):
         return -(1 << (bits - 1)), (1 << (bits - 1)) - 1
     return 0, (1 << bits) - 1
@@ -124,11 +130,19 @@ def resolve_qonnx_datatype_name(name: str) -> QONNXDataType:
     """
 
     if not isinstance(name, str):
-        raise DatatypeError(f"a datatype name must be a string, not {type(name)}")
+        raise DatatypeError(
+            "datatype-name-not-string",
+            "resolve_qonnx_datatype_name",
+            f"a datatype name must be a string, not {type(name)}",
+        )
     try:
         return DataType[name]
     except KeyError as error:
-        raise DatatypeError(f"no QONNX datatype is named {name!r}") from error
+        raise DatatypeError(
+            "datatype-name-unknown",
+            "resolve_qonnx_datatype_name",
+            f"no QONNX datatype is named {name!r}",
+        ) from error
 
 
 def canonical_qonnx_datatype(value: object) -> QONNXDataType:
@@ -144,9 +158,17 @@ def canonical_qonnx_datatype(value: object) -> QONNXDataType:
         # hashes equal to its own canonical name, so admitting strings here
         # would make a name and the live value interchangeable and
         # let them collide as mapping keys without raising.
-        raise DatatypeError(f"a canonical name is not a datatype value; resolve {value!r} first")
+        raise DatatypeError(
+            "datatype-name-not-value",
+            "canonical_qonnx_datatype",
+            f"a canonical name is not a datatype value; resolve {value!r} first",
+        )
     if not is_datatype(value):
-        raise DatatypeError(f"not a QONNX datatype value: a {type(value).__name__}")
+        raise DatatypeError(
+            "datatype-not-qonnx",
+            "canonical_qonnx_datatype",
+            f"not a QONNX datatype value: a {type(value).__name__}",
+        )
     return value
 
 

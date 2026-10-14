@@ -133,6 +133,19 @@ def test_dense_activations_are_broadcast_to_the_output_lanes() -> None:
         schedule.present((4, 4), Form.DENSE.w, lanes=(k,))
 
 
+def test_a_schedule_refuses_by_the_rule_and_the_method_that_checks_it() -> None:
+    schedule = gemm(2, 4, 4, 2, 2)
+    with pytest.raises(Refused) as refused:
+        schedule.present((4, 4), Form.DENSE.w, lanes=(k,))
+    found = [(each.code, each.owner) for each in refused.value.findings]
+    assert found == [("lanes-move-position", "Schedule.present")]
+    with pytest.raises(Refused) as refused:
+        schedule.extent(Index("z"))
+    assert [(each.code, each.owner) for each in refused.value.findings] == [
+        ("index-unknown", "Schedule")
+    ]
+
+
 @pytest.mark.parametrize("M,N,K,PE,SIMD", [(1, 4, 4, 2, 2), (3, 6, 4, 3, 2), (2, 8, 9, 4, 3)])
 def test_depthwise_fields_are_finnlib_s_s_times_pe_plus_p(
     M: int, N: int, K: int, PE: int, SIMD: int

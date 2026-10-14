@@ -74,13 +74,11 @@ from finn.dataflow.traversal import LevelEnd, Loop, Traversal, axis_strides, req
 
 class Refused(Refusal):
     """A schedule or expression that the requested beat sequence cannot be derived from:
-    one ``schedule-refused`` rejection, owned by ``Schedule``, whose rules refuse it."""
+    one rejection, ``code`` by ``owner``, the rule's check (``Schedule.present``,
+    ``bind_extents``), its message the error's."""
 
-    def __init__(self, message: str) -> None:
-        super().__init__(
-            (Finding(FindingKind.REJECTION, "schedule-refused", "Schedule", message),),
-            message,
-        )
+    def __init__(self, code: str, owner: str, message: str) -> None:
+        super().__init__((Finding(FindingKind.REJECTION, code, owner, message),), message)
 
 
 @dataclass(frozen=True, order=True)
@@ -197,7 +195,9 @@ class Schedule:
         known = set(self.order)
         for index in indices:
             if index not in known:
-                raise Refused(f"{index!r} is not an index of the schedule")
+                raise Refused(
+                    "index-unknown", "Schedule", f"{index!r} is not an index of the schedule"
+                )
 
     def extent(self, index: Index) -> int:
         """``index``'s extent; ``Refused`` when it is not an index of the schedule."""
@@ -239,10 +239,18 @@ class Schedule:
         for extent in (*shape, *viewed):
             require_positive(extent, "tensor extent")
         if prod(viewed) != prod(shape):
-            raise Refused(f"a {shape} tensor cannot be viewed as {viewed}")
+            raise Refused(
+                "view-size-mismatch",
+                "Schedule.present",
+                f"a {shape} tensor cannot be viewed as {viewed}",
+            )
         axes = tuple(Affine.of(axis) for axis in index)
         if len(axes) != len(viewed):
-            raise Refused(f"{len(axes)} expressions for a rank-{len(viewed)} tensor")
+            raise Refused(
+                "rank-mismatch",
+                "Schedule.present",
+                f"{len(axes)} expressions for a rank-{len(viewed)} tensor",
+            )
         self._known(*(used for axis in axes for used in axis.indices), *lanes, *reduces, *holds)
         strides = axis_strides(viewed)
 
@@ -251,12 +259,20 @@ class Schedule:
 
         for i in self.order:
             if self.factor(i) > 1 and i not in lanes and stride(i):
-                raise Refused(f"{i!r}'s lanes move the position; carry them as lanes")
+                raise Refused(
+                    "lanes-move-position",
+                    "Schedule.present",
+                    f"{i!r}'s lanes move the position; carry them as lanes",
+                )
         dropped = (*reduces, *holds)
         for i in dropped:
             if stride(i):
                 word = "reduced" if i in reduces else "held"
-                raise Refused(f"{i!r} moves the position, so it cannot be {word} away")
+                raise Refused(
+                    "dropped-index-moves",
+                    "Schedule.present",
+                    f"{i!r} moves the position, so it cannot be {word} away",
+                )
         beats = [
             Loop(self.steps(i), self.factor(i) * stride(i)) for i in self.order if i not in dropped
         ]
@@ -264,7 +280,7 @@ class Schedule:
         try:
             return Traversal(shape, beats, lane_loops)
         except ValueError as error:
-            raise Refused(str(error)) from error
+            raise Refused("traversal-invalid", "Schedule.present", str(error)) from error
 
     def beat_times(
         self, *, reduces: Sequence[Index] = (), holds: Sequence[Index] = ()
@@ -282,7 +298,9 @@ class Schedule:
         """
         self._known(*reduces, *holds)
         if set(reduces) & set(holds):
-            raise Refused("an index is reduced or held, not both")
+            raise Refused(
+                "reduced-and-held", "Schedule.beat_times", "an index is reduced or held, not both"
+            )
         # Each index's weight in the beat count: the beats of every index inside it.
         weight: dict[Index, int] = {}
         inner = 1
@@ -301,7 +319,11 @@ class Schedule:
         order = self.order
         suffix = order[len(order) - len(reduces) :] if reduces else ()
         if not reduces or sorted(suffix) != sorted(reduces):
-            raise Refused(f"the reduced {list(reduces)} are not the innermost of {list(order)}")
+            raise Refused(
+                "reduction-not-innermost",
+                "Schedule.closing",
+                f"the reduced {list(reduces)} are not the innermost of {list(order)}",
+            )
         return LevelEnd(prod(self.steps(index) for index in reduces))
 
 
@@ -379,15 +401,25 @@ def bind_extents(
         if not isinstance(index, Index):
             raise TypeError("extents are given to Index values")
         if type(extent) is not int or extent < 1:
-            raise Refused(f"the extent given to {index!r} must be a positive integer")
+            raise Refused(
+                "extent-invalid",
+                "bind_extents",
+                f"the extent given to {index!r} must be a positive integer",
+            )
         bound[index], origin[index] = extent, "given"
     for access in accesses:
         if access.reshaped:
             if any(plain_index(axis) is None for axis in access.index):
-                raise Refused(f"{access.name}: a reshaped port reads plain indices")
+                raise Refused(
+                    "reshape-not-plain",
+                    "bind_extents",
+                    f"{access.name}: a reshaped port reads plain indices",
+                )
         elif len(access.index) != len(access.shape):
             raise Refused(
-                f"{access.name}: {len(access.index)} indices for a rank-{len(access.shape)} tensor"
+                "rank-mismatch",
+                "bind_extents",
+                f"{access.name}: {len(access.index)} indices for a rank-{len(access.shape)} tensor",
             )
     # Binding: every plain axis of every access that is not a view.
     for access in accesses:
@@ -401,20 +433,30 @@ def bind_extents(
             known = bound.setdefault(plain, extent)
             origin.setdefault(plain, here)
             if known != extent:
-                raise Refused(f"{plain!r} is {known} ({origin[plain]}) and {extent} ({here})")
+                raise Refused(
+                    "extent-conflict",
+                    "bind_extents",
+                    f"{plain!r} is {known} ({origin[plain]}) and {extent} ({here})",
+                )
     # Checking: every index has an extent, windows stay inside, views keep the size.
     for access in accesses:
         for axis, expression in enumerate(access.index):
             for index in Affine.of(expression).indices:
                 if index not in bound:
                     raise Refused(
+                        "extent-unbound",
+                        "bind_extents",
                         f"{access.name} axis {axis}: {index!r} has no extent "
-                        "(no axis addresses it alone and none is given)"
+                        "(no axis addresses it alone and none is given)",
                     )
         if access.reshaped:
             view = tuple(bound[Affine.of(axis).indices[0]] for axis in access.index)
             if prod(view) != prod(access.shape):
-                raise Refused(f"{access.name}: a {access.shape} tensor cannot be viewed as {view}")
+                raise Refused(
+                    "view-size-mismatch",
+                    "bind_extents",
+                    f"{access.name}: a {access.shape} tensor cannot be viewed as {view}",
+                )
             continue
         for axis, (extent, expression) in enumerate(zip(access.shape, access.index)):
             if plain_index(expression) is None:
@@ -422,8 +464,10 @@ def bind_extents(
                 reach = sum(c * (bound[i] - 1) for i, c in terms)
                 if reach >= extent:
                     raise Refused(
+                        "window-out-of-extent",
+                        "bind_extents",
                         f"{access.name} axis {axis}: {expression!r} reaches {reach}, "
-                        f"beyond extent {extent}"
+                        f"beyond extent {extent}",
                     )
     return bound
 

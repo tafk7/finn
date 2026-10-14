@@ -122,6 +122,27 @@ def test_a_view_binds_nothing_and_is_checked_against_the_bound_extents() -> None
         bind_extents([Access("x", (M, K, N), (m, k * 1 + n), reshaped=True), w, y])
 
 
+@pytest.mark.parametrize(
+    ("accesses", "given", "code"),
+    (
+        ([Access("x", (4, 5), (i, i))], {}, "extent-conflict"),
+        ([Access("x", (4, 8), (b, r, c))], {}, "rank-mismatch"),
+        ([Access("x", (7, 4), (oh * 2 + kh, c))], {oh: 3}, "extent-unbound"),
+        ([Access("x", (6, 4), (oh * 2 + kh, c))], {oh: 3, kh: 3}, "window-out-of-extent"),
+        (dense(3, 8, 6), {k: 0}, "extent-invalid"),
+        ([Access("x", (2, 3, 4), (m, k * 1 + n), reshaped=True)], {}, "reshape-not-plain"),
+        ([Access("x", (2, 3, 5), (m, k), reshaped=True)], {m: 2, k: 12}, "view-size-mismatch"),
+    ),
+)
+def test_each_rule_refuses_by_its_own_code_owned_by_bind_extents(
+    accesses: list[Access], given: dict[Index, int], code: str
+) -> None:
+    with pytest.raises(Refused) as refused:
+        bind_extents(accesses, given)
+    ((found, owner),) = [(each.code, each.owner) for each in refused.value.findings]
+    assert (found, owner) == (code, "bind_extents")
+
+
 def test_a_plain_index_is_one_index_of_coefficient_one() -> None:
     # The one rule a reshaped port and the binding share: ``m`` and ``m * 1`` alike.
     assert plain_index(m) == m and plain_index(m * 1) == m
