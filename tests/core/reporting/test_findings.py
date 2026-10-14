@@ -56,6 +56,28 @@ def test_a_finding_s_text_is_its_owner_code_and_message() -> None:
     )
 
 
+def test_a_finding_s_subject_line_names_what_it_is_about_once() -> None:
+    """The first of its node, tensor and declaration goes first; a message that starts
+    with it already names it; a finding about nothing named is its plain line."""
+    plain = unassigned("compute.packed.pe")
+    assert plain.subject_line() == str(plain)
+    about_node = plain.about(node="MatMul_1", tensor="x")
+    assert about_node.subject_line() == f"MatMul_1: {plain}"
+    assert plain.about(tensor="x").subject_line() == f"x: {plain}"
+    declared = Finding(
+        FindingKind.AUTHORING, "name-reserved", "space.names", "reserved", (("declaration", "A.b"),)
+    )
+    assert declared.subject_line() == "A.b: space.names: name-reserved: reserved"
+    labelled = Finding(
+        FindingKind.REJECTION,
+        "weights-absent",
+        "MatMul",
+        "MatMul_1: no weights",
+        (("node", "MatMul_1"),),
+    )
+    assert labelled.subject_line() == str(labelled)
+
+
 def test_a_finding_freezes_its_details_and_orders_its_causes() -> None:
     shape = [1, 2]
     found = Finding(

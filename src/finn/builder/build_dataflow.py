@@ -92,15 +92,16 @@ def _failure_kind(error: BaseException) -> str:
 
 def _log_failure(step: str, error: BaseException) -> str:
     """Log a failed step's error by its kind, and return the kind. A refusal is logged
-    one line per finding, without its message (those same lines). The traceback goes to
-    the log file, and for a bug to the console too."""
+    one line per finding, after what it is about (``Finding.subject_line``), without its
+    message (those same findings). The traceback goes to the log file, and for a bug to
+    the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
     if isinstance(error, Refusal):
         findings = error.findings
         _LOG.error("%s refused: %d findings (%s)", step, len(findings), name)
         for finding in findings:
-            _LOG.error("  %s", finding)
+            _LOG.error("  %s", finding.subject_line())
     elif kind != "bug":
         _LOG.error("%s: %s: %s", step, name, error)
     else:
@@ -220,12 +221,12 @@ def _configured(
 
 def _refused(manifest: BuildManifest, error: BaseException) -> None:
     """Log a build stopped before its first step and record it as ``refused``: a refusal
-    (there, only the configuration refuses) finding by finding, any other error with its
-    traceback in the log file."""
+    (there, only the configuration refuses) one line per finding, as a step's, any other
+    error with its traceback in the log file."""
     if isinstance(error, Refusal):
         _LOG.error("Configuration refused: %d findings", len(error.findings))
         for finding in error.findings:
-            _LOG.error("  %s", finding)
+            _LOG.error("  %s", finding.subject_line())
     else:
         _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
         _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)

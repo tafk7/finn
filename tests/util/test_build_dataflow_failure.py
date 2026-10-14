@@ -156,6 +156,24 @@ def test_a_refused_steps_findings_are_logged_once_with_their_owners(capsys):
 
 
 @pytest.mark.util
+def test_a_members_refusal_names_its_node_or_tensor_on_the_console(capsys):
+    """A refusal carried out of a network names its member in its details: each line
+    starts with it, unless its message does already."""
+    found = [
+        blocker("decision-no-viable-case", "no case").about(node="MatMul_1"),
+        blocker("transport-refused", "too wide").about(tensor="x"),
+        Finding(FindingKind.BLOCKER, "y", "test", "MatMul_2: y", (("node", "MatMul_2"),)),
+    ]
+    err, _ = logged_failure(capsys, Refusal(found))
+    assert err.splitlines()[:4] == [
+        "ERROR: step_fails refused: 3 findings (Refusal)",
+        "ERROR:   MatMul_1: test: decision-no-viable-case: no case",
+        "ERROR:   x: test: transport-refused: too wide",
+        "ERROR:   test: y: MatMul_2: y",
+    ]
+
+
+@pytest.mark.util
 def test_a_tool_that_failed_is_logged_with_its_transcript_and_errors_no_traceback(capsys):
     failed = ToolFailed(
         "vivado", 1, "/logs/package.sh.stdout.log", ("ERROR: [Common 17-1] no", "ERROR: two")
