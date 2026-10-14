@@ -397,6 +397,9 @@ LAYERS: tuple[Layer, ...] = (
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
+    # Each test one build: the member cache its fixture opens (finn.kernels.members), which
+    # the kernel and the kernel-op tests' conftests import.
+    Layer("tests.member_cache", ("member_cache",), ("kernels",), ("pytest",), "tests/kernels"),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
@@ -438,6 +441,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.value_classes",
             "tests.core.space",
             "tests.oracle",
+            "tests.member_cache",
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/kernels",
