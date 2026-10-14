@@ -11,6 +11,9 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
+from qonnx.transformation.infer_data_layouts import InferDataLayouts
+from qonnx.transformation.infer_datatypes import InferDataTypes
+from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.errors import KernelOpError
@@ -19,7 +22,7 @@ from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import THRESHOLDS, schema_digest, thresholding_model
+from kernel_ops.models import THRESHOLDS, convert, schema_digest, thresholding_model
 
 MEMORY = {"ram_style": "distributed", "block_stages": 1, "ultra_stages": 0}
 
@@ -190,4 +193,73 @@ def test_execution_is_multithreshold() -> None:
     values = np.arange(-12, 12, dtype=np.float32).reshape(3, 8)[:, :4]
     produced = execute_onnx(model, {"x": values})["y"]
     expected = execute_onnx(multithreshold(model), {"x": values})["y"]
+    assert np.array_equal(produced, expected)
+
+
+def layout_scenario(*, transposed: bool) -> ModelWrapper:
+    """A MultiThreshold on a 4-D INT3 input whose channel axis the graph doesn't settle.
+
+    ``transposed``: an NHWC input, a Transpose with perm [0, 2, 1, 3] (channels stay last),
+    then thresholds shared by every channel, its output annotated NCHW (stale). Otherwise:
+    an NCHW input and a row of thresholds for each of its 3 channels, ``data_layout``
+    unset. Both from upstream FINN's tests of its threshold layout inference."""
+    shape = [1, 3, 2, 4]
+    nodes = []
+    x = "x"
+    if transposed:
+        nodes.append(helper.make_node("Transpose", ["x"], ["xt"], name="swap", perm=[0, 2, 1, 3]))
+        x = "xt"
+    nodes.append(
+        helper.make_node(
+            "MultiThreshold",
+            [x, "t"],
+            ["y"],
+            name="mt",
+            domain="qonnx.custom_op.general",
+            out_dtype="INT2",
+            out_bias=-2.0,
+        )
+    )
+    graph = helper.make_graph(
+        nodes,
+        "layout_scenario",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, shape)],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, None)],
+    )
+    model = ModelWrapper(
+        qonnx_make_model(
+            graph,
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid("qonnx.custom_op.general", 1),
+            ],
+        )
+    )
+    rows = 1 if transposed else 3
+    model.set_initializer("t", np.asarray([[-1.0, 0.0, 1.0]] * rows, dtype=np.float32))
+    model.set_tensor_datatype("x", DataType["INT3"])
+    model.set_tensor_layout("x", ["N", "H", "W", "C"] if transposed else ["N", "C", "H", "W"])
+    model = model.transform(InferShapes()).transform(InferDataTypes())  # type: ignore[no-untyped-call]
+    model = model.transform(InferDataLayouts())
+    if transposed:
+        model.set_tensor_layout("y", ["N", "C", "H", "W"])
+    return model
+
+
+@pytest.mark.parametrize("transposed", [True, False], ids=["shared-after-transpose", "nchw-rows"])
+def test_a_layout_the_graph_does_not_settle_is_refused_never_reordered(transposed: bool) -> None:
+    """Upstream FINN once reordered such values silently (a transpose on one side of the
+    threshold only). Here the MultiThreshold stays on the host (``layout-unproven``), and
+    the converted graph computes what qonnx computes."""
+    source = layout_scenario(transposed=transposed)
+    values = (np.arange(24, dtype=np.float32) % 5 - 2).reshape(1, 3, 2, 4)
+    expected = execute_onnx(source, {"x": values})["y"]
+
+    converted, conversion = convert(source)
+
+    (outcome,) = [o for o in conversion.outcomes if o.nodes == ("mt",)]
+    assert outcome.op is None
+    assert "layout-unproven" in [finding.code for finding in outcome.findings]
+    assert [n.op_type for n in converted.graph.node if n.name == "mt"] == ["MultiThreshold"]
+    produced = execute_onnx(converted, {"x": values})["y"]
     assert np.array_equal(produced, expected)
