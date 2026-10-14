@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from finn.core.reporting.manifest import stored
 from finn.resources import home, tree_digest
 from finn.resources._store import MARKER, complete, locked, publish
 from finn.toolchain import launcher
@@ -82,10 +83,12 @@ def packaging_key(project: Path, *, run_synth: bool, toolchain: Toolchain) -> st
 
 @dataclass(frozen=True)
 class PackagedIp:
-    """A stored packaging: its entry (``directory``) and its ``key``."""
+    """A stored packaging: its entry (``directory``), its ``key``, and whether this call
+    ``built`` it or reused the store's."""
 
     directory: Path
     key: str
+    built: bool
 
     @property
     def ip(self) -> Path:
@@ -105,8 +108,9 @@ def packaged(
     ``toolchain`` unless the store holds it.
 
     ``name`` names the entry, ``<name>-<key16>`` under ``store`` (``ip_store()`` by
-    default). Raises ``ToolFailed`` when Vivado fails or packages no IP,
-    ``ToolUnavailable`` when the toolchain names no Vivado."""
+    default). The running step's manifest lists the entry, built or reused
+    (``finn.core.reporting.manifest.stored``). Raises ``ToolFailed`` when Vivado fails or
+    packages no IP, ``ToolUnavailable`` when the toolchain names no Vivado."""
     store = (ip_store() if store is None else Path(store)).resolve()
     project = Path(project)
     if not (project / PACKAGE_SCRIPT).is_file():
@@ -115,7 +119,8 @@ def packaged(
     entry_name = f"{name}-{key.removeprefix('sha256:')[:16]}"
     with locked(store, entry_name) as entry:
         if complete(entry, key):  # type: ignore[no-untyped-call]
-            return PackagedIp(entry, key)
+            stored("ip", entry, key, built=False)
+            return PackagedIp(entry, key, built=False)
         work = Path(tempfile.mkdtemp(dir=store, prefix=f".{entry_name}."))
         failed = store / f"{entry_name}.failed"
         try:
@@ -126,7 +131,8 @@ def packaged(
             raise
         _read_only(work)
         publish(work, entry, key)  # type: ignore[no-untyped-call]
-    return PackagedIp(entry, key)
+    stored("ip", entry, key, built=True)
+    return PackagedIp(entry, key, built=True)
 
 
 def _package(project: Path, work: Path, toolchain: Toolchain, *, kept: Path, name: str) -> None:

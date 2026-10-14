@@ -501,7 +501,9 @@ configuration found (its rejections and the limitations warned of), the plan (th
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
 `completed` or `failed`), seconds, the reports it wrote (by path), its tool runs with
-their transcripts, status, exit and messages by severity, and the findings it noted (a
+their transcripts, status, exit and messages by severity, the stored products it used
+(an entry of the packaged-IP store or the HLS cache, `built` in this run or `reused`),
+and the findings it noted (a
 limitation the run goes on with, such as the delivered clock's shortfall); and the
 `outcome`: `completed`, `failed` (the step, the error's kind: `refusal`,
 `tool-unavailable`, `tool-failed` or `bug`, the error, a refusal's findings by code) or

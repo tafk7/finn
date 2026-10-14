@@ -40,6 +40,7 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import design_digest, partition_body
+from finn.core.reporting.manifest import RECORDS, STORED
 from finn.custom_op.kernels.base import kernel_op
 from finn.platform.resolve import resolve_target
 from finn.shells.pynq import runner as pynq_runner
@@ -632,12 +633,13 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
 
 
 def test_an_ends_hls_is_cached_across_build_directories_not_across_parts(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An end's HLS request names neither its build directory nor the part (it reads the
     part and finn-hlslib's location from the synthesis): generated in two build
     directories, it is synthesized once, one entry of the HLS cache, each build holding
-    its own copy of the IP; for another part, synthesized again, another entry."""
+    its own copy of the IP; for another part, synthesized again, another entry. Each use
+    of the cache is recorded, built or reused."""
     noted = 'open(os.path.join(os.path.dirname(sys.argv[0]), "runs"), "a").write("ran\\n")\n'
     tools = hls_toolchain(tmp_path, monkeypatch, vitis_hls=FAKE_VITIS_HLS + noted)
     toolchain = Toolchain(
@@ -646,12 +648,19 @@ def test_an_ends_hls_is_cached_across_build_directories_not_across_parts(
     )
     end = integration(zynq_model(tmp_path)).ends[0]
     made = []
-    for build, part in (("one", ZYNQ.part), ("two", ZYNQ.part), ("three", "xc7z020clg400-1")):
-        monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / build))
-        model = hls_synth_ip(prepare_ip(iodma_model(end), 5.0), part, toolchain=toolchain)
-        (node,) = model.graph.node
-        made.append(Path(str(getCustomOp(node).get_nodeattr("ip_path"))))
+    with caplog.at_level(logging.INFO, logger=RECORDS.name):
+        for build, part in (("one", ZYNQ.part), ("two", ZYNQ.part), ("three", "xc7z020clg400-1")):
+            monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / build))
+            model = hls_synth_ip(prepare_ip(iodma_model(end), 5.0), part, toolchain=toolchain)
+            (node,) = model.graph.node
+            made.append(Path(str(getCustomOp(node).get_nodeattr("ip_path"))))
     assert (tools / "runs").read_text() == "ran\n" * 2
+    recorded = [getattr(record, STORED) for record in caplog.records if hasattr(record, STORED)]
+    assert [(each["store"], each["status"]) for each in recorded] == [
+        ("hls", "built"),
+        ("hls", "reused"),
+        ("hls", "built"),
+    ]
     cached = [path for path in (tmp_path / "hls_cache").iterdir() if not path.name.startswith(".")]
     assert len(cached) == 2
     for ip, build in zip(made, ("one", "two", "three")):

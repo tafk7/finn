@@ -24,6 +24,7 @@ from finn.core.reporting.manifest import (
     note,
     recorded_run,
     reported,
+    stored,
     write_report,
 )
 
@@ -37,6 +38,25 @@ def limitation(code: str) -> Finding:
 def read(manifest: Manifest) -> dict[str, Any]:
     stated: dict[str, Any] = json.loads(manifest.path.read_text())
     return stated
+
+
+def test_a_step_lists_the_stored_products_it_built_or_reused(tmp_path: Path) -> None:
+    manifest = Manifest(tmp_path / "run.json", tmp_path, {})
+    store = tmp_path / "store"
+    with recorded_run(str(tmp_path / "run.log"), manifest, runner=RUNNER):
+        stored("ip", store / "outside-0", "sha256:0", built=True)
+        with running_step("probe"):
+            manifest.step_started("probe")
+            stored("ip", store / "partition-1", "sha256:1", built=True)
+            stored("hls", store / "odma0-2", "sha256:2", built=False)
+            manifest.step_ended("completed", 0.5)
+    (step,) = read(manifest)["steps"]
+    assert step["stored"] == [
+        {"store": "ip", "entry": "store/partition-1", "key": "sha256:1", "status": "built"},
+        {"store": "hls", "entry": "store/odma0-2", "key": "sha256:2", "status": "reused"},
+    ]
+    log = (tmp_path / "run.log").read_text()
+    assert f"reused {store / 'odma0-2'}" in log and f"built {store / 'outside-0'}" in log
 
 
 def test_a_step_lists_its_reports_tool_runs_and_noted_findings(
