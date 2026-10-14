@@ -8,7 +8,9 @@ identity and plan), then:
 - ``steps``: each step run, in order, with its ``status`` (``running``, ``completed``,
   ``failed``), its ``seconds``, the ``reports`` it wrote (by path), its tool runs
   (``tools``: each with its transcript, status, seconds, exit status and messages by
-  severity) and the ``findings`` noted while it ran (each ``Finding.record``);
+  severity), the stored products it used (``stored``: each with its store, entry, key
+  and ``status``, ``built`` in this run or ``reused``) and the ``findings`` noted while
+  it ran (each ``Finding.record``);
 - ``outcome``: None while the run goes on; then ``completed``; ``failed``, with the
   step, the error's ``kind``, its type and message, and a refusal's findings by code; or
   ``refused`` before the first step, with the error.
@@ -19,7 +21,8 @@ manifest's directory are relative to it.
 
 Steps say what they did in records of one logger, ``RECORDS``, which a run's manifest
 collects (``recorded_run``): a report written (``reported``, ``write_report``), a tool
-run (``TOOL_RUN``, logged by ``finn.toolchain.launcher``) and a finding stated without
+run (``TOOL_RUN``, logged by ``finn.toolchain.launcher``), a stored product used
+(``stored``, logged by the stores of ``finn.toolchain``) and a finding stated without
 refusing (``note``). A record outside a step is logged, not listed.
 """
 
@@ -55,6 +58,10 @@ FINDING = "finn_finding"
 #: it, its ``messages`` by severity.
 TOOL_RUN = "finn_tool_run"
 
+#: The ``extra`` key of a log record for a stored product a step used: its ``store``,
+#: ``entry`` (its directory), ``key`` and ``status``, ``built`` or ``reused``.
+STORED = "finn_stored"
+
 
 def reported(path: str | os.PathLike[str]) -> None:
     """Log a report the running step wrote, which the manifest lists under the step."""
@@ -66,6 +73,14 @@ def write_report(path: Path, stated: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(stated, indent=2))
     reported(path)
+
+
+def stored(store: str, entry: str | os.PathLike[str], key: str, *, built: bool) -> None:
+    """Log a product of the store ``store`` the running step used, its ``entry`` of the
+    ``key``, ``built`` in this run or reused, which the manifest lists under the step."""
+    status = "built" if built else "reused"
+    fields = {"store": store, "entry": os.fspath(entry), "key": key, "status": status}
+    RECORDS.info(f"{status} {entry}", extra={STORED: fields})
 
 
 def note(finding: Finding, level: int = logging.WARNING) -> None:
@@ -126,6 +141,7 @@ class Manifest:
                 "seconds": None,
                 "reports": [],
                 "tools": [],
+                "stored": [],
                 "findings": [],
             }
             self.state["steps"].append(self._step)
@@ -169,6 +185,14 @@ class Manifest:
                 return
             self.write()
 
+    def stored(self, fields: Mapping[str, Any]) -> None:
+        """List a stored product the running step used."""
+        with self._lock:
+            if self._step is None:
+                return
+            self._step["stored"].append({**fields, "entry": self.relative(fields["entry"])})
+            self.write()
+
     def noted(self, finding: Finding) -> None:
         """List a finding noted in the running step."""
         with self._lock:
@@ -208,8 +232,8 @@ class Manifest:
 
 
 class _Collector(logging.Handler):
-    """Lists in ``manifest`` the reports, tool runs and noted findings that the records
-    of ``RECORDS`` carry."""
+    """Lists in ``manifest`` the reports, tool runs, stored products and noted findings
+    that the records of ``RECORDS`` carry."""
 
     def __init__(self, manifest: Manifest) -> None:
         super().__init__(logging.NOTSET)
@@ -223,6 +247,9 @@ class _Collector(logging.Handler):
             run = getattr(record, TOOL_RUN, None)
             if run is not None:
                 self.manifest.tool_run(run)
+            product = getattr(record, STORED, None)
+            if product is not None:
+                self.manifest.stored(product)
             finding = getattr(record, FINDING, None)
             if finding is not None:
                 self.manifest.noted(finding)
@@ -257,10 +284,12 @@ __all__ = [
     "FINDING",
     "RECORDS",
     "REPORT",
+    "STORED",
     "TOOL_RUN",
     "Manifest",
     "note",
     "recorded_run",
     "reported",
+    "stored",
     "write_report",
 ]

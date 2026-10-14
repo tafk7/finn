@@ -6,9 +6,11 @@
 declaration's path in its space (``compute.packed.core_supported``), a setting's place in
 the build's configuration (``configuration.target.part``), or a check's, an analysis's,
 a transformation's or a strategy's name. What the finding is about goes in ``details``,
-under ``node`` or ``tensor`` for a node or tensor of the graph.
+under ``node`` or ``tensor`` for a node or tensor of the graph, or ``declaration`` for a
+declaration of a space.
 
-A finding has three text forms: ``str(finding)``, one line (``owner: code: message``);
+A finding has four text forms: ``str(finding)``, one line (``owner: code: message``);
+``finding.subject_line()``, that line after what it is about, as a console shows it;
 ``finding.record()``, JSON's values; and ``by_code``, one line per code for many.
 
 A ``Refusal`` is an error that carries the findings it refuses for.
@@ -33,6 +35,10 @@ class FindingKind(str, Enum):
     REJECTION = "rejection"
     #: The code is wrong, not the input: fix the code (a declaration, a step).
     AUTHORING = "authoring"
+
+
+#: The details that name what a finding is about, in the order ``subject_line`` reads them.
+SUBJECTS = ("node", "tensor", "declaration")
 
 
 def _freeze_detail(value: object) -> object:
@@ -91,6 +97,15 @@ class Finding:
     def __str__(self) -> str:
         """One line: ``owner: code: message``."""
         return f"{self.owner}: {self.code}: {self.message}"
+
+    def subject_line(self) -> str:
+        """``str(finding)`` after what it is about, the first of its details ``SUBJECTS``
+        names (``subject: owner: code: message``), unless its message starts with it."""
+        details = dict(self.details)
+        subject = next((details[key] for key in SUBJECTS if key in details), None)
+        if subject is None or self.message.startswith(f"{subject}:"):
+            return str(self)
+        return f"{subject}: {self}"
 
     def about(self, **subjects: str) -> Finding:
         """This finding, its owner kept, naming in its details what it is about (``node``,
@@ -166,6 +181,7 @@ __all__ = [
     "Finding",
     "FindingKind",
     "Refusal",
+    "SUBJECTS",
     "by_code",
     "ordered_findings",
 ]

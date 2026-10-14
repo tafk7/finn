@@ -235,7 +235,11 @@ class AxiStreamPort(Port):
             if self.reshaped:
                 plain = [each for each in map(plain_index, index) if each is not None]
                 if len(plain) != len(index):
-                    raise Refused("a reshaped port reads plain indices")
+                    raise Refused(
+                        "reshape-not-plain",
+                        "AxiStreamPort.presented",
+                        "a reshaped port reads plain indices",
+                    )
                 view = tuple(schedule.extent(axis) for axis in plain)
             form = schedule.present(
                 self.tensor.shape,

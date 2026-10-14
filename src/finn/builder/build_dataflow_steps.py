@@ -399,20 +399,27 @@ def step_package_partition(
     reuses it.
 
     ``ooc_synth``: synthesize the IP out of context; its utilization report is listed
-    under this step, and step_resources_report reads it."""
+    under this step, and step_resources_report reads it. An IP the store holds already
+    is reused, not packaged again, and its line says so."""
     directory = Path(cfg.output_dir) / STITCHED_IP_DIR
     toolchain = cfg.step_toolchain("step_package_partition")
     node, body, body_file = partition_body(model)
-    body = body.transform(
-        PackagePartition(
-            node.name,
-            run_synth=ooc_synth,
-            directory=directory,
-            toolchain=toolchain,
-        )
+    packaging = PackagePartition(
+        node.name,
+        run_synth=ooc_synth,
+        directory=directory,
+        toolchain=toolchain,
     )
+    body = body.transform(packaging)
     body.save(body_file)
-    _LOG.info(f"Packaged IP {node.name} and its interface description in {directory}")
+    assert packaging.packaged is not None
+    if packaging.packaged.built:
+        _LOG.info(f"Packaged IP {node.name} and its interface description in {directory}")
+    else:
+        _LOG.info(
+            f"Reused the stored IP {node.name} ({packaging.packaged.directory}), placed with "
+            f"its interface description in {directory}"
+        )
     if ooc_synth:
         reported(partition_utilization_report(directory))
     testbench = directory / TESTBENCH_DIR

@@ -57,7 +57,7 @@ from finn.builder.build_dataflow_steps import (
     default_steps,
 )
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
-from finn.core.reporting.log import FILE_ONLY, running_step
+from finn.core.reporting.log import FILE_ONLY, log_run, running_step
 from finn.core.reporting.manifest import note, recorded_run
 from finn.kernels.members import member_cache
 from finn.platform.refusal import TargetRefused
@@ -70,8 +70,9 @@ CONFIG_FILE = "dataflow_build_config.json"
 #: The build log, in the output directory.
 LOG_FILE = "build_dataflow.log"
 
-#: The runner's logger.
-_LOG = logging.getLogger(__name__)
+#: The runner's logger, by its module's name also where the module runs as ``__main__``
+#: (``python -m``), so the run's log has its lines.
+_LOG = logging.getLogger("finn.builder.build_dataflow")
 
 #: The build's own loggers, the runner's and the steps': the console shows their INFO
 #: lines, and only the warnings and errors of the others.
@@ -92,15 +93,16 @@ def _failure_kind(error: BaseException) -> str:
 
 def _log_failure(step: str, error: BaseException) -> str:
     """Log a failed step's error by its kind, and return the kind. A refusal is logged
-    one line per finding, without its message (those same lines). The traceback goes to
-    the log file, and for a bug to the console too."""
+    one line per finding, after what it is about (``Finding.subject_line``), without its
+    message (those same findings). The traceback goes to the log file, and for a bug to
+    the console too."""
     kind = _failure_kind(error)
     name = type(error).__name__
     if isinstance(error, Refusal):
         findings = error.findings
         _LOG.error("%s refused: %d findings (%s)", step, len(findings), name)
         for finding in findings:
-            _LOG.error("  %s", finding)
+            _LOG.error("  %s", finding.subject_line())
     elif kind != "bug":
         _LOG.error("%s: %s: %s", step, name, error)
     else:
@@ -218,14 +220,19 @@ def _configured(
     return plan
 
 
+def _log_refused(refusal: Refusal) -> None:
+    """Log a refusal before the first step, one line per finding, as a step's."""
+    _LOG.error("Configuration refused: %d findings", len(refusal.findings))
+    for finding in refusal.findings:
+        _LOG.error("  %s", finding.subject_line())
+
+
 def _refused(manifest: BuildManifest, error: BaseException) -> None:
     """Log a build stopped before its first step and record it as ``refused``: a refusal
-    (there, only the configuration refuses) finding by finding, any other error with its
-    traceback in the log file."""
+    (there, only the configuration refuses) by its findings (``_log_refused``), any other
+    error with its traceback in the log file."""
     if isinstance(error, Refusal):
-        _LOG.error("Configuration refused: %d findings", len(error.findings))
-        for finding in error.findings:
-            _LOG.error("  %s", finding)
+        _log_refused(error)
     else:
         _LOG.error("Build failed before its first step: %s: %s", type(error).__name__, error)
         _LOG.error("the traceback", exc_info=error, extra=FILE_ONLY)
@@ -268,9 +275,14 @@ def build_dataflow_cfg(model_filename, cfg: DataflowBuildConfig):
         return _run_build_steps(model, cfg, plan, manifest)
 
 
-def _refused_in(output_dir: str, refused: ConfigurationRefused) -> None:
+def _refused_in(output_dir: str | None, refused: ConfigurationRefused) -> None:
     """Log and record in ``output_dir`` a build refused before its configuration
-    decoded, replacing the manifest an earlier build left there."""
+    decoded, replacing the manifest an earlier build left there; with no ``output_dir``,
+    log it on the console only."""
+    if output_dir is None:
+        with log_run(None, runner=_BUILD_LOGGERS):
+            _log_refused(refused)
+        return
     manifest = BuildManifest(output_dir, _identity(output_dir, None, None))
     with recorded_run(os.path.join(output_dir, LOG_FILE), manifest, runner=_BUILD_LOGGERS):
         manifest.configured(list(refused.findings))
@@ -304,7 +316,7 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     this process and without changing the working directory (a relative FINN_BUILD_DIR
     stays the caller's). Returns build_dataflow_cfg's result. A configuration that does
     not decode is refused in the output directory it states as a string, its log and a
-    new manifest, as the build's; otherwise with nothing written."""
+    new manifest, as the build's; otherwise on the console, with nothing written."""
     path_to_cfg_dir = os.path.abspath(path_to_cfg_dir)
     assert os.path.isdir(path_to_cfg_dir), "Directory not found: " + path_to_cfg_dir
     onnx_filename = path_to_cfg_dir + "/model.onnx"
@@ -312,20 +324,22 @@ def build_dataflow_directory(path_to_cfg_dir: str):
     try:
         cfg = read_build_config(path_to_cfg_dir)
     except ConfigurationRefused as refused:
-        output_dir = _stated_output_dir(path_to_cfg_dir)
-        if output_dir is not None:
-            _refused_in(output_dir, refused)
+        _refused_in(_stated_output_dir(path_to_cfg_dir), refused)
         raise
     return build_dataflow_cfg(onnx_filename, cfg)
 
 
-def main():
+def main() -> None:
     """The ``build_dataflow`` command: build_dataflow_directory on its argument. It exits
-    0, or 255 for a failed step; a refused configuration exits 1 with the traceback."""
+    0, 255 for a failed step, or 1 for a build refused before its first step, whose
+    findings are logged already, without a traceback."""
 
-    def cli(path_to_cfg_dir: str):
+    def cli(path_to_cfg_dir: str) -> None:
         """Build the model and configuration in path_to_cfg_dir."""
-        status = build_dataflow_directory(path_to_cfg_dir)
+        try:
+            status = build_dataflow_directory(path_to_cfg_dir)
+        except Refusal:
+            raise SystemExit(1) from None
         if status:
             raise SystemExit(status)
 

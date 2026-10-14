@@ -40,6 +40,7 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import design_digest, partition_body
+from finn.core.reporting.manifest import RECORDS, STORED
 from finn.custom_op.kernels.base import kernel_op
 from finn.platform.resolve import resolve_target
 from finn.shells.pynq import runner as pynq_runner
@@ -452,13 +453,20 @@ def test_the_debug_option_reaches_the_block_design(
     assert "if {0 == 1} {" in script
 
 
-def test_a_build_vivado_made_nothing_of_is_refused(
+def test_a_build_vivado_made_nothing_of_is_vivados_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    with pytest.raises(RuntimeError, match="Vivado made no bitfile or hardware handoff"):
+    """Vivado exits cleanly when its implementation fails: no bitfile is its failure
+    (``ToolFailed``, no exit status), its errors read from the run's transcript."""
+    with pytest.raises(launcher.ToolFailed, match="made no bitfile or hardware handoff"):
         recorded_build(monkeypatch, tmp_path, FakeVivado(makes=False))
-    with pytest.raises(RuntimeError, match="check the logs under"):
-        collect(str(tmp_path), "sha256:" + "0" * 64, PACKAGED_KEY)
+    transcript = tmp_path / "synth_project.sh.stdout.log"
+    transcript.write_text("ERROR: [Vivado 12-13638] Failed runs(s) : 'impl_1'\n")
+    with pytest.raises(launcher.ToolFailed, match="check the logs under") as failed:
+        collect(str(tmp_path), "sha256:" + "0" * 64, PACKAGED_KEY, transcript)
+    assert (failed.value.tool, failed.value.status) == ("vivado", None)
+    assert failed.value.transcript == transcript
+    assert failed.value.errors == ("ERROR: [Vivado 12-13638] Failed runs(s) : 'impl_1'",)
 
 
 def test_the_bitfile_build_prepares_its_default_toolchain_once_when_made(
@@ -625,12 +633,13 @@ def test_hls_synthesis_runs_in_the_builds_toolchain(
 
 
 def test_an_ends_hls_is_cached_across_build_directories_not_across_parts(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """An end's HLS request names neither its build directory nor the part (it reads the
     part and finn-hlslib's location from the synthesis): generated in two build
     directories, it is synthesized once, one entry of the HLS cache, each build holding
-    its own copy of the IP; for another part, synthesized again, another entry."""
+    its own copy of the IP; for another part, synthesized again, another entry. Each use
+    of the cache is recorded, built or reused."""
     noted = 'open(os.path.join(os.path.dirname(sys.argv[0]), "runs"), "a").write("ran\\n")\n'
     tools = hls_toolchain(tmp_path, monkeypatch, vitis_hls=FAKE_VITIS_HLS + noted)
     toolchain = Toolchain(
@@ -639,12 +648,19 @@ def test_an_ends_hls_is_cached_across_build_directories_not_across_parts(
     )
     end = integration(zynq_model(tmp_path)).ends[0]
     made = []
-    for build, part in (("one", ZYNQ.part), ("two", ZYNQ.part), ("three", "xc7z020clg400-1")):
-        monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / build))
-        model = hls_synth_ip(prepare_ip(iodma_model(end), 5.0), part, toolchain=toolchain)
-        (node,) = model.graph.node
-        made.append(Path(str(getCustomOp(node).get_nodeattr("ip_path"))))
+    with caplog.at_level(logging.INFO, logger=RECORDS.name):
+        for build, part in (("one", ZYNQ.part), ("two", ZYNQ.part), ("three", "xc7z020clg400-1")):
+            monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path / build))
+            model = hls_synth_ip(prepare_ip(iodma_model(end), 5.0), part, toolchain=toolchain)
+            (node,) = model.graph.node
+            made.append(Path(str(getCustomOp(node).get_nodeattr("ip_path"))))
     assert (tools / "runs").read_text() == "ran\n" * 2
+    recorded = [getattr(record, STORED) for record in caplog.records if hasattr(record, STORED)]
+    assert [(each["store"], each["status"]) for each in recorded] == [
+        ("hls", "built"),
+        ("hls", "reused"),
+        ("hls", "built"),
+    ]
     cached = [path for path in (tmp_path / "hls_cache").iterdir() if not path.name.startswith(".")]
     assert len(cached) == 2
     for ip, build in zip(made, ("one", "two", "three")):
@@ -683,6 +699,34 @@ def test_an_ends_tools_write_transcripts_not_this_processs_output(
     assert failed.value.transcript == logs / "make_project.sh.stdout.log"
     assert failed.value.transcript.read_text().startswith("VIVADO SAYS\n")
     assert failed.value.errors == ("ERROR: [BD 41-1] no block design",)
+
+
+def test_an_ends_vivado_that_exits_cleanly_without_its_wrapper_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vivado exiting 0 with no wrapper HDL for the stitched project is its failure
+    (``ToolFailed``, no exit status), naming its transcript, not a bug."""
+    tools = hls_toolchain(
+        tmp_path,
+        monkeypatch,
+        vitis_hls=FAKE_VITIS_HLS,
+        vivado="import sys\n"
+        "if sys.argv[1] == '-version': print('vivado v2024.2'); sys.exit()\n"
+        "print('ERROR: [BD 41-2] no wrapper')\n",
+    )
+    logs = tmp_path / "logs" / "step_build_bitfile"
+    toolchain = Toolchain(
+        Selection(hls_frontend="vitis_hls"),
+        {"PATH": f"{tools}:{os.defpath}", "XILINX_HLS": str(tmp_path / "hls")},
+    ).transcripts_in(logs)
+    end = integration(zynq_model(tmp_path)).ends[0]
+    with pytest.raises(
+        launcher.ToolFailed, match="the stitched project has no wrapper HDL"
+    ) as failed:
+        pynq_runner.generate_end_ip(end, ZYNQ.part, 5.0, tmp_path / "ends", toolchain)
+    assert (failed.value.tool, failed.value.status) == ("vivado", None)
+    assert failed.value.transcript == logs / "make_project.sh.stdout.log"
+    assert failed.value.errors == ("ERROR: [BD 41-2] no wrapper",)
 
 
 def test_the_driver_reads_its_io_from_the_ends_and_sets_the_clock_it_is_given(

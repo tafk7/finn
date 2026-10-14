@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import pytest
 
+import logging
 import os
 import shutil
 import stat
 import sys
 from pathlib import Path
 
+from finn.core.reporting.manifest import RECORDS, STORED
 from finn.resources._store import MARKER
 from finn.toolchain.hls import synthesis_key
 from finn.toolchain.ip import packaged, packaging_key, place
@@ -114,7 +116,29 @@ def test_a_project_is_packaged_once_and_its_ip_can_move(tmp_path):
     again = packaged(
         staged(tmp_path / "b"), name="sdp", run_synth=False, toolchain=toolchain, store=store
     )
-    assert again == first and len(runs(toolchain)) == 1
+    assert (again.directory, again.key) == (first.directory, first.key)
+    assert first.built and not again.built and len(runs(toolchain)) == 1
+
+
+def test_each_use_of_the_store_is_recorded_built_or_reused(tmp_path, caplog):
+    """The running step's manifest lists each entry the store gives, built by this call
+    or reused (``finn.core.reporting.manifest.stored``)."""
+    toolchain = vivado(tmp_path)
+    store = tmp_path / "store"
+    with caplog.at_level(logging.INFO, logger=RECORDS.name):
+        for where in ("a", "b"):
+            entry = packaged(
+                staged(tmp_path / where),
+                name="sdp",
+                run_synth=False,
+                toolchain=toolchain,
+                store=store,
+            )
+    recorded = [getattr(record, STORED) for record in caplog.records if hasattr(record, STORED)]
+    assert recorded == [
+        {"store": "ip", "entry": str(entry.directory), "key": entry.key, "status": status}
+        for status in ("built", "reused")
+    ]
 
 
 def test_the_key_is_what_vivado_is_given(tmp_path):

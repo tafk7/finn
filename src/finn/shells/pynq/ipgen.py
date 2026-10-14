@@ -365,10 +365,12 @@ def create_stitched_ip(
         if os.path.isfile(wrapper_filename_alt):
             model.set_metadata_prop("wrapper_filename", wrapper_filename_alt)
         else:
-            raise Exception(
-                """CreateStitchedIP failed, no wrapper HDL found under %s or %s.
-                Please check logs under the parent directory."""
-                % (wrapper_filename, wrapper_filename_alt)
+            raise ToolFailed.of(
+                "vivado",
+                (result.stdout or b"") + (result.stderr or b""),
+                transcript=getattr(result, "transcript", None) or Path(project) / "vivado.log",
+                what=f"the stitched project has no wrapper HDL ({wrapper_filename} or "
+                f"{wrapper_filename_alt})",
             )
     return model
 

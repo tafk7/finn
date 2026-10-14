@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,7 @@ from finn.builder.build_dataflow import (
     build_dataflow_cfg,
     build_dataflow_directory,
     build_plan,
+    main,
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
@@ -724,17 +727,77 @@ def test_a_build_directorys_configuration_that_does_not_decode_is_refused_in_its
 
 
 def test_a_configuration_without_an_output_directory_is_refused_on_the_console_only(
-    tmp_path: Path,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "output_dir": 3}))
-    match = r"configuration.output_dir: configuration-invalid: a str, not 3"
-    with pytest.raises(ConfigurationRefused, match=match):
+    line = "configuration.output_dir: configuration-invalid: a str, not 3"
+    with pytest.raises(ConfigurationRefused, match=line):
         build_dataflow_directory(str(tmp_path))
+    assert capsys.readouterr().err.splitlines() == [
+        "ERROR: Configuration refused: 1 findings",
+        f"ERROR:   {line}",
+    ]
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "dataflow_build_config.json",
         "model.onnx",
     ]
+
+
+def command(monkeypatch: pytest.MonkeyPatch, directory: Path) -> object:
+    """The ``build_dataflow`` command's exit status on ``directory``."""
+    monkeypatch.setattr(sys, "argv", ["build_dataflow", str(directory)])
+    with pytest.raises(SystemExit) as exited:
+        main()
+    return exited.value.code
+
+
+@pytest.mark.parametrize(
+    ("output_dir", "refused"),
+    (
+        ("out", "configuration.target.board: unknown-board: 'NoSuchBoard' is not a board"),
+        (3, "configuration.output_dir: configuration-invalid: a str, not 3"),
+    ),
+)
+def test_the_command_exits_1_for_a_refused_configuration_without_a_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    output_dir: object,
+    refused: str,
+) -> None:
+    """Refused before the first step (by the build, or before its configuration decodes
+    with no output directory to log in): its findings are on the console once each, and
+    no traceback repeats them."""
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
+    target = {"period_ns": 5.0, "board": "NoSuchBoard", "shell": "pynq"}
+    stated = {**STATED, "output_dir": output_dir, "target": target}
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
+    assert command(monkeypatch, tmp_path) == 1
+    err = capsys.readouterr().err
+    assert err.splitlines()[0] == "ERROR: Configuration refused: 1 findings"
+    assert err.count(refused) == 1
+    assert "Traceback" not in err
+
+
+def test_the_module_run_as_a_script_keeps_the_runners_log(tmp_path: Path) -> None:
+    """``python -m finn.builder.build_dataflow`` logs as the command does: the runner's
+    lines in the build's log and on the console, a refusal without a traceback."""
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
+    target = {"period_ns": 5.0, "board": "NoSuchBoard", "shell": "pynq"}
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "target": target}))
+    ran = subprocess.run(
+        [sys.executable, "-m", "finn.builder.build_dataflow", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert ran.returncode == 1
+    assert "Final outputs will be generated in" in ran.stdout
+    assert "ERROR: Configuration refused: 1 findings" in ran.stderr.splitlines()
+    assert "Traceback" not in ran.stderr
+    log = (tmp_path / "out" / "build_dataflow.log").read_text()
+    assert "ERROR - finn.builder.build_dataflow: Configuration refused: 1 findings" in log
 
 
 def test_reading_a_configuration_that_does_not_decode_writes_nothing(tmp_path: Path) -> None:

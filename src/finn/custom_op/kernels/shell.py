@@ -234,13 +234,6 @@ def shell_resources(subject: InShell | Configured) -> ShellResources | tuple[Fin
     return found.value if isinstance(found, Available) else found.findings
 
 
-def _about(finding: Finding) -> str:
-    """A finding as text after the node or tensor it is about, where it names one."""
-    details = dict(finding.details)
-    about = details.get("node", details.get("tensor"))
-    return str(finding) if about is None else f"{about}: {finding}"
-
-
 def configured_network(
     model: ModelWrapper, label: str
 ) -> tuple[Configured, tuple[tuple[str, str], ...]]:
@@ -306,7 +299,7 @@ def configured_network(
     if found or not isinstance(module, Available):
         refused = tuple(dict.fromkeys(found))
         raise KernelOpError(
-            f"{label}: refused by its members: " + "; ".join(map(_about, refused)),
+            f"{label}: refused by its members: " + "; ".join(map(Finding.subject_line, refused)),
             findings=refused,
         )
     # Only which keys are held matters here, not their values (exploration checks those).
@@ -322,7 +315,7 @@ def configured_network(
     if stale:
         raise KernelOpError(
             f"{label}: FIFOs too small for their streams, refused at emission (run "
-            "step_size_fifos): " + "; ".join(map(_about, stale)),
+            "step_size_fifos): " + "; ".join(map(Finding.subject_line, stale)),
             findings=stale,
         )
     ports = dict(bound.boundary)

@@ -119,7 +119,7 @@ from finn.kernels.ends import EndContract
 from finn.platform.capabilities import Resources
 from finn.resources import finnlib_root, scratch
 from finn.toolchain import vivado, xsim
-from finn.toolchain.ip import PACKAGE_SCRIPT, packaged, packaging_key, place
+from finn.toolchain.ip import PACKAGE_SCRIPT, PackagedIp, packaged, packaging_key, place
 from finn.toolchain.launcher import Toolchain, ToolFailed, host_toolchain
 from finn.transformation.kernels.hls import built_hls
 from finn.util.basic import make_build_dir
@@ -377,6 +377,7 @@ class PackagePartition(Transformation):
     holds of the same names; ``toolchain`` the prepared toolchain Vivado and HLS run
     in (a flow passes its own, so that one build runs Vivado by one route), by default
     the machine's (``finn.toolchain.launcher.host_toolchain``), prepared once, here.
+    Once applied, ``packaged`` is the store's entry it placed, built or reused.
     """
 
     def __init__(
@@ -392,6 +393,7 @@ class PackagePartition(Transformation):
         self.run_synth = run_synth
         self.directory = directory
         self.toolchain = host_toolchain() if toolchain is None else toolchain
+        self.packaged: PackagedIp | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         point, boundary = configured_network(model, self.ip_name)
@@ -407,6 +409,7 @@ class PackagePartition(Transformation):
             model, point, self.ip_name, run_synth=run_synth, toolchain=toolchain
         ) as staged:
             stored = packaged(staged, name=self.ip_name, run_synth=run_synth, toolchain=toolchain)
+        self.packaged = stored
         place(stored.directory, project)
         described = interface_description(model, point, boundary, self.ip_name)
         (project / INTERFACE_FILE).write_text(json.dumps(described, indent=2) + "\n")

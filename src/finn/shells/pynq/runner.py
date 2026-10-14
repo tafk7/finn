@@ -81,7 +81,7 @@ from finn.shells.pynq.ipgen import (
     ip_repositories,
     prepare_ip,
 )
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed, host_toolchain
 from finn.toolchain.vivado import PL_CLOCKS, delivered_clock, tcl_quote, vivado_jobs
 from finn.transformation.kernels.choose import shell_bottleneck
 from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
@@ -309,10 +309,14 @@ def project_script(export: Integration, design: str, jobs: int | None = None) ->
     )
 
 
-def collect(project: str, made_from: str, packaged_key: str) -> PynqBuilt:
+def collect(
+    project: str, made_from: str, packaged_key: str, transcript: StrPath | None = None
+) -> PynqBuilt:
     """What Vivado made in ``project`` (the template's project), from the partition's
-    design ``made_from`` and its IP of the key ``packaged_key``; a bitfile or hardware
-    handoff not there is refused, pointing at the project's logs."""
+    design ``made_from`` and its IP of the key ``packaged_key``. A bitfile or hardware
+    handoff not there is Vivado's failure (``ToolFailed``, its errors read from the run's
+    ``transcript``, pointing at the project's logs): it exits cleanly when its
+    implementation fails."""
     root = Path(project)
     runs = root / f"{PROJECT}.runs"
     bitfile = runs / "impl_1" / "top_wrapper.bit"
@@ -322,8 +326,10 @@ def collect(project: str, made_from: str, packaged_key: str) -> PynqBuilt:
     ]
     hwh = next((path for path in handoffs if path.is_file()), None)
     if not bitfile.is_file() or hwh is None:
-        raise RuntimeError(
-            f"Vivado made no bitfile or hardware handoff: check the logs under {project}"
+        raise ToolFailed.of(
+            "vivado",
+            transcript=transcript,
+            what=f"it made no bitfile or hardware handoff: check the logs under {project}",
         )
     out_of_context = {
         path.name[: -len("_utilization_synth.rpt")]: str(path)
@@ -392,14 +398,14 @@ def build_pynq(
     script = project + "/ip_config.tcl"
     with open(script, "w") as f:
         f.write(project_script(export, block_design(export, ips, options.hw_debug), jobs))
-    toolchain.run(
+    ran = toolchain.run(
         "vivado",
         ["-mode", "batch", "-source", script],
         cwd=project,
         replay=project + "/synth_project.sh",
     )
     assert packaged_key is not None  # the partition is one of the instances
-    return collect(project, design_digest(body), packaged_key)
+    return collect(project, design_digest(body), packaged_key, getattr(ran, "transcript", None))
 
 
 #: Where ``BuildPynqBitfile`` collects what the build made, under the output directory

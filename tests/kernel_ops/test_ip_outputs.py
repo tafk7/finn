@@ -16,6 +16,7 @@ then runs on its own (marker ``xsim``; it packages with Vivado too).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -47,6 +48,7 @@ from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
+from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, save_channels
@@ -264,6 +266,31 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     assert (testbench / "check.sv").read_text().startswith("`timescale 1ns/1ps\n")
     assert (testbench / RUN_SCRIPT).is_file()
     assert not (testbench / "xsim.log").exists()
+
+
+def test_an_ip_the_store_holds_is_reused_and_the_step_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Packaged again from the same partition, the IP is the store's: the step's line says
+    it reused it, not that it packaged it, and the store records it reused."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    cfg = DataflowBuildConfig(
+        output_dir=str(tmp_path / "output"),
+        target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
+    )
+    cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
+    step_package_partition(parent, cfg)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="finn"):
+        step_package_partition(parent, cfg)
+    assert "Reused the stored IP partition (" in caplog.text
+    assert "Packaged IP partition" not in caplog.text
+    statuses = [
+        getattr(record, STORED)["status"]
+        for record in caplog.records
+        if getattr(record, STORED, {}).get("store") == "ip"
+    ]
+    assert statuses == ["reused"]
 
 
 def _levels_short(channel: Any, period: int, words: int) -> bool:

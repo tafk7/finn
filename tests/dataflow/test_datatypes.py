@@ -17,9 +17,11 @@ from qonnx.core.ranges import TensorRange
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
+    canonical_qonnx_datatype,
     is_ordinary_integer,
     ordinary_integer_bounds,
     qonnx_datatype_width,
+    resolve_qonnx_datatype_name,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 
@@ -118,6 +120,40 @@ def test_a_width_cannot_be_asked_of_a_non_datatype() -> None:
         qonnx_datatype_width("INT8")
     with pytest.raises(DatatypeError):
         ScalarEncoding(cast(QONNXDataType, "INT8"))
+
+
+@pytest.mark.parametrize(
+    ("refused", "code", "owner"),
+    [
+        (
+            lambda: ordinary_integer_bounds(DataType["BIPOLAR"]),
+            "integer-not-ordinary",
+            "ordinary_integer_bounds",
+        ),
+        (
+            lambda: resolve_qonnx_datatype_name(cast(str, 8)),
+            "datatype-name-not-string",
+            "resolve_qonnx_datatype_name",
+        ),
+        (
+            lambda: resolve_qonnx_datatype_name("NOSUCHTYPE"),
+            "datatype-name-unknown",
+            "resolve_qonnx_datatype_name",
+        ),
+        (
+            lambda: canonical_qonnx_datatype("INT8"),
+            "datatype-name-not-value",
+            "canonical_qonnx_datatype",
+        ),
+        (lambda: canonical_qonnx_datatype(8), "datatype-not-qonnx", "canonical_qonnx_datatype"),
+    ],
+)
+def test_each_datatype_refusal_names_its_rule_and_its_function(
+    refused: Any, code: str, owner: str
+) -> None:
+    with pytest.raises(DatatypeError) as error:
+        refused()
+    assert [(each.code, each.owner) for each in error.value.findings] == [(code, owner)]
 
 
 def test_a_tensor_holds_the_one_immutable_datatype_value() -> None:

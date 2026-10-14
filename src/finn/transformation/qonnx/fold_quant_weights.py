@@ -95,8 +95,10 @@ class FoldQuantWeights(Transformation):
                         )
                     target_node = model.find_direct_successors(n)
                     if target_node is None:
-                        raise RuntimeError(
-                            "Weights quantized with the Quant node must have " "a successor node."
+                        raise _refused(
+                            "weight-quant-unconsumed",
+                            n,
+                            "Weights quantized with the Quant node must have a successor node.",
                         )
                     else:
                         target_node = target_node[0]
@@ -191,11 +193,19 @@ class FoldQuantWeights(Transformation):
 
                         successor = model.find_consumers(node_out)
                         if successor == []:
-                            raise RuntimeError(
+                            raise _refused(
+                                "weight-quant-unconsumed",
+                                n,
                                 "Can only constant fold scaled Quant weights "
-                                "if a successor exists."
+                                "if a successor exists.",
                             )
-                        assert len(successor) == 1, "Only implemented for a single consumer"
+                        if len(successor) != 1:
+                            raise _refused(
+                                "weight-quant-fork",
+                                n,
+                                "Can only constant fold scaled Quant weights "
+                                "into a single consumer.",
+                            )
                         successor = successor[0]
                         succ_output_name = successor.output[0]
 

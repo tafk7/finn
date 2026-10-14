@@ -75,6 +75,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
+from finn.core.reporting.manifest import stored
 from finn.resources import home, tree_digest
 from finn.resources._store import complete, locked, publish
 
@@ -236,9 +237,10 @@ def synthesize(
 
     ``name`` names the entry, ``<name>-<key16>`` under ``cache`` (``hls_cache()`` by
     default); ``toolchain`` runs the frontend; ``libraries`` are the directories the
-    script reads in place, each by a Tcl variable of its name. Raises
-    ``ToolFailed`` when the tool fails or leaves no exported RTL, ``ToolUnavailable``
-    when the toolchain has no HLS installation or frontend to run."""
+    script reads in place, each by a Tcl variable of its name. The running step's
+    manifest lists the entry, built or reused (``finn.core.reporting.manifest.stored``).
+    Raises ``ToolFailed`` when the tool fails or leaves no exported RTL,
+    ``ToolUnavailable`` when the toolchain has no HLS installation or frontend to run."""
     cache = hls_cache() if cache is None else cache
     libraries = dict(libraries or {})
     if not (Path(request) / REQUEST_SCRIPT).is_file():
@@ -249,6 +251,7 @@ def synthesize(
     entry_name = f"{name}-{key[:16]}"
     with locked(cache, entry_name) as entry:
         if complete(entry, key):
+            stored("hls", entry, key, built=False)
             return HlsProduct(entry)
         work = Path(tempfile.mkdtemp(dir=cache, prefix=f".{entry_name}."))
         failed = cache / f"{entry_name}.failed"
@@ -259,6 +262,7 @@ def synthesize(
             work.rename(failed)
             raise
         publish(work, entry, key)
+    stored("hls", entry, key, built=True)
     return HlsProduct(entry)
 
 

@@ -478,8 +478,9 @@ is relative to the directory the command runs from. Every tool runs in the
 environment of the configuration's toolchain (the machine's when it names none),
 prepared once for the build; the process's own environment is left as it is. The
 command exits 0 when the build completes, 255 when a step fails
-(`build_dataflow_directory` returns -1), and 1 with the traceback when the
-configuration is refused: before the first step, one `ConfigurationRefused` carries
+(`build_dataflow_directory` returns -1), and 1 when the configuration is refused,
+its findings on the console and in the log, one line each, without a traceback: before
+the first step, one `ConfigurationRefused` carries
 every rejection found, the target's, the plan's and the configuration checks', each a
 finding with its code, owned by its place in the configuration
 (`configuration.target.board: unknown-board: ...`). A setting a step cannot take
@@ -500,7 +501,9 @@ configuration found (its rejections and the limitations warned of), the plan (th
 it runs, and each setting with its value or default and its readers), each step with
 its status (`running` while it runs, then
 `completed` or `failed`), seconds, the reports it wrote (by path), its tool runs with
-their transcripts, status, exit and messages by severity, and the findings it noted (a
+their transcripts, status, exit and messages by severity, the stored products it used
+(an entry of the packaged-IP store or the HLS cache, `built` in this run or `reused`),
+and the findings it noted (a
 limitation the run goes on with, such as the delivered clock's shortfall); and the
 `outcome`: `completed`, `failed` (the step, the error's kind: `refusal`,
 `tool-unavailable`, `tool-failed` or `bug`, the error, a refusal's findings by code) or
