@@ -5,7 +5,8 @@
 
 ``network(model, nodes, ends=...)`` binds a ``finn.kernels.network.Network`` straight
 from the graph, for any selection of KernelOp nodes (a partition's body, a slice of it, one
-node), and changes no graph. The ends offered on its boundary (``ends``, each an
+node), and changes no graph: it reads the graph once, its tensors from one index
+(``finn.core.graph.facts.reading``). The ends offered on its boundary (``ends``, each an
 ``finn.kernels.ends.EndOffer``; none by default) are a fact its caller gives: a shell's
 row offers them, and ``finn.custom_op.kernels.shell`` binds a partition's network in the
 shell of the model's target (``in_shell``).
@@ -72,7 +73,7 @@ from finn.core.graph.annotations.channel import (
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor
+from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
@@ -197,7 +198,7 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
     inputs = [
         tensor
         for tensor in dict.fromkeys(t for node in nodes for t in node.input)
-        if tensor not in produced and tensor not in owned and model.get_initializer(tensor) is None
+        if tensor not in produced and tensor not in owned and initializer(model, tensor) is None
     ]
     outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
@@ -216,7 +217,7 @@ def _fan_out(
     readers: dict[str, list[str]] = {}
     for node, tensors in zip(nodes, owned):
         for tensor in node.input:
-            if tensor in tensors.values() or model.get_initializer(tensor) is None:
+            if tensor in tensors.values() or initializer(model, tensor) is None:
                 readers.setdefault(tensor, []).append(node.name)
     found = []
     for tensor, names in readers.items():
@@ -240,7 +241,7 @@ def _tensors(model: ModelWrapper, nodes: list[NodeProto], owned: list[dict[str, 
     found: dict[str, None] = {}
     for node, tensors in zip(nodes, owned):
         for tensor in node.input:
-            if tensor not in parameters and model.get_initializer(tensor) is None:
+            if tensor not in parameters and initializer(model, tensor) is None:
                 found.setdefault(tensor)
         for tensor in tensors.values():
             found.setdefault(tensor)
@@ -359,7 +360,19 @@ def _network(
 ) -> P:
     """``network``, made by ``kind`` (``Partition``, or a shell's network over it), each
     tensor of ``stating`` replayed with the channel choices it gives in place of those the
-    tensor states."""
+    tensor states; the graph's tensors read from one index."""
+    with reading(model):
+        return _bound(model, nodes, name, stating, ends, kind)
+
+
+def _bound(
+    model: ModelWrapper,
+    nodes: list[NodeProto],
+    name: str,
+    stating: Mapping[str, Mapping[str, object]],
+    ends: tuple[EndOffer, ...],
+    kind: Callable[..., P],
+) -> P:
     ops = [kernel_op(model, node) for node in nodes]
     owned = [op.owned() for op in ops]
     ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})

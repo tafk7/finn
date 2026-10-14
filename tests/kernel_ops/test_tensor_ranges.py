@@ -23,7 +23,7 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor
+from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.dataflow.tensor import ScalarEncoding
@@ -141,3 +141,20 @@ def test_a_graph_input_is_drawn_from_its_stated_range() -> None:
         assert -3 <= int(draw["x"].min()) and int(draw["x"].max()) <= 5
     extremes = drawn_inputs(model, 0)[0]["x"]
     assert (int(extremes.min()), int(extremes.max())) == (-3, 5)
+
+
+def test_a_bind_reads_each_tensor_from_one_index_as_the_graph_states_it() -> None:
+    """Inside ``reading`` (a network's bind) every tensor reads as it does outside, an
+    initializer as one array shared and read-only; another model is read directly."""
+    model, other = ranged_model(), ranged_model()
+    tensors = ["x", "t", "levels", "w", "y"]
+    outside = {tensor: edge_tensor(model, tensor, "test") for tensor in tensors}
+    with reading(model):
+        assert {tensor: edge_tensor(model, tensor, "test") for tensor in tensors} == outside
+        weights = initializer(model, "w")
+        assert weights is not None and weights is initializer(model, "w")
+        assert not weights.flags.writeable
+        np.testing.assert_array_equal(weights, WEIGHTS)
+        assert initializer(model, "levels") is None
+        assert initializer(other, "w") is not initializer(other, "w")
+    assert initializer(model, "w") is not weights

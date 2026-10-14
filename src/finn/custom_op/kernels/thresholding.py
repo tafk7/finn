@@ -32,7 +32,7 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import datatype, integer_tensor, known_shape, shape
+from finn.core.graph.facts import datatype, initializer, integer_tensor, known_shape, shape
 from finn.core.reporting.findings import Finding
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import (
@@ -143,7 +143,7 @@ class Thresholding(KernelOp):
         model, label = self.model(), self.label
         x, thresholds = self.onnx_node.input
         channels = shape(model, x, label)[-1]
-        stored = model.get_initializer(thresholds)
+        stored = initializer(model, thresholds)
         if stored is None:
             raise KernelOpError(
                 f"{label}: the thresholds {thresholds} are not an initializer: not a "

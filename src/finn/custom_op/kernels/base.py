@@ -76,7 +76,7 @@ from qonnx.util.basic import get_by_name
 from finn.core.graph.annotations.channel import CHANNEL, value_type
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor, state
+from finn.core.graph.facts import edge_tensor, initializer, reading, state
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Rejected, Space, inspection
 from finn.dataflow.tensor import Tensor
@@ -417,9 +417,7 @@ class KernelOp(CustomOp):
         model, node = self.model(), self.onnx_node
         found = {port: node.input[self.ports.index(port)] for port in self.parameters}
         return {
-            port: tensor
-            for port, tensor in found.items()
-            if model.get_initializer(tensor) is not None
+            port: tensor for port, tensor in found.items() if initializer(model, tensor) is not None
         }
 
     def network(self) -> Network:
@@ -428,6 +426,10 @@ class KernelOp(CustomOp):
         by its ONNX position (``in<i>_V``, ``out<j>_V``), on the target's platform. An
         input's carries its tensor, a parameter's the tensor and values its kernel states
         for it; an output's what its kernel states it writes. Nothing chosen."""
+        with reading(self.model()):
+            return self._network()
+
+    def _network(self) -> Network:
         facts = self.facts()
         owned = self.owned()
         platform = self.target().platform

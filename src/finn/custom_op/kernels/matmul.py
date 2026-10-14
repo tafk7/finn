@@ -23,7 +23,14 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import admitted, datatype, integer_tensor, known_shape, shape
+from finn.core.graph.facts import (
+    admitted,
+    datatype,
+    initializer,
+    integer_tensor,
+    known_shape,
+    shape,
+)
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, Match, Wiring, refused, unstated
 from finn.kernels.matmul import MatMulKernel
@@ -114,7 +121,7 @@ class MatMul(KernelOp):
         b = self.onnx_node.input[1]
         shaped = self.shaped()
         platform = self.target().platform
-        stored = model.get_initializer(b)
+        stored = initializer(model, b)
         if stored is None:
             return self.binding(dict(platform=platform, **shaped))
         # Known weights: their values, and the datatype the graph declares them in.
