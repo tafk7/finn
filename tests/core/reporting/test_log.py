@@ -80,3 +80,20 @@ def test_verbose_shows_each_python_warning_and_logs_debug_to_the_file_only(
     assert "UserWarning: a library's warning" in printed.err
     assert "Python warnings" not in printed.out + log
     assert finn.level == level
+
+
+def test_a_run_without_a_file_logs_to_the_console_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    runner = logging.getLogger(RUNNER)
+    with log_run(None, runner=runner.name):
+        runner.info("said")
+        runner.error("refused")
+        with warnings.catch_warnings():
+            warnings.simplefilter("always")
+            warnings.warn("a library's warning", UserWarning)
+    printed = capsys.readouterr()
+    assert printed.out.splitlines() == ["said", "1 Python warnings"]
+    assert printed.err.splitlines() == ["ERROR: refused"]
+    assert list(tmp_path.iterdir()) == []

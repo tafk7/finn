@@ -104,9 +104,9 @@ class _ConsoleFormat(logging.Formatter):
 
 
 @contextlib.contextmanager
-def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
+def log_run(path: str | None, *, runner: str, verbose: bool = False) -> Iterator[None]:
     """Log the ``with`` block to the file ``path`` (appended to) and to the console, then
-    restore the logging found.
+    restore the logging found; with no ``path``, to the console only.
 
     FINN's loggers and Python's warnings go to the file, each line with its level, step
     and logger, and to the console as the module docstring states: the INFO lines of
@@ -114,13 +114,15 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
     many Python warnings the file has; with ``verbose``, all of it. ``finn`` logs from
     INFO, from DEBUG with ``verbose``, unless the caller set its level. No stream is
     redirected, so a third party's print reaches the console unchanged."""
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     stamp = _StepStamp()
-    file_handler = logging.FileHandler(path, mode="a")
-    file_handler.setFormatter(
-        logging.Formatter("[%(asctime)s] %(levelname)s %(step)s %(name)s: %(message)s")
-    )
-    handlers: list[logging.Handler] = [file_handler]
+    handlers: list[logging.Handler] = []
+    if path is not None:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        file_handler = logging.FileHandler(path, mode="a")
+        file_handler.setFormatter(
+            logging.Formatter("[%(asctime)s] %(levelname)s %(step)s %(name)s: %(message)s")
+        )
+        handlers.append(file_handler)
     for stream, errors in ((sys.stdout, False), (sys.stderr, True)):
         console = logging.StreamHandler(stream)
         console.addFilter(_Console(runner, verbose, errors))
@@ -152,7 +154,8 @@ def log_run(path: str, *, runner: str, verbose: bool = False) -> Iterator[None]:
         yield
     finally:
         if counted.count and not verbose:
-            logging.getLogger(runner).info("%d Python warnings, in %s", counted.count, path)
+            where = "" if path is None else f", in {path}"
+            logging.getLogger(runner).info("%d Python warnings%s", counted.count, where)
         if capture:
             logging.captureWarnings(False)
         python.removeHandler(counted)
