@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -777,6 +778,26 @@ def test_the_command_exits_1_for_a_refused_configuration_without_a_traceback(
     assert err.splitlines()[0] == "ERROR: Configuration refused: 1 findings"
     assert err.count(refused) == 1
     assert "Traceback" not in err
+
+
+def test_the_module_run_as_a_script_keeps_the_runners_log(tmp_path: Path) -> None:
+    """``python -m finn.builder.build_dataflow`` logs as the command does: the runner's
+    lines in the build's log and on the console, a refusal without a traceback."""
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
+    target = {"period_ns": 5.0, "board": "NoSuchBoard", "shell": "pynq"}
+    (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "target": target}))
+    ran = subprocess.run(
+        [sys.executable, "-m", "finn.builder.build_dataflow", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert ran.returncode == 1
+    assert "Final outputs will be generated in" in ran.stdout
+    assert "ERROR: Configuration refused: 1 findings" in ran.stderr.splitlines()
+    assert "Traceback" not in ran.stderr
+    log = (tmp_path / "out" / "build_dataflow.log").read_text()
+    assert "ERROR - finn.builder.build_dataflow: Configuration refused: 1 findings" in log
 
 
 def test_reading_a_configuration_that_does_not_decode_writes_nothing(tmp_path: Path) -> None:

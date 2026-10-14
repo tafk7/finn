@@ -70,8 +70,9 @@ CONFIG_FILE = "dataflow_build_config.json"
 #: The build log, in the output directory.
 LOG_FILE = "build_dataflow.log"
 
-#: The runner's logger.
-_LOG = logging.getLogger(__name__)
+#: The runner's logger, by its module's name also where the module runs as ``__main__``
+#: (``python -m``), so the run's log has its lines.
+_LOG = logging.getLogger("finn.builder.build_dataflow")
 
 #: The build's own loggers, the runner's and the steps': the console shows their INFO
 #: lines, and only the warnings and errors of the others.
