@@ -20,6 +20,12 @@ because one configuration is already several simulations.  So :func:`drive`
 marshals a request to a fresh interpreter running *this* module, whose whole
 job is one simulation.
 
+**Each design is elaborated once.**  A design's runs (free-running, stalled)
+differ only in what Python drives, so its first run compiles the design into the
+directory the caller names (``compiled``) and every run simulates a private copy
+of it: XSI writes into the snapshot (``xsimkernel.log``). The copy is still that
+process's first and only load. A design's runs are therefore sequential.
+
 The worker is this module and not the caller's, deliberately.  A sweep that
 spawned another sweep's file would re-enter that sweep's argument parser, and
 the two would have to keep agreeing about flags they do not share.
@@ -31,6 +37,7 @@ import argparse
 import ctypes
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -43,8 +50,10 @@ import numpy as np
 
 from finn.core.rtlsim_pacing import Pace, Pacing
 from finn.kernels.artifacts.module import RegisterMap
-from finn.toolchain.launcher import Toolchain, host_toolchain
+from finn.toolchain import vivado
+from finn.toolchain.launcher import Toolchain, host_toolchain, identity
 from finn.xsi import close_rtlsim, compile_sim_obj, load_sim_obj, reset_rtlsim
+from finn.xsi._artifacts import validate_record
 
 #: Watchdog budget, in cycles without an accepted output beat.
 LIVENESS = 4000
@@ -190,9 +199,11 @@ def drive(
     expected: int,
     *,
     pacing: Pacing,
+    compiled: Path,
     data_files: Mapping[str, str] | None = None,
 ) -> list[int]:
-    """Compile and run one DUT in a fresh process, its streams paced by ``pacing``.
+    """Run one DUT in a fresh process, its streams paced by ``pacing``; ``compiled``
+    is the design's, shared by its runs (the first compiles it).
 
     Only marshals arguments across the process boundary; the simulation itself
     happens in :func:`simulate_once`, which is the whole body of that process.
@@ -209,6 +220,7 @@ def drive(
                     "stimulus": stimulus,
                     "expected": expected,
                     "pacing": pacing.as_json(),
+                    "compiled": str(compiled),
                     "data_files": dict(data_files or {}),
                 }
             )
@@ -231,11 +243,13 @@ def drive_observed(
     *,
     pacing: Pacing,
     directory: Path,
+    compiled: Path,
     drain_cycles: int = LIVENESS,
     data_files: dict[str, str] | None = None,
     registers: Mapping[str, RegisterMap] | None = None,
 ) -> dict[str, Any]:
-    """Run an observed production artifact, retaining request, response and compile files.
+    """Run an observed production artifact, retaining request, response and the run's
+    copy of the design compiled into ``compiled`` (shared by its runs; the first compiles).
 
     Stream names are complete ABI bus names, paced by ``pacing`` in the order
     ``stimulus`` and ``expected_outputs`` name them. Each observation names actual
@@ -258,6 +272,7 @@ def drive_observed(
                 "observations": observations,
                 "pacing": pacing.as_json(),
                 "work_directory": str(directory / "compile"),
+                "compiled": str(compiled),
                 "drain_cycles": drain_cycles,
                 "data_files": data_files or {},
                 "axilite_writes": {
@@ -489,11 +504,40 @@ def _simulate_observed(
         close_rtlsim(sim)
 
 
+def _private_copy(request: dict[str, Any], run: Path, *, toolchain: Toolchain) -> tuple[str, str]:
+    """The design compiled into ``request["compiled"]`` (by this run if it is the first),
+    copied to ``run``: the directory and the ``.so`` to load.
+
+    A compilation is reused only as its ``.so``'s record states it: these sources,
+    unchanged, elaborated by this toolchain's xelab."""
+    compiled = Path(request["compiled"])
+    so_rel = f"xsim.dir/{request['top_module']}/xsimk.so"
+    if (compiled / f"{so_rel}.finn.json").is_file():
+        tool = identity(toolchain, "xelab")
+        record = validate_record(compiled / so_rel, kind="design", tool=tool, check_abi=False)
+        sources = [*request["sources"], vivado.glbl(toolchain)]
+        if set(record["sources"]) != {str(Path(source).resolve()) for source in sources}:
+            raise ValueError(f"{compiled} holds another design's compilation")
+    else:
+        compiled.mkdir(parents=True, exist_ok=False)
+        for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
+            (compiled / name).write_text(contents)
+        compile_sim_obj(
+            request["top_module"], request["sources"], compiled, behav=True, toolchain=toolchain
+        )
+    shutil.copytree(compiled, run)
+    # The run's own data files, where the simulation resolves them (its working directory).
+    for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
+        (run / name).write_text(contents)
+    return str(run), so_rel
+
+
 def simulate_once(request_path: str, response_path: str) -> int:
     """Run exactly one simulation described by a JSON request, then exit.
 
-    The whole body of the process: compile, load, run, write the outputs.
-    Nothing else may load a simulation object here, which is the point.
+    The whole body of the process: compile unless an earlier run of the design
+    did, copy, load, run, write the outputs. Nothing else may load a simulation
+    object here, which is the point.
     """
 
     request = json.loads(Path(request_path).read_text())
@@ -502,26 +546,13 @@ def simulate_once(request_path: str, response_path: str) -> int:
         # The process's entry: the machine's toolchain, for every tool it runs.
         toolchain = host_toolchain()
         if "observations" in request:
-            scratch = Path(request["work_directory"])
-            scratch.mkdir(parents=True, exist_ok=False)
-            for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
-                (scratch / name).write_text(contents)
-            sim_dir, so_rel = compile_sim_obj(
-                request["top_module"],
-                request["sources"],
-                str(scratch),
-                behav=True,
-                toolchain=toolchain,
-            )
+            run = Path(request["work_directory"])
+            sim_dir, so_rel = _private_copy(request, run, toolchain=toolchain)
             payload = _simulate_observed(sim_dir, so_rel, request, toolchain=toolchain)
             Path(response_path).write_text(json.dumps(payload, indent=2))
             return 0
         with tempfile.TemporaryDirectory() as scratch:
-            for name, contents in cast("dict[str, str]", request.get("data_files", {})).items():
-                (Path(scratch) / name).write_text(contents)
-            sim_dir, so_rel = compile_sim_obj(
-                request["top_module"], request["sources"], scratch, behav=True, toolchain=toolchain
-            )
+            sim_dir, so_rel = _private_copy(request, Path(scratch) / "run", toolchain=toolchain)
             payload = {
                 "output": _simulate(
                     sim_dir,

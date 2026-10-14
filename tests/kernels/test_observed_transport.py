@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The observed scoreboard rejects a correct prefix followed by an extra beat; the XSI
-drivers pace their streams as ``finn.core.rtlsim_pacing`` states."""
+drivers pace their streams as ``finn.core.rtlsim_pacing`` states; a design's runs share
+one compilation, each simulating its own copy."""
 
 import pytest
 
 from finn.core.rtlsim_pacing import FREE, Pace
+from finn.xsi._artifacts import write_record
 from kernels.sweeps import rtl_transport
 
 #: The toolchain the transport is given: nothing here runs a tool.
@@ -166,3 +168,51 @@ def test_the_xsi_output_driver_pauses_after_each_burst():
     levels = _levels(driver, top.pins["out0_V_tready"], 20)
     assert levels == [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0]
     assert driver.words == [7, 7, 7] and Watchdog.resets == 3
+
+
+def test_a_design_is_compiled_once_and_each_run_simulates_its_own_copy(monkeypatch, tmp_path):
+    """The first run compiles into the design's ``compiled``; every run copies it (XSI
+    writes into the snapshot), and a compilation is reused only as its record states it."""
+    glbl = tmp_path / "glbl.v"
+    glbl.write_text("module glbl; endmodule\n")
+    source = tmp_path / "top.sv"
+    source.write_text("module top; endmodule\n")
+    compiles = []
+
+    def compile_sim_obj(top, sources, directory, *, behav, toolchain):
+        compiles.append(top)
+        so = directory / "xsim.dir" / top / "xsimk.so"
+        so.parent.mkdir(parents=True)
+        so.write_bytes(b"elaborated")
+        write_record(so, kind="design", tool="xelab test", sources=[*sources, glbl])
+
+    monkeypatch.setattr(rtl_transport, "compile_sim_obj", compile_sim_obj)
+    monkeypatch.setattr(rtl_transport, "identity", lambda _toolchain, tool: f"{tool} test")
+    monkeypatch.setattr(rtl_transport.vivado, "glbl", lambda _toolchain: glbl)
+    request = {
+        "top_module": "top",
+        "sources": [str(source)],
+        "compiled": str(tmp_path / "compiled"),
+        "data_files": {"weights.dat": "0f\n"},
+    }
+    runs = [tmp_path / mode for mode in ("free", "stalled")]
+    for run in runs:
+        directory, so = rtl_transport._private_copy(request, run, toolchain=STUB)
+        assert (directory, so) == (str(run), "xsim.dir/top/xsimk.so")
+        assert (run / so).read_bytes() == b"elaborated"
+        assert (run / "weights.dat").read_text() == "0f\n"
+    assert compiles == ["top"]
+    (runs[0] / "xsim.dir/top/xsimkernel.log").write_text("written by a run")
+    assert not (tmp_path / "compiled/xsim.dir/top/xsimkernel.log").exists()
+    assert not (runs[1] / "xsim.dir/top/xsimkernel.log").exists()
+
+    other = tmp_path / "other.sv"
+    other.write_text("module other; endmodule\n")
+    with pytest.raises(ValueError, match="another design"):
+        rtl_transport._private_copy(
+            {**request, "sources": [str(other)]}, tmp_path / "another", toolchain=STUB
+        )
+    source.write_text("module top; wire changed; endmodule\n")
+    with pytest.raises(ValueError, match="input changed"):
+        rtl_transport._private_copy(request, tmp_path / "changed", toolchain=STUB)
+    assert compiles == ["top"]

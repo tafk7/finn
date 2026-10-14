@@ -73,7 +73,8 @@ def run_adapted(label, source, pe, modules, evidence):
     assert kinds == modules, (label, kinds)
     levels = [value + 8 for row in values(*source.shape) for value in row]
     expected = [pack_lanes(levels[start : start + pe], 4) for start in range(0, len(levels), pe)]
-    top, sources, data = _build(point, "adapted", evidence / f"adapted_{label}")
+    design = evidence / f"adapted_{label}"
+    top, sources, data = _build(point, "adapted", design)
     mask = (1 << (4 * pe)) - 1
     for stalls in (False, True):
         out = drive(
@@ -82,6 +83,7 @@ def run_adapted(label, source, pe, modules, evidence):
             {},
             len(expected),
             pacing=STALLED if stalls else FREE,
+            compiled=design / "compiled",
             data_files=data,
         )
         assert [word & mask for word in out] == expected, (label, stalls)
@@ -104,9 +106,8 @@ def run_transpose(rows, cols, simd, evidence):
         for j in range(cols)
         for start in range(0, rows, simd)
     ]
-    top, sources, data = _build(
-        transposed(rows, cols, simd), "transposed", evidence / f"shuffle_{rows}_{cols}_{simd}"
-    )
+    design = evidence / f"shuffle_{rows}_{cols}_{simd}"
+    top, sources, data = _build(transposed(rows, cols, simd), "transposed", design)
     mask = (1 << (simd * BITS)) - 1
     for stalls in (False, True):
         out = drive(
@@ -115,6 +116,7 @@ def run_transpose(rows, cols, simd, evidence):
             {"in0": _padded(stimulus, simd * BITS)},
             len(expected),
             pacing=STALLED if stalls else FREE,
+            compiled=design / "compiled",
             data_files=data,
         )
         assert [word & mask for word in out] == expected, (rows, cols, simd, stalls)
