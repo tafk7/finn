@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable
+from pathlib import Path
 from typing import Self, cast
 
 import pytest
@@ -25,6 +27,7 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    errors,
     view,
 )
 from finn.core.space._nodes import (
@@ -320,6 +323,33 @@ def test_each_broken_rule_is_its_own_code_owned_by_the_module_that_checks_it() -
         "attribute-hides-declaration",
     ]
     assert len(by_code(found)) == 3
+
+
+def _error_classes(base: type[DefinitionError]) -> set[str]:
+    return {base.__name__}.union(*(_error_classes(sub) for sub in base.__subclasses__()))
+
+
+def test_finn_raises_no_definition_error_without_its_own_finding() -> None:
+    """Every DefinitionError FINN's own code makes names its rule (``broken``) or carries
+    the findings it rewraps (``findings=``): none falls back to ``definition-invalid``,
+    which only the error's own module names."""
+    source = Path(errors.__file__).parents[2]
+    names = _error_classes(DefinitionError)
+    unnamed, naming = [], []
+    for path in sorted(source.rglob("*.py")):
+        text = path.read_text()
+        if "definition-invalid" in text:
+            naming.append(path.relative_to(source).as_posix())
+        for node in ast.walk(ast.parse(text)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in names
+                and not any(keyword.arg == "findings" for keyword in node.keywords)
+            ):
+                unnamed.append(f"{path.relative_to(source).as_posix()}:{node.lineno}")
+    assert unnamed == []
+    assert naming == ["core/space/errors.py"]
 
 
 def test_duplicate_declaration_reuse_is_attributable() -> None:

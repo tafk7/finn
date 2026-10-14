@@ -181,6 +181,19 @@ def test_a_refused_save_names_its_rule_owned_by_the_op_about_the_node() -> None:
     assert len(by_code(found)) == 3
 
 
+def test_a_kernel_op_error_carries_at_least_one_finding() -> None:
+    """No raise can leave its rule unnamed: the error takes its findings, or one
+    rejection's (``refused``)."""
+    with pytest.raises(TypeError):
+        KernelOpError("unnamed")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        KernelOpError("unnamed", findings=())
+    refused = KernelOpError.refused("a-rule", "MatMul", "m: refused", ("pe",), node="m")
+    (finding,) = refused.findings
+    assert str(finding) == "MatMul: a-rule: m: refused" and str(refused) == "m: refused"
+    assert dict(finding.details) == {"keys": ("pe",), "node": "m"} and refused.keys == ("pe",)
+
+
 def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_replays_them() -> None:
     """The node owns its weight channel, whose choices are stated on the initializer's
     tensor, beside its value, never on the node; the network replays them, the node its

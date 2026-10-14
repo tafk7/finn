@@ -18,17 +18,12 @@ class KernelOpError(Refusal):
     details; the error's message is its own. ``keys`` names what is refused, if
     anything: a node's choice attributes (``compute.packed.pe``), a channel's keys
     (``transport``, or ``<tensor>.<key>``), or tensors whose channel choices are
-    refused whole. ``refused`` makes the error of one rejection. Where the raiser names
-    none, one ``kernel-op-refused`` rejection owned by ``KernelOp``."""
+    refused whole. ``refused`` makes the error of one rejection."""
 
     def __init__(
-        self, message: str, keys: tuple[str, ...] = (), findings: Iterable[Finding] = ()
+        self, message: str, keys: tuple[str, ...] = (), *, findings: Iterable[Finding]
     ) -> None:
-        details = (("keys", keys),) if keys else ()
-        found = tuple(findings) or (
-            Finding(FindingKind.REJECTION, "kernel-op-refused", "KernelOp", message, details),
-        )
-        super().__init__(found, message)
+        super().__init__(findings, message)
         self.keys = keys
 
     @staticmethod
