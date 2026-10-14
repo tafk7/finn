@@ -896,7 +896,9 @@ class MoveScalarLinearPastSplit(Transformation):
                         new_mul_node = deepcopy(producer)
                         new_split_output = model.make_new_valueinfo_name()
                         model.set_tensor_datatype(
-                            new_split_output, model.get_tensor_datatype(producer.input[0])
+                            new_split_output,
+                            model.get_tensor_datatype(producer.input[0]),
+                            model.get_tensor_range(producer.input[0]),
                         )
 
                         model.set_tensor_shape(
@@ -943,7 +945,9 @@ class MoveTransposePastSplit(Transformation):
                         new_split_output = model.make_new_valueinfo_name()
                         old_split_output_shape = model.get_tensor_shape(old_split_output)
                         model.set_tensor_datatype(
-                            new_split_output, model.get_tensor_datatype(producer.input[0])
+                            new_split_output,
+                            model.get_tensor_datatype(producer.input[0]),
+                            model.get_tensor_range(producer.input[0]),
                         )
 
                         model.set_tensor_shape(

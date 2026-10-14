@@ -31,7 +31,9 @@ import pytest
 import numpy as np
 from onnx import TensorProto
 from onnx import helper as oh
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.core.ranges import TensorRange
 from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
@@ -141,3 +143,18 @@ def test_move_identical_op_past_split(identical_op):
         model_transformed.get_first_global_in()
     )[0].op_type
     assert node0_input0_model != node0_input0_model_transformed
+
+
+@pytest.mark.streamline
+@pytest.mark.parametrize("identical_op", ["Transpose_0231", "Transpose_0312", "Mul", "Add"])
+def test_the_splits_new_outputs_keep_their_sources_range(identical_op):
+    """The Split's new outputs, which now split the moved op's input, state that input's
+    datatype and range."""
+    model = create_split_model(identical_op)
+    model.set_tensor_datatype("in1", DataType["INT8"], TensorRange(-5, 7))
+    model = model.transform(transform_dict[identical_op])
+    (split,) = [node for node in model.graph.node if node.op_type == "Split"]
+    assert split.input[0] == "in1"
+    for output in split.output:
+        assert model.get_tensor_datatype(output) == DataType["INT8"]
+        assert model.get_tensor_range(output) == TensorRange(-5, 7)
