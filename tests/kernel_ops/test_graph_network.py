@@ -373,7 +373,9 @@ def test_persist_checks_every_value_before_it_writes_any(
 
     def refuse_y(tensor: str, values: Any) -> None:
         if tensor == "y":
-            raise KernelOpError(f"{tensor}: refused")
+            raise KernelOpError.refused(
+                "channel-choice-invalid", "finn.channel", f"{tensor}: refused", tensor=tensor
+            )
         checked(tensor, values)
 
     monkeypatch.setattr(graph_network, "_encoded", refuse_y)

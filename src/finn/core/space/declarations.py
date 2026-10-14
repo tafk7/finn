@@ -57,6 +57,8 @@ if TYPE_CHECKING:
     from ._configuration import Space
     from .expressions import Expr
 
+_OWNER = "space.declarations"
+
 T = TypeVar("T")
 T_co = TypeVar("T_co", covariant=True)
 
@@ -64,7 +66,9 @@ T_co = TypeVar("T_co", covariant=True)
 def local_name(value: str, role: str) -> str:
     """Keep authored identity segments disjoint from generated node names."""
     if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
-        raise DefinitionError(f"{role} must be one nonempty ASCII name segment")
+        raise DefinitionError.broken(
+            "name-invalid", _OWNER, f"{role} must be one nonempty ASCII name segment"
+        )
     return value
 
 
@@ -142,9 +146,12 @@ class Declaration:
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         if self.owner is not None and (self.owner is not owner or self.name != name):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "declaration-reused",
+                _OWNER,
                 f"{owner.__qualname__}.{name}: declaration already belongs to "
-                f"{self.owner.__qualname__}.{self.name}; create a fresh declaration"
+                f"{self.owner.__qualname__}.{self.name}; create a fresh declaration",
+                declaration=f"{owner.__qualname__}.{name}",
             )
         self.owner, self.name = owner, name
 
@@ -311,9 +318,12 @@ def declared_annotation(declaration: Declaration, kind: str) -> object:
     try:
         return eval(annotation, dict(globals_), dict(locals_))  # noqa: S307 - authored annotation
     except Exception as cause:
-        raise PendingAnnotation(
+        raise PendingAnnotation.broken(
+            "annotation-unresolved",
+            _OWNER,
             f"{describe_formal(declaration, kind)}: cannot resolve the annotation "
-            f"{annotation!r}: {cause}"
+            f"{annotation!r}: {cause}",
+            declaration=describe_formal(declaration, kind),
         ) from cause
 
 
@@ -324,9 +334,12 @@ class PendingAnnotation(DefinitionError):
 
 def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
     attribute = declaration.name or kind.lower()
-    return DefinitionError(
+    return DefinitionError.broken(
+        "annotation-missing",
+        _OWNER,
         f"{describe_formal(declaration, kind)}: annotate the {kind.lower()} with its value "
-        f"type, as in `{attribute}: int = {kind}()`"
+        f"type, as in `{attribute}: int = {kind}()`",
+        declaration=describe_formal(declaration, kind),
     )
 
 
@@ -355,15 +368,21 @@ def _annotation_semantics(
             and isinstance(token, type)
             and nominal is not token
         ):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "annotation-semantics-incompatible",
+                _OWNER,
                 f"{label}: annotation {nominal.__qualname__} is incompatible with "
-                f"{explicit.name} semantics"
+                f"{explicit.name} semantics",
+                declaration=label,
             )
         return explicit
     if union or protocol or not isinstance(nominal, type):
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "semantics-unstated",
+            _OWNER,
             f"{label}: the annotation {annotation!r} needs explicit semantics= (a union, "
-            "protocol or special form has no default value semantics)"
+            "protocol or special form has no default value semantics)",
+            declaration=label,
         )
     return default_semantics(nominal)
 
@@ -411,11 +430,15 @@ class Param(ValueDecl[T], Generic[T]):
         cls, *, default: object = MISSING, required: object = None, semantics: object = None
     ) -> Any:
         if default is not MISSING and required is not None:
-            raise DefinitionError(
-                "Param(default=...) is already optional; required= applies without a default"
+            raise DefinitionError.broken(
+                "param-required-with-default",
+                _OWNER,
+                "Param(default=...) is already optional; required= applies without a default",
             )
         if semantics is not None and not isinstance(semantics, ValueSemantics):
-            raise DefinitionError("semantics= must be a ValueSemantics")
+            raise DefinitionError.broken(
+                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
+            )
         instance = cast(Param[object], super().__new__(cls))
         object.__setattr__(instance, "_body", class_body())
         instance.explicit = cast("ValueSemantics[object] | None", semantics)
@@ -442,14 +465,22 @@ class Param(ValueDecl[T], Generic[T]):
         label = describe_formal(self, "Param")
         space_type = _annotated_space_type(annotation)
         if space_type is not None:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "formal-takes-node",
+                _OWNER,
                 f"{label}: a formal takes a value, not a {space_type.__qualname__} node; "
-                "place the node in a class body, and give the formal the values it reads"
+                "place the node in a class body, and give the formal the values it reads",
+                declaration=label,
             )
         semantics = _annotation_semantics(annotation, self.explicit, label)
         if self.default not in (MISSING, UNSUPPLIED):
             if not recognize(semantics, self.default, owner=label, role="default recognition"):
-                raise DefinitionError(f"{label}: invalid formal default: {unrecognized(semantics)}")
+                raise DefinitionError.broken(
+                    "literal-unrecognized",
+                    _OWNER,
+                    f"{label}: invalid formal default: {unrecognized(semantics)}",
+                    declaration=label,
+                )
             self.default = snapshot(semantics, self.default, owner=label, role="default snapshot")
         self.semantics = semantics
         self.resolved = True
@@ -487,7 +518,12 @@ class Const(ValueDecl[T], Generic[T]):
         self.semantics = semantics if semantics is not None else semantics_for(type(value))
         label = f"Const{at(self.origin)}"
         if not recognize(self.semantics, value, owner=label, role="constant recognition"):
-            raise DefinitionError(f"{label}: {unrecognized(self.semantics)}")
+            raise DefinitionError.broken(
+                "literal-unrecognized",
+                _OWNER,
+                f"{label}: {unrecognized(self.semantics)}",
+                declaration=label,
+            )
         self.value = snapshot(self.semantics, value, owner=label, role="constant snapshot")
 
 
@@ -596,7 +632,11 @@ class Decision(ValueDecl[T], Generic[T]):
         **shared: object,
     ) -> Any:
         if type(required) is not bool:
-            raise DefinitionError(f"Decision{at(source_origin())}: required= is True or False")
+            raise DefinitionError.broken(
+                "required-not-bool",
+                _OWNER,
+                f"Decision{at(source_origin())}: required= is True or False",
+            )
         if entries is not None:
             reserved = {
                 key: value
@@ -611,10 +651,12 @@ class Decision(ValueDecl[T], Generic[T]):
                 if value is not None
             }
             if reserved:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "shared-binding-reserved",
+                    _OWNER,
                     f"Decision{at(source_origin())}: shared bindings {sorted(reserved)} are "
                     "named like the Decision's own arguments; rename the Param (values -> "
-                    "contents), or write the binding on each entry that takes it"
+                    "contents), or write the binding on each entry that takes it",
                 )
             from ._nodes import entry_choice
 
@@ -622,25 +664,39 @@ class Decision(ValueDecl[T], Generic[T]):
                 entries, shared, optional=optional, required=required, when=guard(when)
             )
         if shared or optional is not False:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "entries-only-option",
+                _OWNER,
                 "optional= and shared bindings apply to a Decision over candidate entries: "
-                'Decision({"key": Room, ...}, ...)'
+                'Decision({"key": Room, ...}, ...)',
             )
         if domain is None and isinstance(values, Mapping):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "node-decision-not-entries",
+                _OWNER,
                 f"Decision{at(source_origin())}: a Decision over nodes lists its candidates as "
                 'entries, Decision({"key": Room, "other": Room(...)}); optional=True adds '
-                'the None candidate "none"'
+                'the None candidate "none"',
             )
         if (domain is None) == (values is None):
-            raise DefinitionError("a Decision needs exactly one of domain= or values=")
+            raise DefinitionError.broken(
+                "decision-domain-ambiguous",
+                _OWNER,
+                "a Decision needs exactly one of domain= or values=",
+            )
         if semantics is not None and not isinstance(semantics, ValueSemantics):
-            raise DefinitionError("semantics= must be a ValueSemantics")
+            raise DefinitionError.broken(
+                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
+            )
         if domain is not None and not isinstance(domain, Domain):
-            raise DefinitionError("domain= must be a Domain")
+            raise DefinitionError.broken(
+                "domain-argument-invalid", _OWNER, "domain= must be a Domain"
+            )
         if ordered is not None and (domain is not None or type(ordered) is not bool):
-            raise DefinitionError(
-                "ordered= is a bool, for listed values= (a domain= states its own order)"
+            raise DefinitionError.broken(
+                "ordered-invalid",
+                _OWNER,
+                "ordered= is a bool, for listed values= (a domain= states its own order)",
             )
         instance = cast(Decision[object], super().__new__(cls))
         object.__setattr__(instance, "_body", class_body())
@@ -657,7 +713,11 @@ class Decision(ValueDecl[T], Generic[T]):
         if requires is not None:
             stated = tuple(cast(Iterable[object], requires))
             if not all(isinstance(item, Requirement) for item in stated):
-                raise DefinitionError("requires= takes requirements, as built by requires()")
+                raise DefinitionError.broken(
+                    "requires-invalid",
+                    _OWNER,
+                    "requires= takes requirements, as built by requires()",
+                )
             instance.domain = requiring(instance.domain, *cast(tuple[Requirement, ...], stated))
         instance.sites = []
         instance.required = required
@@ -667,9 +727,12 @@ class Decision(ValueDecl[T], Generic[T]):
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         if self.owner is None and self.name is not None and self.name != name:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "decision-misnamed",
+                _OWNER,
                 f"{owner.__qualname__}.{name}: Decision{at(self.origin)} is named "
-                f"{self.name!r}; a class attribute takes its attribute name"
+                f"{self.name!r}; a class attribute takes its attribute name",
+                declaration=f"{owner.__qualname__}.{name}",
             )
         super().__set_name__(owner, name)
         try:
@@ -725,7 +788,11 @@ def required(kind: type[T]) -> T:
     is never a keyword of the class's call.
     """
     if not isinstance(kind, type):
-        raise DefinitionError("required() takes the member's value type, as in required(int)")
+        raise DefinitionError.broken(
+            "required-type-invalid",
+            _OWNER,
+            "required() takes the member's value type, as in required(int)",
+        )
     return cast(T, Required(kind))
 
 
@@ -748,9 +815,12 @@ def unfinished(space_type: type[object], where: str) -> DefinitionError | None:
     unmet = unmet_required(space_type)
     if not unmet:
         return None
-    return DefinitionError(
+    return DefinitionError.broken(
+        "required-unmet",
+        _OWNER,
         f"{space_type.__qualname__}{where} leaves required members unmet: {', '.join(unmet)}; a "
-        "Space class with an unmet required() member cannot be placed (define them in a subclass)"
+        "Space class with an unmet required() member cannot be placed (define them in a subclass)",
+        declaration=space_type.__qualname__,
     )
 
 
@@ -758,7 +828,9 @@ def guard(when: object) -> ValueRef[bool] | None:
     if when is None:
         return None
     if not isinstance(when, ValueRef):
-        raise DefinitionError("when= requires a Boolean reference")
+        raise DefinitionError.broken(
+            "guard-not-boolean", _OWNER, "when= requires a Boolean reference"
+        )
     return cast(ValueRef[bool], when)
 
 
@@ -833,7 +905,9 @@ def derived(
         return Derived(function, aliases=aliases, when=when)
     if semantics is not None:
         if not isinstance(semantics, ValueSemantics):
-            raise DefinitionError("semantics= must be a ValueSemantics")
+            raise DefinitionError.broken(
+                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
+            )
         return _SemanticDerivedDecorator(semantics, aliases, when)
     return _DerivedDecorator(aliases, when)
 
@@ -1054,7 +1128,9 @@ def view(
         return decorator(function)
     if semantics is not None:
         if not isinstance(semantics, ValueSemantics):
-            raise DefinitionError("semantics= must be a ValueSemantics")
+            raise DefinitionError.broken(
+                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
+            )
         return _SemanticViewDecorator(semantics, decorator)
     return decorator
 
@@ -1372,7 +1448,9 @@ def selected(decision: object) -> str:
     from ._nodes import NodeChoice
 
     if not isinstance(decision, NodeChoice):
-        raise DefinitionError("selected() requires a Decision over nodes")
+        raise DefinitionError.broken(
+            "selected-not-node-decision", _OWNER, "selected() requires a Decision over nodes"
+        )
     return cast(str, CaseRef(decision._space_path))
 
 
@@ -1394,7 +1472,11 @@ def supplied(formal: object) -> bool:
     nodes it guards can never apply, and its candidates are not compiled.
     """
     if not isinstance(formal, Param):
-        raise DefinitionError("supplied() takes a value input (a Param) of this Space class")
+        raise DefinitionError.broken(
+            "supplied-not-param",
+            _OWNER,
+            "supplied() takes a value input (a Param) of this Space class",
+        )
     return cast(bool, Supplied(cast("Param[object]", formal)))
 
 
@@ -1407,7 +1489,9 @@ class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
 
     def __init__(self, key: ViewKey[T]) -> None:
         if not isinstance(key, ViewKey):
-            raise DefinitionError(f"{type(self).__name__} requires a ViewKey")
+            raise DefinitionError.broken(
+                "view-key-required", _OWNER, f"{type(self).__name__} requires a ViewKey"
+            )
         self.key = key
         self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
 

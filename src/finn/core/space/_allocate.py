@@ -59,6 +59,8 @@ from .expressions import Expr
 from .ir import Argument, NodeKind
 from .semantics import BOOL, STRING
 
+_OWNER = "space.allocate"
+
 
 def _matches(expected: str) -> Callable[..., object]:
     def matches(*, selected: str) -> bool:
@@ -203,9 +205,12 @@ class _Allocation:
         binding: PlacementBinding | None = None
         if slot is not None:
             if not isinstance(declaration, Param):
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "body-supplies-non-formal",
+                    _OWNER,
                     f"{key} (assigned at {slot.origin}): a body supplies formals only; "
-                    f"{type(declaration).__name__} belongs to the Space class"
+                    f"{type(declaration).__name__} belongs to the Space class",
+                    declaration=key,
                 )
             binding_kind, supplier = classify(slot)
             binding = PlacementBinding(supplier, binding_kind, slot.origin)
@@ -224,7 +229,12 @@ class _Allocation:
         else:
             node_kind = _declared_kind(declaration)
             if node_kind is None:
-                raise DefinitionError(f"{key}: unsupported declaration")
+                raise DefinitionError.broken(
+                    "declaration-unsupported",
+                    _OWNER,
+                    f"{key}: unsupported declaration",
+                    declaration=key,
+                )
         node = self.table.reserve(
             draft.index,
             key,
@@ -262,10 +272,12 @@ class _Allocation:
         decision = cast(Decision[object], binding.supplier)
         if decision.name is None:
             if len(decision.sites) > 1:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "shared-decision-unnamed",
+                    _OWNER,
                     f"Decision{at(decision.origin)} supplies {len(decision.sites)} formals "
                     f"({', '.join(decision.sites)}): a shared decision must be named. Make it "
-                    'a class attribute, or pass Decision(..., name="...")'
+                    'a class attribute, or pass Decision(..., name="...")',
                 )
             return
         identity = (draft.source_scope, id(decision))
@@ -448,7 +460,7 @@ class _Allocation:
                 elif kind == "choice":
                     self.choice(scope, name, cast(NodeDecision, declaration))
         if self.missing:
-            raise DefinitionError("; ".join(self.missing))
+            raise DefinitionError.broken("formal-unsupplied", _OWNER, "; ".join(self.missing))
         self.own_named_decisions()
         # All occurrence identities and membership maps are now stable. Later
         # phases replace node payloads, never scope identities.
@@ -470,9 +482,12 @@ class _Allocation:
             name = cast(str, decision.name)
             key = member_key(draft.name, name)
             if name in draft.named_members or name in draft.named_children:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "shared-decision-name-taken",
+                    _OWNER,
                     f"{key}: the shared Decision{at(decision.origin)} is named like a member "
-                    f"of {draft.effective.space_type.__qualname__}; choose another name"
+                    f"of {draft.effective.space_type.__qualname__}; choose another name",
+                    declaration=key,
                 )
             first = self.table.nodes[uses[0]]
             node = self.table.reserve(

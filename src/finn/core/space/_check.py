@@ -19,6 +19,8 @@ from ._table import Table
 from .errors import DefinitionError
 from .semantics import BOOL, STRING
 
+_OWNER = "space.check"
+
 
 def check(table: Table, order: tuple[int, ...]) -> None:
     _check_nodes(table, order)
@@ -34,9 +36,19 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
         if node.kind in {"view", "alias"} and node.output is not None:
             output = nodes[node.output].semantics
             if output is None:
-                raise DefinitionError(f"{node.key}: output has no value semantics")
+                raise DefinitionError.broken(
+                    "output-semantics-missing",
+                    _OWNER,
+                    f"{node.key}: output has no value semantics",
+                    declaration=node.key,
+                )
             if node.semantics is not None and not node.semantics.is_compatible_with(output):
-                raise DefinitionError(f"{node.key}: output has incompatible value semantics")
+                raise DefinitionError.broken(
+                    "output-semantics-incompatible",
+                    _OWNER,
+                    f"{node.key}: output has incompatible value semantics",
+                    declaration=node.key,
+                )
             if node.semantics is None:
                 nodes[index] = node = replace(node, semantics=output)
         if node.kind in {"present", "select"} and node.semantics is None and node.alternatives:
@@ -52,17 +64,30 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
                 ):
                     if index in table.shared and _drop_shared(table, index):
                         break
-                    raise DefinitionError(
-                        f"{node.key}: alternatives have incompatible value semantics"
+                    raise DefinitionError.broken(
+                        "alternatives-semantics-incompatible",
+                        _OWNER,
+                        f"{node.key}: alternatives have incompatible value semantics",
+                        declaration=node.key,
                     )
         if node.guard is not None:
             semantics = nodes[node.guard].semantics
             if semantics is None or not semantics.is_compatible_with(BOOL):
-                raise DefinitionError(f"{node.key}: applicability requires Boolean value semantics")
+                raise DefinitionError.broken(
+                    "applicability-not-boolean",
+                    _OWNER,
+                    f"{node.key}: applicability requires Boolean value semantics",
+                    declaration=node.key,
+                )
         if node.kind == "guard" and node.output is not None:
             semantics = nodes[node.output].semantics
             if semantics is None or not semantics.is_compatible_with(BOOL):
-                raise DefinitionError(f"{node.key}: applicability requires Boolean value semantics")
+                raise DefinitionError.broken(
+                    "applicability-not-boolean",
+                    _OWNER,
+                    f"{node.key}: applicability requires Boolean value semantics",
+                    declaration=node.key,
+                )
 
 
 def _drop_shared(table: Table, index: int) -> bool:
@@ -79,7 +104,12 @@ def _check_arguments(table: Table) -> None:
     for dependency, target, owner in table.argument_checks:
         semantics = table.nodes[target].semantics
         if semantics is None:
-            raise DefinitionError(f"{owner}: dependency has no value semantics")
+            raise DefinitionError.broken(
+                "dependency-semantics-missing",
+                _OWNER,
+                f"{owner}: dependency has no value semantics",
+                declaration=owner,
+            )
         validate_argument(dependency, semantics, owner=owner)
 
 
@@ -92,8 +122,11 @@ def _check_exports(table: Table) -> None:
         for export, target in exported:
             semantics = table.nodes[target].semantics
             if semantics is None or not export.semantics.is_compatible_with(semantics):
-                raise DefinitionError(
-                    f"{draft.name}: export {export.name} has incompatible semantics"
+                raise DefinitionError.broken(
+                    "export-semantics-incompatible",
+                    _OWNER,
+                    f"{draft.name}: export {export.name} has incompatible semantics",
+                    declaration=draft.name,
                 )
 
 
@@ -103,6 +136,9 @@ def _check_expressions(table: Table) -> None:
         node = table.nodes[task.index]
         operands = (table.nodes[arg.node].semantics for arg in node.arguments)
         if any(semantics is None or semantics.type_token is not int for semantics in operands):
-            raise DefinitionError(
-                f"{node.owner}: integer expression operands require int value semantics"
+            raise DefinitionError.broken(
+                "expression-operand-not-int",
+                _OWNER,
+                f"{node.owner}: integer expression operands require int value semantics",
+                declaration=node.owner,
             )

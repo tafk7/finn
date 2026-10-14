@@ -387,12 +387,16 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     network in the shell of the model's target, the body's pins held and recorded; see the
     module docstring."""
     if not model.graph.node:
-        raise KernelOpError("no KernelOp to explore")
+        raise KernelOpError.refused(
+            "kernel-ops-absent", "explore_kernel_choices", "no KernelOp to explore"
+        )
     others = [node.name for node in model.graph.node if node.domain != KERNEL_OPS_DOMAIN]
     if others:
-        raise KernelOpError(
+        raise KernelOpError.refused(
+            "body-not-kernel-ops",
+            "explore_kernel_choices",
             f"{', '.join(others)}: not KernelOps; exploration reads a partition's body, the "
-            "KernelOps the cut put together (CutKernelPartition, partition_body)"
+            "KernelOps the cut put together (CutKernelPartition, partition_body)",
         )
     nodes = list(model.graph.node)
     started = time.perf_counter()

@@ -250,13 +250,26 @@ class Kernel(Space):
         if protocol:
             return  # one of the two bases
         if type(cls.id) is not str or not cls.id:
-            raise DefinitionError(f"{cls.__qualname__} must declare a nonempty string id")
+            raise DefinitionError.broken(
+                "kernel-id-invalid",
+                "Kernel",
+                f"{cls.__qualname__} must declare a nonempty string id",
+                declaration=cls.__qualname__,
+            )
         if type(cls.version) is not int or cls.version < 1:
-            raise DefinitionError(f"{cls.__qualname__} must declare a positive int version")
+            raise DefinitionError.broken(
+                "kernel-version-invalid",
+                "Kernel",
+                f"{cls.__qualname__} must declare a positive int version",
+                declaration=cls.__qualname__,
+            )
         if not issubclass(cls, (LeafKernel, ComposedKernel)):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "kernel-kind-invalid",
+                "Kernel",
                 f"{cls.__qualname__}: a kernel is a LeafKernel (one module) or a "
-                "ComposedKernel (a kernel with children)"
+                "ComposedKernel (a kernel with children)",
+                declaration=cls.__qualname__,
             )
 
     admission = ConstraintGroup()
@@ -296,18 +309,29 @@ class LeafKernel(Kernel, protocol=True):
         if not all(_declared(cls, name, LeafKernel) for name in _LEAF_REQUIRED):
             return  # a base of leaves (dotp's cores'), which cannot be placed
         if not _declared(cls, "admission", LeafKernel):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "leaf-admission-unstated",
+                "LeafKernel",
                 f"{cls.__qualname__} states no admission: a leaf states the constraints by "
-                "which it refuses what it cannot build (ConstraintGroup() for none)"
+                "which it refuses what it cannot build (ConstraintGroup() for none)",
+                declaration=cls.__qualname__,
             )
         members = _members(cls, LeafKernel)
         if not any(isinstance(value, Port) for value in members.values()):
-            raise DefinitionError(f"{cls.__qualname__} places no port: a leaf states its ports")
+            raise DefinitionError.broken(
+                "leaf-ports-unplaced",
+                "LeafKernel",
+                f"{cls.__qualname__} places no port: a leaf states its ports",
+                declaration=cls.__qualname__,
+            )
         children = sorted(name for name, value in members.items() if isinstance(value, Kernel))
         if children:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "leaf-places-kernels",
+                "LeafKernel",
                 f"{cls.__qualname__} places the kernels {children}: a leaf binds one module, "
-                "a ComposedKernel places children"
+                "a ComposedKernel places children",
+                declaration=cls.__qualname__,
             )
 
     # -- what a leaf may state ------------------------------------------------------------
@@ -512,9 +536,12 @@ class ComposedKernel(Kernel, protocol=True):
             return  # unmet: the class is a base of kernels with children, not placed
         missing = [name for name in names if not hasattr(cls, f"{name}_end")]
         if missing:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "composed-end-absent",
+                "ComposedKernel",
                 f"{cls.__qualname__} presents the interfaces {missing} without their ends: "
-                "each is a view <name>_end naming the child that serves it"
+                "each is a view <name>_end naming the child that serves it",
+                declaration=cls.__qualname__,
             )
 
     # -- its children: their netlists, merged ---------------------------------------------

@@ -268,8 +268,12 @@ def _named(nodes: list[NodeProto], tensors: Iterable[str]) -> None:
     for node in nodes:
         if node.name in kinds:
             other = "another node" if kinds[node.name] == "node" else "a tensor"
-            raise KernelOpError(
-                f"{node.name}: a node and {other} are both named {node.name}", (node.name,)
+            raise KernelOpError.refused(
+                "name-shared",
+                "unique_names",
+                f"{node.name}: a node and {other} are both named {node.name}",
+                (node.name,),
+                node=node.name,
             )
         kinds[node.name] = "node"
 
@@ -554,7 +558,9 @@ def _bound(
             whole=whole,
         )
     except NetworkError as error:
-        raise KernelOpError(f"{name}: {error}") from error
+        raise KernelOpError.refused(
+            "network-invalid", "Partition", f"{name}: {error}", node=name
+        ) from error
     _stale(model, bound, nodes, ops)
     return bound
 
@@ -566,14 +572,24 @@ def _encoded(tensor: str, values: Mapping[str, object]) -> None:
     """Refuse a channel choice ``CHANNEL`` does not declare or admit, by name."""
     unknown = sorted(set(values) - set(CHANNEL_KEYS))
     if unknown:
-        raise KernelOpError(
-            f"{tensor}: {unknown} are not a channel's choices ({CHANNEL.name})", tuple(unknown)
+        raise KernelOpError.refused(
+            "channel-choice-unknown",
+            CHANNEL.name,
+            f"{tensor}: {unknown} are not a channel's choices ({CHANNEL.name})",
+            tuple(unknown),
+            tensor=tensor,
         )
     for key, value in values.items():
         try:
             CHANNEL_KEYS[key].encode(value)
         except MetadataError as error:
-            raise KernelOpError(f"{tensor}: {error}", (key,)) from error
+            raise KernelOpError.refused(
+                "channel-choice-invalid",
+                CHANNEL.name,
+                f"{tensor}: {error}",
+                (key,),
+                tensor=tensor,
+            ) from error
 
 
 def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, object]) -> None:

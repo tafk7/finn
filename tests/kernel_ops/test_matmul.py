@@ -26,6 +26,7 @@ from finn.core.graph.annotations.channel import channel_choices
 from finn.core.graph.annotations.platform import PLATFORM_KEYS
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
+from finn.core.reporting.findings import by_code
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.network import network
@@ -158,6 +159,39 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
     # A channel's choice is no node's: refused, naming where it is stated.
     with pytest.raises(KernelOpError, match="are not choices of MatMul; a channel's choices"):
         op(model).save({"w.transport": "direct"})
+
+
+def test_a_refused_save_names_its_rule_owned_by_the_op_about_the_node() -> None:
+    """Three saves refused for three reasons: each its own code, owned by the op's type,
+    the node in its details, so ``by_code`` tells them apart."""
+    model = matmul_model()
+    label = op(model).label
+    found = []
+    for choices in ({"compute.packed.typo": 1}, {"compute": 1}, {"compute.packed.pe": 3}):
+        with pytest.raises(KernelOpError) as refused:
+            op(model).save(choices)
+        (finding,) = refused.value.findings
+        assert finding.owner == "MatMul" and dict(finding.details)["node"] == label
+        found.append(finding)
+    assert [finding.code for finding in found] == [
+        "choice-unknown",
+        "choice-value-invalid",
+        "choices-refused",
+    ]
+    assert len(by_code(found)) == 3
+
+
+def test_a_kernel_op_error_carries_at_least_one_finding() -> None:
+    """No raise can leave its rule unnamed: the error takes its findings, or one
+    rejection's (``refused``)."""
+    with pytest.raises(TypeError):
+        KernelOpError("unnamed")  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        KernelOpError("unnamed", findings=())
+    refused = KernelOpError.refused("a-rule", "MatMul", "m: refused", ("pe",), node="m")
+    (finding,) = refused.findings
+    assert str(finding) == "MatMul: a-rule: m: refused" and str(refused) == "m: refused"
+    assert dict(finding.details) == {"keys": ("pe",), "node": "m"} and refused.keys == ("pe",)
 
 
 def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_replays_them() -> None:

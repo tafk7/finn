@@ -60,7 +60,14 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
         else:
             known = model.get_tensor_valueinfo(name)
             if known is None:
-                raise KernelOpError(f"{node.name or node.op_type}: {name} has no shape yet")
+                label = node.name or node.op_type
+                raise KernelOpError.refused(
+                    "fact-unstated",
+                    "infer_node",
+                    f"{label}: {name} has no shape yet",
+                    node=label,
+                    tensor=name,
+                )
             info = known
         types[name] = info.type
     for name, proto in shape_inference.infer_node_outputs(schema, node, types, values).items():

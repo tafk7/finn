@@ -136,7 +136,12 @@ class Thresholding(KernelOp):
         """The ``bias`` attribute, added to every count."""
         bias = self.get_nodeattr("bias")
         if not isinstance(bias, int):
-            raise KernelOpError(f"{self.label}: bias = {bias!r} is not an integer")
+            raise KernelOpError.refused(
+                "bias-not-integer",
+                self.op_type,
+                f"{self.label}: bias = {bias!r} is not an integer",
+                node=self.label,
+            )
         return bias
 
     def facts(self) -> Facts:
@@ -145,21 +150,47 @@ class Thresholding(KernelOp):
         channels = shape(model, x, label)[-1]
         stored = initializer(model, thresholds)
         if stored is None:
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "initializer-absent",
+                self.op_type,
                 f"{label}: the thresholds {thresholds} are not an initializer: not a "
-                "Thresholding (its pattern refuses them, threshold-dynamic)"
+                "Thresholding (its pattern refuses them, threshold-dynamic)",
+                node=label,
+                tensor=thresholds,
             )
         if stored.ndim != 2 or stored.shape[0] not in (1, channels):
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "thresholds-shape-invalid",
+                self.op_type,
                 f"{label}: the thresholds {thresholds} are {tuple(stored.shape)}, neither one "
-                f"row for every channel of {x} nor one for each of its {channels} channels"
+                f"row for every channel of {x} nor one for each of its {channels} channels",
+                node=label,
+                tensor=thresholds,
             )
         if stored.size == 0:
-            raise KernelOpError(f"{label}: {thresholds} is empty: it holds no thresholds")
+            raise KernelOpError.refused(
+                "initializer-empty",
+                self.op_type,
+                f"{label}: {thresholds} is empty: it holds no thresholds",
+                node=label,
+                tensor=thresholds,
+            )
         if stored.dtype.kind not in "biuf":
-            raise KernelOpError(f"{label}: {thresholds} holds {stored.dtype} values, not numbers")
+            raise KernelOpError.refused(
+                "thresholds-not-numeric",
+                self.op_type,
+                f"{label}: {thresholds} holds {stored.dtype} values, not numbers",
+                node=label,
+                tensor=thresholds,
+            )
         if np.isnan(stored).any():
-            raise KernelOpError(f"{label}: {thresholds} holds NaN, which no input compares to")
+            raise KernelOpError.refused(
+                "thresholds-nan",
+                self.op_type,
+                f"{label}: {thresholds} holds NaN, which no input compares to",
+                node=label,
+                tensor=thresholds,
+            )
         table, threshold_dtype = stored_thresholds(stored, datatype(model, x, label))
         formals = dict(
             threshold_dtype=threshold_dtype,

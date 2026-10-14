@@ -46,6 +46,8 @@ from .expressions import INTEGER_SEMANTICS, Expr, evaluator
 from .ir import Argument, Node
 from .semantics import ValueSemantics
 
+_OWNER = "space.lower"
+
 
 def lower(table: Table) -> None:
     """Lower every member, then link every guard's condition and every expression."""
@@ -68,7 +70,12 @@ def _constant(semantics: ValueSemantics[object], constant: Const[object], *, own
     try:
         return semantics.freeze(constant.value)
     except Exception as cause:
-        raise DefinitionError(f"{owner}: constant snapshot failed") from cause
+        raise DefinitionError.broken(
+            "constant-snapshot-failed",
+            _OWNER,
+            f"{owner}: constant snapshot failed",
+            declaration=owner,
+        ) from cause
 
 
 class _Lowering:
@@ -97,10 +104,20 @@ class _Lowering:
             task = self.table.expression_tasks[cursor]
             cursor += 1
             if task.operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
-                raise DefinitionError(f"{task.owner}: unsupported integer expression operator")
+                raise DefinitionError.broken(
+                    "expression-operator-unsupported",
+                    _OWNER,
+                    f"{task.owner}: unsupported integer expression operator",
+                    declaration=task.owner,
+                )
             names = ("operand",) if task.operator == "neg" else ("left", "right")
             if len(task.operands) != len(names):
-                raise DefinitionError(f"{task.owner}: invalid integer expression arity")
+                raise DefinitionError.broken(
+                    "expression-arity-invalid",
+                    _OWNER,
+                    f"{task.owner}: invalid integer expression arity",
+                    declaration=task.owner,
+                )
             arguments: list[Argument] = []
             for name, operand in zip(names, task.operands):
                 if type(operand) is int:
@@ -129,8 +146,11 @@ class _Lowering:
                 elif isinstance(operand, ValueRef):
                     target = self.names.reference(task.scope, operand, owner=task.owner)
                 else:
-                    raise DefinitionError(
-                        f"{task.owner}: integer expressions reject non-int literals"
+                    raise DefinitionError.broken(
+                        "expression-literal-not-int",
+                        _OWNER,
+                        f"{task.owner}: integer expressions reject non-int literals",
+                        declaration=task.owner,
                     )
                 arguments.append(Argument(name, target))
             self.table.nodes[task.index] = replace(
@@ -161,7 +181,12 @@ class _Lowering:
         seen: set[int] = set()
         for source in sources:
             if not isinstance(source, allowed):
-                raise DefinitionError(f"{owner}: unsupported obligation declaration")
+                raise DefinitionError.broken(
+                    "obligation-unsupported",
+                    _OWNER,
+                    f"{owner}: unsupported obligation declaration",
+                    declaration=owner,
+                )
             if isinstance(source, Members):
                 # A Members group obliges each member's acceptance separately.
                 indices = [
@@ -173,13 +198,21 @@ class _Lowering:
             else:
                 indices = [self.names.reference(scope, source, owner=owner)]
                 if self.table.nodes[indices[0]].kind not in {"view", "constraint", "group"}:
-                    raise DefinitionError(
+                    raise DefinitionError.broken(
+                        "view-obligation-invalid",
+                        _OWNER,
                         f"{owner}: a view may require only constraints, groups, views, "
-                        "references to views and Members"
+                        "references to views and Members",
+                        declaration=owner,
                     )
             for index in indices:
                 if index in seen:
-                    raise DefinitionError(f"{owner}: duplicate obligation")
+                    raise DefinitionError.broken(
+                        "obligation-duplicate",
+                        _OWNER,
+                        f"{owner}: duplicate obligation",
+                        declaration=owner,
+                    )
                 result.append(index)
                 seen.add(index)
         return tuple(result)
@@ -195,19 +228,30 @@ class _Lowering:
         try:
             domain = declaration.domain.with_semantics(semantics)
         except Exception as cause:
-            raise DefinitionError(f"{owner}: invalid decision domain: {cause}") from cause
+            raise DefinitionError.broken(
+                "domain-invalid",
+                _OWNER,
+                f"{owner}: invalid decision domain: {cause}",
+                declaration=owner,
+            ) from cause
         arguments: list[Argument] = []
         for name, source in domain.dependencies:
             if not isinstance(source, ValueRef):
-                raise DefinitionError(
-                    f"{owner}: domain dependency {name} must be a value reference"
+                raise DefinitionError.broken(
+                    "domain-dependency-not-value",
+                    _OWNER,
+                    f"{owner}: domain dependency {name} must be a value reference",
+                    declaration=owner,
                 )
             arguments.append(Argument(name, self.names.reference(scope, source, owner=owner)))
         supplied = dict.fromkeys(argument.name for argument in arguments)
         for position, requirement in enumerate(domain.requirements):
             if not isinstance(requirement.fact, ValueRef):
-                raise DefinitionError(
-                    f"{owner}: requirement {requirement.code}'s fact must be a value reference"
+                raise DefinitionError.broken(
+                    "requirement-fact-not-value",
+                    _OWNER,
+                    f"{owner}: requirement {requirement.code}'s fact must be a value reference",
+                    declaration=owner,
                 )
             arguments.append(
                 Argument(
@@ -223,8 +267,11 @@ class _Lowering:
                 try:
                     inspect.signature(function).bind(**values)
                 except (TypeError, ValueError) as cause:
-                    raise DefinitionError(
-                        f"{owner}: incompatible domain {role} signature"
+                    raise DefinitionError.broken(
+                        "domain-signature-incompatible",
+                        _OWNER,
+                        f"{owner}: incompatible domain {role} signature",
+                        declaration=owner,
                     ) from cause
         return domain, tuple(arguments)
 

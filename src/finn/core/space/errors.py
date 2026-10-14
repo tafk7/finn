@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
@@ -23,9 +23,11 @@ class DefinitionError(SpaceError, Refusal):
     """An authored definition cannot be compiled into a valid model: the declaration's
     code is wrong, not its input.
 
-    It carries the findings that explain it; where the raiser names none, one
-    ``definition-invalid`` authoring finding owned by ``Space``, whose rules the
-    definition breaks, its message the detail (which names the declaration).
+    It carries the findings that explain it, its message the detail. ``broken`` makes
+    the error of one rule: an authoring finding owned by the engine's module that checks
+    it (``space.declarations``, ``space.names``, ...), the declaration it is about in its
+    details where the rule knows it. Where the raiser names none, one
+    ``definition-invalid`` authoring finding owned by ``Space``.
     """
 
     def __init__(self, detail: str, *, findings: Iterable[Finding] = ()) -> None:
@@ -33,6 +35,13 @@ class DefinitionError(SpaceError, Refusal):
             Finding(FindingKind.AUTHORING, "definition-invalid", "Space", detail),
         )
         super().__init__(found, detail)
+
+    @classmethod
+    def broken(cls, code: str, owner: str, detail: str, *, declaration: str | None = None) -> Self:
+        """The error of one broken rule, ``code`` by ``owner``, its message the
+        detail, the ``declaration`` in its details."""
+        details = () if declaration is None else (("declaration", declaration),)
+        return cls(detail, findings=(Finding(FindingKind.AUTHORING, code, owner, detail, details),))
 
 
 class RequestError(SpaceError, ValueError):

@@ -30,6 +30,8 @@ from .semantics import ValueSemantics, default_semantics
 if TYPE_CHECKING:
     from .collection import EffectiveSpace
 
+_OWNER = "space.signatures"
+
 
 @dataclass(frozen=True, slots=True)
 class BoundArgument:
@@ -52,7 +54,12 @@ def resolve_annotations(
     try:
         return get_type_hints(function, localns=namespace)
     except (NameError, TypeError, ValueError) as exc:
-        raise DefinitionError(f"{owner}: cannot resolve annotations: {exc}") from exc
+        raise DefinitionError.broken(
+            "annotation-unresolved",
+            _OWNER,
+            f"{owner}: cannot resolve annotations: {exc}",
+            declaration=owner,
+        ) from exc
 
 
 def _answer_value_type(annotation: object) -> object | None:
@@ -76,11 +83,21 @@ def output_semantics(
 ) -> ValueSemantics[object]:
     annotation = hints.get("return")
     if annotation is None:
-        raise DefinitionError(f"{owner}: a return annotation is required")
+        raise DefinitionError.broken(
+            "return-annotation-missing",
+            _OWNER,
+            f"{owner}: a return annotation is required",
+            declaration=owner,
+        )
     answer_type = _answer_value_type(annotation)
     semantics = cast("ValueSemantics[object] | None", declaration.semantics)
     if answer_type is not None and semantics is None:
-        raise DefinitionError(f"{owner}: QueryResult[T] returns require explicit semantics=")
+        raise DefinitionError.broken(
+            "semantics-unstated",
+            _OWNER,
+            f"{owner}: QueryResult[T] returns require explicit semantics=",
+            declaration=owner,
+        )
     value_type = answer_type if answer_type is not None else annotation
     marked_type = marked_value_type(value_type)
     value_type = marked_type if marked_type is not None else value_type
@@ -88,13 +105,25 @@ def output_semantics(
     nominal_type = origin if origin is not None else value_type
     if semantics is None:
         if getattr(nominal_type, "_is_protocol", False):
-            raise DefinitionError(f"{owner}: Protocol outputs require explicit semantics=")
+            raise DefinitionError.broken(
+                "semantics-unstated",
+                _OWNER,
+                f"{owner}: Protocol outputs require explicit semantics=",
+                declaration=owner,
+            )
         if origin in (Union, types.UnionType) or not isinstance(nominal_type, type):
-            raise DefinitionError(f"{owner}: output annotation needs explicit semantics=")
+            raise DefinitionError.broken(
+                "semantics-unstated",
+                _OWNER,
+                f"{owner}: output annotation needs explicit semantics=",
+                declaration=owner,
+            )
         try:
             semantics = default_semantics(nominal_type)
         except (TypeError, ValueError) as exc:
-            raise DefinitionError(f"{owner}: {exc}") from exc
+            raise DefinitionError.broken(
+                "semantics-unstated", _OWNER, f"{owner}: {exc}", declaration=owner
+            ) from exc
     token_origin = get_origin(semantics.type_token)
     nominal_token = semantics.type_token if token_origin is None else token_origin
     if (
@@ -104,27 +133,45 @@ def output_semantics(
         and not getattr(nominal_type, "_is_protocol", False)
     ):
         if nominal_type is not nominal_token:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "annotation-semantics-incompatible",
+                _OWNER,
                 f"{owner}: output annotation {nominal_type.__name__} is incompatible with "
-                f"{semantics.name} semantics"
+                f"{semantics.name} semantics",
+                declaration=owner,
             )
     return semantics
 
 
 def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> ValueRef[object]:
     if not isinstance(source, (ValueRef, View)):
-        raise DefinitionError(f"{owner}: dependency must be a value reference")
+        raise DefinitionError.broken(
+            "dependency-not-value",
+            _OWNER,
+            f"{owner}: dependency must be a value reference",
+            declaration=owner,
+        )
     name = effective.aliases.get(source)
     if name is not None:
         replacement = effective.members[name]
         if not isinstance(replacement, (ValueRef, View)):
-            raise DefinitionError(f"{owner}: overridden dependency {name} is not a value")
+            raise DefinitionError.broken(
+                "dependency-not-value",
+                _OWNER,
+                f"{owner}: overridden dependency {name} is not a value",
+                declaration=owner,
+            )
         return cast(ValueRef[object], replacement)
     if isinstance(source, (MemberRef, ChoiceMemberRef)):
         return source
     if isinstance(source, (Expr, Supplied, CaseRef, Projection)) and source.owner is None:
         return cast(ValueRef[object], source)
-    raise DefinitionError(f"{owner}: dependency is not declared in this effective scope")
+    raise DefinitionError.broken(
+        "dependency-undeclared",
+        _OWNER,
+        f"{owner}: dependency is not declared in this effective scope",
+        declaration=owner,
+    )
 
 
 def source_semantics(
@@ -172,8 +219,11 @@ def validate_argument(
     token_origin = get_origin(semantics.type_token)
     nominal_token = semantics.type_token if token_origin is None else token_origin
     if isinstance(nominal_token, type) and not _annotation_accepts(value_type, nominal_token):
-        raise DefinitionError(
-            f"{owner}: annotation {argument.annotation!r} cannot consume {semantics.name}"
+        raise DefinitionError.broken(
+            "argument-annotation-incompatible",
+            _OWNER,
+            f"{owner}: annotation {argument.annotation!r} cannot consume {semantics.name}",
+            declaration=owner,
         )
 
 
@@ -189,7 +239,12 @@ def bind_function(
     owner = f"{effective.space_type.__qualname__}.{name}"
     function = declaration.function
     if function is None:
-        raise DefinitionError(f"{owner}: value-authored view has no function to bind")
+        raise DefinitionError.broken(
+            "view-function-absent",
+            _OWNER,
+            f"{owner}: value-authored view has no function to bind",
+            declaration=owner,
+        )
     hints = annotations
     signature = inspect.signature(function)
     parameters = tuple(signature.parameters.values())
@@ -198,7 +253,12 @@ def bind_function(
         or inspect.iscoroutinefunction(function)
         or inspect.isasyncgenfunction(function)
     ):
-        raise DefinitionError(f"{owner}: computations must be ordinary synchronous functions")
+        raise DefinitionError.broken(
+            "computation-not-function",
+            _OWNER,
+            f"{owner}: computations must be ordinary synchronous functions",
+            declaration=owner,
+        )
     if parameters and parameters[0].name == "self":
         parameter = parameters[0]
         if (
@@ -208,8 +268,11 @@ def bind_function(
             not in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
             or parameter.default is not inspect.Parameter.empty
         ):
-            raise DefinitionError(
-                f"{owner}: self methods cannot declare dependency arguments or aliases"
+            raise DefinitionError.broken(
+                "self-method-dependencies",
+                _OWNER,
+                f"{owner}: self methods cannot declare dependency arguments or aliases",
+                declaration=owner,
             )
         receiver = hints.get("self", Self)
         if receiver is not Self and not (
@@ -217,37 +280,73 @@ def bind_function(
             and issubclass(receiver, Space)
             and issubclass(effective.space_type, receiver)
         ):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "receiver-annotation-incompatible",
+                _OWNER,
                 f"{owner}: receiver annotation {receiver!r} cannot accept "
-                f"{effective.space_type.__qualname__}"
+                f"{effective.space_type.__qualname__}",
+                declaration=owner,
             )
         return BoundFunction(function, (), semantics, "self")
     extra = declaration.aliases.keys() - signature.parameters.keys()
     if extra:
-        raise DefinitionError(f"{owner}: aliases name unknown arguments {sorted(extra)}")
+        raise DefinitionError.broken(
+            "alias-unknown",
+            _OWNER,
+            f"{owner}: aliases name unknown arguments {sorted(extra)}",
+            declaration=owner,
+        )
     arguments: list[BoundArgument] = []
     for parameter in signature.parameters.values():
         label = f"{owner} argument {parameter.name}"
         if parameter.name in ("self", "cls"):
-            raise DefinitionError(f"{label}: implicit self/cls is unsupported")
+            raise DefinitionError.broken(
+                "implicit-self",
+                _OWNER,
+                f"{label}: implicit self/cls is unsupported",
+                declaration=label,
+            )
         if parameter.name == "when":
-            raise DefinitionError(f"{label}: when is a reserved authoring control argument")
+            raise DefinitionError.broken(
+                "when-reserved",
+                _OWNER,
+                f"{label}: when is a reserved authoring control argument",
+                declaration=label,
+            )
         if parameter.kind not in (
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.KEYWORD_ONLY,
         ):
-            raise DefinitionError(
-                f"{label}: positional-only and variadic parameters are unsupported"
+            raise DefinitionError.broken(
+                "parameter-kind-unsupported",
+                _OWNER,
+                f"{label}: positional-only and variadic parameters are unsupported",
+                declaration=label,
             )
         if parameter.default is not inspect.Parameter.empty:
-            raise DefinitionError(f"{label}: dependency parameters cannot have defaults")
+            raise DefinitionError.broken(
+                "dependency-default",
+                _OWNER,
+                f"{label}: dependency parameters cannot have defaults",
+                declaration=label,
+            )
         if parameter.name not in hints:
-            raise DefinitionError(f"{label}: a dependency annotation is required")
+            raise DefinitionError.broken(
+                "dependency-annotation-missing",
+                _OWNER,
+                f"{label}: a dependency annotation is required",
+                declaration=label,
+            )
         source = declaration.aliases.get(parameter.name)
         if parameter.name not in declaration.aliases:
             record = effective.members.get(parameter.name)
             if record is None:
-                raise DefinitionError(f"{label}: no declaration with this name")
+                raise DefinitionError.broken(
+                    "declaration-unknown",
+                    _OWNER,
+                    f"{label}: no declaration with this name",
+                    declaration=label,
+                )
             source = record
         resolved = resolve_source(source, effective, label)
         supplier_semantics = source_semantics(resolved, effective)

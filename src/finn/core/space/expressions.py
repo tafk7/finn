@@ -12,6 +12,8 @@ from .declarations import ValueDecl, ValueRef
 from .errors import DefinitionError
 from .semantics import default_semantics
 
+_OWNER = "space.expressions"
+
 IntOperator = Literal["add", "sub", "mul", "floordiv", "mod", "neg"]
 INTEGER_SEMANTICS = default_semantics(int)
 
@@ -27,19 +29,29 @@ class Expr(ValueDecl[int]):
 
     def __init__(self, operator: IntOperator, *operands: int | ValueRef[int]) -> None:
         if operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
-            raise DefinitionError("unsupported integer expression operator")
+            raise DefinitionError.broken(
+                "expression-operator-unsupported", _OWNER, "unsupported integer expression operator"
+            )
         if len(operands) != (1 if operator == "neg" else 2):
-            raise DefinitionError("wrong number of integer expression operands")
+            raise DefinitionError.broken(
+                "expression-arity-invalid", _OWNER, "wrong number of integer expression operands"
+            )
         for operand in operands:
             if type(operand) is int:
                 continue
             if not isinstance(operand, ValueRef):
-                raise DefinitionError(
-                    "integer expressions require exact int literals or references"
+                raise DefinitionError.broken(
+                    "expression-literal-not-int",
+                    _OWNER,
+                    "integer expressions require exact int literals or references",
                 )
             semantics = operand.semantics
             if semantics is not None and semantics.type_token is not int:
-                raise DefinitionError("integer expression operands require int value semantics")
+                raise DefinitionError.broken(
+                    "expression-operand-not-int",
+                    _OWNER,
+                    "integer expression operands require int value semantics",
+                )
         self.operator = operator
         self.operands = tuple(operands)
         self.semantics = INTEGER_SEMANTICS

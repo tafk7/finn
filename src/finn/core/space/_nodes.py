@@ -45,6 +45,8 @@ from .semantics import STRING, ValueSemantics, recognize, snapshot, unrecognized
 if TYPE_CHECKING:
     from ._configuration import Space
 
+_OWNER = "space.nodes"
+
 _SPACE: list[type[Space]] = []
 
 
@@ -120,10 +122,13 @@ class NodeDecision(Decision[str]):
 
 
 def _refuse_placement(record: NodeDecl, where: str) -> NoReturn:
-    raise DefinitionError(
+    raise DefinitionError.broken(
+        "node-placed-twice",
+        _OWNER,
         f"{record.describe()} cannot also be placed at {where}: a node declaration is "
         "placed exactly once. Declare a fresh node for each placement, for example from "
-        "a function that returns one."
+        "a function that returns one.",
+        declaration=record.describe(),
     )
 
 
@@ -233,7 +238,12 @@ def _check_reference(semantics: ValueSemantics[object] | None, value: object, la
         and semantics is not None
         and not semantics.is_compatible_with(supplied)
     ):
-        raise DefinitionError(f"{label}: binding has incompatible value semantics")
+        raise DefinitionError.broken(
+            "binding-semantics-incompatible",
+            _OWNER,
+            f"{label}: binding has incompatible value semantics",
+            declaration=label,
+        )
 
 
 def _freeze_literal(
@@ -245,9 +255,16 @@ def _freeze_literal(
     programmer failure, reported with its owner and role like any other.
     """
     if semantics is None:
-        raise DefinitionError(f"{label}: the member's value type is not known yet")
+        raise DefinitionError.broken(
+            "member-type-unknown",
+            _OWNER,
+            f"{label}: the member's value type is not known yet",
+            declaration=label,
+        )
     if not recognize(semantics, value, owner=name, role="parameter recognition"):
-        raise DefinitionError(f"{label}: {unrecognized(semantics)}")
+        raise DefinitionError.broken(
+            "literal-unrecognized", _OWNER, f"{label}: {unrecognized(semantics)}", declaration=label
+        )
     return snapshot(semantics, value, owner=name, role="parameter snapshot")
 
 
@@ -257,8 +274,11 @@ def _value_supplier(
     from ._configuration import Space
 
     if isinstance(value, (NodeChoice, Space)):
-        raise DefinitionError(
-            f"{label}: a node or a Decision over nodes is not a value; bind one of its members"
+        raise DefinitionError.broken(
+            "node-not-value",
+            _OWNER,
+            f"{label}: a node or a Decision over nodes is not a value; bind one of its members",
+            declaration=label,
         )
     # A declaration's owner is set only after the class body ran, so a
     # sibling member and a fresh inline Decision are told apart when linking.
@@ -296,10 +316,13 @@ def check_supplier(
     if kind != "param":
         what = _KINDS.get(kind)
         belongs = "it belongs" if what else "behaviour belongs"
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "member-belongs-to-class",
+            _OWNER,
             f"{label}: {space_type.__qualname__}.{name} is a {what or type(member).__name__}: "
             f"{belongs} to the Space class; subclass it to change it (a body supplies formals "
-            "only)"
+            "only)",
+            declaration=label,
         )
     cast(Param[object], member).resolve()
     semantics = cast("ValueSemantics[object] | None", getattr(member, "semantics", None))
@@ -313,13 +336,21 @@ def _pending_supplier(member: Param[object], value: object, label: str) -> objec
     from ._configuration import Space
 
     if isinstance(value, (NodeChoice, Space)):
-        raise DefinitionError(f"{label}: a node is not a value; bind one of its members")
+        raise DefinitionError.broken(
+            "node-not-value",
+            _OWNER,
+            f"{label}: a node is not a value; bind one of its members",
+            declaration=label,
+        )
     if isinstance(value, (ValueRef, View)):
         return value  # a forward (a Param), a member reference or an expression
-    raise DefinitionError(
+    raise DefinitionError.broken(
+        "literal-annotation-unresolved",
+        _OWNER,
         f"{label}: the annotation of {member.name} does not resolve yet, so a literal "
         "cannot be recognized here; bind a member, or assign the value where the Space class "
-        "is defined"
+        "is defined",
+        declaration=label,
     )
 
 
@@ -336,8 +367,11 @@ def _annotated_yet(member: Param[object]) -> bool:
 def _record(record: NodeDecl, name: str, supplier: object, origin: str | None, label: str) -> None:
     earlier = record.settings.get(name)
     if earlier is not None:
-        raise DefinitionError(
-            f"{label}: {name} is already assigned at {earlier[1]}; a body supplies a formal once"
+        raise DefinitionError.broken(
+            "formal-assigned-twice",
+            _OWNER,
+            f"{label}: {name} is already assigned at {earlier[1]}; a body supplies a formal once",
+            declaration=label,
         )
     record.settings[name] = (supplier, origin)
 
@@ -359,7 +393,12 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
     members, handles = space_members(space_type)
     unknown = sorted(keywords.keys() - members.keys())
     if unknown:
-        raise DefinitionError(f"{space_type.__qualname__}{at(origin)}: unknown members {unknown}")
+        raise DefinitionError.broken(
+            "members-unknown",
+            _OWNER,
+            f"{space_type.__qualname__}{at(origin)}: unknown members {unknown}",
+            declaration=space_type.__qualname__,
+        )
     record = Declaration.__new__(NodeDecl)
     record._init(space_type, origin)
     record.when = when
@@ -388,24 +427,36 @@ def assign(instance: object, name: str, value: object) -> None:
         raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
     label = f"{path_text(path)}.{name} (assigned at {origin})"
     if len(path) != 1 or not isinstance(path[0], NodeDecl):
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "assignment-not-own-formal",
+            _OWNER,
             f"{label}: assign a formal of the node declaration itself; a node below it is "
-            "supplied where it is declared (or write a subclass)"
+            "supplied where it is declared (or write a subclass)",
+            declaration=label,
         )
     record = path[0]
     members, handles = space_members(record.space_type)
     if name in handles:
-        raise DefinitionError(
-            f"{label}: {name} names a candidate of a Decision; it belongs to the Space class"
+        raise DefinitionError.broken(
+            "assignment-names-candidate",
+            _OWNER,
+            f"{label}: {name} names a candidate of a Decision; it belongs to the Space class",
+            declaration=label,
         )
     if name not in members:
-        raise DefinitionError(
-            f"{label}: {record.space_type.__qualname__} has no member {name!r} to assign"
+        raise DefinitionError.broken(
+            "assignment-member-absent",
+            _OWNER,
+            f"{label}: {record.space_type.__qualname__} has no member {name!r} to assign",
+            declaration=label,
         )
     if record.frozen is not None:
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "declaration-frozen",
+            _OWNER,
             f"{label}: {record.describe()} is frozen ({record.frozen}); a declaration can be "
-            "assigned only until its Space class is prepared or design_space() takes it"
+            "assigned only until its Space class is prepared or design_space() takes it",
+            declaration=label,
         )
     supplier = check_supplier(record.space_type, name, members[name], value, label)
     _record(record, name, supplier, origin, label)
@@ -473,8 +524,11 @@ class NodeChoice:
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         if len(self._space_path) != 1:
-            raise DefinitionError(
-                f"{owner.__qualname__}.{name}: a nested choice path is a reference"
+            raise DefinitionError.broken(
+                "choice-path-nested",
+                _OWNER,
+                f"{owner.__qualname__}.{name}: a nested choice path is a reference",
+                declaration=f"{owner.__qualname__}.{name}",
             )
         decision = self._space_decision()
         decision.__set_name__(owner, name)
@@ -504,13 +558,21 @@ class NodeChoice:
         """``choice["pump"]``: one candidate's node, for its own members."""
         decision = self._space_decision()
         if case not in decision.candidates:
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "candidate-unknown",
+                _OWNER,
                 f"{decision.describe()}: no candidate {case!r}; its candidates are "
-                f"{list(decision.candidates)}"
+                f"{list(decision.candidates)}",
+                declaration=decision.describe(),
             )
         record = decision.candidates[case]
         if record is None:
-            raise DefinitionError(f"{decision.describe()}: candidate {case!r} places nothing")
+            raise DefinitionError.broken(
+                "candidate-places-nothing",
+                _OWNER,
+                f"{decision.describe()}: candidate {case!r} places nothing",
+                declaration=decision.describe(),
+            )
         return path_proxy(record.space_type, (*self._space_path[:-1], record))
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -533,7 +595,11 @@ class NodeChoice:
 
 def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None) -> NodeChoice:
     if not values:
-        raise DefinitionError("a Decision over nodes requires at least one candidate")
+        raise DefinitionError.broken(
+            "node-decision-no-candidate",
+            _OWNER,
+            "a Decision over nodes requires at least one candidate",
+        )
     from .declarations import class_body
 
     decision = Declaration.__new__(NodeDecision)
@@ -548,13 +614,19 @@ def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None)
             continue
         record = node_record(value)
         if record is None:
-            raise DefinitionError(
-                f"candidate {key!r}{at(decision.origin)}: expected a node declaration or None"
+            raise DefinitionError.broken(
+                "candidate-not-node",
+                _OWNER,
+                f"candidate {key!r}{at(decision.origin)}: expected a node declaration or None",
             )
         place_as_candidate(record, decision, cast(str, key))
         candidates[cast(str, key)] = record
     if all(record is None for record in candidates.values()):
-        raise DefinitionError(f"a Decision over nodes{at(decision.origin)} needs a node candidate")
+        raise DefinitionError.broken(
+            "node-decision-no-node",
+            _OWNER,
+            f"a Decision over nodes{at(decision.origin)} needs a node candidate",
+        )
     decision.candidates = MappingProxyType(candidates)
     string = cast("ValueSemantics[str]", STRING)
     decision.semantics = decision.explicit = string
@@ -588,22 +660,32 @@ def entry_choice(
     origin = source_origin()
     where = at(origin)
     if not isinstance(entries, Mapping):
-        raise DefinitionError(
-            f"Decision{where}: candidate entries map keys to Space classes or calls on them"
+        raise DefinitionError.broken(
+            "candidate-entries-invalid",
+            _OWNER,
+            f"Decision{where}: candidate entries map keys to Space classes or calls on them",
         )
     if not entries:
-        raise DefinitionError(
-            f"Decision{where}: a Decision over nodes needs at least one candidate"
+        raise DefinitionError.broken(
+            "node-decision-no-candidate",
+            _OWNER,
+            f"Decision{where}: a Decision over nodes needs at least one candidate",
         )
     if type(optional) is not bool:
-        raise DefinitionError(f"Decision{where}: optional= is True or False")
+        raise DefinitionError.broken(
+            "optional-not-bool", _OWNER, f"Decision{where}: optional= is True or False"
+        )
     space = _space()
     space_types: dict[str, type[Space]] = {}
     records: dict[str, NodeDecl] = {}
     for key, entry in entries.items():
         local_name(key, "candidate key")
         if optional and key == NONE_CASE:
-            raise DefinitionError(f"Decision{where}: {key!r} is the key of the None candidate")
+            raise DefinitionError.broken(
+                "candidate-key-reserved",
+                _OWNER,
+                f"Decision{where}: {key!r} is the key of the None candidate",
+            )
         if isinstance(entry, type) and issubclass(entry, space):
             error = unfinished(entry, f" (candidate {key!r} of a Decision{where})")
             if error is not None:
@@ -612,8 +694,10 @@ def entry_choice(
             continue
         record = node_record(entry)
         if record is None:
-            raise DefinitionError(
-                f"Decision{where}: candidate {key!r} must be a Space class or a call on one"
+            raise DefinitionError.broken(
+                "candidate-not-space",
+                _OWNER,
+                f"Decision{where}: candidate {key!r} must be a Space class or a call on one",
             )
         space_types[key], records[key] = record.space_type, record
     _check_shared(space_types, records, shared, where)
@@ -655,19 +739,23 @@ def _check_shared(
         if lacking:
             problems.append(f"shared binding {name!r} is not declared by candidates {lacking}")
     if problems:
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "shared-binding-invalid",
+            _OWNER,
             f"Decision{where}: "
             + "; ".join(problems)
-            + ". A shared binding goes to every candidate: write it on the entries that take it"
+            + ". A shared binding goes to every candidate: write it on the entries that take it",
         )
     for key, record in records.items():
         for name in shared:
             earlier = record.settings.get(name)
             if earlier is not None:
-                raise DefinitionError(
+                raise DefinitionError.broken(
+                    "shared-binding-repeated",
+                    _OWNER,
                     f"Decision{where}: candidate {key!r} already binds {name} (at {earlier[1]}), "
                     "and the shared bindings bind it again; a body sets a member once: remove "
-                    "it from the entry or from the shared bindings"
+                    "it from the entry or from the shared bindings",
                 )
 
 
@@ -686,10 +774,13 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
     if not having:
         raise AttributeError(name)
     if lacking:
-        raise DefinitionError(
+        raise DefinitionError.broken(
+            "direct-read-undeclared",
+            _OWNER,
             f"{decision.describe()}.{name}: a direct read needs a member every candidate "
             f"declares; candidates {lacking} do not declare {name!r}. Read it qualified, as "
-            f'{decision.name or "choice"}["{next(iter(having))}"].{name}'
+            f'{decision.name or "choice"}["{next(iter(having))}"].{name}',
+            declaration=f"{decision.describe()}.{name}",
         )
     from .collection import collect_space
 
@@ -707,10 +798,13 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
     for case, semantics in known[1:]:
         first_case, first = known[0]
         if not first.is_compatible_with(semantics):
-            raise DefinitionError(
+            raise DefinitionError.broken(
+                "direct-read-types-differ",
+                _OWNER,
                 f"{decision.describe()}.{name}: candidates declare {name!r} with different "
                 f"value types ({first_case}: {first.name}, {case}: {semantics.name}); read "
-                "each qualified"
+                "each qualified",
+                declaration=f"{decision.describe()}.{name}",
             )
 
 

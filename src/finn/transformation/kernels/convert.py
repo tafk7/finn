@@ -125,9 +125,12 @@ class ToKernelOps(Transformation):
                     findings.extend(found.findings)
             covered = Counter(tuple(map(_label, match.nodes)) for _, match in matches)
             if any(count > 1 for count in covered.values()):
-                raise KernelOpError(
+                raise KernelOpError.refused(
+                    "match-ambiguous",
+                    ToKernelOps.__name__,
                     f"{_label(node)}: {[op.op_type for op, _ in matches]} each match it: one "
-                    "computation is one KernelOp, its alternatives a Decision of its kernel"
+                    "computation is one KernelOp, its alternatives a Decision of its kernel",
+                    node=_label(node),
                 )
             sets = [(op, match, _covered(model, index, op, match)) for op, match in matches]
             converted, moved = None, False
@@ -188,15 +191,23 @@ def _covered(model: ModelWrapper, index: int, op: type[KernelOp], match: Match) 
         or len({id(each) for each in match.nodes}) != len(match.nodes)
         or any(id(each) not in where for each in match.nodes)
     ):
-        raise KernelOpError(f"{named}: a match lists its anchor first, then nodes of the graph")
+        raise KernelOpError.refused(
+            "match-malformed",
+            ToKernelOps.__name__,
+            f"{named}: a match lists its anchor first, then nodes of the graph",
+            node=_label(anchor),
+        )
     indices = tuple(sorted(where[id(each)] for each in match.nodes))
     written = {tensor for i in indices for tensor in nodes[i].output if tensor}
     read = {tensor for i in indices for tensor in nodes[i].input if tensor}
     for i in indices:
         if i < index or (i > index and not written.intersection(nodes[i].input)):
-            raise KernelOpError(
+            raise KernelOpError.refused(
+                "match-not-forward",
+                ToKernelOps.__name__,
                 f"{named}: {_label(nodes[i])} is not a consumer forward of the anchor, the "
-                "first covered node in graph order"
+                "first covered node in graph order",
+                node=_label(anchor),
             )
     return _Subgraph(
         indices,
