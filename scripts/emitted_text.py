@@ -30,7 +30,9 @@ is emitted, by default this one):
   emitted_text.py emit OUT [--blank-hashes]       the text, one file per item, under OUT:
       designs/<job>/...   what each XSim job simulates
       ipxact/<job>/<sample>/   each conformance sample's IP-XACT text (interface.tcl, ifnames.json)
-      package/                 PackagePartition's package.tcl and metadata (Chain, TFC), no Vivado
+      package/                 PackagePartition's text (Chain, TFC), no Vivado: per partition,
+                               package.tcl, the IP's metadata, the top (<name>.top.sv) and
+                               its memory images' digests (<name>.images.txt)
   emitted_text.py jobs [--smoke] [--collect-log F]  the sweep's jobs, one per line: name, kind, args
   emitted_text.py keys --work DIR [--jobs F]        each job's key, as JSON on stdout
   emitted_text.py select BASELINE KEYS              run or skip, with the reason, per job
@@ -915,17 +917,37 @@ def packaged_ip(model: Any, work: Path) -> dict[str, str]:
     }
 
 
+def package_images(emitted: Any, top: str) -> str:
+    """Each data file an emitted module reads (its memory images), as ``sha256sum`` lists
+    it: the content's digest, then the path. In the order the top's text ``top`` first
+    names them (an instance's ``INIT_FILE``), so a line stays the image of the same
+    instance when a content-named file's hash changes; one the top does not name after,
+    by its path with its hashes blanked, then its digest."""
+    found = [(file_digest(emitted.directory / path), path) for path in emitted.data]
+
+    def order(item: tuple[str, str]) -> tuple[int, str, str]:
+        named = top.find(item[1])
+        return (named if named >= 0 else len(top), blank_hashes(item[1]), item[0])
+
+    return "".join(f"{digest}  {path}\n" for digest, path in sorted(found, key=order))
+
+
 def emit_package(out: Path, work: Path) -> int:
     """What PackagePartition writes for the Chain and the TFC partition, Vivado stubbed.
 
     PackagePartition runs for real except for the Vivado call: the toolchain is a
     stub that writes ip/component.xml. Per partition (the Chain also with
-    run_synth): package.tcl and what packaging states of the IP (``packaged_ip``).
+    run_synth): package.tcl, what packaging states of the IP (``packaged_ip``), the
+    partition's top-level module as emitted (``<name>.top.sv``: every instance's
+    parameters, every net's width) and the digest of each memory image beside it
+    (``<name>.images.txt``, ``package_images``); the module as ``emit_module`` returned it
+    to PackagePartition.
     """
     # The checkout's code, importable only in its environment (Target.run).
     from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
     from kernel_ops.tfc import partitioned  # noqa: PLC0415
 
+    import finn.transformation.kernels.package as packaging  # noqa: PLC0415
     from finn.transformation.kernels import PackagePartition  # noqa: PLC0415
 
     class StubToolchain:
@@ -933,8 +955,19 @@ def emit_package(out: Path, work: Path) -> int:
             (Path(cwd) / "ip").mkdir(parents=True, exist_ok=True)
             (Path(cwd) / "ip" / "component.xml").write_text("<stub/>")
 
+    emitted: list[Any] = []
+    emit_module = packaging.emit_module
+
+    def recorded(*args: Any, **kwargs: Any) -> Any:
+        found = emit_module(*args, **kwargs)
+        emitted.append(found)
+        return found
+
+    packaging.emit_module = recorded
+
     def emit(name: str, model: Any, ip_name: str, run_synth: bool = False) -> None:
         project = work / name
+        emitted.clear()
         model = model.transform(
             PackagePartition(
                 ip_name, run_synth=run_synth, directory=project, toolchain=StubToolchain()
@@ -944,6 +977,13 @@ def emit_package(out: Path, work: Path) -> int:
         (out / f"{name}.metadata.txt").write_text(
             "".join(f"{key}={value}\n" for key, value in packaged_ip(model, work).items())
         )
+        (module,) = emitted
+        top = f"{module.entry_point}.sv"
+        if top not in module.sources:
+            raise RuntimeError(f"{name}: the top {module.entry_point} is no file of its own")
+        text = (module.directory / top).read_text()
+        (out / f"{name}.top.sv").write_text(text)
+        (out / f"{name}.images.txt").write_text(package_images(module, text))
 
     out.mkdir(parents=True, exist_ok=True)
     work = work.resolve()

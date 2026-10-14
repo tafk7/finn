@@ -16,8 +16,10 @@ under the baseline's key passed, and a skip cites the commit where that run was.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
+import re
 import shutil
 import site
 import subprocess
@@ -546,6 +548,67 @@ def test_an_older_checkout_has_only_the_sweeps_whose_modules_it_has(tmp_path: Pa
     module.parent.mkdir(parents=True)
     module.write_text("")
     assert tool._has_module(tmp_path, sweep)
+
+
+@dataclasses.dataclass
+class _Emitted:
+    """What ``emit_module`` returns, as far as ``package_images`` reads it."""
+
+    directory: Path
+    data: tuple[str, ...]
+
+
+def test_images_are_listed_in_the_order_the_top_names_them(tmp_path: Path) -> None:
+    """A line is the image of the same instance whatever its content-named file's hash:
+    in the order the top names the images; one it does not name after, by its blanked
+    name, then its digest."""
+    first, second = "memstream_ffffffffffffffff.dat", "memstream_0000000000000000.dat"
+    unnamed = ("thresholds_aaaaaaaaaaaaaaaa.dat", "thresholds_1111111111111111.dat")
+    names = (second, *unnamed, first)
+    for name, content in zip(names, (b"a", b"b", b"c", b"d")):
+        (tmp_path / name).write_bytes(content)
+    top = "".join(
+        f'm u{i} (.INIT_FILE("{name}"));\n' for i, name in enumerate((first, second, first))
+    )
+    lines = tool.package_images(_Emitted(tmp_path, names), top).splitlines()
+    digests = {name: tool.file_digest(tmp_path / name) for name in names}
+    last = sorted(unnamed, key=lambda name: digests[name])
+    assert lines == [f"{digests[name]}  {name}" for name in (first, second, *last)]
+
+
+@pytest.mark.slow
+def test_a_package_states_its_top_and_its_images(tmp_path: Path) -> None:
+    """Per packaged partition, the top PackagePartition packages, as its Tcl names it, by
+    content, and each data file the Tcl adds by its digest; published with its hashes
+    blanked, in its name and its text."""
+    out, work = tmp_path / "package", tmp_path / "work"
+    log = tmp_path / "package.log"
+    assert tool.Target(ROOT).run("_emit-package", out, work, log=log) == 0, log.read_text()
+    for name in ("chain", "chain_synth", "tfc"):
+        tcl = (out / f"{name}.package.tcl").read_text()
+        (top,) = re.findall(r"^set_property top (\S+) \[current_fileset\]$", tcl, re.MULTILINE)
+        text = (out / f"{name}.top.sv").read_text()
+        assert text == (work / name / "src" / f"{top}.sv").read_text()
+        assert re.search(rf"^module {top}\b", text, re.MULTILINE)
+        added = re.findall(r"^add_files -norecurse \$project/src/(\S+)$", tcl, re.MULTILINE)
+        listed = [
+            line.split("  ") for line in (out / f"{name}.images.txt").read_text().splitlines()
+        ]
+        assert listed, f"{name} packages no memory image"
+        for digest, path in listed:
+            assert path in added and path.endswith(".dat")
+            assert digest == tool.file_digest(work / name / "src" / path)
+        # Every image the Tcl adds, in the order the top names them.
+        named = re.findall(r'_FILE\("([^"]+)"\)', text)
+        assert [path for _, path in listed] == list(dict.fromkeys(named))
+        assert {path for _, path in listed} == {path for path in added if path.endswith(".dat")}
+    published = tmp_path / "published"
+    tool._publish(out, published, blank=True)
+    for name in ("chain", "tfc"):
+        text = (published / f"{name}.top.sv").read_text()
+        assert text == tool.blank_hashes((out / f"{name}.top.sv").read_text())
+        assert not tool.HASH.search(text)
+        assert not tool.HASH.search((published / f"{name}.images.txt").read_text())
 
 
 def test_a_summary_reports_skipped_jobs_and_fails_on_a_baseline_that_did_not_pass(
