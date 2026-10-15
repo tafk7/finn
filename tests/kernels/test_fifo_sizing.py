@@ -354,6 +354,85 @@ def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPat
         assert values["hidden.transport.fifo.buffer.ram_style"] == style
 
 
+def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sizing without a style sizes each FIFO for the style settling gives it: its held
+    style, else its earlier one, else ``auto``. Above 257 words ``auto`` is block RAM,
+    which holds more than its DEPTH, and ``distributed`` holds DEPTH words: a FIFO stored
+    ``distributed`` before is sized at the words it needs, which the check keeps."""
+
+    # Every modelled channel (hidden, levels) needs 300 words; the check keeps a FIFO
+    # that holds them, and reads no other channel.
+    def holds(channel: Channel, period: int, words: int) -> bool:
+        ends(channel)
+        return words >= 300
+
+    monkeypatch.setattr(fifo_sizing, "least_depth", lambda supply, accept, period: 300)
+    monkeypatch.setattr(explore_module, "holds", holds)
+    style = ("hidden", "transport.fifo.buffer.ram_style")
+    for held in (False, True):
+        explorer, point = _folded()
+        placed = explorer.set(
+            point,
+            keyed(
+                {
+                    "hidden.transport": "fifo",
+                    "hidden.transport.fifo.buffer.depth": 400,
+                    "hidden.transport.fifo.buffer.ram_style": "distributed",
+                }
+            ),
+        )
+        assert isinstance(placed, Accepted)
+        if held:
+            explorer.held[style] = "distributed"
+        sized = SizeFifos().explore(explorer, placed.network)
+        values = chosen(explorer, sized)
+        # hidden, stored distributed: DEPTH 300, 300 words.
+        assert values["hidden.transport.fifo.buffer.ram_style"] == "distributed"
+        assert values["hidden.transport.fifo.buffer.depth"] == 300
+        # levels, no style before: auto, block RAM from DEPTH 258 (514 words).
+        assert values["levels.transport.fifo.buffer.ram_style"] == "auto"
+        assert values["levels.transport.fifo.buffer.depth"] == 258
+        found = explorer.check_fifos(sized)
+        assert found.checked == ("hidden", "levels")
+        assert found.stale == {} and found.findings == ()
+
+
+def test_a_style_held_as_none_is_sized_as_auto_and_settling_refuses_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A held value is not checked until settling: a style held as ``None`` (a pin, or the
+    graph's held choices, stating null) is sized as ``auto``, never as a style named
+    "None", and settling refuses it, naming it."""
+    sized: dict[str, str] = {}
+
+    def sizing(channel: Channel, period: int, **options: Any) -> Sized:
+        sized[channel.endpoints.source_owner or ""] = options["ram_style"]
+        return _hidden_needs_eight(channel, period)
+
+    monkeypatch.setattr(explore_module, "size", sizing)
+    explorer, point = _folded()
+    placed = explorer.set(
+        point,
+        keyed(
+            {
+                "hidden.transport": "fifo",
+                "hidden.transport.fifo.buffer.depth": 8,
+                "hidden.transport.fifo.buffer.ram_style": "distributed",
+            }
+        ),
+    )
+    assert isinstance(placed, Accepted)
+    explorer.held[("hidden", "transport.fifo.buffer.ram_style")] = None
+    with pytest.raises(
+        ExploreError, match="hidden.transport.fifo.buffer.ram_style: pin-unsettled: held to None"
+    ):
+        SizeFifos().explore(explorer, placed.network)
+    assert sized["first.compute.packed.y"] == "auto"
+    assert set(sized.values()) == {"auto"}
+
+
 MARKERS = Finding(
     FindingKind.REJECTION, "fifo-markers", "hidden.transport.fifo", "what arrives carries markers"
 )

@@ -1958,9 +1958,10 @@ class SizeFifos:
     the channel's ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the
     producer within its idle time) and proposes, all in one batch, ``direct`` or
     the FIFO case with its depth (the least DEPTH whose storage holds the least words
-    plus ``margin``, in ``ram_style``'s storage). ``ram_style`` ``None``, the default,
-    leaves the FIFO's style to settling (its earlier value, else its baseline, ``auto``:
-    FinnLib's own selection by depth and width, which the depth is sized for); a style
+    plus ``margin``, in the storage of the style the FIFO is built in). ``ram_style``
+    ``None``, the default, leaves the FIFO's style to settling (its held value, else its
+    earlier value, else its baseline, ``auto``: FinnLib's own selection by depth and
+    width), and the depth is sized for the style settling gives it (``_style``); a style
     named is committed with the depth. A channel the model does not read (a
     boundary without an end, a memory source) is direct, with why. Where the seam refuses
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
@@ -2000,7 +2001,7 @@ class SizeFifos:
         return seam.run(
             network,
             self.scope(seam, network),
-            lambda opened, _: self.search(seam, opened),
+            lambda opened, prior: self.search(seam, opened, prior),
             self.strategy,
         )
 
@@ -2014,8 +2015,9 @@ class SizeFifos:
             if key not in seam.held and _transport_of(transports, key) is not None
         ]
 
-    def search(self, seam: Seam, network: S) -> S:
-        """The open transports of ``network`` sized at its folding, in one batch."""
+    def search(self, seam: Seam, network: S, prior: Mapping[Key, object]) -> S:
+        """The open transports of ``network`` sized at its folding, in one batch;
+        ``prior``, the values before its scope was reopened, which settling keeps."""
         cost = seam.cost(network)
         bottleneck = cost.bottleneck
         if bottleneck is None:
@@ -2033,7 +2035,7 @@ class SizeFifos:
                 network.member(transport.channel),
                 bottleneck.cycles,
                 margin=self.margin,
-                ram_style="auto" if self.ram_style is None else self.ram_style,
+                ram_style=self._style(seam, transport, prior),
             )
             # A FIFO case the channel refuses before any attempt is a refusal only where
             # a FIFO is needed.
@@ -2071,6 +2073,17 @@ class SizeFifos:
                     causes=_all(outcome.why),
                 )
         return network
+
+    def _style(self, seam: Seam, transport: _Transport, prior: Mapping[Key, object]) -> str:
+        """The style ``transport``'s FIFO is built in, which its depth is sized for: the
+        one named, committed with the depth; else the one settling gives it
+        (``Seam.settle``), its held value, else its earlier value, else its baseline,
+        ``auto``. A held value is not checked until settling (a pin or the graph's held
+        choices may state ``None``, which settling refuses): ``None`` is sized as ``auto``."""
+        if self.ram_style is not None:
+            return self.ram_style
+        style = seam.held.get(transport.ram_style, prior.get(transport.ram_style))
+        return "auto" if style is None else str(style)
 
     def report(self) -> dict[str, object]:
         proposals = self.proposals.values()
