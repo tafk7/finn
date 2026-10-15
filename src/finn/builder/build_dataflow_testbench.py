@@ -46,7 +46,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.rtlsim_bench import SimulationFailed, Words, stream_bench
-from finn.custom_op.kernels.shell import configured_network
+from finn.custom_op.kernels.shell import configured_network, refuse_unverified
 from finn.dataflow.traversal import pack
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.artifacts.sources import include_directories, is_header
@@ -145,11 +145,14 @@ def write_testbench(
 ) -> None:
     """Write the XSim testbench of the partition ``body`` into ``directory`` (see the
     module docstring). It streams ``frame`` (the inputs by tensor name) and expects the
-    body's outputs for it, executed in Python. The module is the one PackagePartition
-    packages (``configured_network``), and the watchdog allows the cycles the network states.
-    Nothing is simulated here (``run_testbench`` does that); ``toolchain`` synthesizes
-    any HLS leaf first, unless the HLS cache holds it
+    body's outputs for it, executed in Python. Like PackagePartition, it writes only the
+    design step_verify_partition verified: a body that records none, or whose design changed
+    since, is refused (``refuse_unverified``) before anything is written. The module is the
+    one PackagePartition packages (``configured_network``), and the watchdog allows the
+    cycles the network states. Nothing is simulated here (``run_testbench`` does that);
+    ``toolchain`` synthesizes any HLS leaf first, unless the HLS cache holds it
     (``finn.core.rtlsim_bench.materialize``)."""
+    refuse_unverified(body, label)
     point, boundary = configured_network(body, label)
     context = execute_onnx(body, dict(frame), return_full_exec_context=True)
     inputs, outputs = boundary_words(body, point, boundary, context, label)

@@ -19,11 +19,11 @@ does, a no-op on a body the cut created; on a body made by hand, or for a choice
 dropped as stale, the report names what it baselined), runs the strategy, which reopens
 the choices it decides, explores and settles, and then:
 
-- checks each stored transport against its stream at the bottleneck period
-  (``Seam.checked``): a FIFO that no longer keeps its producer within its idle time is
-  dropped, named with why and left open (a required choice: emission refuses it until FIFO
-  sizing sizes it again), unless it is held; a held one, and a ``direct`` that throttles
-  its producer, is a limitation;
+- checks nothing of the FIFOs of itself: a strategy may (``Seam.check_fifos``, or
+  ``Seam.checked``, which drops each FIFO, not held, that no longer keeps its producer
+  within its idle time, named with why and left open, a required choice FIFO sizing sizes
+  again), and the build checks once, before emission (``verify_partition``,
+  ``finn.custom_op.kernels.shell``);
 - refuses a network a member refuses (``Seam.refusals``) or its shell does not admit
   (``admission_refusal``: its AXI-Lite buses, memory ports and doubled clock against
   the shell's row), by name (a ``KernelOpError`` carrying their findings);
@@ -45,18 +45,21 @@ the choices it decides, explores and settles, and then:
   or the strategy); the keys held; the choices left open (a required one named so); each
   FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
   (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
-  sized; the dropped choices with why (``dropped``: replay's and the check's), what the
-  check of the transports found (``fifo_check``), per member cycles, buffering and
-  resources, the bottleneck, and the shell's resources against the platform's,
-  ``resources``), so an outer search can compare; and every limitation it found
-  (``findings``: the strategy's, the check's and the resources'), in the report where
-  each was found. Who set a value is logged in the report, never stored in the model.
+  sized; how they were judged (``fifos_judged``: ``model``, where the strategy sized them
+  or checked them; ``not checked``; or what the strategy's report states); the dropped
+  choices with why (``dropped``: replay's, and those the strategy dropped through
+  ``Seam.checked``), what the strategy's last check of the transports found
+  (``fifo_check``, only where it checked), per member cycles, buffering and resources, the
+  bottleneck, and the shell's resources against the platform's, ``resources``), so an
+  outer search can compare; and every limitation it found (``findings``: the strategy's,
+  its last check's and the resources'), in the report where each was found. Who set a
+  value is logged in the report, never stored in the model.
 
 ``exploration_summary`` gives an exploration's lines for a build's log.
 
 Pins go first, and FIFO sizing after the last strategy that changes the folding: a FIFO
-sized before a fold that leaves it too small for its stream is dropped at the end of
-that exploration, and emission refuses its open depth.
+sized before a fold that leaves it too small for its stream is refused when the build
+verifies the partition (``fifo-stale``), unless a strategy dropped it to be sized again.
 
 The resources are the shell's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
@@ -113,9 +116,12 @@ from finn.custom_op.kernels.shell import (
 from finn.kernels.base import RESOURCES
 from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
+    FIFOS_BY_MODEL,
+    FIFOS_NOT_CHECKED,
     Bottleneck,
     Cost,
     Explorer,
+    FifoCheck,
     Pinned,
     Seam,
     SizeFifos,
@@ -138,8 +144,8 @@ _ABSENT = object()
 class Explored:
     """An exploration's result: the body's network (every value, settled after the
     strategy), its cost, the report (JSON values), and every limitation it found
-    (``findings``: the strategy's, the check's of the transports, then the resources'),
-    never a refusal."""
+    (``findings``: the strategy's, its last check's of the transports where it checked,
+    then the resources'), never a refusal."""
 
     network: InShell
     cost: Cost
@@ -333,6 +339,15 @@ def _fifos(
     return f"sized by size_fifos: {channels} channels, {len(placed)} FIFOs placed"
 
 
+def _judged(entry: Mapping[str, Any] | None, check: FifoCheck | None) -> str:
+    """How this exploration judged the FIFOs (``fifos_judged``): as its strategy's report
+    states it (``SizeFifos``: by the model), else by the model where the strategy checked
+    them (``Seam.check_fifos``), else not at all."""
+    if entry is not None and "fifos_judged" in entry:
+        return str(entry["fifos_judged"])
+    return FIFOS_NOT_CHECKED if check is None else FIFOS_BY_MODEL
+
+
 def _placed(seam: Seam, network: Partition) -> dict[Key, object]:
     """Every FIFO placed on ``network``: each transport at its FIFO case, with its depth
     (None where it is open)."""
@@ -443,8 +458,6 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         }
         if isinstance(strategy, Pinned):
             entry["held"] = [dotted(key) for key in strategy.held]
-    # Every FIFO checked against its stream at the period the exploration reached.
-    network, fifos = seam.checked(network)
     refused = seam.refusals(network)
     if refused:
         raise KernelOpError(
@@ -486,6 +499,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         ends = {"ends": _end_rows(network, network.ends), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(network)
     placed = [dotted(key) for key in _placed(seam, network)]
+    # The strategy's last check of the FIFOs, where it made one (Seam.check_fifos).
+    check = seam.checks[-1] if seam.checks else None
     explored = {
         "strategy": entry,
         "baselined": [dotted(key) for key in baselined],
@@ -494,17 +509,19 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         "open": left,
         "fifo_storage": _fifo_storage(seam, network),
         "fifos": _fifos(strategy, entry, placed),
+        "fifos_judged": _judged(entry, check),
         "dropped": {
             **bound.stale,
-            **{dotted(key): why(found) for key, found in fifos.stale.items()},
+            **{dotted(key): why(found) for key, found in seam.dropped.items()},
         },
-        "fifo_check": fifos.report(),
+        **({} if check is None else {"fifo_check": check.report()}),
         **_cost_report(network, cost, resources),
         **ends,
         "seconds": round(time.perf_counter() - started, 3),
     }
     found = tuple(getattr(strategy, "findings", ()))
-    return Explored(network, cost, explored, (*found, *fifos.findings, *over_part))
+    checked = () if check is None else check.findings
+    return Explored(network, cost, explored, (*found, *checked, *over_part))
 
 
 def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:

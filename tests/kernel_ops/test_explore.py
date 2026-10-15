@@ -26,13 +26,14 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 import finn.kernels.explore as explore_module
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
+from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import Partition, network
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network, save_channels, verify_partition
 from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,
@@ -469,14 +470,30 @@ LEVELS_FIFO = {"transport": "fifo", "transport.fifo.buffer.depth": 8}
 LEVELS_DEPTH = "levels.transport.fifo.buffer.depth"
 
 
-def test_each_exploration_checks_its_fifos_against_their_streams(
+class Checking:
+    """A strategy that only checks the FIFOs and drops what the model calls too small
+    (``Seam.checked``): the step a hybrid strategy composes before sizing again."""
+
+    strategy = "checking"
+
+    def explore(self, seam: Seam, network: Any) -> Any:
+        checked, _ = seam.checked(network)
+        return checked
+
+    def report(self) -> dict[str, object]:
+        return {"strategy": self.strategy}
+
+
+def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Nothing marks a body: each exploration ends by checking every FIFO against its
-    stream at the bottleneck it reached (``Seam.checked``). A fold that leaves a FIFO
-    holding its stream keeps it; one that does not drops its depth, names it in the
-    report's ``dropped`` and leaves it open, which emission refuses; a pinned depth is the
-    user's, kept and built, a limitation naming it."""
+    """Nothing marks a body, and an exploration checks nothing of itself: a fold that
+    leaves a FIFO too small for its stream keeps it, its report saying its FIFOs were not
+    checked, and the build's verification refuses it (``fifo-stale``), while binding alone
+    builds it. A strategy that checks (``Seam.checked``) drops its depth, names it in the
+    report's ``dropped`` and leaves it open, which emission refuses, its report saying the
+    model judged them; sizing says so too. A pinned depth is the user's, kept and built,
+    and the verification names it, a limitation."""
     model = kernel_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
     save_channels(model, {"levels": LEVELS_FIFO})
@@ -484,15 +501,26 @@ def test_each_exploration_checks_its_fifos_against_their_streams(
     assert folded.report["strategy"]["changed"]
     assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
     assert folded.report["dropped"] == {} and folded.findings == ()
-    assert folded.report["fifo_check"]["period"] == folded.report["bottleneck"]["cycles"]
-    assert "levels" in folded.report["fifo_check"]["checked"]
-    # The same FIFO too small for its stream at the next exploration's end.
+    assert folded.report["fifos_judged"] == "not checked"
+    assert "fifo_check" not in folded.report
+    # The same FIFO too small for its stream: no exploration drops it of itself.
     monkeypatch.setattr(explore_module, "holds", _levels_short)
-    dropped = explore_kernel_choices(model).report
+    kept = explore_kernel_choices(model).report
+    assert kept["dropped"] == {} and kept["fifos_judged"] == "not checked"
+    assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+    configured_network(model, "the chain")
+    with pytest.raises(KernelOpError) as refused:
+        verify_partition(model, "the chain")
+    assert [(f.code, f.owner) for f in refused.value.findings] == [("fifo-stale", LEVELS_DEPTH)]
+    assert model.get(OUTPUT_VERIFIED) is None
+    # A strategy that checks drops it.
+    dropped = explore_kernel_choices(model, Checking()).report
     assert list(dropped["dropped"]) == [LEVELS_DEPTH]
     assert dropped["dropped"][LEVELS_DEPTH].startswith(
         f"{LEVELS_DEPTH}: fifo-stale: depth 8 (8 words) no longer keeps its producer"
     )
+    assert dropped["fifos_judged"] == "model"
+    assert dropped["fifo_check"]["period"] == dropped["bottleneck"]["cycles"]
     assert dropped["fifo_check"]["stale"] == [LEVELS_DEPTH]
     assert f"{LEVELS_DEPTH} (required)" in dropped["open"]
     levels = choices(model)["levels"]
@@ -504,10 +532,16 @@ def test_each_exploration_checks_its_fifos_against_their_streams(
     pins.write_text(json.dumps({"levels": {"transport.fifo.buffer.depth": 8}}))
     pinned = explore_kernel_choices(model, Pinned(pins))
     assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
-    assert [(f.kind, f.code, f.owner) for f in pinned.findings] == [
+    assert pinned.findings == () and pinned.report["fifos_judged"] == "not checked"
+    _, check = verify_partition(model, "the chain")
+    assert [(f.kind, f.code, f.owner) for f in check.findings] == [
         (FindingKind.LIMITATION, "fifo-held-stale", LEVELS_DEPTH)
     ]
-    configured_network(model, "the chain")
+    assert check.stale == {} and "levels" in check.checked
+    # Sizing judges by the model, and checks nothing.
+    sized = explore_kernel_choices(kernel_model(), SizeFifos()).report
+    assert sized["fifos_judged"] == sized["strategy"]["fifos_judged"] == "model"
+    assert "fifo_check" not in sized
 
 
 def test_the_target_s_frames_a_second_go_when_an_exploration_changes_a_kernel_s_choice(

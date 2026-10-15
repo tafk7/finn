@@ -42,20 +42,23 @@ from finn.builder.build_dataflow_testbench import (
     TESTBENCH_DIR,
     generated_frame,
     run_testbench,
+    write_testbench,
 )
 from finn.core.graph.annotations.choices import HELD
-from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_VERIFIED
+from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network, save_channels, verify_partition
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
+from finn.platform.resolve import resolve_target
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
     Selection,
@@ -67,6 +70,7 @@ from finn.toolchain.launcher import (
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     boundary_facts,
     free_side,
@@ -74,8 +78,13 @@ from finn.transformation.kernels.package import (
     resources_of,
     stream_order,
 )
-from kernel_ops.models import configure_partition, kernel_model
-from kernel_ops.packaging import PackagedByStub, read_back
+from kernel_ops.models import (
+    choose_memories,
+    configure_partition,
+    kernel_model,
+    streamed_w2_model,
+)
+from kernel_ops.packaging import PackagedByStub, read_back, verified, verified_parent
 
 
 def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
@@ -233,6 +242,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
     stub = cast(Toolchain, SynthesizedByStub())
     assert "ooc_synth" not in built_reports(parent, toolchain=stub)
     node, body, body_file = partition_body(parent)
+    verified(body, node.name)
     project = tmp_path / "stitched_ip"
     packaged = body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
     packaged.save(body_file)
@@ -254,7 +264,7 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     """The packaging step writes the testbench beside the IP and simulates nothing
     (PRINCIPLES §8: no build re-verifies the computation): run_testbench runs it, a
     utility."""
-    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    parent = verified_parent(kernel_model().transform(CutKernelPartition(tmp_path / "partition")))
     output = tmp_path / "output"
     cfg = DataflowBuildConfig(
         output_dir=str(output),
@@ -273,7 +283,7 @@ def test_an_ip_the_store_holds_is_reused_and_the_step_says_so(
 ) -> None:
     """Packaged again from the same partition, the IP is the store's: the step's line says
     it reused it, not that it packaged it, and the store records it reused."""
-    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    parent = verified_parent(kernel_model().transform(CutKernelPartition(tmp_path / "partition")))
     cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
@@ -300,13 +310,14 @@ def _levels_short(channel: Any, period: int, words: int) -> bool:
     return not str(channel.endpoints.source_owner).startswith("activate.")
 
 
-def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
+def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A FIFO, not held, that no longer keeps its producer within its idle time at the
     network's bottleneck, however it got there (stated by hand after the cut, here), is
-    refused before anything is emitted, named, saying where to size it again; held, it is
-    built as held."""
+    refused when the partition is verified, before anything is emitted, named, saying
+    where to size it again, and nothing is recorded; binding alone builds it. Held, it is
+    verified, a limitation naming it, and built as held."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
     node, body, _ = partition_body(parent)
     fifo = {
@@ -316,11 +327,9 @@ def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
     }
     save_channels(body, {"levels": fifo})
     monkeypatch.setattr(explore_module, "holds", _levels_short)
-    packaging = PackagePartition(
-        node.name, directory=tmp_path / "ip", toolchain=cast(Toolchain, PackagedByStub())
-    )
+    configured_network(body, node.name)
     with pytest.raises(KernelOpError) as refused:
-        body.transform(packaging)
+        verify_partition(body, node.name)
     (finding,) = refused.value.findings
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
@@ -328,13 +337,119 @@ def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
         "levels.transport.fifo.buffer.depth",
     )
     assert str(refused.value).startswith(
-        f"{node.name}: FIFOs too small for their streams, refused at emission (run "
+        f"{node.name}: FIFOs too small for their streams, refused at verification (run "
         "step_size_fifos): levels: levels.transport.fifo.buffer.depth: fifo-stale: depth 8 "
         "(8 words) no longer keeps its producer"
     )
-    assert not (tmp_path / "ip").exists()
+    assert body.get(OUTPUT_VERIFIED) is None
     body.set(HELD, {"levels": {"transport.fifo.buffer.depth": 8}})
-    body.transform(packaging)
+    _, check = verify_partition(body, node.name)
+    assert [(f.kind, f.code) for f in check.findings] == [
+        (FindingKind.LIMITATION, "fifo-held-stale")
+    ]
+    body.transform(
+        PackagePartition(
+            node.name, directory=tmp_path / "ip", toolchain=cast(Toolchain, PackagedByStub())
+        )
+    )
+
+
+def test_verification_records_the_design_it_verified_and_a_save_keeps_it(
+    tmp_path: Path,
+) -> None:
+    """``verify_partition`` records the body's design digest under ``finn.outputs``
+    (``verified``), beside the IP's key and not in the design: the digest is unchanged by
+    it, and the record survives a save and a reload."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, body_file = partition_body(parent)
+    before = design_digest(body)
+    point, check = verify_partition(body, node.name)
+    assert body.get(OUTPUT_VERIFIED) == design_digest(body) == before
+    assert check.stale == {} and check.findings == ()
+    assert point.network.members == configured_network(body, node.name)[0].network.members
+    body.save(body_file)
+    _, again, _ = partition_body(parent)
+    assert again.get(OUTPUT_VERIFIED) == design_digest(again) == before
+
+
+#: Ultra96 in the Zynq shell, whose integration reads the partition's ends.
+ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+
+
+def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
+    tmp_path: Path,
+) -> None:
+    """Emission compares the body's design with the one its verification recorded
+    (``refuse_unverified``): packaging, before anything is staged, and the shell's
+    integration refuse a body never verified (``design-unverified``) and one changed since
+    (``design-changed``: here a FIFO stated by hand); verified again, both take it."""
+    model = streamed_w2_model()
+    write_target(model, ZYNQ)
+    choose_memories(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, body_file = partition_body(parent)
+    project = tmp_path / "ip"
+    packaging = PackagePartition(
+        node.name, directory=project, toolchain=cast(Toolchain, PackagedByStub())
+    )
+
+    def refused(code: str) -> None:
+        for emit in (lambda: body.transform(packaging), lambda: integration(parent)):
+            with pytest.raises(KernelOpError) as found:
+                emit()
+            assert [(f.code, f.owner) for f in found.value.findings] == [
+                (code, "refuse_unverified")
+            ]
+        assert not project.exists()
+
+    refused("design-unverified")
+    verified_parent(parent)
+    _, body, body_file = partition_body(parent)
+    fifo = {
+        "transport": "fifo",
+        "transport.fifo.buffer.depth": 32,
+        "transport.fifo.buffer.ram_style": "auto",
+    }
+    save_channels(body, {"levels": fifo})
+    body.save(body_file)
+    refused("design-changed")
+    verified(body, node.name)
+    body.save(body_file)
+    integration(parent)
+    assert body.transform(packaging).get(OUTPUT_IP) == str(project / "ip")
+
+
+def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) -> None:
+    """The testbench, like packaging, is written only for the design the partition's
+    verification recorded (``refuse_unverified``): a body never verified
+    (``design-unverified``) and one changed since (``design-changed``: here a FIFO stated
+    by hand) are refused before anything is written; verified again, it is written."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, _ = partition_body(parent)
+    testbench = tmp_path / TESTBENCH_DIR
+    stub = cast(Toolchain, PackagedByStub())
+
+    def write() -> None:
+        write_testbench(body, testbench, generated_frame(body), toolchain=stub, label=node.name)
+
+    def refused(code: str) -> None:
+        with pytest.raises(KernelOpError) as found:
+            write()
+        assert [(f.code, f.owner) for f in found.value.findings] == [(code, "refuse_unverified")]
+        assert not testbench.exists()
+
+    refused("design-unverified")
+    verified(body, node.name)
+    fifo = {
+        "transport": "fifo",
+        "transport.fifo.buffer.depth": 32,
+        "transport.fifo.buffer.ram_style": "auto",
+    }
+    save_channels(body, {"levels": fifo})
+    refused("design-changed")
+    verified(body, node.name)
+    write()
+    assert (testbench / RUN_SCRIPT).is_file()
 
 
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:
@@ -384,7 +499,7 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
     cfg.prepared_toolchain = Toolchain(
         Selection(command_dir=str(tools)), {"PATH": os.defpath, "XILINX_VIVADO": str(tools)}
     )
-    parent = kernel_model().transform(CutKernelPartition(tmp_path / "p"))
+    parent = verified_parent(kernel_model().transform(CutKernelPartition(tmp_path / "p")))
     step_package_partition(parent, cfg)
     logs = output / "logs" / "step_package_partition"
     assert sorted(path.name for path in logs.iterdir()) == [

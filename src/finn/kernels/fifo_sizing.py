@@ -49,8 +49,9 @@ check is evidence outside it.
 ``holds`` checks a channel's transport, a FIFO of so many words or ``direct``, against
 its stream again (``keeps``, one simulation): a depth is sized at one bottleneck period,
 and a fold anywhere in the network may change the period, or the ends, after it. Nothing
-records what it was sized against; the seam checks it at the end of each exploration and
-at emission (``Seam.check_fifos``).
+records what it was sized against; the seam checks it where a strategy asks
+(``Seam.check_fifos``) and the build once, before emission
+(``finn.custom_op.kernels.shell.verify_partition``).
 """
 
 from __future__ import annotations

@@ -3,10 +3,11 @@
 
 """What a build made of a partition of KernelOps: the ``finn.outputs`` namespace.
 
-On the partition's body: the packaged IP, its key and the options it was packaged with.
-On the parent graph: the bitfile, its hardware handoff, the digest of the design and the
-key of the IP it was built from, and its shell options. Two ties, two facts: a design
-digest (``finn.core.graph.partition.design_digest``) says which design an artifact
+On the partition's body: the digest of the design its check verified, the packaged IP,
+its key and the options it was packaged with. On the parent graph: the bitfile, its
+hardware handoff, the digest of the design and the key of the IP it was built from, and
+its shell options. Two ties, two facts: a design digest
+(``finn.core.graph.partition.design_digest``) says which design an artifact or a check
 describes, an IP key (``finn.toolchain.ip.packaging_key``) which packaged IP it holds. A
 reader compares a recorded value with the current one, so an artifact is never cleared
 when the design changes.
@@ -42,6 +43,13 @@ def _options(value: object) -> bool:
     return isinstance(value, dict)
 
 
+OUTPUT_VERIFIED = OUTPUTS.key(
+    "verified", str, check=_digest, expect="a design digest (sha256:<64 hex digits>)"
+)
+"""The digest of the design the partition's check verified (``design_digest`` of the body
+when ``finn.custom_op.kernels.shell.verify_partition`` passed it). Emission refuses a body
+whose design is not that one (``refuse_unverified``). Not the IP key: what Vivado was
+given is one fact, that this design passed its check another."""
 OUTPUT_IP = OUTPUTS.key("ip", str, check=_named, expect="a directory")
 """The packaged IP's directory (its ``component.xml``)."""
 OUTPUT_VLNV = OUTPUTS.key("vlnv", str, check=_named, expect="a VLNV")
@@ -94,5 +102,6 @@ __all__ = [
     "OUTPUT_IP",
     "OUTPUT_IP_KEY",
     "OUTPUT_IP_OPTIONS",
+    "OUTPUT_VERIFIED",
     "OUTPUT_VLNV",
 ]

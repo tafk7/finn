@@ -28,6 +28,7 @@ from finn.custom_op.kernels.shell import InShell, in_shell, save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
+from kernel_ops.packaging import verified
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]
@@ -345,9 +346,10 @@ def open_memories(bound: Partition) -> tuple[Partition, list[str]]:
     return bound, open_choices(bound, ADAPTER_RAM_STYLES)
 
 
-def configure_partition(model: ModelWrapper) -> InShell:
+def choose_memories(model: ModelWrapper) -> InShell:
     """The partition's network in its shell, its open adapter memories chosen (each its
-    baseline) and saved on their owners, bound again."""
+    baseline) and saved on their owners, bound again; not verified (a model to cut first,
+    or one its shell refuses)."""
     bound = in_shell(model, model.graph.node, name="chain")
     persist(model, with_adapter_memories(bound))
     bound = in_shell(model, model.graph.node, name="chain")
@@ -356,11 +358,21 @@ def configure_partition(model: ModelWrapper) -> InShell:
     return bound
 
 
+def configure_partition(model: ModelWrapper) -> InShell:
+    """The partition's network in its shell, its open adapter memories chosen
+    (``choose_memories``), and the partition verified as the build verifies it before
+    emission (``kernel_ops.packaging.verified``), so that it packages."""
+    bound = choose_memories(model)
+    verified(model, "chain")
+    return bound
+
+
 __all__ = [
     "DOMAIN",
     "EDGE",
     "WEIGHT_CHANNEL",
     "chain_source",
+    "choose_memories",
     "configure_partition",
     "convert",
     "kernel_model",
