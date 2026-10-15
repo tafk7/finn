@@ -144,6 +144,7 @@ SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-thresholds", "kernels.sweeps.threshold_numeric", ()),
     ("sweep-eltwise", "kernels.sweeps.eltwise_numeric", ()),
     ("sweep-softmax", "kernels.sweeps.softmax_numeric", ()),
+    ("sweep-pwpolyf", "kernels.sweeps.pwpolyf_numeric", ()),
 )
 SMOKE_SWEEPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("sweep-packed", "kernels.sweeps.matmul_numeric", ("--case", "packed")),

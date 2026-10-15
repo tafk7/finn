@@ -16,6 +16,7 @@ from kernels.specs import (
     matmul,
     memstream,
     pool,
+    pwpolyf,
     softmax,
     stages,
     thresholding,
@@ -36,6 +37,7 @@ SPECS: tuple[KernelSpec, ...] = (
     matmul.SPEC,
     pool.SPEC,
     softmax.SPEC,
+    pwpolyf.SPEC,
 )
 
 
