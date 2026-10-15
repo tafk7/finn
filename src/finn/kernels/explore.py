@@ -2078,10 +2078,12 @@ class SizeFifos:
         """The style ``transport``'s FIFO is built in, which its depth is sized for: the
         one named, committed with the depth; else the one settling gives it
         (``Seam.settle``), its held value, else its earlier value, else its baseline,
-        ``auto``."""
+        ``auto``. A held value is not checked until settling (a pin or the graph's held
+        choices may state ``None``, which settling refuses): ``None`` is sized as ``auto``."""
         if self.ram_style is not None:
             return self.ram_style
-        return str(seam.held.get(transport.ram_style, prior.get(transport.ram_style, "auto")))
+        style = seam.held.get(transport.ram_style, prior.get(transport.ram_style))
+        return "auto" if style is None else str(style)
 
     def report(self) -> dict[str, object]:
         proposals = self.proposals.values()
