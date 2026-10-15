@@ -13,6 +13,7 @@ from __future__ import annotations
 from kernels.specs import (
     dotp,
     eltwise,
+    layernorm,
     matmul,
     memstream,
     pool,
@@ -36,6 +37,7 @@ SPECS: tuple[KernelSpec, ...] = (
     matmul.SPEC,
     pool.SPEC,
     softmax.SPEC,
+    layernorm.SPEC,
 )
 
 
