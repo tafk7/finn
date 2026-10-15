@@ -87,7 +87,17 @@ cycle):
 - the **interval** between frames: their last beats apart on a stream, the root's
   over its outputs; the last interval is the steady state's (II);
 - the **total**: from the first input beat to the last output beat of all frames;
-- a stream's **busy** span in a frame: its first to its last beat.
+- a stream's **busy** span in a frame: its first to its last beat;
+- a stream's **stalls** and **starves** in a frame: the cycles its producer offered a
+  word and was refused (valid without ready), and the cycles its consumer waited for
+  one (ready without valid), each counted against the handshake that ends it;
+- a FIFO's **occupancy**: the words it holds, its stream in minus its stream out, and
+  its peak in each frame.
+
+A FIFO that in one frame both held its producer back and left its consumer waiting
+lost throughput a deeper FIFO would have kept: ``Measured.findings`` names it
+(``fifo-held-producer``). A FIFO that only fills, as one behind a slower consumer
+does by design, and a ``direct`` link that stalls are in the table, not findings.
 
 ``Measured`` is pure arithmetic on the recorded cycles: the fast gate tests it
 without Vivado.
@@ -96,11 +106,14 @@ without Vivado.
 from __future__ import annotations
 
 import logging
+from bisect import bisect_right
+from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from finn.core.reporting.findings import Finding, FindingKind, ordered_findings
 from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
 from finn.kernels.artifacts.abi import (
     Bus,
@@ -125,6 +138,7 @@ from finn.kernels.artifacts.module import (
     declared_registers,
 )
 from finn.kernels.artifacts.sources import include_directories, is_header
+from finn.kernels.fifo import FifoKernel
 from finn.resources import finnlib_root
 from finn.toolchain import xsim
 from finn.toolchain.launcher import Toolchain
@@ -355,20 +369,24 @@ def measure(
 
     Each input presents its words ``frames`` times over and each output must
     present its words as many times, checked as ``stream_through`` checks them.
-    Every handshake is recorded by the cycle it completes in: on the root's
+    Every handshake is recorded by the cycle it completes in, with the cycles its
+    producer was refused and its consumer waited before it: on the root's
     streams and on each link between the module's instances, observed at the
     sink's nets (``instance_net``), so a kernel's own ports are measured where the
-    module composes several. ``cycles``, a frame's, and ``toolchain``, as
-    ``stream_through`` takes them.
+    module composes several. Each FIFO instance (``FifoKernel``'s) whose streams in
+    and out are both recorded is kept with them (``FifoStreams``). ``cycles``, a
+    frame's, and ``toolchain``, as ``stream_through`` takes them.
     """
     if frames < 1:
         raise ValueError(f"at least one frame, not {frames}")
     _check_streams(module, inputs, outputs)
     observed = {}
+    by_data: dict[str, str] = {}  # the root's streams by their data pin
     for name, bus in _streams(module).items():
         if name in inputs or name in outputs:
             member = _members(bus)
             observed[name] = (member["tvalid"], member["tready"])
+            by_data[member["tdata"]] = name
     for link in module.fragment.links if isinstance(module, Composed) else ():
         stream = link_stream(link)
         if stream is not None:
@@ -378,6 +396,7 @@ def measure(
                 f"dut.{instance_net(sink, link.sink.valid)}",
                 f"dut.{instance_net(sink, link.sink.ready)}",
             )
+    fifos = _fifos(module, by_data) if isinstance(module, Composed) else {}
     log = _stream(
         module,
         directory,
@@ -389,18 +408,51 @@ def measure(
         toolchain=toolchain,
     )
     beats: dict[str, list[int]] = {name: [] for name in observed}
+    stalls: dict[str, list[int]] = {name: [] for name in observed}
+    starves: dict[str, list[int]] = {name: [] for name in observed}
     for line in log.splitlines():
         if line.startswith("BEAT "):
-            _, name, cycle = line.split()
+            _, name, cycle, stalled, starved = line.split()
             beats[name].append(int(cycle))
+            stalls[name].append(int(stalled))
+            starves[name].append(int(starved))
     measured = Measured(
         frames=frames,
         inputs=tuple(inputs),
         outputs=tuple(outputs),
         beats={name: tuple(cycles) for name, cycles in beats.items()},
+        stalls={name: tuple(counts) for name, counts in stalls.items()},
+        starves={name: tuple(counts) for name, counts in starves.items()},
+        fifos=fifos,
     )
     _LOG.info(measured.table())
     return measured
+
+
+def _fifos(module: Composed, by_data: Mapping[str, str]) -> dict[str, FifoStreams]:
+    """Each FIFO instance of ``module`` by its label, with its streams as ``measure`` records
+    them: a link to the root by the root's output (``by_data``, the given streams by their
+    data pins); a FIFO into an output not given is left out, its words out not recorded."""
+    links = module.fragment.links
+    found = {}
+    for label, leaf in module.fragment.instances:
+        if leaf.implementation_id != FifoKernel.id:
+            continue
+        (into,) = (link for link in links if link.sink.instance == label)
+        (out,) = (link for link in links if link.source.instance == label)
+        into_stream = link_stream(into)
+        out_stream = link_stream(out) or by_data.get(out.sink.data)
+        assert into_stream is not None
+        if out_stream is None:
+            continue
+        depth = dict(leaf.parameters).get("DEPTH")
+        found[label] = FifoStreams(
+            into=into_stream,
+            out=out_stream,
+            producer=into.source.instance or by_data.get(into.source.data, into.source.data),
+            depth=depth if isinstance(depth, int) else None,
+        )
+    return found
 
 
 def link_stream(link: Link) -> str | None:
@@ -808,8 +860,19 @@ def stream_bench(
             continue
         vector = "" if info.width == 1 else f"[{info.width - 1}:0] "
         lines.append(f"wire {vector}{name};")  # an output nothing reads
-    for name, (valid, ready) in (observed or {}).items():
-        count.append(f'if ({valid} && {ready}) $display("BEAT {name} %0d", cycle);')
+    # Each observed handshake, with the cycles before it its producer was refused (a stall)
+    # and its consumer waited (a starve).
+    for index, (name, (valid, ready)) in enumerate((observed or {}).items()):
+        stall, starve = f"observed{index}_stall", f"observed{index}_starve"
+        lines.append(f"int {stall} = 0, {starve} = 0;")
+        count.append(
+            f"""if ({valid} && {ready}) begin
+                $display("BEAT {name} %0d %0d %0d", cycle, {stall}, {starve});
+                {stall} <= 0;
+                {starve} <= 0;
+            end else if ({valid}) {stall} <= {stall} + 1;
+            else if ({ready}) {starve} <= {starve} + 1;"""
+        )
     for name, tap in (taps or {}).items():
         end, total = tap.end, tap.count
         lines += [f"logic [{tap.bits - 1}:0] {name}_tapped [{total}];", f"int {name}_taps = 0;"]
@@ -955,14 +1018,37 @@ Frame = tuple[int, ...]
 
 
 @dataclass(frozen=True)
+class FifoStreams:
+    """A FIFO instance as ``Measured`` reads it: the stream into it and the stream out of
+    it, by their names there; the producer that feeds it (an instance, or the root's
+    input); and its depth, where its module states one."""
+
+    into: str
+    out: str
+    producer: str
+    depth: int | None = None
+
+
+#: The code of the finding that names a FIFO that held its producer back
+#: (``Measured.findings``).
+FIFO_HELD_PRODUCER = "fifo-held-producer"
+
+
+@dataclass(frozen=True)
 class Measured:
     """``frames`` frames' handshakes, by stream name: the root's ``inputs`` and
-    ``outputs`` by port, each link by its sink (``instance.pin``)."""
+    ``outputs`` by port, each link by its sink (``instance.pin``). For a stream in
+    ``stalls`` and ``starves``, each handshake's cycles before it its producer was
+    refused and its consumer waited, in the order of its beats; and each FIFO instance
+    between two of the streams, by its label (``fifos``)."""
 
     frames: int
     inputs: tuple[str, ...]
     outputs: tuple[str, ...]
     beats: Mapping[str, tuple[int, ...]]
+    stalls: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
+    starves: Mapping[str, tuple[int, ...]] = field(default_factory=dict)
+    fifos: Mapping[str, FifoStreams] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in (*self.inputs, *self.outputs):
@@ -970,6 +1056,15 @@ class Measured:
                 raise ValueError(f"no beats recorded on the root's stream {name}")
         for name in self.beats:
             self.of(name)  # refuses uneven frames now
+        for counts in (self.stalls, self.starves):
+            for name, waits in counts.items():
+                beats = len(self.beats.get(name, ()))
+                if len(waits) != beats:
+                    raise ValueError(f"{name}: {len(waits)} counts of waits for {beats} beats")
+        for label, fifo in self.fifos.items():
+            words = [len(self.beats.get(name, ())) for name in (fifo.into, fifo.out)]
+            if not words[0] or words[0] != words[1]:
+                raise ValueError(f"{label}: {words[0]} words in and {words[1]} out")
 
     def of(self, name: str) -> tuple[Frame, ...]:
         """``name``'s beats, frame by frame."""
@@ -1024,20 +1119,117 @@ class Measured:
         """The first input beat to the last output beat of the last frame."""
         return self._last(self.outputs)[-1] - self._first(self.inputs)[0] + 1
 
+    def stalled(self, name: str) -> tuple[int, ...]:
+        """Each frame's cycles on ``name`` its producer offered a word and was refused."""
+        return self._waits(self.stalls, name)
+
+    def starved(self, name: str) -> tuple[int, ...]:
+        """Each frame's cycles on ``name`` its consumer waited for a word."""
+        return self._waits(self.starves, name)
+
+    def _waits(self, counts: Mapping[str, tuple[int, ...]], name: str) -> tuple[int, ...]:
+        if name not in counts:
+            raise ValueError(f"{name}: no waits recorded")
+        waits, count = counts[name], self.per_frame(name)
+        return tuple(sum(waits[f * count : (f + 1) * count]) for f in range(self.frames))
+
+    def occupancy(self, fifo: str) -> tuple[tuple[int, int], ...]:
+        """The FIFO ``fifo``'s words over time: at each cycle a word entered or left it,
+        the cycle and the words it holds after that cycle's handshakes."""
+        streams = self.fifos[fifo]
+        change = Counter(self.beats[streams.into])
+        change.subtract(self.beats[streams.out])
+        held = 0
+        found: list[tuple[int, int]] = []
+        for cycle in sorted(change):
+            held += change[cycle]
+            found.append((cycle, held))
+        return tuple(found)
+
+    def peaks(self, fifo: str) -> tuple[int, ...]:
+        """Each frame's most words the FIFO ``fifo`` holds, just after one of the frame's
+        words entered it (only a word entering raises the count)."""
+        streams = self.fifos[fifo]
+        out = self.beats[streams.out]
+        held = [
+            entered + 1 - bisect_right(out, cycle)
+            for entered, cycle in enumerate(self.beats[streams.into])
+        ]
+        count = self.per_frame(streams.into)
+        return tuple(max(held[f * count : (f + 1) * count]) for f in range(self.frames))
+
+    @property
+    def findings(self) -> tuple[Finding, ...]:
+        """Each FIFO that in a frame both held its producer back (stalls on its stream in)
+        and left its consumer waiting (starves on its stream out): it lost throughput a
+        deeper FIFO would have kept (``fifo-held-producer``, a limitation). The consumer's
+        wait for the run's first word is left out, the pipeline's fill, which no depth
+        shortens; every frame is judged, the first too, so a single frame's burst is.
+
+        A FIFO that only fills, as one behind a slower consumer does, and a stream with no
+        FIFO that stalls are not findings; nor is a FIFO whose streams carry no counts."""
+        found: list[Finding] = []
+        for label, fifo in self.fifos.items():
+            if fifo.into not in self.stalls or fifo.out not in self.starves:
+                continue
+            stalls = self.stalled(fifo.into)
+            starves = list(self.starved(fifo.out))
+            starves[0] -= self.starves[fifo.out][0]  # the fill
+            frames = [f for f in range(self.frames) if stalls[f] and starves[f]]
+            if not frames:
+                continue
+            peaks = self.peaks(label)
+            depth = "" if fifo.depth is None else f" of its depth {fifo.depth}"
+            found.append(
+                Finding(
+                    FindingKind.LIMITATION,
+                    FIFO_HELD_PRODUCER,
+                    "measure",
+                    f"{label}: in frames {frames} it held its producer {fifo.producer} back "
+                    f"{sum(stalls[f] for f in frames)} cycles and left its consumer waiting "
+                    f"{sum(starves[f] for f in frames)} cycles, holding at most "
+                    f"{max(peaks[f] for f in frames)} words{depth}: a deeper FIFO would have "
+                    "kept that throughput",
+                    (
+                        ("instance", label),
+                        ("producer", fifo.producer),
+                        ("depth", fifo.depth),
+                        ("frames", frames),
+                        ("stalls", stalls),
+                        ("starves", starves),
+                        ("peaks", peaks),
+                    ),
+                )
+            )
+        return ordered_findings(found)
+
     def table(self) -> str:
-        """The measurement as text: the root's latency, interval and total, then per
-        stream its beats per frame, busy span, interval and first beat."""
+        """The measurement as text: the root's latency, interval and total; per stream its
+        beats per frame, busy span, interval, first beat, and the last frame's stalls and
+        starves where they were counted; per FIFO its depth and each frame's peak, stalls
+        in and starves out; then each finding."""
         start = self._first(self.inputs)[0]
         lines = [
             f"frames {self.frames}; latency per frame {list(self.latencies)}; "
             f"intervals {list(self.intervals()) if self.frames > 1 else []}; "
             f"total {self.total}",
-            f"{'stream':<56} {'beats':>6} {'busy':>6} {'II':>6} {'first':>6}",
+            f"{'stream':<56} {'beats':>6} {'busy':>6} {'II':>6} {'first':>6} "
+            f"{'stall':>6} {'starve':>6}",
         ]
         for name in self.beats:
             interval = self.interval(name) if self.frames > 1 else "-"
+            stall = self.stalled(name)[-1] if name in self.stalls else "-"
+            starve = self.starved(name)[-1] if name in self.starves else "-"
             lines.append(
                 f"{name:<56} {self.per_frame(name):>6} {self.busy(name)[-1]:>6} "
-                f"{interval:>6} {self.of(name)[0][0] - start:>6}"
+                f"{interval:>6} {self.of(name)[0][0] - start:>6} {stall:>6} {starve:>6}"
             )
+        if self.fifos:
+            lines.append(f"{'fifo':<56} {'depth':>6}  peak, stalls in, starves out per frame")
+        for label, fifo in self.fifos.items():
+            depth = "-" if fifo.depth is None else fifo.depth
+            stalls = list(self.stalled(fifo.into)) if fifo.into in self.stalls else "-"
+            starves = list(self.starved(fifo.out)) if fifo.out in self.starves else "-"
+            lines.append(f"{label:<56} {depth:>6}  {list(self.peaks(label))}, {stalls}, {starves}")
+        lines += [str(finding) for finding in self.findings]
         return "\n".join(lines)
