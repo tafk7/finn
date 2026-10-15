@@ -407,16 +407,11 @@ class NestBuffer:
     freed: tuple[int, ...]
 
 
-def nest_buffer(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestBuffer:
-    """``input_gen``'s buffer over one frame: its pointers stepped as its nest counters
-    select the increments ``nest_geometry`` read from the RTL.
-
-    At each output beat, the outermost level the beat completes (with every level
-    inside it) selects the read pointer's increment and, where that level frees
-    (``R_FLAG``), the free pointer's; a beat completing no loop advances by the
-    innermost default (level ``D``).
-    """
-    geometry = nest_geometry(frame_words, dims, strides)
+@cache
+def _stepped(
+    source: Path, frame_words: int, dims: tuple[int, ...], strides: tuple[int, ...]
+) -> NestBuffer:
+    geometry = _evaluated(source, frame_words, dims, strides)
     depth = len(dims)
     reads: list[int] = []
     freed: list[int] = []
@@ -436,6 +431,19 @@ def nest_buffer(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -
         if level > 0:
             counters[level - 1] += 1
     return NestBuffer(geometry.capacity, tuple(reads), tuple(freed))
+
+
+def nest_buffer(frame_words: int, dims: Sequence[int], strides: Sequence[int]) -> NestBuffer:
+    """``input_gen``'s buffer over one frame: its pointers stepped as its nest counters
+    select the increments ``nest_geometry`` read from the RTL (once per nest and source).
+
+    At each output beat, the outermost level the beat completes (with every level
+    inside it) selects the read pointer's increment and, where that level frees
+    (``R_FLAG``), the free pointer's; a beat completing no loop advances by the
+    innermost default (level ``D``).
+    """
+    source = Path(resources.path(SOURCE.root, fetch=False)) / SOURCE.path
+    return _stepped(source, frame_words, tuple(dims), tuple(strides))
 
 
 __all__ = [

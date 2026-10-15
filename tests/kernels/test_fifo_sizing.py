@@ -137,6 +137,15 @@ def test_a_row_replay_frees_each_row_after_its_last_pass() -> None:
     )
 
 
+def test_a_nest_s_buffer_is_stepped_once_per_nest() -> None:
+    # A list and a tuple name the same nest: one buffer, shared (it is immutable).
+    input_generator._stepped.cache_clear()
+    first = nest_buffer(12, (3, 2, 4), (4, 0, 1))
+    again = nest_buffer(12, [3, 2, 4], [4, 0, 1])
+    assert again == first and again is first
+    assert input_generator._stepped.cache_info().misses == 1
+
+
 # -- the throttle and the least depth --------------------------------------------------------
 
 
