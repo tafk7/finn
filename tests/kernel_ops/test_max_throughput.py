@@ -36,6 +36,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
     Explorer,
     MaxThroughput,
@@ -199,11 +200,15 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert (budget["kind"], budget["code"]) == ("limitation", "resource-budget")
     assert "most of lut: lut 9882 of 7056" in budget["message"]
     assert budget["details"] == {"binding": "lut", "over": ("lut",)}
-    # Before sizing, the output's direct throttles its producer: each exploration names it.
-    assert [finding.code for finding in findings] == [
-        "direct-throttles",
-        "resource-budget",
-        "direct-throttles",
+    # Before sizing, the output's direct throttles its producer: no exploration checks it,
+    # and the build's verification names it.
+    assert [finding.code for finding in findings] == ["resource-budget"]
+    unsized = kernel_model()
+    write_target(unsized, ULTRA96)
+    explore_kernel_choices(unsized, Rebaseline())
+    _, check = verify_partition(unsized, "the chain")
+    assert [(f.kind, f.code) for f in check.findings] == [
+        (FindingKind.LIMITATION, "direct-throttles")
     ]
     assert [row["cycles"] for row in searched["tried"]] == [1, None]
     assert searched["fits"] is False and searched["binding"] == "lut"

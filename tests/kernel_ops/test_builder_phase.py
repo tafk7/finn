@@ -439,14 +439,14 @@ def _levels_holds(channel: Channel, period: int, words: int) -> bool:
     return not _is_levels(channel) or words >= _levels_need(period)
 
 
-def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_packaging(
+def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A folding step of the user's own after the last FIFO sizing leaves the FIFO sized
     at the baseline's period too small for its stream at the period it reaches: the step
-    drops its depth and leaves it open, and packaging refuses the open depth, saying where
-    to size it, the manifest recording the refusal. Sized after it, the partition is
-    packaged."""
+    keeps it (an exploration checks nothing of itself), and the partition's verification
+    refuses it, saying where to size it, the manifest recording the refusal. Sized after
+    it, the partition is packaged."""
     monkeypatch.setattr(explore_module, "size", _levels_sized)
     monkeypatch.setattr(explore_module, "holds", _levels_holds)
     model_file = tmp_path / "chain.onnx"
@@ -458,7 +458,12 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_packaging(
         cfg = config(
             tmp_path / name,
             target=CHAIN_TARGET,
-            steps=["step_create_dataflow_partition", *strategies, "step_package_partition"],
+            steps=[
+                "step_create_dataflow_partition",
+                *strategies,
+                "step_verify_partition",
+                "step_package_partition",
+            ],
         )
         cfg.prepared_toolchain = cast(Toolchain, PackagedByStub())
         assert build_dataflow_cfg(str(model_file), cfg) == status, name
@@ -475,12 +480,13 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_packaging(
         )
         assert {key: outcome[key] for key in ("status", "step", "kind")} == {
             "status": "failed",
-            "step": "step_package_partition",
+            "step": "step_verify_partition",
             "kind": "refusal",
         }
-        assert outcome["error"]["message"] == (
-            "partition: open choices, refused at emission: levels.transport.fifo.buffer.depth "
-            "(required: run step_size_fifos or step_placeholder_choices)"
+        assert outcome["error"]["message"].startswith(
+            "partition: FIFOs too small for their streams, refused at verification (run "
+            "step_size_fifos): levels: levels.transport.fifo.buffer.depth: fifo-stale: depth 5 "
+            "(5 words) no longer keeps its producer"
         )
 
 
@@ -1650,6 +1656,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     shipped_body = ModelWrapper(str(deploy / "model" / "partition.onnx"))
     for model in (shipped, shipped_body):
         assert set(model.namespace(OUTPUTS)) <= {
+            "verified",
             "vlnv",
             "interfaces",
             "ip_key",

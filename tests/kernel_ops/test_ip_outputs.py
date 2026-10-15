@@ -44,14 +44,14 @@ from finn.builder.build_dataflow_testbench import (
     run_testbench,
 )
 from finn.core.graph.annotations.choices import HELD
-from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY
+from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_VERIFIED
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.partition import partition_body
+from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network, save_channels, verify_partition
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
@@ -300,13 +300,14 @@ def _levels_short(channel: Any, period: int, words: int) -> bool:
     return not str(channel.endpoints.source_owner).startswith("activate.")
 
 
-def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
+def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A FIFO, not held, that no longer keeps its producer within its idle time at the
     network's bottleneck, however it got there (stated by hand after the cut, here), is
-    refused before anything is emitted, named, saying where to size it again; held, it is
-    built as held."""
+    refused when the partition is verified, before anything is emitted, named, saying
+    where to size it again, and nothing is recorded; binding alone builds it. Held, it is
+    verified, a limitation naming it, and built as held."""
     parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
     node, body, _ = partition_body(parent)
     fifo = {
@@ -316,11 +317,9 @@ def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
     }
     save_channels(body, {"levels": fifo})
     monkeypatch.setattr(explore_module, "holds", _levels_short)
-    packaging = PackagePartition(
-        node.name, directory=tmp_path / "ip", toolchain=cast(Toolchain, PackagedByStub())
-    )
+    configured_network(body, node.name)
     with pytest.raises(KernelOpError) as refused:
-        body.transform(packaging)
+        verify_partition(body, node.name)
     (finding,) = refused.value.findings
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
@@ -328,13 +327,39 @@ def test_a_fifo_too_small_for_its_stream_is_refused_before_packaging(
         "levels.transport.fifo.buffer.depth",
     )
     assert str(refused.value).startswith(
-        f"{node.name}: FIFOs too small for their streams, refused at emission (run "
+        f"{node.name}: FIFOs too small for their streams, refused at verification (run "
         "step_size_fifos): levels: levels.transport.fifo.buffer.depth: fifo-stale: depth 8 "
         "(8 words) no longer keeps its producer"
     )
-    assert not (tmp_path / "ip").exists()
+    assert body.get(OUTPUT_VERIFIED) is None
     body.set(HELD, {"levels": {"transport.fifo.buffer.depth": 8}})
-    body.transform(packaging)
+    _, check = verify_partition(body, node.name)
+    assert [(f.kind, f.code) for f in check.findings] == [
+        (FindingKind.LIMITATION, "fifo-held-stale")
+    ]
+    body.transform(
+        PackagePartition(
+            node.name, directory=tmp_path / "ip", toolchain=cast(Toolchain, PackagedByStub())
+        )
+    )
+
+
+def test_verification_records_the_design_it_verified_and_a_save_keeps_it(
+    tmp_path: Path,
+) -> None:
+    """``verify_partition`` records the body's design digest under ``finn.outputs``
+    (``verified``), beside the IP's key and not in the design: the digest is unchanged by
+    it, and the record survives a save and a reload."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, body_file = partition_body(parent)
+    before = design_digest(body)
+    point, check = verify_partition(body, node.name)
+    assert body.get(OUTPUT_VERIFIED) == design_digest(body) == before
+    assert check.stale == {} and check.findings == ()
+    assert point.network.members == configured_network(body, node.name)[0].network.members
+    body.save(body_file)
+    _, again, _ = partition_body(parent)
+    assert again.get(OUTPUT_VERIFIED) == design_digest(again) == before
 
 
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:

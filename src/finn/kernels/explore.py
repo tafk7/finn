@@ -53,13 +53,14 @@ The strategies, each an objective and its constraints searched through the seam:
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
 A FIFO's depth is sized at one bottleneck period, and a fold anywhere in the network may
-change the period or its ends after it. Nothing records what it was sized against: each
-stored transport is checked against its stream again (``check_fifos``: sizing's own model
-at the network's period), at the end of each exploration (``checked``,
-``finn.transformation.kernels.choose``) and at emission. A FIFO that no longer keeps its
-producer within its idle time is dropped, named and left open, where it is not held; a
-held one is kept and named (a limitation), and so is a ``direct`` that throttles its
-producer.
+change the period or its ends after it. Nothing records what it was sized against: a
+stored transport can be checked against its stream again (``check_fifos``: sizing's own
+model at the network's period), a tool a strategy calls or does not; ``checked`` drops,
+names and leaves open each FIFO, not held, that no longer keeps its producer within its
+idle time, the step a strategy composes before sizing again. A held one is kept and named
+(a limitation), and so is a ``direct`` that throttles its producer. An exploration checks
+nothing of itself: the build checks once, before emission
+(``finn.custom_op.kernels.shell.verify_partition``).
 """
 
 from __future__ import annotations
@@ -191,6 +192,13 @@ class Accepted(Generic[S]):
 
     network: S
     dropped: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
+
+
+#: How a strategy step judged its FIFOs, as its report states it (``fifos_judged``): by
+#: sizing's model (``SizeFifos``, or ``Seam.check_fifos``), or not at all. A strategy that
+#: judges them otherwise states its own in its report (``"simulation"``: none yet).
+FIFOS_BY_MODEL = "model"
+FIFOS_NOT_CHECKED = "not checked"
 
 
 @dataclass
@@ -381,13 +389,17 @@ class Seam:
     """The seam over the networks of one exploration: the ``platform`` its kernels are
     built for (its clock, which a throughput reads). ``attempts`` counts the changes tried
     through it; ``held`` maps each held key to its value; ``runs`` records each
-    strategy's run, in order."""
+    strategy's run, in order; ``checks`` each check of the FIFOs a caller made through it
+    (``check_fifos``), in order, and ``dropped`` each FIFO's depth ``checked`` dropped,
+    with why."""
 
     def __init__(self, platform: Platform | None = None) -> None:
         self.platform = platform
         self.attempts = 0
         self.held: dict[Key, object] = {}
         self.runs: list[Run] = []
+        self.checks: list[FifoCheck] = []
+        self.dropped: dict[Key, tuple[Finding, ...]] = {}
 
     def declared(self, network: Composition) -> Mapping[Key, type[Space] | None]:
         """Every Decision of the network by key, open or not, applicable or not (one nested
@@ -665,7 +677,15 @@ class Seam:
         whatever changed. A FIFO whose depth is not held is then ``stale``; a held one
         (``held``) and a ``direct`` are limitations (``FifoCheck``). A transport whose
         depth or style is open, or whose channel's ends the model does not read, is not
-        checked; nor is any where a member's cycles are not known."""
+        checked; nor is any where a member's cycles are not known. A tool a strategy calls
+        or does not (no exploration calls it of itself); each call is recorded
+        (``checks``)."""
+        found = self._check_fifos(network)
+        self.checks.append(found)
+        return found
+
+    def _check_fifos(self, network: Composition) -> FifoCheck:
+        """``check_fifos``, not recorded."""
         bottleneck = self.cost(network).bottleneck
         if bottleneck is None:
             return FifoCheck(None)
@@ -749,10 +769,13 @@ class Seam:
         """``network`` with each stale FIFO's depth dropped (``check_fifos``): cleared and
         left open, a required choice no strategy set, so emission refuses it until
         ``SizeFifos`` sizes it again; what else the clear reaches is settled back to its
-        value. With what the check found."""
+        value. With what the check found; what it dropped is recorded (``dropped``). A tool
+        a strategy composes (drop what the model calls too small, then size again); no
+        exploration calls it of itself."""
         found = self.check_fifos(network)
         if not found.stale:
             return network, found
+        self.dropped.update(found.stale)
         prior = {key: value for key, value in network.chosen().items() if key not in found.stale}
         opened, reopened = self.reopen(network, found.stale)
         return self._settle(opened, prior, keys=reopened).network, found
@@ -1945,7 +1968,8 @@ class SizeFifos:
 
     ``method`` is ``"analytical"``, the only one. The model runs ``FRAMES`` frames to
     reach its periodic state, as the seam's check (``Seam.check_fifos``) does, so every
-    transport it sizes passes the check at the period it sized it at.
+    transport it sizes passes the check at the period it sized it at: it calls no check,
+    and its report says its FIFOs were judged by the model (``fifos_judged``).
     """
 
     strategy = "size_fifos"
@@ -2053,6 +2077,7 @@ class SizeFifos:
         return {
             "strategy": self.strategy,
             "method": self.method,
+            "fifos_judged": FIFOS_BY_MODEL,
             "margin": self.margin,
             "ram_style": self.ram_style,
             "frames": FRAMES,
@@ -2162,6 +2187,8 @@ __all__ = [
     "DebugPlaceholder",
     "ExploreError",
     "Explorer",
+    "FIFOS_BY_MODEL",
+    "FIFOS_NOT_CHECKED",
     "FifoCheck",
     "MaxThroughput",
     "Pinned",

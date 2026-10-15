@@ -21,7 +21,12 @@ the shell as functions over it, over its module and its channels' end contracts.
   neither, so its resources are its members'.
 
 ``configured_network`` is a partition's network as emission builds it (``Configured``: the
-network, its module and its cycles a frame). A body's choices are stated by hand
+network, its module and its cycles a frame), bound only. ``verify_partition`` is the one
+check of its FIFOs against their streams before emission (a strategy may call the seam's
+check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
+(packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
+and refuses a design never verified or changed since. Simulation and elaboration only
+bind. A body's choices are stated by hand
 (``save_channels``) and given their baselines (``baseline_choices``) on its network in its
 shell, which alone holds both of a boundary channel's ends.
 """
@@ -37,8 +42,10 @@ from onnx import NodeProto
 
 from finn.core.graph.annotations.channel import channel_choices, refuse_outside_body
 from finn.core.graph.annotations.choices import held_choices
+from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
+from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, Space
 from finn.custom_op.kernels.base import refusal, why
@@ -55,7 +62,7 @@ from finn.custom_op.kernels.network import (
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
 from finn.kernels.ends import END, EndContract
-from finn.kernels.explore import Seam
+from finn.kernels.explore import FifoCheck, Seam
 from finn.kernels.members import Facts
 from finn.kernels.network import Wire, dotted
 from finn.kernels.utilization import total
@@ -246,10 +253,10 @@ def configured_network(
     viable (each case's reason), a required one no strategy set ("required: run
     step_size_fifos or step_placeholder_choices"), any other one never baselined ("not
     created: BaselineChoices"); a network the shell does not admit
-    (``admission_refusal``), or whose module or cycles its members refuse; a FIFO not
-    held that no longer keeps its producer within its idle time at the network's
-    bottleneck period (``Seam.check_fifos``: whatever changed since it was sized, an edit
-    by hand included); or graph inputs and outputs out of port order refuse, named."""
+    (``admission_refusal``), or whose module or cycles its members refuse; or graph inputs
+    and outputs out of port order refuse, named. It only binds: it does not check the
+    FIFOs against their streams (``verify_partition`` does), so a simulation can run a
+    FIFO the model calls too small."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
         raise KernelOpError.refused(
@@ -302,22 +309,6 @@ def configured_network(
             f"{label}: refused by its members: " + "; ".join(map(Finding.subject_line, refused)),
             findings=refused,
         )
-    # Only which keys are held matters here, not their values (exploration checks those).
-    seam = Seam(read_target(model).platform)
-    seam.held.update(
-        {
-            (owner, key): value
-            for owner, held in held_choices(model).items()
-            for key, value in held.items()
-        }
-    )
-    stale = tuple(finding for each in seam.check_fifos(bound).stale.values() for finding in each)
-    if stale:
-        raise KernelOpError(
-            f"{label}: FIFOs too small for their streams, refused at emission (run "
-            "step_size_fifos): " + "; ".join(map(Finding.subject_line, stale)),
-            findings=stale,
-        )
     ports = dict(bound.boundary)
     initializers = {tensor.name for tensor in model.graph.initializer}
     inputs = [item.name for item in model.graph.input if item.name not in initializers]
@@ -333,6 +324,65 @@ def configured_network(
         )
     slowest = max(each.value for each in cycles.values() if isinstance(each, Available))
     return Configured(bound, module.value, slowest), bound.boundary
+
+
+def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoCheck]:
+    """A partition model's configured network (``configured_network``, whose refusals it
+    keeps) with its FIFOs checked against their streams at its bottleneck period
+    (``Seam.check_fifos``: sizing's own model, whatever changed since a FIFO was sized, an
+    edit by hand included), and what the check found; the design it verified recorded on
+    the model (``OUTPUT_VERIFIED``: its ``design_digest``), which emission compares
+    (``refuse_unverified``). A FIFO not held that no longer keeps its producer within its
+    idle time is refused, named (``fifo-stale``: run step_size_fifos), and nothing is
+    recorded; a held one (``fifo-held-stale``) and a ``direct`` that throttles its
+    producer (``direct-throttles``) are limitations, the check's ``findings``. The model
+    is changed only by the record; its caller saves it."""
+    point, _ = configured_network(model, label)
+    seam = Seam(read_target(model).platform)
+    # Only which keys are held matters here, not their values (exploration checks those).
+    seam.held.update(
+        {
+            (owner, key): value
+            for owner, held in held_choices(model).items()
+            for key, value in held.items()
+        }
+    )
+    found = seam.check_fifos(point.network)
+    stale = tuple(finding for each in found.stale.values() for finding in each)
+    if stale:
+        raise KernelOpError(
+            f"{label}: FIFOs too small for their streams, refused at verification (run "
+            "step_size_fifos): " + "; ".join(map(Finding.subject_line, stale)),
+            findings=stale,
+        )
+    model.set(OUTPUT_VERIFIED, design_digest(model))
+    return point, found
+
+
+def refuse_unverified(model: ModelWrapper, label: str) -> None:
+    """Refuse to emit a partition model whose design was not verified as it is now: it
+    records none (``design-unverified``: run step_verify_partition), or the one it records
+    (``OUTPUT_VERIFIED``, by ``verify_partition``) is not its ``design_digest`` now
+    (``design-changed``: it changed since; verify it again). Read from the model alone, in
+    milliseconds: nothing is bound or checked."""
+    verified = model.get(OUTPUT_VERIFIED)
+    if verified is None:
+        raise KernelOpError.refused(
+            "design-unverified",
+            "refuse_unverified",
+            f"{label}: its design was never verified (finn.outputs verified): run "
+            "step_verify_partition",
+            node=label,
+        )
+    now = design_digest(model)
+    if verified != now:
+        raise KernelOpError.refused(
+            "design-changed",
+            "refuse_unverified",
+            f"{label}: the design changed since step_verify_partition verified it (verified "
+            f"{verified}, now {now}): run step_verify_partition again",
+            node=label,
+        )
 
 
 # -- a body's choices, on its network in its shell ---------------------------------------
@@ -412,6 +462,8 @@ __all__ = [
     "baseline_choices",
     "configured_network",
     "in_shell",
+    "refuse_unverified",
     "save_channels",
     "shell_resources",
+    "verify_partition",
 ]
