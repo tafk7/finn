@@ -214,7 +214,7 @@ requires-dist = [
     { name = "onnxruntime", specifier = ">=1.28.0,<1.29" },
     { name = "pybind11", specifier = ">=2.11.1,<3" },
     { name = "pyslang", specifier = ">=11.0.0,<12" },
-    { name = "qonnx", git = "https://github.com/tafk7/qonnx.git?rev=29956914eda87246a5efa87d40203df37def299e" },
+    { name = "qonnx", git = "https://github.com/tafk7/qonnx.git?rev=4d6f2f5688d38c1b4c3e41aa17caaf76ca5d707d" },
     { name = "torch", specifier = ">=2.8.0,<3", index = "https://download.pytorch.org/whl/cpu" },
 ]
 
@@ -694,8 +694,8 @@ wheels = [
 
 [[package]]
 name = "qonnx"
-version = "1.0.0.post1.dev56+g29956914e"
-source = { git = "https://github.com/tafk7/qonnx.git?rev=29956914eda87246a5efa87d40203df37def299e#29956914eda87246a5efa87d40203df37def299e" }
+version = "1.0.0.post1.dev59+g4d6f2f568"
+source = { git = "https://github.com/tafk7/qonnx.git?rev=4d6f2f5688d38c1b4c3e41aa17caaf76ca5d707d#4d6f2f5688d38c1b4c3e41aa17caaf76ca5d707d" }
 dependencies = [
     { name = "attrs", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "bitstring", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
