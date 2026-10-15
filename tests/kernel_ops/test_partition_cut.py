@@ -55,11 +55,12 @@ from finn.transformation.kernels.integration import (
 from finn.transformation.kernels.package import boundary_facts, ip_key
 from kernel_ops.models import (
     ROW_MAJOR_W2,
+    choose_memories,
     configure_partition,
     kernel_model,
     streamed_w2_model,
 )
-from kernel_ops.packaging import NO_VIVADO
+from kernel_ops.packaging import NO_VIVADO, verified, verified_parent
 from kernel_ops.tfc import ULTRA96
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls end at a 128-bit port.
@@ -75,7 +76,7 @@ def chain(shell: str = "ip") -> ModelWrapper:
         write_target(model, ZYNQ)
     else:
         model = kernel_model(second_weights=False)
-    configure_partition(model)
+    choose_memories(model)
     return model
 
 
@@ -149,6 +150,8 @@ def test_packaging_reads_the_part_and_period_from_the_target() -> None:
     for key in PLATFORM_KEYS.values():
         model.delete(key)
     with pytest.raises(KernelOpError, match="states no target"):
+        verified(model, "sdp_1")
+    with pytest.raises(KernelOpError, match="design-changed|the design changed since"):
         model.transform(PackagePartition("sdp_1"))
 
 
@@ -182,7 +185,7 @@ def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
 
 
 def test_the_export_names_each_end_its_iodma_and_every_connection(tmp_path: Path) -> None:
-    parent = chain("pynq").transform(CutKernelPartition(tmp_path))
+    parent = verified_parent(chain("pynq").transform(CutKernelPartition(tmp_path)))
     export = integration(parent)
     assert (export.shell, export.board, export.part, export.period_ns) == (
         "pynq",
@@ -259,7 +262,7 @@ def test_the_export_names_each_end_its_iodma_and_every_connection(tmp_path: Path
 
 
 def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
-    parent = chain().transform(CutKernelPartition(tmp_path))
+    parent = verified_parent(chain().transform(CutKernelPartition(tmp_path)))
     with pytest.raises(IntegrationError, match="the 'ip' shell's integration is None: no export"):
         integration(parent)
 
@@ -284,7 +287,7 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
         if folding is not None:
             (second,) = [node for node in model.graph.node if node.name == "second"]
             kernel_op(model, second).save(folding)
-        configure_partition(model)
+        choose_memories(model)
         with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable") as refused:
             configured_network(model, "partition")
         for refusal in refusals:
@@ -295,7 +298,7 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
 def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
     """The block design wires one AXI-Lite bus and one memory port an end, and maps a bus
     by its ``awaddr``: an end stating other counts, or a bus without one, is refused."""
-    parent = chain("pynq").transform(CutKernelPartition(tmp_path))
+    parent = verified_parent(chain("pynq").transform(CutKernelPartition(tmp_path)))
     end = integration(parent).ends[0]
     wire_one_bus_each(end.contract, "x")
     for counts in ({"control_buses": 2}, {"memory_ports": 2}, {"memory_ports": 0}):
@@ -327,6 +330,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
     before = {item.key for item in body.graph.metadata_props}
     project = tmp_path / "stitch"
     toolchain: Any = PackagedHere()
+    verified(body, "partition")
     packaged = body.transform(PackagePartition("partition", directory=project, toolchain=toolchain))
     assert packaged.get(OUTPUT_IP) == str(project / "ip")
     assert packaged.get(OUTPUT_VLNV) == "xilinx_finn:finn:partition:1.0"
@@ -343,6 +347,7 @@ def test_packaging_states_its_ip_typed_and_writes_no_flat_key(tmp_path: Path) ->
         "finn.outputs/interfaces",
         "finn.outputs/ip_key",
         "finn.outputs/ip_options",
+        "finn.outputs/verified",
     }
     assert packaged.get(OUTPUT_IP_KEY) == ip_key(
         body, "partition", run_synth=False, toolchain=toolchain

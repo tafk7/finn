@@ -1,7 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Packaging without Vivado: a toolchain double that stops PackagePartition where Vivado
+"""Packaging without Vivado: a partition verified as the build verifies it before
+emission (``verified``, ``verified_parent``), which packaging, the shell's integration
+and the testbench ask for; a toolchain double that stops PackagePartition where Vivado
 would start, so a test reads what packaging checks before then; one that stands in for
 Vivado's packaging, so a test reads what PackagePartition writes beside the IP; and one
 that fakes the pynq shell's Vivado project. ``read_back`` checks an interface
@@ -23,6 +25,8 @@ import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.graph.partition import partition_body
+from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.artifacts.abi import (
     Bus,
     Clock,
@@ -39,6 +43,25 @@ from finn.transformation.kernels import PackagePartition
 #: A toolchain double's environment: a Vivado installation directory with no Vivado in
 #: it, whose identity the packaged-IP store's key reads as unstated.
 NO_VIVADO = {"XILINX_VIVADO": str(Path(__file__).parent)}
+
+
+def verified(model: ModelWrapper, label: str = "the partition") -> ModelWrapper:
+    """``model``, a partition's body, verified as the build verifies it before emission
+    (``verify_partition``, not the build's step: its FIFOs checked, the design it verified
+    recorded on it), so that packaging, the shell's integration and the testbench take it;
+    the model itself. A test that changes the body after it verifies it again."""
+    verify_partition(model, label)
+    return model
+
+
+def verified_parent(parent: ModelWrapper) -> ModelWrapper:
+    """The build's parent graph ``parent``, its partition's body verified (``verified``,
+    named as its node) and saved in its file, as step_verify_partition leaves it; the
+    parent itself."""
+    node, body, body_file = partition_body(parent)
+    verified(body, node.name)
+    body.save(body_file)
+    return parent
 
 
 class ReachedVivado(Exception):
@@ -60,8 +83,9 @@ class NoVivado:
 
 
 def reaches_vivado(model: ModelWrapper, name: str, project: Path) -> None:
-    """Package ``model`` against ``NoVivado``: its emitted top elaborates, and packaging
-    gets as far as running Vivado."""
+    """Package ``model``, verified first (``verified``), against ``NoVivado``: its emitted
+    top elaborates, and packaging gets as far as running Vivado."""
+    verified(model, name)
     toolchain = NoVivado()
     with pytest.raises(ReachedVivado):
         model.transform(
@@ -308,4 +332,6 @@ __all__ = [
     "io_shape_dict",
     "reaches_vivado",
     "read_back",
+    "verified",
+    "verified_parent",
 ]

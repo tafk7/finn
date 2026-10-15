@@ -47,6 +47,7 @@ from finn.transformation.kernels import (
     ToKernelOps,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
+from kernel_ops.packaging import verified
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
@@ -149,10 +150,11 @@ def cut(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapp
 def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:
     """The streamlined ``source`` by hand through the kernel path, as the builder's
     kernel-path phases run it: the parent graph (Reshape, the partition, TopK) and the
-    partition's body, cut first, then every choice committed at 16 lanes (``LANES``) and
-    the body saved again in its file."""
+    partition's body, cut first, then every choice committed at 16 lanes (``LANES``), the
+    body verified (``kernel_ops.packaging.verified``) and saved again in its file."""
     parent, body, body_file = cut(source, directory)
     body = body.transform(ExploreKernelChoices(Ranked(LANES)))
+    verified(body, parent.graph.node[1].name)
     body.save(body_file)
     return parent, body
 

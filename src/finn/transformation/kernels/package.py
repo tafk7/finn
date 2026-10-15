@@ -48,8 +48,11 @@ The partition's choices are its nodes' and its channels' (each on its tensor,
 ``finn.channel``), every one stored where it is created and replaced by the
 exploration: the network is replayed from them (a stale choice refuses, named), a
 Decision with one viable case is forced, and an open choice refuses, named
-(``configured_network``), and so does a FIFO too small for its stream at the network's
-bottleneck period, unless it is held (``fifo-stale``). The body's graph
+(``configured_network``). PackagePartition packages only the design the partition's
+check verified (``verify_partition``, which refuses a FIFO too small for its stream):
+before anything is staged or keyed, a body that records no verified design, or whose
+design changed since, is refused (``refuse_unverified``). ``ip_key``, ``ooc_member_resources``
+and ``ElaboratePartition`` only bind. The body's graph
 inputs and outputs, in order, are the network's ``s_axis_<i>`` and ``m_axis_<j>``:
 the shells connect a partition's i-th input to ``s_axis_<i>``.
 
@@ -107,7 +110,7 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import shape
-from finn.custom_op.kernels.shell import Configured, configured_network
+from finn.custom_op.kernels.shell import Configured, configured_network, refuse_unverified
 from finn.dataflow.traversal import Traversal, passes, period
 from finn.kernels.artifacts.build import EmittedModule, emit_module, instance_name
 from finn.kernels.artifacts.interface import INTERFACE_FILE, describe_interface
@@ -362,14 +365,16 @@ def staged_project(
 def ip_key(model: ModelWrapper, ip_name: str, *, run_synth: bool, toolchain: Toolchain) -> str:
     """The key ``PackagePartition(ip_name, run_synth=run_synth)`` gives the partition model
     ``model``'s IP as it is now: its project staged (``staged_project``) and discarded,
-    Vivado not run. An HLS leaf's product comes from the HLS cache, or is synthesized."""
+    Vivado not run. An HLS leaf's product comes from the HLS cache, or is synthesized. It
+    only binds (``configured_network``): its callers compare the verified design first."""
     point, _ = configured_network(model, ip_name)
     with staged_project(model, point, ip_name, run_synth=run_synth, toolchain=toolchain) as staged:
         return packaging_key(staged, run_synth=run_synth, toolchain=toolchain)
 
 
 class PackagePartition(Transformation):
-    """Package a partition model of KernelOps as the shells' IP; see the module docstring.
+    """Package a partition model of KernelOps as the shells' IP, the design its check
+    verified (``refuse_unverified``); see the module docstring.
 
     ``ip_name`` is the partition node's name; the part and the clock period are the
     model's target. ``directory`` is the packaging project, whose ``ip`` the IP is, a new
@@ -396,6 +401,7 @@ class PackagePartition(Transformation):
         self.packaged: PackagedIp | None = None
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
+        refuse_unverified(model, self.ip_name)
         point, boundary = configured_network(model, self.ip_name)
         project = Path(
             self.directory or make_build_dir(prefix="vivado_stitch_proj_")  # type: ignore[no-untyped-call]
@@ -423,7 +429,8 @@ class PackagePartition(Transformation):
 
 class ElaboratePartition(Transformation):
     """Compile and elaborate a partition model's emitted RTL in XSim; the model is
-    unchanged. See the module docstring for what it checks.
+    unchanged. See the module docstring for what it checks. It only binds
+    (``configured_network``): no verified design is asked for.
 
     ``directory`` holds the emitted sources and the simulator's logs (``xvlog.log``,
     ``xelab.log``), a new build directory by default; ``toolchain`` is the

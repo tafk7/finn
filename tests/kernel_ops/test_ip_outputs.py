@@ -45,6 +45,7 @@ from finn.builder.build_dataflow_testbench import (
 )
 from finn.core.graph.annotations.choices import HELD
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_VERIFIED
+from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.findings import FindingKind
@@ -56,6 +57,7 @@ from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
 from finn.platform.request import TargetRequest
+from finn.platform.resolve import resolve_target
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
     Selection,
@@ -67,6 +69,7 @@ from finn.toolchain.launcher import (
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
 from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.integration import integration
 from finn.transformation.kernels.package import (
     boundary_facts,
     free_side,
@@ -74,8 +77,13 @@ from finn.transformation.kernels.package import (
     resources_of,
     stream_order,
 )
-from kernel_ops.models import configure_partition, kernel_model
-from kernel_ops.packaging import PackagedByStub, read_back
+from kernel_ops.models import (
+    choose_memories,
+    configure_partition,
+    kernel_model,
+    streamed_w2_model,
+)
+from kernel_ops.packaging import PackagedByStub, read_back, verified, verified_parent
 
 
 def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
@@ -233,6 +241,7 @@ def test_the_resources_report_reads_the_synthesis_of_the_ip_the_body_states(
     stub = cast(Toolchain, SynthesizedByStub())
     assert "ooc_synth" not in built_reports(parent, toolchain=stub)
     node, body, body_file = partition_body(parent)
+    verified(body, node.name)
     project = tmp_path / "stitched_ip"
     packaged = body.transform(PackagePartition(node.name, directory=project, toolchain=stub))
     packaged.save(body_file)
@@ -254,7 +263,7 @@ def test_the_testbench_is_an_output_the_build_does_not_run(tmp_path: Path) -> No
     """The packaging step writes the testbench beside the IP and simulates nothing
     (PRINCIPLES §8: no build re-verifies the computation): run_testbench runs it, a
     utility."""
-    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    parent = verified_parent(kernel_model().transform(CutKernelPartition(tmp_path / "partition")))
     output = tmp_path / "output"
     cfg = DataflowBuildConfig(
         output_dir=str(output),
@@ -273,7 +282,7 @@ def test_an_ip_the_store_holds_is_reused_and_the_step_says_so(
 ) -> None:
     """Packaged again from the same partition, the IP is the store's: the step's line says
     it reused it, not that it packaged it, and the store records it reused."""
-    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    parent = verified_parent(kernel_model().transform(CutKernelPartition(tmp_path / "partition")))
     cfg = DataflowBuildConfig(
         output_dir=str(tmp_path / "output"),
         target=TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0),
@@ -362,6 +371,53 @@ def test_verification_records_the_design_it_verified_and_a_save_keeps_it(
     assert again.get(OUTPUT_VERIFIED) == design_digest(again) == before
 
 
+#: Ultra96 in the Zynq shell, whose integration reads the partition's ends.
+ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
+
+
+def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
+    tmp_path: Path,
+) -> None:
+    """Emission compares the body's design with the one its verification recorded
+    (``refuse_unverified``): packaging, before anything is staged, and the shell's
+    integration refuse a body never verified (``design-unverified``) and one changed since
+    (``design-changed``: here a FIFO stated by hand); verified again, both take it."""
+    model = streamed_w2_model()
+    write_target(model, ZYNQ)
+    choose_memories(model)
+    parent = model.transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, body_file = partition_body(parent)
+    project = tmp_path / "ip"
+    packaging = PackagePartition(
+        node.name, directory=project, toolchain=cast(Toolchain, PackagedByStub())
+    )
+
+    def refused(code: str) -> None:
+        for emit in (lambda: body.transform(packaging), lambda: integration(parent)):
+            with pytest.raises(KernelOpError) as found:
+                emit()
+            assert [(f.code, f.owner) for f in found.value.findings] == [
+                (code, "refuse_unverified")
+            ]
+        assert not project.exists()
+
+    refused("design-unverified")
+    verified_parent(parent)
+    _, body, body_file = partition_body(parent)
+    fifo = {
+        "transport": "fifo",
+        "transport.fifo.buffer.depth": 32,
+        "transport.fifo.buffer.ram_style": "auto",
+    }
+    save_channels(body, {"levels": fifo})
+    body.save(body_file)
+    refused("design-changed")
+    verified(body, node.name)
+    body.save(body_file)
+    integration(parent)
+    assert body.transform(packaging).get(OUTPUT_IP) == str(project / "ip")
+
+
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:
     """``run_testbench`` runs the directory's run.sh as its user would, the toolchain's
     command directory first on PATH, and returns what it printed when it ends in PASS;
@@ -409,7 +465,7 @@ def test_a_steps_tools_write_their_transcripts_into_its_log_directory(tmp_path: 
     cfg.prepared_toolchain = Toolchain(
         Selection(command_dir=str(tools)), {"PATH": os.defpath, "XILINX_VIVADO": str(tools)}
     )
-    parent = kernel_model().transform(CutKernelPartition(tmp_path / "p"))
+    parent = verified_parent(kernel_model().transform(CutKernelPartition(tmp_path / "p")))
     step_package_partition(parent, cfg)
     logs = output / "logs" / "step_package_partition"
     assert sorted(path.name for path in logs.iterdir()) == [

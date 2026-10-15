@@ -75,8 +75,14 @@ from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from finn.transformation.kernels.package import ip_key
-from kernel_ops.models import configure_partition, streamed_w2_model
-from kernel_ops.packaging import FakeVivado, bitfile_default, io_shape_dict
+from kernel_ops.models import choose_memories, configure_partition, streamed_w2_model
+from kernel_ops.packaging import (
+    FakeVivado,
+    bitfile_default,
+    io_shape_dict,
+    verified,
+    verified_parent,
+)
 from kernel_ops.test_builder_phase import TIMING_REPORT
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
@@ -89,13 +95,14 @@ PACKAGED_KEY = "sha256:" + "1" * 64
 def zynq_model(directory: Path) -> ModelWrapper:
     """The Chain as KernelOps, x and w2 crossing its boundary, stated for Ultra96 in the
     Zynq shell, w2 presenting one row-major pass a frame (``streamed_w2_model``: one
-    row), its choices saved, cut once (its body in ``directory``): the kernel path's
-    parent graph."""
+    row), its choices saved, cut once (its body in ``directory``) and verified
+    (``verified_parent``): the kernel path's parent graph, as step_verify_partition
+    leaves it."""
     model = streamed_w2_model()
     write_target(model, ZYNQ)
-    configure_partition(model)
+    choose_memories(model)
     parent: ModelWrapper = model.transform(CutKernelPartition(directory / "cut"))
-    return parent
+    return verified_parent(parent)
 
 
 #: Each instance's IP as a test states it: the ends' IODMA IP and stitched IP, the
@@ -310,6 +317,7 @@ def recorded_build(
         body.set(OUTPUT_IP_OPTIONS, {"run_synth": False})
         if since is not None:
             since(body)
+            verified(body, node.name)
         body.save(body_file)
     export = integration(parent)
     built = build_pynq(
