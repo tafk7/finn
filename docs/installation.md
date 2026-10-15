@@ -702,23 +702,32 @@ needed), `fifo_margin` words added to a FIFO it places. The default phase is
 `[step_size_fifos, step_verify_partition]`: the baseline folding, its FIFOs sized; a
 target throughput is `step_target_throughput` listed before it, with `target_fps` (the
 example above). FIFO depths are sized at the folding before them: run `step_size_fifos`
-after the last step that may change the folding. Each strategy step ends by checking every
-FIFO against its stream at the bottleneck it reached (the model `step_size_fifos` sizes
-by): a FIFO that no longer keeps its producer within its idle time (a fold anywhere may
-shorten the bottleneck) has its depth dropped, named in the step's report (`dropped`) and
-left open, unless you pinned it, which keeps it with a warning; a `direct` that throttles
-its producer is a warning. Packaging checks the same, so a depth edited by hand is
-refused there. A required choice left open (a FIFO's depth) is refused by name when the
-partition is built.
+after the last step that may change the folding. The FIFOs are checked against their
+streams once, by `step_verify_partition`, at the bottleneck the partition reached (the
+model `step_size_fifos` sizes by), and in a strategy step only where its strategy calls
+the check. A FIFO that no longer keeps its producer within its idle time (a fold anywhere
+may shorten the bottleneck, and a depth edited by hand may be too small) is refused
+there, named, unless you pinned it: a pinned one is kept with a warning, and so is a
+`direct` that throttles its producer. Packaging, the shell's integration and the
+testbench take only the design `step_verify_partition` verified: a partition it never
+verified is refused (run `step_verify_partition`), and so is one changed since (verify
+again), so a list that makes an output lists `step_verify_partition` after its last
+strategy step. Simulating or elaborating the partition only builds it, without the
+check, so a simulation can run a FIFO the model calls too small. A required choice left
+open (a FIFO's depth) is refused by name when the partition is built.
 
 Each strategy step writes its report, `report/<step>.json`, listed under it in the
 build's manifest: its strategy with the values it changed, reopened, kept and
 re-baselined, attempts and time; every value with who set it (the body, the baseline or
-the strategy); the pins; whether it sized FIFOs; per-member cycles and buffering, the
+the strategy); the pins; whether it sized FIFOs and how its FIFOs were judged
+(`fifos_judged`: `model` where it sized or checked them, else `not checked`; where it
+checked, what the check found, `fifo_check`); per-member cycles and buffering, the
 bottleneck, and the shell's resources against the part's. A point that uses more of a
 resource than the part has is a warning naming that resource, never a refusal.
-`step_verify_partition` writes every value to `kernel_choices.json`, by graph name
-(`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"compute.packed.pe": 16}}`:
+`step_verify_partition` writes its check's record, `report/step_verify_partition.json`
+(`fifos_judged`, and `fifo_check`: the bottleneck period, the channels checked, those
+the model does not read, and the warnings), and every value to `kernel_choices.json`,
+by graph name (`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"compute.packed.pe": 16}}`:
 a kernel's choices under its node, a channel's under the tensor it carries, in graph
 order: each node's input channels, the node, its output channels), the file
 `step_pin_choices` reads.

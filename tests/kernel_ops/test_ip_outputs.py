@@ -42,6 +42,7 @@ from finn.builder.build_dataflow_testbench import (
     TESTBENCH_DIR,
     generated_frame,
     run_testbench,
+    write_testbench,
 )
 from finn.core.graph.annotations.choices import HELD
 from finn.core.graph.annotations.outputs import OUTPUT_IP, OUTPUT_IP_KEY, OUTPUT_VERIFIED
@@ -416,6 +417,39 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
     body.save(body_file)
     integration(parent)
     assert body.transform(packaging).get(OUTPUT_IP) == str(project / "ip")
+
+
+def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) -> None:
+    """The testbench, like packaging, is written only for the design the partition's
+    verification recorded (``refuse_unverified``): a body never verified
+    (``design-unverified``) and one changed since (``design-changed``: here a FIFO stated
+    by hand) are refused before anything is written; verified again, it is written."""
+    parent = kernel_model().transform(CutKernelPartition(tmp_path / "partition"))
+    node, body, _ = partition_body(parent)
+    testbench = tmp_path / TESTBENCH_DIR
+    stub = cast(Toolchain, PackagedByStub())
+
+    def write() -> None:
+        write_testbench(body, testbench, generated_frame(body), toolchain=stub, label=node.name)
+
+    def refused(code: str) -> None:
+        with pytest.raises(KernelOpError) as found:
+            write()
+        assert [(f.code, f.owner) for f in found.value.findings] == [(code, "refuse_unverified")]
+        assert not testbench.exists()
+
+    refused("design-unverified")
+    verified(body, node.name)
+    fifo = {
+        "transport": "fifo",
+        "transport.fifo.buffer.depth": 32,
+        "transport.fifo.buffer.ram_style": "auto",
+    }
+    save_channels(body, {"levels": fifo})
+    refused("design-changed")
+    verified(body, node.name)
+    write()
+    assert (testbench / RUN_SCRIPT).is_file()
 
 
 def test_a_testbench_runs_by_its_script_and_a_mismatch_fails(tmp_path: Path) -> None:

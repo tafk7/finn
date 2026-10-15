@@ -63,6 +63,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
+    FIFOS_BY_MODEL,
     DebugPlaceholder,
     Explorer,
     MaxThroughput,
@@ -358,12 +359,22 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
 
 def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Write the partition's choices to kernel_choices.json by node or tensor name, then
-    check the partition before a shell builds it: its choices are complete and current,
-    its ports match its graph's inputs and outputs, and its target is the
-    configuration's."""
+    verify the partition before a shell builds it (``verify_partition``): its choices are
+    complete and current, its ports match its graph's inputs and outputs, its target is
+    the configuration's, and its FIFOs keep their streams at its bottleneck period (the
+    build's one check of them, by sizing's model). A FIFO not held that does not is
+    refused (``fifo-stale``: run step_size_fifos); a held one (``fifo-held-stale``) and a
+    ``direct`` that throttles its producer (``direct-throttles``) are noted as warnings.
+    Writes report/step_verify_partition.json, what the check found. The body records the
+    design it verified: packaging, the shell's integration and the testbench refuse one
+    not verified, or changed since."""
     node, body, body_file = partition_body(model)
     write_report(Path(cfg.output_dir) / KERNEL_CHOICES_FILE, kernel_choices_config(body))
-    verify_partition(body, node.name)
+    _, check = verify_partition(body, node.name)
+    stated = {"fifos_judged": FIFOS_BY_MODEL, "fifo_check": check.report()}
+    write_report(Path(cfg.output_dir) / "report" / "step_verify_partition.json", stated)
+    for finding in check.findings:
+        note(finding)
     refuse_drift(read_target(body), cfg.resolved_target, "build")
     body.save(body_file)
     return model
