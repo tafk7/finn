@@ -39,10 +39,19 @@ each sample it
    that carries another index tuple and both loop nests, in the port's index
    names.
 
+**Floats.** A FLOAT32 input is streamed as the bits of random binary32 values in
+``[-FLOAT_BOUND, FLOAT_BOUND]``. A FLOAT32 output is expected as the bits of the
+reference rounded to binary32, compared bit for bit, unless the case states a
+``tolerance``: then the lanes that differ are compared with the reference itself, each
+within ``tolerance`` absolute (NaN only against NaN, an infinity only against itself).
+Integer outputs stay exact. The tolerance is the case's, provisional: an approximating
+kernel's oracle is not decided.
+
 The adapter sample feeds the first input from a read-only ``MemStreamKernel``
 presenting ``vector_major`` at another lane count, so that input's channel
 places a width conversion and the adapter is part of the simulated path. A
-kernel without inputs has none.
+kernel without inputs has none, nor one whose first input is a float (a memory
+stores integers).
 
 A port is found where it is placed: the end on each channel below the kernel, a
 member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
@@ -106,6 +115,7 @@ from finn.dataflow.traversal import (
     BeatSequence,
     Repetition,
     Traversal,
+    offsets,
     pack,
     unreplayed,
     vector_major,
@@ -134,6 +144,10 @@ from kernels.helpers import (
 )
 
 KERNEL, SOURCE = "kernel", "source"
+#: The element the harness streams as a float: binary32, as its bits.
+FLOAT32 = "FLOAT32"
+#: A FLOAT32 input's random values lie in [-FLOAT_BOUND, FLOAT_BOUND].
+FLOAT_BOUND = 8.0
 MODES = ("free", "stalled")
 PACING = {"free": FREE, "stalled": STALLED}
 SAMPLED, ALL = "sampled", "all"
@@ -177,8 +191,10 @@ def conformance(
     facts: Mapping[str, object] = EMPTY,
     xsim: Path | None = None,
     known: Mapping[tuple[str, str], str] | None = None,
+    tolerance: float | None = None,
 ) -> tuple[Sample, ...]:
-    """Check ``space_type`` over its samples, simulating each under ``xsim`` when given."""
+    """Check ``space_type`` over its samples, simulating each under ``xsim`` when given;
+    a FLOAT32 output within ``tolerance`` of the reference, when given (see **Floats**)."""
     chosen = samples(
         space_type, inputs=inputs, outputs=outputs, factors=factors, choices=choices, facts=facts
     )
@@ -196,7 +212,7 @@ def conformance(
         if xsim is not None:
             directory = xsim / f"{index}-{re.sub(r'[^A-Za-z0-9_.=-]+', '_', sample.label)}"
             failures += _simulate(
-                point, space_type, sample, values, reference, inputs, outputs, directory
+                point, space_type, sample, values, reference, inputs, outputs, directory, tolerance
             )
     if xsim is not None:
         _settle_known(chosen, failures, known or {})
@@ -250,7 +266,9 @@ def samples(
     if not plain:
         raise ValueError(f"{space_type.__name__}: no folding configuration to sample")
     middle = plain[len(plain) // 2]
-    adapter = (Sample(f"adapter, {middle.label}", middle.factors, adapter=True),) if inputs else ()
+    # A memory stores integers: a float first input has no adapter sample.
+    fed = bool(inputs) and not _floating(next(iter(inputs.values())).element)
+    adapter = (Sample(f"adapter, {middle.label}", middle.factors, adapter=True),) if fed else ()
     return (*plain, *adapter)
 
 
@@ -692,20 +710,69 @@ def _check_model(
             )
 
 
+def _floating(element: ScalarEncoding) -> bool:
+    """Whether the harness streams ``element`` as a float: FLOAT32, as its bits."""
+    return bool(element.dtype.name == FLOAT32)
+
+
 def _values(
     space_type: type[Kernel], sample: Sample, inputs: Mapping[str, Tensor]
 ) -> dict[str, np.ndarray]:
-    """Random integers in each input's range, seeded by the kernel and the sample."""
+    """Random values of each input, seeded by the kernel and the sample: integers in its
+    range, or binary32 values in [-FLOAT_BOUND, FLOAT_BOUND]."""
     rng = np.random.default_rng(zlib.crc32(f"{space_type.id}|{sample.label}".encode()))
-    found = {}
+    found: dict[str, np.ndarray] = {}
     for name, tensor in inputs.items():
+        if _floating(tensor.element):
+            drawn = rng.uniform(-FLOAT_BOUND, FLOAT_BOUND, size=tensor.shape)
+            found[name] = drawn.astype(np.float32)
+            continue
         low, high = ordinary_integer_bounds(tensor.element.dtype)
         found[name] = rng.integers(low, high + 1, size=tensor.shape, dtype=np.int64)
     return found
 
 
+def _lanes(values: np.ndarray, element: ScalarEncoding) -> np.ndarray:
+    """The integers a stream's lanes carry of ``values``: a float its binary32 bits."""
+    if _floating(element):
+        return np.asarray(values, dtype=np.float32).view(np.uint32).astype(np.int64)
+    return np.asarray(values).astype(np.int64)
+
+
 def _words(form: Traversal, values: np.ndarray, element: ScalarEncoding) -> tuple[list[int], int]:
-    return list(pack(form, values.ravel().tolist(), element.bits)), form.lanes * element.bits
+    found = _lanes(values, element)
+    return list(pack(form, found.ravel().tolist(), element.bits)), form.lanes * element.bits
+
+
+def _beyond(
+    form: Traversal, received: Sequence[int], expected: np.ndarray, tolerance: float
+) -> str | None:
+    """Which of the binary32 lanes ``received`` (words in ``form``'s order) are not within
+    ``tolerance`` of ``expected`` (the reference, in its tensor's shape); None when all are.
+    """
+    lanes = form.lanes
+    wanted = np.asarray(expected, dtype=np.float64).ravel()[
+        offsets(form).reshape(form.beats, lanes)
+    ]
+    words = np.asarray(received, dtype=object)
+    if len(words) != form.beats:
+        return f"{len(words)} words of {form.beats}"
+    bits = np.array(
+        [[(int(word) >> (32 * lane)) & 0xFFFFFFFF for lane in range(lanes)] for word in words],
+        dtype=np.uint32,
+    )
+    found = bits.view(np.float32).astype(np.float64)
+    close = np.isclose(found, wanted, rtol=0.0, atol=tolerance, equal_nan=True)
+    if close.all():
+        return None
+    with np.errstate(invalid="ignore"):
+        apart = np.nan_to_num(np.abs(found - wanted), nan=np.inf)
+    error = np.where(close, -1.0, apart)  # a NaN against a number is the farthest
+    beat, lane = (int(i) for i in np.unravel_index(int(np.argmax(error)), error.shape))
+    return (
+        f"{int((~close).sum())} lanes beyond {tolerance:g}; the farthest at beat {beat} "
+        f"lane {lane}: {float(found[beat, lane])!r}, expected {float(wanted[beat, lane])!r}"
+    )
 
 
 def _brief(message: str) -> str:
@@ -724,6 +791,7 @@ def _simulate(
     inputs: Mapping[str, Tensor],
     outputs: Outputs,
     directory: Path,
+    tolerance: float | None = None,
 ) -> list[tuple[Sample, str, str]]:
     ends = _ends(point, space_type, sample, [*inputs, *outputs])
     expected = reference(**{name: array.copy() for name, array in values.items()})
@@ -734,13 +802,20 @@ def _simulate(
         if not (sample.adapter and name == next(iter(inputs))):
             driven[name] = _words(unreplayed(ends[name].form), array, ends[name].element)
     checked: dict[str, tuple[list[int], int]] = {}
+    # The float outputs compared within the tolerance where their words differ.
+    tolerated = (
+        set() if tolerance is None else {name for name in produced if _floating(ends[name].element)}
+    )
     for name in produced:
         end, array = ends[name], np.asarray(expected[name])
         assert array.shape == end.form.shape, f"{name}: the reference gives {array.shape}"
+        if _floating(end.element):
+            checked[name] = _words(end.form, array, end.element)
+            continue
         try:
             low, high = ordinary_integer_bounds(end.element.dtype)
         except DatatypeError as error:
-            raise AssertionError(f"{name}: the harness streams integers only") from error
+            raise AssertionError(f"{name}: the harness streams integers and FLOAT32") from error
         assert low <= array.min() and array.max() <= high, f"{name} leaves {end.element}"
         checked[name] = _words(end.form, array.astype(np.int64), end.element)
     module = _value(design_module(point, space_type), space_type, sample)
@@ -764,6 +839,26 @@ def _simulate(
                 toolchain=host_toolchain(),
             )
         except WordsDiffer as error:
+            exact = {
+                name
+                for name in produced - tolerated
+                if list(error.received[name]) != list(checked[name][0])
+            }
+            far = (
+                {}
+                if tolerance is None
+                else {
+                    name: _beyond(ends[name].form, error.received[name], expected[name], tolerance)
+                    for name in tolerated
+                }
+            )
+            if not exact and not any(far.values()):
+                continue  # only float lanes differ, each within the tolerance
+            if not exact:
+                failures.append(
+                    (sample, mode, "; ".join(f"{name}: {why}" for name, why in far.items() if why))
+                )
+                continue
             decoded = decode(
                 {name: _stream(point, name, ends[name].form, ends[name]) for name in produced},
                 error.received,
