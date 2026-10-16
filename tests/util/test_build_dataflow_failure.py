@@ -27,7 +27,6 @@ from finn.toolchain.launcher import (
     ToolFailed,
     ToolUnavailable,
 )
-from finn.util.basic import make_build_dir
 
 
 class Stdin(io.StringIO):
@@ -50,12 +49,12 @@ def step_fails(model, cfg):
     raise RuntimeError("the step's own error")
 
 
-def failed_build(monkeypatch, terminal: bool) -> tuple[int, list]:
+def failed_build(monkeypatch, tmp_path, terminal: bool) -> tuple[int, list]:
     """The build's status and the tracebacks the debugger was started on."""
     debugged = []
     monkeypatch.setattr(sys, "stdin", Stdin(terminal))
     monkeypatch.setattr(build.pdb, "post_mortem", debugged.append)
-    output = make_build_dir("test_build_failure_")
+    output = str(tmp_path)
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
     cfg = DataflowBuildConfig(
@@ -68,8 +67,8 @@ def failed_build(monkeypatch, terminal: bool) -> tuple[int, list]:
 
 
 @pytest.mark.util
-def test_a_failed_step_without_a_terminal_reports_its_error(monkeypatch, capsys):
-    status, debugged = failed_build(monkeypatch, terminal=False)
+def test_a_failed_step_without_a_terminal_reports_its_error(monkeypatch, capsys, tmp_path):
+    status, debugged = failed_build(monkeypatch, tmp_path, terminal=False)
     assert status == -1 and debugged == []
     captured = capsys.readouterr()
     assert "RuntimeError: the step's own error" in captured.err
@@ -77,8 +76,8 @@ def test_a_failed_step_without_a_terminal_reports_its_error(monkeypatch, capsys)
 
 
 @pytest.mark.util
-def test_a_failed_step_at_a_terminal_starts_the_debugger(monkeypatch):
-    status, debugged = failed_build(monkeypatch, terminal=True)
+def test_a_failed_step_at_a_terminal_starts_the_debugger(monkeypatch, tmp_path):
+    status, debugged = failed_build(monkeypatch, tmp_path, terminal=True)
     assert status == -1 and len(debugged) == 1
 
 
@@ -100,9 +99,9 @@ def raising(error: BaseException):
     return step_fails
 
 
-def logged_failure(capsys, error: BaseException) -> tuple[str, str]:
+def logged_failure(capsys, tmp_path, error: BaseException) -> tuple[str, str]:
     """A build whose one step raises ``error``: its console's stderr and its log file."""
-    output = make_build_dir("test_build_failure_")
+    output = str(tmp_path)
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
     cfg = DataflowBuildConfig(
@@ -118,9 +117,10 @@ def logged_failure(capsys, error: BaseException) -> tuple[str, str]:
 
 
 @pytest.mark.util
-def test_a_refusal_is_logged_as_its_findings_its_traceback_in_the_file_only(capsys):
+def test_a_refusal_is_logged_as_its_findings_its_traceback_in_the_file_only(capsys, tmp_path):
     err, log = logged_failure(
         capsys,
+        tmp_path,
         Refused([blocker("odd", "one is odd"), blocker("odd", "three is odd"), blocker("x", "x")]),
     )
     assert err.splitlines()[:4] == [
@@ -134,7 +134,7 @@ def test_a_refusal_is_logged_as_its_findings_its_traceback_in_the_file_only(caps
 
 
 @pytest.mark.util
-def test_a_refused_steps_findings_are_logged_once_with_their_owners(capsys):
+def test_a_refused_steps_findings_are_logged_once_with_their_owners(capsys, tmp_path):
     """A refusal's message is its findings' lines: the step's line leaves it out, so each
     finding's line, its owner first, is on the console once, and in the log file once
     before the traceback."""
@@ -144,7 +144,7 @@ def test_a_refused_steps_findings_are_logged_once_with_their_owners(capsys):
     ]
     refusal = Refusal(found)
     assert str(refusal) == "\n".join(map(str, found))
-    err, log = logged_failure(capsys, refusal)
+    err, log = logged_failure(capsys, tmp_path, refusal)
     assert err.splitlines()[:3] == [
         "ERROR: step_fails refused: 2 findings (Refusal)",
         "ERROR:   /build/pins.json: member-unknown: no member owns x",
@@ -156,7 +156,7 @@ def test_a_refused_steps_findings_are_logged_once_with_their_owners(capsys):
 
 
 @pytest.mark.util
-def test_a_members_refusal_names_its_node_or_tensor_on_the_console(capsys):
+def test_a_members_refusal_names_its_node_or_tensor_on_the_console(capsys, tmp_path):
     """A refusal carried out of a network names its member in its details: each line
     starts with it, unless its message does already."""
     found = [
@@ -164,7 +164,7 @@ def test_a_members_refusal_names_its_node_or_tensor_on_the_console(capsys):
         blocker("transport-refused", "too wide").about(tensor="x"),
         Finding(FindingKind.BLOCKER, "y", "test", "MatMul_2: y", (("node", "MatMul_2"),)),
     ]
-    err, _ = logged_failure(capsys, Refusal(found))
+    err, _ = logged_failure(capsys, tmp_path, Refusal(found))
     assert err.splitlines()[:4] == [
         "ERROR: step_fails refused: 3 findings (Refusal)",
         "ERROR:   MatMul_1: test: decision-no-viable-case: no case",
@@ -174,11 +174,11 @@ def test_a_members_refusal_names_its_node_or_tensor_on_the_console(capsys):
 
 
 @pytest.mark.util
-def test_a_tool_that_failed_is_logged_with_its_transcript_and_errors_no_traceback(capsys):
+def test_a_tool_that_failed_is_logged_with_its_transcript_and_errors_no_traceback(capsys, tmp_path):
     failed = ToolFailed(
         "vivado", 1, "/logs/package.sh.stdout.log", ("ERROR: [Common 17-1] no", "ERROR: two")
     )
-    err, log = logged_failure(capsys, failed)
+    err, log = logged_failure(capsys, tmp_path, failed)
     assert err.splitlines()[:3] == [
         "ERROR: step_fails: ToolFailed: vivado failed with exit status 1; transcript "
         "/logs/package.sh.stdout.log",
@@ -189,26 +189,26 @@ def test_a_tool_that_failed_is_logged_with_its_transcript_and_errors_no_tracebac
 
 
 @pytest.mark.util
-def test_a_tool_unavailable_is_logged_naming_what_selects_it(capsys):
-    err, _ = logged_failure(capsys, ToolUnavailable("vivado", "not on the route"))
+def test_a_tool_unavailable_is_logged_naming_what_selects_it(capsys, tmp_path):
+    err, _ = logged_failure(capsys, tmp_path, ToolUnavailable("vivado", "not on the route"))
     named = f"vivado: not on the route; {SELECTED_BY}"
     assert err.splitlines()[0] == f"ERROR: step_fails: ToolUnavailable: {named}"
     assert "Traceback" not in err
 
 
 @pytest.mark.util
-def test_a_plain_assert_is_a_bug_with_its_traceback_on_the_console(capsys):
-    err, _ = logged_failure(capsys, AssertionError("unreachable"))
+def test_a_plain_assert_is_a_bug_with_its_traceback_on_the_console(capsys, tmp_path):
+    err, _ = logged_failure(capsys, tmp_path, AssertionError("unreachable"))
     assert err.startswith("ERROR: step_fails failed: AssertionError: unreachable\nTraceback")
 
 
 @pytest.mark.util
-def test_a_plain_value_error_is_a_bug_even_with_findings(capsys):
+def test_a_plain_value_error_is_a_bug_even_with_findings(capsys, tmp_path):
     """A refusal is told by its type: a ValueError that is no Refusal is a bug, whatever
     it carries."""
     plain = ValueError("not typed")
     plain.findings = (blocker("odd", "one is odd"),)
-    err, _ = logged_failure(capsys, plain)
+    err, _ = logged_failure(capsys, tmp_path, plain)
     assert err.startswith("ERROR: step_fails failed: ValueError: not typed\nTraceback")
 
 
@@ -224,6 +224,7 @@ def step_says(model, cfg):
 @pytest.mark.util
 def test_the_log_has_every_record_with_its_step_the_console_the_builds_lines_and_warnings(
     capsys,
+    tmp_path,
 ):
     """No stream is swapped: a print reaches the console as printed and not the log.
     The log file has every FINN record and the captured warnings, each with its level,
@@ -232,7 +233,7 @@ def test_the_log_has_every_record_with_its_step_the_console_the_builds_lines_and
     the warnings hook and FINN's logger are as they were."""
     shown, finn = warnings.showwarning, logging.getLogger("finn")
     level, handlers, propagate = finn.level, list(finn.handlers), finn.propagate
-    output = make_build_dir("test_build_log_")
+    output = str(tmp_path)
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
     cfg = DataflowBuildConfig(
@@ -262,11 +263,11 @@ def test_the_log_has_every_record_with_its_step_the_console_the_builds_lines_and
 
 
 @pytest.mark.util
-def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys):
+def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys, tmp_path):
     """Before the first step, each limitation the configuration checks find is a warning
     and each rejection an error, once each on the console and in the log, and the build
     raises one ConfigurationRefused; it writes no report of its own."""
-    output = make_build_dir("test_build_failure_")
+    output = str(tmp_path)
     model = f"{output}/model.onnx"
     onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), model)
     # A board that requires a Vivado release, and a toolchain whose route has no Vivado.

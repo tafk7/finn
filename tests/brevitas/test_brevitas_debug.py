@@ -43,13 +43,12 @@ from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
 @pytest.mark.parametrize("QONNX_FINN_conversion", [False, True])
-def test_brevitas_debug(QONNX_FINN_conversion):
-    build_dir = make_build_dir("test_brevitas_debug")
+def test_brevitas_debug(QONNX_FINN_conversion, tmp_path):
+    build_dir = str(tmp_path)
     finn_onnx = os.path.join(build_dir, "test_brevitas_debug.onnx")
     fc = get_test_model_trained("TFC", 2, 2)
     ishape = (1, 1, 28, 28)

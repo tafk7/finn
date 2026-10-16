@@ -43,14 +43,13 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
 @pytest.mark.parametrize("abits", [1, 2, 4, 8])
 @pytest.mark.parametrize("narrow_range", [False, True])
 @pytest.mark.parametrize("max_val", [1.0, 1 - 2 ** (-7)])
-def test_brevitas_act_export_qhardtanh_nonscaled(abits, narrow_range, max_val):
+def test_brevitas_act_export_qhardtanh_nonscaled(abits, narrow_range, max_val, tmp_path):
     def get_quant_type(bit_width):
         if bit_width is None:
             return QuantType.FP
@@ -71,7 +70,7 @@ def test_brevitas_act_export_qhardtanh_nonscaled(abits, narrow_range, max_val):
         scaling_impl_type=ScalingImplType.CONST,
         narrow_range=narrow_range,
     )
-    build_dir = make_build_dir(prefix="test_brevitas_act_export_qhardtanh_nonscaled")
+    build_dir = str(tmp_path)
     m_path = os.path.join(build_dir, "test_brevitas_non_scaled_QuantHardTanh_export.onnx")
     export_qonnx(b_act, torch.randn(ishape), m_path)
     qonnx_cleanup(m_path, out_file=m_path)

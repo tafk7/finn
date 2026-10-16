@@ -45,14 +45,13 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
 @pytest.mark.parametrize("dw", [False, True])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("in_channels", [32])
-def test_brevitas_QConv2d(dw, bias, in_channels):
+def test_brevitas_QConv2d(dw, bias, in_channels, tmp_path):
     ishape = (1, 32, 111, 111)
     if dw is True:
         groups = in_channels
@@ -91,7 +90,7 @@ def test_brevitas_QConv2d(dw, bias, in_channels):
     weight_tensor = gen_finn_dt_tensor(DataType["INT4"], w_shape)
     b_conv.weight = torch.nn.Parameter(torch.from_numpy(weight_tensor).float())
     b_conv.eval()
-    build_dir = make_build_dir(prefix="test_brevitas_QConv2d")
+    build_dir = str(tmp_path)
     m_path = os.path.join(build_dir, "test_brevitas_conv.onnx")
     export_qonnx(b_conv, torch.randn(ishape), m_path)
     qonnx_cleanup(m_path, out_file=m_path)

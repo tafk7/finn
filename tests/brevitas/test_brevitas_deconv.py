@@ -38,7 +38,6 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
@@ -50,7 +49,7 @@ from finn.util.basic import make_build_dir
 @pytest.mark.parametrize("stride", [2])
 @pytest.mark.parametrize("kw", [4])
 @pytest.mark.parametrize("bias", [False])
-def test_brevitas_QTransposeConv(ifm_ch, ofm_ch, mh, mw, padding, stride, kw, bias):
+def test_brevitas_QTransposeConv(ifm_ch, ofm_ch, mh, mw, padding, stride, kw, bias, tmp_path):
     kh = kw
     oh = stride * (mh - 1) - (2 * padding) + kh
     if oh % mh != 0:
@@ -65,7 +64,7 @@ def test_brevitas_QTransposeConv(ifm_ch, ofm_ch, mh, mw, padding, stride, kw, bi
         padding=padding,
         bias=bias,
     )
-    build_dir = make_build_dir("test_brevitas_QTransposeConv")
+    build_dir = str(tmp_path)
     export_path = os.path.join(build_dir, "test_brevitas_deconv.onnx")
     # outp = el(inp) # expects NCHW data format
     export_qonnx(b_deconv, input_t=inp, export_path=export_path, opset_version=11)

@@ -50,7 +50,6 @@ from trained_networks import get_test_model_trained
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
 from finn.transformation.streamline import Streamline
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.streamline
@@ -60,13 +59,13 @@ from finn.util.basic import make_build_dir
 @pytest.mark.parametrize("wbits", [1, 2])
 # network topology / size
 @pytest.mark.parametrize("size", ["TFC", "SFC", "LFC"])
-def test_streamline_fc(size, wbits, abits):
+def test_streamline_fc(size, wbits, abits, tmp_path):
     if size == "LFC" and wbits == 2 and abits == 2:
         pytest.skip("No LFC-w2a2 present at the moment")
     if wbits > abits:
         pytest.skip("No wbits > abits cases at the moment")
     nname = "%s_%dW%dA" % (size, wbits, abits)
-    export_onnx_path = make_build_dir("test_streamline_fc_")
+    export_onnx_path = str(tmp_path)
     finn_onnx = export_onnx_path + "/%s.onnx" % nname
     fc = get_test_model_trained(size, wbits, abits)
     export_qonnx(fc, torch.randn(1, 1, 28, 28), finn_onnx)
