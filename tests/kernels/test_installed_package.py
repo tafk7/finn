@@ -14,7 +14,7 @@ from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
-from layering import ROOT
+from support.layering import ROOT
 
 from finn import resources as finn_resources
 

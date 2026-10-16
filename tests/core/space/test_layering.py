@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The rows of the layer table (``tests/layering.py``) that this tree checks.
+"""The rows of the layer table (``tests/support/layering.py``) that this tree checks.
 
 Also the table's and the walker's own tests: a check that has never rejected
 anything is a check nobody has tested.
@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from layering import (
+from support.layering import (
     BY_NAME,
     LAYERS,
     ROOT,

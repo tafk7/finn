@@ -20,7 +20,7 @@ import subprocess
 import sys
 
 import pytest
-from layering import ROOT
+from support.layering import ROOT
 
 import finn.kernels
 

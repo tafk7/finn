@@ -6,7 +6,7 @@
 The package sits below the physical kernels (``finn.kernels``) built on its
 values, beside the generic Space engine (``finn.core.space``) and independent
 of it: it states values, and a refusal in the engine's terms is the kernels'
-(``finn.kernels.values.domains``). The layer table, ``tests/layering.py``,
+(``finn.kernels.values.domains``). The layer table, ``tests/support/layering.py``,
 states the whole order. ``finn.dataflow`` imports only ``qonnx.core.datatype``,
 numpy, the standard library and the findings its refusals carry
 (``finn.core.reporting``).

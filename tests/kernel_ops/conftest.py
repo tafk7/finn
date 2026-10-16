@@ -13,8 +13,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from qonnx.core.modelwrapper import ModelWrapper
+from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 
 from finn.toolchain import ip
 from kernel_ops import cnv

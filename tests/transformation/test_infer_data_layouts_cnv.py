@@ -44,7 +44,7 @@ from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
-from trained_networks import get_test_model_trained
+from support.trained_networks import get_test_model_trained
 
 import finn.transformation.streamline.absorb as absorb
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN

@@ -6,7 +6,7 @@ graphs and its negative graphs with their codes. ``tests/kernel_ops/test_referen
 checks them offline, in the fast gate.
 
 They live here, not beside the kernels' specs (``tests/kernels/specs``): they are ONNX
-graphs, and the kernel tests read no graph (``tests/layering.py``).
+graphs, and the kernel tests read no graph (``tests/support/layering.py``).
 """
 
 from __future__ import annotations

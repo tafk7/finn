@@ -38,7 +38,7 @@ from qonnx.transformation.fold_constants import FoldConstants
 from qonnx.transformation.general import GiveUniqueNodeNames, RemoveStaticGraphInputs
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup as qonnx_cleanup
-from trained_networks import get_test_model_trained
+from support.trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN

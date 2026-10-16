@@ -3,7 +3,7 @@
 
 """The seed of a test's random state, derived from its node id (tests/conftest.py).
 
-A test helper, imported as ``rng_seed`` (tests/ is on ``sys.path``)."""
+A test helper, imported as ``support.rng_seed`` (tests/ is on ``sys.path``)."""
 
 import hashlib
 import re

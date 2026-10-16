@@ -4,7 +4,7 @@
 """Cold imports: the kernel stack loads and builds without graph code.
 
 The import statements of each layer are checked against the layer table
-(``tests/layering.py``); these tests check what an import loads at runtime.
+(``tests/support/layering.py``); these tests check what an import loads at runtime.
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from layering import ROOT
+from support.layering import ROOT
 
 from finn.core.space import Available, Space
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected

@@ -19,7 +19,7 @@ shares as well, so sharing them changes nothing. Not immutable: ``object``,
 ``Any``, a bare type variable, ``Mapping`` and every other type, unless the
 caller names it immutable, with its reason.
 
-A test helper, imported as ``value_classes`` (the gates put ``tests`` on
+A test helper, imported as ``support.value_classes`` (the gates put ``tests`` on
 ``PYTHONPATH``); the standard library only.
 """
 

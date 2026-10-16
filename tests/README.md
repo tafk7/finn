@@ -64,7 +64,7 @@ def test_my_op(finn_test_seed):
 
 ### 5. Trees and gates
 
-The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §4, `rng_seed.py`, and the autouse member cache of `tests/member_cache.py`: each test runs in one `finn.kernels.members` cache, dropped at its end) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
+The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §4, `tests/support/rng_seed.py`, and the autouse member cache of `tests/support/member_cache.py`: each test runs in one `finn.kernels.members` cache, dropped at its end) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
 
 | Tree | Gate | `--confcutdir` |
 |---|---|---|
@@ -81,10 +81,10 @@ The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_p
 
 The trees under their own `--confcutdir` get no `finn_test_seed`: a test seeds the generators it uses itself (for example `np.random.default_rng(<seed>)`). They mark Vivado work with `requires_xsim`, `requires_hls` and `requires_vivado` (`tests/kernels/xsim.py`), which mark and skip, and the markers of [3. Markers](#3-markers).
 
-The gates put `tests` on `PYTHONPATH`, so its helpers import by bare name:
+The gates put `tests` on `PYTHONPATH`, so its helpers import by package name; these are in `tests/support`:
 
-- `rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §4).
-- `layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/core/space/test_layering.py` also tests the table and the walker.
-- `value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
-- `trained_networks.py`: the pretrained Brevitas example networks (`get_test_model_trained`), which the Brevitas, transformation and KernelOp tests export.
+- `support/rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §4).
+- `support/layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/core/space/test_layering.py` also tests the table and the walker.
+- `support/value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
+- `support/trained_networks.py`: the pretrained Brevitas example networks (`get_test_model_trained`), which the Brevitas, transformation and KernelOp tests export.
 - `oracle/`: the finn-dev oracle's captures, values only the HWCustomOp flow computed (it is deleted), which the kernel tests compare with; the gates never run the oracle.

@@ -6,7 +6,7 @@ immutable values, so the engine shares an instance as its own snapshot."""
 
 from __future__ import annotations
 
-from value_classes import frozen_dataclasses, mutable_fields
+from support.value_classes import frozen_dataclasses, mutable_fields
 
 from finn.dataflow.datatypes import QONNXDataType
 

@@ -61,7 +61,7 @@ The rows are declared lowest first and name only earlier rows, so the order
 has no cycle. Each row names the test tree whose ``test_layering.py`` checks
 it, so each gate checks the layers it owns.
 
-A test helper, imported as ``layering`` (the gates put ``tests`` on
+A test helper, imported as ``support.layering`` (the gates put ``tests`` on
 ``PYTHONPATH``).
 """
 
@@ -73,7 +73,7 @@ from dataclasses import dataclass
 from importlib.util import resolve_name
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src"
 TESTS = ROOT / "tests"
 
@@ -390,16 +390,18 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # This table: the standard library only. Every tree's tests import it.
-    Layer("tests.layering", ("layering",), (), (), "tests/core/space"),
+    Layer("tests.layering", ("support.layering",), (), (), "tests/core/space"),
     # The default snapshot's contract on value classes: the standard library only.
     # The engine, dataflow and kernel trees check their own classes with it.
-    Layer("tests.value_classes", ("value_classes",), (), (), "tests/core/space"),
+    Layer("tests.value_classes", ("support.value_classes",), (), (), "tests/core/space"),
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
     # Each test one build: the member cache its fixture opens (finn.kernels.members), which
     # the kernel and the kernel-op tests' conftests import.
-    Layer("tests.member_cache", ("member_cache",), ("kernels",), ("pytest",), "tests/kernels"),
+    Layer(
+        "tests.member_cache", ("support.member_cache",), ("kernels",), ("pytest",), "tests/kernels"
+    ),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
