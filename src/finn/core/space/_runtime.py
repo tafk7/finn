@@ -271,9 +271,11 @@ class _TrialSnapshot(Snapshot):
       candidates are the successor's assignments, each admitted before it was
       read. A candidate's own answer is
       taken as the successor gives it: with the reads of its guard, which its
-      frame makes first (at publication, for a choice whose admission was reused,
-      which did not), and without the reads of its admission; what read it
-      counts those reads among its own, which only keeps less. The successor
+      frame makes first, and without the reads of its admission; what read it
+      counts those reads among its own, which only keeps less. A choice whose
+      admission was reused did not evaluate its guard, and the base's cache may not
+      hold it: the successor takes neither that choice nor what read it, and
+      evaluates it when something asks. The successor
       records each candidate's admission reads (``admissions``), and beside them
       the value it saw of each Decision it read that was neither a candidate nor
       stable and that the base forces (``assumed``): the trial read that Decision as
@@ -360,20 +362,21 @@ class _TrialSnapshot(Snapshot):
         object.__setattr__(successor, "admissions", MappingProxyType(admissions))
         object.__setattr__(successor, "assumed", MappingProxyType(assumed))
         nodes = self.linked.nodes
-        for index in candidates:
-            # A choice whose admission the trial reused did not evaluate its guard, and the
-            # base's cache may not hold it (it read a Decision the base's own change
-            # reached). The admission read what the guard reads, so each reads as it did:
-            # the guard is evaluated now, as the decision frame would have.
-            guard = nodes[index].guard
-            if guard is not None and guard not in self.cache:
-                evaluate(self, guard)
+        # A choice whose admission the trial reused did not evaluate its guard, and the
+        # base's cache may not hold it. Its record would have no guard to name, so the
+        # successor does not take it, nor what read it: it evaluates the choice when
+        # something asks, as any snapshot does.
+        unrecorded = frozenset(
+            index
+            for index in candidates
+            if nodes[index].guard is not None and nodes[index].guard not in self.cache
+        )
         open_ = frozenset(
             index
             for index in self.linked.decisions
             if index not in candidates and index not in self._stable
         )
-        for index, entry in unaffected(self.cache, open_).items():
+        for index, entry in unaffected(self.cache, open_ | unrecorded).items():
             if index in candidates:
                 entry = self._record(index, entry)
             successor.cache.setdefault(index, entry)

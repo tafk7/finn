@@ -347,7 +347,7 @@ def test_an_admission_that_assumed_a_forced_value_is_reused_only_while_that_valu
     assert refusals[0] == refusals[1] and list(refusals[0]) == ["depth"]
 
 
-def test_a_reused_admission_of_a_guarded_choice_evaluates_its_guard_for_the_successor() -> None:
+def test_a_reused_admission_of_a_guarded_choice_answers_as_a_recomputation() -> None:
     calls: list[str] = []
 
     def within(*, candidate: int, limit: int) -> bool:
@@ -383,3 +383,38 @@ def test_a_reused_admission_of_a_guarded_choice_evaluates_its_guard_for_the_succ
     assert inspection.explain(glossy, Guarded.depth) == inspection.explain(
         recomputed(glossy), Guarded.depth
     )
+
+
+def test_a_change_does_not_evaluate_the_guard_of_a_choice_it_does_not_reach() -> None:
+    guards: list[str] = []
+
+    def within(*, candidate: int, limit: int) -> bool:
+        return candidate <= limit
+
+    class Guarded(Space):
+        lanes: int = Decision(values=(3, 5, 128))
+        finish: str = Decision(values=("matte", "gloss"))
+        # An odd width refuses the stub core, so packed is forced.
+        compute: Packed | Stub = Decision(CORES, width=lanes)
+
+        @derived
+        def packed(self) -> bool:
+            guards.append("packed")
+            return isinstance(self.compute, Packed)
+
+        @derived
+        def rows(self) -> int:
+            return 2
+
+        depth: int = Decision(domain=domain(accepts=within, limit=rows), when=packed)
+
+    base = commit(design_space(Guarded()), {"lanes": 3, "depth": 1})
+    guards.clear()
+    # ``depth`` keeps its admission, and the guard it was never asked is not asked for
+    # the successor either: the successor evaluates it when something reads it.
+    glossy = commit(base, {"finish": "gloss"})
+    assert guards == [] and glossy.depth == 1
+    assert inspection.explain(glossy, Guarded.depth) == inspection.explain(
+        recomputed(glossy), Guarded.depth
+    )
+    assert guards  # both answered it, from the successor's own evaluation
